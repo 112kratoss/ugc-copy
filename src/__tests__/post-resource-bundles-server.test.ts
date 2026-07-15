@@ -46,6 +46,7 @@ let generationInputRows: Array<{
   metadata: Record<string, unknown> | null;
 }>;
 let viewerHasPurchased: boolean;
+let bundlePresenceError: unknown;
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({
@@ -67,8 +68,13 @@ vi.mock('@/lib/server-helpers', () => ({
     },
     from(table: string) {
       if (table === 'post_resource_bundles') {
+        let checksPresence = false;
         const query = {
           select() {
+            return query;
+          },
+          in() {
+            checksPresence = true;
             return query;
           },
           eq() {
@@ -79,6 +85,12 @@ vi.mock('@/lib/server-helpers', () => ({
               data: bundleRow,
               error: null,
             };
+          },
+          then(resolve: (value: { data: unknown[] | null; error: unknown }) => void) {
+            resolve({
+              data: checksPresence && bundleRow ? [{ post_id: bundleRow.post_id }] : [],
+              error: checksPresence ? bundlePresenceError : null,
+            });
           },
         };
 
@@ -319,6 +331,7 @@ describe('post resource bundle server access', () => {
       metadata: {},
     }];
     viewerHasPurchased = false;
+    bundlePresenceError = null;
   });
 
   it('reveals published free recipe resources to anonymous viewers', async () => {
@@ -449,6 +462,32 @@ describe('post resource bundle server access', () => {
       storagePath: 'generation_inputs/owner-1/gen-1/00-reference-image.png',
       contentType: 'image/png',
     });
+  });
+
+  it('fails closed when bundle presence cannot be checked conclusively', async () => {
+    bundlePresenceError = {
+      code: 'XX000',
+      message: 'temporary database failure',
+    };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { getPublicGenerationRecipeAssetSummaryMap } = await import(
+      '@/lib/post-resource-bundles-server'
+    );
+
+    const summaries = await getPublicGenerationRecipeAssetSummaryMap([{
+      id: 'post-1',
+      user_id: 'owner-1',
+      generation_id: 'gen-1',
+      prompt: 'Post prompt fallback',
+      category: 'image',
+      source_kind: 'magicbooklet',
+    }]);
+
+    expect(summaries.size).toBe(0);
+    expect(consoleError).toHaveBeenCalledWith(
+      'Failed to check existing post resource bundles before recipe fallback:',
+      bundlePresenceError,
+    );
   });
 
   it('builds public generation recipes from legacy workflow references when durable input rows are missing', async () => {

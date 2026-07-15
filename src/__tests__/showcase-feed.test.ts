@@ -136,6 +136,8 @@ let postSavesState: PostSaveRow[] = [];
 let postResourceBundlePurchasesState: PostResourceBundlePurchaseRow[] = [];
 let postsSchemaMissingState = false;
 let lastPurchaseBundleIds: unknown[] | null = null;
+let tableAccesses: string[] = [];
+let rpcAccesses: string[] = [];
 
 function createPostRow(overrides: Partial<PostRow> & { id: string; created_at: string }): PostRow {
   return {
@@ -176,6 +178,43 @@ function compareValues(left: string | number | null | undefined, right: string |
 
 function createServiceClientMock() {
   return {
+    async rpc(name: string) {
+      rpcAccesses.push(name);
+      if (name === 'get_public_post_resource_bundle_summaries') {
+        return {
+          data: resourceBundlesState.map((row) => (
+            row.status === 'published'
+              ? row
+              : {
+                  id: null,
+                  post_id: row.post_id,
+                  title: null,
+                  access_mode: null,
+                  price_usd_cents: null,
+                  preview_text: null,
+                  prompt_text: null,
+                  notes_markdown: null,
+                  workflow_share_url: null,
+                  workflow_snapshot: null,
+                  attachments: null,
+                  allow_remix: null,
+                  resource_sections: null,
+                  resource_items: null,
+                  sales_count: null,
+                  status: row.status,
+                }
+          )),
+          error: null,
+        };
+      }
+      return {
+        data: null,
+        error: {
+          code: 'PGRST202',
+          message: `Could not find the function public.${name} in the schema cache`,
+        },
+      };
+    },
     storage: {
       from: vi.fn(() => ({
         getPublicUrl: vi.fn((filePath: string) => ({
@@ -188,6 +227,7 @@ function createServiceClientMock() {
       })),
     },
     from(table: string) {
+      tableAccesses.push(table);
       if (table === 'posts') {
         const filters: Record<string, unknown> = {};
         const sorts: Array<{ column: keyof PostRow; ascending: boolean }> = [];
@@ -203,6 +243,10 @@ function createServiceClientMock() {
           },
           eq(column: string, value: unknown) {
             filters[column] = value;
+            return query;
+          },
+          in(column: string, values: unknown[]) {
+            filters[column] = values;
             return query;
           },
           is(column: string, value: unknown) {
@@ -227,7 +271,9 @@ function createServiceClientMock() {
                 Object.entries(filters).every(([key, value]) =>
                   key === 'archived_at' && value === null
                     ? ((row as Record<string, unknown>)[key] ?? null) === null
-                    : (row as Record<string, unknown>)[key] === value
+                    : Array.isArray(value)
+                      ? value.includes((row as Record<string, unknown>)[key])
+                      : (row as Record<string, unknown>)[key] === value
                 )
               )
               .filter((row) => !textFilter || row.category === 'text' || row.post_format === 'mixed')
@@ -244,6 +290,12 @@ function createServiceClientMock() {
               .slice(start, end + 1);
 
             return { data: rows, error: null };
+          },
+          then(
+            resolve: (value: { data: PostRow[] | null; error: unknown }) => unknown,
+            reject: (reason: unknown) => unknown,
+          ) {
+            return query.range(0, Number.MAX_SAFE_INTEGER).then(resolve, reject);
           },
         };
 
@@ -538,6 +590,8 @@ describe('showcase feed', () => {
     postResourceBundlePurchasesState = [];
     postsSchemaMissingState = false;
     lastPurchaseBundleIds = null;
+    tableAccesses = [];
+    rpcAccesses = [];
     nextCacheState.invocations = [];
   });
 
@@ -552,7 +606,7 @@ describe('showcase feed', () => {
 
     expect(nextCacheState.definitions).toEqual([
       {
-        keyParts: ['marketplace-resource-list-base-v1'],
+        keyParts: ['marketplace-resource-list-base-v2'],
         options: {
           revalidate: 60,
           tags: [MARKETPLACE_RESOURCE_LIST_CACHE_TAG, SHOWCASE_FEED_CACHE_TAG],
@@ -651,6 +705,50 @@ describe('showcase feed', () => {
     expect(page.items).toHaveLength(1);
     expect(page.items[0].id).toBe('post-1');
     expect(nextCacheState.invocations).toHaveLength(0);
+  });
+
+  it('hydrates posts shared by ranked and recent fallback pools only once per personalized request', async () => {
+    postsState = [
+      createPostRow({ id: 'post-1', created_at: '2026-03-20T10:00:00.000Z' }),
+      createPostRow({ id: 'post-2', created_at: '2026-03-19T10:00:00.000Z' }),
+    ];
+    generationModelsState = [];
+    resourceBundlesState = [];
+    const personalization = await import('@/lib/showcase-feed-personalization');
+    vi.spyOn(personalization, 'getPersonalizedShowcaseFeedPage').mockImplementation(async (options) => {
+      const ranked = await options.hydratePostIds(['post-1', 'post-2']);
+      const fallback = await options.fallbackItems(2);
+      return {
+        items: fallback.length > 0 ? fallback : ranked,
+        feedSessionId: null,
+        algorithmVersion: 'test-v1',
+        pageInfo: {
+          hasMore: false,
+          nextOffset: null,
+          nextCursor: null,
+          limit: 2,
+          offset: 0,
+        },
+      };
+    });
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'for-you',
+      offset: 0,
+      limit: 2,
+      anonymousKeyHash: 'a'.repeat(64),
+      bypassCache: true,
+    });
+
+    expect(page.items.map((item) => item.id)).toEqual(['post-1', 'post-2']);
+    expect(tableAccesses.filter((table) => table === 'posts')).toHaveLength(2);
+    expect(tableAccesses.filter((table) => table === 'profiles')).toHaveLength(1);
+    expect(tableAccesses.filter((table) => table === 'post_media')).toHaveLength(1);
+    expect(rpcAccesses.filter((name) => name === 'get_public_post_resource_bundle_summaries')).toHaveLength(1);
+    expect(tableAccesses).not.toContain('post_resource_bundles');
+    expect(tableAccesses.filter((table) => table === 'post_source_tools')).toHaveLength(1);
   });
 
   it('returns ordered media items while keeping the first item as the legacy cover', async () => {
@@ -854,6 +952,42 @@ describe('showcase feed', () => {
     });
     expect(serializedAsset).not.toContain('SECRET_GENERATION_PROMPT');
     expect(serializedAsset).not.toContain('generation_inputs/user-1');
+  });
+
+  it('uses one bundle query while drafts suppress automatic recipe summaries', async () => {
+    resourceBundlesState = [{
+      id: 'draft-asset-1',
+      post_id: 'post-1',
+      title: 'Unpublished workflow',
+      access_mode: 'paid',
+      price_usd_cents: 1900,
+      preview_text: 'This draft must stay private.',
+      allow_remix: true,
+      status: 'draft',
+    }];
+    generationModelsState = [{
+      id: 'gen-1',
+      model: 'nano-banana-2',
+      category: 'image',
+      prompt: 'A prompt that would otherwise produce a public recipe.',
+      workflow_settings: {
+        model: 'nano-banana-2',
+        aspectRatio: '9:16',
+      },
+    }];
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+    });
+
+    expect(page.items[0].asset).toBeNull();
+    expect(rpcAccesses.filter((name) => name === 'get_public_post_resource_bundle_summaries')).toHaveLength(1);
+    expect(tableAccesses).not.toContain('post_resource_bundles');
+    expect(tableAccesses).not.toContain('generation_input_media');
   });
 
   it('adds safe public recipe reference counts from legacy workflow settings', async () => {

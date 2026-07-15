@@ -1,7 +1,7 @@
 const {
   createRunOncePlugin,
   withGradleProperties,
-} = require('@expo/config-plugins');
+} = require('expo/config-plugins');
 
 const PLUGIN_NAME = 'withAndroidReleaseOptimization';
 const PLUGIN_VERSION = '1.0.0';

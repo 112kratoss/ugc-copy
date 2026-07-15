@@ -268,4 +268,49 @@ describe('generation input media loading', () => {
       null,
     ]);
   });
+
+  it('builds legacy summary descriptors without storage signing or source-generation reads', async () => {
+    const { buildLegacyGenerationInputMedia } = await import('@/lib/generation-input-media');
+    const storageFrom = vi.fn();
+    const from = vi.fn();
+
+    const result = await buildLegacyGenerationInputMedia({
+      supabase: { storage: { from: storageFrom }, from } as never,
+      generationId: 'gen-1',
+      ownerUserId: 'user-1',
+      category: 'image',
+      workflowSettings: {
+        elements: [
+          {
+            id: 'stored-reference',
+            displayName: 'Stored reference',
+            handle: '@stored',
+            storagePath: 'generation_inputs/user-1/gen-1/stored.png',
+          },
+          {
+            id: 'source-reference',
+            displayName: 'Source reference',
+            handle: '@source',
+            sourceGenerationId: 'source-gen-1',
+          },
+        ],
+      },
+      urlMode: 'none',
+    });
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        storagePath: 'generation_inputs/user-1/gen-1/stored.png',
+        sourceGenerationId: null,
+        url: null,
+      }),
+      expect.objectContaining({
+        storagePath: null,
+        sourceGenerationId: 'source-gen-1',
+        url: null,
+      }),
+    ]);
+    expect(storageFrom).not.toHaveBeenCalled();
+    expect(from).not.toHaveBeenCalled();
+  });
 });

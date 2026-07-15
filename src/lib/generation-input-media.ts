@@ -631,6 +631,7 @@ async function resolveDescriptorLegacyItem(params: {
   fallbackLabel: string;
   sortOrder: number;
   sourceGenerationCache: Map<string, Promise<LegacyGenerationReference | null>>;
+  urlMode: 'signed' | 'none';
 }): Promise<GenerationInputMediaItem | null> {
   const { descriptor } = params;
   if (!descriptor) {
@@ -638,10 +639,10 @@ async function resolveDescriptorLegacyItem(params: {
   }
 
   let url: string | null = null;
-  if (descriptor.storagePath) {
+  if (params.urlMode === 'signed' && descriptor.storagePath) {
     url = await resolveLegacyStorageUrl(params.supabase, descriptor.storagePath, params.ownerUserId);
   }
-  if (!url && descriptor.sourceGenerationId) {
+  if (params.urlMode === 'signed' && !url && descriptor.sourceGenerationId) {
     url = await resolveLegacySourceGenerationUrl({
       supabase: params.supabase,
       sourceGenerationId: descriptor.sourceGenerationId,
@@ -668,17 +669,19 @@ export async function buildLegacyGenerationInputMedia(params: {
   ownerUserId: string | null;
   category: string | null;
   workflowSettings: Record<string, unknown>;
+  urlMode?: 'signed' | 'none';
 }): Promise<GenerationInputMediaItem[]> {
   const items: GenerationInputMediaItem[] = [];
   const sourceGenerationCache = new Map<string, Promise<LegacyGenerationReference | null>>();
+  const urlMode = params.urlMode ?? 'signed';
   let sortOrder = 0;
 
   const pushElement = async (element: ImageElementDescriptor, index: number) => {
     let url: string | null = null;
-    if (element.storagePath) {
+    if (urlMode === 'signed' && element.storagePath) {
       url = await resolveLegacyStorageUrl(params.supabase, element.storagePath, params.ownerUserId);
     }
-    if (!url && element.sourceGenerationId) {
+    if (urlMode === 'signed' && !url && element.sourceGenerationId) {
       url = await resolveLegacySourceGenerationUrl({
         supabase: params.supabase,
         sourceGenerationId: element.sourceGenerationId,
@@ -720,7 +723,7 @@ export async function buildLegacyGenerationInputMedia(params: {
       mediaType: 'image',
       role: 'reference_image',
       label: `Image reference ${index + 1}`,
-      url: sourceUrl,
+      url: urlMode === 'signed' ? sourceUrl : null,
       sortOrder: sortOrder++,
       metadata: { seedanceAsset: asset, sourceUrl },
     }));
@@ -736,6 +739,7 @@ export async function buildLegacyGenerationInputMedia(params: {
     fallbackLabel: 'Start frame',
     sortOrder: sortOrder++,
     sourceGenerationCache,
+    urlMode,
   });
   if (startFrame) items.push(startFrame);
 
@@ -749,6 +753,7 @@ export async function buildLegacyGenerationInputMedia(params: {
     fallbackLabel: 'End frame',
     sortOrder: sortOrder++,
     sourceGenerationCache,
+    urlMode,
   });
   if (endFrame) items.push(endFrame);
 
@@ -760,7 +765,7 @@ export async function buildLegacyGenerationInputMedia(params: {
       mediaType: 'video',
       role: 'reference_video',
       label: `Video reference ${index + 1}`,
-      url: sourceUrl,
+      url: urlMode === 'signed' ? sourceUrl : null,
       sortOrder: sortOrder++,
       metadata: { seedanceAsset: asset, sourceUrl },
     }));
@@ -774,7 +779,7 @@ export async function buildLegacyGenerationInputMedia(params: {
       mediaType: 'audio',
       role: 'reference_audio',
       label: `Audio reference ${index + 1}`,
-      url: sourceUrl,
+      url: urlMode === 'signed' ? sourceUrl : null,
       sortOrder: sortOrder++,
       metadata: { seedanceAsset: asset, sourceUrl },
     }));
@@ -790,6 +795,7 @@ export async function buildLegacyGenerationInputMedia(params: {
     fallbackLabel: 'Character image',
     sortOrder: sortOrder++,
     sourceGenerationCache,
+    urlMode,
   });
   if (characterImage) items.push(characterImage);
 
@@ -803,6 +809,7 @@ export async function buildLegacyGenerationInputMedia(params: {
     fallbackLabel: 'Motion reference video',
     sortOrder: sortOrder++,
     sourceGenerationCache,
+    urlMode,
   });
   if (referenceVideo) items.push(referenceVideo);
 

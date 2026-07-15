@@ -1265,17 +1265,27 @@ function capitalize(value: string) {
   return `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;
 }
 
-function scheduleFrame(callback: () => void) {
+type ScheduledFrameHandle =
+  | { kind: 'animation-frame'; value: number }
+  | { kind: 'timeout'; value: ReturnType<typeof globalThis.setTimeout> };
+
+function scheduleFrame(callback: () => void): ScheduledFrameHandle {
   if (typeof globalThis.requestAnimationFrame === 'function') {
-    return globalThis.requestAnimationFrame(callback);
+    return {
+      kind: 'animation-frame',
+      value: globalThis.requestAnimationFrame(callback),
+    };
   }
-  return globalThis.setTimeout(callback, 0);
+  return {
+    kind: 'timeout',
+    value: globalThis.setTimeout(callback, 0),
+  };
 }
 
-function cancelFrame(handle: number) {
-  if (typeof globalThis.cancelAnimationFrame === 'function') {
-    globalThis.cancelAnimationFrame(handle);
+function cancelFrame(handle: ScheduledFrameHandle) {
+  if (handle.kind === 'animation-frame') {
+    globalThis.cancelAnimationFrame?.(handle.value);
     return;
   }
-  globalThis.clearTimeout(handle);
+  globalThis.clearTimeout(handle.value);
 }

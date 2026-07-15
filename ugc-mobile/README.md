@@ -24,6 +24,32 @@ npm run test
 npm run typecheck
 ```
 
+## Physical Android performance profile
+
+Connect and authorize one physical Android device, then provide a signed,
+non-debuggable release APK:
+
+```sh
+npm run profile:android:physical -- \
+  --apk /absolute/path/to/app-release.apk \
+  --cold-runs 10 \
+  --hot-runs 10
+```
+
+Pass `--serial DEVICE_SERIAL` when more than one physical phone is connected.
+The command rejects emulators, debug/unsigned APKs, and packages other than
+`com.magicbooklet.mobile`. It prints one JSON report containing per-run startup
+timings, summary percentiles, device/build metadata, and `gfxinfo` frame stats.
+Graphics counters are reset and read around every startup run, so each cold/hot
+sample has its own frame metrics. The report also sums additive counters and
+calculates weighted jank across runs; frame-time percentiles stay per-run because
+averaging percentiles would be misleading.
+
+The profile is data-preserving: it replaces/launches the app, force-stops it for
+cold starts, sends the device Home for hot resumes, and resets performance
+counters. It does not clear app data or caches, grant permissions, change runtime
+compilation, or reboot the phone.
+
 ## Environment
 
 Copy `.env.example` to `.env.local` and fill in:

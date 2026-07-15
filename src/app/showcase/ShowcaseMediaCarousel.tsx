@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight, Images, Play } from 'lucide-react';
 
 import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
 import { useMediaLoadingPreferences } from '@/app/components/useMediaLoadingPreferences';
+import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import type { ShowcaseMediaItem } from '@/lib/showcase';
 
 interface ShowcaseMediaCarouselProps {
@@ -136,6 +137,9 @@ export default function ShowcaseMediaCarousel({
   const isReel = mode === 'reel';
   const showControls = isDetail || isReel;
   const feedPreviewUrl = mode === 'feed' ? activeItem.previewUrl ?? null : null;
+  const feedPosterUrl = feedPreviewUrl
+    ? buildOptimizedPreviewImageUrl(feedPreviewUrl)
+    : null;
   const shouldLoadFeedPoster = mode !== 'feed'
     || priority
     || isNearViewport
@@ -202,7 +206,7 @@ export default function ShowcaseMediaCarousel({
                 ref={activeVideoRef}
                 key={activeItem.id}
                 src={shouldAttachVideo ? activeItem.url : undefined}
-                poster={shouldLoadFeedPoster ? feedPreviewUrl ?? undefined : undefined}
+                poster={shouldLoadFeedPoster ? feedPosterUrl ?? undefined : undefined}
                 muted={!showControls}
                 controls={showControls}
                 autoPlay={shouldPlayVideo}

@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { ArrowRight, ShoppingBag } from 'lucide-react';
+import { Suspense, use } from 'react';
 
 import MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
 import {
@@ -23,7 +24,7 @@ function getParam(value: string | string[] | undefined): string | undefined {
 
 export const revalidate = 60;
 
-export default async function MarketplacePage({ searchParams }: MarketplacePageProps) {
+async function loadMarketplacePageData(searchParams: MarketplacePageProps['searchParams']) {
   const resolvedSearchParams = searchParams ? await searchParams : {};
   const filter = normalizeMarketplaceResourceFilter(
     getParam(resolvedSearchParams.access)
@@ -56,6 +57,65 @@ export default async function MarketplacePage({ searchParams }: MarketplacePageP
       limit: 24,
     },
   };
+
+  return {
+    initialPage,
+    initialFilters: {
+      access: filter,
+      resource,
+      tool,
+      sort,
+      q,
+    },
+    sourceToolOptions,
+  };
+}
+
+function MarketplaceResultsFallback() {
+  return (
+    <div aria-label="Loading marketplace unlocks">
+      <div className="relative mt-8 min-h-44 overflow-hidden rounded-[28px] border border-white/8 bg-zinc-950/70 p-5">
+        <div className="h-3 w-28 rounded-full bg-white/8" />
+        <div className="mt-4 h-12 rounded-full bg-white/[0.04]" />
+        <div className="mt-4 flex gap-2">
+          {[1, 2, 3, 4].map((item) => (
+            <div key={item} className="h-9 w-20 rounded-full bg-white/[0.04]" />
+          ))}
+        </div>
+        <div className="absolute inset-0 -translate-x-full animate-[skeleton-shimmer_1.5s_linear_infinite] bg-gradient-to-r from-transparent via-white/5 to-transparent" />
+      </div>
+      <div className="mt-10 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+        {[1, 2, 3].map((item) => (
+          <div
+            key={item}
+            className="relative min-h-[430px] overflow-hidden rounded-[30px] border border-white/8 bg-zinc-950/70"
+          >
+            <div className="absolute inset-0 -translate-x-full animate-[skeleton-shimmer_1.5s_linear_infinite] bg-gradient-to-r from-transparent via-white/5 to-transparent" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MarketplaceResults({
+  data,
+}: {
+  data: ReturnType<typeof loadMarketplacePageData>;
+}) {
+  const { initialPage, initialFilters, sourceToolOptions } = use(data);
+
+  return (
+    <MarketplaceBrowser
+      initialPage={initialPage}
+      initialFilters={initialFilters}
+      sourceToolOptions={sourceToolOptions}
+    />
+  );
+}
+
+export default function MarketplacePage({ searchParams }: MarketplacePageProps) {
+  const marketplacePageData = loadMarketplacePageData(searchParams);
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -98,17 +158,9 @@ export default async function MarketplacePage({ searchParams }: MarketplacePageP
           </div>
         </div>
 
-        <MarketplaceBrowser
-          initialPage={initialPage}
-          initialFilters={{
-            access: filter,
-            resource,
-            tool,
-            sort,
-            q,
-          }}
-          sourceToolOptions={sourceToolOptions}
-        />
+        <Suspense fallback={<MarketplaceResultsFallback />}>
+          <MarketplaceResults data={marketplacePageData} />
+        </Suspense>
       </div>
     </div>
   );

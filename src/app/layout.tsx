@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import Script from "next/script";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 
 import { siteConfig } from "@/lib/seo";
 
@@ -11,7 +12,16 @@ import DeferredGenerationNotifications from "./components/DeferredGenerationNoti
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
+  // Slow first visits can keep the metric-compatible fallback instead of
+  // repainting the page when the custom font arrives.
+  display: "optional",
+  preload: false,
 });
+
+function getSpeedInsightsSampleRate(): number {
+  const configured = Number(process.env.NEXT_PUBLIC_SPEED_INSIGHTS_SAMPLE_RATE ?? '1');
+  return Number.isFinite(configured) && configured > 0 && configured <= 1 ? configured : 1;
+}
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteConfig.siteUrl),
@@ -69,6 +79,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   const gaMeasurementId = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
+  const speedInsightsEnabled = process.env.NEXT_PUBLIC_SPEED_INSIGHTS_ENABLED === '1';
   const buildId =
     process.env.VERCEL_GIT_COMMIT_SHA?.trim() ||
     process.env.VERCEL_DEPLOYMENT_ID?.trim() ||
@@ -77,9 +88,7 @@ export default function RootLayout({
 
   return (
     <html lang="en" suppressHydrationWarning data-build-id={buildId}>
-      <body
-        className={`${geistSans.variable} antialiased`}
-      >
+      <body className={`${geistSans.variable} antialiased`}>
         <a
           href="#main-content"
           className="ui-focus-ring fixed left-4 top-3 z-[120] -translate-y-24 rounded-full bg-[var(--ui-primary)] px-4 py-3 text-sm font-bold text-[var(--ui-primary-on)] transition focus:translate-y-0"
@@ -88,6 +97,9 @@ export default function RootLayout({
         </a>
         <AppShell>{children}</AppShell>
         <DeferredGenerationNotifications />
+        {speedInsightsEnabled ? (
+          <SpeedInsights sampleRate={getSpeedInsightsSampleRate()} />
+        ) : null}
         {gaMeasurementId ? (
           <>
             <Script

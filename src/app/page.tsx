@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowRight, Sparkles } from 'lucide-react';
+import { Suspense, use } from 'react';
 
 import { CreatorToolPreview } from '@/app/components/CreatorToolPreview';
 import { CreatorToolCard, SectionHeading } from '@/app/components/CreatorStudio';
@@ -132,12 +133,113 @@ async function loadHomeCreatorToolPreviewMap({
   }
 }
 
-export default async function Home() {
+type HomePageData = {
+  showcaseFeed: ShowcaseFeedPage;
+  usedFallback: boolean;
+  previewByTool: Awaited<ReturnType<typeof loadHomeCreatorToolPreviewMap>>;
+};
+
+async function loadHomePageData(): Promise<HomePageData> {
   const { feed: showcaseFeed, usedFallback } = await loadHomeShowcaseFeed();
   const previewByTool = await loadHomeCreatorToolPreviewMap({
     seedItems: showcaseFeed.items,
     skipRemoteFallback: usedFallback,
   });
+
+  return {
+    showcaseFeed,
+    usedFallback,
+    previewByTool,
+  };
+}
+
+function HomeCreatorSuiteFallback() {
+  return (
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4" aria-label="Loading creator previews">
+      {CREATOR_TOOLS.map((tool) => (
+        <CreatorToolCard
+          key={tool.id}
+          tool={tool}
+          variant="suite"
+          prefetch={false}
+        />
+      ))}
+    </div>
+  );
+}
+
+function HomeCreatorSuite({ data }: { data: Promise<HomePageData> }) {
+  const { previewByTool } = use(data);
+
+  return (
+    <div className="ui-stagger grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      {CREATOR_TOOLS.map((tool, index) => (
+        <CreatorToolCard
+          key={tool.id}
+          tool={tool}
+          variant="suite"
+          prefetch={false}
+          preview={
+            // The first mobile card sits inside the initial viewport. Keep its
+            // branded gradient stable so a deferred remote image cannot replace
+            // the already-painted hero as the page's LCP.
+            index > 0 && previewByTool[tool.id] ? (
+              <CreatorToolPreview
+                item={previewByTool[tool.id]}
+                alt={tool.label}
+                className="h-full w-full object-cover opacity-90 transition duration-300 group-hover:opacity-100"
+              />
+            ) : undefined
+          }
+        />
+      ))}
+    </div>
+  );
+}
+
+function HomeInspirationsFallback() {
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5" aria-label="Loading creator feed">
+      {[180, 240, 210, 270, 200].map((height, index) => (
+        <div
+          key={index}
+          className="relative overflow-hidden rounded-[24px] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]"
+          style={{ minHeight: height }}
+        >
+          <div className="absolute inset-0 -translate-x-full animate-[skeleton-shimmer_1.5s_linear_infinite] bg-gradient-to-r from-transparent via-white/5 to-transparent" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HomeInspirations({ data }: { data: Promise<HomePageData> }) {
+  const { showcaseFeed, usedFallback } = use(data);
+
+  if (usedFallback) {
+    return (
+      <div className="space-y-3">
+        <StatusCallout
+          tone="danger"
+          title="Could not load the creator feed"
+          body="Your creation tools are still available. Check the connection, then try the feed again."
+        />
+        <Link href="/?retryFeed=1" prefetch={false} className="ui-button ui-button-secondary ui-focus-ring">Retry feed</Link>
+      </div>
+    );
+  }
+
+  return (
+    <DeferredHomeShowcasePreviewGrid
+      items={showcaseFeed.items}
+      initialSession={null}
+      initialCredits={null}
+    />
+  );
+}
+
+export default function Home() {
+  const homePageData = loadHomePageData();
 
   return (
     <div className="ui-page ui-page-ambient relative flex flex-col overflow-hidden font-[family-name:var(--font-geist-sans)]">
@@ -160,7 +262,7 @@ export default async function Home() {
       />
 
       <main className="studio-shell relative z-10 flex flex-1 flex-col pb-24 pt-7 sm:pt-10">
-        <section className="ui-enter grid gap-8 border-b border-[var(--ui-border-subtle)] pb-10 lg:grid-cols-[minmax(0,1fr)_minmax(420px,0.78fr)] lg:items-end">
+        <section className="grid gap-8 border-b border-[var(--ui-border-subtle)] pb-10 lg:grid-cols-[minmax(0,1fr)_minmax(420px,0.78fr)] lg:items-end">
           <div className="max-w-3xl">
             <Kicker icon={Sparkles}>Obsidian creator studio</Kicker>
             <Text as="h1" variant="display" className="mt-4 max-w-[13ch]">
@@ -214,26 +316,9 @@ export default async function Home() {
             className="mb-5"
           />
 
-          <div className="ui-stagger grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {CREATOR_TOOLS.map((tool, index) => (
-              <CreatorToolCard
-                key={tool.id}
-                tool={tool}
-                variant="suite"
-                prefetch={false}
-                preview={
-                  previewByTool[tool.id] ? (
-                    <CreatorToolPreview
-                      item={previewByTool[tool.id]}
-                      alt={tool.label}
-                      className="h-full w-full object-cover opacity-90 transition duration-300 group-hover:opacity-100"
-                      priority={index === 0}
-                    />
-                  ) : undefined
-                }
-              />
-            ))}
-          </div>
+          <Suspense fallback={<HomeCreatorSuiteFallback />}>
+            <HomeCreatorSuite data={homePageData} />
+          </Suspense>
         </section>
 
         <section className="mt-12 w-full">
@@ -275,22 +360,9 @@ export default async function Home() {
             variant="minimal"
           />
 
-          {usedFallback ? (
-            <div className="space-y-3">
-              <StatusCallout
-                tone="danger"
-                title="Could not load the creator feed"
-                body="Your creation tools are still available. Check the connection, then try the feed again."
-              />
-              <Link href="/?retryFeed=1" prefetch={false} className="ui-button ui-button-secondary ui-focus-ring">Retry feed</Link>
-            </div>
-          ) : (
-            <DeferredHomeShowcasePreviewGrid
-              items={showcaseFeed.items}
-              initialSession={null}
-              initialCredits={null}
-            />
-          )}
+          <Suspense fallback={<HomeInspirationsFallback />}>
+            <HomeInspirations data={homePageData} />
+          </Suspense>
         </section>
       </main>
 

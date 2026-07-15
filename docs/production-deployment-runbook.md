@@ -267,6 +267,41 @@ External alert delivery should route on the stable outbound payload:
 
 Use `/api/ops/backend-dashboard` as the primary dashboard feed. Use `/api/ops/backend-health` and `/api/ops/backend-costs` as drill-down panels. Use `/api/ops/backend-alerts` as the paging source because it combines health, cost, spend, provider, scheduler, media, and settlement signals into one normalized contract.
 
+## Performance Monitoring And Load Budgets
+
+Vercel Speed Insights is the canonical browser real-user monitoring source. Enable Speed Insights for the `ugc-app` Vercel project first, then set `NEXT_PUBLIC_SPEED_INSIGHTS_ENABLED=1` and redeploy. The root layout deliberately injects no monitoring script while that flag is absent, which prevents a failed script request when the paid project feature is disabled. `NEXT_PUBLIC_SPEED_INSIGHTS_SAMPLE_RATE` controls the collection ratio (default `1`). Review production mobile and desktop data separately. The release budgets in `config/performance-budgets.json` use the standard P75 Core Web Vitals thresholds: LCP at most 2.5 seconds, CLS at most 0.1, INP at most 200 milliseconds, FCP at most 1.8 seconds, and TTFB at most 800 milliseconds.
+
+The read-only production load harness measures both TTFB and complete response time, records the Vercel cache status, enforces target-specific P95/P99/error-rate budgets, caps normal edge runs at 300 seconds, concurrency 20, and 50 requests per second, and never exercises mutations, authentication, generation providers, payments, or webhooks. The default rate cap is 25 requests per second. Production access requires an explicit opt-in.
+
+Run a ten-second smoke locally:
+
+```bash
+PERF_ALLOW_PRODUCTION=1 npm run perf:load:smoke
+```
+
+Run the default 30-second bounded check and retain a machine-readable report:
+
+```bash
+PERF_ALLOW_PRODUCTION=1 npm run perf:load -- --output performance-load-results.json
+```
+
+The `Production Performance` GitHub workflow runs for 90 seconds at concurrency 4 every Monday and can also be dispatched manually. Any error-rate, minimum-sample, P95, or P99 violation fails the workflow and its job summary identifies the affected route. The full JSON report is retained as an artifact for 30 days. Treat a single failure as an investigation trigger; treat two consecutive failures as a release blocker until the regression or upstream incident is understood.
+
+The same workflow runs three Lighthouse samples for `/`, `/showcase`, and `/marketplace` under both mobile and desktop emulation, applying the network and CPU constraints directly in Chrome so streamed server content is measured from the browser trace. Median LCP, CLS, FCP, server response time, and Total Blocking Time must meet the budgets in `config/performance-budgets.json`; Lighthouse Total Blocking Time is the lab responsiveness proxy because INP requires real-user interaction data. The performance score is an advisory warning, while the individual user-centric metrics are release gates. HTML and JSON reports are retained for 30 days. Run one local production audit with `LHCI_FORM_FACTOR=mobile PERF_LIGHTHOUSE_RUNS=1 npm run perf:lighthouse`.
+
+The scheduled `edge` profile validates the experience users receive through Vercel and application caches. It is not a database saturation test. Reports retain `x-vercel-cache`, `age`, `cache-control`, and `x-matched-path` observations and summarize edge-served (`HIT`, `STALE`, `REVALIDATED`) separately from naturally origin-served (`MISS`, `BYPASS`) latency. This keeps production misses visible without deliberately defeating production caches.
+
+The cache-bypassing `origin` profile is restricted to localhost backed by an isolated non-production dataset. Every remote hostname is rejected, requests do not follow redirects, and the explicit non-production-data acknowledgement is mandatory. It uses only the viewer-neutral recent showcase feed, a unique cache key, a duration of at most 60 seconds, concurrency at most 2, and at most 2 requests per second. Localhost accepts the absent Vercel cache header.
+
+```bash
+PERF_ALLOW_ORIGIN_LOAD=1 PERF_ORIGIN_NON_PRODUCTION_DATA=1 \
+  PERF_BASE_URL=http://localhost:3000 \
+  npm run perf:load -- --profile origin --duration-seconds 30 --concurrency 1 \
+  --output performance-load-results.json
+```
+
+Use Vercel Speed Insights for field regressions and the scheduled workflow for synthetic latency regressions. Configure Vercel project error/usage alerts and spend management when available on the active plan; the repository-owned workflow remains the plan-independent latency alert.
+
 ## Routine Review
 
 - Weekly: provider failures, paid-generation refunds, job health, storage growth, and bandwidth-heavy reads.

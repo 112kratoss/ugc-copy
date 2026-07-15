@@ -1,0 +1,33 @@
+diff --git a/node_modules/react-native/scripts/cocoapods/new_architecture.rb b/node_modules/react-native/scripts/cocoapods/new_architecture.rb
+--- a/node_modules/react-native/scripts/cocoapods/new_architecture.rb
++++ b/node_modules/react-native/scripts/cocoapods/new_architecture.rb
+@@ -6 +6,2 @@
+ require 'json'
++require 'shellwords'
+@@ -168 +169 @@ class NewArchitectureHelper
+-            infoPlistFiles = `find #{projectFolderPath} -name "Info.plist"`
++            infoPlistFiles = `find #{Shellwords.escape(projectFolderPath)} -name "Info.plist"`
+diff --git a/node_modules/react-native/scripts/cocoapods/rncore.rb b/node_modules/react-native/scripts/cocoapods/rncore.rb
+--- a/node_modules/react-native/scripts/cocoapods/rncore.rb
++++ b/node_modules/react-native/scripts/cocoapods/rncore.rb
+@@ -89 +89 @@ class ReactNativeCoreUtils
+-            return {:http => "file://#{ENV["RCT_TESTONLY_RNCORE_TARBALL_PATH"]}" }
++            return {:http => URI::File.build(path: URI::DEFAULT_PARSER.escape(ENV["RCT_TESTONLY_RNCORE_TARBALL_PATH"])).to_s }
+@@ -146 +146 @@ class ReactNativeCoreUtils
+-        return {:http => URI::File.build(path: destinationDebug).to_s }
++        return {:http => URI::File.build(path: URI::DEFAULT_PARSER.escape(destinationDebug)).to_s }
+@@ -182 +182 @@ class ReactNativeCoreUtils
+-        return {:http => URI::File.build(path: destinationDebug).to_s }
++        return {:http => URI::File.build(path: URI::DEFAULT_PARSER.escape(destinationDebug)).to_s }
+diff --git a/node_modules/react-native/scripts/cocoapods/rndependencies.rb b/node_modules/react-native/scripts/cocoapods/rndependencies.rb
+--- a/node_modules/react-native/scripts/cocoapods/rndependencies.rb
++++ b/node_modules/react-native/scripts/cocoapods/rndependencies.rb
+@@ -73 +73 @@ class ReactNativeDependenciesUtils
+-            return {:http => "file://#{ENV["RCT_USE_LOCAL_RN_DEP"]}" }
++            return {:http => URI::File.build(path: URI::DEFAULT_PARSER.escape(ENV["RCT_USE_LOCAL_RN_DEP"])).to_s }
+@@ -164 +164 @@ class ReactNativeDependenciesUtils
+-        return {:http => URI::File.build(path: destinationDebug).to_s }
++        return {:http => URI::File.build(path: URI::DEFAULT_PARSER.escape(destinationDebug)).to_s }
+@@ -231 +231 @@ class ReactNativeDependenciesUtils
+-        return {:http => URI::File.build(path: destinationDebug).to_s }
++        return {:http => URI::File.build(path: URI::DEFAULT_PARSER.escape(destinationDebug)).to_s }

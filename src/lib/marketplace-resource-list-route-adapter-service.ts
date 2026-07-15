@@ -18,6 +18,8 @@ type MarketplaceResourceListRouteDependencies = {
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
 
+export const MAX_MARKETPLACE_RESOURCE_OFFSET = 960;
+
 function resolveDependencies(dependencies: MarketplaceResourceListRouteDependencies | undefined) {
   return {
     getMarketplaceResourceList: dependencies?.getMarketplaceResourceList ?? getMarketplaceResourceList,
@@ -37,18 +39,41 @@ async function handleMarketplaceResourceListGET(
 ) {
   try {
     const searchParams = new URL(request.url).searchParams;
+    const offset = normalizeNumber(searchParams.get('offset'), 0);
+    if (offset > MAX_MARKETPLACE_RESOURCE_OFFSET) {
+      return NextResponse.json(
+        { error: `offset must be at most ${MAX_MARKETPLACE_RESOURCE_OFFSET}.` },
+        {
+          status: 400,
+          headers: createApiResponseHeaders(request, API_CACHE_CONTROL.privateNoStore),
+        },
+      );
+    }
+
     const page = await dependencies.getMarketplaceResourceList({
       filter: normalizeMarketplaceResourceFilter(searchParams.get('access')),
       resource: normalizeMarketplaceResourceKindFilter(searchParams.get('resource')),
       tool: slugifySourceTool(searchParams.get('tool') ?? undefined),
       q: (searchParams.get('q') ?? '').trim().slice(0, 80),
       sort: normalizeMarketplaceResourceSort(searchParams.get('sort')),
-      offset: normalizeNumber(searchParams.get('offset'), 0),
+      offset,
       limit: Math.min(48, Math.max(1, normalizeNumber(searchParams.get('limit'), 24))),
       countryCode: request.headers.get('x-vercel-ip-country'),
     });
 
-    return NextResponse.json(page, {
+    const boundedPage = page.pageInfo.nextOffset !== null
+      && page.pageInfo.nextOffset > MAX_MARKETPLACE_RESOURCE_OFFSET
+      ? {
+          ...page,
+          pageInfo: {
+            ...page.pageInfo,
+            hasMore: false,
+            nextOffset: null,
+          },
+        }
+      : page;
+
+    return NextResponse.json(boundedPage, {
       headers: createApiResponseHeaders(request, API_CACHE_CONTROL.publicShortEdge, {
         vary: ['x-vercel-ip-country'],
       }),

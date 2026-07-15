@@ -5,7 +5,7 @@ import { unstable_cache } from 'next/cache';
 import { getCreatorDisplayName } from '@/lib/profile';
 import {
   deriveTitleFromBody,
-  getMarketplaceAssetSummaryMap,
+  getMarketplaceAssetSummaryHydration,
   getPostMediaKind,
   isMissingPostTextColumnsError,
   isMissingPostsSchemaError,
@@ -110,6 +110,7 @@ interface LegacyGenerationRow {
 }
 
 const FILTERED_FEED_BATCH_SIZE = 48;
+type ShowcaseFeedHydrationCache = Map<string, ShowcaseFeedItem | null>;
 
 function resolveItemCategory(category: string | null): ShowcaseItemCategory {
   if (category === 'video' || category === 'motion' || category === 'ugc-ad') return 'video';
@@ -425,11 +426,27 @@ function buildAvailableTools(items: ShowcaseFeedItem[]) {
 
 export async function resolvePostRowsToFeedItems(
   rows: PostRow[],
-  adminSupabase: ReturnType<typeof createServiceClient>
+  adminSupabase: ReturnType<typeof createServiceClient>,
+  hydrationCache?: ShowcaseFeedHydrationCache,
 ): Promise<ShowcaseFeedItem[]> {
   const visibleRows = rows.filter((row) => !row.review_status || row.review_status === 'visible');
-  const userIds = Array.from(new Set(visibleRows.map((row) => row.user_id).filter(Boolean))) as string[];
-  const generationIds = Array.from(new Set(visibleRows.map((row) => row.generation_id).filter(Boolean))) as string[];
+  const pendingPostIds = new Set<string>();
+  const rowsToHydrate = hydrationCache
+    ? visibleRows.filter((row) => {
+        if (hydrationCache.has(row.id) || pendingPostIds.has(row.id)) return false;
+        pendingPostIds.add(row.id);
+        return true;
+      })
+    : visibleRows;
+  if (rowsToHydrate.length === 0) {
+    return visibleRows.flatMap((row) => {
+      const item = hydrationCache?.get(row.id);
+      return item ? [item] : [];
+    });
+  }
+
+  const userIds = Array.from(new Set(rowsToHydrate.map((row) => row.user_id).filter(Boolean))) as string[];
+  const generationIds = Array.from(new Set(rowsToHydrate.map((row) => row.generation_id).filter(Boolean))) as string[];
 
   const loadProfiles = async () => {
     const profilesMap: Record<string, ProfileSummary> = {};
@@ -507,7 +524,7 @@ export async function resolvePostRowsToFeedItems(
       modelSlug?: string | null;
     }>>();
     try {
-    const postIds = visibleRows.map((row) => row.id);
+    const postIds = rowsToHydrate.map((row) => row.id);
     if (postIds.length === 0) return sourceToolsMap;
     const { data: sourceToolsRows, error: sourceToolsError } = await adminSupabase
       .from('post_source_tools')
@@ -539,14 +556,17 @@ export async function resolvePostRowsToFeedItems(
     return sourceToolsMap;
   };
 
-  const postIds = visibleRows.map((row) => row.id);
-  const assetMapPromise = getMarketplaceAssetSummaryMap(postIds, adminSupabase);
-  const recipeAssetMapPromise = assetMapPromise.then((assetMap) =>
-    getPublicGenerationRecipeAssetSummaryMap(
-      visibleRows.filter((row) => !assetMap.has(row.id)),
-      adminSupabase
-    )
-  );
+  const postIds = rowsToHydrate.map((row) => row.id);
+  const assetHydrationPromise = getMarketplaceAssetSummaryHydration(postIds, adminSupabase);
+  const assetMapPromise = assetHydrationPromise.then(({ assetMap }) => assetMap);
+  const recipeAssetMapPromise = assetHydrationPromise.then(({
+    assetMap,
+    knownBundlePostIds,
+  }) => getPublicGenerationRecipeAssetSummaryMap(
+    rowsToHydrate.filter((row) => !assetMap.has(row.id)),
+    adminSupabase,
+    knownBundlePostIds === null ? undefined : { knownBundlePostIds }
+  ));
   const [
     profilesMap,
     generationInfoMap,
@@ -564,7 +584,7 @@ export async function resolvePostRowsToFeedItems(
   ]);
 
   const resolvedItems = await Promise.all(
-    visibleRows.map(async (post): Promise<ShowcaseFeedItem | null> => {
+    rowsToHydrate.map(async (post): Promise<ShowcaseFeedItem | null> => {
       let mediaItems = mediaItemsMap.get(post.id) ?? await buildLegacyPostMediaItems({
         supabase: adminSupabase,
         postId: post.id,
@@ -644,7 +664,18 @@ export async function resolvePostRowsToFeedItems(
     })
   );
 
-  return resolvedItems.filter((item): item is ShowcaseFeedItem => item !== null);
+  if (!hydrationCache) {
+    return resolvedItems.filter((item): item is ShowcaseFeedItem => item !== null);
+  }
+
+  resolvedItems.forEach((item, index) => {
+    const postId = rowsToHydrate[index]?.id;
+    if (postId) hydrationCache.set(postId, item);
+  });
+  return visibleRows.flatMap((row) => {
+    const item = hydrationCache.get(row.id);
+    return item ? [item] : [];
+  });
 }
 
 async function collectFilteredFeedItems(params: {
@@ -656,6 +687,7 @@ async function collectFilteredFeedItems(params: {
   unlockFilter: ShowcaseUnlockFilter;
   resourceFilter: ShowcaseResourceFilter;
   adminSupabase: ReturnType<typeof createServiceClient>;
+  hydrationCache?: ShowcaseFeedHydrationCache;
 }): Promise<ShowcaseFeedPage | null> {
   const {
     category,
@@ -666,6 +698,7 @@ async function collectFilteredFeedItems(params: {
     unlockFilter,
     resourceFilter,
     adminSupabase,
+    hydrationCache,
   } = params;
   const matchingItems: ShowcaseFeedItem[] = [];
   const batchSize = Math.max(FILTERED_FEED_BATCH_SIZE, limit * 4);
@@ -687,7 +720,7 @@ async function collectFilteredFeedItems(params: {
       break;
     }
 
-    const items = await resolvePostRowsToFeedItems(rows, adminSupabase);
+    const items = await resolvePostRowsToFeedItems(rows, adminSupabase, hydrationCache);
     matchingItems.push(
       ...items.filter((item) => itemMatchesFeedFilters(item, category, unlockFilter, resourceFilter))
     );
@@ -719,7 +752,8 @@ async function getShowcaseFeedPageBase(
   limit: number,
   toolSlug: string | null,
   unlockFilter: ShowcaseUnlockFilter,
-  resourceFilter: ShowcaseResourceFilter
+  resourceFilter: ShowcaseResourceFilter,
+  hydrationCache?: ShowcaseFeedHydrationCache,
 ): Promise<ShowcaseFeedPage> {
   const adminSupabase = createServiceClient();
   if (sort === 'top-sales' && unlockFilter === 'all' && resourceFilter === 'all') {
@@ -750,6 +784,7 @@ async function getShowcaseFeedPageBase(
       unlockFilter,
       resourceFilter,
       adminSupabase,
+      hydrationCache,
     });
 
     if (filteredPage === null) {
@@ -765,7 +800,11 @@ async function getShowcaseFeedPageBase(
   }
 
   const hasMore = posts.length > limit;
-  const resolvedItems = await resolvePostRowsToFeedItems(posts.slice(0, limit), adminSupabase);
+  const resolvedItems = await resolvePostRowsToFeedItems(
+    posts.slice(0, limit),
+    adminSupabase,
+    hydrationCache,
+  );
   const items = resolvedItems.filter((item) => itemMatchesCategory(item, category));
 
   return {
@@ -970,6 +1009,7 @@ async function getShowcaseForYouFeedPage(params: {
   adminSupabase?: ReturnType<typeof createServiceClient>;
 }): Promise<ShowcaseFeedPage> {
   const adminSupabase = params.adminSupabase ?? createServiceClient();
+  const hydrationCache: ShowcaseFeedHydrationCache = new Map();
 
   return getPersonalizedShowcaseFeedPage({
     anonymousKeyHash: params.anonymousKeyHash,
@@ -983,7 +1023,10 @@ async function getShowcaseForYouFeedPage(params: {
     hydratePostIds: async (postIds) => {
       const rows = await fetchPostRowsByIds(postIds, adminSupabase);
       if (rows === null) return [];
-      const items = await resolvePostRowsToFeedItems(rows, adminSupabase);
+      const items = await resolvePostRowsToFeedItems(rows, adminSupabase, hydrationCache);
+      for (const postId of postIds) {
+        if (!hydrationCache.has(postId)) hydrationCache.set(postId, null);
+      }
       return items.filter((item) => (
         (!params.toolSlug || item.sourceToolSlug === params.toolSlug)
         && itemMatchesFeedFilters(
@@ -1003,6 +1046,7 @@ async function getShowcaseForYouFeedPage(params: {
         params.toolSlug,
         params.unlockFilter,
         params.resourceFilter,
+        hydrationCache,
       );
       return page.items;
     },

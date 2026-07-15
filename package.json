@@ -8,7 +8,9 @@
   "overrides": {
     "next": {
       "postcss": "^8.5.10"
-    }
+    },
+    "tmp": "0.2.7",
+    "uuid": "11.1.1"
   },
   "scripts": {
     "backfill:legacy-media": "node scripts/backfill-legacy-temp-media.mjs",
@@ -22,6 +24,11 @@
     "dev:turbo": "next dev",
     "build": "next build",
     "build:verify": "node scripts/check-ffmpeg-build-artifact.mjs",
+    "perf:load": "node scripts/performance-load-test.mjs",
+    "perf:load:smoke": "node scripts/performance-load-test.mjs --smoke",
+    "perf:load:self-test": "node scripts/performance-load-test.mjs --self-test",
+    "perf:lighthouse": "lhci autorun --config=config/lighthouse.cjs",
+    "perf:lighthouse:self-test": "node config/lighthouse.cjs",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
@@ -32,6 +39,7 @@
   "dependencies": {
     "@supabase/ssr": "0.12.0",
     "@supabase/supabase-js": "2.108.2",
+    "@vercel/speed-insights": "2.0.0",
     "@xyflow/react": "^12.10.1",
     "clsx": "^2.1.1",
     "ffmpeg-static": "^5.3.0",
@@ -47,6 +55,7 @@
     "thumbhash": "^0.1.1"
   },
   "devDependencies": {
+    "@lhci/cli": "0.15.1",
     "@playwright/test": "^1.58.2",
     "@tailwindcss/postcss": "^4",
     "@testing-library/jest-dom": "^6.9.1",

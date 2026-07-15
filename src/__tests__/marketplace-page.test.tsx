@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import MarketplacePage, { revalidate } from '@/app/marketplace/page';
@@ -42,9 +42,11 @@ describe('MarketplacePage', () => {
       items: [],
     });
 
-    render(await MarketplacePage({
-      searchParams: Promise.resolve({}),
-    }));
+    await act(async () => {
+      render(MarketplacePage({
+        searchParams: Promise.resolve({}),
+      }));
+    });
 
     expect(revalidate).toBe(60);
     expect(headersMock).not.toHaveBeenCalled();
@@ -64,11 +66,13 @@ describe('MarketplacePage', () => {
       items: [],
     });
 
-    render(await MarketplacePage({
-      searchParams: Promise.resolve({}),
-    }));
+    await act(async () => {
+      render(MarketplacePage({
+        searchParams: Promise.resolve({}),
+      }));
+    });
 
-    expect(screen.getByRole('link', { name: /^recent$/i })).toHaveAttribute('href', '/marketplace?sort=recent');
+    expect(await screen.findByRole('link', { name: /^recent$/i })).toHaveAttribute('href', '/marketplace?sort=recent');
     expect(screen.getAllByRole('link', { name: /share a post/i })[0]).toHaveAttribute('href', '/post/new');
     expect(screen.queryByRole('link', { name: /create a listing/i })).not.toBeInTheDocument();
   });
@@ -140,11 +144,13 @@ describe('MarketplacePage', () => {
       ],
     });
 
-    render(await MarketplacePage({
-      searchParams: Promise.resolve({}),
-    }));
+    await act(async () => {
+      render(MarketplacePage({
+        searchParams: Promise.resolve({}),
+      }));
+    });
 
-    expect(screen.getByText('Tip / note')).toBeInTheDocument();
+    expect(await screen.findByText('Tip / note')).toBeInTheDocument();
     expect(screen.getByText('Prompt pacing tip')).toBeInTheDocument();
     expect(screen.getByText('Lead with the product benefit before adding style language.')).toBeInTheDocument();
     expect(screen.getByText('Free unlock')).toBeInTheDocument();
@@ -197,11 +203,14 @@ describe('MarketplacePage', () => {
       ],
     });
 
-    const { container } = render(await MarketplacePage({
-      searchParams: Promise.resolve({}),
-    }));
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(MarketplacePage({
+        searchParams: Promise.resolve({}),
+      })));
+    });
 
-    const image = screen.getByRole('img', { name: 'Image post' });
+    const image = await screen.findByRole('img', { name: 'Image post' });
     expect(image).toHaveAttribute('loading', 'lazy');
     expect(image).toHaveAttribute('decoding', 'async');
 

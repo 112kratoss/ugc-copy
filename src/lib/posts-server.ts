@@ -315,86 +315,194 @@ export async function findPublicPostReferenceByIdOrGenerationId(
   return post;
 }
 
-export async function getMarketplaceAssetSummaryMap(
+export interface MarketplaceAssetSummaryHydration {
+  assetMap: Map<string, ShowcaseAssetSummary>;
+  knownBundlePostIds: ReadonlySet<string> | null;
+}
+
+const PUBLIC_BUNDLE_SUMMARY_RPC = 'get_public_post_resource_bundle_summaries';
+const PRIVATE_BUNDLE_SUMMARY_FIELDS = [
+  'id',
+  'title',
+  'access_mode',
+  'price_usd_cents',
+  'preview_text',
+  'prompt_text',
+  'notes_markdown',
+  'workflow_share_url',
+  'workflow_snapshot',
+  'attachments',
+  'allow_remix',
+  'resource_sections',
+  'resource_items',
+  'sales_count',
+] as const;
+
+function isMissingPublicBundleSummaryRpcError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as SupabaseSchemaError;
+  const errorText = [candidate.message, candidate.details, candidate.hint]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ')
+    .toLowerCase();
+
+  return (
+    candidate.code === '42883' || candidate.code === 'PGRST202'
+  ) && errorText.includes(PUBLIC_BUNDLE_SUMMARY_RPC);
+}
+
+function failClosedMarketplaceAssetSummaryHydration(postIds: string[]): MarketplaceAssetSummaryHydration {
+  return {
+    assetMap: new Map(),
+    // Treat every requested post as potentially bundled until bundle presence can
+    // be established. This prevents a database error from synthesizing a public
+    // recipe over an intentional draft bundle.
+    knownBundlePostIds: new Set(postIds),
+  };
+}
+
+function buildMarketplaceAssetSummaryMap(
+  bundleRows: Array<Record<string, unknown>>
+): Map<string, ShowcaseAssetSummary> {
+  return new Map(
+    bundleRows
+      .filter((row) => row.status === 'published')
+      .filter((row) =>
+        typeof row.id === 'string' &&
+        typeof row.post_id === 'string' &&
+        typeof row.title === 'string' &&
+        (row.access_mode === 'free' || row.access_mode === 'paid') &&
+        typeof row.price_usd_cents === 'number'
+      )
+      .map((row) => {
+        const salesCount = typeof row.sales_count === 'number' ? row.sales_count : 0;
+        const legacyResources: Partial<PostResourceBundleResources> = {
+          promptText: typeof row.prompt_text === 'string' ? row.prompt_text : null,
+          notesMarkdown: typeof row.notes_markdown === 'string' ? row.notes_markdown : null,
+          workflowShareUrl: typeof row.workflow_share_url === 'string' ? row.workflow_share_url : null,
+          workflowSnapshot: row.workflow_snapshot as PostResourceBundleResources['workflowSnapshot'],
+          attachments: normalizePostResourceAttachments(row.attachments),
+          allowRemix: Boolean(row.allow_remix),
+          sections: normalizePostResourceSections((row as { resource_sections?: unknown }).resource_sections),
+        };
+        const resourceItems = normalizePostResourceItems((row as { resource_items?: unknown }).resource_items, legacyResources);
+        const normalizedResources = {
+          ...legacyResources,
+          items: resourceItems,
+        };
+        const lockedPreview = buildPostResourceBundleLockedPreview(normalizedResources);
+        const resourceKinds = getPostResourceKinds(normalizedResources);
+
+        return [
+          row.post_id as string,
+          {
+            id: row.id as string,
+            postId: row.post_id as string,
+            title: row.title as string,
+            accessMode: row.access_mode as ShowcaseAssetSummary['accessMode'],
+            priceUsdCents: row.price_usd_cents as number,
+            previewText: typeof row.preview_text === 'string' ? row.preview_text : '',
+            allowRemix: Boolean(row.allow_remix || resourceItems.some((item) => item.type === 'remix_access' || item.remixUse === 'direct_remix')),
+            ...(salesCount > 0 ? { salesCount } : {}),
+            resourceKinds,
+            itemCounts: lockedPreview.itemCounts,
+            lockedPreview,
+          } satisfies ShowcaseAssetSummary,
+        ] as const;
+      })
+  );
+}
+
+function hydratePublicBundleSummaryRows(
+  rows: Array<Record<string, unknown>>,
+  postIds: string[]
+): MarketplaceAssetSummaryHydration {
+  const knownBundlePostIds = new Set<string>();
+  for (const row of rows) {
+    if (typeof row.post_id !== 'string') {
+      console.error('Public bundle summary RPC returned a row without a post id.');
+      return failClosedMarketplaceAssetSummaryHydration(postIds);
+    }
+    knownBundlePostIds.add(row.post_id);
+    if (
+      row.status !== 'published' &&
+      PRIVATE_BUNDLE_SUMMARY_FIELDS.some((field) => row[field] !== null && row[field] !== undefined)
+    ) {
+      console.error('Public bundle summary RPC returned details for a non-published bundle.');
+      return failClosedMarketplaceAssetSummaryHydration(postIds);
+    }
+  }
+
+  return {
+    assetMap: buildMarketplaceAssetSummaryMap(rows),
+    knownBundlePostIds,
+  };
+}
+
+async function getMarketplaceAssetSummaryHydrationFallback(
   postIds: string[],
-  adminSupabase = createServiceClient()
-): Promise<Map<string, ShowcaseAssetSummary>> {
-  if (postIds.length === 0) {
-    return new Map();
+  adminSupabase: SupabaseClient
+): Promise<MarketplaceAssetSummaryHydration | null> {
+  const { data: presenceData, error: presenceError } = await adminSupabase
+    .from('post_resource_bundles')
+    .select('post_id, status')
+    .in('post_id', postIds);
+
+  if (presenceError) {
+    if (isMissingPostResourceBundlesSchemaError(presenceError)) return null;
+    console.error('Failed to load post resource bundle presence:', presenceError);
+    return failClosedMarketplaceAssetSummaryHydration(postIds);
+  }
+
+  const presenceRows = (presenceData ?? []) as unknown as Array<Record<string, unknown>>;
+  const knownBundlePostIds = new Set(
+    presenceRows
+      .map((row) => row.post_id)
+      .filter((postId): postId is string => typeof postId === 'string')
+  );
+  const publishedPostIds = presenceRows
+    .filter((row) => row.status === 'published')
+    .map((row) => row.post_id)
+    .filter((postId): postId is string => typeof postId === 'string');
+
+  if (publishedPostIds.length === 0) {
+    return { assetMap: new Map(), knownBundlePostIds };
   }
 
   const bundleSelectWithItems =
     'id, post_id, title, access_mode, price_usd_cents, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, resource_sections, resource_items, sales_count, status';
   const bundleSelectLegacy =
     'id, post_id, title, access_mode, price_usd_cents, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, sales_count, status';
-  const loadBundles = (selectColumns: string) =>
+  const loadPublishedBundles = (selectColumns: string) =>
     adminSupabase
       .from('post_resource_bundles')
       .select(selectColumns)
-      .in('post_id', postIds)
+      .in('post_id', publishedPostIds)
       .eq('status', 'published');
 
-  let bundleResult = await loadBundles(bundleSelectWithItems);
+  let bundleResult = await loadPublishedBundles(bundleSelectWithItems);
   if (isMissingPostResourceItemsColumnError(bundleResult.error)) {
-    bundleResult = await loadBundles(bundleSelectLegacy);
+    bundleResult = await loadPublishedBundles(bundleSelectLegacy);
   }
 
-  if (!bundleResult.error) {
-    const bundleRows = (bundleResult.data ?? []) as unknown as Array<Record<string, unknown>>;
-
-    return new Map(
-      bundleRows
-        .filter((row) =>
-          typeof row.id === 'string' &&
-          typeof row.post_id === 'string' &&
-          typeof row.title === 'string' &&
-          (row.access_mode === 'free' || row.access_mode === 'paid') &&
-          typeof row.price_usd_cents === 'number'
-        )
-        .map((row) => {
-          const salesCount = typeof row.sales_count === 'number' ? row.sales_count : 0;
-          const legacyResources: Partial<PostResourceBundleResources> = {
-            promptText: typeof row.prompt_text === 'string' ? row.prompt_text : null,
-            notesMarkdown: typeof row.notes_markdown === 'string' ? row.notes_markdown : null,
-            workflowShareUrl: typeof row.workflow_share_url === 'string' ? row.workflow_share_url : null,
-            workflowSnapshot: row.workflow_snapshot as PostResourceBundleResources['workflowSnapshot'],
-            attachments: normalizePostResourceAttachments(row.attachments),
-            allowRemix: Boolean(row.allow_remix),
-            sections: normalizePostResourceSections((row as { resource_sections?: unknown }).resource_sections),
-          };
-          const resourceItems = normalizePostResourceItems((row as { resource_items?: unknown }).resource_items, legacyResources);
-          const normalizedResources = {
-            ...legacyResources,
-            items: resourceItems,
-          };
-          const lockedPreview = buildPostResourceBundleLockedPreview(normalizedResources);
-          const resourceKinds = getPostResourceKinds(normalizedResources);
-
-          return [
-            row.post_id as string,
-            {
-              id: row.id as string,
-              postId: row.post_id as string,
-              title: row.title as string,
-              accessMode: row.access_mode as ShowcaseAssetSummary['accessMode'],
-              priceUsdCents: row.price_usd_cents as number,
-              previewText: typeof row.preview_text === 'string' ? row.preview_text : '',
-              allowRemix: Boolean(row.allow_remix || resourceItems.some((item) => item.type === 'remix_access' || item.remixUse === 'direct_remix')),
-              ...(salesCount > 0 ? { salesCount } : {}),
-              resourceKinds,
-              itemCounts: lockedPreview.itemCounts,
-              lockedPreview,
-            } satisfies ShowcaseAssetSummary,
-          ] as const;
-        })
-    );
+  if (bundleResult.error) {
+    if (isMissingPostResourceBundlesSchemaError(bundleResult.error)) return null;
+    console.error('Failed to load published post resource bundle summaries:', bundleResult.error);
+    return { assetMap: new Map(), knownBundlePostIds };
   }
 
-  if (!isMissingPostResourceBundlesSchemaError(bundleResult.error)) {
-    console.error('Failed to load post resource bundle summaries:', bundleResult.error);
-    return new Map();
-  }
+  return {
+    assetMap: buildMarketplaceAssetSummaryMap(
+      (bundleResult.data ?? []) as unknown as Array<Record<string, unknown>>
+    ),
+    knownBundlePostIds,
+  };
+}
 
+async function getLegacyMarketplaceAssetSummaryHydration(
+  postIds: string[],
+  adminSupabase: SupabaseClient
+): Promise<MarketplaceAssetSummaryHydration> {
   const { data, error } = await adminSupabase
     .from('marketplace_assets')
     .select('id, post_id, title, price_usd_cents, status')
@@ -405,30 +513,93 @@ export async function getMarketplaceAssetSummaryMap(
     if (!isMissingMarketplaceSchemaError(error)) {
       console.error('Failed to load legacy marketplace asset summaries:', error);
     }
-    return new Map();
+    return {
+      assetMap: new Map(),
+      knownBundlePostIds: null,
+    };
   }
 
-  return new Map(
-    (data ?? [])
-      .filter((row) =>
-        typeof row.id === 'string' &&
-        typeof row.post_id === 'string' &&
-        typeof row.title === 'string' &&
-        typeof row.price_usd_cents === 'number'
-      )
-      .map((row) => [
-        row.post_id as string,
-        {
-          id: row.id as string,
-          postId: row.post_id as string,
-          title: row.title as string,
-          accessMode: (row.price_usd_cents as number) === 0 ? 'free' : 'paid',
-          priceUsdCents: row.price_usd_cents as number,
-          previewText: '',
-          allowRemix: false,
-          salesCount: 0,
-          resourceKinds: [],
-        } satisfies ShowcaseAssetSummary,
-      ])
+  return {
+    assetMap: new Map(
+      (data ?? [])
+        .filter((row) =>
+          typeof row.id === 'string' &&
+          typeof row.post_id === 'string' &&
+          typeof row.title === 'string' &&
+          typeof row.price_usd_cents === 'number'
+        )
+        .map((row) => [
+          row.post_id as string,
+          {
+            id: row.id as string,
+            postId: row.post_id as string,
+            title: row.title as string,
+            accessMode: (row.price_usd_cents as number) === 0 ? 'free' : 'paid',
+            priceUsdCents: row.price_usd_cents as number,
+            previewText: '',
+            allowRemix: false,
+            salesCount: 0,
+            resourceKinds: [],
+          } satisfies ShowcaseAssetSummary,
+        ])
+    ),
+    knownBundlePostIds: null,
+  };
+}
+
+export async function getMarketplaceAssetSummaryHydration(
+  postIds: string[],
+  adminSupabase = createServiceClient()
+): Promise<MarketplaceAssetSummaryHydration> {
+  if (postIds.length === 0) {
+    return {
+      assetMap: new Map(),
+      knownBundlePostIds: new Set(),
+    };
+  }
+
+  const rpc = (adminSupabase as unknown as {
+    rpc?: (
+      name: string,
+      params: { p_post_ids: string[] }
+    ) => Promise<{ data: unknown; error: unknown }>;
+  }).rpc;
+  if (typeof rpc === 'function') {
+    const { data, error } = await rpc.call(adminSupabase, PUBLIC_BUNDLE_SUMMARY_RPC, {
+      p_post_ids: postIds,
+    });
+    if (!error) {
+      if (!Array.isArray(data)) {
+        console.error('Public bundle summary RPC returned an invalid response.');
+        return failClosedMarketplaceAssetSummaryHydration(postIds);
+      }
+      return hydratePublicBundleSummaryRows(
+        data as Array<Record<string, unknown>>,
+        postIds
+      );
+    }
+    if (!isMissingPublicBundleSummaryRpcError(error)) {
+      console.error('Failed to load public post resource bundle summaries:', error);
+      return failClosedMarketplaceAssetSummaryHydration(postIds);
+    }
+  }
+
+  // Rolling-deploy compatibility: older databases do not have the RPC. Read
+  // presence/status first, then request detailed columns only for rows the
+  // database has already identified as published.
+  const fallbackHydration = await getMarketplaceAssetSummaryHydrationFallback(
+    postIds,
+    adminSupabase
   );
+  if (fallbackHydration) return fallbackHydration;
+
+  return getLegacyMarketplaceAssetSummaryHydration(postIds, adminSupabase);
+}
+
+export async function getMarketplaceAssetSummaryMap(
+  postIds: string[],
+  adminSupabase = createServiceClient()
+): Promise<Map<string, ShowcaseAssetSummary>> {
+  const { assetMap } = await getMarketplaceAssetSummaryHydration(postIds, adminSupabase);
+  return assetMap;
 }

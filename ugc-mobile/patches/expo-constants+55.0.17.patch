@@ -1,0 +1,18 @@
+diff --git a/node_modules/expo-constants/ios/EXConstants.podspec b/node_modules/expo-constants/ios/EXConstants.podspec
+--- a/node_modules/expo-constants/ios/EXConstants.podspec
++++ b/node_modules/expo-constants/ios/EXConstants.podspec
+@@ -1 +1,2 @@
+ require 'json'
++require 'shellwords'
+@@ -37 +38 @@ Pod::Spec.new do |s|
+-  env_vars = ENV['PROJECT_ROOT'] ? "PROJECT_ROOT=#{ENV['PROJECT_ROOT']} " : ""
++  env_vars = ENV['PROJECT_ROOT'] ? "PROJECT_ROOT=#{Shellwords.escape(ENV['PROJECT_ROOT'])} " : ""
+@@ -40 +41 @@ Pod::Spec.new do |s|
+-    :script => "bash -l -c \"#{env_vars}$PODS_TARGET_SRCROOT/../scripts/get-app-config-ios.sh\"",
++    :script => "#{env_vars}bash -l \"$PODS_TARGET_SRCROOT/../scripts/get-app-config-ios.sh\"",
+diff --git a/node_modules/expo-constants/scripts/get-app-config-ios.sh b/node_modules/expo-constants/scripts/get-app-config-ios.sh
+--- a/node_modules/expo-constants/scripts/get-app-config-ios.sh
++++ b/node_modules/expo-constants/scripts/get-app-config-ios.sh
+@@ -11 +11 @@ EXPO_CONSTANTS_PACKAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+-PROJECT_DIR_BASENAME=$(basename $PROJECT_DIR)
++PROJECT_DIR_BASENAME=$(basename "$PROJECT_DIR")

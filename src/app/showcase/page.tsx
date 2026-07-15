@@ -13,6 +13,7 @@ import {
     type ShowcaseFeedPage,
 } from '@/lib/showcase';
 import { createMetadata } from '@/lib/seo';
+import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 
 type ShowcasePageProps = {
     searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -38,7 +39,9 @@ function getPriorityVideoPoster(feed: ShowcaseFeedPage): string | null {
     const cover = priorityItem.mediaItems
         ?.slice()
         .sort((left, right) => left.sortOrder - right.sortOrder)[0];
-    return cover?.mediaKind === 'video' ? cover.previewUrl ?? null : null;
+    return cover?.mediaKind === 'video' && cover.previewUrl
+        ? buildOptimizedPreviewImageUrl(cover.previewUrl)
+        : null;
 }
 
 export async function generateMetadata({ searchParams }: ShowcasePageProps): Promise<Metadata> {

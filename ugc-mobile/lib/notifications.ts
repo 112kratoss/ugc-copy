@@ -42,12 +42,23 @@ export type MobilePushRegistrationResult =
   | { status: 'missing-project-id' }
   | { status: 'missing-firebase-setup' };
 
+type NotificationPermissionResponse = Notifications.NotificationPermissionsStatus & {
+  granted: boolean;
+  canAskAgain: boolean;
+};
+
+function withBasePermissionFields(
+  permissions: Notifications.NotificationPermissionsStatus
+): NotificationPermissionResponse {
+  return permissions as NotificationPermissionResponse;
+}
+
 export async function getMobilePushPermissionState(): Promise<{ status: MobilePushPermissionStatus }> {
   if (!isNativeMobile()) {
     return { status: 'unsupported' };
   }
 
-  const permissions = await Notifications.getPermissionsAsync();
+  const permissions = withBasePermissionFields(await Notifications.getPermissionsAsync());
   if (permissions.granted) {
     return { status: 'granted' };
   }
@@ -117,13 +128,13 @@ export async function registerForMobilePushNotifications(
 
   await configureAndroidChannel();
 
-  const currentPermissions = await Notifications.getPermissionsAsync();
+  const currentPermissions = withBasePermissionFields(await Notifications.getPermissionsAsync());
   let finalPermissions = currentPermissions;
   if (!currentPermissions.granted) {
     if (!options.requestPermission) {
       return { status: currentPermissions.canAskAgain === false ? 'denied' : 'permission-required' };
     }
-    finalPermissions = await Notifications.requestPermissionsAsync();
+    finalPermissions = withBasePermissionFields(await Notifications.requestPermissionsAsync());
   }
 
   if (!finalPermissions.granted) {

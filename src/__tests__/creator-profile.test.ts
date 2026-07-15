@@ -63,14 +63,91 @@ type PostMediaRow = {
   sort_order: number;
 };
 
+type ResourceBundleRow = {
+  id: string;
+  post_id: string;
+  title: string;
+  access_mode: 'free' | 'paid';
+  price_usd_cents: number;
+  preview_text: string;
+  allow_remix: boolean;
+  status: 'published' | 'draft';
+};
+
 let profilesState: ProfileRow[] = [];
 let generationsState: GenerationRow[] = [];
 let postsState: PostRow[] = [];
 let postMediaState: PostMediaRow[] = [];
+let resourceBundlesState: ResourceBundleRow[] = [];
 let postsMissingSourceToolSlugColumn = false;
+let creatorStatsRpcState: Record<string, unknown> | null = null;
+let tableAccesses: string[] = [];
+let bundleSummaryRpcCalls = 0;
+
+function createResourceBundleQuery() {
+  const filters: Array<(row: ResourceBundleRow) => boolean> = [];
+  const query = {
+    in(column: string, values: unknown[]) {
+      filters.push((row) => values.includes((row as unknown as Record<string, unknown>)[column]));
+      return query;
+    },
+    eq(column: string, value: unknown) {
+      filters.push((row) => (row as unknown as Record<string, unknown>)[column] === value);
+      return query;
+    },
+    then<TResult1 = { data: ResourceBundleRow[]; error: null }, TResult2 = never>(
+      onfulfilled?: ((value: { data: ResourceBundleRow[]; error: null }) => TResult1 | PromiseLike<TResult1>) | null,
+      onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+    ) {
+      return Promise.resolve({
+        data: resourceBundlesState.filter((row) => filters.every((filter) => filter(row))),
+        error: null,
+      }).then(onfulfilled, onrejected);
+    },
+  };
+
+  return query;
+}
 
 function createServiceClientMock() {
   return {
+    async rpc(name: string) {
+      if (name === 'get_public_post_resource_bundle_summaries') {
+        bundleSummaryRpcCalls += 1;
+        return {
+          data: resourceBundlesState.map((row) => (
+            row.status === 'published'
+              ? row
+              : {
+                  id: null,
+                  post_id: row.post_id,
+                  title: null,
+                  access_mode: null,
+                  price_usd_cents: null,
+                  preview_text: null,
+                  prompt_text: null,
+                  notes_markdown: null,
+                  workflow_share_url: null,
+                  workflow_snapshot: null,
+                  attachments: null,
+                  allow_remix: null,
+                  resource_sections: null,
+                  resource_items: null,
+                  sales_count: null,
+                  status: row.status,
+                }
+          )),
+          error: null,
+        };
+      }
+      if (name !== 'get_creator_profile_stats') {
+        throw new Error(`Unexpected RPC access: ${name}`);
+      }
+      if (creatorStatsRpcState === null) {
+        return { data: null, error: { code: 'PGRST202' } };
+      }
+      return { data: creatorStatsRpcState, error: null };
+    },
     storage: {
       from: vi.fn(() => ({
         getPublicUrl: vi.fn((path: string) => ({
@@ -79,6 +156,7 @@ function createServiceClientMock() {
       })),
     },
     from(table: string) {
+      tableAccesses.push(table);
       if (table === 'profiles') {
         return {
           select() {
@@ -276,17 +354,7 @@ function createServiceClientMock() {
       if (table === 'post_resource_bundles') {
         return {
           select() {
-            return {
-              in() {
-                return this;
-              },
-              async eq() {
-                return {
-                  data: [],
-                  error: null,
-                };
-              },
-            };
+            return createResourceBundleQuery();
           },
         };
       }
@@ -384,7 +452,11 @@ describe('creator profile data loader', () => {
         sort_order: 0,
       },
     ];
+    resourceBundlesState = [];
     postsMissingSourceToolSlugColumn = false;
+    creatorStatsRpcState = null;
+    tableAccesses = [];
+    bundleSummaryRpcCalls = 0;
   });
 
   afterEach(() => {
@@ -407,6 +479,35 @@ describe('creator profile data loader', () => {
     expect(data?.stats.totalSaves).toBe(12);
     expect(data?.pageInfo.hasMore).toBe(false);
     expect(data?.pageInfo).toMatchObject({ limit: 24, offset: 0, nextOffset: null });
+  });
+
+  it('uses one bundle query and keeps draft bundle recipes private on creator pages', async () => {
+    resourceBundlesState = [{
+      id: 'draft-bundle-1',
+      post_id: 'post-1',
+      title: 'Private workflow draft',
+      access_mode: 'paid',
+      price_usd_cents: 1900,
+      preview_text: 'This draft must not appear publicly.',
+      allow_remix: true,
+      status: 'draft',
+    }];
+    creatorStatsRpcState = {
+      publicCreations: 1,
+      totalSaves: 12,
+      totalRemixes: 4,
+      unlocks: 0,
+      totalUnlockSales: 0,
+      toolsUsed: [],
+    };
+
+    const { getCreatorProfilePageData } = await import('@/lib/creator-profile');
+    const data = await getCreatorProfilePageData('Creator-Name');
+
+    expect(data?.items[0].asset).toBeNull();
+    expect(bundleSummaryRpcCalls).toBe(1);
+    expect(tableAccesses).not.toContain('post_resource_bundles');
+    expect(tableAccesses).not.toContain('generation_input_media');
   });
 
   it('returns stable offset pages while keeping full-profile statistics', async () => {

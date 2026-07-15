@@ -12,6 +12,7 @@ import {
   DEVELOPMENT_ONLY_NATIVE_MODULES,
   setAndroidBuildProfileAutolinking,
   setIosBuildProfileAutolinking,
+  setPathSafeIosBundleScript,
 } from '../plugins/withBuildProfileAutolinking';
 
 const projectRoot = join(__dirname, '..');
@@ -46,10 +47,6 @@ describe('Android native network config', () => {
     const packageJson = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8'));
     const easJson = JSON.parse(readFileSync(join(projectRoot, 'eas.json'), 'utf8'));
     const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
-    const autolinkingPatch = readFileSync(
-      join(projectRoot, 'patches/expo-modules-autolinking+3.0.26.patch'),
-      'utf8'
-    );
     const settingsGradle = `plugins {
   id("expo-autolinking-settings")
 }
@@ -63,9 +60,9 @@ end
     const productionPodfile = setIosBuildProfileAutolinking(podfile);
 
     expect(packageJson.dependencies['expo-dev-client']).toBeUndefined();
-    expect(packageJson.devDependencies['expo-dev-client']).toBe('6.0.21');
+    expect(packageJson.devDependencies['expo-dev-client']).toBe('~55.0.37');
     expect(packageJson.scripts.postinstall).toBe('patch-package');
-    expect(autolinkingPatch).toContain('value.forEach { optionsMap.add(key to it) }');
+    expect(packageJson.dependencies.expo).toMatch(/^\^55\./);
     expect(appJson.expo.plugins).toContain('./plugins/withBuildProfileAutolinking');
     expect(easJson.build.development.env.MAGICBOOKLET_INCLUDE_DEV_CLIENT).toBe('true');
     expect(easJson.build.preview.env.MAGICBOOKLET_INCLUDE_DEV_CLIENT).toBe('false');
@@ -88,6 +85,45 @@ end
 
     expect(appJson.expo.ios.usesAppleSignIn).toBe(true);
     expect(appJson.expo.plugins).toContain('expo-apple-authentication');
+  });
+
+  it('keeps Expo Constants builds safe when the workspace path contains spaces', () => {
+    const constantsPatch = readFileSync(
+      join(projectRoot, 'patches/expo-constants+55.0.17.patch'),
+      'utf8'
+    );
+
+    expect(constantsPatch).toContain('basename \"$PROJECT_DIR\"');
+    expect(constantsPatch).toContain('bash -l \\\"$PODS_TARGET_SRCROOT/../scripts/get-app-config-ios.sh\\\"');
+  });
+
+  it('quotes the resolved React Native iOS bundle script path', () => {
+    const unsafeInvocation =
+      '`\"$NODE_BINARY\" --print \"require(\'path\').dirname(require.resolve(\'react-native/package.json\')) + \'/scripts/react-native-xcode.sh\'\"`';
+    const project = {
+      hash: {
+        project: {
+          objects: {
+            PBXShellScriptBuildPhase: {
+              phase: {
+                name: JSON.stringify('Bundle React Native code and images'),
+                shellScript: JSON.stringify(`before\n${unsafeInvocation}\nafter\n`),
+              },
+            },
+          },
+        },
+      },
+    };
+
+    setPathSafeIosBundleScript(project);
+    const script = JSON.parse(
+      project.hash.project.objects.PBXShellScriptBuildPhase.phase.shellScript
+    );
+
+    expect(script).toContain('REACT_NATIVE_XCODE_SCRIPT=');
+    expect(script).toContain('\"$REACT_NATIVE_XCODE_SCRIPT\"');
+    expect(script).not.toContain(unsafeInvocation);
+    expect(() => setPathSafeIosBundleScript(project)).not.toThrow();
   });
 
   it('registers verified referral links on iOS and Android', () => {

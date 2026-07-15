@@ -30,6 +30,7 @@ import { buildShowcaseDetailPath } from '@/lib/share';
 import type { SourceToolOption } from '@/lib/source-tools';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 import { HoverVideo } from '@/app/components/HoverVideo';
+import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
 
 interface MarketplacePageInfo {
   hasMore: boolean;
@@ -370,20 +371,22 @@ function MarketplaceCard({
       aria-label={`${unlockCtaLabel}: ${asset.title}`}
       className="group mb-6 block break-inside-avoid overflow-hidden rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(18,18,22,0.98),rgba(10,10,14,0.98))] shadow-[0_24px_70px_rgba(0,0,0,0.35)] transition hover:border-white/14 hover:shadow-[0_28px_90px_rgba(0,0,0,0.45)]"
     >
-      <div className="relative overflow-hidden border-b border-white/8 bg-black/60">
+      <div className={`relative overflow-hidden border-b border-white/8 bg-black/60 ${
+        asset.post?.mediaUrl && asset.post.mediaKind === 'image' ? 'h-64' : ''
+      }`}>
         {asset.post?.mediaUrl ? (
           asset.post.mediaKind === 'image' ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={asset.post.mediaUrl}
+            <OptimizedPreviewImage
+              previewSrc={asset.post.mediaPreviewUrl ?? asset.post.mediaUrl}
+              fallbackSrc={asset.post.mediaUrl}
               alt={asset.post.title}
-              loading="lazy"
-              decoding="async"
-              className="h-64 w-full object-cover transition duration-500 group-hover:scale-[1.02]"
+              sizes="(min-width: 1280px) 33vw, (min-width: 768px) 50vw, 100vw"
+              className="object-cover transition duration-500 group-hover:scale-[1.02]"
             />
           ) : (
             <HoverVideo
               src={asset.post.mediaUrl}
+              poster={asset.post.mediaPreviewUrl}
               className="h-64 w-full object-cover transition duration-500 group-hover:scale-[1.02]"
             />
           )

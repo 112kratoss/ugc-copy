@@ -1,9 +1,10 @@
 import { DarkTheme, ThemeProvider } from '@react-navigation/native';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import Constants from 'expo-constants';
+import { AppMetrics, AppMetricsRoot } from 'expo-observe';
 import { Stack, router, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import 'react-native-reanimated';
 import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -14,6 +15,11 @@ import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
 import { useReducedMotion } from '@/lib/motion';
 import { navigateToNotificationDeepLink, subscribeToNotificationResponses } from '@/lib/notifications';
 import { OnboardingProvider, useOnboarding } from '@/lib/onboarding';
+import {
+  isStartupInteractiveReady,
+  STARTUP_VERSION_CHECK_FALLBACK_MS,
+  type StartupVersionCheckStatus,
+} from '@/lib/startup-readiness';
 import { appTheme } from '@/lib/theme';
 
 export {
@@ -47,9 +53,11 @@ const navigationTheme = {
   },
 };
 
-export default function RootLayout() {
+function RootLayout() {
   return <RootLayoutNav />;
 }
+
+export default AppMetricsRoot.wrap(RootLayout);
 
 function RootLayoutNav() {
   const reducedMotion = useReducedMotion();
@@ -111,31 +119,86 @@ function StartupCoordinator() {
   const { api, isLoading, user } = useAuth();
   const { isHydrated, state, storageAvailable } = useOnboarding();
   const pathname = usePathname();
+  const hasMarkedInteractive = useRef(false);
+  const [versionCheckStatus, setVersionCheckStatus] =
+    useState<StartupVersionCheckStatus>('idle');
+  const onboardingRedirectPending = Boolean(
+    isHydrated &&
+    !isLoading &&
+    !user &&
+    storageAvailable &&
+    pathname === '/' &&
+    (state.status === 'not_started' || state.status === 'in_progress')
+  );
+  const startupInteractiveReady = isStartupInteractiveReady({
+    isAuthLoading: isLoading,
+    isOnboardingHydrated: isHydrated,
+    onboardingRedirectPending,
+    versionCheckStatus,
+  });
 
   useEffect(() => {
-    if (!isHydrated || isLoading) return;
+    if (!startupInteractiveReady || hasMarkedInteractive.current) return;
+    hasMarkedInteractive.current = true;
+    AppMetrics.markInteractive();
+  }, [startupInteractiveReady]);
+
+  useEffect(() => {
+    if (!isHydrated || isLoading) {
+      setVersionCheckStatus('idle');
+      return;
+    }
+
     let active = true;
+    setVersionCheckStatus('pending');
+    const fallbackTimer = setTimeout(() => {
+      if (!active) return;
+      setVersionCheckStatus((current) => current === 'pending' ? 'settled' : current);
+    }, STARTUP_VERSION_CHECK_FALLBACK_MS);
+
     void api.getAppVersion()
       .then((response) => {
         if (!active) return;
+        clearTimeout(fallbackTimer);
         const currentVersion = Constants.expoConfig?.version ?? '0.0.0';
         if (isAppVersionBelowMinimum(currentVersion, response.mobileCompatibility.minimumAppVersion)) {
+          setVersionCheckStatus('redirecting');
           router.replace('/update-required' as never);
+          return;
         }
+        setVersionCheckStatus('settled');
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (!active) return;
+        clearTimeout(fallbackTimer);
+        setVersionCheckStatus('settled');
+      });
+
     return () => {
       active = false;
+      clearTimeout(fallbackTimer);
     };
   }, [api, isHydrated, isLoading]);
 
   useEffect(() => {
-    if (!isHydrated || isLoading || user || !storageAvailable) return;
+    if (versionCheckStatus === 'redirecting' && pathname === '/update-required') {
+      setVersionCheckStatus('settled');
+    }
+  }, [pathname, versionCheckStatus]);
+
+  useEffect(() => {
+    if (
+      !isHydrated ||
+      isLoading ||
+      user ||
+      !storageAvailable ||
+      versionCheckStatus === 'redirecting'
+    ) return;
     if (pathname !== '/') return;
     if (state.status === 'not_started' || state.status === 'in_progress') {
       router.replace('/onboarding' as never);
     }
-  }, [isHydrated, isLoading, pathname, state.status, storageAvailable, user]);
+  }, [isHydrated, isLoading, pathname, state.status, storageAvailable, user, versionCheckStatus]);
 
   if ((!isHydrated || isLoading) && pathname === '/') {
     return <View pointerEvents="none" style={{ position: 'absolute', inset: 0, zIndex: 100, backgroundColor: appTheme.colors.background }} />;

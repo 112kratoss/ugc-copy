@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { useMediaLoadingPreferences } from '@/app/components/useMediaLoadingPreferences';
+import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 
 function safePlay(video: HTMLVideoElement) {
   try {
@@ -82,7 +83,7 @@ export function HoverVideo({
     <video
       ref={videoRef}
       src={attachedSrc}
-      poster={poster ?? undefined}
+      poster={poster ? buildOptimizedPreviewImageUrl(poster) : undefined}
       muted
       loop
       playsInline

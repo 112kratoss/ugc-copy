@@ -1,0 +1,112 @@
+name: Production Performance
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_seconds:
+        description: Bounded duration (maximum 300 seconds)
+        required: false
+        default: "90"
+      concurrency:
+        description: Concurrent reads (maximum 20)
+        required: false
+        default: "4"
+      max_rps:
+        description: Global request-rate cap (maximum 50 requests/second)
+        required: false
+        default: "25"
+  schedule:
+    - cron: "20 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-performance
+  cancel-in-progress: false
+
+jobs:
+  production-load-budgets:
+    name: P95/P99 production budgets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
+      - name: Validate performance harness
+        run: node scripts/performance-load-test.mjs --self-test
+
+      - name: Run bounded production load test
+        env:
+          PERF_BASE_URL: https://magicbooklet.com
+          PERF_ALLOW_PRODUCTION: "1"
+          PERF_DURATION_SECONDS: ${{ inputs.duration_seconds || '90' }}
+          PERF_CONCURRENCY: ${{ inputs.concurrency || '4' }}
+          PERF_MAX_RPS: ${{ inputs.max_rps || '25' }}
+          PERF_PROFILE: edge
+          PERF_WARMUP_REQUESTS: "2"
+        run: node scripts/performance-load-test.mjs --profile "$PERF_PROFILE" --output performance-load-results.json
+
+      - name: Upload detailed performance report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: production-performance-results
+          path: performance-load-results.json
+          if-no-files-found: error
+          retention-days: 30
+
+  frontend-vitals:
+    name: Lighthouse ${{ matrix.form_factor }} budgets
+    needs: production-load-budgets
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      # Keep mobile and desktop samples independent instead of making both
+      # compete for the same production origin/cache window.
+      max-parallel: 1
+      matrix:
+        form_factor:
+          - mobile
+          - desktop
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate Lighthouse configuration
+        run: npm run perf:lighthouse:self-test
+        env:
+          LHCI_FORM_FACTOR: ${{ matrix.form_factor }}
+
+      - name: Enforce rendered frontend budgets
+        run: npm run perf:lighthouse
+        env:
+          LHCI_FORM_FACTOR: ${{ matrix.form_factor }}
+          PERF_BASE_URL: https://magicbooklet.com
+          PERF_LIGHTHOUSE_RUNS: "3"
+
+      - name: Upload Lighthouse reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lighthouse-${{ matrix.form_factor }}-results
+          path: lighthouse-results/${{ matrix.form_factor }}
+          if-no-files-found: error
+          retention-days: 30

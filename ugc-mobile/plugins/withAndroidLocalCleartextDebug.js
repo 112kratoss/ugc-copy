@@ -2,7 +2,7 @@ const {
   createRunOncePlugin,
   withAndroidManifest,
   withAppBuildGradle,
-} = require('@expo/config-plugins');
+} = require('expo/config-plugins');
 
 const CLEAR_TEXT_PLACEHOLDER = 'usesCleartextTraffic';
 const PLUGIN_NAME = 'withAndroidLocalCleartextDebug';

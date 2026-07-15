@@ -12,7 +12,11 @@ type PackageJson = {
 };
 
 type PackageLock = {
-  packages?: Record<string, { version?: string }>;
+  packages?: Record<string, {
+    version?: string;
+    dev?: boolean;
+    dependencies?: Record<string, string>;
+  }>;
 };
 
 const packageJson = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8')) as PackageJson;
@@ -58,7 +62,16 @@ describe('package security baseline', () => {
     expect(packageJson.dependencies?.['@supabase/ssr']).toBe('0.12.0');
     expect(packageLockVersion('@supabase/supabase-js')).toBe('2.108.2');
     expect(packageLockVersion('@supabase/realtime-js')).toBe('2.108.2');
-    expect(packageLockVersion('ws')).toBeUndefined();
+    expect(
+      packageLock.packages?.['node_modules/@supabase/realtime-js']?.dependencies?.ws
+    ).toBeUndefined();
+
+    // Developer tooling may use WebSockets without reintroducing ws into the
+    // browser/production Supabase client graph.
+    const hoistedWs = packageLock.packages?.['node_modules/ws'];
+    if (hoistedWs) {
+      expect(hoistedWs.dev).toBe(true);
+    }
   });
 
   it('does not ship the legacy markdown front-matter parser in production dependencies', () => {

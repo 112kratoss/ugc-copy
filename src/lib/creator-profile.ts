@@ -3,7 +3,7 @@ import 'server-only';
 import { cache } from 'react';
 
 import {
-  getMarketplaceAssetSummaryMap,
+  getMarketplaceAssetSummaryHydration,
   getPostMediaKind,
   isMissingPostReviewStatusColumnError,
   isMissingPostTextColumnsError,
@@ -366,12 +366,16 @@ async function loadCreatorAssetSummaries(rows: PostRow[], adminSupabase: Creator
 
   for (let index = 0; index < rows.length; index += CREATOR_ASSET_BATCH_SIZE) {
     const batch = rows.slice(index, index + CREATOR_ASSET_BATCH_SIZE);
-    const marketplaceAssets = await getMarketplaceAssetSummaryMap(batch.map((row) => row.id), adminSupabase);
+    const {
+      assetMap: marketplaceAssets,
+      knownBundlePostIds,
+    } = await getMarketplaceAssetSummaryHydration(batch.map((row) => row.id), adminSupabase);
     for (const [postId, asset] of marketplaceAssets) assets.set(postId, asset);
 
     const recipeAssets = await getPublicGenerationRecipeAssetSummaryMap(
       batch.filter((row) => !marketplaceAssets.has(row.id)),
-      adminSupabase
+      adminSupabase,
+      knownBundlePostIds === null ? undefined : { knownBundlePostIds }
     );
     for (const [postId, asset] of recipeAssets) assets.set(postId, asset);
   }

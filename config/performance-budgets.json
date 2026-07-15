@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "description": "Production-safe latency and real-user performance budgets for MagicBooklet.",
+  "load": {
+    "defaults": {
+      "timeoutMs": 10000,
+      "minRequests": 10,
+      "maxErrorRate": 0.01,
+      "p95TtfbMs": 1500,
+      "p99TtfbMs": 3000,
+      "p95TotalMs": 2200,
+      "p99TotalMs": 4000
+    },
+    "targets": [
+      {
+        "name": "home-page",
+        "path": "/",
+        "method": "GET",
+        "expectedStatuses": [200],
+        "weight": 2,
+        "p95TtfbMs": 1000,
+        "p99TtfbMs": 2000
+      },
+      {
+        "name": "showcase-page",
+        "path": "/showcase",
+        "method": "GET",
+        "expectedStatuses": [200],
+        "weight": 1
+      },
+      {
+        "name": "marketplace-page",
+        "path": "/marketplace",
+        "method": "GET",
+        "expectedStatuses": [200],
+        "weight": 1
+      },
+      {
+        "name": "model-catalog-api",
+        "path": "/api/generation-models?platform=web",
+        "method": "GET",
+        "expectedStatuses": [200],
+        "weight": 2,
+        "p95TtfbMs": 800,
+        "p99TtfbMs": 1500,
+        "p95TotalMs": 1000,
+        "p99TotalMs": 1800
+      },
+      {
+        "name": "showcase-feed-api",
+        "path": "/api/showcase/feed?sort=recent&limit=12",
+        "method": "GET",
+        "expectedStatuses": [200],
+        "weight": 2,
+        "p95TtfbMs": 1200,
+        "p99TtfbMs": 2500,
+        "p95TotalMs": 1600,
+        "p99TotalMs": 3200
+      }
+    ],
+    "originTargets": [
+      {
+        "name": "showcase-feed-origin",
+        "path": "/api/showcase/feed?sort=recent&limit=12&cursor=perf-origin",
+        "method": "GET",
+        "expectedStatuses": [200],
+        "expectedCacheStatuses": ["MISS", "BYPASS"],
+        "cacheBust": true,
+        "weight": 1,
+        "minRequests": 10,
+        "p95TtfbMs": 1800,
+        "p99TtfbMs": 3500,
+        "p95TotalMs": 2400,
+        "p99TotalMs": 4500
+      }
+    ]
+  },
+  "webVitals": {
+    "percentile": 75,
+    "LCP": 2500,
+    "CLS": 0.1,
+    "INP": 200,
+    "FCP": 1800,
+    "TTFB": 800
+  }
+}

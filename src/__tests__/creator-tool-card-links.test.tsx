@@ -1,5 +1,5 @@
 import type { ComponentPropsWithoutRef, ReactNode } from 'react';
-import { render, screen, within } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateHubPage from '@/app/create/page';
@@ -189,7 +189,9 @@ describe('creator tool card links', () => {
   });
 
   it('uses one full-card link for each creator path on the home page', async () => {
-    render(await Home());
+    await act(async () => {
+      render(Home());
+    });
 
     expectCardToUseSingleLink({
       title: 'Create Image',
@@ -216,6 +218,7 @@ describe('creator tool card links', () => {
       href: '/create-workflow',
     });
 
+    await screen.findByTestId('hover-video');
     const videoCardLink = screen.getByText('Create Video').closest('a');
     expect(within(videoCardLink as HTMLAnchorElement).getByTestId('hover-video')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /launchpad/i })).toHaveAttribute('href', '/create');
@@ -254,9 +257,11 @@ describe('creator tool card links', () => {
       return category === 'all' ? { items: [textItem] } : { items: [] };
     });
 
-    render(await Home());
+    await act(async () => {
+      render(Home());
+    });
 
-    expect(screen.getByTestId('home-showcase-preview-grid')).toHaveAttribute('data-count', '1');
+    expect(await screen.findByTestId('home-showcase-preview-grid')).toHaveAttribute('data-count', '1');
     expect(homeShowcasePreviewGridMock.mock.calls[0]?.[0]).toMatchObject({
       items: [textItem],
     });
@@ -267,7 +272,9 @@ describe('creator tool card links', () => {
       throw new Error('Home should not read server auth for cacheable public content');
     });
 
-    render(await Home());
+    await act(async () => {
+      render(Home());
+    });
 
     expect(getServerAuthStateMock).not.toHaveBeenCalled();
     expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -281,7 +288,9 @@ describe('creator tool card links', () => {
   });
 
   it('only prefetches the primary homepage action during first paint', async () => {
-    render(await Home());
+    await act(async () => {
+      render(Home());
+    });
     expect(screen.getByRole('link', { name: 'Start creating' })).not.toHaveAttribute('data-prefetch');
     expect(screen.getByRole('link', { name: 'Browse the feed' })).toHaveAttribute(
       'data-prefetch',
@@ -297,10 +306,12 @@ describe('creator tool card links', () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     getShowcaseFeedPageMock.mockRejectedValue(new Error('Supabase host unavailable during build'));
 
-    render(await Home());
+    await act(async () => {
+      render(Home());
+    });
 
     expect(screen.getByText(/What will you create/i)).toBeInTheDocument();
-    expect(screen.getByText(/Could not load the creator feed/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Could not load the creator feed/i)).toBeInTheDocument();
     expect(screen.queryByTestId('home-showcase-preview-grid')).not.toBeInTheDocument();
     expect(homeShowcasePreviewGridMock).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith(

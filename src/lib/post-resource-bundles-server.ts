@@ -70,6 +70,7 @@ import {
 } from '@/lib/generation-input-media';
 import { slugifySourceTool } from '@/lib/source-tools';
 import { getStoredMediaLocation } from '@/lib/media-urls';
+import { loadPostMediaItemsMap } from '@/lib/post-media';
 import { shouldCacheMarketplaceResourceListBasePage } from '@/lib/marketplace-resource-list-cache-policy';
 import { MARKETPLACE_RESOURCE_LIST_CACHE_TAG } from '@/lib/marketplace-resource-list-cache';
 import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
@@ -98,6 +99,12 @@ const BUNDLE_ROW_SELECT =
 const BUNDLE_ROW_SELECT_LEGACY =
   'id, post_id, owner_user_id, legacy_asset_id, access_mode, status, title, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, sales_count, earnings_usd_cents, created_at, updated_at';
 const POST_RESOURCE_FILES_BUCKET = 'post_resource_files';
+const MARKETPLACE_FALLBACK_MIN_BATCH_SIZE = 24;
+const MARKETPLACE_FALLBACK_MAX_BATCH_SIZE = 96;
+// The missing-RPC path is only a rolling-deploy compatibility bridge. Keep its
+// worst-case database and hydration work bounded even for highly selective
+// public filters. The normal RPC remains responsible for deep catalog reads.
+const MARKETPLACE_FALLBACK_MAX_SCANNED_ROWS = 1_009;
 
 type LinkedPostQueryResult = {
   data: unknown[] | null;
@@ -213,6 +220,7 @@ interface PostResourceBundleLinkedPost {
   sourceTool: string | null;
   sourceToolSlug: string | null;
   mediaUrl: string | null;
+  mediaPreviewUrl: string | null;
   mediaKind: ShowcaseMediaKind | null;
   saveCount: number;
   remixCount: number;
@@ -719,6 +727,7 @@ async function loadGenerationRecipeInputMedia(params: {
     ownerUserId: params.post.user_id,
     category: params.generation.category ?? params.post.category,
     workflowSettings: normalizeWorkflowSettings(params.generation.workflow_settings) ?? {},
+    urlMode: 'none',
   });
 }
 
@@ -801,6 +810,7 @@ async function loadGenerationRecipeInputMediaMap(params: {
       ownerUserId: post.user_id,
       category: generation.category ?? post.category,
       workflowSettings: normalizeWorkflowSettings(generation.workflow_settings) ?? {},
+      urlMode: 'none',
     });
 
     if (legacyInputMedia.length > 0) {
@@ -895,6 +905,7 @@ async function buildPublicGenerationRecipeBundleDetail(params: {
     sourceTool: post.source_tool,
     sourceToolSlug: post.source_tool_slug ?? slugifySourceTool(post.source_tool),
     mediaUrl: postMediaUrl,
+    mediaPreviewUrl: null,
     mediaKind: getPostMediaKind(post.category, post.post_format),
     saveCount: post.save_count ?? 0,
     remixCount: post.remix_count ?? 0,
@@ -951,7 +962,10 @@ export async function getPublicGenerationRecipeAssetSummaryMap(
     category: string | null;
     source_kind: RawShowcaseSourceKind;
   }>,
-  adminSupabase: SupabaseClient = createServiceClient()
+  adminSupabase: SupabaseClient = createServiceClient(),
+  options?: {
+    knownBundlePostIds?: ReadonlySet<string>;
+  }
 ): Promise<Map<string, ShowcaseAssetSummary>> {
   const eligiblePosts = posts.filter((post) =>
     post.user_id &&
@@ -962,24 +976,35 @@ export async function getPublicGenerationRecipeAssetSummaryMap(
     return new Map();
   }
 
-  const eligiblePostIds = eligiblePosts.map((post) => post.id);
-  const { data: existingBundleRows, error: existingBundleError } = await adminSupabase
-    .from('post_resource_bundles')
-    .select('post_id')
-    .in('post_id', eligiblePostIds);
-  const bundledPostIds = new Set(
-    ((existingBundleRows ?? []) as Array<{ post_id?: string | null }>)
-      .map((row) => row.post_id)
-      .filter((postId): postId is string => Boolean(postId))
-  );
+  let fallbackPosts: typeof eligiblePosts;
+  if (options?.knownBundlePostIds) {
+    fallbackPosts = eligiblePosts.filter((post) => !options.knownBundlePostIds?.has(post.id));
+  } else {
+    const eligiblePostIds = eligiblePosts.map((post) => post.id);
+    const { data: existingBundleRows, error: existingBundleError } = await adminSupabase
+      .from('post_resource_bundles')
+      .select('post_id')
+      .in('post_id', eligiblePostIds);
+    const bundledPostIds = new Set(
+      ((existingBundleRows ?? []) as Array<{ post_id?: string | null }>)
+        .map((row) => row.post_id)
+        .filter((postId): postId is string => Boolean(postId))
+    );
 
-  if (existingBundleError && !isMissingPostResourceBundlesSchemaError(existingBundleError)) {
-    console.error('Failed to check existing post resource bundles before recipe fallback:', existingBundleError);
+    if (existingBundleError) {
+      if (isMissingPostResourceBundlesSchemaError(existingBundleError)) {
+        fallbackPosts = eligiblePosts;
+      } else {
+        // Bundle presence is the privacy boundary for synthetic recipes. If that
+        // boundary cannot be checked conclusively, do not infer that any post is
+        // bundle-free: an unpublished bundle may intentionally suppress a recipe.
+        console.error('Failed to check existing post resource bundles before recipe fallback:', existingBundleError);
+        return new Map();
+      }
+    } else {
+      fallbackPosts = eligiblePosts.filter((post) => !bundledPostIds.has(post.id));
+    }
   }
-
-  const fallbackPosts = existingBundleError && isMissingPostResourceBundlesSchemaError(existingBundleError)
-    ? eligiblePosts
-    : eligiblePosts.filter((post) => !bundledPostIds.has(post.id));
   if (fallbackPosts.length === 0) {
     return new Map();
   }
@@ -1150,7 +1175,8 @@ function toSellerSummary(
 
 async function loadLinkedPostMap(
   postIds: string[],
-  scope: LinkedPostScope = 'public'
+  scope: LinkedPostScope = 'public',
+  includeMediaPreviews = false,
 ) {
   const uniquePostIds = Array.from(new Set(postIds.filter(Boolean)));
   if (uniquePostIds.length === 0) {
@@ -1276,26 +1302,39 @@ async function loadLinkedPostMap(
     rows = (result.data ?? []) as LinkedPostRow[];
   }
 
+  const mediaItemsMap = includeMediaPreviews
+    ? await loadPostMediaItemsMap(adminSupabase, rows.map((row) => row.id)).catch((error) => {
+        console.error('Failed to load marketplace media previews:', error);
+        return new Map();
+      })
+    : new Map();
+
   const linkedPosts = await Promise.all(
-    rows.map(async (row) => ({
-      id: row.id,
-      generationId: row.generation_id,
-      title: row.title?.trim() || deriveTitleFromBody(row.body) || (row.post_format === 'text' ? 'Untitled note' : 'Untitled creation'),
-      category: row.category,
-      body: row.body?.trim() || '',
-      postFormat: row.post_format,
-      visibility: row.visibility,
-      archivedAt: row.archived_at,
-      reviewStatus: row.review_status ?? 'visible',
-      sourceKind: normalizeShowcaseSourceKind(row.source_kind),
-      sourceTool: row.source_tool,
-      sourceToolSlug: row.source_tool_slug ?? slugifySourceTool(row.source_tool),
-      mediaUrl: await resolvePostMediaUrl(adminSupabase, row),
-      mediaKind: getPostMediaKind(row.category, row.post_format),
-      saveCount: row.save_count ?? 0,
-      remixCount: row.remix_count ?? 0,
-      shareVisitCount: row.share_visit_count ?? 0,
-    }))
+    rows.map(async (row) => {
+      const coverMedia = mediaItemsMap.get(row.id)?.[0] ?? null;
+      const mediaUrl = coverMedia?.url ?? await resolvePostMediaUrl(adminSupabase, row);
+
+      return {
+        id: row.id,
+        generationId: row.generation_id,
+        title: row.title?.trim() || deriveTitleFromBody(row.body) || (row.post_format === 'text' ? 'Untitled note' : 'Untitled creation'),
+        category: row.category,
+        body: row.body?.trim() || '',
+        postFormat: row.post_format,
+        visibility: row.visibility,
+        archivedAt: row.archived_at,
+        reviewStatus: row.review_status ?? 'visible',
+        sourceKind: normalizeShowcaseSourceKind(row.source_kind),
+        sourceTool: row.source_tool,
+        sourceToolSlug: row.source_tool_slug ?? slugifySourceTool(row.source_tool),
+        mediaUrl,
+        mediaPreviewUrl: coverMedia?.previewUrl ?? null,
+        mediaKind: coverMedia?.mediaKind ?? getPostMediaKind(row.category, row.post_format),
+        saveCount: row.save_count ?? 0,
+        remixCount: row.remix_count ?? 0,
+        shareVisitCount: row.share_visit_count ?? 0,
+      };
+    })
   );
 
   return new Map(linkedPosts.map((row) => [row.id, row]));
@@ -1304,11 +1343,12 @@ async function loadLinkedPostMap(
 async function hydrateBundleRows(
   rows: BundleRow[],
   countryCode?: string | null,
-  scope: LinkedPostScope = 'public'
+  scope: LinkedPostScope = 'public',
+  includeMediaPreviews = false,
 ): Promise<MarketplaceResourceListItem[]> {
   const [profilesMap, postMap] = await Promise.all([
     loadProfileMap(rows.map((row) => row.owner_user_id)),
-    loadLinkedPostMap(rows.map((row) => row.post_id), scope),
+    loadLinkedPostMap(rows.map((row) => row.post_id), scope, includeMediaPreviews),
   ]);
 
   return Promise.all(
@@ -1738,56 +1778,89 @@ async function getMarketplaceResourceListFallback(options: {
       query = query.order('created_at', { ascending: false });
     }
 
-    return query;
+    return query.order('id', { ascending: false });
   };
 
-  let { data, error } = await buildQuery(BUNDLE_ROW_SELECT);
-  if (isMissingPostResourceItemsColumnError(error)) {
-    ({ data, error } = await buildQuery(BUNDLE_ROW_SELECT_LEGACY));
-  }
-  if (error) {
-    if (isMissingPostResourceBundlesSchemaError(error)) {
-      return {
-        items: [],
-        pageInfo: {
-          hasMore: false,
-          nextOffset: null,
-          offset,
-          limit,
-        },
-      };
+  const matchingItems: MarketplaceResourceListItem[] = [];
+  const targetMatchCount = offset + limit + 1;
+  const batchSize = Math.min(
+    MARKETPLACE_FALLBACK_MAX_BATCH_SIZE,
+    Math.max(MARKETPLACE_FALLBACK_MIN_BATCH_SIZE, limit * 2),
+  );
+  let scanOffset = 0;
+  let exhausted = false;
+  let selectColumns = BUNDLE_ROW_SELECT;
+
+  while (
+    !exhausted
+    && matchingItems.length < targetMatchCount
+    && scanOffset < MARKETPLACE_FALLBACK_MAX_SCANNED_ROWS
+  ) {
+    const rangeEnd = Math.min(
+      scanOffset + batchSize,
+      MARKETPLACE_FALLBACK_MAX_SCANNED_ROWS,
+    ) - 1;
+    let { data, error } = await buildQuery(selectColumns)
+      .range(scanOffset, rangeEnd);
+
+    if (selectColumns === BUNDLE_ROW_SELECT && isMissingPostResourceItemsColumnError(error)) {
+      selectColumns = BUNDLE_ROW_SELECT_LEGACY;
+      ({ data, error } = await buildQuery(selectColumns)
+        .range(scanOffset, rangeEnd));
     }
 
-    console.error('Failed to load marketplace resource list:', error);
-    throw error;
-  }
+    if (error) {
+      if (isMissingPostResourceBundlesSchemaError(error)) {
+        return {
+          items: [],
+          pageInfo: {
+            hasMore: false,
+            nextOffset: null,
+            offset,
+            limit,
+          },
+        };
+      }
 
-  const rows = (data ?? []) as unknown as BundleRow[];
-  const hydratedItems = await hydrateBundleRows(rows, countryCode);
-  const filteredItems = hydratedItems.filter((item) => {
-    if (!item.post) {
-      return false;
+      console.error('Failed to load marketplace resource list:', error);
+      throw error;
     }
 
-    const matchesResource = resource === 'all' || item.resourceKinds.includes(resource);
-    const itemToolSlug = item.post.sourceToolSlug ?? slugifySourceTool(item.post.sourceTool);
-    const matchesTool = !normalizedToolFilter || itemToolSlug === normalizedToolFilter;
-    const matchesQuery = !normalizedQuery || marketplaceItemMatchesQuery(item, normalizedQuery);
-    const quality = assessMarketplaceListingQuality({
-      title: item.title,
-      summary: item.summary,
-      previewText: item.previewText,
-      accessMode: item.accessMode,
-      priceUsdCents: item.priceUsdCents,
-      resourceKinds: item.resourceKinds,
-      post: item.post,
-      seller: item.seller,
-    });
+    const rows = (data ?? []) as unknown as BundleRow[];
+    exhausted = rows.length < rangeEnd - scanOffset + 1;
+    scanOffset += rows.length;
 
-    return quality.eligible && matchesResource && matchesTool && matchesQuery;
-  });
-  const pageItems = filteredItems.slice(offset, offset + limit);
-  const hasMore = filteredItems.length > offset + limit;
+    if (rows.length === 0) {
+      break;
+    }
+
+    const hydratedItems = await hydrateBundleRows(rows, countryCode, 'public', true);
+    matchingItems.push(...hydratedItems.filter((item) => {
+      if (!item.post) {
+        return false;
+      }
+
+      const matchesResource = resource === 'all' || item.resourceKinds.includes(resource);
+      const itemToolSlug = item.post.sourceToolSlug ?? slugifySourceTool(item.post.sourceTool);
+      const matchesTool = !normalizedToolFilter || itemToolSlug === normalizedToolFilter;
+      const matchesQuery = !normalizedQuery || marketplaceItemMatchesQuery(item, normalizedQuery);
+      const quality = assessMarketplaceListingQuality({
+        title: item.title,
+        summary: item.summary,
+        previewText: item.previewText,
+        accessMode: item.accessMode,
+        priceUsdCents: item.priceUsdCents,
+        resourceKinds: item.resourceKinds,
+        post: item.post,
+        seller: item.seller,
+      });
+
+      return quality.eligible && matchesResource && matchesTool && matchesQuery;
+    }));
+  }
+
+  const pageItems = matchingItems.slice(offset, offset + limit);
+  const hasMore = matchingItems.length > offset + limit;
 
   return {
     items: pageItems,
@@ -1867,7 +1940,7 @@ async function getMarketplaceResourceListBase(
 
   const rows = ((data ?? []) as BundleRow[]).slice(0, limit + 1);
   const hasMore = rows.length > limit;
-  const hydratedItems = await hydrateBundleRows(rows, null);
+  const hydratedItems = await hydrateBundleRows(rows, null, 'public', true);
   const pageItems = hydratedItems.filter((item) => {
     if (!item.post) {
       return false;
@@ -1913,7 +1986,7 @@ const getCachedMarketplaceResourceListBase = unstable_cache(
     offset: 0,
     limit: 24,
   }),
-  ['marketplace-resource-list-base-v1'],
+  ['marketplace-resource-list-base-v2'],
   {
     revalidate: 60,
     tags: [MARKETPLACE_RESOURCE_LIST_CACHE_TAG, SHOWCASE_FEED_CACHE_TAG],

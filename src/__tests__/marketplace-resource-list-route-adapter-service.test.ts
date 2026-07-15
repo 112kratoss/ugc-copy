@@ -71,4 +71,45 @@ describe('marketplace resource list route adapter service', () => {
     await expect(response.json()).resolves.toEqual({ error: 'Failed to load marketplace unlocks.' });
     expect(logError).toHaveBeenCalledWith('Failed to load marketplace resources:', expect.any(Error));
   });
+
+  it('rejects offsets beyond the bounded public pagination window', async () => {
+    const getMarketplaceResourceList = vi.fn();
+
+    const response = await getMarketplaceResourceListRouteResponse({
+      request: createRequest('?offset=961', { 'x-request-id': 'resources-list-offset-1' }),
+      dependencies: { getMarketplaceResourceList },
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('x-request-id')).toBe('resources-list-offset-1');
+    await expect(response.json()).resolves.toEqual({ error: 'offset must be at most 960.' });
+    expect(getMarketplaceResourceList).not.toHaveBeenCalled();
+  });
+
+  it('does not advertise a next offset beyond the bounded public window', async () => {
+    const response = await getMarketplaceResourceListRouteResponse({
+      request: createRequest('?offset=960&limit=48'),
+      dependencies: {
+        getMarketplaceResourceList: vi.fn(async () => ({
+          items: [{ id: 'resource-1' }],
+          pageInfo: {
+            hasMore: true,
+            limit: 48,
+            nextOffset: 1_008,
+            offset: 960,
+          },
+        })),
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      pageInfo: {
+        hasMore: false,
+        nextOffset: null,
+        offset: 960,
+      },
+    });
+  });
 });

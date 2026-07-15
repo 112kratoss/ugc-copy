@@ -3,6 +3,8 @@
 import Image from 'next/image';
 import { useState, type SyntheticEvent } from 'react';
 
+import { canOptimizePreviewImage } from '@/lib/preview-images';
+
 interface OptimizedPreviewImageProps {
   previewSrc: string;
   fallbackSrc?: string | null;
@@ -13,40 +15,6 @@ interface OptimizedPreviewImageProps {
   priority?: boolean;
   fallbackToUnoptimized?: boolean;
   onLoad?: (event: SyntheticEvent<HTMLImageElement>) => void;
-}
-
-function getSupabaseStorageHost(): string | null {
-  const configuredUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!configuredUrl) {
-    return null;
-  }
-
-  try {
-    return new URL(configuredUrl).hostname;
-  } catch {
-    return null;
-  }
-}
-
-const supabaseStorageHost = getSupabaseStorageHost();
-
-export function canOptimizePreviewImage(src: string): boolean {
-  if (src.startsWith('/')) {
-    return true;
-  }
-
-  if (!supabaseStorageHost) {
-    return false;
-  }
-
-  try {
-    const url = new URL(src);
-    return url.protocol === 'https:'
-      && url.hostname === supabaseStorageHost
-      && url.pathname.startsWith('/storage/v1/object/');
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -126,3 +94,5 @@ export function OptimizedPreviewImage({
     />
   );
 }
+
+export { canOptimizePreviewImage } from '@/lib/preview-images';

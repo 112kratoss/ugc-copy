@@ -43,6 +43,9 @@ jobs:
       - name: Typecheck operational scripts
         run: npm run typecheck:scripts
 
+      - name: Validate production performance budgets
+        run: npm run perf:load:self-test && npm run perf:lighthouse:self-test
+
       - name: Build
         run: npm run build
         env:
@@ -82,6 +85,30 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Validate Expo dependency alignment
+        run: npx expo install --check
+
+      - name: Run Expo Doctor
+        run: npx --yes expo-doctor@1.20.1
+
+      - name: Validate production native configuration
+        run: npx expo prebuild --clean --no-install
+        env:
+          MAGICBOOKLET_INCLUDE_DEV_CLIENT: "false"
+
+      - name: Bundle production JavaScript
+        run: |
+          npx expo export --platform ios --output-dir "$RUNNER_TEMP/magicbooklet-export-ios"
+          npx expo export --platform android --output-dir "$RUNNER_TEMP/magicbooklet-export-android"
+        env:
+          EXPO_PUBLIC_API_BASE_URL: https://example.com
+          EXPO_PUBLIC_WEB_API_BASE_URL: https://example.com
+          EXPO_PUBLIC_SITE_URL: https://example.com
+          EXPO_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ci-placeholder
+          EXPO_PUBLIC_REVENUECAT_IOS_API_KEY: ci-placeholder
+          EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY: ci-placeholder
 
       - name: Run tests
         run: npm test
