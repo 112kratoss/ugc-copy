@@ -33,7 +33,7 @@ function DesktopNavItem({ item, active }: { item: AppNavItem; active: boolean })
   return (
     <Link
       href={item.href}
-      prefetch={item.prefetch}
+      prefetch={false}
       aria-current={active ? 'page' : undefined}
       className={`ui-focus-ring group relative flex min-h-11 items-center gap-3 rounded-[14px] border px-3 py-2 text-[13px] font-semibold transition ${
         active
@@ -70,7 +70,7 @@ function DrawerNavItem({
   return (
     <Link
       href={item.href}
-      prefetch={item.prefetch}
+      prefetch={false}
       aria-current={active ? 'page' : undefined}
       onClick={onClick}
       className={`ui-focus-ring flex min-h-12 items-center gap-3 rounded-2xl border px-3 py-3 text-sm font-bold transition ${
@@ -92,7 +92,7 @@ function BottomNavItem({ item, active }: { item: AppNavItem; active: boolean }) 
     return (
       <Link
         href={item.href}
-        prefetch={item.prefetch}
+        prefetch={false}
         aria-current={active ? 'page' : undefined}
         aria-label="Create"
         className="ui-focus-ring relative flex min-w-0 flex-1 flex-col items-center justify-end gap-0.5 rounded-2xl pb-1 text-xs font-extrabold text-[var(--ui-primary)]"
@@ -108,7 +108,7 @@ function BottomNavItem({ item, active }: { item: AppNavItem; active: boolean }) 
   return (
     <Link
       href={item.href}
-      prefetch={item.prefetch}
+      prefetch={false}
       aria-current={active ? 'page' : undefined}
       className={`ui-focus-ring relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-[18px] px-1 py-2 text-[11px] font-bold transition ${
         active
@@ -125,7 +125,7 @@ function BottomNavItem({ item, active }: { item: AppNavItem; active: boolean }) 
 
 function Brand({ compact = false }: { compact?: boolean }) {
   return (
-    <Link href="/" className="ui-focus-ring flex items-center gap-3 rounded-2xl text-[var(--ui-text-primary)]">
+    <Link href="/" prefetch={false} className="ui-focus-ring flex items-center gap-3 rounded-2xl text-[var(--ui-text-primary)]">
       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-[var(--ui-primary)] text-[var(--ui-primary-on)] shadow-[0_10px_24px_rgba(255,122,89,0.18)]">
         <WandSparkles className="h-5 w-5" strokeWidth={2.4} aria-hidden />
       </span>
@@ -236,6 +236,7 @@ export default function AppShellClient({ children }: { children: React.ReactNode
 
         <Link
           href="/contact"
+          prefetch={false}
           className="ui-focus-ring mx-3 mb-4 flex min-h-12 items-center gap-3 rounded-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-3 py-2 text-[13px] font-bold text-[var(--ui-text-secondary)] transition hover:border-[var(--ui-border-default)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
         >
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--ui-surface-inset)] text-[var(--ui-text-secondary)]">
@@ -270,6 +271,7 @@ export default function AppShellClient({ children }: { children: React.ReactNode
           <div className="ml-auto flex min-w-0 items-center gap-2 sm:gap-3">
             <Link
               href="/notifications"
+              prefetch={false}
               aria-label="Open alerts"
               className="ui-focus-ring hidden h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)] sm:inline-flex"
             >
@@ -277,6 +279,7 @@ export default function AppShellClient({ children }: { children: React.ReactNode
             </Link>
             <Link
               href="/create"
+              prefetch={false}
               className="ui-focus-ring hidden min-h-12 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] md:inline-flex"
             >
               <Plus className="h-4 w-4" aria-hidden />
@@ -354,6 +357,7 @@ export default function AppShellClient({ children }: { children: React.ReactNode
 
             <Link
               href="/contact"
+              prefetch={false}
               onClick={() => setMobileOpen(false)}
               className="ui-focus-ring mt-8 flex min-h-12 items-center gap-3 rounded-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-3 text-sm font-bold text-[var(--ui-text-secondary)]"
             >

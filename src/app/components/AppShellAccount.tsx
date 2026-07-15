@@ -177,6 +177,7 @@ export default function AppShellAccount() {
     <>
       <Link
         href="/pricing"
+        prefetch={false}
         className="ui-focus-ring hidden min-h-12 items-center gap-2 rounded-full border border-amber-300/20 bg-amber-400/10 px-3 text-sm font-bold text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-400/15 sm:inline-flex"
       >
         <Sparkles className="h-4 w-4" />
@@ -211,6 +212,7 @@ export default function AppShellAccount() {
             </div>
             <Link
               href="/invite"
+              prefetch={false}
               role="menuitem"
               onClick={() => setAccountOpen(false)}
               className="ui-focus-ring mt-2 flex min-h-12 items-center justify-between rounded-2xl px-3 py-2 text-sm font-bold text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
@@ -223,6 +225,7 @@ export default function AppShellAccount() {
             </Link>
             <Link
               href="/profile"
+              prefetch={false}
               role="menuitem"
               onClick={() => setAccountOpen(false)}
               className="ui-focus-ring mt-1 flex min-h-11 items-center justify-between rounded-2xl px-3 py-2 text-sm font-bold text-[var(--ui-text-secondary)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"

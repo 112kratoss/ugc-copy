@@ -377,6 +377,7 @@ export function SectionHeader({
   actionHref,
   actionLabel,
   actionIcon,
+  actionPrefetch,
   align = 'start',
   compact = false,
   className,
@@ -387,6 +388,7 @@ export function SectionHeader({
   actionHref?: string;
   actionLabel?: string;
   actionIcon?: LucideIcon;
+  actionPrefetch?: boolean;
   align?: 'start' | 'center';
   compact?: boolean;
   className?: string;
@@ -413,7 +415,13 @@ export function SectionHeader({
         ) : null}
       </div>
       {actionHref && actionLabel ? (
-        <Button href={actionHref} variant="secondary" icon={ActionIcon} className="shrink-0">
+        <Button
+          href={actionHref}
+          prefetch={actionPrefetch}
+          variant="secondary"
+          icon={ActionIcon}
+          className="shrink-0"
+        >
           {actionLabel}
         </Button>
       ) : null}
