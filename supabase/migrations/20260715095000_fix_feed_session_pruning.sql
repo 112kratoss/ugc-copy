@@ -10,8 +10,8 @@
 CREATE OR REPLACE FUNCTION public.detach_feed_events_before_session_delete()
 RETURNS trigger
 LANGUAGE plpgsql
-SECURITY INVOKER
-SET search_path = public, pg_temp
+SECURITY DEFINER
+SET search_path = ''
 AS $$
 BEGIN
   UPDATE public.feed_events AS events
@@ -28,10 +28,10 @@ BEGIN
 END;
 $$;
 
+ALTER FUNCTION public.detach_feed_events_before_session_delete()
+  OWNER TO postgres;
 REVOKE ALL ON FUNCTION public.detach_feed_events_before_session_delete()
-  FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.detach_feed_events_before_session_delete()
-  TO service_role;
+  FROM PUBLIC, anon, authenticated, service_role;
 
 DROP TRIGGER IF EXISTS feed_sessions_detach_events_before_delete
   ON public.feed_sessions;
@@ -40,7 +40,7 @@ BEFORE DELETE ON public.feed_sessions
 FOR EACH ROW EXECUTE FUNCTION public.detach_feed_events_before_session_delete();
 
 COMMENT ON FUNCTION public.detach_feed_events_before_session_delete() IS
-  'Detaches retained telemetry before any feed session deletion starts independent FK actions.';
+  'Owner-executed trigger that detaches retained telemetry before independent feed-session FK actions run.';
 
 CREATE OR REPLACE FUNCTION public.prune_feed_personalization_data(
   p_as_of timestamptz DEFAULT timezone('utc'::text, now()),

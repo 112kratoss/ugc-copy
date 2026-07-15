@@ -3,7 +3,47 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(11);
+select plan(14);
+
+select is(
+  (
+    select procedures.prosecdef
+    from pg_catalog.pg_proc AS procedures
+    where procedures.oid = 'public.detach_feed_events_before_session_delete()'::regprocedure
+  ),
+  true,
+  'the session-delete trigger runs with its owner privileges'
+);
+
+select is(
+  (
+    select pg_catalog.pg_get_userbyid(procedures.proowner)
+    from pg_catalog.pg_proc AS procedures
+    where procedures.oid = 'public.detach_feed_events_before_session_delete()'::regprocedure
+  ),
+  'postgres',
+  'the session-delete trigger has the expected trusted owner'
+);
+
+select is(
+  pg_catalog.has_function_privilege(
+    'anon',
+    'public.detach_feed_events_before_session_delete()'::regprocedure,
+    'EXECUTE'
+  )
+  or pg_catalog.has_function_privilege(
+    'authenticated',
+    'public.detach_feed_events_before_session_delete()'::regprocedure,
+    'EXECUTE'
+  )
+  or pg_catalog.has_function_privilege(
+    'service_role',
+    'public.detach_feed_events_before_session_delete()'::regprocedure,
+    'EXECUTE'
+  ),
+  false,
+  'application roles cannot invoke the privileged trigger function directly'
+);
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
 values
@@ -24,12 +64,14 @@ values
     '{}'::jsonb
   );
 
-insert into public.posts (id, user_id, category, source_kind)
+insert into public.posts (id, user_id, category, source_kind, post_format, body)
 values (
   '10000000-0000-4000-8000-000000000001'::uuid,
   '00000000-0000-4000-8000-000000000001'::uuid,
-  'image',
-  'external'
+  'text',
+  'external',
+  'text',
+  'feed pruning test fixture'
 );
 
 insert into public.feed_sessions (
@@ -186,10 +228,11 @@ select is(
   'the delete trigger covers session deletions outside the pruning RPC'
 );
 
-select lives_ok(
-  $$delete from auth.users where id = '00000000-0000-4000-8000-000000000002'::uuid$$,
-  'viewer account deletion can cascade through feed sessions and events'
-);
+set local role supabase_auth_admin;
+delete from auth.users where id = '00000000-0000-4000-8000-000000000002'::uuid;
+reset role;
+
+select pass('viewer account deletion can cascade under the production auth role');
 
 select is(
   (select count(*)::integer from public.feed_sessions where id = '20000000-0000-4000-8000-000000000003'::uuid),

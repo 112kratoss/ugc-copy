@@ -160,6 +160,15 @@ describe('feed personalization migration', () => {
     expect(pruningFix).toContain('SET session_id = NULL,');
     expect(pruningFix).toContain('session_item_id = NULL');
     expect(pruningFix).toContain('items.session_id = ANY (v_session_ids)');
+    expect(pruningFix).toMatch(
+      /detach_feed_events_before_session_delete\(\)[\s\S]+?SECURITY DEFINER[\s\S]+?SET search_path = ''/,
+    );
+    expect(pruningFix).toContain(
+      'ALTER FUNCTION public.detach_feed_events_before_session_delete()\n  OWNER TO postgres;',
+    );
+    expect(pruningFix).toMatch(
+      /REVOKE ALL ON FUNCTION public\.detach_feed_events_before_session_delete\(\)[\s\S]+?service_role/,
+    );
 
     const detachIndex = pruningFix.indexOf('UPDATE public.feed_events AS events');
     const deleteIndex = pruningFix.indexOf('DELETE FROM public.feed_sessions AS sessions');
