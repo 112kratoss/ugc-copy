@@ -3,3 +3,4 @@ export type GradleProperty =
   | { type: 'comment'; value: string };
 
 export function setReleaseOptimizationProperties(properties: GradleProperty[]): GradleProperty[];
+export function setReleaseProguardOptimization(buildGradle: string): string;

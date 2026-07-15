@@ -7,7 +7,10 @@ import {
   setGradleCleartextPlaceholders,
   setManifestCleartextPlaceholder,
 } from '../plugins/withAndroidLocalCleartextDebug';
-import { setReleaseOptimizationProperties } from '../plugins/withAndroidReleaseOptimization';
+import {
+  setReleaseOptimizationProperties,
+  setReleaseProguardOptimization,
+} from '../plugins/withAndroidReleaseOptimization';
 import {
   DEVELOPMENT_ONLY_NATIVE_MODULES,
   setAndroidBuildProfileAutolinking,
@@ -41,6 +44,27 @@ describe('Android native network config', () => {
       key: 'android.enableShrinkResourcesInReleaseBuilds',
       value: 'true',
     });
+
+    const generatedBuildGradle = `release {
+      proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+    }`;
+    const optimizedBuildGradle = setReleaseProguardOptimization(generatedBuildGradle);
+    expect(optimizedBuildGradle).toContain('getDefaultProguardFile("proguard-android-optimize.txt")');
+    expect(optimizedBuildGradle).not.toContain('getDefaultProguardFile("proguard-android.txt")');
+    expect(setReleaseProguardOptimization(optimizedBuildGradle)).toBe(optimizedBuildGradle);
+  });
+
+  it('excludes RevenueCat Amazon billing code from the Google Play-only binary', () => {
+    const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
+    const inAppPurchaseSource = readFileSync(join(projectRoot, 'lib/iap.ts'), 'utf8');
+    const purchasesPatch = readFileSync(
+      join(projectRoot, 'patches/react-native-purchases+10.1.0.patch'),
+      'utf8'
+    );
+
+    expect(appJson.expo.android.permissions).toContain('com.android.vending.BILLING');
+    expect(inAppPurchaseSource).not.toMatch(/useAmazon\s*:\s*true/);
+    expect(purchasesPatch).toContain("module: 'purchases-store-amazon'");
   });
 
   it('keeps the development launcher out of runtime dependencies', () => {

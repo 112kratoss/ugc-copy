@@ -1,0 +1,15 @@
+diff --git a/node_modules/react-native-purchases/android/build.gradle b/node_modules/react-native-purchases/android/build.gradle
+--- a/node_modules/react-native-purchases/android/build.gradle
++++ b/node_modules/react-native-purchases/android/build.gradle
+@@ -121,6 +121,10 @@ def kotlin_version = getExtOrDefault('kotlinVersion')
+ dependencies {
+     //noinspection GradleDynamicVersion
+     api 'com.facebook.react:react-native:+'
+-    implementation 'com.revenuecat.purchases:purchases-hybrid-common:18.4.0'
++    implementation('com.revenuecat.purchases:purchases-hybrid-common:18.4.0') {
++        // This app ships through Google Play and never configures useAmazon.
++        // Excluding the optional store keeps its SDK and consumer rules out of R8.
++        exclude group: 'com.revenuecat.purchases', module: 'purchases-store-amazon'
++    }
+     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
+ }

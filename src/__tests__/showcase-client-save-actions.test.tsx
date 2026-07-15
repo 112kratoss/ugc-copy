@@ -394,7 +394,7 @@ describe('ShowcaseClient save actions', () => {
     expect(unlockLink).toHaveAttribute('href', expect.stringContaining('#resources'));
   });
 
-  it('disables prefetching for community card detail and creator links', () => {
+  it('disables prefetching for community card detail and creator links', async () => {
     renderShowcase(createShowcaseItem({
       asset: {
         id: 'bundle-1',
@@ -413,8 +413,8 @@ describe('ShowcaseClient save actions', () => {
 
     fireEvent.click(screen.getByAltText('Campaign Frame'));
 
-    expect(screen.getAllByRole('link', { name: /unlock for \$9\.00/i }).at(-1)).toHaveAttribute('data-prefetch', 'false');
-    expect(screen.getByRole('link', { name: /open full page/i })).toHaveAttribute('data-prefetch', 'false');
+    expect((await screen.findAllByRole('link', { name: /unlock for \$9\.00/i })).at(-1)).toHaveAttribute('data-prefetch', 'false');
+    expect(await screen.findByRole('link', { name: /open full page/i })).toHaveAttribute('data-prefetch', 'false');
   });
 
   it('prioritizes the first image preview in the public showcase grid', () => {
@@ -462,7 +462,7 @@ describe('ShowcaseClient save actions', () => {
     });
     expect(pushState).toHaveBeenCalledWith(null, '', '/showcase?post=post-1');
 
-    fireEvent.click(screen.getByRole('button', { name: /feed/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /feed/i }));
     expect(back).toHaveBeenCalledTimes(1);
   });
 
@@ -502,6 +502,7 @@ describe('ShowcaseClient save actions', () => {
       expect(params.get('post')).toBe('post-1');
       expect(params.get('media')).toBe('1');
     });
+    expect(await screen.findByRole('button', { name: /feed/i })).toBeInTheDocument();
   });
 
   it('loads a shared post URL that is not present in the first feed page without pushing a duplicate history entry', async () => {
@@ -542,7 +543,7 @@ describe('ShowcaseClient save actions', () => {
     expect((await screen.findAllByRole('heading', { name: 'Shared Campaign' })).length).toBeGreaterThan(1);
     expect(pushState).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: /feed/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /feed/i }));
 
     await waitFor(() => {
       expect(new URLSearchParams(window.location.search).has('post')).toBe(false);

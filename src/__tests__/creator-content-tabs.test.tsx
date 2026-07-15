@@ -136,14 +136,14 @@ describe('CreatorContentTabs', () => {
     vi.unstubAllGlobals();
   });
 
-  it('uses global counts and opens a creation in the immersive viewer', () => {
+  it('uses global counts and opens a creation in the immersive viewer', async () => {
     render(<CreatorContentTabs initialData={initialData} profilePath="/creators/creator-name" />);
 
     expect(screen.getByRole('tab', { name: /creations 8/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /unlocks 3/i })).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole('button', { name: /campaign frame/i })[0]);
 
-    expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('item-1');
+    expect(await screen.findByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('item-1');
     expect(window.location.search).toContain('post=item-1');
   });
 

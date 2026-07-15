@@ -1,5 +1,6 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
@@ -11,7 +12,6 @@ import SkeletonLoader from '@/app/components/SkeletonLoader';
 import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
 import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
-import ShowcaseReelViewer from '@/app/showcase/ShowcaseReelViewer';
 import {
     QualifiedImpressionBoundary,
     ShowcaseFeedbackMenu,
@@ -41,6 +41,29 @@ import {
 import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { formatSourceToolsCompact, type SourceToolOption } from '@/lib/source-tools';
+
+function ShowcaseReelLoadingFallback() {
+    return (
+        <div
+            role="status"
+            aria-live="polite"
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 text-sm font-bold text-white backdrop-blur-sm"
+        >
+            <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-zinc-950 px-5 py-3 shadow-2xl">
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                Opening preview
+            </span>
+        </div>
+    );
+}
+
+const ShowcaseReelViewer = dynamic(
+    () => import('@/app/showcase/ShowcaseReelViewer'),
+    {
+        ssr: false,
+        loading: ShowcaseReelLoadingFallback,
+    }
+);
 
 const CATEGORIES: Array<{
     id: ShowcaseCategory;
@@ -1301,35 +1324,35 @@ export default function ShowcaseClient({
                 </div>
             ) : null}
 
-            <ShowcaseReelViewer
-                isOpen={Boolean(selectedItemId)}
-                items={items}
-                selectedItemId={selectedItemId}
-                initialMediaIndex={selectedMediaIndex}
-                savedItemIds={savedItemIds}
-                savingItemIds={savingItemIds}
-                accessToken={session?.access_token ?? null}
-                hasMoreItems={pageInfo.hasMore}
-                isLoadingMoreItems={isLoadingMore}
-                onLoadMoreItems={loadMore}
-                onClose={closePreview}
-                onSelectItemId={selectPreviewItem}
-                onMediaIndexChange={(mediaIndex) => {
-                    setSelectedMediaIndex(mediaIndex);
-                    if (selectedItemId) {
+            {selectedItemId ? (
+                <ShowcaseReelViewer
+                    isOpen
+                    items={items}
+                    selectedItemId={selectedItemId}
+                    initialMediaIndex={selectedMediaIndex}
+                    savedItemIds={savedItemIds}
+                    savingItemIds={savingItemIds}
+                    accessToken={session?.access_token ?? null}
+                    hasMoreItems={pageInfo.hasMore}
+                    isLoadingMoreItems={isLoadingMore}
+                    onLoadMoreItems={loadMore}
+                    onClose={closePreview}
+                    onSelectItemId={selectPreviewItem}
+                    onMediaIndexChange={(mediaIndex) => {
+                        setSelectedMediaIndex(mediaIndex);
                         updateReelUrl(selectedItemId, 'replace', mediaIndex);
-                    }
-                }}
-                onToggleSave={(id) => toggleSave(id, 'showcase-reel')}
-                onRemix={(id) => handleRemix(id, 'showcase-reel')}
-                feedSessionId={feedSessionId}
-                onFeedback={(feedbackItem, action) => handleFeedFeedback(
-                    feedbackItem,
-                    action,
-                    'showcase-reel'
-                )}
-                buildDetailPath={buildCommunityDetailPath}
-            />
+                    }}
+                    onToggleSave={(id) => toggleSave(id, 'showcase-reel')}
+                    onRemix={(id) => handleRemix(id, 'showcase-reel')}
+                    feedSessionId={feedSessionId}
+                    onFeedback={(feedbackItem, action) => handleFeedFeedback(
+                        feedbackItem,
+                        action,
+                        'showcase-reel'
+                    )}
+                    buildDetailPath={buildCommunityDetailPath}
+                />
+            ) : null}
         </div>
     );
 }

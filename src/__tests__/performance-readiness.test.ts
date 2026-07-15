@@ -10,6 +10,12 @@ const readProjectFile = (relativePath: string) => (
 );
 
 describe('production performance readiness', () => {
+  it('inlines the production Tailwind stylesheet to remove the first-render request waterfall', () => {
+    const nextConfig = readProjectFile('next.config.ts');
+
+    expect(nextConfig).toMatch(/experimental:\s*{[\s\S]*?inlineCss:\s*true/);
+  });
+
   it('ships Vercel real-user Core Web Vitals collection from the root layout', () => {
     const packageJson = JSON.parse(readProjectFile('package.json')) as {
       dependencies?: Record<string, string>;

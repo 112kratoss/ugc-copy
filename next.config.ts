@@ -14,6 +14,12 @@ if (
 }
 
 const nextConfig: NextConfig = {
+  experimental: {
+    // Tailwind's atomic stylesheet is otherwise a render-blocking request on
+    // first visits. Shipping it with the initial document removes that
+    // round-trip for the mobile-critical public routes.
+    inlineCss: true,
+  },
   outputFileTracingIncludes: {
     "/api/cron/backend-jobs": ["./node_modules/ffmpeg-static/**"],
     "/api/cron/generation-completions": ["./node_modules/ffmpeg-static/**"],
