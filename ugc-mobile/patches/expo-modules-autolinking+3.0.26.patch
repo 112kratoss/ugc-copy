@@ -1,0 +1,13 @@
+diff --git a/node_modules/expo-modules-autolinking/android/expo-gradle-plugin/expo-autolinking-plugin-shared/src/main/kotlin/expo/modules/plugin/AutolinkigCommandBuilder.kt b/node_modules/expo-modules-autolinking/android/expo-gradle-plugin/expo-autolinking-plugin-shared/src/main/kotlin/expo/modules/plugin/AutolinkigCommandBuilder.kt
+index 2064ca4..e3397c5 100644
+--- a/node_modules/expo-modules-autolinking/android/expo-gradle-plugin/expo-autolinking-plugin-shared/src/main/kotlin/expo/modules/plugin/AutolinkigCommandBuilder.kt
++++ b/node_modules/expo-modules-autolinking/android/expo-gradle-plugin/expo-autolinking-plugin-shared/src/main/kotlin/expo/modules/plugin/AutolinkigCommandBuilder.kt
+@@ -25 +25 @@ class AutolinkingCommandBuilder {
+-  private val optionsMap = mutableMapOf<String, String>()
++  private val optionsMap = mutableSetOf<Pair<String, String>>()
+@@ -39 +39 @@ class AutolinkingCommandBuilder {
+-    optionsMap[key] = value
++    optionsMap.add(key to value)
+@@ -46 +46 @@ class AutolinkingCommandBuilder {
+-    optionsMap[key] = value.joinToString(" ")
++    value.forEach { optionsMap.add(key to it) }

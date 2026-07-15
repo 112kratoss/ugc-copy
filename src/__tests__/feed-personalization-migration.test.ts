@@ -10,6 +10,12 @@ const migrationName = fs
 const migration = migrationName
   ? fs.readFileSync(path.join(migrationsDirectory, migrationName), 'utf8')
   : '';
+const pruningFixName = fs
+  .readdirSync(migrationsDirectory)
+  .find((name) => name.endsWith('_fix_feed_session_pruning.sql'));
+const pruningFix = pruningFixName
+  ? fs.readFileSync(path.join(migrationsDirectory, pruningFixName), 'utf8')
+  : '';
 
 const backendTables = [
   'feed_algorithm_versions',
@@ -144,6 +150,21 @@ describe('feed personalization migration', () => {
     );
     expect(migration).toContain('LIMIT p_limit');
     expect(migration).toContain("'events_deleted', v_events_deleted");
+  });
+
+  it('detaches retained events before deleting expired feed sessions', () => {
+    expect(pruningFixName).toBeDefined();
+    expect(pruningFix).toContain('FOR UPDATE SKIP LOCKED');
+    expect(pruningFix).toContain('CREATE TRIGGER feed_sessions_detach_events_before_delete');
+    expect(pruningFix).toContain('BEFORE DELETE ON public.feed_sessions');
+    expect(pruningFix).toContain('SET session_id = NULL,');
+    expect(pruningFix).toContain('session_item_id = NULL');
+    expect(pruningFix).toContain('items.session_id = ANY (v_session_ids)');
+
+    const detachIndex = pruningFix.indexOf('UPDATE public.feed_events AS events');
+    const deleteIndex = pruningFix.indexOf('DELETE FROM public.feed_sessions AS sessions');
+    expect(detachIndex).toBeGreaterThanOrEqual(0);
+    expect(deleteIndex).toBeGreaterThan(detachIndex);
   });
 
   it('keeps every callable feed function service-role-only and invoker-secured', () => {

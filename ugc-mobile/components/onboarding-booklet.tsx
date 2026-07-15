@@ -122,11 +122,10 @@ export function OnboardingBookletGoal({
         }}
       >
         <Image
-          key={selected.id}
           source={selected.image}
           accessibilityLabel={selected.imageLabel}
+          cachePolicy="memory"
           contentFit="contain"
-          transition={180}
           style={{ width: '100%', height: '100%' }}
         />
         <LinearGradient

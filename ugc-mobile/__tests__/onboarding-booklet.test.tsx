@@ -141,6 +141,10 @@ describe('Onboarding booklet components', () => {
     expect(text).toContain('Pick a starting point. You can use every format whenever you like.');
     expect(text).toContain('Ads, reels, and story-driven clips');
 
+    const artwork = tree!.root.findByProps({ accessibilityLabel: 'A cinematic creator portrait' });
+    expect(artwork.props.cachePolicy).toBe('memory');
+    expect(artwork.props.transition).toBeUndefined();
+
     const imageChoice = tree!.root.findByProps({ accessibilityLabel: 'Image. Campaign visuals and product shots' });
     const videoChoice = tree!.root.findByProps({ accessibilityLabel: 'Video. Ads, reels, and story-driven clips' });
     const motionChoice = tree!.root.findByProps({ accessibilityLabel: 'Motion. Animate a character or reference video' });
@@ -166,5 +170,23 @@ describe('Onboarding booklet components', () => {
     expect(onContinue).toHaveBeenCalledTimes(1);
     expect(onBack).toHaveBeenCalledTimes(1);
     expect(onExploreAsGuest).toHaveBeenCalledTimes(1);
+
+    renderer.act(() => {
+      tree!.update(
+        <OnboardingBookletGoal
+          goals={goals}
+          selectedGoal="motion"
+          availableWidth={358}
+          onSelect={onSelect}
+          onContinue={onContinue}
+          onExploreAsGuest={onExploreAsGuest}
+          onBack={onBack}
+        />
+      );
+    });
+
+    const updatedArtwork = tree!.root.findByProps({ accessibilityLabel: 'An energetic purple motion scene' });
+    expect(updatedArtwork).toBe(artwork);
+    expect(updatedArtwork.props.source).toBe(3);
   });
 });

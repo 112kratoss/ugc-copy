@@ -8,7 +8,11 @@ import {
   setManifestCleartextPlaceholder,
 } from '../plugins/withAndroidLocalCleartextDebug';
 import { setReleaseOptimizationProperties } from '../plugins/withAndroidReleaseOptimization';
-import { withBuildProfileAutolinking } from '../app.config';
+import {
+  DEVELOPMENT_ONLY_NATIVE_MODULES,
+  setAndroidBuildProfileAutolinking,
+  setIosBuildProfileAutolinking,
+} from '../plugins/withBuildProfileAutolinking';
 
 const projectRoot = join(__dirname, '..');
 
@@ -41,20 +45,42 @@ describe('Android native network config', () => {
   it('keeps the development launcher out of runtime dependencies', () => {
     const packageJson = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8'));
     const easJson = JSON.parse(readFileSync(join(projectRoot, 'eas.json'), 'utf8'));
-    const productionConfig = withBuildProfileAutolinking({ name: 'Magic Booklet' }, false);
-    const developmentConfig = withBuildProfileAutolinking({ name: 'Magic Booklet' }, true);
+    const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
+    const autolinkingPatch = readFileSync(
+      join(projectRoot, 'patches/expo-modules-autolinking+3.0.26.patch'),
+      'utf8'
+    );
+    const settingsGradle = `plugins {
+  id("expo-autolinking-settings")
+}
+expoAutolinking.useExpoModules()
+`;
+    const podfile = `target 'MagicBooklet' do
+  use_expo_modules!
+end
+`;
+    const productionSettings = setAndroidBuildProfileAutolinking(settingsGradle);
+    const productionPodfile = setIosBuildProfileAutolinking(podfile);
 
     expect(packageJson.dependencies['expo-dev-client']).toBeUndefined();
     expect(packageJson.devDependencies['expo-dev-client']).toBe('6.0.21');
+    expect(packageJson.scripts.postinstall).toBe('patch-package');
+    expect(autolinkingPatch).toContain('value.forEach { optionsMap.add(key to it) }');
+    expect(appJson.expo.plugins).toContain('./plugins/withBuildProfileAutolinking');
     expect(easJson.build.development.env.MAGICBOOKLET_INCLUDE_DEV_CLIENT).toBe('true');
     expect(easJson.build.preview.env.MAGICBOOKLET_INCLUDE_DEV_CLIENT).toBe('false');
     expect(easJson.build.production.env.MAGICBOOKLET_INCLUDE_DEV_CLIENT).toBe('false');
-    expect(productionConfig.autolinking?.exclude).toEqual(expect.arrayContaining([
-      'expo-dev-client',
-      'expo-dev-launcher',
-      'expo-dev-menu',
-    ]));
-    expect(developmentConfig.autolinking).toBeUndefined();
+    expect(productionSettings.indexOf('expoAutolinking.exclude')).toBeLessThan(
+      productionSettings.indexOf('expoAutolinking.useExpoModules()')
+    );
+    expect(productionPodfile).toContain("ENV['MAGICBOOKLET_INCLUDE_DEV_CLIENT'] == 'false'");
+    expect(productionPodfile).toContain(':exclude => development_only_native_modules');
+    for (const moduleName of DEVELOPMENT_ONLY_NATIVE_MODULES) {
+      expect(productionSettings).toContain(`'${moduleName}'`);
+      expect(productionPodfile).toContain(`'${moduleName}'`);
+    }
+    expect(setAndroidBuildProfileAutolinking(productionSettings)).toBe(productionSettings);
+    expect(setIosBuildProfileAutolinking(productionPodfile)).toBe(productionPodfile);
   });
 
   it('enables native Sign in with Apple for iOS builds', () => {

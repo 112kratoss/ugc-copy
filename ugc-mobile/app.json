@@ -87,6 +87,7 @@
         }
       ],
       "expo-video",
+      "./plugins/withBuildProfileAutolinking",
       "./plugins/withAndroidLocalCleartextDebug",
       "./plugins/withAndroidReleaseOptimization",
       [
