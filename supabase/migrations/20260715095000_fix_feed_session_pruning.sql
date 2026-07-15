@@ -4,8 +4,66 @@
 -- feed_events foreign keys independently set session_id/session_item_id to
 -- NULL. PostgreSQL does not guarantee the order of those referential actions,
 -- so the feed event validation trigger could observe a still-linked event
--- after its session item had already disappeared. Detach both references
--- explicitly before deleting the expired session graph.
+-- after its parent had already disappeared. Delete telemetry before auth-user
+-- and post cascades, and detach both session references before deleting an
+-- ordinary or expired session graph.
+
+CREATE OR REPLACE FUNCTION public.delete_feed_events_before_auth_user_delete()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  DELETE FROM public.feed_events AS events
+  WHERE events.viewer_user_id = OLD.id
+    OR events.creator_user_id = OLD.id;
+
+  RETURN OLD;
+END;
+$$;
+
+ALTER FUNCTION public.delete_feed_events_before_auth_user_delete()
+  OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delete_feed_events_before_auth_user_delete()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+DROP TRIGGER IF EXISTS auth_users_delete_feed_events_before_delete
+  ON auth.users;
+CREATE TRIGGER auth_users_delete_feed_events_before_delete
+BEFORE DELETE ON auth.users
+FOR EACH ROW EXECUTE FUNCTION public.delete_feed_events_before_auth_user_delete();
+
+COMMENT ON FUNCTION public.delete_feed_events_before_auth_user_delete() IS
+  'Deletes private feed telemetry before auth-user cascades can expose invalid intermediate FK states.';
+
+CREATE OR REPLACE FUNCTION public.delete_feed_events_before_post_delete()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  DELETE FROM public.feed_events AS events
+  WHERE events.post_id = OLD.id;
+
+  RETURN OLD;
+END;
+$$;
+
+ALTER FUNCTION public.delete_feed_events_before_post_delete()
+  OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.delete_feed_events_before_post_delete()
+  FROM PUBLIC, anon, authenticated, service_role;
+
+DROP TRIGGER IF EXISTS posts_delete_feed_events_before_delete
+  ON public.posts;
+CREATE TRIGGER posts_delete_feed_events_before_delete
+BEFORE DELETE ON public.posts
+FOR EACH ROW EXECUTE FUNCTION public.delete_feed_events_before_post_delete();
+
+COMMENT ON FUNCTION public.delete_feed_events_before_post_delete() IS
+  'Deletes post telemetry before post-item cascades can expose invalid intermediate FK states.';
 
 CREATE OR REPLACE FUNCTION public.detach_feed_events_before_session_delete()
 RETURNS trigger

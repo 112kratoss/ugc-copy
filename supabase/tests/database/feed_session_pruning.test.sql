@@ -3,46 +3,53 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(15);
+select plan(22);
 
 select is(
   (
-    select procedures.prosecdef
+    select count(*) = 3 and bool_and(procedures.prosecdef)
     from pg_catalog.pg_proc AS procedures
-    where procedures.oid = 'public.detach_feed_events_before_session_delete()'::regprocedure
+    where procedures.oid = any (array[
+      'public.delete_feed_events_before_auth_user_delete()'::regprocedure,
+      'public.delete_feed_events_before_post_delete()'::regprocedure,
+      'public.detach_feed_events_before_session_delete()'::regprocedure
+    ])
   ),
   true,
-  'the session-delete trigger runs with its owner privileges'
+  'all feed parent-delete triggers run with their owner privileges'
 );
 
 select is(
   (
-    select pg_catalog.pg_get_userbyid(procedures.proowner)
+    select count(*) = 3
+      and bool_and(pg_catalog.pg_get_userbyid(procedures.proowner) = 'postgres')
     from pg_catalog.pg_proc AS procedures
-    where procedures.oid = 'public.detach_feed_events_before_session_delete()'::regprocedure
+    where procedures.oid = any (array[
+      'public.delete_feed_events_before_auth_user_delete()'::regprocedure,
+      'public.delete_feed_events_before_post_delete()'::regprocedure,
+      'public.detach_feed_events_before_session_delete()'::regprocedure
+    ])
   ),
-  'postgres',
-  'the session-delete trigger has the expected trusted owner'
+  true,
+  'all feed parent-delete triggers have the expected trusted owner'
 );
 
 select is(
-  pg_catalog.has_function_privilege(
-    'anon',
-    'public.detach_feed_events_before_session_delete()'::regprocedure,
-    'EXECUTE'
-  )
-  or pg_catalog.has_function_privilege(
-    'authenticated',
-    'public.detach_feed_events_before_session_delete()'::regprocedure,
-    'EXECUTE'
-  )
-  or pg_catalog.has_function_privilege(
-    'service_role',
-    'public.detach_feed_events_before_session_delete()'::regprocedure,
-    'EXECUTE'
+  (
+    select coalesce(bool_or(
+      pg_catalog.has_function_privilege('anon', procedures.oid, 'EXECUTE')
+      or pg_catalog.has_function_privilege('authenticated', procedures.oid, 'EXECUTE')
+      or pg_catalog.has_function_privilege('service_role', procedures.oid, 'EXECUTE')
+    ), false)
+    from pg_catalog.pg_proc AS procedures
+    where procedures.oid = any (array[
+      'public.delete_feed_events_before_auth_user_delete()'::regprocedure,
+      'public.delete_feed_events_before_post_delete()'::regprocedure,
+      'public.detach_feed_events_before_session_delete()'::regprocedure
+    ])
   ),
   false,
-  'application roles cannot invoke the privileged trigger function directly'
+  'application roles cannot invoke the privileged trigger functions directly'
 );
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
@@ -65,14 +72,23 @@ values
   );
 
 insert into public.posts (id, user_id, category, source_kind, post_format, body)
-values (
-  '10000000-0000-4000-8000-000000000001'::uuid,
-  '00000001-0000-4000-8000-000000000001'::uuid,
-  'text',
-  'external',
-  'text',
-  'feed pruning test fixture'
-);
+values
+  (
+    '10000000-0000-4000-8000-000000000001'::uuid,
+    '00000001-0000-4000-8000-000000000001'::uuid,
+    'text',
+    'external',
+    'text',
+    'feed pruning test fixture'
+  ),
+  (
+    '10000000-0000-4000-8000-000000000002'::uuid,
+    '00000001-0000-4000-8000-000000000001'::uuid,
+    'text',
+    'external',
+    'text',
+    'feed post deletion test fixture'
+  );
 
 insert into public.feed_sessions (
   id,
@@ -93,8 +109,8 @@ values
   ),
   (
     '20000000-0000-4000-8000-000000000002'::uuid,
+    '00000001-0000-4000-8000-000000000001'::uuid,
     null,
-    repeat('b', 64),
     (select id from public.feed_algorithm_versions where status = 'active' limit 1),
     now(),
     now() + interval '2 hours'
@@ -103,6 +119,14 @@ values
     '20000000-0000-4000-8000-000000000003'::uuid,
     '00000002-0000-4000-8000-000000000002'::uuid,
     null,
+    (select id from public.feed_algorithm_versions where status = 'active' limit 1),
+    now(),
+    now() + interval '2 hours'
+  ),
+  (
+    '20000000-0000-4000-8000-000000000004'::uuid,
+    null,
+    repeat('d', 64),
     (select id from public.feed_algorithm_versions where status = 'active' limit 1),
     now(),
     now() + interval '2 hours'
@@ -126,6 +150,21 @@ where sessions.id in (
   '20000000-0000-4000-8000-000000000001'::uuid,
   '20000000-0000-4000-8000-000000000002'::uuid,
   '20000000-0000-4000-8000-000000000003'::uuid
+);
+
+insert into public.feed_session_items (
+  session_id,
+  post_id,
+  position,
+  candidate_source,
+  final_score
+)
+values (
+  '20000000-0000-4000-8000-000000000004'::uuid,
+  '10000000-0000-4000-8000-000000000002'::uuid,
+  0,
+  'recent',
+  1.0
 );
 
 insert into public.feed_events (
@@ -168,6 +207,37 @@ where sessions.id in (
   '20000000-0000-4000-8000-000000000002'::uuid,
   '20000000-0000-4000-8000-000000000003'::uuid
 );
+
+insert into public.feed_events (
+  id,
+  client_event_id,
+  session_id,
+  session_item_id,
+  viewer_user_id,
+  anonymous_key_hash,
+  post_id,
+  creator_user_id,
+  event_type,
+  source_surface,
+  position,
+  occurred_at
+)
+select
+  '30000000-0000-4000-8000-000000000004'::uuid,
+  'feed-post-delete-test',
+  sessions.id,
+  items.id,
+  null,
+  sessions.anonymous_key_hash,
+  items.post_id,
+  '00000001-0000-4000-8000-000000000001'::uuid,
+  'impression',
+  'showcase',
+  items.position,
+  now()
+from public.feed_sessions AS sessions
+join public.feed_session_items AS items on items.session_id = sessions.id
+where sessions.id = '20000000-0000-4000-8000-000000000004'::uuid;
 
 create temporary table feed_prune_test_result (summary jsonb) on commit drop;
 
@@ -215,7 +285,7 @@ select is(
 
 select lives_ok(
   $$delete from public.feed_sessions where id = '20000000-0000-4000-8000-000000000002'::uuid$$,
-  'direct session deletion safely detaches retained telemetry'
+  'direct user-session deletion safely detaches retained telemetry while the account exists'
 );
 
 select is(
@@ -228,14 +298,40 @@ select is(
   'the delete trigger covers session deletions outside the pruning RPC'
 );
 
+select lives_ok(
+  $$delete from public.posts where id = '10000000-0000-4000-8000-000000000002'::uuid$$,
+  'direct post deletion removes feed telemetry before item cascades'
+);
+
+select is(
+  (
+    select count(*)::integer
+    from public.feed_session_items
+    where session_id = '20000000-0000-4000-8000-000000000004'::uuid
+  ),
+  0,
+  'direct post deletion removes the linked feed item'
+);
+
+select is(
+  (select count(*)::integer from public.feed_events where id = '30000000-0000-4000-8000-000000000004'::uuid),
+  0,
+  'direct post deletion removes the linked feed event'
+);
+
 select is(
   pg_catalog.has_table_privilege(
     'supabase_auth_admin',
     'public.feed_events',
     'UPDATE'
+  )
+  or pg_catalog.has_table_privilege(
+    'supabase_auth_admin',
+    'public.feed_events',
+    'DELETE'
   ),
   false,
-  'the production auth role relies on the owner-executed delete trigger'
+  'the production auth role lacks direct feed event mutation privileges'
 );
 
 select lives_ok(
@@ -253,6 +349,29 @@ select is(
   (select count(*)::integer from public.feed_events where id = '30000000-0000-4000-8000-000000000003'::uuid),
   0,
   'viewer account deletion removes its feed event'
+);
+
+select lives_ok(
+  $$delete from auth.users where id = '00000001-0000-4000-8000-000000000001'::uuid$$,
+  'creator account deletion can cascade through posts, feed items, and events'
+);
+
+select is(
+  (select count(*)::integer from public.posts where id = '10000000-0000-4000-8000-000000000001'::uuid),
+  0,
+  'creator account deletion removes the owned post'
+);
+
+select is(
+  (select count(*)::integer from public.feed_events where id = '30000000-0000-4000-8000-000000000001'::uuid),
+  0,
+  'creator account deletion removes retained anonymous telemetry'
+);
+
+select is(
+  (select count(*)::integer from public.feed_events where id = '30000000-0000-4000-8000-000000000002'::uuid),
+  0,
+  'creator account deletion removes retained user telemetry'
 );
 
 select * from finish();

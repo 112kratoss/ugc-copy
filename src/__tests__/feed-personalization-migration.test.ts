@@ -157,11 +157,24 @@ describe('feed personalization migration', () => {
     expect(pruningFix).toContain('FOR UPDATE SKIP LOCKED');
     expect(pruningFix).toContain('CREATE TRIGGER feed_sessions_detach_events_before_delete');
     expect(pruningFix).toContain('BEFORE DELETE ON public.feed_sessions');
+    expect(pruningFix).toContain('CREATE TRIGGER auth_users_delete_feed_events_before_delete');
+    expect(pruningFix).toContain('BEFORE DELETE ON auth.users');
+    expect(pruningFix).toContain('CREATE TRIGGER posts_delete_feed_events_before_delete');
+    expect(pruningFix).toContain('BEFORE DELETE ON public.posts');
     expect(pruningFix).toContain('SET session_id = NULL,');
     expect(pruningFix).toContain('session_item_id = NULL');
     expect(pruningFix).toContain('items.session_id = ANY (v_session_ids)');
+    expect(pruningFix).toContain('DELETE FROM public.feed_events AS events');
+    expect(pruningFix).toContain('WHERE events.viewer_user_id = OLD.id');
+    expect(pruningFix).toContain('WHERE events.post_id = OLD.id');
     expect(pruningFix).toMatch(
       /detach_feed_events_before_session_delete\(\)[\s\S]+?SECURITY DEFINER[\s\S]+?SET search_path = ''/,
+    );
+    expect(pruningFix).toMatch(
+      /delete_feed_events_before_auth_user_delete\(\)[\s\S]+?SECURITY DEFINER[\s\S]+?SET search_path = ''/,
+    );
+    expect(pruningFix).toMatch(
+      /delete_feed_events_before_post_delete\(\)[\s\S]+?SECURITY DEFINER[\s\S]+?SET search_path = ''/,
     );
     expect(pruningFix).toContain(
       'ALTER FUNCTION public.detach_feed_events_before_session_delete()\n  OWNER TO postgres;',
