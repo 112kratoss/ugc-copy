@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
 
+import '@/app/non-public-utilities.css';
+
 import { createNoIndexMetadata } from '@/lib/seo';
 import { RequireAuth } from '@/app/components/RouteAuthBoundary';
 

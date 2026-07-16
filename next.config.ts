@@ -17,9 +17,12 @@ if (
 }
 
 const nextConfig: NextConfig = {
-  // Keep global CSS external. Next 16's experimental inlineCss mode repeats
-  // the full stylesheet in both the document and the RSC payload, adding more
-  // than 400 KiB of main-thread parse work to every uncached navigation.
+  // Inline the source-scoped route CSS to remove the render-blocking stylesheet
+  // round trip. Public routes still exclude utilities used only by authenticated
+  // tools; private routes add their supplemental utilities from route layouts.
+  experimental: {
+    inlineCss: true,
+  },
   outputFileTracingIncludes: {
     "/api/cron/backend-jobs": ["./node_modules/ffmpeg-static/**"],
     "/api/cron/generation-completions": ["./node_modules/ffmpeg-static/**"],

@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
 
+import '@/app/non-public-utilities.css';
+
 import { createNoIndexMetadata } from '@/lib/seo';
 
 export const metadata: Metadata = createNoIndexMetadata(
@@ -10,4 +12,3 @@ export const metadata: Metadata = createNoIndexMetadata(
 export default function LoginLayout({ children }: { children: React.ReactNode }) {
     return children;
 }
-

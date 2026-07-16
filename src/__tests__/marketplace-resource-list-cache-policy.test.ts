@@ -9,6 +9,8 @@ import {
 
 describe('marketplace resource list cache policy', () => {
   it('caches only bounded, filter-only first pages', () => {
+    expect(MARKETPLACE_INITIAL_PAGE_SIZE).toBe(3);
+    expect(MARKETPLACE_COMPACT_PAGE_SIZE).toBe(12);
     expect(shouldCacheMarketplaceResourceListBasePage({
       offset: 0,
       limit: MARKETPLACE_INITIAL_PAGE_SIZE,

@@ -1,0 +1,88 @@
+@import "tailwindcss/theme.css" theme(reference);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+
+/*
+ * Route-only utility supplement.
+ *
+ * globals.css owns Tailwind's theme/base layers and the utilities needed by
+ * the anonymous public entry points. This sheet emits only utility rules used
+ * by the remaining visual routes, so it can be linked from their layouts
+ * without growing the home, showcase, or marketplace stylesheet graph.
+ */
+@source "./ai-image-generator";
+@source "./ai-motion-transfer";
+@source "./ai-video-generator";
+@source "./ai-workflow-builder";
+@source "./auth";
+@source "./blog";
+@source "./cancellation";
+@source "./contact";
+@source "./create";
+@source "./create-image";
+@source "./create-motion";
+@source "./create-video";
+@source "./create-workflow";
+@source "./creations";
+@source "./creators";
+@source "./delete-account";
+@source "./invite";
+@source "./login";
+@source "./notifications";
+@source "./post";
+@source "./pricing";
+@source "./privacy";
+@source "./profile";
+@source "./r";
+@source "./template-runs";
+@source "./templates";
+@source "./terms";
+@source "./welcome-reward";
+
+/* Shared components that are reachable only from the route set above. Keep
+ * this closure explicit so public-only component utilities are not rescanned. */
+@source "./components/EnhancePromptButton.tsx";
+@source "./components/FeatureLandingPage.tsx";
+@source "./components/NavbarClient.tsx";
+@source "./components/ProfileShareButton.tsx";
+@source "./components/PublishToShowcaseModal.tsx";
+@source "./components/enhancePromptClient.ts";
+@source "./components/templates/CreateTemplateRunClient.tsx";
+@source "./components/templates/TemplateCatalogClient.tsx";
+@source "./components/templates/TemplateDetailClient.tsx";
+@source "./components/templates/TemplateEditorClient.tsx";
+@source "./components/templates/TemplatePrimitives.tsx";
+@source "./components/templates/TemplateRunClient.tsx";
+@source "./components/templates/api.ts";
+@source "./components/templates/types.ts";
+
+/* Model and tool registries expose complete class tokens through data fields
+ * (for example gradient badge colors) that route components compose at run
+ * time. Scanning lib keeps those dynamic values available without a safelist.
+ */
+@source "../lib/client-generation-models.ts";
+@source "../lib/generation-model-client.ts";
+@source "../lib/models.ts";
+
+/* The root stylesheet already emits these variables. Reference mode teaches
+ * this isolated compiler about the project aliases without duplicating them.
+ */
+@theme reference {
+  --color-brand-coral: #ff7a59;
+  --color-brand-coral-soft: #ff8e72;
+  --color-brand-blue: #73bff2;
+  --color-brand-red: #ff7c8b;
+  --color-brand-emerald: #67d6a7;
+  --color-ui-bg-app: #0c0c0e;
+  --color-ui-bg-page: #101012;
+  --color-ui-surface-1: #19191c;
+  --color-ui-text-primary: #fff8ed;
+  --color-ui-text-secondary: #ddd6cc;
+  --color-ui-text-muted: #aaa39b;
+  --color-ui-text-faint: #8d8780;
+  --radius-ui-sm: 0.5rem;
+  --radius-ui-md: 0.75rem;
+  --radius-ui-lg: 1rem;
+  --radius-ui-xl: 1.25rem;
+  --radius-ui-2xl: 1.5rem;
+  --shadow-ui-panel: 0 14px 34px rgba(0, 0, 0, 0.3);
+}

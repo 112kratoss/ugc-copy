@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { ArrowRight, ShoppingBag } from 'lucide-react';
 import { Suspense, use } from 'react';
 
-import MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
+import MarketplaceBootstrap from '@/app/marketplace/MarketplaceBootstrap';
 import {
   getMarketplaceResourceList,
 } from '@/lib/post-resource-bundles-server';
@@ -107,7 +107,7 @@ function MarketplaceResults({
   const { initialPage, initialFilters, sourceToolOptions } = use(data);
 
   return (
-    <MarketplaceBrowser
+    <MarketplaceBootstrap
       initialPage={initialPage}
       initialFilters={initialFilters}
       sourceToolOptions={sourceToolOptions}

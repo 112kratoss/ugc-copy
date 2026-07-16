@@ -10,11 +10,18 @@ const readProjectFile = (relativePath: string) => (
 );
 
 describe('production performance readiness', () => {
-  it('inlines the production Tailwind stylesheet to remove the first-render request waterfall', () => {
+  it('inlines the scoped public Tailwind stylesheet without pulling in private utilities', () => {
     const nextConfig = readProjectFile('next.config.ts');
+    const globalCss = readProjectFile('src/app/globals.css');
 
-    expect(nextConfig).not.toContain('inlineCss: true');
-    expect(nextConfig).toContain('Keep global CSS external');
+    expect(nextConfig).toContain('inlineCss: true');
+    expect(nextConfig).toContain('Inline the source-scoped route CSS');
+    expect(globalCss).toContain('@import "tailwindcss" source(none)');
+    expect(globalCss).toContain('@source "./showcase"');
+    expect(globalCss).toContain('@source "./marketplace"');
+    expect(globalCss).not.toContain('@source "./components";');
+    expect(globalCss).toContain('@source "./components/AppShell.tsx";');
+    expect(globalCss).toContain('@source "../lib/client-generation-models.ts";');
   });
 
   it('bounds media-heavy first renders and yields the remaining showcase hydration work', () => {
@@ -43,7 +50,7 @@ describe('production performance readiness', () => {
     expect(priorityPoster).toContain("return `data:image/webp;base64,${Buffer.from(bytes).toString('base64')}`");
     expect(nextConfig).toContain('value: `<${supabaseUrl.origin}>; rel=preconnect`');
     expect(nextConfig).toContain('{ source: "/showcase", headers: showcasePreconnectHeaders }');
-    expect(marketplacePolicy).toContain('MARKETPLACE_INITIAL_PAGE_SIZE = 6');
+    expect(marketplacePolicy).toContain('MARKETPLACE_INITIAL_PAGE_SIZE = 3');
     expect(marketplacePolicy).toContain('MARKETPLACE_COMPACT_PAGE_SIZE = 12');
     expect(marketplacePolicy).toContain('MARKETPLACE_DEFAULT_PAGE_SIZE = 24');
     expect(marketplaceClient).toContain('limit: MARKETPLACE_COMPACT_PAGE_SIZE');

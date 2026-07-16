@@ -40,87 +40,87 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     vi.unstubAllGlobals();
   });
 
-  it('serializes all six production bootstrap cards and exposes pagination', () => {
+  it('serializes all three production bootstrap cards and exposes pagination', () => {
     const markup = renderToStaticMarkup(
       <MarketplaceBrowser
-        initialPage={createPage(6, true, 0, 6)}
+        initialPage={createPage(3, true, 0, 3)}
         initialFilters={INITIAL_FILTERS}
         sourceToolOptions={[]}
       />
     );
 
     expect(markup).toContain('Unlock 1');
-    expect(markup).toContain('Unlock 6');
-    expect(markup).not.toContain('Unlock 7');
+    expect(markup).toContain('Unlock 3');
+    expect(markup).not.toContain('Unlock 4');
     expect(markup).toContain('Load more unlocks');
     expect(markup).not.toContain('data-marketplace-bootstrap-sentinel');
   });
 
-  it('continues a six-item bootstrap at offset six with the compact API page size', async () => {
+  it('continues a three-item bootstrap at offset three with the compact API page size', async () => {
     vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({
       items: [
-        createMarketplaceItem(6),
-        createMarketplaceItem(7),
-        createMarketplaceItem(7),
+        createMarketplaceItem(3),
+        createMarketplaceItem(4),
+        createMarketplaceItem(4),
       ],
       pageInfo: {
         hasMore: false,
         nextOffset: null,
-        offset: 6,
+        offset: 3,
         limit: 12,
       },
     })));
-    renderMarketplace(createPage(6, true, 0, 6));
+    renderMarketplace(createPage(3, true, 0, 3));
 
     fireEvent.click(screen.getByRole('button', { name: /load more unlocks/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('Unlock 7')).toBeInTheDocument();
+      expect(screen.getByText('Unlock 4')).toBeInTheDocument();
     });
     expect(fetch).toHaveBeenCalledWith(
-      '/api/marketplace/resources?offset=6&limit=12',
+      '/api/marketplace/resources?offset=3&limit=12',
       expect.objectContaining({
         headers: { Accept: 'application/json' },
         signal: expect.any(AbortSignal),
       })
     );
-    expect(screen.getAllByText('Unlock 6')).toHaveLength(1);
-    expect(screen.getAllByText('Unlock 7')).toHaveLength(1);
+    expect(screen.getAllByText('Unlock 3')).toHaveLength(1);
+    expect(screen.getAllByText('Unlock 4')).toHaveLength(1);
     expect(screen.queryByRole('button', { name: /load more unlocks/i })).not.toBeInTheDocument();
   });
 
   it('uses each response nextOffset without gaps when loading another normal page', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        items: Array.from({ length: 12 }, (_, index) => createMarketplaceItem(index + 7)),
+        items: Array.from({ length: 12 }, (_, index) => createMarketplaceItem(index + 4)),
         pageInfo: {
           hasMore: true,
-          nextOffset: 18,
-          offset: 6,
+          nextOffset: 15,
+          offset: 3,
           limit: 12,
         },
       })))
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        items: [createMarketplaceItem(19)],
+        items: [createMarketplaceItem(16)],
         pageInfo: {
           hasMore: false,
           nextOffset: null,
-          offset: 18,
+          offset: 15,
           limit: 12,
         },
       })));
-    renderMarketplace(createPage(6, true, 0, 6));
+    renderMarketplace(createPage(3, true, 0, 3));
 
     fireEvent.click(screen.getByRole('button', { name: /load more unlocks/i }));
-    await screen.findByText('Unlock 18');
+    await screen.findByText('Unlock 15');
     fireEvent.click(screen.getByRole('button', { name: /load more unlocks/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('Unlock 19')).toBeInTheDocument();
+      expect(screen.getByText('Unlock 16')).toBeInTheDocument();
     });
     expect(fetch).toHaveBeenNthCalledWith(
       2,
-      '/api/marketplace/resources?offset=18&limit=12',
+      '/api/marketplace/resources?offset=15&limit=12',
       expect.objectContaining({
         headers: { Accept: 'application/json' },
         signal: expect.any(AbortSignal),
@@ -133,14 +133,14 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     vi.mocked(fetch).mockImplementation(() => new Promise<Response>((resolve) => {
       resolveRequest = resolve;
     }));
-    const { rerender } = renderMarketplace(createPage(6, true, 0, 6));
+    const { rerender } = renderMarketplace(createPage(3, true, 0, 3));
 
     fireEvent.click(screen.getByRole('button', { name: /load more unlocks/i }));
     const requestSignal = vi.mocked(fetch).mock.calls[0]?.[1]?.signal;
 
     rerender(
       <MarketplaceBrowser
-        initialPage={createPage(6, false, 100, 6)}
+        initialPage={createPage(3, false, 100, 3)}
         initialFilters={{ ...INITIAL_FILTERS, q: 'new query' }}
         sourceToolOptions={[]}
       />
@@ -149,11 +149,11 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     expect(requestSignal?.aborted).toBe(true);
     await act(async () => {
       resolveRequest?.(new Response(JSON.stringify({
-        items: [createMarketplaceItem(7)],
+        items: [createMarketplaceItem(4)],
         pageInfo: {
           hasMore: true,
-          nextOffset: 18,
-          offset: 6,
+          nextOffset: 15,
+          offset: 3,
           limit: 12,
         },
       })));
@@ -161,16 +161,16 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     });
 
     expect(screen.getByText('Unlock 101')).toBeInTheDocument();
-    expect(screen.queryByText('Unlock 7')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unlock 4')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /load more unlocks/i })).not.toBeInTheDocument();
   });
 
   it('replaces accumulated items when navigation supplies a new result page', async () => {
-    const { rerender } = renderMarketplace(createPage(6, true));
+    const { rerender } = renderMarketplace(createPage(3, true));
 
     rerender(
       <MarketplaceBrowser
-        initialPage={createPage(6, false, 100, 6)}
+        initialPage={createPage(3, false, 100, 3)}
         initialFilters={{ ...INITIAL_FILTERS, q: 'new query' }}
         sourceToolOptions={[]}
       />
@@ -179,7 +179,7 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     await waitFor(() => {
       expect(screen.getByText('Unlock 101')).toBeInTheDocument();
     });
-    expect(screen.getByText('Unlock 106')).toBeInTheDocument();
+    expect(screen.getByText('Unlock 103')).toBeInTheDocument();
     expect(screen.queryByText('Unlock 1')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /load more unlocks/i })).not.toBeInTheDocument();
   });
@@ -195,7 +195,7 @@ function renderMarketplace(initialPage: ReturnType<typeof createPage>) {
   );
 }
 
-function createPage(count: number, hasMore: boolean, startAt = 0, limit = 12) {
+function createPage(count: number, hasMore: boolean, startAt = 0, limit = 3) {
   return {
     items: Array.from({ length: count }, (_, index) => createMarketplaceItem(startAt + index + 1)),
     pageInfo: {

@@ -1,4 +1,48 @@
-@import "tailwindcss";
+@import "tailwindcss" source(none);
+
+/* Keep the root/public stylesheet limited to the routes that every anonymous
+   first visit can reach. Other product routes add their utility supplement in
+   their route layout. */
+@source "./page.tsx";
+@source "./layout.tsx";
+@source "./showcase";
+@source "./marketplace";
+/* Public route import closure. Keep this list explicit so private editor and
+   account utilities stay in the route-only supplemental stylesheet. */
+@source "./components/AppShell.tsx";
+@source "./components/AppShellAccount.tsx";
+@source "./components/AppShellAccountFallback.tsx";
+@source "./components/AppShellClient.tsx";
+@source "./components/AuthProvider.tsx";
+@source "./components/CreatorIdentity.tsx";
+@source "./components/CreatorStudio.tsx";
+@source "./components/CreatorToolPreview.tsx";
+@source "./components/DeferredAppShellAccount.tsx";
+@source "./components/DeferredGenerationNotifications.tsx";
+@source "./components/DeferredHomeShowcasePreviewGrid.tsx";
+@source "./components/DesignSystem.tsx";
+@source "./components/GenerationNotifications.tsx";
+@source "./components/HomeShowcasePreviewGrid.tsx";
+@source "./components/HomeShowcasePreviewGridIsland.tsx";
+@source "./components/HoverVideo.tsx";
+@source "./components/JsonLd.tsx";
+@source "./components/MediaDetailsPreviewModal.tsx";
+@source "./components/OptimizedPreviewImage.tsx";
+@source "./components/PublicShareButton.tsx";
+@source "./components/RouteAuthBoundary.tsx";
+@source "./components/SkeletonLoader.tsx";
+@source "./components/TabLoadingShell.tsx";
+@source "./components/TextPostPreviewCard.tsx";
+@source "./components/app-shell-auth-state.ts";
+@source "./components/app-shell-nav.ts";
+@source "./components/useMediaLoadingPreferences.ts";
+@source "./components/useOptimisticPostSave.ts";
+@source "./components/useShareAction.ts";
+@source "./components/useSupabaseAuthCookieHint.ts";
+
+/* Home composes model badge gradients from data rather than JSX literals. */
+@source "../lib/client-generation-models.ts";
+@source "../lib/models.ts";
 
 @theme {
   --color-brand-coral: #ff7a59;

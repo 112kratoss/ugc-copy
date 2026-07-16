@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 
-import ShowcaseClient from '@/app/showcase/ShowcaseClient';
+import ShowcaseBootstrapClient from '@/app/showcase/ShowcaseBootstrapClient';
 import { getShowcaseFeedPage } from '@/lib/showcase-feed';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import {
@@ -143,7 +143,7 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
                     fetchPriority="high"
                 />
             ) : null}
-            <ShowcaseClient
+            <ShowcaseBootstrapClient
                 initialFeed={initialFeed}
                 initialCategory={category}
                 initialSort={sort}

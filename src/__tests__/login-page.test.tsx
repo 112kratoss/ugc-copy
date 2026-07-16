@@ -1,7 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import LoginClient from '@/app/login/LoginClient';
 import LoginPage from '@/app/login/page';
+import { getSafeAuthNextPath } from '@/lib/auth-onboarding';
 
 const mocks = vi.hoisted(() => ({
   replace: vi.fn(),
@@ -19,7 +21,6 @@ vi.mock('next/navigation', () => ({
     replace: mocks.replace,
     refresh: mocks.refresh,
   }),
-  useSearchParams: () => mocks.searchParams,
 }));
 
 vi.mock('@/lib/supabase', () => ({
@@ -83,9 +84,40 @@ describe('LoginPage onboarding redirects', () => {
     }
   }
 
+  function renderLogin() {
+    const explicitRedirect = mocks.searchParams.get('next')
+      || mocks.searchParams.get('redirect')
+      || mocks.searchParams.get('returnUrl');
+
+    return render(
+      <LoginClient
+        initialMode={mocks.searchParams.get('mode') === 'signup' ? 'signup' : 'login'}
+        recoveryRequested={mocks.searchParams.get('recovery') === '1'}
+        redirectTo={getSafeAuthNextPath(explicitRedirect)}
+      />
+    );
+  }
+
+  it('resolves query intent on the server so the real form is present in initial HTML', async () => {
+    const element = await LoginPage({
+      searchParams: Promise.resolve({
+        mode: 'signup',
+        recovery: '1',
+        returnUrl: '/create',
+      }),
+    });
+
+    expect(element.type).toBe(LoginClient);
+    expect(element.props).toMatchObject({
+      initialMode: 'signup',
+      recoveryRequested: true,
+      redirectTo: '/create',
+    });
+  });
+
   it('keeps normal login pointed at the requested return URL', async () => {
     mocks.searchParams = new URLSearchParams('returnUrl=/create');
-    render(<LoginPage />);
+    renderLogin();
 
     fillAuthForm();
     fireEvent.click(screen.getAllByRole('button', { name: /^sign in$/i }).at(-1)!);
@@ -96,7 +128,7 @@ describe('LoginPage onboarding redirects', () => {
   });
 
   it('sends password recovery back through the authenticated reset page', async () => {
-    render(<LoginPage />);
+    renderLogin();
 
     fireEvent.change(screen.getByLabelText(/email address/i), {
       target: { value: 'creator@example.com' },
@@ -118,7 +150,7 @@ describe('LoginPage onboarding redirects', () => {
       data: { session: { access_token: 'token' } },
       error: null,
     });
-    render(<LoginPage />);
+    renderLogin();
 
     fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
     fillAuthForm();
@@ -137,7 +169,7 @@ describe('LoginPage onboarding redirects', () => {
 
   it('preserves the requested route through confirmation-email signup', async () => {
     mocks.searchParams = new URLSearchParams('returnUrl=/create/video?model=kling');
-    render(<LoginPage />);
+    renderLogin();
 
     fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
     fillAuthForm();
@@ -156,7 +188,7 @@ describe('LoginPage onboarding redirects', () => {
 
   it('preserves intent for Google while server-side onboarding decides the destination', async () => {
     mocks.searchParams = new URLSearchParams('returnUrl=/create');
-    render(<LoginPage />);
+    renderLogin();
 
     fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
     fireEvent.click(screen.getByRole('button', { name: /google/i }));
@@ -172,14 +204,14 @@ describe('LoginPage onboarding redirects', () => {
   });
 
   it('does not advertise Apple while the provider is unavailable', () => {
-    render(<LoginPage />);
+    renderLogin();
 
     expect(screen.queryByRole('button', { name: /apple/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /continue with google/i })).toBeInTheDocument();
   });
 
   it('shows and enforces the configured password requirements before signup', async () => {
-    render(<LoginPage />);
+    renderLogin();
 
     fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
     expect(screen.getByText('8 or more characters')).toBeInTheDocument();
@@ -197,7 +229,7 @@ describe('LoginPage onboarding redirects', () => {
   });
 
   it('requires password confirmation before creating an account', async () => {
-    render(<LoginPage />);
+    renderLogin();
 
     fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
     fillAuthForm();
@@ -213,7 +245,7 @@ describe('LoginPage onboarding redirects', () => {
 
   it('allows an explicit auth redirect origin to override the public site URL', async () => {
     process.env.NEXT_PUBLIC_AUTH_REDIRECT_ORIGIN = 'https://www.magicbooklet.com';
-    render(<LoginPage />);
+    renderLogin();
 
     fireEvent.click(screen.getByRole('button', { name: /google/i }));
 

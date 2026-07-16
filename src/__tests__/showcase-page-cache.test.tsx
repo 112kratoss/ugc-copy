@@ -32,7 +32,7 @@ vi.mock('@/lib/showcase-priority-poster', () => ({
   ),
 }));
 
-vi.mock('@/app/showcase/ShowcaseClient', () => ({
+vi.mock('@/app/showcase/ShowcaseBootstrapClient', () => ({
   default: (props: unknown) => {
     showcaseClientPropsMock(props);
     return <div data-testid="showcase-client" />;

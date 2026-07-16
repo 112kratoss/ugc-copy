@@ -245,6 +245,93 @@ describe('ShowcaseClient save actions', () => {
     });
   });
 
+  it('uses a poster-only anonymous shell for the single critical visual card and opens the reel', async () => {
+    authState.session = null;
+    authState.user = null;
+    const items = [
+      createShowcaseItem(),
+      createShowcaseItem({
+        id: 'post-2',
+        generationId: 'gen-2',
+        title: 'Deferred Campaign',
+      }),
+    ];
+
+    const { container } = render(
+      <ShowcaseClient
+        initialFeed={createFeed(items)}
+        initialCategory="all"
+        initialSort="recent"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+        initialPriorityPoster={{
+          postId: 'post-1',
+          mediaId: 'post-1:cover',
+          dataUrl: 'data:image/webp;base64,UklGRg==',
+        }}
+      />
+    );
+
+    expect(container.querySelector('[data-showcase-lightweight-card="true"]')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Campaign Frame' })).toHaveAttribute(
+      'src',
+      'data:image/webp;base64,UklGRg=='
+    );
+    expect(screen.getByText('Creator Name')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /save campaign frame/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /more actions for campaign frame/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Share' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /open campaign frame in viewer/i }));
+
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get('post')).toBe('post-1');
+    });
+    expect(container.querySelector('[data-showcase-lightweight-card="true"]')).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /feed/i })).toBeInTheDocument();
+  });
+
+  it('keeps the complete initial card actions for authenticated viewers', () => {
+    const { container } = renderShowcase([
+      createShowcaseItem(),
+      createShowcaseItem({ id: 'post-2', generationId: 'gen-2', title: 'Deferred Campaign' }),
+    ]);
+
+    expect(container.querySelector('[data-showcase-lightweight-card="true"]')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save campaign frame\. 4 saves/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /more actions for campaign frame/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Share' })).toBeInTheDocument();
+  });
+
+  it('restores the complete anonymous card when deferred rendering begins', async () => {
+    authState.session = null;
+    authState.user = null;
+    const { container } = renderShowcase([
+      createShowcaseItem(),
+      createShowcaseItem({ id: 'post-2', generationId: 'gen-2', title: 'Deferred Campaign' }),
+    ]);
+
+    expect(container.querySelector('[data-showcase-lightweight-card="true"]')).toBeInTheDocument();
+    const deferredObserver = intersectionObservers.find((observer) => (
+      observer.observedTargets.some((target) => (
+        target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
+      ))
+    ));
+
+    act(() => {
+      deferredObserver?.trigger(true);
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-showcase-lightweight-card="true"]')).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /save campaign frame\. 4 saves/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /more actions for campaign frame/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Share' })).toHaveLength(2);
+  });
+
   it('hydrates only the priority card and reveals one deferred card per sentinel approach', async () => {
     const items = Array.from({ length: 5 }, (_, index) => createShowcaseItem({
       id: `post-${index + 1}`,
@@ -364,7 +451,7 @@ describe('ShowcaseClient save actions', () => {
     expect(screen.getByText('Fallback Campaign 3')).toBeInTheDocument();
   });
 
-  it('establishes an anonymous feed session after the critical window without hydrating hidden cards', () => {
+  it('establishes an anonymous feed session after demand and idle without hydrating hidden cards', () => {
     vi.useFakeTimers();
     authState.session = null;
     authState.user = null;
@@ -404,7 +491,7 @@ describe('ShowcaseClient save actions', () => {
     );
 
     act(() => {
-      vi.advanceTimersByTime(5_999);
+      vi.advanceTimersByTime(7_999);
     });
     expect(screen.getByText('Anonymous Campaign 1')).toBeInTheDocument();
     expect(screen.queryByText('Anonymous Campaign 2')).not.toBeInTheDocument();
@@ -414,9 +501,8 @@ describe('ShowcaseClient save actions', () => {
       expect.anything()
     );
 
-    act(() => {
-      vi.advanceTimersByTime(1);
-    });
+    fireEvent.pointerDown(window);
+
     expect(idleCallbacks).toHaveLength(1);
     expect(fetchMock).not.toHaveBeenCalledWith(
       expect.stringMatching(/^\/api\/showcase\/feed\?/),
@@ -1063,7 +1149,7 @@ describe('ShowcaseClient save actions', () => {
     expect(feedFetch).toHaveBeenCalledWith(expect.stringContaining('cursor=cursor-1'));
   });
 
-  it('refreshes the For You fallback for an anonymous viewer to establish a feed session', async () => {
+  it('keeps the anonymous fallback idle until interaction establishes a feed session', async () => {
     vi.useFakeTimers();
     vi.stubGlobal('requestIdleCallback', vi.fn((callback: IdleRequestCallback) => {
       callback({
@@ -1122,7 +1208,16 @@ describe('ShowcaseClient save actions', () => {
     );
 
     await act(async () => {
-      vi.advanceTimersByTime(6_000);
+      vi.advanceTimersByTime(60_000);
+      await Promise.resolve();
+    });
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => (
+      String(input).startsWith('/api/showcase/feed?')
+    ))).toBe(false);
+
+    fireEvent.pointerDown(window);
+
+    await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -1205,8 +1300,12 @@ describe('ShowcaseClient save actions', () => {
       />
     );
 
+    await act(async () => Promise.resolve());
+    expect(feedFetch).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+
     await act(async () => {
-      vi.advanceTimersByTime(6_000);
       await Promise.resolve();
       await Promise.resolve();
     });

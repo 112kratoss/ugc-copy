@@ -27,7 +27,19 @@ interface AuthContextValue {
     refreshSessionState: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextValue | null>(null);
+const anonymousAuthContext: AuthContextValue = {
+    session: null,
+    user: null,
+    credits: null,
+    isLoading: false,
+    updateCredits: () => undefined,
+    refreshSessionState: async () => undefined,
+};
+
+// Public routes intentionally omit the provider when the request has no auth
+// cookie hint. Consumers still receive a complete, signed-out context while
+// authenticated requests mount AuthProvider with server-verified state.
+const AuthContext = createContext<AuthContextValue>(anonymousAuthContext);
 
 async function getBrowserSupabase(): Promise<BrowserSupabaseClient> {
     const { supabase } = await import('@/lib/supabase');
@@ -380,11 +392,5 @@ export function AuthProvider({
 }
 
 export function useAuth() {
-    const context = useContext(AuthContext);
-
-    if (!context) {
-        throw new Error('useAuth must be used within an AuthProvider');
-    }
-
-    return context;
+    return useContext(AuthContext);
 }

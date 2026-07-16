@@ -35,15 +35,25 @@ function CatalogSkeleton() {
   );
 }
 
-export default function TemplateCatalogClient({ mode = 'public' }: { mode?: 'public' | 'owner' }) {
+export default function TemplateCatalogClient({
+  mode = 'public',
+  initialTemplates,
+}: {
+  mode?: 'public' | 'owner';
+  initialTemplates?: MediaTemplate[];
+}) {
   const { session, isLoading: isAuthLoading } = useAuth();
-  const [templates, setTemplates] = useState<MediaTemplate[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const hasInitialPublicTemplates = mode === 'public' && initialTemplates !== undefined;
+  const [templates, setTemplates] = useState<MediaTemplate[]>(
+    hasInitialPublicTemplates ? initialTemplates : []
+  );
+  const [isLoading, setIsLoading] = useState(!hasInitialPublicTemplates);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [inputFilter, setInputFilter] = useState<InputFilter>('all');
 
   useEffect(() => {
+    if (hasInitialPublicTemplates) return;
     if (mode === 'owner' && isAuthLoading) return;
 
     let active = true;
@@ -61,7 +71,7 @@ export default function TemplateCatalogClient({ mode = 'public' }: { mode?: 'pub
     return () => {
       active = false;
     };
-  }, [isAuthLoading, mode, session?.access_token]);
+  }, [hasInitialPublicTemplates, isAuthLoading, mode, session?.access_token]);
 
   const filteredTemplates = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
