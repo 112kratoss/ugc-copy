@@ -12,6 +12,7 @@ import SkeletonLoader from '@/app/components/SkeletonLoader';
 import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
 import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
+import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
 import {
     QualifiedImpressionBoundary,
     ShowcaseFeedbackMenu,
@@ -45,6 +46,7 @@ import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { formatSourceToolsCompact, type SourceToolOption } from '@/lib/source-tools';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
+import { mergeShowcaseFeedKeepingVisibleItems } from '@/lib/showcase-feed-stability';
 
 function ShowcaseReelLoadingFallback() {
     return (
@@ -100,10 +102,9 @@ function getShowcaseDeferredRevealBatchSize(): number {
         return 1;
     }
 
-    // Match the responsive column counts used by the showcase masonry feed.
-    // Revealing one complete row prevents the sentinel from getting trapped
-    // inside a partially filled desktop row while preserving one-at-a-time
-    // hydration on the mobile performance path.
+    // Match the responsive column counts used by the stable showcase grid.
+    // Revealing one complete row fills desktop space predictably while
+    // preserving one-at-a-time hydration on the mobile performance path.
     if (window.matchMedia('(min-width: 1280px)').matches) {
         return 4;
     }
@@ -429,6 +430,7 @@ export default function ShowcaseClient({
     const [renderedItemCount, setRenderedItemCount] = useState(() => (
         Math.min(SHOWCASE_INITIAL_RENDER_COUNT, initialFeed.items.length)
     ));
+    const renderedItemCountRef = useRef(renderedItemCount);
     const [hasActivatedInitialAnonymousCard, setHasActivatedInitialAnonymousCard] = useState(false);
     const [hasAnonymousPersonalizationDemand, setHasAnonymousPersonalizationDemand] = useState(() => (
         Boolean(searchParams.get('post'))
@@ -466,7 +468,8 @@ export default function ShowcaseClient({
         selectedItemIdRef.current = selectedItemId;
         feedItemsForEventsRef.current = items;
         feedSessionIdForEventsRef.current = feedSessionId;
-    }, [feedSessionId, items, selectedItemId]);
+        renderedItemCountRef.current = renderedItemCount;
+    }, [feedSessionId, items, renderedItemCount, selectedItemId]);
 
     const currentShowcasePath = searchParams.toString()
         ? `${pathname}?${searchParams.toString()}`
@@ -828,12 +831,30 @@ export default function ShowcaseClient({
                             anonymousHiddenPostIdsRef.current,
                             anonymousHiddenCreatorIdsRef.current
                         );
+                    const currentItems = feedItemsForEventsRef.current;
+                    const preservedVisibleItemCount = Math.min(
+                        renderedItemCountRef.current,
+                        currentItems.length
+                    );
                     const selectedItem = selectedItemIdRef.current
-                        ? feedItemsForEventsRef.current.find((candidate) => candidate.id === selectedItemIdRef.current) ?? null
+                        ? currentItems.find((candidate) => candidate.id === selectedItemIdRef.current) ?? null
                         : null;
-                    const nextItems = selectedItem && !visiblePersonalizedItems.some((candidate) => candidate.id === selectedItem.id)
+                    const incomingItems = selectedItem && !visiblePersonalizedItems.some((candidate) => candidate.id === selectedItem.id)
                         ? [...visiblePersonalizedItems, selectedItem]
                         : visiblePersonalizedItems;
+                    const nextItems = mergeShowcaseFeedKeepingVisibleItems(
+                        currentItems,
+                        incomingItems,
+                        preservedVisibleItemCount
+                    );
+                    const preservedItemIds = new Set(
+                        currentItems
+                            .slice(0, preservedVisibleItemCount)
+                            .map((item) => item.id)
+                    );
+                    if (selectedItem) {
+                        preservedItemIds.add(selectedItem.id);
+                    }
                     setItems(nextItems);
                     setRenderedItemCount((currentCount) => Math.min(
                         Math.max(SHOWCASE_INITIAL_RENDER_COUNT, currentCount),
@@ -841,9 +862,17 @@ export default function ShowcaseClient({
                     ));
                     setPageInfo(personalizedFeed.pageInfo);
                     setFeedSessionId(getShowcaseFeedSessionId(personalizedFeed));
-                    setSavedItemIds(new Set(
-                        visiblePersonalizedItems.filter((item) => item.isSaved).map((item) => item.id)
-                    ));
+                    setSavedItemIds((currentSavedItemIds) => {
+                        const nextSavedItemIds = new Set(
+                            visiblePersonalizedItems.filter((item) => item.isSaved).map((item) => item.id)
+                        );
+                        preservedItemIds.forEach((itemId) => {
+                            if (currentSavedItemIds.has(itemId)) {
+                                nextSavedItemIds.add(itemId);
+                            }
+                        });
+                        return nextSavedItemIds;
+                    });
                     setLoadMoreError(null);
                     isLoadingMoreRef.current = false;
                     setIsLoadingMore(false);
@@ -1415,9 +1444,9 @@ export default function ShowcaseClient({
                 </div>
 
                 {isLoadingInitialFeed ? (
-                    <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
+                    <div className={SHOWCASE_FEED_GRID_CLASS}>
                         {[1, 2, 3, 4, 5, 6, 7, 8].map((placeholder) => (
-                            <div key={placeholder} className="break-inside-avoid mb-6">
+                            <div key={placeholder} className="min-w-0">
                                 <SkeletonLoader className="h-64" />
                             </div>
                         ))}
@@ -1434,7 +1463,7 @@ export default function ShowcaseClient({
                         </Link>
                     </div>
                 ) : (
-                    <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-6 space-y-6">
+                    <div className={SHOWCASE_FEED_GRID_CLASS}>
                             {renderedItems.map((item, itemIndex) => {
                                 const resourceKinds = getItemResourceKinds(item);
                                 const isSaved = savedItemIds.has(item.id);
@@ -1452,7 +1481,7 @@ export default function ShowcaseClient({
                                         position={itemIndex}
                                         feedSessionId={feedSessionId}
                                         accessToken={session?.access_token ?? null}
-                                        className="break-inside-avoid mb-6 flex flex-col"
+                                        className="flex min-w-0 flex-col"
                                     >
                                         {useInitialAnonymousCardShell ? (
                                             <AnonymousShowcaseCardShell

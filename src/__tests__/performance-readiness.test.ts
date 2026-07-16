@@ -28,6 +28,9 @@ describe('production performance readiness', () => {
     const nextConfig = readProjectFile('next.config.ts');
     const showcaseModel = readProjectFile('src/lib/showcase.ts');
     const showcaseClient = readProjectFile('src/app/showcase/ShowcaseClient.tsx');
+    const showcaseBootstrap = readProjectFile('src/app/showcase/ShowcaseBootstrapClient.tsx');
+    const showcaseLayout = readProjectFile('src/app/showcase/showcase-layout.ts');
+    const showcaseFeedStability = readProjectFile('src/lib/showcase-feed-stability.ts');
     const showcasePage = readProjectFile('src/app/showcase/page.tsx');
     const priorityPoster = readProjectFile('src/lib/showcase-priority-poster.ts');
     const marketplacePolicy = readProjectFile('src/lib/marketplace-resource-list-cache-policy.ts');
@@ -42,6 +45,11 @@ describe('production performance readiness', () => {
     expect(showcaseClient).toContain("SHOWCASE_DEFERRED_REVEAL_ROOT_MARGIN = '200px 0px'");
     expect(showcaseClient).toContain('data-showcase-deferred-reveal-sentinel="true"');
     expect(showcaseClient).toContain("rootMargin: '400px 0px'");
+    expect(showcaseLayout).toContain("'grid grid-cols-1 items-start gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'");
+    expect(showcaseClient).not.toContain('columns-');
+    expect(showcaseBootstrap).not.toContain('columns-');
+    expect(showcaseFeedStability).toContain('mergeShowcaseFeedKeepingVisibleItems');
+    expect(showcaseClient).toContain('mergeShowcaseFeedKeepingVisibleItems(');
     expect(showcaseClient).toMatch(/href="\/post\/new"[\s\S]*?prefetch={false}/);
     expect(showcaseClient).toMatch(/href="\/marketplace"[\s\S]*?prefetch={false}/);
     expect(readProjectFile('src/lib/preview-images.ts')).toContain('if (isGeneratedPreviewImage(src))');

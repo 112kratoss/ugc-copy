@@ -1019,7 +1019,7 @@ describe('ShowcaseClient save actions', () => {
     });
   });
 
-  it('replaces the server fallback with a signed-in For You session and continues by cursor', async () => {
+  it('keeps the visible server fallback while a signed-in For You session continues by cursor', async () => {
     const fallbackItem = createShowcaseItem({
       id: 'post-fallback',
       title: 'Server fallback',
@@ -1109,17 +1109,40 @@ describe('ShowcaseClient save actions', () => {
       />
     );
 
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith('/api/showcase/feed?limit=12', expect.objectContaining({
+        headers: { Authorization: 'Bearer test-token' },
+      }));
+    });
+    expect(screen.getByText('Server fallback')).toBeInTheDocument();
+    expect(screen.queryByText('Ranked for you')).not.toBeInTheDocument();
+
+    let initialDeferredObserver: (typeof intersectionObservers)[number] | undefined;
+    await waitFor(() => {
+      initialDeferredObserver = intersectionObservers.findLast((observer) => (
+        observer.observedTargets.some((target) => (
+          target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
+          && target.isConnected
+        ))
+      ));
+      expect(initialDeferredObserver).toBeDefined();
+    });
+    act(() => {
+      initialDeferredObserver?.trigger(true);
+    });
+
     expect(await screen.findByText('Ranked for you')).toBeInTheDocument();
-    expect(screen.queryByText('Server fallback')).not.toBeInTheDocument();
-    expect(fetch).toHaveBeenCalledWith('/api/showcase/feed?limit=12', expect.objectContaining({
-      headers: { Authorization: 'Bearer test-token' },
-    }));
+    expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual([
+      'Server fallback',
+      'Ranked for you',
+    ]);
 
     let loadMoreObserver: (typeof intersectionObservers)[number] | undefined;
     await waitFor(() => {
       loadMoreObserver = intersectionObservers.findLast((observer) => (
         observer.observedTargets.some((target) => (
           target.getAttribute('data-showcase-load-more-sentinel') === 'true'
+          && target.isConnected
         ))
       ));
       expect(loadMoreObserver).toBeDefined();
@@ -1137,6 +1160,7 @@ describe('ShowcaseClient save actions', () => {
       deferredObserver = intersectionObservers.findLast((observer) => (
         observer.observedTargets.some((target) => (
           target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
+          && target.isConnected
         ))
       ));
       expect(deferredObserver).toBeDefined();
@@ -1222,13 +1246,26 @@ describe('ShowcaseClient save actions', () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByText('Anonymous discovery')).toBeInTheDocument();
+    expect(screen.getByText('Server fallback')).toBeInTheDocument();
+    expect(screen.queryByText('Anonymous discovery')).not.toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith(
       `/api/showcase/feed?limit=${SHOWCASE_INITIAL_PAGE_SIZE}`,
       expect.objectContaining({
         headers: undefined,
       })
     );
+
+    const deferredObserver = intersectionObservers.findLast((observer) => (
+      observer.observedTargets.some((target) => (
+        target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
+        && target.isConnected
+      ))
+    ));
+    expect(deferredObserver).toBeDefined();
+    act(() => {
+      deferredObserver?.trigger(true);
+    });
+    expect(screen.getByText('Anonymous discovery')).toBeInTheDocument();
   });
 
   it('retries a transient anonymous feed refresh without hydrating the fallback backlog', async () => {
@@ -1320,8 +1357,21 @@ describe('ShowcaseClient save actions', () => {
     });
 
     expect(feedFetch).toHaveBeenCalledTimes(2);
-    expect(screen.getByText('Recovered discovery')).toBeInTheDocument();
+    expect(screen.getByText('Retry Fallback 1')).toBeInTheDocument();
+    expect(screen.queryByText('Recovered discovery')).not.toBeInTheDocument();
     expect(screen.queryByText('Retry Fallback 2')).not.toBeInTheDocument();
+
+    const deferredObserver = intersectionObservers.findLast((observer) => (
+      observer.observedTargets.some((target) => (
+        target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
+        && target.isConnected
+      ))
+    ));
+    expect(deferredObserver).toBeDefined();
+    act(() => {
+      deferredObserver?.trigger(true);
+    });
+    expect(screen.getByText('Recovered discovery')).toBeInTheDocument();
   });
 
   it('optimistically removes a post after Not interested and records ranked feedback', async () => {

@@ -6,6 +6,7 @@ import type { ComponentType } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useAuth } from '@/app/components/AuthProvider';
+import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import type {
     ShowcaseCategory,
@@ -127,7 +128,7 @@ function BootstrapCard({
     return (
         <article
             data-showcase-bootstrap-card="true"
-            className="break-inside-avoid overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]"
+            className="min-w-0 overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]"
         >
             {item.postFormat === 'text' ? (
                 <button
@@ -431,7 +432,7 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
                 </nav>
 
                 {firstItem ? (
-                    <div className="columns-1 gap-6 sm:columns-2 lg:columns-3 xl:columns-4">
+                    <div className={SHOWCASE_FEED_GRID_CLASS}>
                         <BootstrapCard
                             item={firstItem}
                             priorityPoster={priorityPoster}
