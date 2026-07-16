@@ -76,6 +76,7 @@ interface ShowcaseReelViewerProps {
 
 type ReelTransitionDirection = 'next' | 'previous' | 'neutral';
 type ReelUnlockAction = 'free' | 'cash' | 'tokens' | null;
+type ReelMediaLoadState = 'ready' | 'error';
 const QUALIFIED_REEL_VIEW_DURATION_MS = 1000;
 
 interface ReelBundleResources {
@@ -202,7 +203,7 @@ function getMediaTypeLabel(item: ShowcaseFeedItem): string {
 
 function getItemMediaItems(item: ShowcaseFeedItem): ShowcaseMediaItem[] {
   if (item.mediaItems?.length) {
-    return item.mediaItems;
+    return item.mediaItems.slice().sort((left, right) => left.sortOrder - right.sortOrder);
   }
 
   if (!item.mediaUrl || !item.mediaKind) {
@@ -220,6 +221,10 @@ function getItemMediaItems(item: ShowcaseFeedItem): ShowcaseMediaItem[] {
     durationSeconds: null,
     sortOrder: 0,
   }];
+}
+
+function getReelMediaLifecycleKey(postId: string, mediaItem: ShowcaseMediaItem): string {
+  return JSON.stringify([postId, mediaItem.id, mediaItem.url]);
 }
 
 export default function ShowcaseReelViewer({
@@ -257,7 +262,7 @@ export default function ShowcaseReelViewer({
   const prefersReducedMotion = useReducedMotion();
   const [transitionDirection, setTransitionDirection] = useState<ReelTransitionDirection>('neutral');
   const [activeMediaIndex, setActiveMediaIndex] = useState(initialMediaIndex);
-  const [loadedMediaKeys, setLoadedMediaKeys] = useState<Set<string>>(new Set());
+  const [mediaLoadStates, setMediaLoadStates] = useState<Record<string, ReelMediaLoadState>>({});
   const [activeUnlockCheckoutItemId, setActiveUnlockCheckoutItemId] = useState<string | null>(null);
   const [unlockWorkingAction, setUnlockWorkingAction] = useState<ReelUnlockAction>(null);
   const [unlockError, setUnlockError] = useState<string | null>(null);
@@ -284,7 +289,7 @@ export default function ShowcaseReelViewer({
   }, [item]);
   const selectedAssetId = item?.asset?.id ?? null;
   const isPublicRecipeAsset = Boolean(selectedAssetId && isGenerationRecipeAssetId(selectedAssetId));
-  const mediaItems = item ? getItemMediaItems(item) : [];
+  const mediaItems = useMemo(() => item ? getItemMediaItems(item) : [], [item]);
   const activeMediaItem = mediaItems[Math.min(activeMediaIndex, Math.max(0, mediaItems.length - 1))] ?? mediaItems[0] ?? null;
 
   const moveToItem = useCallback((targetItem: ShowcaseFeedItem, direction: ReelTransitionDirection) => {
@@ -383,15 +388,26 @@ export default function ShowcaseReelViewer({
     });
   };
 
-  const markMediaReady = useCallback((mediaKey: string) => {
-    setLoadedMediaKeys((currentKeys) => {
-      if (currentKeys.has(mediaKey)) {
-        return currentKeys;
+  const setMediaLoadState = useCallback((mediaKey: string, nextState: ReelMediaLoadState | null) => {
+    setMediaLoadStates((currentStates) => {
+      if (nextState === null) {
+        if (!(mediaKey in currentStates)) {
+          return currentStates;
+        }
+
+        const nextStates = { ...currentStates };
+        delete nextStates[mediaKey];
+        return nextStates;
       }
 
-      const nextKeys = new Set(currentKeys);
-      nextKeys.add(mediaKey);
-      return nextKeys;
+      if (currentStates[mediaKey] === nextState) {
+        return currentStates;
+      }
+
+      return {
+        ...currentStates,
+        [mediaKey]: nextState,
+      };
     });
   }, []);
 
@@ -783,9 +799,9 @@ export default function ShowcaseReelViewer({
     : '';
   const publicRecipeIsLoading = publicRecipeLoadingItemId === item.id;
   const shouldWaitForMedia = item.postFormat !== 'text' && Boolean(activeMediaItem);
-  const currentMediaKey = activeMediaItem ? `${item.id}:${activeMediaItem.id}` : null;
-  const isMediaReady = !currentMediaKey || loadedMediaKeys.has(currentMediaKey);
-  const showMediaLoading = shouldWaitForMedia && !isMediaReady;
+  const currentMediaKey = activeMediaItem ? getReelMediaLifecycleKey(item.id, activeMediaItem) : null;
+  const currentMediaLoadState = currentMediaKey ? mediaLoadStates[currentMediaKey] ?? null : 'ready';
+  const showMediaLoading = shouldWaitForMedia && currentMediaLoadState === null;
   const transition = prefersReducedMotion
     ? { duration: 0.16, ease: 'easeOut' as const }
     : { duration: 0.34, ease: [0.22, 1, 0.36, 1] as const };
@@ -1322,17 +1338,21 @@ export default function ShowcaseReelViewer({
           mediaItems={mediaItems}
           title={item.title}
           mode="reel"
+          autoPlayVideo={currentMediaLoadState !== 'error'}
           initialIndex={activeMediaIndex}
           className="h-full"
           onIndexChange={(index) => {
             setActiveMediaIndex(index);
             onMediaIndexChange?.(index);
           }}
-          onMediaReady={(index) => {
-            const readyItem = mediaItems[index];
-            if (readyItem) {
-              markMediaReady(`${item.id}:${readyItem.id}`);
-            }
+          onMediaReady={(readyItem) => {
+            setMediaLoadState(getReelMediaLifecycleKey(item.id, readyItem), 'ready');
+          }}
+          onMediaError={(failedItem) => {
+            setMediaLoadState(getReelMediaLifecycleKey(item.id, failedItem), 'error');
+          }}
+          onMediaRetry={(retryItem) => {
+            setMediaLoadState(getReelMediaLifecycleKey(item.id, retryItem), null);
           }}
         />
       );
@@ -1444,7 +1464,10 @@ export default function ShowcaseReelViewer({
             </span>
           </div>
 
-          <div className="relative h-full w-full overflow-hidden">
+          <div
+            className="relative h-full w-full overflow-hidden"
+            aria-busy={showMediaLoading}
+          >
             <AnimatePresence mode="wait" custom={transitionDirection}>
               <motion.div
                 key={item.id}
@@ -1469,9 +1492,17 @@ export default function ShowcaseReelViewer({
                   exit={{ opacity: 0 }}
                   transition={{ duration: prefersReducedMotion ? 0.1 : 0.18 }}
                   className="pointer-events-none absolute inset-0 z-[5] bg-black"
-                  aria-hidden="true"
+                  data-showcase-media-state="loading"
+                  role="status"
+                  aria-live="polite"
                 >
-                  <div className="absolute inset-0 bg-[linear-gradient(110deg,transparent,rgba(255,255,255,0.08),transparent)] [animation:skeleton-shimmer_1.35s_ease-in-out_infinite]" />
+                  <span className="sr-only">Loading media</span>
+                  <div
+                    aria-hidden="true"
+                    className={prefersReducedMotion
+                      ? 'absolute inset-0 bg-white/[0.025]'
+                      : 'absolute inset-0 bg-[linear-gradient(110deg,transparent,rgba(255,255,255,0.08),transparent)] [animation:skeleton-shimmer_1.35s_ease-in-out_infinite]'}
+                  />
                   <div className="absolute inset-x-[18%] top-1/2 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
                 </motion.div>
               ) : null}

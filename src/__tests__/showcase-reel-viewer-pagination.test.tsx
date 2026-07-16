@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseReelViewer from '@/app/showcase/ShowcaseReelViewer';
-import type { ShowcaseFeedItem } from '@/lib/showcase';
+import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
 
 vi.mock('next/link', () => ({
   default: ({
@@ -101,6 +101,59 @@ function createShowcaseItem(overrides: Partial<ShowcaseFeedItem> = {}): Showcase
   };
 }
 
+function createVideoMedia(overrides: Partial<ShowcaseMediaItem> = {}): ShowcaseMediaItem {
+  return {
+    id: 'video-1',
+    url: 'https://example.com/clip.mp4',
+    previewUrl: 'https://example.com/clip-preview.webp',
+    mediaKind: 'video',
+    contentType: 'video/mp4',
+    originalName: 'clip.mp4',
+    width: 1280,
+    height: 720,
+    durationSeconds: 8,
+    sortOrder: 0,
+    ...overrides,
+  };
+}
+
+function getMediaLoadingOverlay(container: HTMLElement) {
+  return container.querySelector('[data-showcase-media-state="loading"]');
+}
+
+function createVideoReel(mediaItems: ShowcaseMediaItem[]) {
+  return (
+    <ShowcaseReelViewer
+      isOpen
+      items={[
+        createShowcaseItem({
+          mediaUrl: mediaItems[0]?.url ?? null,
+          mediaKind: 'video',
+          category: 'video',
+          mediaItems,
+        }),
+      ]}
+      selectedItemId="post-1"
+      savedItemIds={new Set()}
+      savingItemIds={new Set()}
+      accessToken={null}
+      hasMoreItems={false}
+      isLoadingMoreItems={false}
+      onLoadMoreItems={vi.fn()}
+      onClose={vi.fn()}
+      onSelectItemId={vi.fn()}
+      onMediaIndexChange={vi.fn()}
+      onToggleSave={vi.fn()}
+      onRemix={vi.fn()}
+      buildDetailPath={(id, section) => section ? `/showcase/${id}#${section}` : `/showcase/${id}`}
+    />
+  );
+}
+
+function renderVideoReel(mediaItems: ShowcaseMediaItem[]) {
+  return render(createVideoReel(mediaItems));
+}
+
 const paidAsset: NonNullable<ShowcaseFeedItem['asset']> = {
   id: 'bundle-1',
   postId: 'post-1',
@@ -176,6 +229,10 @@ describe('ShowcaseReelViewer pagination', () => {
       configurable: true,
       value: vi.fn(),
     });
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
+    vi.spyOn(HTMLVideoElement.prototype, 'videoWidth', 'get').mockReturnValue(1280);
+    vi.spyOn(HTMLVideoElement.prototype, 'videoHeight', 'get').mockReturnValue(720);
   });
 
   it('requests another page when next is pressed at the last loaded reel item', async () => {
@@ -449,6 +506,89 @@ describe('ShowcaseReelViewer pagination', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('img', { name: 'Campaign Frame' })).toHaveAttribute('src', 'https://example.com/history-slide.jpg');
+    });
+  });
+
+  it('removes the reel loading overlay when video playback proves the media is ready', async () => {
+    const { container } = renderVideoReel([createVideoMedia()]);
+
+    expect(getMediaLoadingOverlay(container)).not.toBeNull();
+    fireEvent.playing(container.querySelector('video')!);
+
+    await waitFor(() => {
+      expect(getMediaLoadingOverlay(container)).toBeNull();
+    });
+  });
+
+  it('clears the blocking overlay on error and restores it while retrying the video', async () => {
+    const { container } = renderVideoReel([createVideoMedia()]);
+    const video = container.querySelector('video');
+
+    expect(getMediaLoadingOverlay(container)).not.toBeNull();
+    fireEvent.error(video!);
+
+    await waitFor(() => {
+      expect(getMediaLoadingOverlay(container)).toBeNull();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry video' }));
+
+    await waitFor(() => {
+      expect(getMediaLoadingOverlay(container)).not.toBeNull();
+    });
+    fireEvent.canPlay(container.querySelector('video')!);
+    await waitFor(() => {
+      expect(getMediaLoadingOverlay(container)).toBeNull();
+    });
+  });
+
+  it('keeps reel loading state aligned with sorted media ids across slide changes', async () => {
+    const { container } = renderVideoReel([
+      createVideoMedia({
+        id: 'video-2',
+        url: 'https://example.com/second.mp4',
+        sortOrder: 1,
+      }),
+      createVideoMedia({
+        id: 'video-1',
+        url: 'https://example.com/first.mp4',
+        sortOrder: 0,
+      }),
+    ]);
+
+    expect(container.querySelector('video')).toHaveAttribute('src', 'https://example.com/first.mp4');
+    expect(getMediaLoadingOverlay(container)).not.toBeNull();
+    fireEvent.loadedData(container.querySelector('video')!);
+    await waitFor(() => {
+      expect(getMediaLoadingOverlay(container)).toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next media' }));
+    expect(container.querySelector('video')).toHaveAttribute('src', 'https://example.com/second.mp4');
+    expect(getMediaLoadingOverlay(container)).not.toBeNull();
+    fireEvent.playing(container.querySelector('video')!);
+
+    await waitFor(() => {
+      expect(getMediaLoadingOverlay(container)).toBeNull();
+    });
+  });
+
+  it('restores reel loading when the same media id receives a refreshed source URL', async () => {
+    const initialItem = createVideoMedia({ url: 'https://example.com/initial.mp4' });
+    const refreshedItem = createVideoMedia({ url: 'https://example.com/refreshed.mp4' });
+    const { container, rerender } = renderVideoReel([initialItem]);
+
+    fireEvent.canPlay(container.querySelector('video')!);
+    await waitFor(() => {
+      expect(getMediaLoadingOverlay(container)).toBeNull();
+    });
+
+    rerender(createVideoReel([refreshedItem]));
+
+    expect(container.querySelector('video')).toHaveAttribute('src', refreshedItem.url);
+    expect(getMediaLoadingOverlay(container)).not.toBeNull();
+    fireEvent.playing(container.querySelector('video')!);
+    await waitFor(() => {
+      expect(getMediaLoadingOverlay(container)).toBeNull();
     });
   });
 

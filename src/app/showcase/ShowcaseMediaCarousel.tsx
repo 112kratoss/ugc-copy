@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Images, Play } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CircleAlert, ChevronLeft, ChevronRight, Images, Play, RotateCcw } from 'lucide-react';
 
 import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
 import { useMediaLoadingPreferences } from '@/app/components/useMediaLoadingPreferences';
@@ -22,8 +22,13 @@ interface ShowcaseMediaCarouselProps {
   } | null;
   onOpen?: (index: number) => void;
   onIndexChange?: (index: number) => void;
-  onMediaReady?: (index: number) => void;
+  onMediaReady?: (item: ShowcaseMediaItem) => void;
+  onMediaError?: (item: ShowcaseMediaItem) => void;
+  onMediaRetry?: (item: ShowcaseMediaItem) => void;
 }
+
+const MEDIA_LOAD_TIMEOUT_MS = 15_000;
+const HAVE_METADATA = 1;
 
 function clampIndex(index: number, itemCount: number) {
   return Math.min(Math.max(index, 0), Math.max(0, itemCount - 1));
@@ -41,6 +46,8 @@ export default function ShowcaseMediaCarousel({
   onOpen,
   onIndexChange,
   onMediaReady,
+  onMediaError,
+  onMediaRetry,
 }: ShowcaseMediaCarouselProps) {
   const items = useMemo(
     () => mediaItems.slice().sort((left, right) => left.sortOrder - right.sortOrder),
@@ -57,6 +64,9 @@ export default function ShowcaseMediaCarousel({
   const carouselRef = useRef<HTMLDivElement | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const activeVideoRef = useRef<HTMLVideoElement | null>(null);
+  const lifecycleStatusRef = useRef<Map<string, 'ready' | 'error'>>(new Map());
+  const [failedLoadKeys, setFailedLoadKeys] = useState<Set<string>>(new Set());
+  const [loadAttempts, setLoadAttempts] = useState<Record<string, number>>({});
   const { prefersReducedMotion, saveData } = useMediaLoadingPreferences();
   const requestedAutoPlay = autoPlayVideo ?? mode !== 'feed';
   const canPlayMotion = !prefersReducedMotion && !saveData;
@@ -69,6 +79,93 @@ export default function ShowcaseMediaCarousel({
     canPlayMotion
     && (isInteracting || (requestedAutoPlay && isInViewport))
   );
+  const activeItem = items[activeIndex] ?? items[0] ?? null;
+  const activeSourceKey = activeItem ? JSON.stringify([activeItem.id, activeItem.url]) : '';
+  const activeLoadAttempt = activeSourceKey ? loadAttempts[activeSourceKey] ?? 0 : 0;
+  const activeLoadKey = activeItem
+    ? JSON.stringify([activeItem.id, activeItem.url, activeLoadAttempt])
+    : '';
+  const hasActiveMediaError = Boolean(activeLoadKey && failedLoadKeys.has(activeLoadKey));
+  const shouldActuallyPlayVideo = shouldPlayVideo && !hasActiveMediaError;
+
+  const reportMediaReady = useCallback((mediaItem: ShowcaseMediaItem, loadKey: string) => {
+    // An error is terminal for this exact source attempt. Retry creates a new
+    // load key, so late canplay/playing events from the failed element cannot
+    // dismiss the recovery UI or restart audio behind it.
+    if (lifecycleStatusRef.current.has(loadKey)) {
+      return;
+    }
+
+    lifecycleStatusRef.current.set(loadKey, 'ready');
+    setFailedLoadKeys((currentKeys) => {
+      if (!currentKeys.has(loadKey)) {
+        return currentKeys;
+      }
+
+      const nextKeys = new Set(currentKeys);
+      nextKeys.delete(loadKey);
+      return nextKeys;
+    });
+    onMediaReady?.(mediaItem);
+  }, [onMediaReady]);
+
+  const reportActiveVideoReady = useCallback((video: HTMLVideoElement) => {
+    if (!activeItem || activeItem.mediaKind !== 'video' || !activeLoadKey) {
+      return;
+    }
+
+    // Audio can be playable even when the browser cannot decode a visual track.
+    // Keep the recovery path active until the element proves it has video frames.
+    if (video.videoWidth <= 0 || video.videoHeight <= 0) {
+      return;
+    }
+
+    if (activeIndex === 0) {
+      setCoverAspectRatio(video.videoWidth / video.videoHeight);
+    }
+    reportMediaReady(activeItem, activeLoadKey);
+  }, [activeIndex, activeItem, activeLoadKey, reportMediaReady]);
+
+  const reportActiveMediaError = useCallback(() => {
+    if (!activeItem || !activeLoadKey || lifecycleStatusRef.current.get(activeLoadKey) === 'error') {
+      return;
+    }
+
+    activeVideoRef.current?.pause();
+    lifecycleStatusRef.current.set(activeLoadKey, 'error');
+    setFailedLoadKeys((currentKeys) => {
+      if (currentKeys.has(activeLoadKey)) {
+        return currentKeys;
+      }
+
+      const nextKeys = new Set(currentKeys);
+      nextKeys.add(activeLoadKey);
+      return nextKeys;
+    });
+    onMediaError?.(activeItem);
+  }, [activeItem, activeLoadKey, onMediaError]);
+
+  const retryActiveMedia = useCallback(() => {
+    if (!activeItem || !activeSourceKey || !activeLoadKey) {
+      return;
+    }
+
+    lifecycleStatusRef.current.delete(activeLoadKey);
+    setFailedLoadKeys((currentKeys) => {
+      if (!currentKeys.has(activeLoadKey)) {
+        return currentKeys;
+      }
+
+      const nextKeys = new Set(currentKeys);
+      nextKeys.delete(activeLoadKey);
+      return nextKeys;
+    });
+    setLoadAttempts((currentAttempts) => ({
+      ...currentAttempts,
+      [activeSourceKey]: (currentAttempts[activeSourceKey] ?? 0) + 1,
+    }));
+    onMediaRetry?.(activeItem);
+  }, [activeItem, activeLoadKey, activeSourceKey, onMediaRetry]);
 
   useEffect(() => {
     const carousel = carouselRef.current;
@@ -109,7 +206,7 @@ export default function ShowcaseMediaCarousel({
       return;
     }
 
-    if (shouldPlayVideo) {
+    if (shouldActuallyPlayVideo) {
       const playResult = video.play();
       void playResult?.catch(() => {
         // Browsers can decline autoplay until the page has received interaction.
@@ -121,7 +218,76 @@ export default function ShowcaseMediaCarousel({
     return () => {
       video.pause();
     };
-  }, [activeIndex, shouldPlayVideo, shouldAttachVideo]);
+  }, [activeIndex, activeLoadKey, shouldActuallyPlayVideo, shouldAttachVideo]);
+
+  useEffect(() => {
+    if (!activeItem || activeItem.mediaKind !== 'video' || !shouldAttachVideo) {
+      return;
+    }
+
+    const reconcileReadyState = () => {
+      const video = activeVideoRef.current;
+      if (
+        video
+        && video.readyState >= HAVE_METADATA
+        && video.videoWidth > 0
+        && video.videoHeight > 0
+      ) {
+        reportActiveVideoReady(video);
+      }
+    };
+
+    // A cached video may already be ready before React observes loadedmetadata.
+    // Reconcile after commit and once more on the next paint to close that race.
+    reconcileReadyState();
+    if (typeof window.requestAnimationFrame !== 'function') {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(reconcileReadyState);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [activeItem, activeLoadKey, reportActiveVideoReady, shouldAttachVideo]);
+
+  useEffect(() => {
+    if (
+      mode === 'feed'
+      || !activeItem
+      || activeItem.mediaKind !== 'video'
+      || !shouldAttachVideo
+      || hasActiveMediaError
+    ) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      if (lifecycleStatusRef.current.get(activeLoadKey)) {
+        return;
+      }
+
+      const video = activeVideoRef.current;
+      if (
+        video
+        && video.readyState >= HAVE_METADATA
+        && video.videoWidth > 0
+        && video.videoHeight > 0
+      ) {
+        reportActiveVideoReady(video);
+        return;
+      }
+
+      reportActiveMediaError();
+    }, MEDIA_LOAD_TIMEOUT_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    activeItem,
+    activeLoadKey,
+    hasActiveMediaError,
+    mode,
+    reportActiveMediaError,
+    reportActiveVideoReady,
+    shouldAttachVideo,
+  ]);
 
   const selectIndex = (nextIndex: number) => {
     const clamped = clampIndex(nextIndex, items.length);
@@ -137,17 +303,18 @@ export default function ShowcaseMediaCarousel({
     return null;
   }
 
-  const activeItem = items[activeIndex] ?? items[0];
+  // The empty state above guarantees an active item for the render below.
+  const renderedActiveItem = activeItem ?? items[0];
   const isDetail = mode === 'detail';
   const isReel = mode === 'reel';
   const showControls = isDetail || isReel;
-  const feedPreviewUrl = mode === 'feed' ? activeItem.previewUrl ?? null : null;
-  const feedPosterUrl = priorityPoster?.mediaId === activeItem.id
+  const previewUrl = renderedActiveItem.previewUrl ?? null;
+  const posterUrl = priorityPoster?.mediaId === renderedActiveItem.id
     ? priorityPoster.dataUrl
-    : feedPreviewUrl
-      ? buildOptimizedPreviewImageUrl(feedPreviewUrl)
+    : previewUrl
+      ? buildOptimizedPreviewImageUrl(previewUrl)
       : null;
-  const shouldLoadFeedPoster = mode !== 'feed'
+  const shouldLoadPoster = mode !== 'feed'
     || priority
     || isNearViewport
     || isInViewport
@@ -207,25 +374,29 @@ export default function ShowcaseMediaCarousel({
         }}
       >
         <div className="absolute inset-0 z-[1] h-full w-full">
-          {activeItem.mediaKind === 'video' ? (
+          {renderedActiveItem.mediaKind === 'video' ? (
             <>
               <video
                 ref={activeVideoRef}
-                key={activeItem.id}
-                src={shouldAttachVideo ? activeItem.url : undefined}
-                poster={shouldLoadFeedPoster ? feedPosterUrl ?? undefined : undefined}
-                muted={!showControls}
-                controls={showControls}
-                autoPlay={shouldPlayVideo}
+                key={activeLoadKey}
+                src={shouldAttachVideo ? renderedActiveItem.url : undefined}
+                poster={shouldLoadPoster ? posterUrl ?? undefined : undefined}
+                muted={!showControls || hasActiveMediaError}
+                controls={showControls && !hasActiveMediaError}
+                autoPlay={shouldActuallyPlayVideo}
                 loop
                 playsInline
+                aria-label={title}
+                aria-hidden={hasActiveMediaError || undefined}
+                tabIndex={hasActiveMediaError ? -1 : undefined}
                 preload={mode === 'feed' ? 'none' : 'metadata'}
                 onLoadedMetadata={(event) => {
-                  if (activeIndex === 0 && event.currentTarget.videoWidth && event.currentTarget.videoHeight) {
-                    setCoverAspectRatio(event.currentTarget.videoWidth / event.currentTarget.videoHeight);
-                  }
-                  onMediaReady?.(activeIndex);
+                  reportActiveVideoReady(event.currentTarget);
                 }}
+                onLoadedData={(event) => reportActiveVideoReady(event.currentTarget)}
+                onCanPlay={(event) => reportActiveVideoReady(event.currentTarget)}
+                onPlaying={(event) => reportActiveVideoReady(event.currentTarget)}
+                onError={reportActiveMediaError}
                 className={`h-full w-full ${mode === 'feed' ? 'object-cover' : 'object-contain'}`}
               />
               {!showControls ? (
@@ -236,20 +407,20 @@ export default function ShowcaseMediaCarousel({
             </>
           ) : mode === 'feed' ? (
             <OptimizedPreviewImage
-              key={activeItem.id}
-              previewSrc={feedPreviewUrl ?? activeItem.url}
-              fallbackSrc={activeItem.url}
+              key={activeLoadKey}
+              previewSrc={previewUrl ?? renderedActiveItem.url}
+              fallbackSrc={renderedActiveItem.url}
               alt={title}
               sizes="(min-width: 1280px) 25vw, (min-width: 768px) 33vw, (min-width: 640px) 50vw, 100vw"
               priority={priority}
-              onLoad={() => onMediaReady?.(activeIndex)}
+              onLoad={() => reportMediaReady(renderedActiveItem, activeLoadKey)}
               className="object-cover"
             />
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              key={activeItem.id}
-              src={activeItem.url}
+              key={activeLoadKey}
+              src={renderedActiveItem.url}
               alt={title}
               loading={isDetail ? 'eager' : 'lazy'}
               decoding="async"
@@ -257,12 +428,38 @@ export default function ShowcaseMediaCarousel({
                 if (activeIndex === 0 && event.currentTarget.naturalWidth && event.currentTarget.naturalHeight) {
                   setCoverAspectRatio(event.currentTarget.naturalWidth / event.currentTarget.naturalHeight);
                 }
-                onMediaReady?.(activeIndex);
+                reportMediaReady(renderedActiveItem, activeLoadKey);
               }}
+              onError={reportActiveMediaError}
               className="h-full w-full object-contain"
             />
           )}
         </div>
+
+        {hasActiveMediaError ? (
+          <div
+            role="status"
+            aria-live="polite"
+            className="absolute inset-0 z-[6] flex items-center justify-center bg-black/90 px-6 text-center"
+          >
+            <div className="max-w-sm">
+              <CircleAlert className="mx-auto h-7 w-7 text-amber-300" aria-hidden="true" />
+              <p className="mt-3 text-sm font-semibold text-white">
+                {renderedActiveItem.mediaKind === 'video' ? 'Video couldn\u2019t be loaded' : 'Image couldn\u2019t be loaded'}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-zinc-400">Check your connection, then try again.</p>
+              <button
+                type="button"
+                onClick={retryActiveMedia}
+                aria-label={renderedActiveItem.mediaKind === 'video' ? 'Retry video' : 'Retry image'}
+                className="ui-focus-ring mx-auto mt-4 inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15"
+              >
+                <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                Try again
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {onOpen ? (
           <button

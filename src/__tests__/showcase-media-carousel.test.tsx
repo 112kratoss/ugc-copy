@@ -1,7 +1,8 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
+import type { ShowcaseMediaItem } from '@/lib/showcase';
 
 interface ObserverRegistration {
   callback: IntersectionObserverCallback;
@@ -37,12 +38,30 @@ class IntersectionObserverMock {
   unobserve = vi.fn();
 }
 
+function createVideoItem(overrides: Partial<ShowcaseMediaItem> = {}): ShowcaseMediaItem {
+  return {
+    id: 'video-1',
+    url: 'https://example.com/clip.mp4',
+    previewUrl: 'https://example.com/clip-preview.webp',
+    mediaKind: 'video',
+    contentType: 'video/mp4',
+    originalName: 'clip.mp4',
+    width: 1080,
+    height: 1350,
+    durationSeconds: 8,
+    sortOrder: 0,
+    ...overrides,
+  };
+}
+
 describe('ShowcaseMediaCarousel', () => {
   beforeEach(() => {
     observerRegistrations.length = 0;
     vi.stubGlobal('IntersectionObserver', IntersectionObserverMock);
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
     vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
+    vi.spyOn(HTMLVideoElement.prototype, 'videoWidth', 'get').mockReturnValue(1280);
+    vi.spyOn(HTMLVideoElement.prototype, 'videoHeight', 'get').mockReturnValue(720);
   });
 
   afterEach(() => {
@@ -300,5 +319,183 @@ describe('ShowcaseMediaCarousel', () => {
     const image = screen.getByRole('img', { name: 'Campaign still' });
     expect(image).toHaveAttribute('src', 'https://example.com/preview.webp');
     expect(image).toHaveAttribute('loading', 'lazy');
+  });
+
+  it('reports an already-ready reel video without waiting for a loadedmetadata event', async () => {
+    vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockReturnValue(4);
+    const onMediaReady = vi.fn();
+    const mediaItem = createVideoItem();
+
+    render(
+      <ShowcaseMediaCarousel
+        title="Cached campaign clip"
+        mode="reel"
+        mediaItems={[mediaItem]}
+        onMediaReady={onMediaReady}
+      />
+    );
+
+    await waitFor(() => {
+      expect(onMediaReady).toHaveBeenCalledWith(mediaItem);
+    });
+    expect(onMediaReady).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['loadeddata', (video: HTMLVideoElement) => fireEvent.loadedData(video)],
+    ['canplay', (video: HTMLVideoElement) => fireEvent.canPlay(video)],
+    ['playing', (video: HTMLVideoElement) => fireEvent.playing(video)],
+  ] as const)('treats %s as a video readiness signal', (_eventName, signalReady) => {
+    const onMediaReady = vi.fn();
+    const mediaItem = createVideoItem();
+    const { container } = render(
+      <ShowcaseMediaCarousel
+        title="Campaign clip"
+        mode="reel"
+        mediaItems={[mediaItem]}
+        onMediaReady={onMediaReady}
+      />
+    );
+    const video = container.querySelector('video');
+
+    expect(video).not.toBeNull();
+    signalReady(video!);
+
+    expect(onMediaReady).toHaveBeenCalledWith(mediaItem);
+  });
+
+  it.each(['reel', 'detail'] as const)('uses the preview image as the %s video poster', (mode) => {
+    const { container } = render(
+      <ShowcaseMediaCarousel
+        title="Campaign clip"
+        mode={mode}
+        mediaItems={[createVideoItem()]}
+      />
+    );
+
+    expect(container.querySelector('video')).toHaveAttribute(
+      'poster',
+      'https://example.com/clip-preview.webp'
+    );
+  });
+
+  it('reports the exact visible media item after sorting and changing slides', () => {
+    const onMediaReady = vi.fn();
+    const secondItem = createVideoItem({
+      id: 'video-2',
+      url: 'https://example.com/second.mp4',
+      sortOrder: 1,
+    });
+    const firstItem = createVideoItem({
+      id: 'video-1',
+      url: 'https://example.com/first.mp4',
+      sortOrder: 0,
+    });
+    const { container } = render(
+      <ShowcaseMediaCarousel
+        title="Campaign clips"
+        mode="reel"
+        mediaItems={[secondItem, firstItem]}
+        onMediaReady={onMediaReady}
+      />
+    );
+
+    expect(container.querySelector('video')).toHaveAttribute('src', 'https://example.com/first.mp4');
+    fireEvent.playing(container.querySelector('video')!);
+    expect(onMediaReady).toHaveBeenLastCalledWith(firstItem);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next media' }));
+    expect(container.querySelector('video')).toHaveAttribute('src', 'https://example.com/second.mp4');
+    fireEvent.loadedData(container.querySelector('video')!);
+
+    expect(onMediaReady).toHaveBeenLastCalledWith(secondItem);
+    expect(onMediaReady).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports readiness again when a media id is reused with a refreshed source URL', () => {
+    const onMediaReady = vi.fn();
+    const initialItem = createVideoItem({ url: 'https://example.com/initial.mp4' });
+    const refreshedItem = createVideoItem({ url: 'https://example.com/refreshed.mp4' });
+    const { container, rerender } = render(
+      <ShowcaseMediaCarousel
+        title="Campaign clip"
+        mode="reel"
+        mediaItems={[initialItem]}
+        onMediaReady={onMediaReady}
+      />
+    );
+
+    fireEvent.canPlay(container.querySelector('video')!);
+    expect(onMediaReady).toHaveBeenLastCalledWith(initialItem);
+
+    rerender(
+      <ShowcaseMediaCarousel
+        title="Campaign clip"
+        mode="reel"
+        mediaItems={[refreshedItem]}
+        onMediaReady={onMediaReady}
+      />
+    );
+    expect(container.querySelector('video')).toHaveAttribute('src', refreshedItem.url);
+    fireEvent.playing(container.querySelector('video')!);
+
+    expect(onMediaReady).toHaveBeenLastCalledWith(refreshedItem);
+    expect(onMediaReady).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a failed video as the exact media item and exposes an accessible retry action', () => {
+    const onMediaReady = vi.fn();
+    const onMediaError = vi.fn();
+    const onMediaRetry = vi.fn();
+    const mediaItem = createVideoItem();
+    const { container } = render(
+      <ShowcaseMediaCarousel
+        title="Campaign clip"
+        mode="reel"
+        mediaItems={[mediaItem]}
+        onMediaReady={onMediaReady}
+        onMediaError={onMediaError}
+        onMediaRetry={onMediaRetry}
+      />
+    );
+    const video = container.querySelector('video');
+
+    fireEvent.error(video!);
+
+    expect(onMediaError).toHaveBeenCalledWith(mediaItem);
+    fireEvent.playing(video!);
+    expect(onMediaReady).not.toHaveBeenCalled();
+    const retryButton = screen.getByRole('button', { name: 'Retry video' });
+    fireEvent.click(retryButton);
+
+    expect(onMediaRetry).toHaveBeenCalledWith(mediaItem);
+    expect(screen.queryByRole('button', { name: 'Retry video' })).not.toBeInTheDocument();
+  });
+
+  it('turns a reel video that never becomes ready into a bounded, retryable error', () => {
+    vi.useFakeTimers();
+    const onMediaError = vi.fn();
+    const mediaItem = createVideoItem();
+    const { unmount } = render(
+      <ShowcaseMediaCarousel
+        title="Campaign clip"
+        mode="reel"
+        mediaItems={[mediaItem]}
+        onMediaError={onMediaError}
+      />
+    );
+
+    try {
+      act(() => {
+        vi.advanceTimersByTime(15_000);
+      });
+
+      expect(onMediaError).toHaveBeenCalledWith(mediaItem);
+      expect(screen.getByRole('button', { name: 'Retry video' })).toBeInTheDocument();
+      expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled();
+    } finally {
+      unmount();
+      vi.useRealTimers();
+    }
   });
 });
