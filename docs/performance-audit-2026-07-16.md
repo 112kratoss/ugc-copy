@@ -4,17 +4,28 @@ Date: 2026-07-16
 
 ## Executive verdict
 
-The release candidate is close to the practical ideal for the current Vercel, Supabase, Next.js, and Expo architecture. The material code-level performance and backend-safety gaps found in this audit have been fixed. The remaining gaps are operational evidence that requires production traffic, paid real-user monitoring, or physical release hardware rather than another source-code optimization pass.
+All reproducible code-level performance and backend-safety findings in scope are resolved and regression-protected. Runtime commit [`4f021e871f673b092cc1c925e93ff6605dc4259b`](https://github.com/112kratoss/ugc-copy/commit/4f021e871f673b092cc1c925e93ff6605dc4259b) is deployed to production and passed both the exact-commit Quality workflow and the bounded Production Performance workflow. The remaining gaps require field traffic, physical release devices, or distribution credentials rather than another source-code optimization pass.
 
-Pre-deployment rating: **9.5/10**.
+Post-deployment rating: **9.6/10**. This is a risk-weighted release rating, not a simple average.
 
 | Area | Rating | Decision |
 | --- | ---: | --- |
-| Backend correctness and security | 9.7/10 | Reviewed migration applied and live privilege/masking probes passed. |
-| Backend read performance | 9.6/10 | Query amplification removed from the critical public feeds; bounded compatibility fallbacks remain. |
-| Web performance | 9.6/10 | All local mobile and desktop Lighthouse release budgets pass over three runs per route. |
-| Mobile implementation | 9.2/10 | SDK, startup telemetry, tests, exports, and native builds pass; physical-device traces remain an external gate. |
-| Observability and regression control | 9.1/10 | Synthetic and load gates are automated; field P75 INP/LCP requires production RUM to be enabled. |
+| Backend correctness and security | 9.8/10 | Live privilege/masking probes and the exact-release clean migration replay passed. |
+| Backend read performance | 9.7/10 | Query amplification is removed and all post-deployment P95/P99 production budgets pass with zero errors. |
+| Web performance | 9.8/10 | All 18 production Lighthouse reports pass the mobile and desktop release gates. |
+| Mobile implementation | 9.3/10 | SDK, startup telemetry, tests, exports, and the release APK pass; physical-device traces remain external. |
+| Observability and regression control | 9.2/10 | Synthetic and load gates are automated; field P75 INP/LCP still requires production RUM. |
+
+### Release evidence
+
+| Evidence | Result |
+| --- | --- |
+| Runtime commit | `4f021e871f673b092cc1c925e93ff6605dc4259b` |
+| Vercel deployment | `dpl_2yN9v47fnotDBJ1Wu2dKWcqx9tuZ`, READY, production aliases attached |
+| GitHub deployment | `5468481060`, success for the exact runtime SHA |
+| Quality workflow | [Run 29474247410](https://github.com/112kratoss/ugc-copy/actions/runs/29474247410), Web/Mobile/Supabase replay all green |
+| Production Performance | [Run 29474661561](https://github.com/112kratoss/ugc-copy/actions/runs/29474661561), load/mobile/desktop all green |
+| Evidence completed | 2026-07-16 05:54:24 UTC |
 
 ## Scope and method
 
@@ -30,7 +41,21 @@ Synthetic browser results are three-run medians. They apply network and CPU cons
 
 ## Performance evidence
 
-### Production edge baseline before deployment
+### Post-deployment production edge result
+
+The bounded 90-second production read test completed 1,323 anonymous, read-only requests with zero failures and no budget violations.
+
+| Target | Requests | P95 TTFB | P99 TTFB | P95 total | P99 total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Home page | 332 | 155.7 ms | 396.3 ms | 162.8 ms | 400.7 ms |
+| Showcase page | 166 | 543.6 ms | 592.0 ms | 1,280.9 ms | 1,424.1 ms |
+| Marketplace page | 165 | 534.8 ms | 760.2 ms | 1,179.7 ms | 1,480.9 ms |
+| Generation model catalog | 330 | 63.6 ms | 112.6 ms | 64.0 ms | 113.0 ms |
+| Showcase feed API | 330 | 54.3 ms | 123.8 ms | 55.1 ms | 125.0 ms |
+
+The home and API targets were edge-cache hits or stale revalidations. Showcase and marketplace HTML remained origin-rendered so signed-in state and query filters stay correct; both still passed their 1.5/3.0-second TTFB and 2.2/4.0-second total-time budgets under the bounded load.
+
+### Pre-release production edge baseline
 
 The bounded 60-second production read test completed 1,499 requests with zero errors. It exercised only anonymous, read-only pages and APIs.
 
@@ -44,23 +69,25 @@ The bounded 60-second production read test completed 1,499 requests with zero er
 
 All target-specific P95, P99, minimum-sample, status, and error-rate budgets passed.
 
-### Final local mobile Lighthouse medians
+### Final production mobile Lighthouse medians
 
-| Route | Score | FCP | LCP | TTFB | TBT | CLS |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `/` | 0.99 | 1,779 ms | 1,779 ms | 11.6 ms | 0 ms | 0 |
-| `/marketplace` | 0.98 | 1,754 ms | 2,038 ms | 6.6 ms | 1.9 ms | 0 |
-| `/showcase` | 0.98 | 1,696 ms | 2,019 ms | 11.3 ms | 0 ms | 0 |
+| Route | Score | FCP | LCP | TTFB | TBT | TTI | CLS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `/` | 0.97 | 1,432.8 ms | 1,432.8 ms | 13.6 ms | 187.0 ms | 3,347.2 ms | 0 |
+| `/marketplace` | 0.99 | 943.5 ms | 1,218.9 ms | 13.3 ms | 138.6 ms | 2,721.9 ms | 0 |
+| `/showcase` | 0.98 | 883.0 ms | 1,393.2 ms | 13.7 ms | 157.1 ms | 2,617.4 ms | 0.0032 |
 
-### Final local desktop Lighthouse medians
+### Final production desktop Lighthouse medians
 
-| Route | Score | FCP | LCP | TTFB | TBT | CLS |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `/` | 1.00 | 157 ms | 157 ms | 10.0 ms | 0 ms | 0.00004 |
-| `/marketplace` | 1.00 | 88 ms | 169 ms | 6.6 ms | 0 ms | 0 |
-| `/showcase` | 1.00 | 108 ms | 170 ms | 13.4 ms | 0 ms | 0 |
+| Route | Score | FCP | LCP | TTFB | TBT | TTI | CLS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `/` | 0.99 | 800.9 ms | 800.9 ms | 5.9 ms | 0 ms | 813.4 ms | 0.00004 |
+| `/marketplace` | 0.99 | 575.9 ms | 854.9 ms | 6.2 ms | 0 ms | 843.2 ms | 0 |
+| `/showcase` | 0.98 | 592.9 ms | 1,097.2 ms | 6.6 ms | 0 ms | 909.0 ms | 0 |
 
-All 18 final Lighthouse reports passed the configured FCP, LCP, TTFB, CLS, TBT, interactive, and score assertions.
+All 18 retained reports (three routes times three samples times two form factors) passed the configured median FCP, LCP, TTFB, CLS, TBT, interactive, and score assertions. One cold mobile home sample was noisier than the other two (score 0.82, TBT 506.6 ms), but the route median was 0.97/187.0 ms and every enforced median budget passed. Field RUM remains the correct way to determine whether that variability occurs for real users.
+
+Targeted local single-run diagnostics also confirmed that the real SSR login form reached FCP/LCP at 874/874 ms with 1.6 ms TBT, and the server-bootstrapped template catalog reached 868/882 ms with 1.9 ms TBT. Both had score 1.00 and CLS 0; these diagnostics are not production medians.
 
 An earlier production audit identified LCP as the main frontend gap: approximately 4.06 seconds on home, 3.63 seconds on marketplace, and 3.51 seconds on showcase. The final numbers are not a strict apples-to-apples comparison because the final gate uses browser-applied throttling to correctly measure already-painted streamed server content, while the earlier run used Lighthouse's simulated dependency model. The earlier audit still correctly located the slow rendering and oversized-media paths that were fixed.
 
@@ -99,6 +126,14 @@ An earlier production audit identified LCP as the main frontend gap: approximate
 - Added optimized marketplace previews and a stable card media frame, eliminating the earlier multi-megabyte raw image path.
 - Optimized and preloaded the priority showcase poster.
 - Kept Geist non-blocking with optional display and no font preload.
+- Replaced the marketplace's initial full client with a native SSR search/filter surface and three compact cards. Search and filters work without JavaScript; the full buyer browser warms on intent and activates for continuation demand. Mobile filter groups and the search row are width-constrained down to narrow phone viewports.
+- Replaced the showcase's anonymous first view with a one-card SSR-compatible bootstrap using the exact priority poster. The full client loads for deep links, card opening, authenticated viewers, or meaningful pointer/keyboard/wheel/touch/scroll demand.
+- Deferred anonymous feed personalization until real demand plus an idle window instead of starting it on a fixed six-second timer.
+- Added a cookie-name-only auth hint boundary: requests with no hint skip provider/server-auth work, while a hint is never trusted and only causes server verification. A complete signed-out context keeps anonymous consumers stable.
+- Server-rendered the real login form after resolving safe redirect/signup/recovery intent, rather than shipping a spinner-only initial document.
+- Server-bootstrapped active public templates with five-minute revalidation, removed authoring metadata, retained the public API resilience fallback, and eliminated the duplicate browser fetch.
+- Scoped Tailwind to the exact public route import closure and moved private editor/account utilities into a utilities-only route supplement. Route-readiness tests enforce every visual route and both public/private component and dynamic-class closures.
+- Enabled inline CSS after scoping so public first paint no longer waits on a stylesheet round trip. The release build's public sheet is approximately 18.4 KiB gzip and the non-public supplement approximately 21.4 KiB gzip.
 
 ## Mobile changes completed
 
@@ -121,18 +156,21 @@ An earlier production audit identified LCP as the main frontend gap: approximate
 
 ## Verification summary
 
-- Web: 448 test files and 2,290 tests passed after the final pagination hardening.
-- Mobile: 74 test files and 557 tests passed.
-- Web and mobile TypeScript checks passed.
-- ESLint passed.
+- Web: 455 test files and 2,339 tests passed.
+- Mobile: 74 test files and 558 tests passed.
+- Web application, operational-script, and mobile TypeScript checks passed.
+- Full ESLint passed.
 - Expo dependency alignment passed.
 - Expo Doctor passed 19/19 checks.
 - Web and mobile dependency audits reported zero vulnerabilities, including development dependencies.
 - Performance load-harness and Lighthouse-configuration self-tests passed.
+- The 124-route production build passed, and packaged FFmpeg remained executable and traced into all 42 required bundles.
+- Focused 412px browser checks confirmed `scrollWidth === innerWidth` for login and templates, with the real form/catalog content present. Marketplace's standard mobile profile recorded CLS 0.
+- The Android release APK is 93,964,600 bytes, non-debuggable, signed/zipaligned, contains four ABIs, and targets package `com.magicbooklet.mobile` (min/target SDK 24/36). Its SHA-256 is `ed116efb4a72657072efa6d21a1feb43f12c42a4ef7c9a1f7dd5b36a31ae801`; local signing is not store-signing evidence.
 - Supabase linked migration dry-run identified only the reviewed migration; it was then applied and production history aligned at 107 migrations.
 - A live privilege probe confirmed anonymous RPC execution is denied with PostgreSQL code `42501` while `service_role` receives a successful response.
 - A live non-published-row probe confirmed status is preserved while every sensitive field is null-masked.
-- The local database replay was unavailable because Docker was not running; the repository's isolated Supabase CI replay remains the authoritative clean-database gate.
+- The exact-release Quality workflow replayed every migration in an isolated Supabase database and passed the database behavior tests. This CI job is the authoritative clean-database gate; the workstation replay remained unavailable because Docker was not running locally.
 
 ## Remaining external gates
 
@@ -146,4 +184,4 @@ These are not unresolved code findings:
 
 ## Rating interpretation
 
-A 10/10 rating would imply proven performance under representative production field traffic, physical-device release traces on both platforms, verified store signing, and no remaining operational uncertainty. Those claims cannot be established from source code or simulators alone. At 9.5/10, the application has strong architecture, bounded failure modes, automated regression budgets, and clean release evidence while preserving a small, explicit set of real-world validation gates.
+A 10/10 rating would imply proven performance under representative production field traffic, physical-device release traces on both platforms, verified store signing, and no remaining operational uncertainty. Those claims cannot be established from source code, CI, or simulators alone. At 9.6/10, the application has strong architecture, bounded failure modes, automated regression budgets, an exact production deployment, and clean release evidence while preserving a small, explicit set of real-world validation gates.
