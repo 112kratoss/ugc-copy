@@ -3,7 +3,11 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseClient from '@/app/showcase/ShowcaseClient';
-import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
+import {
+  SHOWCASE_INITIAL_PAGE_SIZE,
+  type ShowcaseFeedItem,
+  type ShowcaseFeedPage,
+} from '@/lib/showcase';
 import type { SourceToolOption } from '@/lib/source-tools';
 
 const mockPush = vi.fn();
@@ -130,6 +134,7 @@ describe('ShowcaseClient save actions', () => {
     observe: ReturnType<typeof vi.fn>;
     disconnect: ReturnType<typeof vi.fn>;
     observedTargets: Element[];
+    rootMargin: string;
     trigger: (isIntersecting?: boolean) => void;
   }> = [];
 
@@ -163,11 +168,14 @@ describe('ShowcaseClient save actions', () => {
       configurable: true,
       value: vi.fn(),
     });
-    vi.stubGlobal('IntersectionObserver', vi.fn(function IntersectionObserverMock(callback: IntersectionObserverCallback) {
+    vi.stubGlobal('IntersectionObserver', vi.fn(function IntersectionObserverMock(
+      callback: IntersectionObserverCallback,
+      options?: IntersectionObserverInit
+    ) {
       const observedTargets: Element[] = [];
       const observer = {
         root: null,
-        rootMargin: '0px',
+        rootMargin: options?.rootMargin ?? '0px',
         thresholds: [0],
         observe: vi.fn((target: Element) => { observedTargets.push(target); }),
         unobserve: vi.fn(),
@@ -179,6 +187,7 @@ describe('ShowcaseClient save actions', () => {
         observe: observer.observe,
         disconnect: observer.disconnect,
         observedTargets,
+        rootMargin: observer.rootMargin,
         trigger: (isIntersecting = true) => {
           callback([
             {
@@ -236,14 +245,7 @@ describe('ShowcaseClient save actions', () => {
     });
   });
 
-  it('hydrates only the first two cards and delays the first idle reveal', async () => {
-    vi.useFakeTimers();
-    const idleCallbacks: IdleRequestCallback[] = [];
-    vi.stubGlobal('requestIdleCallback', vi.fn((callback: IdleRequestCallback) => {
-      idleCallbacks.push(callback);
-      return idleCallbacks.length;
-    }));
-    vi.stubGlobal('cancelIdleCallback', vi.fn());
+  it('hydrates only the priority card and reveals one deferred card per sentinel approach', async () => {
     const items = Array.from({ length: 5 }, (_, index) => createShowcaseItem({
       id: `post-${index + 1}`,
       generationId: `gen-${index + 1}`,
@@ -254,27 +256,115 @@ describe('ShowcaseClient save actions', () => {
     renderShowcase(items);
 
     expect(screen.getByText('Campaign 1')).toBeInTheDocument();
-    expect(screen.getByText('Campaign 2')).toBeInTheDocument();
+    expect(screen.queryByText('Campaign 2')).not.toBeInTheDocument();
+
+    const deferredObserver = intersectionObservers.find((observer) => (
+      observer.observedTargets.some((target) => (
+        target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
+      ))
+    ));
+    expect(deferredObserver?.rootMargin).toBe('200px 0px');
+
+    act(() => {
+      deferredObserver?.trigger(true);
+    });
+    expect(await screen.findByText('Campaign 2')).toBeInTheDocument();
     expect(screen.queryByText('Campaign 3')).not.toBeInTheDocument();
-    expect(idleCallbacks).toHaveLength(0);
+
+    // Repeated intersecting callbacks for the same boundary entry must not
+    // restart the old immediate reveal chain.
+    act(() => {
+      deferredObserver?.trigger(true);
+    });
+    expect(screen.queryByText('Campaign 3')).not.toBeInTheDocument();
 
     act(() => {
-      vi.advanceTimersByTime(1_000);
+      deferredObserver?.trigger(false);
+      deferredObserver?.trigger(true);
     });
-    expect(idleCallbacks).toHaveLength(1);
-
-    act(() => {
-      idleCallbacks.shift()?.({
-        didTimeout: false,
-        timeRemaining: () => 50,
-      });
-    });
-
-    expect(screen.getByText('Campaign 3')).toBeInTheDocument();
+    expect(await screen.findByText('Campaign 3')).toBeInTheDocument();
     expect(screen.queryByText('Campaign 4')).not.toBeInTheDocument();
   });
 
-  it('waits for all initial cards before establishing an anonymous feed session', () => {
+  it('reveals a complete desktop column row so the sentinel cannot stall in a partial row', async () => {
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+      matches: query === '(min-width: 1280px)',
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+    const items = Array.from({ length: 6 }, (_, index) => createShowcaseItem({
+      id: `desktop-post-${index + 1}`,
+      generationId: `desktop-gen-${index + 1}`,
+      title: `Desktop Campaign ${index + 1}`,
+      mediaUrl: `https://example.com/desktop-campaign-${index + 1}.jpg`,
+    }));
+
+    renderShowcase(items);
+
+    expect(screen.getByText('Desktop Campaign 1')).toBeInTheDocument();
+    expect(screen.queryByText('Desktop Campaign 2')).not.toBeInTheDocument();
+
+    const deferredObserver = intersectionObservers.find((observer) => (
+      observer.observedTargets.some((target) => (
+        target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
+      ))
+    ));
+    act(() => {
+      deferredObserver?.trigger(true);
+    });
+
+    expect(await screen.findByText('Desktop Campaign 5')).toBeInTheDocument();
+    expect(screen.queryByText('Desktop Campaign 6')).not.toBeInTheDocument();
+
+    act(() => {
+      deferredObserver?.trigger(false);
+      deferredObserver?.trigger(true);
+    });
+    expect(await screen.findByText('Desktop Campaign 6')).toBeInTheDocument();
+  });
+
+  it('keeps startup quiet for five seconds and reveals at a long fallback cadence', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('IntersectionObserver', undefined);
+    const items = Array.from({ length: 3 }, (_, index) => createShowcaseItem({
+      id: `fallback-post-${index + 1}`,
+      generationId: `fallback-gen-${index + 1}`,
+      title: `Fallback Campaign ${index + 1}`,
+    }));
+
+    renderShowcase(items);
+
+    expect(screen.getByText('Fallback Campaign 1')).toBeInTheDocument();
+    expect(screen.queryByText('Fallback Campaign 2')).not.toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(screen.queryByText('Fallback Campaign 2')).not.toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+    });
+    expect(screen.getByText('Fallback Campaign 2')).toBeInTheDocument();
+    expect(screen.queryByText('Fallback Campaign 3')).not.toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(7_999);
+    });
+    expect(screen.queryByText('Fallback Campaign 3')).not.toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(screen.getByText('Fallback Campaign 3')).toBeInTheDocument();
+  });
+
+  it('establishes an anonymous feed session after the critical window without hydrating hidden cards', () => {
     vi.useFakeTimers();
     authState.session = null;
     authState.user = null;
@@ -313,28 +403,21 @@ describe('ShowcaseClient save actions', () => {
       />
     );
 
-    expect(idleCallbacks).toHaveLength(0);
     act(() => {
-      vi.advanceTimersByTime(1_000);
+      vi.advanceTimersByTime(5_999);
+    });
+    expect(screen.getByText('Anonymous Campaign 1')).toBeInTheDocument();
+    expect(screen.queryByText('Anonymous Campaign 2')).not.toBeInTheDocument();
+    expect(idleCallbacks).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringMatching(/^\/api\/showcase\/feed\?/),
+      expect.anything()
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(1);
     });
     expect(idleCallbacks).toHaveLength(1);
-
-    for (let index = 0; index < 3; index += 1) {
-      act(() => {
-        idleCallbacks.shift()?.({
-          didTimeout: false,
-          timeRemaining: () => 50,
-        });
-      });
-      expect(fetchMock).not.toHaveBeenCalledWith(
-        expect.stringMatching(/^\/api\/showcase\/feed\?/),
-        expect.anything()
-      );
-    }
-
-    act(() => {
-      vi.advanceTimersByTime(1_000);
-    });
     expect(fetchMock).not.toHaveBeenCalledWith(
       expect.stringMatching(/^\/api\/showcase\/feed\?/),
       expect.anything()
@@ -347,9 +430,12 @@ describe('ShowcaseClient save actions', () => {
       });
     });
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/showcase/feed?limit=12', expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/showcase/feed?limit=${SHOWCASE_INITIAL_PAGE_SIZE}`,
+      expect.objectContaining({
       headers: undefined,
-    }));
+      })
+    );
   });
 
   it('records an unsave only after the save API confirms removal', async () => {
@@ -548,7 +634,7 @@ describe('ShowcaseClient save actions', () => {
     expect(image).toHaveAttribute('decoding', 'async');
   });
 
-  it('prioritizes the first visual preview when a text post leads the feed', () => {
+  it('prioritizes the first visual preview when a text post leads the feed', async () => {
     renderShowcase([
       createShowcaseItem({
         id: 'text-post',
@@ -563,7 +649,16 @@ describe('ShowcaseClient save actions', () => {
       }),
     ]);
 
-    expect(screen.getByRole('img', { name: 'First visual frame' }))
+    const deferredObserver = intersectionObservers.find((observer) => (
+      observer.observedTargets.some((target) => (
+        target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
+      ))
+    ));
+    act(() => {
+      deferredObserver?.trigger(true);
+    });
+
+    expect(await screen.findByRole('img', { name: 'First visual frame' }))
       .toHaveAttribute('fetchpriority', 'high');
   });
 
@@ -676,23 +771,26 @@ describe('ShowcaseClient save actions', () => {
       generationId: 'gen-2',
       mediaUrl: 'https://example.com/second.jpg',
     });
-    const feedFetch = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
-        items: [secondItem],
-        pageInfo: {
-          hasMore: false,
-          nextOffset: null,
-          limit: 12,
-          offset: 12,
-        },
-      }),
-    }));
+    const feedFetch = vi.fn(async (url: string) => {
+      void url;
+      return {
+        ok: true,
+        json: async () => ({
+          items: [secondItem],
+          pageInfo: {
+            hasMore: false,
+            nextOffset: null,
+            limit: 12,
+            offset: 2,
+          },
+        }),
+      };
+    });
 
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('/api/showcase/feed')) {
-        return feedFetch();
+        return feedFetch(url);
       }
 
       if (url.startsWith('/api/showcase/saved-state')) {
@@ -710,7 +808,7 @@ describe('ShowcaseClient save actions', () => {
 
     render(
       <ShowcaseClient
-        initialFeed={createFeed(firstItem, { hasMore: true, nextOffset: 12, limit: 12 })}
+        initialFeed={createFeed(firstItem, { hasMore: true, nextOffset: 2, limit: 2 })}
         initialCategory="all"
         initialSort="recent"
         initialTool={null}
@@ -720,11 +818,37 @@ describe('ShowcaseClient save actions', () => {
       />
     );
 
+    let loadMoreObserver: (typeof intersectionObservers)[number] | undefined;
     await waitFor(() => {
-      expect(intersectionObservers.length).toBeGreaterThan(0);
+      loadMoreObserver = intersectionObservers.find((observer) => (
+        observer.observedTargets.some((target) => (
+          target.getAttribute('data-showcase-load-more-sentinel') === 'true'
+        ))
+      ));
+      expect(loadMoreObserver).toBeDefined();
     });
 
-    intersectionObservers.at(-1)?.trigger(true);
+    act(() => {
+      loadMoreObserver?.trigger(true);
+    });
+
+    await waitFor(() => {
+      expect(feedFetch).toHaveBeenCalledTimes(1);
+    });
+    expect(feedFetch).toHaveBeenCalledWith('/api/showcase/feed?limit=12&offset=2&sort=recent');
+
+    let deferredObserver: (typeof intersectionObservers)[number] | undefined;
+    await waitFor(() => {
+      deferredObserver = intersectionObservers.findLast((observer) => (
+        observer.observedTargets.some((target) => (
+          target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
+        ))
+      ));
+      expect(deferredObserver).toBeDefined();
+    });
+    act(() => {
+      deferredObserver?.trigger(true);
+    });
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Second Campaign Frame' })).toBeInTheDocument();
@@ -776,12 +900,20 @@ describe('ShowcaseClient save actions', () => {
       />
     );
 
+    let loadMoreObserver: (typeof intersectionObservers)[number] | undefined;
     await waitFor(() => {
-      expect(intersectionObservers.length).toBeGreaterThan(0);
+      loadMoreObserver = intersectionObservers.find((observer) => (
+        observer.observedTargets.some((target) => (
+          target.getAttribute('data-showcase-load-more-sentinel') === 'true'
+        ))
+      ));
+      expect(loadMoreObserver).toBeDefined();
     });
 
-    intersectionObservers.at(-1)?.trigger(true);
-    intersectionObservers.at(-1)?.trigger(true);
+    act(() => {
+      loadMoreObserver?.trigger(true);
+      loadMoreObserver?.trigger(true);
+    });
 
     await waitFor(() => {
       expect(feedFetch).toHaveBeenCalledTimes(1);
@@ -897,21 +1029,49 @@ describe('ShowcaseClient save actions', () => {
       headers: { Authorization: 'Bearer test-token' },
     }));
 
+    let loadMoreObserver: (typeof intersectionObservers)[number] | undefined;
     await waitFor(() => {
-      expect(intersectionObservers.some((observer) => observer.observedTargets.some(
-        (target) => target.getAttribute('aria-hidden') === 'true'
-      ))).toBe(true);
+      loadMoreObserver = intersectionObservers.findLast((observer) => (
+        observer.observedTargets.some((target) => (
+          target.getAttribute('data-showcase-load-more-sentinel') === 'true'
+        ))
+      ));
+      expect(loadMoreObserver).toBeDefined();
     });
-    const sentinelObserver = intersectionObservers.findLast((observer) => observer.observedTargets.some(
-      (target) => target.getAttribute('aria-hidden') === 'true'
-    ));
-    sentinelObserver?.trigger(true);
+    act(() => {
+      loadMoreObserver?.trigger(true);
+    });
+
+    await waitFor(() => {
+      expect(feedFetch).toHaveBeenCalledWith(expect.stringContaining('cursor=cursor-1'));
+    });
+
+    let deferredObserver: (typeof intersectionObservers)[number] | undefined;
+    await waitFor(() => {
+      deferredObserver = intersectionObservers.findLast((observer) => (
+        observer.observedTargets.some((target) => (
+          target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
+        ))
+      ));
+      expect(deferredObserver).toBeDefined();
+    });
+    act(() => {
+      deferredObserver?.trigger(true);
+    });
 
     expect(await screen.findByText('More for you')).toBeInTheDocument();
     expect(feedFetch).toHaveBeenCalledWith(expect.stringContaining('cursor=cursor-1'));
   });
 
   it('refreshes the For You fallback for an anonymous viewer to establish a feed session', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('requestIdleCallback', vi.fn((callback: IdleRequestCallback) => {
+      callback({
+        didTimeout: false,
+        timeRemaining: () => 50,
+      });
+      return 1;
+    }));
     authState.session = null;
     authState.user = null;
     const anonymousItem = createShowcaseItem({
@@ -936,7 +1096,7 @@ describe('ShowcaseClient save actions', () => {
               hasMore: false,
               nextOffset: null,
               nextCursor: null,
-              limit: 12,
+              limit: SHOWCASE_INITIAL_PAGE_SIZE,
               offset: 0,
             },
           }),
@@ -961,10 +1121,108 @@ describe('ShowcaseClient save actions', () => {
       />
     );
 
-    expect(await screen.findByText('Anonymous discovery', {}, { timeout: 2_000 })).toBeInTheDocument();
-    expect(fetch).toHaveBeenCalledWith('/api/showcase/feed?limit=12', expect.objectContaining({
-      headers: undefined,
+    await act(async () => {
+      vi.advanceTimersByTime(6_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('Anonymous discovery')).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith(
+      `/api/showcase/feed?limit=${SHOWCASE_INITIAL_PAGE_SIZE}`,
+      expect.objectContaining({
+        headers: undefined,
+      })
+    );
+  });
+
+  it('retries a transient anonymous feed refresh without hydrating the fallback backlog', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('requestIdleCallback', vi.fn((callback: IdleRequestCallback) => {
+      callback({
+        didTimeout: false,
+        timeRemaining: () => 50,
+      });
+      return 1;
     }));
+    authState.session = null;
+    authState.user = null;
+    const rankedItem = createShowcaseItem({
+      id: 'post-retry-ranked',
+      title: 'Recovered discovery',
+      generationId: 'gen-retry-ranked',
+      recommendation: {
+        deliveryId: 'delivery-retry',
+        position: 0,
+        reason: 'Recovered ranking',
+        algorithmVersion: 'feed-v1',
+      },
+    });
+    const feedFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => ({ error: 'Temporarily unavailable' }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          items: [rankedItem],
+          feedSessionId: 'anonymous-session-retry',
+          pageInfo: {
+            hasMore: false,
+            nextOffset: null,
+            nextCursor: null,
+            limit: SHOWCASE_INITIAL_PAGE_SIZE,
+            offset: 0,
+          },
+        }),
+      } as Response);
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      if (String(input).startsWith('/api/showcase/feed?')) {
+        return feedFetch();
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ success: true }),
+      } as Response);
+    }));
+    const fallbackItems = Array.from({ length: 2 }, (_, index) => createShowcaseItem({
+      id: `retry-fallback-${index + 1}`,
+      generationId: `retry-fallback-gen-${index + 1}`,
+      title: `Retry Fallback ${index + 1}`,
+    }));
+
+    render(
+      <ShowcaseClient
+        initialFeed={createFeed(fallbackItems)}
+        initialCategory="all"
+        initialSort="for-you"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(6_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(feedFetch).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Retry Fallback 1')).toBeInTheDocument();
+    expect(screen.queryByText('Retry Fallback 2')).not.toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(2_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(feedFetch).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('Recovered discovery')).toBeInTheDocument();
+    expect(screen.queryByText('Retry Fallback 2')).not.toBeInTheDocument();
   });
 
   it('optimistically removes a post after Not interested and records ranked feedback', async () => {

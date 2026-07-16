@@ -52,7 +52,7 @@ describe('MarketplacePage', () => {
     expect(headersMock).not.toHaveBeenCalled();
     expect(getMarketplaceResourceListMock).toHaveBeenCalledWith(expect.objectContaining({
       countryCode: null,
-      limit: 12,
+      limit: 6,
       offset: 0,
     }));
     expect(screen.getByRole('heading', {

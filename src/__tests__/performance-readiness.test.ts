@@ -13,7 +13,8 @@ describe('production performance readiness', () => {
   it('inlines the production Tailwind stylesheet to remove the first-render request waterfall', () => {
     const nextConfig = readProjectFile('next.config.ts');
 
-    expect(nextConfig).toMatch(/experimental:\s*{[\s\S]*?inlineCss:\s*true/);
+    expect(nextConfig).not.toContain('inlineCss: true');
+    expect(nextConfig).toContain('Keep global CSS external');
   });
 
   it('bounds media-heavy first renders and yields the remaining showcase hydration work', () => {
@@ -23,13 +24,16 @@ describe('production performance readiness', () => {
     const showcasePage = readProjectFile('src/app/showcase/page.tsx');
     const priorityPoster = readProjectFile('src/lib/showcase-priority-poster.ts');
     const marketplacePolicy = readProjectFile('src/lib/marketplace-resource-list-cache-policy.ts');
+    const marketplaceClient = readProjectFile('src/app/marketplace/MarketplaceBrowser.tsx');
 
-    expect(showcaseModel).toContain('SHOWCASE_INITIAL_RENDER_COUNT = 2');
-    expect(showcaseModel).toContain('SHOWCASE_INITIAL_PAGE_SIZE = 6');
+    expect(showcaseModel).toContain('SHOWCASE_INITIAL_RENDER_COUNT = 1');
+    expect(showcaseModel).toContain('SHOWCASE_INITIAL_PAGE_SIZE = 2');
     expect(showcaseClient).toContain('items.slice(0, renderedItemCount)');
     expect(showcaseClient).toContain('requestIdleCallback(callback, { timeout })');
-    expect(showcaseClient).toContain('hasDelayedFirstDeferredRevealRef');
-    expect(showcaseClient).toContain('scheduleDelayedIdleWork(() =>');
+    expect(showcaseClient).not.toContain('hasDelayedFirstDeferredRevealRef');
+    expect(showcaseClient).toContain('SHOWCASE_DEFERRED_REVEAL_FALLBACK_MS = 8_000');
+    expect(showcaseClient).toContain("SHOWCASE_DEFERRED_REVEAL_ROOT_MARGIN = '200px 0px'");
+    expect(showcaseClient).toContain('data-showcase-deferred-reveal-sentinel="true"');
     expect(showcaseClient).toContain("rootMargin: '400px 0px'");
     expect(showcaseClient).toMatch(/href="\/post\/new"[\s\S]*?prefetch={false}/);
     expect(showcaseClient).toMatch(/href="\/marketplace"[\s\S]*?prefetch={false}/);
@@ -39,7 +43,11 @@ describe('production performance readiness', () => {
     expect(priorityPoster).toContain("return `data:image/webp;base64,${Buffer.from(bytes).toString('base64')}`");
     expect(nextConfig).toContain('value: `<${supabaseUrl.origin}>; rel=preconnect`');
     expect(nextConfig).toContain('{ source: "/showcase", headers: showcasePreconnectHeaders }');
-    expect(marketplacePolicy).toContain('MARKETPLACE_INITIAL_PAGE_SIZE = 12');
+    expect(marketplacePolicy).toContain('MARKETPLACE_INITIAL_PAGE_SIZE = 6');
+    expect(marketplacePolicy).toContain('MARKETPLACE_COMPACT_PAGE_SIZE = 12');
+    expect(marketplacePolicy).toContain('MARKETPLACE_DEFAULT_PAGE_SIZE = 24');
+    expect(marketplaceClient).toContain('limit: MARKETPLACE_COMPACT_PAGE_SIZE');
+    expect(marketplaceClient).not.toContain('bootstrapRevealSentinelRef');
   });
 
   it('ships Vercel real-user Core Web Vitals collection from the root layout', () => {

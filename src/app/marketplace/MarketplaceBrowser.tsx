@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowRight,
@@ -31,6 +31,7 @@ import type { SourceToolOption } from '@/lib/source-tools';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 import { HoverVideo } from '@/app/components/HoverVideo';
 import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
+import { MARKETPLACE_COMPACT_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
 
 interface MarketplacePageInfo {
   hasMore: boolean;
@@ -84,14 +85,23 @@ export default function MarketplaceBrowser({
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const loadMoreAbortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    loadMoreAbortControllerRef.current?.abort();
+    loadMoreAbortControllerRef.current = null;
     // Navigation supplies a new result page; discard state from the previous query.
     setItems(initialPage.items);
     setPageInfo(initialPage.pageInfo);
     setSearchInput(initialFilters.q);
+    setIsLoadingMore(false);
     setLoadError(null);
     setFiltersOpen(false);
+
+    return () => {
+      loadMoreAbortControllerRef.current?.abort();
+      loadMoreAbortControllerRef.current = null;
+    };
   }, [initialPage, initialFilters]);
 
   const activeFilterLabels = useMemo(() => [
@@ -119,17 +129,24 @@ export default function MarketplaceBrowser({
 
     setIsLoadingMore(true);
     setLoadError(null);
+    const controller = new AbortController();
+    loadMoreAbortControllerRef.current?.abort();
+    loadMoreAbortControllerRef.current = controller;
 
     try {
       const params = buildMarketplaceSearchParams({
         ...initialFilters,
         offset: pageInfo.nextOffset,
-        limit: pageInfo.limit,
+        // The server bootstrap is intentionally smaller than later pages.
+        // Continue from its exact nextOffset using a compact page size that
+        // bounds JSON parsing and DOM work on mobile.
+        limit: MARKETPLACE_COMPACT_PAGE_SIZE,
       });
       const response = await fetch(`/api/marketplace/resources?${params.toString()}`, {
         headers: {
           Accept: 'application/json',
         },
+        signal: controller.signal,
       });
       const payload = await response.json() as {
         items?: MarketplaceResourceListItem[];
@@ -141,14 +158,33 @@ export default function MarketplaceBrowser({
         throw new Error(payload.error || 'Could not load more unlocks.');
       }
 
-      setItems((current) => [...current, ...(payload.items ?? [])]);
+      if (controller.signal.aborted || loadMoreAbortControllerRef.current !== controller) {
+        return;
+      }
+
+      setItems((current) => {
+        const nextItems = [...current];
+        const seenIds = new Set(current.map((item) => item.id));
+        for (const item of payload.items ?? []) {
+          if (!seenIds.has(item.id)) {
+            seenIds.add(item.id);
+            nextItems.push(item);
+          }
+        }
+        return nextItems;
+      });
       if (payload.pageInfo) {
         setPageInfo(payload.pageInfo);
       }
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Could not load more unlocks.');
+      if (!controller.signal.aborted && loadMoreAbortControllerRef.current === controller) {
+        setLoadError(error instanceof Error ? error.message : 'Could not load more unlocks.');
+      }
     } finally {
-      setIsLoadingMore(false);
+      if (loadMoreAbortControllerRef.current === controller) {
+        loadMoreAbortControllerRef.current = null;
+        setIsLoadingMore(false);
+      }
     }
   };
 

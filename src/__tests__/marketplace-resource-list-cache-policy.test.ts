@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  MARKETPLACE_COMPACT_PAGE_SIZE,
   MARKETPLACE_DEFAULT_PAGE_SIZE,
   MARKETPLACE_INITIAL_PAGE_SIZE,
   shouldCacheMarketplaceResourceListBasePage,
@@ -11,6 +12,10 @@ describe('marketplace resource list cache policy', () => {
     expect(shouldCacheMarketplaceResourceListBasePage({
       offset: 0,
       limit: MARKETPLACE_INITIAL_PAGE_SIZE,
+    })).toBe(true);
+    expect(shouldCacheMarketplaceResourceListBasePage({
+      offset: 0,
+      limit: MARKETPLACE_COMPACT_PAGE_SIZE,
     })).toBe(true);
     expect(shouldCacheMarketplaceResourceListBasePage({
       offset: 0,

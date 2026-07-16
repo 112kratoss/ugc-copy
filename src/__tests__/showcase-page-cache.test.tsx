@@ -76,7 +76,18 @@ describe('ShowcasePage cacheability', () => {
     expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
       viewerUserId: null,
       countryCode: null,
-      limit: 6,
+      limit: 2,
+    }));
+  });
+
+  it('keeps nonzero offset pages at the normal continuation size', async () => {
+    const { default: ShowcasePage } = await import('@/app/showcase/page');
+
+    render(await ShowcasePage({ searchParams: Promise.resolve({ offset: '12' }) }));
+
+    expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
+      limit: 12,
+      offset: 12,
     }));
   });
 

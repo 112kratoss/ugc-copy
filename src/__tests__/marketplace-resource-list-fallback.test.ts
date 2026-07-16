@@ -31,6 +31,9 @@ let orderCalls: Array<{ column: string; ascending: boolean }> = [];
 let linkedPostHydrationCalls: string[][] = [];
 let selectedBundleColumns: string[] = [];
 let simulateLegacyResourceColumns = false;
+let rpcBundleRows: TestBundleRow[] | null = null;
+let rpcCalls: Array<{ offset: number; limit: number }> = [];
+let hiddenLinkedPostIds = new Set<string>();
 
 function buildLinkedPost(postId: string) {
   return {
@@ -60,13 +63,23 @@ vi.mock('@/lib/post-media', () => ({
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({
-    rpc: vi.fn(async () => ({
-      data: null,
-      error: {
-        code: 'PGRST202',
-        message: 'Could not find the function public.list_marketplace_resource_bundles',
-      },
-    })),
+    rpc: vi.fn(async (_name: string, params: { p_offset: number; p_limit: number }) => {
+      if (rpcBundleRows) {
+        rpcCalls.push({ offset: params.p_offset, limit: params.p_limit });
+        return {
+          data: rpcBundleRows.slice(params.p_offset, params.p_offset + params.p_limit),
+          error: null,
+        };
+      }
+
+      return {
+        data: null,
+        error: {
+          code: 'PGRST202',
+          message: 'Could not find the function public.list_marketplace_resource_bundles',
+        },
+      };
+    }),
     storage: {
       from: vi.fn(() => ({
         getPublicUrl: vi.fn((path: string) => ({
@@ -154,7 +167,9 @@ vi.mock('@/lib/server-helpers', () => ({
           then(resolve: (value: { data: ReturnType<typeof buildLinkedPost>[]; error: null }) => void) {
             linkedPostHydrationCalls.push([...postIds]);
             resolve({
-              data: postIds.map(buildLinkedPost),
+              data: postIds
+                .filter((postId) => !hiddenLinkedPostIds.has(postId))
+                .map(buildLinkedPost),
               error: null,
             });
           },
@@ -204,6 +219,54 @@ describe('marketplace resource list missing-RPC fallback batching', () => {
     linkedPostHydrationCalls = [];
     selectedBundleColumns = [];
     simulateLegacyResourceColumns = false;
+    rpcBundleRows = null;
+    rpcCalls = [];
+    hiddenLinkedPostIds = new Set();
+  });
+
+  it('advances past a returned lookahead row when hydration drops an earlier row', async () => {
+    rpcBundleRows = Array.from({ length: 5 }, (_, index) => (
+      buildBundleRow(index, `Launch recipe ${index}`)
+    ));
+    hiddenLinkedPostIds.add('post-001');
+    const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+    const firstPage = await getMarketplaceResourceList({ offset: 0, limit: 2 });
+    const secondPage = await getMarketplaceResourceList({
+      offset: firstPage.pageInfo.nextOffset ?? 0,
+      limit: 2,
+    });
+
+    expect(firstPage.items.map((item) => item.postId)).toEqual(['post-000', 'post-002']);
+    expect(firstPage.pageInfo).toMatchObject({ hasMore: true, nextOffset: 3 });
+    expect(secondPage.items.map((item) => item.postId)).toEqual(['post-003', 'post-004']);
+    expect(secondPage.pageInfo).toMatchObject({ hasMore: false, nextOffset: null });
+    expect(rpcCalls).toEqual([
+      { offset: 0, limit: 3 },
+      { offset: 3, limit: 3 },
+    ]);
+  });
+
+  it('leaves an unreturned eligible lookahead at the next page offset', async () => {
+    rpcBundleRows = Array.from({ length: 5 }, (_, index) => (
+      buildBundleRow(index, `Launch recipe ${index}`)
+    ));
+    const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+    const firstPage = await getMarketplaceResourceList({ offset: 0, limit: 2 });
+    const secondPage = await getMarketplaceResourceList({
+      offset: firstPage.pageInfo.nextOffset ?? 0,
+      limit: 2,
+    });
+
+    expect(firstPage.items.map((item) => item.postId)).toEqual(['post-000', 'post-001']);
+    expect(firstPage.pageInfo).toMatchObject({ hasMore: true, nextOffset: 2 });
+    expect(secondPage.items.map((item) => item.postId)).toEqual(['post-002', 'post-003']);
+    expect(secondPage.pageInfo).toMatchObject({ hasMore: true, nextOffset: 4 });
+    expect(rpcCalls).toEqual([
+      { offset: 0, limit: 3 },
+      { offset: 2, limit: 3 },
+    ]);
   });
 
   it('stops before hydrating a later database batch once the first batch proves hasMore', async () => {

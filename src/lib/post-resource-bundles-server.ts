@@ -1944,9 +1944,13 @@ async function getMarketplaceResourceListBase(
   const rows = ((data ?? []) as BundleRow[]).slice(0, limit + 1);
   const hasMore = rows.length > limit;
   const hydratedItems = await hydrateBundleRows(rows, null, 'public', true);
-  const pageItems = hydratedItems.filter((item) => {
+  const pageItems: MarketplaceResourceListItem[] = [];
+  let consumedRowCount = 0;
+
+  for (const item of hydratedItems) {
     if (!item.post) {
-      return false;
+      consumedRowCount += 1;
+      continue;
     }
 
     const quality = assessMarketplaceListingQuality({
@@ -1960,15 +1964,25 @@ async function getMarketplaceResourceListBase(
       seller: item.seller,
     });
 
-    return quality.eligible && (!normalizedQuery || marketplaceItemMatchesQuery(item, normalizedQuery));
-  }).slice(0, limit);
-  const hasDroppedItems = hydratedItems.length > pageItems.length;
+    const isEligible = quality.eligible
+      && (!normalizedQuery || marketplaceItemMatchesQuery(item, normalizedQuery));
+    if (isEligible && pageItems.length >= limit) {
+      // This is an eligible lookahead row that has not been returned. Leave
+      // its raw position for the next page instead of skipping it.
+      break;
+    }
+
+    consumedRowCount += 1;
+    if (isEligible) {
+      pageItems.push(item);
+    }
+  }
 
   return {
     items: pageItems,
     pageInfo: {
-      hasMore: hasMore || hasDroppedItems,
-      nextOffset: hasMore || hasDroppedItems ? offset + limit : null,
+      hasMore,
+      nextOffset: hasMore ? offset + consumedRowCount : null,
       offset,
       limit,
     },

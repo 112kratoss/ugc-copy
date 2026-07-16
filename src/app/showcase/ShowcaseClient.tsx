@@ -21,6 +21,7 @@ import {
     type ShowcaseFeedbackAction,
 } from '@/app/showcase/ShowcaseFeedInteraction';
 import {
+    SHOWCASE_INITIAL_PAGE_SIZE,
     SHOWCASE_INITIAL_RENDER_COUNT,
     SHOWCASE_PAGE_SIZE,
     type ShowcaseCategory,
@@ -87,6 +88,32 @@ const SORTS: Array<{ id: ShowcaseSort; label: string }> = [
 ];
 
 const DEFAULT_SHOWCASE_SORT: ShowcaseSort = 'for-you';
+const SHOWCASE_DEFERRED_REVEAL_ROOT_MARGIN = '200px 0px';
+const SHOWCASE_DEFERRED_REVEAL_FALLBACK_MS = 8_000;
+const SHOWCASE_ANONYMOUS_REFRESH_DELAY_MS = 6_000;
+const SHOWCASE_REFRESH_RETRY_BASE_MS = 2_000;
+const SHOWCASE_REFRESH_MAX_RETRIES = 2;
+
+function getShowcaseDeferredRevealBatchSize(): number {
+    if (typeof window.matchMedia !== 'function') {
+        return 1;
+    }
+
+    // Match the responsive column counts used by the showcase masonry feed.
+    // Revealing one complete row prevents the sentinel from getting trapped
+    // inside a partially filled desktop row while preserving one-at-a-time
+    // hydration on the mobile performance path.
+    if (window.matchMedia('(min-width: 1280px)').matches) {
+        return 4;
+    }
+    if (window.matchMedia('(min-width: 1024px)').matches) {
+        return 3;
+    }
+    if (window.matchMedia('(min-width: 640px)').matches) {
+        return 2;
+    }
+    return 1;
+}
 
 function scheduleIdleWork(callback: () => void, timeout = 1_000): () => void {
     if (typeof window.requestIdleCallback === 'function') {
@@ -340,9 +367,7 @@ export default function ShowcaseClient({
     const anonymousHiddenPostIdsRef = useRef(new Set<string>());
     const anonymousHiddenCreatorIdsRef = useRef(new Set<string>());
     const anonymousPersonalizationStartedRef = useRef(false);
-    const hasDelayedFirstDeferredRevealRef = useRef(
-        initialFeed.items.length <= SHOWCASE_INITIAL_RENDER_COUNT
-    );
+    const deferredRevealSentinelRef = useRef<HTMLDivElement | null>(null);
     const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
     const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(
         searchParams.get('post') ? 'direct' : null
@@ -379,7 +404,6 @@ export default function ShowcaseClient({
     const renderedItems = items.slice(0, renderedItemCount);
     const hasDeferredItems = renderedItemCount < items.length;
     const hasAuthenticatedSession = Boolean(user && session?.access_token);
-    const shouldWaitForAnonymousReveal = !user && !hasAuthenticatedSession && hasDeferredItems;
     const priorityMediaItemId = renderedItems.find((item) => (
         item.postFormat !== 'text' && getItemMediaItems(item).length > 0
     ))?.id ?? null;
@@ -553,9 +577,6 @@ export default function ShowcaseClient({
         setLoadMoreError(null);
         isLoadingMoreRef.current = false;
         anonymousPersonalizationStartedRef.current = false;
-        hasDelayedFirstDeferredRevealRef.current = (
-            visibleInitialItems.length <= SHOWCASE_INITIAL_RENDER_COUNT
-        );
         setCategory(initialCategory);
         setSort(initialSort);
         setTool(initialTool ?? 'all');
@@ -565,25 +586,79 @@ export default function ShowcaseClient({
     }, [initialCategory, initialFeed, initialResource, initialSort, initialTool, initialUnlock, setItems, setSavedItemIds, user]);
 
     useEffect(() => {
-        if (!hasDeferredItems) {
+        const sentinel = deferredRevealSentinelRef.current;
+        if (!sentinel || !hasDeferredItems || isLoadingInitialFeed) {
             return;
         }
 
-        const revealNextItem = () => {
+        let fallbackHandle: number | null = null;
+        let sentinelWasNear = false;
+
+        const revealNextItems = () => {
+            const batchSize = getShowcaseDeferredRevealBatchSize();
             startTransition(() => {
-                setRenderedItemCount((currentCount) => Math.min(currentCount + 1, items.length));
+                setRenderedItemCount((currentCount) => Math.min(
+                    currentCount + batchSize,
+                    items.length
+                ));
             });
         };
 
-        if (!hasDelayedFirstDeferredRevealRef.current) {
-            return scheduleDelayedIdleWork(() => {
-                hasDelayedFirstDeferredRevealRef.current = true;
-                revealNextItem();
-            });
+        const scheduleFallback = () => {
+            if (fallbackHandle !== null) {
+                window.clearTimeout(fallbackHandle);
+            }
+
+            fallbackHandle = window.setTimeout(() => {
+                fallbackHandle = null;
+                revealNextItems();
+                scheduleFallback();
+            }, SHOWCASE_DEFERRED_REVEAL_FALLBACK_MS);
+        };
+
+        // The fallback keeps the complete bootstrap reachable when observers
+        // are unavailable or no scroll event crosses the reveal boundary. Its
+        // long cadence keeps the first five seconds free of deferred-card work.
+        scheduleFallback();
+
+        if (typeof IntersectionObserver === 'undefined') {
+            return () => {
+                if (fallbackHandle !== null) {
+                    window.clearTimeout(fallbackHandle);
+                }
+            };
         }
 
-        return scheduleIdleWork(revealNextItem);
-    }, [hasDeferredItems, items.length, renderedItemCount, startTransition]);
+        const observer = new IntersectionObserver((entries) => {
+            const sentinelIsNear = entries.some((entry) => entry.isIntersecting);
+            if (!sentinelIsNear) {
+                sentinelWasNear = false;
+                return;
+            }
+
+            // A single boundary entry reveals at most one responsive row.
+            // Keeping this observer attached avoids a fresh observe callback
+            // after every render, which previously chained all deferred work.
+            if (sentinelWasNear) {
+                return;
+            }
+
+            sentinelWasNear = true;
+            revealNextItems();
+            scheduleFallback();
+        }, {
+            rootMargin: SHOWCASE_DEFERRED_REVEAL_ROOT_MARGIN,
+        });
+
+        observer.observe(sentinel);
+
+        return () => {
+            observer.disconnect();
+            if (fallbackHandle !== null) {
+                window.clearTimeout(fallbackHandle);
+            }
+        };
+    }, [hasDeferredItems, isLoadingInitialFeed, items.length, startTransition]);
 
     useEffect(() => {
         if (isAuthLoading || sort !== DEFAULT_SHOWCASE_SORT) {
@@ -592,24 +667,24 @@ export default function ShowcaseClient({
 
         if (
             (user && !hasAuthenticatedSession)
-            || (!hasAuthenticatedSession && (
-                shouldWaitForAnonymousReveal
-                || anonymousPersonalizationStartedRef.current
-            ))
+            || (!hasAuthenticatedSession && anonymousPersonalizationStartedRef.current)
         ) {
             return;
         }
 
         const controller = new AbortController();
+        let retryHandle: number | null = null;
         const params = new URLSearchParams({
-            limit: String(SHOWCASE_PAGE_SIZE),
+            limit: String(hasAuthenticatedSession
+                ? SHOWCASE_PAGE_SIZE
+                : SHOWCASE_INITIAL_PAGE_SIZE),
         });
         setNonDefaultParam(params, 'category', category, 'all');
         setNonDefaultParam(params, 'tool', tool, 'all');
         setNonDefaultParam(params, 'unlock', unlock, 'all');
         setNonDefaultParam(params, 'resource', resource, 'all');
 
-        const refreshPersonalizedFeed = () => {
+        const refreshPersonalizedFeed = (retryCount = 0) => {
             void fetch(`/api/showcase/feed?${params.toString()}`, {
                 headers: session?.access_token
                     ? { Authorization: `Bearer ${session.access_token}` }
@@ -656,9 +731,22 @@ export default function ShowcaseClient({
                     setIsLoadingMore(false);
                 })
                 .catch((error) => {
-                    if (!controller.signal.aborted) {
-                        console.error('Failed to refresh personalized showcase feed:', error);
+                    if (controller.signal.aborted) {
+                        return;
                     }
+
+                    if (retryCount < SHOWCASE_REFRESH_MAX_RETRIES) {
+                        retryHandle = window.setTimeout(() => {
+                            retryHandle = null;
+                            refreshPersonalizedFeed(retryCount + 1);
+                        }, SHOWCASE_REFRESH_RETRY_BASE_MS * (2 ** retryCount));
+                        return;
+                    }
+
+                    // A later navigation/filter change may establish a fresh
+                    // session after all bounded attempts have been exhausted.
+                    anonymousPersonalizationStartedRef.current = false;
+                    console.error('Failed to refresh personalized showcase feed:', error);
                 });
         };
         // Signed-in viewers should see their ranking immediately. Anonymous
@@ -669,10 +757,13 @@ export default function ShowcaseClient({
             : scheduleDelayedIdleWork(() => {
                 anonymousPersonalizationStartedRef.current = true;
                 refreshPersonalizedFeed();
-            });
+            }, SHOWCASE_ANONYMOUS_REFRESH_DELAY_MS);
 
         return () => {
             cancelScheduledRefresh?.();
+            if (retryHandle !== null) {
+                window.clearTimeout(retryHandle);
+            }
             controller.abort();
         };
     }, [
@@ -684,7 +775,6 @@ export default function ShowcaseClient({
         session,
         setItems,
         setSavedItemIds,
-        shouldWaitForAnonymousReveal,
         sort,
         tool,
         unlock,
@@ -1403,9 +1493,19 @@ export default function ShowcaseClient({
                     </div>
                 )}
 
+                {hasDeferredItems && !isLoadingInitialFeed ? (
+                    <div
+                        ref={deferredRevealSentinelRef}
+                        data-showcase-deferred-reveal-sentinel="true"
+                        aria-hidden="true"
+                        className="h-px"
+                    />
+                ) : null}
+
                 {pageInfo.hasMore && !isLoadingInitialFeed && !hasDeferredItems ? (
                     <div
                         ref={loadMoreSentinelRef}
+                        data-showcase-load-more-sentinel="true"
                         aria-hidden="true"
                         className="h-1"
                     />
