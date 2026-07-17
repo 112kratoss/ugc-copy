@@ -29,6 +29,7 @@ import {
 import { createPostMediaPreview } from '@/lib/post-media-preview';
 import { isCreatorProfileCheckError } from '@/lib/marketplace-trust';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import {
   normalizeSourceToolInputWithCatalog,
@@ -447,7 +448,7 @@ async function replaceEditedPostMedia(params: {
       const uploadResult = await params.adminSupabase.storage
         .from(SHOWCASE_MEDIA_BUCKET)
         .upload(storagePath, downloadedMedia.data, {
-          cacheControl: '3600',
+          cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
           contentType: downloadedMedia.data.type || item.contentType || undefined,
           upsert: false,
         });

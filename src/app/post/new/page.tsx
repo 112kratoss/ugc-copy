@@ -6,7 +6,7 @@ type NewPostPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-const RETURN_PARAM_KEYS = ['generationId', 'publishIntent', 'resourceMode', 'focus', 'from'] as const;
+const RETURN_PARAM_KEYS = ['generationId', 'publishIntent', 'resourceMode', 'focus', 'from', 'returnTo'] as const;
 
 function getFirstValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;

@@ -396,7 +396,7 @@ function MediaDetailsPreviewDialog({
         >
           <summary className="flex cursor-pointer list-none items-center justify-between gap-4">
             <div>
-              <div className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">Creation recipe</div>
+              <div className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">Saved creation setup</div>
               <div className="mt-1 text-sm text-zinc-300">
                 {recipeItems.length > 0 ? recipeItems.join(' + ') : 'Saved generation details'}
               </div>

@@ -334,7 +334,22 @@ describe('post resource bundle server access', () => {
     bundlePresenceError = null;
   });
 
-  it('reveals published free recipe resources to anonymous viewers', async () => {
+  it('keeps a published free recipe gated until the viewer adds it', async () => {
+    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+    const detail = await getPostResourceBundleDetailByPostId('post-1', {
+      viewerUserId: null,
+    });
+
+    expect(detail?.viewerCanAccess).toBe(false);
+    expect(detail?.resources).toBeNull();
+  });
+
+  it('reveals a public generation recipe without requiring a claim', async () => {
+    bundleRow = {
+      ...(bundleRow as BundleRow),
+      id: 'generation-recipe:post-1',
+    };
     const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
 
     const detail = await getPostResourceBundleDetailByPostId('post-1', {
@@ -343,11 +358,6 @@ describe('post resource bundle server access', () => {
 
     expect(detail?.viewerCanAccess).toBe(true);
     expect(detail?.resources?.promptText).toBe('Public prompt text');
-    expect(detail?.resources?.notesMarkdown).toBe('Public notes');
-    expect(detail?.resources?.items?.find((item) => item.type === 'reference_image')).toMatchObject({
-      type: 'reference_image',
-      title: 'Reference image',
-    });
   });
 
   it('keeps published paid recipe resources locked before purchase', async () => {
@@ -432,7 +442,7 @@ describe('post resource bundle server access', () => {
     })).resolves.toEqual([]);
   });
 
-  it('builds a public generation recipe when no saved bundle exists', async () => {
+  it('does not infer a public recipe when no saved bundle exists', async () => {
     bundleRow = null;
     const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
 
@@ -440,57 +450,10 @@ describe('post resource bundle server access', () => {
       viewerUserId: null,
     });
 
-    expect(detail).toMatchObject({
-      id: 'generation-recipe:post-1',
-      postId: 'post-1',
-      title: 'Creation recipe',
-      accessMode: 'free',
-      priceUsdCents: 0,
-      viewerCanAccess: true,
-      viewerIsOwner: false,
-    });
-    expect(detail?.resourceKinds).toEqual(['prompt', 'files', 'notes']);
-    expect(detail?.lockedPreview.itemCounts).toMatchObject({
-      prompt: 1,
-      reference_image: 1,
-      note: 1,
-    });
-    expect(detail?.resources?.items?.map((item) => item.type)).toEqual(['prompt', 'reference_image', 'note']);
-    expect(detail?.resources?.items?.find((item) => item.type === 'prompt')?.textContent).toBe('Public generated prompt');
-    expect(detail?.resources?.items?.find((item) => item.type === 'reference_image')).toMatchObject({
-      title: 'Image input',
-      storagePath: 'generation_inputs/owner-1/gen-1/00-reference-image.png',
-      contentType: 'image/png',
-    });
+    expect(detail).toBeNull();
   });
 
-  it('fails closed when bundle presence cannot be checked conclusively', async () => {
-    bundlePresenceError = {
-      code: 'XX000',
-      message: 'temporary database failure',
-    };
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const { getPublicGenerationRecipeAssetSummaryMap } = await import(
-      '@/lib/post-resource-bundles-server'
-    );
-
-    const summaries = await getPublicGenerationRecipeAssetSummaryMap([{
-      id: 'post-1',
-      user_id: 'owner-1',
-      generation_id: 'gen-1',
-      prompt: 'Post prompt fallback',
-      category: 'image',
-      source_kind: 'magicbooklet',
-    }]);
-
-    expect(summaries.size).toBe(0);
-    expect(consoleError).toHaveBeenCalledWith(
-      'Failed to check existing post resource bundles before recipe fallback:',
-      bundlePresenceError,
-    );
-  });
-
-  it('builds public generation recipes from legacy workflow references when durable input rows are missing', async () => {
+  it('keeps legacy workflow references private when no recipe was saved', async () => {
     bundleRow = null;
     generationInputRows = [];
     generationRow = {
@@ -511,17 +474,7 @@ describe('post resource bundle server access', () => {
       viewerUserId: null,
     });
 
-    expect(detail?.resourceKinds).toEqual(['prompt', 'files', 'notes', 'remix']);
-    expect(detail?.lockedPreview.itemCounts).toMatchObject({
-      prompt: 1,
-      reference_image: 1,
-      note: 1,
-    });
-    expect(detail?.resources?.items?.find((item) => item.type === 'reference_image')).toMatchObject({
-      title: '@alisa',
-      storagePath: 'generation_inputs/owner-1/gen-1/legacy-reference.png',
-      remixUse: 'reference_only',
-    });
+    expect(detail).toBeNull();
   });
 
   it('requires a deliberately claimed profile before any public post publish', async () => {

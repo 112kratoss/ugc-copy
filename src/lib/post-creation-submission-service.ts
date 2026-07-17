@@ -343,7 +343,7 @@ function parseResourceBundle(
   } catch {
     return {
       bundle: null,
-      error: 'The attached unlock could not be parsed.',
+      error: 'The attached recipe could not be parsed.',
     };
   }
 }

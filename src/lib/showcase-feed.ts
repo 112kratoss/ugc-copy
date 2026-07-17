@@ -22,7 +22,6 @@ import {
 } from '@/lib/server-helpers';
 import {
   getPostResourceBundlePriceQuote,
-  getPublicGenerationRecipeAssetSummaryMap,
 } from '@/lib/post-resource-bundles-server';
 import { resolvePostRemixCapability } from '@/lib/post-resource-bundles';
 import {
@@ -560,26 +559,16 @@ export async function resolvePostRowsToFeedItems(
   const postIds = rowsToHydrate.map((row) => row.id);
   const assetHydrationPromise = getMarketplaceAssetSummaryHydration(postIds, adminSupabase);
   const assetMapPromise = assetHydrationPromise.then(({ assetMap }) => assetMap);
-  const recipeAssetMapPromise = assetHydrationPromise.then(({
-    assetMap,
-    knownBundlePostIds,
-  }) => getPublicGenerationRecipeAssetSummaryMap(
-    rowsToHydrate.filter((row) => !assetMap.has(row.id)),
-    adminSupabase,
-    knownBundlePostIds === null ? undefined : { knownBundlePostIds }
-  ));
   const [
     profilesMap,
     generationInfoMap,
     assetMap,
-    recipeAssetMap,
     mediaItemsMap,
     sourceToolsMap,
   ] = await Promise.all([
     loadProfiles(),
     loadGenerationInfo(),
     assetMapPromise,
-    recipeAssetMapPromise,
     loadPostMediaItemsMap(adminSupabase, postIds),
     loadSourceTools(),
   ]);
@@ -606,7 +595,7 @@ export async function resolvePostRowsToFeedItems(
       }
 
       const profile = post.user_id ? profilesMap[post.user_id] : undefined;
-      const asset = assetMap.get(post.id) ?? recipeAssetMap.get(post.id) ?? null;
+      const asset = assetMap.get(post.id) ?? null;
       const publicContent = sanitizePublicPostContent({
         prompt: post.prompt?.trim() || '',
         body: post.body?.trim() || '',

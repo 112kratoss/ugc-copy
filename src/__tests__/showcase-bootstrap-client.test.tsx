@@ -5,6 +5,11 @@ import ShowcaseBootstrapClient, {
   type ShowcaseBootstrapClientProps,
 } from '@/app/showcase/ShowcaseBootstrapClient';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
+import {
+  buildShowcaseClientCacheKey,
+  clearShowcaseClientCacheForTests,
+  writeShowcaseClientSnapshot,
+} from '@/lib/showcase-client-cache';
 
 const authState = vi.hoisted(() => ({
   session: null as { access_token: string } | null,
@@ -96,6 +101,7 @@ function createProps(): ShowcaseBootstrapClientProps {
 
 describe('ShowcaseBootstrapClient', () => {
   beforeEach(() => {
+    clearShowcaseClientCacheForTests();
     window.history.replaceState(null, '', '/showcase');
     authState.session = null;
     authState.user = null;
@@ -167,6 +173,27 @@ describe('ShowcaseBootstrapClient', () => {
     authState.user = { id: 'user-1' };
 
     render(<ShowcaseBootstrapClient {...createProps()} />);
+
+    expect(await screen.findByTestId('full-showcase-client')).toBeInTheDocument();
+  });
+
+  it('restores the full experience immediately when an anonymous viewer returns', async () => {
+    const props = createProps();
+    const cacheKey = buildShowcaseClientCacheKey({
+      viewerId: null,
+      category: props.initialCategory,
+      sort: props.initialSort,
+      tool: props.initialTool,
+      unlock: props.initialUnlock,
+      resource: props.initialResource,
+    });
+    writeShowcaseClientSnapshot(cacheKey, {
+      feed: props.initialFeed,
+      renderedItemCount: 2,
+      savedItemIds: [],
+    });
+
+    render(<ShowcaseBootstrapClient {...props} />);
 
     expect(await screen.findByTestId('full-showcase-client')).toBeInTheDocument();
   });

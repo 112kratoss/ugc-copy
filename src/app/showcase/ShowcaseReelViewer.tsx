@@ -122,7 +122,7 @@ function formatDate(value: string): string {
 
 function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
   if (isGenerationRecipeAssetId(asset.id)) {
-    return 'Public recipe';
+    return 'Free recipe';
   }
 
   if (asset.priceQuote) {
@@ -141,7 +141,7 @@ function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>)
   }
 
   if (asset.accessMode === 'free' || asset.priceUsdCents === 0) {
-    return 'Unlock free recipe';
+    return 'Get free recipe';
   }
 
   return `Unlock for ${asset.priceQuote?.formatted ?? getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+(?:unlock|recipe)$/i, '')}`;
@@ -730,8 +730,8 @@ export default function ShowcaseReelViewer({
     };
   }, [activeReferencePreview, goNext, goPrevious, handleClose, isOpen]);
 
-  // Auto-fetch free bundles so reference previews are visible immediately.
-  // Free published bundles return viewerCanAccess: true via GET (no POST unlock needed).
+  // Restore recipes that this viewer previously added, without asking them to
+  // claim the same free recipe again when they return to the reel.
   useEffect(() => {
     if (!isOpen || !item?.id || !item?.asset) {
       return;
@@ -788,6 +788,7 @@ export default function ShowcaseReelViewer({
   const isUnlockCheckoutOpen = Boolean(item.asset && activeUnlockCheckoutItemId === item.id);
   const hasReelUnlockAccess = unlockSuccessItemId === item.id;
   const isFreeUnlock = Boolean(item.asset && (item.asset.accessMode === 'free' || item.asset.priceUsdCents === 0));
+  const reelRecipeActionLabel = hasReelUnlockAccess ? 'View recipe' : unlockCtaLabel;
   const priceLabel = item.asset
     ? item.asset.priceQuote?.formatted ?? getAssetAccessLabel(item.asset).replace(/\s+(?:unlock|recipe)$/i, '')
     : '';
@@ -843,12 +844,13 @@ export default function ShowcaseReelViewer({
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to unlock the free recipe.');
+        throw new Error(data.error || 'Failed to get the free recipe.');
       }
 
       await finishReelUnlock();
+      setActiveUnlockCheckoutItemId(item.id);
     } catch (unlockError) {
-      setUnlockError(unlockError instanceof Error ? unlockError.message : 'Failed to unlock the free recipe.');
+      setUnlockError(unlockError instanceof Error ? unlockError.message : 'Failed to get the free recipe.');
     } finally {
       setUnlockWorkingAction(null);
     }
@@ -1248,9 +1250,11 @@ export default function ShowcaseReelViewer({
 
         {hasReelUnlockAccess ? (
           <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-black/25 p-4">
-            <div className="text-sm font-semibold text-emerald-100">Unlocked</div>
+            <div className="text-sm font-semibold text-emerald-100">
+              {isFreeUnlock ? 'Added to your recipes' : 'Unlocked'}
+            </div>
             <p className="mt-1 text-sm leading-6 text-emerald-50/75">
-              Your recipe is ready here.
+              {isFreeUnlock ? 'It is saved to your library and ready here.' : 'Your recipe is ready here.'}
             </p>
             <button
               type="button"
@@ -1274,8 +1278,8 @@ export default function ShowcaseReelViewer({
             disabled={unlockWorkingAction !== null}
             className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
           >
-            {unlockWorkingAction === 'free' ? <Loader2 className="h-4 w-4 animate-spin" /> : <LockKeyhole className="h-4 w-4" />}
-            Unlock free recipe
+            {unlockWorkingAction === 'free' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {unlockWorkingAction === 'free' ? 'Adding recipe…' : 'Get free recipe'}
           </button>
         ) : (
           <div className="mt-4 grid gap-2">
@@ -1434,7 +1438,11 @@ export default function ShowcaseReelViewer({
         <div className="min-w-0 text-center">
           <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">Showcase reel</div>
           <div className="text-xs text-zinc-300">
-            {selectedIndex + 1} / {items.length}
+            {selectedIndex + 1}
+            {!hasMoreItems && !isLoadingMoreItems ? ` / ${items.length}` : null}
+            <span className="sr-only">
+              {hasMoreItems || isLoadingMoreItems ? '. More posts are available.' : ` of ${items.length}.`}
+            </span>
           </div>
         </div>
 
@@ -1603,12 +1611,26 @@ export default function ShowcaseReelViewer({
           {item.asset && !isPublicRecipeAsset ? (
             <button
               type="button"
-              onClick={openUnlockCheckout}
-              aria-label={unlockCtaLabel ?? 'Open recipe'}
-              className="inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/25 bg-emerald-500/12 text-xs font-semibold text-emerald-100 transition hover:border-emerald-300/45 hover:bg-emerald-500/18 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
+              onClick={() => {
+                if (hasReelUnlockAccess) {
+                  detailsScrollerRef.current?.scrollTo({
+                    top: 220,
+                    behavior: prefersReducedMotion ? 'auto' : 'smooth',
+                  });
+                } else if (isFreeUnlock) {
+                  void openFreeUnlock();
+                } else {
+                  openUnlockCheckout();
+                }
+              }}
+              disabled={unlockWorkingAction !== null}
+              aria-label={reelRecipeActionLabel ?? 'Open recipe'}
+              className="inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/25 bg-emerald-500/12 text-xs font-semibold text-emerald-100 transition hover:border-emerald-300/45 hover:bg-emerald-500/18 disabled:cursor-not-allowed disabled:opacity-60 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
             >
-              <ShoppingBag size={20} className="h-5 w-5 shrink-0" />
-              <span>{unlockCtaLabel}</span>
+              {unlockWorkingAction === 'free'
+                ? <Loader2 size={20} className="h-5 w-5 shrink-0 animate-spin" />
+                : <ShoppingBag size={20} className="h-5 w-5 shrink-0" />}
+              <span>{unlockWorkingAction === 'free' ? 'Adding…' : reelRecipeActionLabel}</span>
             </button>
           ) : null}
 
@@ -1716,11 +1738,20 @@ export default function ShowcaseReelViewer({
                     ) : null}
                     <button
                       type="button"
-                      onClick={openUnlockCheckout}
-                      className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200"
+                      onClick={() => {
+                        if (isFreeUnlock) {
+                          void openFreeUnlock();
+                        } else {
+                          openUnlockCheckout();
+                        }
+                      }}
+                      disabled={unlockWorkingAction !== null}
+                      className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
                     >
-                      <LockKeyhole className="h-4 w-4" />
-                      {unlockCtaLabel}
+                      {unlockWorkingAction === 'free'
+                        ? <Loader2 className="h-4 w-4 animate-spin" />
+                        : <LockKeyhole className="h-4 w-4" />}
+                      {unlockWorkingAction === 'free' ? 'Adding recipe…' : unlockCtaLabel}
                     </button>
                   </div>
                 ) : null}

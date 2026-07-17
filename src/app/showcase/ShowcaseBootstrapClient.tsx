@@ -8,6 +8,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/app/components/AuthProvider';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
+import {
+    buildShowcaseClientCacheKey,
+    hasFreshShowcaseClientSnapshot,
+} from '@/lib/showcase-client-cache';
 import type {
     ShowcaseCategory,
     ShowcaseFeedItem,
@@ -265,6 +269,35 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
     }, [activate, isAuthLoading, session?.access_token, user]);
 
     useEffect(() => {
+        if (isAuthLoading || FullShowcaseClient || isActivating) {
+            return;
+        }
+
+        const cacheKey = buildShowcaseClientCacheKey({
+            viewerId: user?.id ?? null,
+            category: props.initialCategory,
+            sort: props.initialSort,
+            tool: props.initialTool,
+            unlock: props.initialUnlock,
+            resource: props.initialResource,
+        });
+        if (hasFreshShowcaseClientSnapshot(cacheKey)) {
+            activate();
+        }
+    }, [
+        FullShowcaseClient,
+        activate,
+        isActivating,
+        isAuthLoading,
+        props.initialCategory,
+        props.initialResource,
+        props.initialSort,
+        props.initialTool,
+        props.initialUnlock,
+        user?.id,
+    ]);
+
+    useEffect(() => {
         if (FullShowcaseClient || isActivating) {
             return;
         }
@@ -369,7 +402,7 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
                     </div>
                     <div className="flex flex-wrap gap-2">
                         <a
-                            href="/post/new"
+                            href="/post/new?from=community&returnTo=%2Fshowcase"
                             data-showcase-static-link="true"
                             className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
                         >
@@ -390,7 +423,8 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
                     className="sticky top-[72px] z-30 mb-7 rounded-[28px] border border-[var(--ui-border-default)] bg-[rgba(25,25,28,0.92)] p-3 shadow-[0_12px_30px_rgba(0,0,0,0.24)] backdrop-blur-xl sm:p-4"
                 >
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                        <div className="flex w-full gap-2 overflow-x-auto pb-1 sm:w-auto sm:pb-0">
+                        <div className="relative min-w-0 w-full sm:w-auto">
+                          <div className="flex gap-2 overflow-x-auto pb-1 pr-12 sm:pb-0 sm:pr-0" aria-label="Filter posts by media type">
                             {CATEGORY_LINKS.map((category) => {
                                 const isActive = props.initialCategory === category.id;
                                 return (
@@ -408,6 +442,8 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
                                     </a>
                                 );
                             })}
+                          </div>
+                          <div aria-hidden className="pointer-events-none absolute inset-y-0 right-0 w-12 bg-gradient-to-l from-[rgba(25,25,28,0.98)] to-transparent sm:hidden" />
                         </div>
                         <div className="flex gap-2 overflow-x-auto pb-1">
                             {SORT_LINKS.map((sort) => {

@@ -924,7 +924,7 @@ describe('showcase feed', () => {
     expect(videoPage.items.map((item) => item.id)).toEqual(['mixed-post']);
   });
 
-  it('adds a safe public recipe summary for generated posts without a saved bundle', async () => {
+  it('does not add a recipe summary for generated posts without a saved bundle', async () => {
     resourceBundlesState = [];
     generationModelsState = [{
       id: 'gen-1',
@@ -959,19 +959,7 @@ describe('showcase feed', () => {
     const asset = page.items[0].asset;
     const serializedAsset = JSON.stringify(asset);
 
-    expect(asset).toMatchObject({
-      id: 'generation-recipe:post-1',
-      postId: 'post-1',
-      title: 'Creation recipe',
-      accessMode: 'free',
-      priceUsdCents: 0,
-      resourceKinds: ['prompt', 'files', 'notes'],
-      itemCounts: {
-        prompt: 1,
-        reference_image: 1,
-        note: 1,
-      },
-    });
+    expect(asset).toBeNull();
     expect(serializedAsset).not.toContain('SECRET_GENERATION_PROMPT');
     expect(serializedAsset).not.toContain('generation_inputs/user-1');
   });
@@ -1012,7 +1000,7 @@ describe('showcase feed', () => {
     expect(tableAccesses).not.toContain('generation_input_media');
   });
 
-  it('adds safe public recipe reference counts from legacy workflow settings', async () => {
+  it('keeps legacy workflow reference counts private without a saved recipe', async () => {
     resourceBundlesState = [];
     generationModelsState = [{
       id: 'gen-1',
@@ -1042,16 +1030,7 @@ describe('showcase feed', () => {
     const asset = page.items[0].asset;
     const serializedAsset = JSON.stringify(asset);
 
-    expect(asset).toMatchObject({
-      id: 'generation-recipe:post-1',
-      accessMode: 'free',
-      resourceKinds: ['prompt', 'files', 'notes', 'remix'],
-      itemCounts: {
-        prompt: 1,
-        reference_image: 1,
-        note: 1,
-      },
-    });
+    expect(asset).toBeNull();
     expect(serializedAsset).not.toContain('SECRET_LEGACY_PROMPT');
     expect(serializedAsset).not.toContain('generation_inputs/user-1');
   });
@@ -1197,7 +1176,7 @@ describe('showcase feed', () => {
     expect(page.items[0].canRemix).toBe(true);
   });
 
-  it('does not send synthetic generation recipe asset ids to uuid purchase lookups', async () => {
+  it('does not send recipe purchase lookups when a post has no saved recipe', async () => {
     resourceBundlesState = [];
     generationModelsState = [{
       id: 'gen-1',
@@ -1225,7 +1204,7 @@ describe('showcase feed', () => {
       viewerUserId: 'viewer-1',
     });
 
-    expect(page.items[0].asset?.id).toBe('generation-recipe:post-1');
+    expect(page.items[0].asset).toBeNull();
     expect(lastPurchaseBundleIds ?? []).toEqual([]);
   });
 

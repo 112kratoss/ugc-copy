@@ -765,7 +765,7 @@ describe('/api/posts route', () => {
     const payload = await response.json();
 
     expect(response.status).toBe(400);
-    expect(payload.error).toMatch(/improve this unlock before publishing/i);
+    expect(payload.error).toMatch(/improve this recipe before publishing/i);
     expect(payload.error).toMatch(/placeholder listing title/i);
     expect(insertPayloads).toHaveLength(0);
   });

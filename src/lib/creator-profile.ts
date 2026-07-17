@@ -14,7 +14,6 @@ import {
 import { getCreatorDisplayName, normalizeUsername } from '@/lib/profile';
 import {
   getPostResourceBundlePriceQuote,
-  getPublicGenerationRecipeAssetSummaryMap,
 } from '@/lib/post-resource-bundles-server';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 import {
@@ -366,18 +365,11 @@ async function loadCreatorAssetSummaries(rows: PostRow[], adminSupabase: Creator
 
   for (let index = 0; index < rows.length; index += CREATOR_ASSET_BATCH_SIZE) {
     const batch = rows.slice(index, index + CREATOR_ASSET_BATCH_SIZE);
-    const {
-      assetMap: marketplaceAssets,
-      knownBundlePostIds,
-    } = await getMarketplaceAssetSummaryHydration(batch.map((row) => row.id), adminSupabase);
-    for (const [postId, asset] of marketplaceAssets) assets.set(postId, asset);
-
-    const recipeAssets = await getPublicGenerationRecipeAssetSummaryMap(
-      batch.filter((row) => !marketplaceAssets.has(row.id)),
-      adminSupabase,
-      knownBundlePostIds === null ? undefined : { knownBundlePostIds }
+    const { assetMap: marketplaceAssets } = await getMarketplaceAssetSummaryHydration(
+      batch.map((row) => row.id),
+      adminSupabase
     );
-    for (const [postId, asset] of recipeAssets) assets.set(postId, asset);
+    for (const [postId, asset] of marketplaceAssets) assets.set(postId, asset);
   }
 
   return assets;

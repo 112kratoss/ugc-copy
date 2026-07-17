@@ -164,7 +164,7 @@ export default function MarketplaceSellClient({
 
             <div className="flex flex-wrap gap-3">
               <Link
-                href="/post/new"
+                href="/post/new?from=seller&returnTo=%2Fmarketplace%2Fsell"
                 className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
               >
                 Share a post
@@ -223,7 +223,7 @@ export default function MarketplaceSellClient({
             </p>
             <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
               <Link
-                href="/post/new"
+                href="/post/new?from=seller&returnTo=%2Fmarketplace%2Fsell"
                 className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
               >
                 Share a post
@@ -239,7 +239,7 @@ export default function MarketplaceSellClient({
                   <h2 className="mt-3 text-2xl font-semibold text-white">Live and draft recipes</h2>
                 </div>
                 <Link
-                  href="/post/new"
+                  href="/post/new?from=seller&returnTo=%2Fmarketplace%2Fsell"
                   className="rounded-full border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
                 >
                   Share post

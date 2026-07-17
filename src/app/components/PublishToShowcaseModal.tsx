@@ -176,7 +176,7 @@ export default function PublishToShowcaseModal({
   const hasAutoUnlock = showPaidShortcut && Boolean(paywallPrefill) && autoUnlockKinds.length > 0;
   const generationReferenceCount = Math.max(0, Math.round(paywallPrefill?.referenceCount ?? 0));
   const hasGenerationReferences = generationReferenceCount > 0;
-  const willPublishUnlock = sellAutoUnlock || hasGenerationReferences;
+  const willPublishUnlock = sellAutoUnlock;
   const parsedPriceUsdCents = parsePriceUsdToCents(priceUsd);
   const isPublishing = publishingVisibility !== null;
   const profileReadiness = getCreatorProfileReadiness(profile);
@@ -387,7 +387,7 @@ export default function PublishToShowcaseModal({
         shareInputMediaForRemix: false,
       };
 
-      if (hasGenerationReferences) {
+      if (hasGenerationReferences && resourceBundle?.accessMode !== 'none') {
         requestBody.includeGenerationReferences = true;
       }
 

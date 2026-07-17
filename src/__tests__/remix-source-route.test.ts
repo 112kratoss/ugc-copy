@@ -334,7 +334,7 @@ describe('/api/remix-source route', () => {
     expect(data.restoreIssues).toEqual([]);
   });
 
-  it('restores public recipe reference images when remix starts from the linked post', async () => {
+  it('keeps reference images private when the linked post has no saved recipe', async () => {
     currentUserId = 'user-2';
 
     generationRows.set('source-1', {
@@ -408,15 +408,8 @@ describe('/api/remix-source route', () => {
 
     const data = await response.json();
     expect(response.status).toBe(200);
-    expect(data.inputs.image?.elements).toEqual([
-      expect.objectContaining({
-        id: 'el-1',
-        displayName: 'Alisa',
-        handle: '@alisa',
-        storagePath: 'uploads/creator-1/alisa.jpg',
-        url: 'https://signed.example.com/uploads/creator-1/alisa.jpg',
-      }),
-    ]);
+    expect(data.inputs.image).toBeUndefined();
+    expect(data.inputMedia).toEqual([]);
     expect(data.workflowSettings.elements).toBeUndefined();
     expect(data.restoreIssues).toEqual([]);
   });

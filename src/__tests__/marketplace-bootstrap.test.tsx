@@ -99,7 +99,7 @@ describe('MarketplaceBootstrap', () => {
       'href',
       '/marketplace?tool=runway&sort=recent'
     );
-    expect(screen.getByRole('link', { name: 'Unlock free recipe: Unlock 1' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'View free recipe: Unlock 1' })).toHaveAttribute(
       'href',
       '/showcase/post-1?from=unlocks&returnTo=%2Fmarketplace%3Fsort%3Drecent#recipe'
     );

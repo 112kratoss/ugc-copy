@@ -264,6 +264,7 @@ describe('PostResourceBundlePanel', () => {
 
   it('presents free public resources as a visible creation recipe', () => {
     renderPanel({
+      isPublic: true,
       title: 'Creation recipe',
       summary: 'Prompt, notes, and references used for this result.',
       resourceKinds: ['prompt', 'files', 'notes'],
@@ -285,9 +286,17 @@ describe('PostResourceBundlePanel', () => {
     expect(screen.getByText('Public recipe prompt')).toBeInTheDocument();
     expect(screen.getByText('Public recipe notes')).toBeInTheDocument();
     expect(screen.getByText('Image input')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /unlock free recipe/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /get free recipe/i })).toBeNull();
     expect(screen.queryByText(/buyer trust/i)).toBeNull();
     expect(screen.queryByText(/digital recipes are final sale/i)).toBeNull();
+  });
+
+  it('offers one-click access for a gated free recipe without checkout choices', () => {
+    renderPanel();
+
+    expect(screen.getByRole('button', { name: /get free recipe/i })).toBeInTheDocument();
+    expect(screen.getByText(/get the full recipe free with one click/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /pay .* with razorpay/i })).toBeNull();
   });
 
   it('shows owner prompt access with buyer-facing context', () => {
@@ -303,7 +312,7 @@ describe('PostResourceBundlePanel', () => {
     });
 
     expect(screen.getByText('secret prompt')).toBeInTheDocument();
-    expect(screen.getByText(/owner preview\. buyers must unlock the recipe before seeing this/i)).toBeInTheDocument();
+    expect(screen.getByText(/owner preview\. people add this recipe before seeing it/i)).toBeInTheDocument();
   });
 
   it('shows buyer trust terms without exposing locked content', () => {

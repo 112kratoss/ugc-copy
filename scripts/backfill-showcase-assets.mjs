@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 
 import {
@@ -9,6 +10,12 @@ import {
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
+const SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL = '31536000';
+
+function isExistingStorageObjectError(error) {
+  return error?.statusCode === '409'
+    || /already exists|duplicate/i.test(error?.message ?? '');
+}
 
 if (!supabaseUrl || !serviceRoleKey) {
   console.error('Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in environment');
@@ -88,7 +95,8 @@ async function createShowcaseDerivative(generation) {
   }
 
   const baseName = path.basename(sourceName, path.extname(sourceName)) || generation.id;
-  const showcaseAssetPath = `showcase/${generation.id}/${baseName}.${inferExtension(sourceName, category)}`;
+  const sourceVersion = createHash('sha256').update(generation.output_url).digest('hex').slice(0, 12);
+  const showcaseAssetPath = `showcase/${generation.id}/${baseName}.${sourceVersion}.${inferExtension(sourceName, category)}`;
 
   if (dryRun) {
     return showcaseAssetPath;
@@ -97,12 +105,12 @@ async function createShowcaseDerivative(generation) {
   const { error: uploadError } = await supabase.storage
     .from(SHOWCASE_MEDIA_BUCKET)
     .upload(showcaseAssetPath, fileBlob, {
-      cacheControl: '3600',
+      cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
       contentType: contentType || (category === 'image' ? 'image/jpeg' : 'video/mp4'),
-      upsert: true,
+      upsert: false,
     });
 
-  if (uploadError) {
+  if (uploadError && !isExistingStorageObjectError(uploadError)) {
     throw new Error(`Failed to upload showcase derivative: ${uploadError.message}`);
   }
 

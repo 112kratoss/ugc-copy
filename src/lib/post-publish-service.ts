@@ -24,6 +24,7 @@ import {
 } from '@/lib/post-media';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
 import {
   isCreatorProfileCheckError,
   isCreatorProfileReadinessError,
@@ -217,7 +218,7 @@ export async function publishPreparedPost({
       const showcaseUpload = await adminSupabase.storage
         .from(SHOWCASE_MEDIA_BUCKET)
         .upload(storagePath, mediaBody, {
-          cacheControl: '3600',
+          cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
           contentType: mediaBody.type || mediaItem.contentType || undefined,
           upsert: false,
         });

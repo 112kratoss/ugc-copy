@@ -59,7 +59,10 @@ describe('MarketplaceSellClient', () => {
     expect(screen.getByText('Ready')).toBeInTheDocument();
     expect(screen.getByText(/20 visits/i)).toBeInTheDocument();
     expect(screen.getByText(/₹1,599 recipe/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /share a post/i })).toHaveAttribute('href', '/post/new');
+    expect(screen.getByRole('link', { name: /share a post/i })).toHaveAttribute(
+      'href',
+      '/post/new?from=seller&returnTo=%2Fmarketplace%2Fsell'
+    );
     expect(screen.getByRole('button', { name: /copy recipe link/i })).toBeInTheDocument();
   });
 

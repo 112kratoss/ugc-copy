@@ -143,7 +143,7 @@ export default function MarketplacePage({ searchParams }: MarketplacePageProps) 
 
             <div className="flex flex-wrap gap-3">
               <Link
-                href="/post/new"
+                href="/post/new?from=marketplace&returnTo=%2Fmarketplace"
                 className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
               >
                 Share a post

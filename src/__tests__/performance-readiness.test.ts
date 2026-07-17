@@ -50,7 +50,7 @@ describe('production performance readiness', () => {
     expect(showcaseBootstrap).not.toContain('columns-');
     expect(showcaseFeedStability).toContain('mergeShowcaseFeedKeepingVisibleItems');
     expect(showcaseClient).toContain('mergeShowcaseFeedKeepingVisibleItems(');
-    expect(showcaseClient).toMatch(/href="\/post\/new"[\s\S]*?prefetch={false}/);
+    expect(showcaseClient).toMatch(/href="\/post\/new\?from=community&returnTo=%2Fshowcase"[\s\S]*?prefetch={false}/);
     expect(showcaseClient).toMatch(/href="\/marketplace"[\s\S]*?prefetch={false}/);
     expect(readProjectFile('src/lib/preview-images.ts')).toContain('if (isGeneratedPreviewImage(src))');
     expect(showcasePage).toContain('getInlineShowcasePriorityPoster(priorityVideoPoster.sourceUrl)');
