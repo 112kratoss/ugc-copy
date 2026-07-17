@@ -497,7 +497,7 @@ async function toOwnerPostListItem(
     updatedAt: row.updated_at,
     publicPath: canShare ? `/showcase/${row.id}` : null,
     ownerPath: `/post/${row.id}/edit`,
-    resourcePath: bundleRow ? (canShare ? `/showcase/${row.id}#resources` : `/post/${row.id}/edit#resources`) : null,
+    resourcePath: bundleRow ? (canShare ? `/showcase/${row.id}#recipe` : `/post/${row.id}/edit#recipe`) : null,
     canShare,
     bundle: bundleRow
       ? {

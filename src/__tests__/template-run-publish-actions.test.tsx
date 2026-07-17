@@ -116,23 +116,23 @@ describe('template run publish actions', () => {
     });
   });
 
-  it('makes Feed publishing primary and keeps a stable post link after success', async () => {
+  it('makes Showcase publishing primary and keeps a stable post link after success', async () => {
     const share = vi.fn(async () => undefined);
     const originalShare = navigator.share;
     Object.defineProperty(navigator, 'share', { configurable: true, value: share });
     render(<TemplateRunClient runId="run-1" />);
 
-    const publishButton = await screen.findByRole('button', { name: 'Publish to Feed' });
+    const publishButton = await screen.findByRole('button', { name: 'Publish to Showcase' });
     fireEvent.click(publishButton);
     fireEvent.click(await screen.findByRole('button', { name: 'Confirm template publish' }));
 
-    expect(await screen.findByText('Published to Feed')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'View in Feed' })).toHaveAttribute(
+    expect(await screen.findByText('Published to Showcase')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'View in Showcase' })).toHaveAttribute(
       'href',
       '/showcase/post-template-1',
     );
-    expect(screen.queryByRole('button', { name: 'Publish to Feed' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Share Feed post' }));
+    expect(screen.queryByRole('button', { name: 'Publish to Showcase' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Share Showcase post' }));
     await waitFor(() => expect(share).toHaveBeenCalledWith(expect.objectContaining({
       url: new URL('/showcase/post-template-1', window.location.origin).toString(),
     })));
@@ -149,7 +149,7 @@ describe('template run publish actions', () => {
     render(<TemplateRunClient runId="test-run-1" />);
 
     expect((await screen.findAllByRole('link', { name: 'Back to workflow canvas' })).length).toBeGreaterThan(0);
-    expect(screen.queryByRole('button', { name: 'Publish to Feed' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Publish to Showcase' })).not.toBeInTheDocument();
     await waitFor(() => {
       expect(publishModalMock).not.toHaveBeenCalledWith(expect.objectContaining({ isOpen: true }));
     });

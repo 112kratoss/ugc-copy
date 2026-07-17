@@ -1533,10 +1533,10 @@ function StorySection({
   return (
     <MinimalComposerSection
       title="Story"
-      body="The public content visible in the community feed."
+      body="The public content visible in Showcase."
       action={(
         <MiniAction
-          label={isDescriptionOpen ? 'Hide description' : 'Add feed description'}
+          label={isDescriptionOpen ? 'Hide description' : 'Add Showcase description'}
           onPress={onToggleDescription}
         />
       )}
@@ -1552,11 +1552,11 @@ function StorySection({
         />
       </FieldBlock>
       {isDescriptionOpen ? (
-        <FieldBlock label="Feed description">
+        <FieldBlock label="Showcase description">
           <ComposerInput
             value={draft.description}
             onChangeText={(description) => onChange({ description })}
-            placeholder="Optional: give the post a short one-line setup for feeds and previews."
+            placeholder="Optional: give the post a short one-line setup for Showcase and previews."
             multiline
             minHeight={78}
             editable={!disabled}
@@ -2089,7 +2089,7 @@ function PublishActionCard({
 function getPublishActionBody(visibility: PostComposerDraft['visibility']) {
   if (visibility === 'private') return 'Saved privately in Studio.';
   if (visibility === 'unlisted') return 'Share by link.';
-  return 'Visible in Feed.';
+  return 'Visible in Showcase.';
 }
 
 function ComposerInput({

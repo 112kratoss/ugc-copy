@@ -136,21 +136,21 @@ describe('CreatorContentTabs', () => {
     vi.unstubAllGlobals();
   });
 
-  it('uses global counts and opens a creation in the immersive viewer', async () => {
+  it('uses global counts and opens a post in the immersive viewer', async () => {
     render(<CreatorContentTabs initialData={initialData} profilePath="/creators/creator-name" />);
 
-    expect(screen.getByRole('tab', { name: /creations 8/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /unlocks 3/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /posts 8/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /recipes 3/i })).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole('button', { name: /campaign frame/i })[0]);
 
     expect(await screen.findByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('item-1');
     expect(window.location.search).toContain('post=item-1');
   });
 
-  it('filters unlocks and makes source tools actionable', () => {
+  it('filters recipes and makes source tools actionable', () => {
     render(<CreatorContentTabs initialData={initialData} profilePath="/creators/creator-name" />);
 
-    fireEvent.click(screen.getByRole('tab', { name: /unlocks 3/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /recipes 3/i }));
     expect(screen.getByText('Workflow Breakdown')).toBeInTheDocument();
     expect(screen.queryByText('Campaign Frame')).not.toBeInTheDocument();
 
@@ -186,7 +186,7 @@ describe('CreatorContentTabs', () => {
       />
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Load more creations' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more posts' }));
 
     expect((await screen.findAllByText('Second Page Frame')).length).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledWith('/api/creators/creator-name?limit=24&offset=24', undefined);

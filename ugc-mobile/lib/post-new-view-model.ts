@@ -264,7 +264,7 @@ export const POST_COMPOSER_SOURCE_OPTIONS: SourceToolOption[] = [
 ];
 
 export const POST_COMPOSER_VISIBILITY_OPTIONS: Array<{ id: PostComposerVisibility; label: string; body: string }> = [
-  { id: 'public', label: 'Public', body: 'Visible in Feed.' },
+  { id: 'public', label: 'Public', body: 'Visible in Showcase.' },
   { id: 'unlisted', label: 'Unlisted', body: 'Shareable by link only.' },
   { id: 'private', label: 'Private', body: 'Saved privately in Studio.' },
 ];

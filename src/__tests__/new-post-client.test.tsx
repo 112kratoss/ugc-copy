@@ -106,8 +106,8 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
 
     expect(screen.queryByText(/community post composer/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/one post, one optional unlock/i)).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: /browse unlocks/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/one post, one optional recipe/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /browse recipes/i })).not.toBeInTheDocument();
 
     expect(screen.getByRole('button', { name: /^media$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^text$/i })).toBeInTheDocument();
@@ -116,7 +116,7 @@ describe('NewPostClient', () => {
     const checklist = screen.getByLabelText(/publish checklist/i);
     expect(checklist).toHaveTextContent(/proof added/i);
     expect(checklist).toHaveTextContent(/story ready/i);
-    expect(checklist).toHaveTextContent(/unlock optional/i);
+    expect(checklist).toHaveTextContent(/recipe optional/i);
   });
 
   it('keeps optional description hidden until the user asks for it', () => {
@@ -124,7 +124,7 @@ describe('NewPostClient', () => {
 
     expect(screen.queryByPlaceholderText(/optional: give the post a short one-line setup/i)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /add feed description/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add showcase description/i }));
 
     expect(screen.getByPlaceholderText(/optional: give the post a short one-line setup/i)).toBeInTheDocument();
   });
@@ -391,7 +391,7 @@ describe('NewPostClient', () => {
       json: async () => ({
         postId: 'post-1',
         showcasePath: '/showcase/post-1',
-        resourceBundlePath: '/showcase/post-1#resources',
+        resourceBundlePath: '/showcase/post-1#recipe',
         visibility: 'public',
         resourceBundleStatus: 'published',
       }),
@@ -403,14 +403,14 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
       target: { value: 'Lead with a concrete before-and-after in the first line.' },
     });
-    fireEvent.click(screen.getByRole('checkbox', { name: /add references & unlockable resources/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
 
     expect(screen.getByText(/resource types to include/i)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/paste the exact prompt people should unlock/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/paste the exact prompt included in the recipe/i)).toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/https:\/\//i)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^workflow \/ setup$/i }));
-    fireEvent.change(screen.getByPlaceholderText(/paste the exact prompt people should unlock/i), {
+    fireEvent.change(screen.getByPlaceholderText(/paste the exact prompt included in the recipe/i), {
       target: { value: 'Use a before\/after hook and keep the CTA visible in frame.' },
     });
     fireEvent.change(screen.getByPlaceholderText(/https:\/\//i), {
@@ -435,9 +435,9 @@ describe('NewPostClient', () => {
         allowRemix: false,
       },
     });
-    expect(await screen.findByRole('link', { name: /open unlock section/i })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: /open recipe section/i })).toHaveAttribute(
       'href',
-      '/showcase/post-1#resources'
+      '/showcase/post-1#recipe'
     );
   });
 
@@ -448,7 +448,7 @@ describe('NewPostClient', () => {
         postId: 'post-2',
         showcasePath: null,
         ownerPath: '/post/post-2/edit',
-        resourceBundlePath: '/post/post-2/edit#resources',
+        resourceBundlePath: '/post/post-2/edit#recipe',
         visibility: 'private',
         resourceBundleStatus: 'draft',
       }),
@@ -460,7 +460,7 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
       target: { value: 'Keep the hook direct and make the benefit visible instantly.' },
     });
-    fireEvent.click(screen.getByRole('checkbox', { name: /add references & unlockable resources/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /^paid \(\$\)$/i }));
 
     expect(screen.queryByText(/public post required/i)).not.toBeInTheDocument();
@@ -509,7 +509,7 @@ describe('NewPostClient', () => {
       json: async () => ({
         postId: 'post-sectioned-1',
         showcasePath: '/showcase/post-sectioned-1',
-        resourceBundlePath: '/showcase/post-sectioned-1#resources',
+        resourceBundlePath: '/showcase/post-sectioned-1#recipe',
         visibility: 'public',
         resourceBundleStatus: 'published',
       }),
@@ -521,7 +521,7 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
       target: { value: 'A compact breakdown for a multi-part creative.' },
     });
-    fireEvent.click(screen.getByRole('checkbox', { name: /add references & unlockable resources/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /Enable section layout/i }));
 
     fireEvent.change(screen.getByLabelText(/section title 1/i), {
@@ -686,7 +686,7 @@ describe('NewPostClient', () => {
         success: true,
         postId: 'post-paywall-1',
         showcasePath: '/showcase/post-paywall-1',
-        resourceBundlePath: '/showcase/post-paywall-1#resources',
+        resourceBundlePath: '/showcase/post-paywall-1#recipe',
         visibility: 'public',
         resourceBundleStatus: 'published',
       }),
@@ -700,7 +700,7 @@ describe('NewPostClient', () => {
       headers: { Authorization: 'Bearer test-token' },
     });
     expect(screen.getByText(/saved prompt, reusable setup notes, and remix access are ready/i)).toBeInTheDocument();
-    expect(screen.getByText(/remix access is included in this unlock/i)).toBeInTheDocument();
+    expect(screen.getByText(/remix access is included in this recipe/i)).toBeInTheDocument();
 
     const priceInput = screen.getByRole('textbox', { name: /price/i });
     await waitFor(() => {
@@ -758,8 +758,8 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient />);
 
-    expect(await screen.findByText(/does not have enough saved inputs to auto-fill a paid unlock yet/i)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/paste the exact prompt people should unlock/i)).toHaveValue('');
+    expect(await screen.findByText(/does not have enough saved inputs to auto-fill a paid recipe yet/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/paste the exact prompt included in the recipe/i)).toHaveValue('');
   });
 
   it('opens the edit flow from creations in resource mode and focuses the price field', async () => {
@@ -794,9 +794,9 @@ describe('NewPostClient', () => {
       />
     );
 
-    expect(screen.getByRole('heading', { name: /manage the unlock behind this post/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /manage the recipe behind this post/i })).toBeInTheDocument();
     expect(screen.getAllByText(/you came from my studio/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/this unlock will save as a draft/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/this recipe will save as a draft/i).length).toBeGreaterThan(0);
 
     const priceInput = screen.getByRole('textbox', { name: /price/i });
     await waitFor(() => {
@@ -877,7 +877,7 @@ describe('NewPostClient', () => {
         postId: 'post-private-paid-1',
         showcasePath: null,
         ownerPath: '/post/post-private-paid-1/edit',
-        resourceBundlePath: '/post/post-private-paid-1/edit#resources',
+        resourceBundlePath: '/post/post-private-paid-1/edit#recipe',
         visibility: 'private',
         resourceBundleStatus: 'draft',
       }),
@@ -889,9 +889,9 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
       target: { value: 'test' },
     });
-    fireEvent.click(screen.getByRole('checkbox', { name: /add references & unlockable resources/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /add a reusable recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /^paid \(\$\)$/i }));
-    fireEvent.change(screen.getByPlaceholderText(/paste the exact prompt people should unlock/i), {
+    fireEvent.change(screen.getByPlaceholderText(/paste the exact prompt included in the recipe/i), {
       target: { value: 'Use a simple private-only setup.' },
     });
     fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
@@ -911,7 +911,7 @@ describe('NewPostClient', () => {
         success: true,
         postId: 'post-unlisted-paid-1',
         showcasePath: '/showcase/post-unlisted-paid-1',
-        resourceBundlePath: '/showcase/post-unlisted-paid-1#resources',
+        resourceBundlePath: '/showcase/post-unlisted-paid-1#recipe',
         visibility: 'public',
         resourceBundleStatus: 'published',
       }),

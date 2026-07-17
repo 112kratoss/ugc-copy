@@ -33,6 +33,7 @@ import {
   normalizePostResourceItems,
   normalizePostResourceSections,
   resolvePostRemixCapability,
+  sanitizePostResourceBundleLockedPreview,
   validatePostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
 import {
@@ -1357,7 +1358,10 @@ async function hydrateBundleRows(
   return Promise.all(
     rows.map(async (row) => {
       const normalizedResources = normalizeResources(row);
-      const lockedPreview = buildPostResourceBundleLockedPreview(normalizedResources, row.updated_at);
+      const fullLockedPreview = buildPostResourceBundleLockedPreview(normalizedResources, row.updated_at);
+      const lockedPreview = scope === 'owner'
+        ? fullLockedPreview
+        : sanitizePostResourceBundleLockedPreview(fullLockedPreview) ?? fullLockedPreview;
       const post = postMap.get(row.post_id) ?? null;
       const remix = resolvePostRemixCapability({
         generationId: post?.generationId ?? null,

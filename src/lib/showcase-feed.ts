@@ -43,6 +43,7 @@ import {
 import { slugifySourceTool } from '@/lib/source-tools';
 import { getPersonalizedShowcaseFeedPage } from '@/lib/showcase-feed-personalization';
 import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
+import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import {
   shouldCacheIdentitylessForYouBootstrap,
   shouldCacheViewerNeutralShowcaseBasePage,
@@ -606,7 +607,14 @@ export async function resolvePostRowsToFeedItems(
 
       const profile = post.user_id ? profilesMap[post.user_id] : undefined;
       const asset = assetMap.get(post.id) ?? recipeAssetMap.get(post.id) ?? null;
-      const body = post.body?.trim() || '';
+      const publicContent = sanitizePublicPostContent({
+        prompt: post.prompt?.trim() || '',
+        body: post.body?.trim() || '',
+        description: '',
+        hasRecipe: Boolean(asset),
+        isPaidRecipe: asset?.accessMode === 'paid',
+      });
+      const body = publicContent.body;
       const model = post.generation_id
         ? generationInfo?.model ?? MAGICBOOKLET_SOURCE_KIND
         : post.source_kind === 'manual'
@@ -634,7 +642,7 @@ export async function resolvePostRowsToFeedItems(
         mediaItems,
         model,
         title: post.title?.trim() || deriveTitleFromBody(body) || (post.post_format === 'text' ? 'Untitled Note' : 'Untitled Creation'),
-        prompt: post.prompt || '',
+        prompt: publicContent.prompt,
         body,
         category: resolveItemCategory(post.category),
         creationMode: post.creation_mode ?? ((post.category as string) === 'motion' ? 'motion' : null),

@@ -96,7 +96,7 @@ describe('createOwnerPostForRoute', () => {
       visibility: 'public',
       showcasePath: '/showcase/post-123',
       ownerPath: '/post/post-123/edit',
-      resourceBundlePath: '/showcase/post-123#resources',
+      resourceBundlePath: '/showcase/post-123#recipe',
       resourceBundleStatus: null,
     } as const;
     const readFormData = vi.fn(async () => formData);

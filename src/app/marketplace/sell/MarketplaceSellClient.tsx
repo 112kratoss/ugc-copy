@@ -130,11 +130,11 @@ export default function MarketplaceSellClient({
   const copyPostLink = async (postId: string) => {
     try {
       const origin = window.location.origin;
-      await navigator.clipboard.writeText(`${origin}/showcase/${postId}#resources`);
-      setCopyFeedback('Unlock link copied.');
+      await navigator.clipboard.writeText(`${origin}/showcase/${postId}#recipe`);
+      setCopyFeedback('Recipe link copied.');
       window.setTimeout(() => setCopyFeedback(null), 2200);
     } catch {
-      setCopyFeedback('Could not copy the unlock link.');
+      setCopyFeedback('Could not copy the recipe link.');
       window.setTimeout(() => setCopyFeedback(null), 2200);
     }
   };
@@ -155,10 +155,10 @@ export default function MarketplaceSellClient({
                 Seller Dashboard
               </div>
               <h1 className="mt-4 text-4xl font-semibold tracking-tight text-white sm:text-5xl">
-                Manage the unlocks attached to your community posts
+                Manage the recipes attached to your community posts
               </h1>
               <p className="mt-4 max-w-2xl text-sm leading-7 text-zinc-300 sm:text-base">
-                The post is the source of truth. Use this screen to see which prompts, workflows, notes, files, and remix gates are live, then track which public posts are turning into unlocks.
+                The post is the source of truth. Use this screen to see which prompts, workflows, notes, files, and remix gates are live, then track recipe sales from each public post.
               </p>
             </div>
 
@@ -174,7 +174,7 @@ export default function MarketplaceSellClient({
                 href="/marketplace"
                 className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
               >
-                Explore unlocks
+                Explore recipes
               </Link>
             </div>
           </div>
@@ -182,7 +182,7 @@ export default function MarketplaceSellClient({
 
         <div className="mt-8 grid gap-4 md:grid-cols-3">
           <div className="rounded-[28px] border border-white/8 bg-zinc-950/70 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
-            <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Unlocks</div>
+            <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Recipes</div>
             <div className="mt-3 text-3xl font-semibold text-white">{initialDashboard.bundles.length}</div>
           </div>
           <div className="rounded-[28px] border border-white/8 bg-zinc-950/70 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
@@ -217,9 +217,9 @@ export default function MarketplaceSellClient({
         {!hasBundles ? (
           <div className="mt-10 rounded-[30px] border border-white/8 bg-zinc-950/70 p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.35)] backdrop-blur-sm">
             <Layers3 className="mx-auto h-10 w-10 text-zinc-500" />
-            <h2 className="mt-4 text-2xl font-semibold text-white">No unlocks yet</h2>
+            <h2 className="mt-4 text-2xl font-semibold text-white">No recipes yet</h2>
             <p className="mt-3 mx-auto max-w-xl text-sm leading-7 text-zinc-400">
-              Start in the post flow: publish the public post, attach the prompt, workflow, notes, files, or remix access, then choose whether the unlock is free or paid.
+              Start in the post flow: publish the public post, attach the prompt, workflow, notes, files, or remix access, then choose whether the recipe is free or paid.
             </p>
             <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
               <Link
@@ -235,8 +235,8 @@ export default function MarketplaceSellClient({
             <section className="rounded-[32px] border border-white/8 bg-zinc-950/70 p-6 shadow-[0_24px_70px_rgba(0,0,0,0.4)] backdrop-blur-sm">
               <div className="flex items-center justify-between gap-4">
                 <div>
-                  <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Live unlocks</div>
-                  <h2 className="mt-3 text-2xl font-semibold text-white">Live and draft unlocks</h2>
+                  <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Live recipes</div>
+                  <h2 className="mt-3 text-2xl font-semibold text-white">Live and draft recipes</h2>
                 </div>
                 <Link
                   href="/post/new"
@@ -354,7 +354,7 @@ export default function MarketplaceSellClient({
                             className="inline-flex items-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-50 transition hover:border-emerald-400/35 hover:bg-emerald-500/15"
                           >
                             <ArrowRight className="h-4 w-4" />
-                            Open unlock
+                            Open recipe
                           </Link>
                           <button
                             type="button"
@@ -362,7 +362,7 @@ export default function MarketplaceSellClient({
                             className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
                           >
                             <Copy className="h-4 w-4" />
-                            Copy unlock link
+                            Copy recipe link
                           </button>
                         </>
                       ) : (
@@ -375,11 +375,11 @@ export default function MarketplaceSellClient({
                             Open editor
                           </Link>
                           <Link
-                            href={`/post/${bundle.postId}/edit#resources`}
+                            href={`/post/${bundle.postId}/edit#recipe`}
                             className="inline-flex items-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-50 transition hover:border-emerald-400/35 hover:bg-emerald-500/15"
                           >
                             <ArrowRight className="h-4 w-4" />
-                            Edit unlock
+                            Edit recipe
                           </Link>
                         </>
                       )}
@@ -413,7 +413,7 @@ export default function MarketplaceSellClient({
               <div className="mt-5 space-y-3">
                 {filteredSales.length === 0 ? (
                   <p className="text-sm leading-7 text-zinc-400">
-                    Sales will show up here once buyers open paid unlocks in this date range.
+                    Sales will show up here once buyers unlock paid recipes in this date range.
                   </p>
                 ) : (
                   filteredSales.slice(0, 8).map((sale) => (
@@ -447,14 +447,14 @@ export default function MarketplaceSellClient({
                       </div>
                     </div>
                     <div className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200">
-                      {snapshot.hadPaidOrders ? 'Had paid unlocks' : 'No paid unlocks'}
+                      {snapshot.hadPaidOrders ? 'Had paid recipes' : 'No paid recipes'}
                     </div>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
                     {snapshot.bundleAccessMode ? (
                       <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-200">
                         {snapshot.bundleAccessMode === 'free'
-                          ? 'Free unlock'
+                          ? 'Free recipe'
                           : formatUsdCents(snapshot.bundlePriceUsdCents ?? 0)}
                       </div>
                     ) : null}
@@ -470,7 +470,7 @@ export default function MarketplaceSellClient({
                   <div className="mt-4 text-sm text-zinc-300">
                     {snapshot.bundleAccessMode
                       ? formatUnlockCountLabel(snapshot.bundleAccessMode, snapshot.salesCount)
-                      : `${snapshot.salesCount} unlock${snapshot.salesCount === 1 ? '' : 's'}`} · {formatUsdCents(snapshot.earningsUsdCents)} tracked lifetime earnings
+                      : `${snapshot.salesCount} sale${snapshot.salesCount === 1 ? '' : 's'}`} · {formatUsdCents(snapshot.earningsUsdCents)} tracked lifetime earnings
                   </div>
                 </div>
               ))}

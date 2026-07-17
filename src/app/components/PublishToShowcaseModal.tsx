@@ -343,7 +343,7 @@ export default function PublishToShowcaseModal({
       setNeedsProfileRepair(true);
       setFormError(
         willPublishUnlock
-          ? 'Complete your profile before publishing an unlock: choose a custom handle, add your display name, and upload a profile photo.'
+          ? 'Complete your profile before publishing a recipe: choose a custom handle, add your display name, and upload a profile photo.'
           : 'Complete your profile before publishing publicly: choose a custom handle and add your display name.'
       );
       return;
@@ -357,7 +357,7 @@ export default function PublishToShowcaseModal({
       }
 
       if (parsedPriceUsdCents === null || parsedPriceUsdCents < 100) {
-        setFormError('Paid unlocks must be priced at $1.00 or above.');
+        setFormError('Paid recipes must be priced at $1.00 or above.');
         return;
       }
 
@@ -491,7 +491,7 @@ export default function PublishToShowcaseModal({
             </h3>
             <p id="publish-to-showcase-description" className="mt-2 text-sm leading-6 text-zinc-400">
               {mediaOnly
-                ? 'Add a title and caption, then share it to the Feed or keep it private.'
+                ? 'Add a title and caption, then share it to Showcase or keep it private.'
                 : 'Title, notes, and optional price.'}
             </p>
           </div>
@@ -544,7 +544,7 @@ export default function PublishToShowcaseModal({
               </p>
               <p className="mt-1 text-xs leading-5 text-zinc-400">
                 {willPublishUnlock
-                  ? 'Unlocks require a custom handle, display name, and profile photo.'
+                  ? 'Selling a recipe requires a custom handle, display name, and profile photo.'
                   : 'Public posts require a custom handle and display name.'}
               </p>
               {profileLoadState === 'ready' && !isProfileReadyForPublish ? (
@@ -633,7 +633,7 @@ export default function PublishToShowcaseModal({
                           </span>
                         </span>
                         <span className="mt-1 block text-sm leading-6 text-zinc-400">
-                          Turn on pricing only when this reusable setup is worth unlocking.
+                          Turn on pricing when this reusable setup is valuable enough to sell as a recipe.
                         </span>
                       </span>
                     </label>
@@ -654,7 +654,7 @@ export default function PublishToShowcaseModal({
                               setPriceUsd(event.target.value);
                               setFormError(null);
                             }}
-                            aria-label="Unlock price"
+                            aria-label="Recipe price"
                             className="w-full rounded-full border border-white/10 bg-white/[0.04] py-2 pl-8 pr-3 text-center text-sm font-semibold text-white outline-none transition focus:border-emerald-300/50"
                           />
                         </div>
@@ -665,7 +665,7 @@ export default function PublishToShowcaseModal({
                   <div className="mt-4 border-t border-white/8 pt-4">
                     <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
                       <BadgeDollarSign className="h-3.5 w-3.5 text-emerald-300" />
-                      Optional unlock
+                      Optional recipe
                     </div>
                     <p className="mt-2 text-sm leading-6 text-zinc-300">
                       This creation can publish without pricing. Add paid resources later from the post if the setup becomes reusable.

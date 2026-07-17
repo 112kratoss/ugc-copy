@@ -361,10 +361,10 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
                             Creator community
                         </div>
                         <h1 className="text-4xl font-extrabold tracking-[-0.035em] text-[var(--ui-text-primary)] sm:text-5xl">
-                            Feed
+                            Showcase
                         </h1>
                         <p className="mt-3 max-w-2xl text-sm leading-6 text-[var(--ui-text-muted)] sm:text-base">
-                            Fresh creator posts with unlocks mixed in. Browse the result, then save it, remix it, or open the reusable process.
+                            Fresh creator posts with optional recipes. Browse the result, then save it, remix it, or open the reusable process.
                         </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -380,7 +380,7 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
                             data-showcase-static-link="true"
                             className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full border border-amber-300/20 bg-amber-400/10 px-5 text-sm font-bold text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-400/15"
                         >
-                            Browse unlocks
+                            Browse recipes
                         </a>
                     </div>
                 </header>

@@ -31,7 +31,7 @@ interface WebNotification {
 
 const CATEGORY_META = {
   generation: { color: 'text-[#ff9b7f] border-[#ff7a59]/25 bg-[#ff7a59]/10', Icon: Sparkles, label: 'Generation' },
-  commerce: { color: 'text-amber-400 border-amber-500/20 bg-amber-500/10', Icon: CreditCard, label: 'Unlocks' },
+  commerce: { color: 'text-amber-400 border-amber-500/20 bg-amber-500/10', Icon: CreditCard, label: 'Recipes' },
   social: { color: 'text-rose-400 border-rose-500/20 bg-rose-500/10', Icon: Heart, label: 'Creator' },
   system: { color: 'text-cyan-400 border-cyan-500/20 bg-cyan-500/10', Icon: Bell, label: 'System' },
 };
@@ -225,7 +225,7 @@ export default function NotificationsPage() {
           </div>
           <h3 className="mt-4 text-lg font-semibold text-white">Sign in required</h3>
           <p className="mt-2 text-sm text-zinc-400">
-            Sign in to review generation results, unlocks, follows, saves, remixes, and creator activity.
+            Sign in to review generation results, recipe purchases, follows, saves, remixes, and creator activity.
           </p>
           <Link
             href="/login"

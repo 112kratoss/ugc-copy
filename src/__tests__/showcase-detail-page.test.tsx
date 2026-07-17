@@ -156,6 +156,28 @@ describe('Showcase detail page', () => {
     expect(screen.getByTestId('post-body-panel')).toHaveTextContent('Behind-the-scenes context for this frame.');
   });
 
+  it('puts identity, bounded media, and actions in a logical reading order', async () => {
+    const { container } = render(await ShowcaseDetailPage({
+      params: Promise.resolve({ id: 'post-1' }),
+    }));
+
+    const identity = screen.getByTestId('canonical-post-identity');
+    const media = screen.getByTestId('canonical-post-media');
+    const actions = screen.getByTestId('canonical-post-actions');
+    const mediaViewport = container.querySelector('[data-showcase-media-viewport]');
+
+    expect(identity.compareDocumentPosition(media) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(media.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(mediaViewport).toHaveClass(
+      'canonical-post-media-viewport',
+      'w-full',
+    );
+    expect(identity).toHaveClass('canonical-post-identity', 'min-w-0');
+    expect(media).toHaveClass('canonical-post-media', 'min-w-0');
+    expect(actions).toHaveClass('canonical-post-actions', 'min-w-0');
+    expect(screen.getByRole('button', { name: 'Open media full screen' })).toBeInTheDocument();
+  });
+
   it('uses the source return context for the detail back link', async () => {
     render(await ShowcaseDetailPage({
       params: Promise.resolve({ id: 'post-1' }),
@@ -165,7 +187,7 @@ describe('Showcase detail page', () => {
       }),
     }));
 
-    expect(screen.getByRole('link', { name: /back to unlocks/i })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /back to marketplace/i })).toHaveAttribute(
       'href',
       '/marketplace?access=paid&resource=workflow'
     );
@@ -338,8 +360,13 @@ describe('Showcase detail page', () => {
     }));
 
     const unlockSummary = screen.getByTestId('unlock-summary-link');
-    expect(within(unlockSummary).getByText(/free unlock available/i)).toBeInTheDocument();
-    expect(within(unlockSummary).getByText(/open free unlock/i)).toBeInTheDocument();
+    expect(within(unlockSummary).getByText(/free recipe available/i)).toBeInTheDocument();
+    expect(within(unlockSummary).getByText(/unlock free recipe/i)).toBeInTheDocument();
     expect(within(unlockSummary).queryByText(/view unlock details/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId('canonical-post-actions').compareDocumentPosition(
+        screen.getByTestId('canonical-post-recipe')
+      ) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 });

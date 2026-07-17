@@ -155,7 +155,7 @@ export function isDestructiveViewerAction(action: string) {
 
 export function getViewerActionGroupLabel(action: string) {
   if (action === 'not-interested' || action === 'hide-creator') {
-    return 'Feed controls';
+    return 'Showcase preferences';
   }
   if (
     action === 'publish'

@@ -199,7 +199,7 @@ function HomeCreatorSuite({ data }: { data: Promise<HomePageData> }) {
 
 function HomeInspirationsFallback() {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5" aria-label="Loading creator feed">
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5" aria-label="Loading Showcase posts">
       {[180, 240, 210, 270, 200].map((height, index) => (
         <div
           key={index}
@@ -221,10 +221,10 @@ function HomeInspirations({ data }: { data: Promise<HomePageData> }) {
       <div className="space-y-3">
         <StatusCallout
           tone="danger"
-          title="Could not load the creator feed"
-          body="Your creation tools are still available. Check the connection, then try the feed again."
+          title="Could not load the Showcase"
+          body="Your creation tools are still available. Check the connection, then try the Showcase again."
         />
-        <Link href="/?retryFeed=1" prefetch={false} className="ui-button ui-button-secondary ui-focus-ring">Retry feed</Link>
+        <Link href="/?retryFeed=1" prefetch={false} className="ui-button ui-button-secondary ui-focus-ring">Retry Showcase</Link>
       </div>
     );
   }
@@ -276,7 +276,7 @@ export default function Home() {
                 Start creating
               </Button>
               <Button href="/showcase" prefetch={false} variant="secondary">
-                Browse the feed
+                Browse Showcase
               </Button>
             </div>
           </div>

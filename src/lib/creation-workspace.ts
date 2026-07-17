@@ -106,7 +106,7 @@ function buildCreationPaywallManagementPath(post: CreationWorkspaceResolvedPost)
     resourceMode,
     focus: 'price',
     from: 'creations',
-  })}#resources`;
+  })}#recipe`;
 }
 
 function buildCreationOpenPostPath(post: CreationWorkspaceResolvedPost): string {
@@ -189,7 +189,7 @@ function getMonetizationState(linkedPost: CreationWorkspaceResolvedPost | null):
   if (!linkedPost?.bundle) {
     return {
       kind: 'none',
-      label: 'No unlock',
+      label: 'No recipe',
       priceUsdCents: null,
     };
   }
@@ -197,7 +197,7 @@ function getMonetizationState(linkedPost: CreationWorkspaceResolvedPost | null):
   if (linkedPost.bundle.status === 'draft') {
     return {
       kind: 'draft',
-      label: 'Unlock draft',
+      label: 'Recipe draft',
       priceUsdCents: linkedPost.bundle.priceUsdCents,
     };
   }
@@ -205,14 +205,14 @@ function getMonetizationState(linkedPost: CreationWorkspaceResolvedPost | null):
   if (linkedPost.bundle.accessMode === 'free') {
     return {
       kind: 'free',
-      label: 'Free unlock',
+      label: 'Free recipe',
       priceUsdCents: 0,
     };
   }
 
   return {
     kind: 'paid',
-    label: '$ unlock',
+    label: 'Paid recipe',
     priceUsdCents: linkedPost.bundle.priceUsdCents,
   };
 }
@@ -227,7 +227,7 @@ export function resolveCreationWorkspaceCardState(
       linkedPost: null,
       publishBadge: 'Archived',
       monetizationKind: 'none',
-      monetizationLabel: 'No unlock',
+      monetizationLabel: 'No recipe',
       monetizationPriceUsdCents: null,
       primaryAction: {
         type: 'none',
@@ -250,7 +250,7 @@ export function resolveCreationWorkspaceCardState(
       linkedPost: null,
       publishBadge: 'Not published',
       monetizationKind: 'none',
-      monetizationLabel: 'No unlock',
+      monetizationLabel: 'No recipe',
       monetizationPriceUsdCents: null,
       primaryAction: {
         type: 'publish',
@@ -259,7 +259,7 @@ export function resolveCreationWorkspaceCardState(
       },
       secondaryAction: {
         type: 'set-paywall',
-        label: 'Add paid unlock',
+        label: 'Add paid recipe',
         href: buildGeneratedPaywallComposerPath(generation.id),
       },
     };
@@ -284,7 +284,7 @@ export function resolveCreationWorkspaceCardState(
     monetizationPriceUsdCents: monetization.priceUsdCents,
     primaryAction: {
       type: state === 'published_no_bundle' ? 'add-paywall' : 'manage-paywall',
-      label: state === 'published_no_bundle' ? 'Add unlock' : 'Manage unlock',
+      label: state === 'published_no_bundle' ? 'Add recipe' : 'Manage recipe',
       href: buildCreationPaywallManagementPath(linkedPost),
     },
     secondaryAction: {

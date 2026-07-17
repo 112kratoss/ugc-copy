@@ -724,7 +724,7 @@ describe('/api/showcase/publish route', () => {
     expect(data.visibility).toBe('private');
     expect(data.resourceBundleStatus).toBe('draft');
     expect(data.showcasePath).toBeNull();
-    expect(data.resourceBundlePath).toBe('/post/post-1/edit#resources');
+    expect(data.resourceBundlePath).toBe('/post/post-1/edit#recipe');
     expect(postUpserts[0]).toMatchObject({
       generation_id: 'gen-1',
       visibility: 'private',
@@ -779,7 +779,7 @@ describe('/api/showcase/publish route', () => {
     expect(data.visibility).toBe('public');
     expect(data.resourceBundleStatus).toBe('published');
     expect(data.showcasePath).toBe('/showcase/post-1');
-    expect(data.resourceBundlePath).toBe('/showcase/post-1#resources');
+    expect(data.resourceBundlePath).toBe('/showcase/post-1#recipe');
   });
 
   it('creates one free reference unlock when a public generated post has saved references and no paid bundle', async () => {
@@ -901,6 +901,7 @@ describe('/api/showcase/publish route', () => {
       accessMode: 'paid',
       priceUsdCents: 900,
     });
+    expect((publishRpcCalls[0]?.p_post as Record<string, unknown>).description).toBeNull();
     expect(resources).toMatchObject({
       promptText: 'Make a dramatic scene using the saved timing reference.',
       notesMarkdown: 'Saved generation setup',

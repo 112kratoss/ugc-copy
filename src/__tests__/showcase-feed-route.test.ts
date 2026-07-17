@@ -189,17 +189,29 @@ describe('/api/showcase/feed route', () => {
             resourceKinds: ['prompt', 'notes'],
             lockedPreview: {
               resourceKinds: ['prompt', 'notes'],
-              attachmentPreviews: [],
+              attachmentPreviews: [{
+                label: 'SECRET_CLIENT_BRIEF.pdf',
+                kind: 'file',
+                contentType: 'application/pdf',
+                sizeBytes: 2048,
+              }],
               itemCounts: { prompt: 1, note: 1 },
               itemPreviews: [
                 {
                   type: 'prompt',
-                  title: 'Prompt',
+                  title: 'SECRET_CAMPAIGN_PROMPT_NAME',
                   role: 'primary',
-                  sectionId: null,
+                  sectionId: 'secret-section',
                   remixUse: 'none',
                 },
               ],
+              sectionCount: 1,
+              sectionPreviews: [{
+                id: 'secret-section',
+                title: 'SECRET_SECTION_TITLE',
+                kind: 'scene',
+                description: 'SECRET_SECTION_DESCRIPTION',
+              }],
               hasPrompt: true,
               hasNotes: true,
               hasWorkflow: false,
@@ -245,5 +257,15 @@ describe('/api/showcase/feed route', () => {
     expect(responseBody).not.toContain('https://secret.example');
     expect(responseBody).not.toContain('creator/private');
     expect(responseBody).not.toContain('workflowSnapshot');
+    expect(responseBody).not.toContain('SECRET_CLIENT_BRIEF');
+    expect(responseBody).not.toContain('SECRET_CAMPAIGN_PROMPT_NAME');
+    expect(responseBody).not.toContain('SECRET_SECTION_TITLE');
+    expect(responseBody).not.toContain('SECRET_SECTION_DESCRIPTION');
+    expect(data.items[0].asset.lockedPreview).toMatchObject({
+      attachmentPreviews: [{ label: 'File 1', contentType: null, sizeBytes: null }],
+      itemPreviews: [{ title: 'Prompt', role: 'other', sectionId: null }],
+      sectionCount: 1,
+      sectionPreviews: [],
+    });
   });
 });

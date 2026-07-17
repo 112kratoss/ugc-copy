@@ -1,15 +1,13 @@
 'use client';
 
-import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { useMemo, useState } from 'react';
-import { Heart, ShoppingBag, Wand2 } from 'lucide-react';
+import dynamic from 'next/dynamic';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Loader2, ShoppingBag } from 'lucide-react';
 
 import { useAuth } from '@/app/components/AuthProvider';
 import { HoverVideo } from '@/app/components/HoverVideo';
-import MediaDetailsPreviewModal from '@/app/components/MediaDetailsPreviewModal';
 import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
-import PublicShareButton from '@/app/components/PublicShareButton';
 import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
 import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
 import { getBundleAccessLabel, isPostResourceKind, type PostResourceKind } from '@/lib/post-resource-bundles';
@@ -20,6 +18,29 @@ import { buildShowcaseDetailPath } from '@/lib/share';
 interface HomeShowcasePreviewGridProps {
   items: ShowcaseFeedItem[];
 }
+
+function ShowcaseReelLoadingFallback() {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 text-sm font-bold text-white backdrop-blur-sm"
+    >
+      <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-zinc-950 px-5 py-3 shadow-2xl">
+        <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+        Opening Showcase
+      </span>
+    </div>
+  );
+}
+
+const ShowcaseReelViewer = dynamic(
+  () => import('@/app/showcase/ShowcaseReelViewer'),
+  {
+    ssr: false,
+    loading: ShowcaseReelLoadingFallback,
+  }
+);
 
 function getCoverMedia(item: ShowcaseFeedItem) {
   return item.mediaItems?.reduce(
@@ -42,7 +63,7 @@ function getItemSummary(item: ShowcaseFeedItem) {
   }
 
   const source = item.sourceTool || item.model;
-  const unlock = item.asset ? 'Unlock attached.' : 'Public community post.';
+  const unlock = item.asset ? 'Recipe attached.' : 'Public community post.';
   return [source ? `Made with ${source}` : null, `${item.category} post`, unlock].filter(Boolean).join(' / ');
 }
 
@@ -55,10 +76,10 @@ function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): str
     return formatBundleAccessLabel({
       accessMode: asset.accessMode,
       priceQuote: asset.priceQuote,
-    });
+    }).replace(/\s+unlock$/i, ' recipe');
   }
 
-  return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents);
+  return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+unlock$/i, ' recipe');
 }
 
 function formatHomeDate(value: string) {
@@ -73,6 +94,8 @@ export default function HomeShowcasePreviewGrid({
   items,
 }: HomeShowcasePreviewGridProps) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { session, user } = useAuth();
   const {
     items: feedItems,
@@ -87,12 +110,62 @@ export default function HomeShowcasePreviewGrid({
     onError: (error) => console.error('Failed to save homepage showcase item:', error),
     sourceSurface: 'home',
   });
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(() => searchParams.get('post'));
+  const [selectedMediaIndex, setSelectedMediaIndex] = useState(() => {
+    const value = Number(searchParams.get('media'));
+    return Number.isInteger(value) && value >= 0 ? value : 0;
+  });
+  const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(searchParams.get('post') ? 'direct' : null);
 
-  const selectedItem = useMemo(
-    () => feedItems.find((item) => item.id === selectedItemId) ?? null,
-    [feedItems, selectedItemId]
-  );
+  const updateLocation = useCallback((postId: string | null, mode: 'push' | 'replace', mediaIndex = 0) => {
+    const params = new URLSearchParams(window.location.search);
+    if (postId) {
+      params.set('post', postId);
+      if (mediaIndex > 0) params.set('media', String(mediaIndex));
+      else params.delete('media');
+    } else {
+      params.delete('post');
+      params.delete('media');
+    }
+
+    const query = params.size > 0 ? `?${params.toString()}` : '';
+    const nextUrl = `${pathname}${query}${window.location.hash}`;
+    if (mode === 'push') window.history.pushState(null, '', nextUrl);
+    else window.history.replaceState(null, '', nextUrl);
+  }, [pathname]);
+
+  const openViewer = useCallback((item: ShowcaseFeedItem) => {
+    reelHistoryModeRef.current = 'pushed';
+    setSelectedMediaIndex(0);
+    setSelectedItemId(item.id);
+    updateLocation(item.id, 'push');
+  }, [updateLocation]);
+
+  const closeViewer = useCallback(() => {
+    setSelectedItemId(null);
+    if (reelHistoryModeRef.current === 'pushed') {
+      reelHistoryModeRef.current = null;
+      window.history.back();
+      return;
+    }
+
+    reelHistoryModeRef.current = null;
+    updateLocation(null, 'replace');
+  }, [updateLocation]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const params = new URLSearchParams(window.location.search);
+      const postId = params.get('post');
+      const mediaIndex = Number(params.get('media'));
+      setSelectedItemId(postId);
+      setSelectedMediaIndex(Number.isInteger(mediaIndex) && mediaIndex >= 0 ? mediaIndex : 0);
+      reelHistoryModeRef.current = postId ? 'direct' : null;
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   const handleRemix = async (id: string) => {
     if (!user || !session?.access_token) {
@@ -141,7 +214,7 @@ export default function HomeShowcasePreviewGrid({
               key={item.id}
               type="button"
               aria-label={`Preview ${item.title}`}
-              onClick={() => setSelectedItemId(item.id)}
+              onClick={() => openViewer(item)}
               className="group relative block w-full break-inside-avoid overflow-hidden rounded-[24px] border border-white/8 bg-[#111215] text-left"
             >
               {item.postFormat === 'text' ? (
@@ -195,88 +268,37 @@ export default function HomeShowcasePreviewGrid({
         })}
       </div>
 
-      <MediaDetailsPreviewModal
-        isOpen={Boolean(selectedItem)}
-        onClose={() => setSelectedItemId(null)}
-        mediaType={
-          selectedItem?.postFormat === 'text'
-            ? 'text'
-            : selectedItem?.mediaKind === 'video'
-              ? 'video'
-              : 'image'
-        }
-        src={selectedItem?.mediaUrl ?? null}
-        alt={selectedItem?.title ?? 'Selected creation preview'}
-        title={selectedItem?.title ?? 'Creation preview'}
-        prompt={selectedItem?.prompt ?? ''}
-        body={selectedItem?.body ?? ''}
-        creator={selectedItem?.creator}
-        actions={selectedItem ? (
-          <>
-            <button
-              type="button"
-              onClick={() => void toggleSave(selectedItem.id)}
-              disabled={savingItemIds.has(selectedItem.id)}
-              aria-label={`${savedItemIds.has(selectedItem.id) ? 'Remove save from' : 'Save'} ${selectedItem.title}. ${selectedItem.saveCount} saves`}
-              aria-pressed={savedItemIds.has(selectedItem.id)}
-              aria-busy={savingItemIds.has(selectedItem.id)}
-              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              <Heart
-                aria-hidden="true"
-                className={`h-4 w-4 ${savedItemIds.has(selectedItem.id) ? 'fill-[var(--ui-primary)] text-[var(--ui-primary)]' : ''}`}
-              />
-              <span aria-hidden="true">{selectedItem.saveCount}</span>
-            </button>
-            <PublicShareButton
-              generationId={selectedItem.id}
-              title={selectedItem.title}
-              description={selectedItem.body || selectedItem.prompt}
-              sourceSurface="showcase"
-              accessToken={session?.access_token ?? null}
-              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
-            />
-            {selectedItem.asset ? (
-              <Link
-                href={buildShowcaseDetailPath(selectedItem.id, {
-                  from: 'home',
-                  returnTo: '/',
-                  section: 'resources',
-                })}
-                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/40 hover:bg-emerald-500/15"
-              >
-                View unlock
-              </Link>
-            ) : null}
-            {selectedItem.canRemix ? (
-              <button
-                type="button"
-                onClick={() => void handleRemix(selectedItem.id)}
-                aria-label={`Remix ${selectedItem.title}. ${selectedItem.remixCount} remixes`}
-                className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]"
-              >
-                <Wand2 aria-hidden="true" className="h-4 w-4" />
-                <span aria-hidden="true">Remix</span>
-                <span
-                  aria-hidden="true"
-                  className="rounded-full bg-black/20 px-2 py-0.5 text-xs font-bold"
-                >
-                  {selectedItem.remixCount}
-                </span>
-              </button>
-            ) : null}
-            <Link
-              href={buildShowcaseDetailPath(selectedItem.id, {
-                from: 'home',
-                returnTo: '/',
-              })}
-              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
-            >
-              Open public page
-            </Link>
-          </>
-        ) : null}
-      />
+      {selectedItemId ? (
+        <ShowcaseReelViewer
+          isOpen={feedItems.some((item) => item.id === selectedItemId)}
+          items={feedItems}
+          selectedItemId={selectedItemId}
+          initialMediaIndex={selectedMediaIndex}
+          savedItemIds={savedItemIds}
+          savingItemIds={savingItemIds}
+          accessToken={session?.access_token ?? null}
+          hasMoreItems={false}
+          isLoadingMoreItems={false}
+          onLoadMoreItems={() => undefined}
+          onClose={closeViewer}
+          onSelectItemId={(id) => {
+            setSelectedMediaIndex(0);
+            setSelectedItemId(id);
+            updateLocation(id, 'replace');
+          }}
+          onMediaIndexChange={(index) => {
+            setSelectedMediaIndex(index);
+            updateLocation(selectedItemId, 'replace', index);
+          }}
+          onToggleSave={toggleSave}
+          onRemix={handleRemix}
+          buildDetailPath={(id, section) => buildShowcaseDetailPath(id, {
+            from: 'home',
+            returnTo: '/',
+            section,
+          })}
+        />
+      ) : null}
     </>
   );
 }

@@ -1045,7 +1045,7 @@ export default function CreationsPage() {
         }
 
         const confirmed = window.confirm(
-            'Delete this post permanently? If it has paid unlocks, you will get a second confirmation so you can still choose archive instead.'
+            'Delete this post permanently? If it has paid recipe purchases, you will get a second confirmation so you can still choose archive instead.'
         );
         if (!confirmed) {
             return;
@@ -1064,7 +1064,7 @@ export default function CreationsPage() {
 
             if (response.status === 409 && data?.requiresForceDelete) {
                 const forceConfirmed = window.confirm(
-                    'This post already has paid unlocks. Archive is safer, but you can still force delete it. Do you want to continue?'
+                    'This post already has paid recipe purchases. Archive is safer, but you can still force delete it. Do you want to continue?'
                 );
 
                 if (!forceConfirmed) {
@@ -1275,7 +1275,7 @@ export default function CreationsPage() {
             if (generation.origin === 'template') {
                 return `Final ${mediaKind} created from a reusable template. Open the run to review its progress or publish the result.`;
             }
-            return `${mediaKind === 'audio' ? 'Audio' : mediaKind === 'image' ? 'Image' : 'Video'} is ready to publish, share, or turn into an unlock.`;
+            return `${mediaKind === 'audio' ? 'Audio' : mediaKind === 'image' ? 'Image' : 'Video'} is ready to preview, publish, or turn into a reusable recipe.`;
         }
 
         return source.length > 118 ? `${source.slice(0, 115).trim()}...` : source;
@@ -1540,7 +1540,7 @@ export default function CreationsPage() {
 
     const getMonetizationBadgeLabel = (workspaceState: CreationWorkspaceCardState): string =>
         workspaceState.monetizationKind === 'paid' && workspaceState.monetizationPriceUsdCents !== null
-            ? `${formatUsdCents(workspaceState.monetizationPriceUsdCents)} unlock`
+            ? `${formatUsdCents(workspaceState.monetizationPriceUsdCents)} recipe`
             : workspaceState.monetizationLabel;
 
     return (
@@ -1594,8 +1594,8 @@ export default function CreationsPage() {
 
                 <div className="mb-6 flex flex-wrap items-center gap-3">
                     {([
-                        { key: 'creations', label: 'Creations', description: 'Outputs, posts, and unlocks' },
-                        { key: 'posts', label: 'Post Library', description: 'Owner view for posts and unlocks' },
+                        { key: 'creations', label: 'Creations', description: 'Private outputs and publishing' },
+                        { key: 'posts', label: 'Post Library', description: 'Manage posts and recipes' },
                     ] as Array<{ key: WorkspaceView; label: string; description: string }>).map((tab) => (
                         <button
                             key={tab.key}
@@ -1612,7 +1612,7 @@ export default function CreationsPage() {
                     ))}
                     <div className="text-sm text-zinc-500">
                         {activeView === 'creations'
-                            ? 'Manage creations, posts, and unlocks without leaving the workspace.'
+                            ? 'Preview private outputs, then turn the strongest ones into posts.'
                             : 'Use Post Library for full post edits, archive state, and cleanup after publishing.'}
                     </div>
                 </div>
@@ -1639,7 +1639,7 @@ export default function CreationsPage() {
                                 <p className="mt-3 max-w-3xl text-sm leading-6 text-zinc-300">
                                     {hasPortfolioProof
                                         ? 'Your creation and public proof are in place. Add the remaining identity details so visitors and buyers know who is behind the work.'
-                                        : 'New creators have three jobs here: shape the profile, create proof, then publish the strongest result with an optional unlock.'}
+                                        : 'New creators have three jobs here: shape the profile, create proof, then publish the strongest result with an optional recipe.'}
                                 </p>
                             </div>
                             <div className="flex flex-col gap-2 sm:flex-row lg:justify-end">
@@ -1672,7 +1672,7 @@ export default function CreationsPage() {
                                         : profileReadiness.sellerReady
                                             ? 'Your selling identity is ready. Add a short bio so visitors understand your work.'
                                             : profileReadiness.publicPublishReady
-                                                ? 'Your public identity is ready. Add an avatar before selling unlocks.'
+                                                ? 'Your public identity is ready. Add an avatar before selling recipes.'
                                                 : 'Choose a custom handle and display name before publishing publicly.',
                                     ready: profileReadiness.profileComplete,
                                 },
@@ -1683,7 +1683,7 @@ export default function CreationsPage() {
                                 },
                                 {
                                     title: activePortfolioPostCount > 0 ? 'Portfolio has posts' : 'Publish to portfolio',
-                                    body: 'Use Publish to add the result publicly, or attach a paid unlock for the reusable process.',
+                                    body: 'Use Publish to add the result publicly, or attach a paid recipe for the reusable process.',
                                     ready: activePortfolioPostCount > 0,
                                 },
                             ].map((item) => (
@@ -1770,14 +1770,14 @@ export default function CreationsPage() {
                         <div className="text-center">
                             <h2 className="mb-2 text-xl font-semibold text-zinc-200">Start your portfolio loop</h2>
                             <p className="mx-auto max-w-xl text-sm leading-6 text-zinc-400">
-                                Make one strong output, publish it to your creator profile, then add an unlock when the prompt, workflow, or setup is worth sharing.
+                                Make one strong output, publish it to your creator profile, then add a recipe when the prompt, workflow, or setup is worth sharing.
                             </p>
                         </div>
                         <div className="grid w-full max-w-3xl gap-3 sm:grid-cols-3">
                             {[
                                 { icon: UserRound, title: 'Profile', body: 'Custom handle, name, and avatar.' },
                                 { icon: Wand2, title: 'Create', body: 'Generate image, video, or motion.' },
-                                { icon: Globe, title: 'Publish', body: 'Add to portfolio or attach an unlock.' },
+                                { icon: Globe, title: 'Publish', body: 'Add to your profile or attach a recipe.' },
                             ].map((item) => {
                                 const Icon = item.icon;
                                 return (
@@ -2299,7 +2299,7 @@ export default function CreationsPage() {
                                 {postVisibilityFilter === 'archived' ? 'Archived posts' : 'Your posts'}
                             </h2>
                             <p className="mt-2 max-w-2xl text-sm text-zinc-500">
-                                Post Library is the owner view for the actual posts people can visit, unlock, archive, or clean up.
+                                Post Library is the management view for editing, publishing, attaching recipes, archiving, and cleanup.
                             </p>
                         </div>
                         <div className="grid gap-4">
@@ -2366,7 +2366,9 @@ export default function CreationsPage() {
                                                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                                                         <div className="min-w-0">
                                                             <h3 className="line-clamp-2 text-lg font-semibold leading-6 text-white">
-                                                                {post.title}
+                                                                <Link href={post.ownerPath} className="transition hover:text-[var(--ui-primary)]">
+                                                                    {post.title}
+                                                                </Link>
                                                             </h3>
                                                             <p className="mt-2 text-sm text-zinc-500">
                                                                 {post.sourceLabel} · Updated {updatedLabel}
@@ -2378,7 +2380,7 @@ export default function CreationsPage() {
                                                             </span>
                                                             {post.bundle ? (
                                                                 <span className={`rounded-full border px-3 py-1 text-xs font-medium ${bundleStatusClass}`}>
-                                                                    {post.bundle.status === 'published' ? 'Unlock live' : 'Unlock draft'}
+                                                                    {post.bundle.status === 'published' ? 'Recipe live' : 'Recipe draft'}
                                                                 </span>
                                                             ) : null}
                                                         </div>
@@ -2393,12 +2395,12 @@ export default function CreationsPage() {
                                                             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                                                                 <div>
                                                                     <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300/80">
-                                                                        Unlock package
+                                                                        Recipe
                                                                     </div>
                                                                     <div className="mt-1 flex flex-wrap items-center gap-2">
                                                                         <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-100">
                                                                             {post.bundle.accessMode === 'free'
-                                                                                ? 'Free unlock'
+                                                                                ? 'Free recipe'
                                                                                 : formatUsdCents(post.bundle.priceUsdCents)}
                                                                         </span>
                                                                         {post.bundle.resourceKinds.slice(0, 4).map((kind) => (
@@ -2418,11 +2420,11 @@ export default function CreationsPage() {
                                                         ) : (
                                                             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                                                 <div>
-                                                                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Unlock package</div>
+                                                                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Recipe</div>
                                                                     <p className="mt-1 text-sm text-zinc-300">No reusable prompt, files, notes, or workflow attached.</p>
                                                                 </div>
                                                                 <span className="self-start rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-300">
-                                                                    No unlock
+                                                                    No recipe
                                                                 </span>
                                                             </div>
                                                         )}
@@ -2431,13 +2433,20 @@ export default function CreationsPage() {
 
                                                 <div className="flex flex-col gap-3 border-t border-white/8 pt-4 lg:flex-row lg:items-center lg:justify-between">
                                                     <div className="flex flex-wrap gap-2">
+                                                        <Link
+                                                            href={post.ownerPath}
+                                                            className="inline-flex items-center gap-2 rounded-full bg-white px-3.5 py-2 text-sm font-semibold text-black transition hover:bg-zinc-200"
+                                                        >
+                                                            <PencilLine className="h-4 w-4" />
+                                                            Edit post
+                                                        </Link>
                                                         {post.publicPath ? (
                                                             <Link
                                                                 href={buildStudioDetailPath(post.id)}
-                                                                className="inline-flex items-center gap-2 rounded-full bg-white px-3.5 py-2 text-sm font-semibold text-black transition hover:bg-zinc-200"
+                                                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
                                                             >
                                                                 <ExternalLink className="h-4 w-4" />
-                                                                Open public page
+                                                                View live
                                                             </Link>
                                                         ) : null}
                                                         {!post.archivedAt ? (
@@ -2455,13 +2464,6 @@ export default function CreationsPage() {
                                                                 {visibilityActionLabel}
                                                             </button>
                                                         ) : null}
-                                                        <Link
-                                                            href={post.ownerPath}
-                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
-                                                        >
-                                                            <PencilLine className="h-4 w-4" />
-                                                            Edit
-                                                        </Link>
                                                         {post.generationId && !post.archivedAt ? (
                                                             <button
                                                                 type="button"
@@ -2469,7 +2471,7 @@ export default function CreationsPage() {
                                                                 className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
                                                             >
                                                                 <Wand2 className="h-4 w-4" />
-                                                                {post.bundle ? 'Manage unlock' : 'Add unlock'}
+                                                                {post.bundle ? 'Manage recipe' : 'Add recipe'}
                                                             </button>
                                                         ) : post.resourcePath ? (
                                                             <Link
@@ -2477,7 +2479,7 @@ export default function CreationsPage() {
                                                                 className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
                                                             >
                                                                 <Wand2 className="h-4 w-4" />
-                                                                Manage unlock
+                                                                Manage recipe
                                                             </Link>
                                                         ) : null}
                                                     </div>

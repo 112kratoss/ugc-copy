@@ -282,7 +282,7 @@ function MediaStudioRail({
   currentToolId: CreatorToolId;
 }) {
   return (
-    <aside className="hidden lg:flex lg:flex-col lg:gap-3">
+    <aside className="studio-media-rail">
       <StudioPanel className="sticky top-24 p-3">
         <Link
           href="/create"
@@ -348,7 +348,7 @@ export function MediaStudioShell({
     <div className="studio-shell-wide relative z-10">
       {header}
 
-      <div className="mb-4 lg:hidden">
+      <div className="studio-path-switcher">
         <StudioPanel className="p-3">
           <div className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">
             Switch creator path
@@ -357,7 +357,7 @@ export function MediaStudioShell({
         </StudioPanel>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[108px_minmax(0,520px)_minmax(0,1fr)] xl:grid-cols-[108px_minmax(0,560px)_minmax(0,1fr)]">
+      <div className="studio-media-layout">
         <MediaStudioRail currentToolId={currentToolId} />
         <div className="min-w-0 space-y-4">{controls}</div>
         <div className="min-w-0 space-y-4">{workspace}</div>

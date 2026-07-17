@@ -257,7 +257,7 @@ describe('PostResourceBundlePanel', () => {
     });
 
     expect(screen.getByRole('button', { name: /pay \$9\.00 with razorpay/i })).toBeInTheDocument();
-    expect(screen.getByText(/the prompt text stays locked until this unlock is opened/i)).toBeInTheDocument();
+    expect(screen.getByText(/the prompt text stays locked until this recipe is unlocked/i)).toBeInTheDocument();
     expect(screen.queryByText(/labels and file types can be shown publicly/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/secret prompt/i)).not.toBeInTheDocument();
   });
@@ -285,9 +285,9 @@ describe('PostResourceBundlePanel', () => {
     expect(screen.getByText('Public recipe prompt')).toBeInTheDocument();
     expect(screen.getByText('Public recipe notes')).toBeInTheDocument();
     expect(screen.getByText('Image input')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /open free unlock/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /unlock free recipe/i })).toBeNull();
     expect(screen.queryByText(/buyer trust/i)).toBeNull();
-    expect(screen.queryByText(/digital unlocks are final sale/i)).toBeNull();
+    expect(screen.queryByText(/digital recipes are final sale/i)).toBeNull();
   });
 
   it('shows owner prompt access with buyer-facing context', () => {
@@ -303,7 +303,7 @@ describe('PostResourceBundlePanel', () => {
     });
 
     expect(screen.getByText('secret prompt')).toBeInTheDocument();
-    expect(screen.getByText(/owner preview\. buyers must unlock before seeing this/i)).toBeInTheDocument();
+    expect(screen.getByText(/owner preview\. buyers must unlock the recipe before seeing this/i)).toBeInTheDocument();
   });
 
   it('shows buyer trust terms without exposing locked content', () => {
@@ -317,7 +317,7 @@ describe('PostResourceBundlePanel', () => {
     expect(screen.getByRole('button', { name: /pay ₹189 with razorpay/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeInTheDocument();
     expect(screen.getByText(/credit cost: 900 credits/i)).toBeInTheDocument();
-    expect(screen.getByText(/digital unlocks are final sale/i)).toBeInTheDocument();
+    expect(screen.getByText(/digital recipes are final sale/i)).toBeInTheDocument();
     expect(screen.getByText(/do not resell, redistribute, or claim the raw bundle as your own/i)).toBeInTheDocument();
     expect(screen.queryByText(/secret prompt/i)).not.toBeInTheDocument();
   });

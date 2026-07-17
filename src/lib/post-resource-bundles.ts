@@ -597,10 +597,10 @@ export function getBundleAccessLabel(
   priceUsdCents: number
 ): string {
   if (accessMode === 'free' || priceUsdCents === 0) {
-    return 'Free unlock';
+    return 'Free recipe';
   }
 
-  return `${formatUsdCents(priceUsdCents)} unlock`;
+  return `${formatUsdCents(priceUsdCents)} recipe`;
 }
 
 export function formatUnlockCountLabel(
@@ -776,14 +776,14 @@ export function validatePostResourceBundleInput(
   options: PostResourceBundleValidationOptions = {}
 ): string | null {
   if (bundle != null && typeof bundle !== 'object') {
-    return 'Invalid unlock payload.';
+    return 'Invalid recipe payload.';
   }
 
   const typedBundle = bundle as PostResourceBundleInput | null | undefined;
   const accessMode = typedBundle?.accessMode ?? 'none';
 
   if (!isPostResourceBundleAccessMode(accessMode)) {
-    return 'Choose whether the unlock should be free or paid.';
+    return 'Choose whether the recipe should be free or paid.';
   }
 
   if (accessMode === 'none') {
@@ -795,7 +795,7 @@ export function validatePostResourceBundleInput(
     : 0;
 
   if (accessMode === 'paid' && priceUsdCents < 100) {
-    return 'Paid unlocks must be priced at $1.00 or above.';
+    return 'Paid recipes must be priced at $1.00 or above.';
   }
 
   const resources = typedBundle?.resources ?? {};
@@ -902,6 +902,52 @@ export function buildPostResourceBundleLockedPreview(
     hasWorkflow: Boolean(normalizedResources.workflowShareUrl?.trim() || normalizedResources.workflowSnapshot || items.some((item) => item.type === 'workflow')),
     hasRemix: Boolean(normalizedResources.allowRemix || items.some((item) => item.type === 'remix_access' || item.remixUse === 'direct_remix')),
     updatedAt,
+  };
+}
+
+/**
+ * Removes creator-authored resource metadata before a locked bundle is sent to
+ * a discovery surface. Counts and resource capabilities are safe sales context;
+ * filenames, item titles, section labels, and descriptions are part of the
+ * paid recipe and must stay behind the access check.
+ */
+export function sanitizePostResourceBundleLockedPreview(
+  preview: PostResourceBundleLockedPreview | null | undefined
+): PostResourceBundleLockedPreview | undefined {
+  if (!preview) {
+    return undefined;
+  }
+
+  return {
+    resourceKinds: [...preview.resourceKinds],
+    attachmentPreviews: preview.attachmentPreviews.map((attachment, index) => ({
+      label: attachment.kind === 'file' ? `File ${index + 1}` : `Link ${index + 1}`,
+      kind: attachment.kind,
+      contentType: null,
+      sizeBytes: null,
+    })),
+    itemCounts: { ...preview.itemCounts },
+    itemPreviews: preview.itemPreviews.map((item) => {
+      const typeLabel = getPostResourceItemTypeLabel(item.type);
+      return {
+        type: item.type,
+        title: `${typeLabel.charAt(0).toUpperCase()}${typeLabel.slice(1)}`,
+        role: 'other',
+        sectionId: null,
+        contentType: null,
+        sizeBytes: null,
+        // The remix mode is required to resolve whether the public action should
+        // be available, but does not reveal the resource itself.
+        remixUse: item.remixUse,
+      };
+    }),
+    sectionCount: preview.sectionCount ?? 0,
+    sectionPreviews: [],
+    hasPrompt: preview.hasPrompt,
+    hasNotes: preview.hasNotes,
+    hasWorkflow: preview.hasWorkflow,
+    hasRemix: preview.hasRemix,
+    updatedAt: preview.updatedAt,
   };
 }
 

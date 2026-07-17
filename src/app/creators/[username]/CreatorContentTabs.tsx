@@ -91,9 +91,9 @@ function assetLabel(item: ShowcaseFeedItem) {
     return formatBundleAccessLabel({
       accessMode: item.asset.accessMode,
       priceQuote: item.asset.priceQuote,
-    });
+    }).replace(/\s+unlock$/i, ' recipe');
   }
-  return getBundleAccessLabel(item.asset.accessMode, item.asset.priceUsdCents);
+  return getBundleAccessLabel(item.asset.accessMode, item.asset.priceUsdCents).replace(/\s+unlock$/i, ' recipe');
 }
 
 export function CreatorContentTabs({
@@ -145,8 +145,8 @@ export function CreatorContentTabs({
     ? items
     : visibleItems;
   const tabs = [
-    { id: 'creations' as const, label: 'Creations', count: initialData.stats.publicCreations },
-    { id: 'unlocks' as const, label: 'Unlocks', count: initialData.stats.unlocks },
+    { id: 'creations' as const, label: 'Posts', count: initialData.stats.publicCreations },
+    { id: 'unlocks' as const, label: 'Recipes', count: initialData.stats.unlocks },
     { id: 'tools' as const, label: 'Tools', count: initialData.stats.toolsUsed.length },
   ];
 
@@ -262,7 +262,7 @@ export function CreatorContentTabs({
       );
       const nextPage = await response.json() as CreatorProfilePageData;
       if (!response.ok || !Array.isArray(nextPage.items)) {
-        throw new Error('Could not load more creations.');
+        throw new Error('Could not load more posts.');
       }
 
       setItems((current) => [
@@ -279,7 +279,7 @@ export function CreatorContentTabs({
       setPageInfo(nextPage.pageInfo);
     } catch (error) {
       console.error('Failed to load more creator posts:', error);
-      setLoadError(error instanceof Error ? error.message : 'Could not load more creations.');
+      setLoadError(error instanceof Error ? error.message : 'Could not load more posts.');
     } finally {
       loadingMoreRef.current = false;
       setIsLoadingMore(false);
@@ -374,7 +374,7 @@ export function CreatorContentTabs({
         ) : (
           <EmptyState
             icon={activeTab === 'unlocks' ? <LockKeyhole className="h-6 w-6" /> : <Images className="h-6 w-6" />}
-            title={activeTab === 'unlocks' ? 'No unlocks yet' : 'No creations yet'}
+            title={activeTab === 'unlocks' ? 'No recipes yet' : 'No posts yet'}
             body={activeTab === 'unlocks'
               ? 'Reusable prompts, files, notes, and remix access will appear here.'
               : 'Published creator work will appear here.'}
@@ -396,11 +396,11 @@ export function CreatorContentTabs({
             </div>
           ) : isLoadingMore ? (
             <div className="inline-flex items-center gap-2 text-sm font-semibold text-zinc-400">
-              <Loader2 className="h-4 w-4 animate-spin" /> Loading creations
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading posts
             </div>
           ) : !observerSupported ? (
             <button type="button" onClick={() => void loadMore()} className="ui-focus-ring min-h-11 rounded-full border border-white/12 bg-white/[0.05] px-5 text-sm font-bold text-white">
-              Load more creations
+              Load more posts
             </button>
           ) : null}
         </div>
@@ -499,7 +499,7 @@ function CreatorCard({
 
 function ToolsGrid({ tools }: { tools: CreatorProfilePageData['stats']['toolsUsed'] }) {
   if (!tools.length) {
-    return <EmptyState icon={<Layers3 className="h-6 w-6" />} title="No tagged tools yet" body="Tools will appear when this creator tags where a creation was made." />;
+    return <EmptyState icon={<Layers3 className="h-6 w-6" />} title="No tagged tools yet" body="Tools will appear when this creator tags where a post was made." />;
   }
 
   return (
@@ -515,7 +515,7 @@ function ToolsGrid({ tools }: { tools: CreatorProfilePageData['stats']['toolsUse
           </span>
           <span className="min-w-0">
             <span className="block truncate font-bold text-white">{tool.label}</span>
-            <span className="mt-1 block text-xs font-semibold text-zinc-500">{tool.count} creation{tool.count === 1 ? '' : 's'}</span>
+            <span className="mt-1 block text-xs font-semibold text-zinc-500">{tool.count} post{tool.count === 1 ? '' : 's'}</span>
           </span>
         </Link>
       ))}

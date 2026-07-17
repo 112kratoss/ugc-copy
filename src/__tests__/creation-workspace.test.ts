@@ -17,7 +17,7 @@ describe('resolveCreationWorkspaceCardState', () => {
 
     expect(state.state).toBe('unpublished');
     expect(state.publishBadge).toBe('Not published');
-    expect(state.monetizationLabel).toBe('No unlock');
+    expect(state.monetizationLabel).toBe('No recipe');
     expect(state.primaryAction).toMatchObject({
       type: 'publish',
       label: 'Publish',
@@ -25,7 +25,7 @@ describe('resolveCreationWorkspaceCardState', () => {
     });
     expect(state.secondaryAction).toMatchObject({
       type: 'set-paywall',
-      label: 'Add paid unlock',
+      label: 'Add paid recipe',
       href: '/post/new?generationId=gen-1&publishIntent=paid-generation&resourceMode=paid&focus=price&from=creations',
     });
   });
@@ -47,11 +47,11 @@ describe('resolveCreationWorkspaceCardState', () => {
 
     expect(state.state).toBe('published_no_bundle');
     expect(state.publishBadge).toBe('Public');
-    expect(state.monetizationLabel).toBe('No unlock');
+    expect(state.monetizationLabel).toBe('No recipe');
     expect(state.primaryAction).toMatchObject({
       type: 'add-paywall',
-      label: 'Add unlock',
-      href: '/post/post-1/edit?resourceMode=paid&focus=price&from=creations#resources',
+      label: 'Add recipe',
+      href: '/post/post-1/edit?resourceMode=paid&focus=price&from=creations#recipe',
     });
     expect(state.secondaryAction).toMatchObject({
       type: 'open-post',
@@ -82,8 +82,8 @@ describe('resolveCreationWorkspaceCardState', () => {
     expect(state.state).toBe('published_free_bundle');
     expect(state.publishBadge).toBe('Private');
     expect(state.monetizationKind).toBe('free');
-    expect(state.monetizationLabel).toBe('Free unlock');
-    expect(state.primaryAction.href).toBe('/post/post-free/edit?resourceMode=free&focus=price&from=creations#resources');
+    expect(state.monetizationLabel).toBe('Free recipe');
+    expect(state.primaryAction.href).toBe('/post/post-free/edit?resourceMode=free&focus=price&from=creations#recipe');
     expect(state.secondaryAction.href).toBe('/post/post-free/edit');
   });
 
@@ -110,7 +110,7 @@ describe('resolveCreationWorkspaceCardState', () => {
     expect(state.publishBadge).toBe('Unlisted');
     expect(state.monetizationKind).toBe('paid');
     expect(state.monetizationPriceUsdCents).toBe(2400);
-    expect(state.primaryAction.label).toBe('Manage unlock');
+    expect(state.primaryAction.label).toBe('Manage recipe');
   });
 
   it('surfaces draft bundle state separately from live unlocks', () => {
@@ -135,7 +135,7 @@ describe('resolveCreationWorkspaceCardState', () => {
     expect(state.state).toBe('published_bundle_draft');
     expect(state.publishBadge).toBe('Archived');
     expect(state.monetizationKind).toBe('draft');
-    expect(state.monetizationLabel).toBe('Unlock draft');
+    expect(state.monetizationLabel).toBe('Recipe draft');
     expect(state.secondaryAction.href).toBe('/post/post-draft/edit');
   });
 });

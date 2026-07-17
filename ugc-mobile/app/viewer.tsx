@@ -420,10 +420,10 @@ export default function ImmersivePreviewViewerScreen() {
       .then(() => {
         void AccessibilityInfo.announceForAccessibility(eventType === 'hide_creator'
           ? user
-            ? `${item.creatorLabel} hidden from your feed.`
+            ? `${item.creatorLabel} hidden from your Showcase.`
             : `${item.creatorLabel} hidden for this visit.`
           : user
-            ? 'Post removed. Your feed will adapt.'
+            ? 'Post removed. Your Showcase will adapt.'
             : 'Post removed for this visit.');
         if (!remainingItems.length) {
           requestAnimationFrame(leaveViewer);
@@ -437,11 +437,11 @@ export default function ImmersivePreviewViewerScreen() {
         });
         setActiveIndex(previousActiveIndex);
         Alert.alert(
-          'Couldn’t update your feed',
+          'Couldn’t update your Showcase',
           'The post was restored. Check your connection and try again.'
         );
         void AccessibilityInfo.announceForAccessibility(
-          'Couldn’t update your feed. The post was restored.'
+          'Couldn’t update your Showcase. The post was restored.'
         );
       });
   };

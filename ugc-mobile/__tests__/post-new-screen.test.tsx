@@ -319,8 +319,8 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
       (node) => String(node.type) === 'textinput' && node.props.placeholder === 'Any model'
     )).toHaveLength(0);
     expect(text).toContain('Caption');
-    expect(text).toContain('Add feed description');
-    expect(text).not.toContain('Feed description');
+    expect(text).toContain('Add Showcase description');
+    expect(text).not.toContain('Showcase description');
     expect(text).toContain('Add references & unlockable resources');
     expect(text).not.toContain('Resource types');
     renderer.act(() => {
@@ -341,11 +341,11 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     expect(unlockText).not.toContain('Public post');
 
     renderer.act(() => {
-      findPressableByText(tree!.root, 'Add feed description').props.onPress();
+      findPressableByText(tree!.root, 'Add Showcase description').props.onPress();
     });
 
     const expandedText = collectText(tree!.root);
-    expect(expandedText).toContain('Feed description');
+    expect(expandedText).toContain('Showcase description');
   });
 
   it('collapses unlock controls behind a web-style checklist row', () => {
@@ -429,7 +429,7 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
 
     const text = collectText(tree!.root);
     expect(text.filter((value) => value === 'Story')).toHaveLength(1);
-    expect(text).toContain('The public content visible in the community feed.');
+    expect(text).toContain('The public content visible in Showcase.');
     expect(text).toContain('Add optional gated resources to this post.');
     expect(text).toContain('Choose who can see this post.');
     expect(text).toContain('Saved privately in Studio');
@@ -962,8 +962,8 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     expect(text).toContain('Save private');
     expect(text).toContain('Publish public');
     expect(text).toContain('Saved privately in Studio.');
-    expect(text).toContain('Visible in Feed.');
-    expect(text).not.toContain('Visible in Feed');
+    expect(text).toContain('Visible in Showcase.');
+    expect(text).not.toContain('Visible in Showcase');
     expect(text).not.toContain('Public');
     expect(text).not.toContain('Unlisted');
     expect(text).not.toContain('Private');

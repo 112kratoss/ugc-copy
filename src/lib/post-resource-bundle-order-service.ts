@@ -163,7 +163,7 @@ export async function createPostResourceBundleOrderForRoute({
   }
 
   if (bundle.access_mode === 'free' || bundle.price_usd_cents === 0) {
-    return { ok: false, status: 400, body: { error: 'Use the free unlock endpoint for this bundle.' } };
+    return { ok: false, status: 400, body: { error: 'Use the free recipe access endpoint for this bundle.' } };
   }
 
   const clientLocale = typeof body.locale === 'string' ? body.locale : null;

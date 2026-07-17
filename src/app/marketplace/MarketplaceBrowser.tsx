@@ -155,7 +155,7 @@ export default function MarketplaceBrowser({
       };
 
       if (!response.ok) {
-        throw new Error(payload.error || 'Could not load more unlocks.');
+        throw new Error(payload.error || 'Could not load more recipes.');
       }
 
       if (controller.signal.aborted || loadMoreAbortControllerRef.current !== controller) {
@@ -178,7 +178,7 @@ export default function MarketplaceBrowser({
       }
     } catch (error) {
       if (!controller.signal.aborted && loadMoreAbortControllerRef.current === controller) {
-        setLoadError(error instanceof Error ? error.message : 'Could not load more unlocks.');
+        setLoadError(error instanceof Error ? error.message : 'Could not load more recipes.');
       }
     } finally {
       if (loadMoreAbortControllerRef.current === controller) {
@@ -200,7 +200,7 @@ export default function MarketplaceBrowser({
             {activeFilterLabels.length > 0 ? (
               <p className="mt-1 text-sm text-zinc-400">Showing {activeFilterLabels.join(' + ')}</p>
             ) : (
-              <p className="mt-1 text-sm text-zinc-400">All quality-checked public unlocks from community posts.</p>
+              <p className="mt-1 text-sm text-zinc-400">All quality-checked public recipes from community posts.</p>
             )}
           </div>
 
@@ -295,9 +295,9 @@ export default function MarketplaceBrowser({
       {items.length === 0 ? (
         <div className="mt-10 rounded-[30px] border border-white/8 bg-zinc-950/70 p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.35)] backdrop-blur-sm">
           <Layers3 className="mx-auto h-10 w-10 text-zinc-500" />
-          <h2 className="mt-4 text-2xl font-semibold text-white">No unlocks yet</h2>
+          <h2 className="mt-4 text-2xl font-semibold text-white">No recipes yet</h2>
           <p className="mt-3 mx-auto max-w-xl text-sm leading-7 text-zinc-400">
-            Unlocks need a useful public post, a creator profile, buyer-facing preview, and reusable resources before they appear here.
+            Recipes need a useful public post, a creator profile, buyer-facing preview, and reusable resources before they appear here.
           </p>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
             <Link
@@ -329,7 +329,7 @@ export default function MarketplaceBrowser({
                 className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isLoadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-                {isLoadingMore ? 'Loading' : 'Load more unlocks'}
+                {isLoadingMore ? 'Loading' : 'Load more recipes'}
               </button>
             </div>
           ) : null}
@@ -386,9 +386,9 @@ function MarketplaceCard({
   const accessLabel = formatBundleAccessLabel({
     accessMode: asset.accessMode,
     priceQuote: asset.priceQuote,
-  });
+  }).replace(/\s+unlock$/i, ' recipe');
   const unlockCtaLabel = asset.accessMode === 'free'
-    ? 'Open free unlock'
+    ? 'Unlock free recipe'
     : `Unlock for ${asset.priceQuote.formatted}`;
   const updatedLabel = formatMarketplaceDate(asset.updatedAt);
   const bundleCountSummary = formatPostResourceBundleCountSummary(asset.lockedPreview);

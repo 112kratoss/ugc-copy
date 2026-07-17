@@ -67,7 +67,7 @@ export function getCreatorPublishReadinessError(
   }
 
   if (options.requiresAvatar && !readiness.sellerReady) {
-    return `${CREATOR_PROFILE_READINESS_ERROR_PREFIX} an unlock: upload a profile photo so customers know who they are buying from.`;
+    return `${CREATOR_PROFILE_READINESS_ERROR_PREFIX} a recipe: upload a profile photo so customers know who they are buying from.`;
   }
 
   return null;
@@ -89,10 +89,10 @@ export function formatBundleAccessLabel({
   priceQuote: MarketplacePriceQuote;
 }): string {
   if (accessMode === 'free' || priceQuote.amountSubunits === 0) {
-    return 'Free unlock';
+    return 'Free recipe';
   }
 
-  return `${priceQuote.formatted} unlock`;
+  return `${priceQuote.formatted} recipe`;
 }
 
 export function assessMarketplaceListingQuality(input: MarketplaceQualityInput): MarketplaceQualityAssessment {
@@ -119,7 +119,7 @@ export function assessMarketplaceListingQuality(input: MarketplaceQualityInput):
     issues.push({
       code: 'missing_preview',
       field: 'preview',
-      message: 'Add a useful preview or summary that tells buyers what they will unlock.',
+      message: 'Add a useful preview or summary that tells buyers what the recipe includes.',
     });
   }
 
@@ -135,7 +135,7 @@ export function assessMarketplaceListingQuality(input: MarketplaceQualityInput):
     issues.push({
       code: 'invalid_price',
       field: 'price',
-      message: 'Paid unlocks must be priced at $1.00 or above.',
+      message: 'Paid recipes must be priced at $1.00 or above.',
     });
   }
 
@@ -157,7 +157,7 @@ export function assessMarketplaceListingQuality(input: MarketplaceQualityInput):
     issues.push({
       code: 'missing_creator_identity',
       field: 'creator',
-      message: 'Choose a custom handle, add your display name, and upload a profile photo before publishing an unlock.',
+      message: 'Choose a custom handle, add your display name, and upload a profile photo before publishing a recipe.',
     });
   }
 

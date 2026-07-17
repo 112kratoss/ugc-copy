@@ -52,7 +52,7 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     expect(markup).toContain('Unlock 1');
     expect(markup).toContain('Unlock 3');
     expect(markup).not.toContain('Unlock 4');
-    expect(markup).toContain('Load more unlocks');
+    expect(markup).toContain('Load more recipes');
     expect(markup).not.toContain('data-marketplace-bootstrap-sentinel');
   });
 
@@ -72,7 +72,7 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     })));
     renderMarketplace(createPage(3, true, 0, 3));
 
-    fireEvent.click(screen.getByRole('button', { name: /load more unlocks/i }));
+    fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
 
     await waitFor(() => {
       expect(screen.getByText('Unlock 4')).toBeInTheDocument();
@@ -86,7 +86,7 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     );
     expect(screen.getAllByText('Unlock 3')).toHaveLength(1);
     expect(screen.getAllByText('Unlock 4')).toHaveLength(1);
-    expect(screen.queryByRole('button', { name: /load more unlocks/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /load more recipes/i })).not.toBeInTheDocument();
   });
 
   it('uses each response nextOffset without gaps when loading another normal page', async () => {
@@ -111,9 +111,9 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
       })));
     renderMarketplace(createPage(3, true, 0, 3));
 
-    fireEvent.click(screen.getByRole('button', { name: /load more unlocks/i }));
+    fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
     await screen.findByText('Unlock 15');
-    fireEvent.click(screen.getByRole('button', { name: /load more unlocks/i }));
+    fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
 
     await waitFor(() => {
       expect(screen.getByText('Unlock 16')).toBeInTheDocument();
@@ -135,7 +135,7 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     }));
     const { rerender } = renderMarketplace(createPage(3, true, 0, 3));
 
-    fireEvent.click(screen.getByRole('button', { name: /load more unlocks/i }));
+    fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
     const requestSignal = vi.mocked(fetch).mock.calls[0]?.[1]?.signal;
 
     rerender(
@@ -162,7 +162,7 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
 
     expect(screen.getByText('Unlock 101')).toBeInTheDocument();
     expect(screen.queryByText('Unlock 4')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /load more unlocks/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /load more recipes/i })).not.toBeInTheDocument();
   });
 
   it('replaces accumulated items when navigation supplies a new result page', async () => {
@@ -181,7 +181,7 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     });
     expect(screen.getByText('Unlock 103')).toBeInTheDocument();
     expect(screen.queryByText('Unlock 1')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /load more unlocks/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /load more recipes/i })).not.toBeInTheDocument();
   });
 });
 

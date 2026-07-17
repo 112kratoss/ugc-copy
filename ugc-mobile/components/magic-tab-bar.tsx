@@ -19,7 +19,7 @@ const ON_PRIMARY = appTheme.colors.onPrimary ?? '#1A0E0A';
 
 const VISIBLE_TABS = [
   { route: 'index', label: 'Home', Icon: Home },
-  { route: 'showcase', label: 'Feed', Icon: Users },
+  { route: 'showcase', label: 'Showcase', Icon: Users },
   { route: 'studio', label: 'Alerts', Icon: Bell },
   { route: 'profile', label: 'Profile', Icon: User },
 ] as const;

@@ -243,7 +243,7 @@ export function CreatorProfileScreen({
         <StatusBlock
           tone={notFound ? 'neutral' : 'danger'}
           title={notFound ? 'Creator not found' : 'Could not load creator'}
-          body={profileQuery.error instanceof Error ? profileQuery.error.message : 'Try again from the feed.'}
+          body={profileQuery.error instanceof Error ? profileQuery.error.message : 'Try again from Showcase.'}
         />
         {!notFound ? (
           <Pressable onPress={() => void profileQuery.refetch()} style={{ minHeight: 48, alignItems: 'center', justifyContent: 'center' }}>
@@ -284,11 +284,11 @@ export function CreatorProfileScreen({
       return (
         <EmptyState
           icon={item.tab === 'unlocks' ? <Lock size={28} color={appTheme.colors.faint} /> : item.tab === 'tools' ? <Layers3 size={28} color={appTheme.colors.faint} /> : <ImageIcon size={28} color={appTheme.colors.faint} />}
-          title={item.tab === 'unlocks' ? 'No unlocks yet' : item.tab === 'tools' ? 'No tagged tools yet' : 'No creations yet'}
+          title={item.tab === 'unlocks' ? 'No recipes yet' : item.tab === 'tools' ? 'No tagged tools yet' : 'No posts yet'}
           body={item.tab === 'unlocks'
             ? 'Reusable prompts, files, notes, and remix access will appear here.'
             : item.tab === 'tools'
-              ? 'Tools will appear when this creator tags where a creation was made.'
+              ? 'Tools will appear when this creator tags where a post was made.'
               : 'Published creator work will appear here.'}
         />
       );
@@ -431,10 +431,10 @@ function CreatorHeader({
 
 function CreatorStats({ data }: { data: CreatorProfileResponse }) {
   const stats = [
-    { label: 'Creations', value: data.stats.publicCreations },
+    { label: 'Posts', value: data.stats.publicCreations },
     { label: 'Saves', value: data.stats.totalSaves },
     { label: 'Remixes', value: data.stats.totalRemixes },
-    { label: 'Unlocks', value: data.stats.unlocks },
+    { label: 'Recipes', value: data.stats.unlocks },
   ];
 
   return (
@@ -486,7 +486,7 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
   const hasVideo = item.mediaKind === 'video' || item.category === 'video' || item.mediaItems?.some((mediaItem) => mediaItem.mediaKind === 'video');
 
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.title || 'creator creation'}`} onPress={onPress} style={({ pressed }) => ({ width, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.title || 'creator post'}`} onPress={onPress} style={({ pressed }) => ({ width, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
       <View style={{ minHeight: height + 92, overflow: 'hidden', borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderSubtle, backgroundColor: appTheme.colors.panel }}>
         <View style={{ height, backgroundColor: appTheme.colors.surfaceInset }}>
           {isTextPost ? (
@@ -533,7 +533,7 @@ function CreatorToolRow({ tool }: { tool: CreatorTool }) {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`View creations made with ${tool.label}`}
+      accessibilityLabel={`View posts made with ${tool.label}`}
       onPress={() => router.push({ pathname: '/(tabs)/showcase', params: { tool: tool.slug } } as never)}
       style={({ pressed }) => ({ minHeight: 76, marginBottom: 10, borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderSubtle, backgroundColor: appTheme.colors.panel, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, opacity: pressed ? appTheme.opacity.pressed : 1 })}
     >
@@ -542,7 +542,7 @@ function CreatorToolRow({ tool }: { tool: CreatorTool }) {
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>{tool.label}</Text>
-        <Text numberOfLines={1} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{formatCompactCount(tool.count)} creation{tool.count === 1 ? '' : 's'}</Text>
+        <Text numberOfLines={1} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{formatCompactCount(tool.count)} post{tool.count === 1 ? '' : 's'}</Text>
       </View>
       <ChevronRight size={19} color={appTheme.colors.faint} />
     </Pressable>

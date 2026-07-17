@@ -222,7 +222,7 @@ function validateSubmittedMediaItems(items: SubmittedPostMediaItem[]): string | 
 
   for (const item of items) {
     if (item.contentType.startsWith('audio/')) {
-      return 'Audio uploads are not supported in the community feed yet.';
+      return 'Audio uploads are not supported in Showcase yet.';
     }
 
     if (!getMediaKindFromContentType(item.contentType)) {

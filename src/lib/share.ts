@@ -15,7 +15,7 @@ const SHARE_CHANNELS = ['native-share', 'copy-link'] as const;
 export type GenerationShareSourceSurface = (typeof SHARE_SOURCE_SURFACES)[number];
 export type GenerationShareChannel = (typeof SHARE_CHANNELS)[number];
 export type GenerationShareEventType = 'share_click' | 'share_visit';
-type ShowcaseReturnSource = 'community' | 'unlocks' | 'creator' | 'seller' | 'studio' | 'home';
+type ShowcaseReturnSource = 'community' | 'unlocks' | 'creator' | 'seller' | 'studio' | 'profile' | 'home';
 
 export interface ShowcaseDetailPathOptions {
   from?: ShowcaseReturnSource | string | null;
@@ -35,15 +35,17 @@ const SHOWCASE_RETURN_SOURCES: ShowcaseReturnSource[] = [
   'creator',
   'seller',
   'studio',
+  'profile',
   'home',
 ];
 
 const SHOWCASE_RETURN_LABELS: Record<ShowcaseReturnSource, string> = {
   community: 'Back to Community',
-  unlocks: 'Back to Unlocks',
+  unlocks: 'Back to Marketplace',
   creator: 'Back to Creator Portfolio',
   seller: 'Back to Seller Dashboard',
   studio: 'Back to My Studio',
+  profile: 'Back to Your Profile',
   home: 'Back to Home',
 };
 
@@ -53,6 +55,7 @@ const SHOWCASE_RETURN_FALLBACKS: Record<ShowcaseReturnSource, string> = {
   creator: '/showcase',
   seller: '/marketplace/sell',
   studio: '/creations?view=posts',
+  profile: '/profile?tab=posts',
   home: '/',
 };
 
@@ -90,6 +93,24 @@ function getSafeInternalReturnPath(value: string | null | undefined, fallback: s
   return candidate;
 }
 
+export function stripShowcaseViewerState(path: string): string {
+  const hashIndex = path.indexOf('#');
+  const hash = hashIndex >= 0 ? path.slice(hashIndex) : '';
+  const pathWithoutHash = hashIndex >= 0 ? path.slice(0, hashIndex) : path;
+  const queryIndex = pathWithoutHash.indexOf('?');
+
+  if (queryIndex < 0) {
+    return path;
+  }
+
+  const pathname = pathWithoutHash.slice(0, queryIndex);
+  const params = new URLSearchParams(pathWithoutHash.slice(queryIndex + 1));
+  params.delete('post');
+  params.delete('media');
+
+  return `${pathname}${params.size > 0 ? `?${params.toString()}` : ''}${hash}`;
+}
+
 function inferShowcaseReturnSource(returnTo: string | null | undefined): ShowcaseReturnSource {
   if (!returnTo) {
     return 'community';
@@ -115,6 +136,10 @@ function inferShowcaseReturnSource(returnTo: string | null | undefined): Showcas
     return 'studio';
   }
 
+  if (returnTo.startsWith('/profile')) {
+    return 'profile';
+  }
+
   return 'community';
 }
 
@@ -125,7 +150,7 @@ export function getShowcaseReturnContext({
   from?: string | null;
   returnTo?: string | null;
 }): ShowcaseReturnContext {
-  const safeReturnTo = getSafeInternalReturnPath(returnTo, '');
+  const safeReturnTo = stripShowcaseViewerState(getSafeInternalReturnPath(returnTo, ''));
   const source = normalizeShowcaseReturnSource(from) ?? inferShowcaseReturnSource(safeReturnTo);
   const href = safeReturnTo || SHOWCASE_RETURN_FALLBACKS[source];
 
@@ -150,8 +175,11 @@ export function getCurrentInternalPath(fallback: string): string {
 export function buildShowcaseDetailPath(generationId: string, options?: ShowcaseDetailPathOptions): string {
   const params = new URLSearchParams();
   const source = normalizeShowcaseReturnSource(options?.from ?? null);
-  const returnTo = options?.returnTo ? getSafeInternalReturnPath(options.returnTo, '') : '';
-  const section = options?.section?.trim();
+  const returnTo = options?.returnTo
+    ? stripShowcaseViewerState(getSafeInternalReturnPath(options.returnTo, ''))
+    : '';
+  const requestedSection = options?.section?.trim();
+  const section = requestedSection === 'resources' ? 'recipe' : requestedSection;
 
   if (source) {
     params.set('from', source);

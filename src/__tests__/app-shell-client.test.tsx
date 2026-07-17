@@ -87,7 +87,7 @@ describe('AppShellClient', () => {
       </AppShellClient>
     );
 
-    expect(html).toContain('Unlock prompts, resources, and creator assets');
+    expect(html).toContain('Reusable post recipes and creator assets');
     expect(html).toContain('Marketplace content');
   });
 

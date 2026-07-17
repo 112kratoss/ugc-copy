@@ -42,6 +42,7 @@
  * this closure explicit so public-only component utilities are not rescanned. */
 @source "./components/EnhancePromptButton.tsx";
 @source "./components/FeatureLandingPage.tsx";
+@source "./components/MediaDetailsPreviewModal.tsx";
 @source "./components/NavbarClient.tsx";
 @source "./components/ProfileShareButton.tsx";
 @source "./components/PublishToShowcaseModal.tsx";

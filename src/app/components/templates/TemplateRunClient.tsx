@@ -141,7 +141,7 @@ function getRunStatusCopy(run: TemplateRun): { title: string; body: string } {
         title: `Your ${run.result?.kind || 'result'} is ready`,
         body: run.isTest
           ? 'Return to the workflow canvas to finish publishing this template.'
-          : 'Publish it to the Feed, download it, or create another version.',
+          : 'Publish it to Showcase, download it, or create another version.',
       };
     case 'failed':
       return { title: 'This run could not finish', body: run.errorMessage || 'The workflow stopped before producing a result.' };
@@ -436,7 +436,7 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
         setShareFeedback('Share sheet opened.');
       } else {
         await navigator.clipboard.writeText(shareUrl);
-        setShareFeedback(hasPublicFeedPost ? 'Feed post link copied.' : 'Result link copied.');
+        setShareFeedback(hasPublicFeedPost ? 'Showcase post link copied.' : 'Result link copied.');
       }
     } catch (reason) {
       if (reason instanceof DOMException && reason.name === 'AbortError') return;
@@ -787,13 +787,13 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
                   <div className="mt-6">
                     <StatusCallout
                       tone="success"
-                      title={publishedPost.visibility === 'public' ? 'Published to Feed' : 'Saved as a private post'}
+                      title={publishedPost.visibility === 'public' ? 'Published to Showcase' : 'Saved as a private post'}
                       body={publishedPost.visibility === 'public'
-                        ? 'Your final template result is now visible on your Feed post.'
+                        ? 'Your final template result is now visible in Showcase.'
                         : 'Only you can open this post until you publish it publicly.'}
                     />
                     <Button href={publishedPost.path} variant="primary" icon={ArrowRight} className="mt-3 w-full">
-                      {publishedPost.visibility === 'public' ? 'View in Feed' : 'Open private post'}
+                      {publishedPost.visibility === 'public' ? 'View in Showcase' : 'Open private post'}
                     </Button>
                   </div>
                 ) : result.generationId ? (
@@ -803,7 +803,7 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
                     onClick={() => setIsPublishOpen(true)}
                     className="mt-6 w-full"
                   >
-                    Publish to Feed
+                    Publish to Showcase
                   </Button>
                 ) : null}
                 <a href={result.url} download className={`${publishedPost ? 'mt-3' : result.generationId ? 'mt-3' : 'mt-6'} ui-button ui-button-secondary ui-focus-ring w-full`}>
@@ -811,7 +811,7 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
                   Download {result.kind}
                 </a>
                 <Button variant="secondary" icon={Share2} onClick={handleShare} className="mt-3 w-full">
-                  {publishedPost?.visibility === 'public' ? 'Share Feed post' : `Share ${result.kind}`}
+                  {publishedPost?.visibility === 'public' ? 'Share Showcase post' : `Share ${result.kind}`}
                 </Button>
                 <Button href={createAnotherHref} variant="ghost" icon={RotateCcw} className="mt-2 w-full">Create another version</Button>
               </>

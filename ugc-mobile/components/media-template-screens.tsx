@@ -928,7 +928,7 @@ function ResultStage({
       ) : null}
       {message ? <StatusBlock title="Could not continue" body={message} tone="danger" /> : null}
       {canPublish ? (
-        <PrimaryButton label="Publish to feed" onPress={publishResult} />
+        <PrimaryButton label="Publish to Showcase" onPress={publishResult} />
       ) : (
         <PrimaryButton label={`Open full-quality ${result.kind}`} disabled={!safeResultUrl} onPress={() => void openOriginal()} />
       )}

@@ -175,7 +175,7 @@ export default function MarketplaceAssetActions({
     }
 
     if (hasKnownInsufficientCredits) {
-      setError(`This unlock costs ${formattedCreditCost} credits. Add credits to continue.`);
+      setError(`This asset costs ${formattedCreditCost} credits. Add credits to continue.`);
       setFeedback(null);
       return;
     }

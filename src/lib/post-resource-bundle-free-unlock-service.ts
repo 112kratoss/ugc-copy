@@ -81,7 +81,7 @@ export async function unlockFreePostResourceBundleForRoute({
     }
 
     console.error('Failed to enforce free unlock rate limit:', error);
-    return { ok: false, status: 500, body: { error: 'Failed to open the free unlock.' } };
+    return { ok: false, status: 500, body: { error: 'Failed to unlock the free recipe.' } };
   }
 
   const bundle = await getBundleForOrderByPostId(postId);
@@ -128,7 +128,7 @@ export async function unlockFreePostResourceBundleForRoute({
 
   if (orderError) {
     console.error('Failed to create free bundle order:', orderError);
-    return { ok: false, status: 500, body: { error: 'Failed to open the free unlock.' } };
+    return { ok: false, status: 500, body: { error: 'Failed to unlock the free recipe.' } };
   }
 
   const { data: completed, error: completionError } = await adminSupabase.rpc(
@@ -141,7 +141,7 @@ export async function unlockFreePostResourceBundleForRoute({
 
   if (completionError) {
     console.error('Failed to complete free bundle unlock:', completionError);
-    return { ok: false, status: 500, body: { error: 'Failed to open the free unlock.' } };
+    return { ok: false, status: 500, body: { error: 'Failed to unlock the free recipe.' } };
   }
 
   if (completed) {

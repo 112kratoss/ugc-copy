@@ -74,7 +74,7 @@ async function loadMarketplacePageData(searchParams: MarketplacePageProps['searc
 
 function MarketplaceResultsFallback() {
   return (
-    <div aria-label="Loading marketplace unlocks">
+    <div aria-label="Loading marketplace recipes">
       <div className="relative mt-8 min-h-44 overflow-hidden rounded-[28px] border border-white/8 bg-zinc-950/70 p-5">
         <div className="h-3 w-28 rounded-full bg-white/8" />
         <div className="mt-4 h-12 rounded-full bg-white/[0.04]" />
@@ -131,13 +131,13 @@ export default function MarketplacePage({ searchParams }: MarketplacePageProps) 
             <div className="max-w-3xl">
               <div className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100">
                 <ShoppingBag className="h-3.5 w-3.5" />
-                Unlocks
+                Recipes
               </div>
               <h1 className="mt-4 text-4xl font-semibold tracking-tight text-white sm:text-5xl">
                 Buy the reusable parts behind community posts
               </h1>
               <p className="mt-4 max-w-2xl text-sm leading-7 text-zinc-300 sm:text-base">
-                Browse free and paid unlocks made from public community posts. Check the post first, then open the prompt, workflow, files, notes, or remix access after purchase or free login unlock.
+                Browse free and paid recipes attached to public posts. Check the post first, then unlock its prompt, workflow, files, notes, or remix access.
               </p>
             </div>
 

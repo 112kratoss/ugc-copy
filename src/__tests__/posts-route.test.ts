@@ -345,7 +345,7 @@ describe('/api/posts route', () => {
       title: 'Three hook ideas that keep working.',
     });
     expect(payload.success).toBe(true);
-    expect(payload.resourceBundlePath).toBe(`/showcase/${payload.postId}#resources`);
+    expect(payload.resourceBundlePath).toBe(`/showcase/${payload.postId}#recipe`);
   });
 
   it('creates mixed posts with media and note content', async () => {
@@ -801,7 +801,7 @@ describe('/api/posts route', () => {
     });
     expect(payload.visibility).toBe('private');
     expect(payload.resourceBundleStatus).toBe('draft');
-    expect(payload.resourceBundlePath).toBe(`/post/${payload.postId}/edit#resources`);
+    expect(payload.resourceBundlePath).toBe(`/post/${payload.postId}/edit#recipe`);
   });
 
   it('surfaces a clear migration error when post resource bundles are not enabled yet', async () => {

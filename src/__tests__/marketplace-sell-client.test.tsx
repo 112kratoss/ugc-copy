@@ -55,12 +55,12 @@ describe('MarketplaceSellClient', () => {
     );
 
     expect(screen.getByText(/seller dashboard/i)).toBeInTheDocument();
-    expect(screen.getByText(/live and draft unlocks/i)).toBeInTheDocument();
+    expect(screen.getByText(/live and draft recipes/i)).toBeInTheDocument();
     expect(screen.getByText('Ready')).toBeInTheDocument();
     expect(screen.getByText(/20 visits/i)).toBeInTheDocument();
-    expect(screen.getByText(/₹1,599 unlock/i)).toBeInTheDocument();
+    expect(screen.getByText(/₹1,599 recipe/i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /share a post/i })).toHaveAttribute('href', '/post/new');
-    expect(screen.getByRole('button', { name: /copy unlock link/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /copy recipe link/i })).toBeInTheDocument();
   });
 
   it('shows the empty-state guidance when no bundles exist', () => {
@@ -76,7 +76,7 @@ describe('MarketplaceSellClient', () => {
       />
     );
 
-    expect(screen.getByText(/no unlocks yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/no recipes yet/i)).toBeInTheDocument();
     expect(screen.getByText(/start in the post flow/i)).toBeInTheDocument();
   });
 });

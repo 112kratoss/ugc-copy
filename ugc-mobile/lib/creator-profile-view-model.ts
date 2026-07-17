@@ -9,8 +9,8 @@ export type CreatorProfileVideoPreviewLayout = {
 };
 
 export const CREATOR_PROFILE_TABS: Array<{ id: CreatorProfileTab; label: string }> = [
-  { id: 'creations', label: 'Creations' },
-  { id: 'unlocks', label: 'Unlocks' },
+  { id: 'creations', label: 'Posts' },
+  { id: 'unlocks', label: 'Recipes' },
   { id: 'tools', label: 'Tools' },
 ];
 

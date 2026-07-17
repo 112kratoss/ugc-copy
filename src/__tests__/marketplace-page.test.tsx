@@ -155,7 +155,7 @@ describe('MarketplacePage', () => {
     expect(await screen.findByText('Tip / note')).toBeInTheDocument();
     expect(screen.getByText('Prompt pacing tip')).toBeInTheDocument();
     expect(screen.getByText('Lead with the product benefit before adding style language.')).toBeInTheDocument();
-    expect(screen.getByText('Free unlock')).toBeInTheDocument();
+    expect(screen.getByText('Free recipe')).toBeInTheDocument();
     expect(screen.queryByText('Text-only attached post')).not.toBeInTheDocument();
   });
 

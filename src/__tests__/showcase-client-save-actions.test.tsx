@@ -290,7 +290,7 @@ describe('ShowcaseClient save actions', () => {
       expect(new URLSearchParams(window.location.search).get('post')).toBe('post-1');
     });
     expect(container.querySelector('[data-showcase-lightweight-card="true"]')).not.toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: /feed/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /showcase/i })).toBeInTheDocument();
   });
 
   it('keeps the complete initial card actions for authenticated viewers', () => {
@@ -680,7 +680,7 @@ describe('ShowcaseClient save actions', () => {
     }));
 
     const unlockLink = screen.getByRole('link', { name: /unlock for \$9\.00/i });
-    expect(unlockLink).toHaveAttribute('href', expect.stringContaining('#resources'));
+    expect(unlockLink).toHaveAttribute('href', expect.stringContaining('#recipe'));
   });
 
   it('disables prefetching for community card detail and creator links', async () => {
@@ -703,7 +703,7 @@ describe('ShowcaseClient save actions', () => {
     fireEvent.click(screen.getByAltText('Campaign Frame'));
 
     expect((await screen.findAllByRole('link', { name: /unlock for \$9\.00/i })).at(-1)).toHaveAttribute('data-prefetch', 'false');
-    expect(await screen.findByRole('link', { name: /open full page/i })).toHaveAttribute('data-prefetch', 'false');
+    expect(await screen.findByRole('link', { name: /post details/i })).toHaveAttribute('data-prefetch', 'false');
   });
 
   it('prioritizes the first image preview in the public showcase grid', () => {
@@ -760,7 +760,7 @@ describe('ShowcaseClient save actions', () => {
     });
     expect(pushState).toHaveBeenCalledWith(null, '', '/showcase?post=post-1');
 
-    fireEvent.click(await screen.findByRole('button', { name: /feed/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /showcase/i }));
     expect(back).toHaveBeenCalledTimes(1);
   });
 
@@ -800,7 +800,7 @@ describe('ShowcaseClient save actions', () => {
       expect(params.get('post')).toBe('post-1');
       expect(params.get('media')).toBe('1');
     });
-    expect(await screen.findByRole('button', { name: /feed/i })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /showcase/i })).toBeInTheDocument();
   });
 
   it('loads a shared post URL that is not present in the first feed page without pushing a duplicate history entry', async () => {
@@ -841,7 +841,7 @@ describe('ShowcaseClient save actions', () => {
     expect((await screen.findAllByRole('heading', { name: 'Shared Campaign' })).length).toBeGreaterThan(1);
     expect(pushState).not.toHaveBeenCalled();
 
-    fireEvent.click(await screen.findByRole('button', { name: /feed/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /showcase/i }));
 
     await waitFor(() => {
       expect(new URLSearchParams(window.location.search).has('post')).toBe(false);

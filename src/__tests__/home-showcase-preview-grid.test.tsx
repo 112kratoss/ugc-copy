@@ -11,6 +11,67 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({
     push: mockPush,
   }),
+  usePathname: () => '/',
+  useSearchParams: () => new URLSearchParams(window.location.search),
+}));
+
+vi.mock('next/dynamic', () => ({
+  default: () => function MockShowcaseReelViewer({
+    isOpen,
+    items,
+    selectedItemId,
+    savedItemIds,
+    savingItemIds,
+    onToggleSave,
+    onRemix,
+    buildDetailPath,
+  }: {
+    isOpen: boolean;
+    items: ShowcaseFeedItem[];
+    selectedItemId: string | null;
+    savedItemIds: Set<string>;
+    savingItemIds: Set<string>;
+    onToggleSave: (id: string) => void;
+    onRemix: (id: string) => void;
+    buildDetailPath: (id: string, section?: string) => string;
+  }) {
+    const selectedItem = items.find((item) => item.id === selectedItemId);
+    if (!isOpen || !selectedItem) return null;
+
+    return (
+      <div role="dialog" aria-label={`${selectedItem.title} Showcase reel`}>
+        <h2>{selectedItem.title}</h2>
+        <p>{selectedItem.body || selectedItem.prompt}</p>
+        {selectedItem.mediaKind === 'video' ? (
+          <video src={selectedItem.mediaUrl ?? undefined} />
+        ) : selectedItem.mediaUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={selectedItem.mediaUrl} alt={selectedItem.title} />
+        ) : null}
+        <button type="button" aria-label="Share">Share</button>
+        <button
+          type="button"
+          onClick={() => onToggleSave(selectedItem.id)}
+          disabled={savingItemIds.has(selectedItem.id)}
+          aria-label={`${savedItemIds.has(selectedItem.id) ? 'Remove save from' : 'Save'} ${selectedItem.title}. ${selectedItem.saveCount} saves`}
+          aria-pressed={savedItemIds.has(selectedItem.id)}
+        >
+          Save
+        </button>
+        {selectedItem.canRemix ? (
+          <button
+            type="button"
+            onClick={() => onRemix(selectedItem.id)}
+            aria-label={`Remix ${selectedItem.title}. ${selectedItem.remixCount} remixes`}
+          >
+            Remix
+          </button>
+        ) : null}
+        <a href={buildDetailPath(selectedItem.id)}>Post details</a>
+        {selectedItem.asset ? <a href={buildDetailPath(selectedItem.id, 'resources')}>View recipe</a> : null}
+      </div>
+    );
+  },
 }));
 
 vi.mock('@/app/components/AuthProvider', () => ({
@@ -71,6 +132,7 @@ function createShowcaseItem(overrides: Partial<ShowcaseFeedItem> = {}): Showcase
 describe('HomeShowcasePreviewGrid', () => {
   beforeEach(() => {
     mockPush.mockReset();
+    window.history.replaceState(null, '', '/');
   });
 
   afterEach(() => {
@@ -78,7 +140,7 @@ describe('HomeShowcasePreviewGrid', () => {
     vi.restoreAllMocks();
   });
 
-  it('opens the media preview modal from the homepage inspiration grid with action buttons', () => {
+  it('opens the shared Showcase reel from the homepage grid with post actions', () => {
     const items: ShowcaseFeedItem[] = [createShowcaseItem()];
 
     render(<HomeShowcasePreviewGrid items={items} />);
@@ -91,11 +153,12 @@ describe('HomeShowcasePreviewGrid', () => {
     expect(within(dialog).getByRole('button', { name: /8 saves/i })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: /3 remixes/i })).toBeInTheDocument();
 
-    const openPageLink = within(dialog).getByRole('link', { name: /open public page/i });
+    const openPageLink = within(dialog).getByRole('link', { name: /post details/i });
     expect(openPageLink).toHaveAttribute('href', '/showcase/gen-1?from=home&returnTo=%2F');
+    expect(window.location.search).toBe('?post=gen-1');
   });
 
-  it('optimistically saves and unsaves from the homepage modal with accessible state', async () => {
+  it('optimistically saves and unsaves from the homepage reel with accessible state', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
       json: async () => ({ success: true }),
@@ -123,7 +186,7 @@ describe('HomeShowcasePreviewGrid', () => {
     }));
   });
 
-  it('restores the homepage modal save state when saving fails', async () => {
+  it('restores the homepage reel save state when saving fails', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: false,
@@ -190,7 +253,7 @@ describe('HomeShowcasePreviewGrid', () => {
     expect(screen.getByText('Tip / note')).toBeInTheDocument();
     expect(screen.getByText('Prompt pacing tip')).toBeInTheDocument();
     expect(screen.getByText('Lead with the product benefit before adding cinematic style words.')).toBeInTheDocument();
-    expect(screen.getByText('Free unlock')).toBeInTheDocument();
+    expect(screen.getByText('Free recipe')).toBeInTheDocument();
     expect(screen.queryByText('No media preview')).not.toBeInTheDocument();
   });
 

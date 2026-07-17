@@ -129,10 +129,10 @@ function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): str
     return formatBundleAccessLabel({
       accessMode: asset.accessMode,
       priceQuote: asset.priceQuote,
-    });
+    }).replace(/\s+unlock$/i, ' recipe');
   }
 
-  return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents);
+  return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+unlock$/i, ' recipe');
 }
 
 function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
@@ -141,10 +141,10 @@ function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>)
   }
 
   if (asset.accessMode === 'free' || asset.priceUsdCents === 0) {
-    return 'Open free unlock';
+    return 'Unlock free recipe';
   }
 
-  return `Unlock for ${asset.priceQuote?.formatted ?? getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+unlock$/i, '')}`;
+  return `Unlock for ${asset.priceQuote?.formatted ?? getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+(?:unlock|recipe)$/i, '')}`;
 }
 
 function getItemSummary(item: ShowcaseFeedItem): string {
@@ -175,10 +175,10 @@ function getItemSummary(item: ShowcaseFeedItem): string {
     const kinds = getItemResourceKinds(item);
     const bundleCountSummary = formatPostResourceBundleCountSummary(item.asset.lockedPreview ?? null);
     return bundleCountSummary
-      ? `Unlock includes ${bundleCountSummary}.`
+      ? `Recipe includes ${bundleCountSummary}.`
       : kinds.length > 0
-      ? `Unlock includes ${kinds.map((kind) => getPostResourceKindLabel(kind).toLowerCase()).join(', ')}.`
-      : 'Reusable unlock attached.';
+      ? `Recipe includes ${kinds.map((kind) => getPostResourceKindLabel(kind).toLowerCase()).join(', ')}.`
+      : 'Reusable recipe attached.';
   }
 
   return `${item.category === 'text' ? 'Tip' : item.category} by ${item.creator.name}`;
@@ -358,7 +358,7 @@ export default function ShowcaseReelViewer({
     const data = await response.json();
 
     if (!response.ok || !data?.bundle) {
-      throw new Error(data.error || 'Failed to refresh the unlock.');
+      throw new Error(data.error || 'Failed to refresh recipe access.');
     }
 
     return data.bundle as ReelBundleRefreshPayload;
@@ -765,7 +765,7 @@ export default function ShowcaseReelViewer({
           return;
         }
 
-        setUnlockError(err instanceof Error ? err.message : 'Failed to load free unlock.');
+        setUnlockError(err instanceof Error ? err.message : 'Failed to load the free recipe.');
       });
 
     return () => {
@@ -789,7 +789,7 @@ export default function ShowcaseReelViewer({
   const hasReelUnlockAccess = unlockSuccessItemId === item.id;
   const isFreeUnlock = Boolean(item.asset && (item.asset.accessMode === 'free' || item.asset.priceUsdCents === 0));
   const priceLabel = item.asset
-    ? item.asset.priceQuote?.formatted ?? getAssetAccessLabel(item.asset).replace(/\s+unlock$/i, '')
+    ? item.asset.priceQuote?.formatted ?? getAssetAccessLabel(item.asset).replace(/\s+(?:unlock|recipe)$/i, '')
     : '';
   const tokenCost = item.asset ? Math.max(0, item.asset.priceUsdCents) : 0;
   const hasKnownInsufficientTokens = Boolean(session?.access_token && typeof credits === 'number' && credits < tokenCost);
@@ -843,12 +843,12 @@ export default function ShowcaseReelViewer({
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to open the free unlock.');
+        throw new Error(data.error || 'Failed to unlock the free recipe.');
       }
 
       await finishReelUnlock();
     } catch (unlockError) {
-      setUnlockError(unlockError instanceof Error ? unlockError.message : 'Failed to open the free unlock.');
+      setUnlockError(unlockError instanceof Error ? unlockError.message : 'Failed to unlock the free recipe.');
     } finally {
       setUnlockWorkingAction(null);
     }
@@ -891,7 +891,7 @@ export default function ShowcaseReelViewer({
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
         amount: orderData.amount,
         currency: orderData.currency,
-        name: 'magicbooklet unlock',
+        name: 'magicbooklet recipe',
         description: orderData.bundleTitle || item.asset.title,
         order_id: orderData.orderId,
         handler: async (response: {
@@ -946,7 +946,7 @@ export default function ShowcaseReelViewer({
     }
 
     if (hasKnownInsufficientTokens) {
-      setUnlockError(`This unlock needs ${tokenCost.toLocaleString()} tokens.`);
+      setUnlockError(`This recipe needs ${tokenCost.toLocaleString()} tokens.`);
       return;
     }
 
@@ -1219,7 +1219,7 @@ export default function ShowcaseReelViewer({
       <div className="mt-5 rounded-[22px] border border-emerald-300/20 bg-emerald-500/10 p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300/80">Unlock</div>
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300/80">Recipe</div>
             <h3 className="mt-2 text-base font-semibold text-white">{item.asset.title}</h3>
           </div>
           <span className="shrink-0 rounded-full border border-emerald-300/20 bg-emerald-300 px-2.5 py-1 text-xs font-bold text-slate-950">
@@ -1250,7 +1250,7 @@ export default function ShowcaseReelViewer({
           <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-black/25 p-4">
             <div className="text-sm font-semibold text-emerald-100">Unlocked</div>
             <p className="mt-1 text-sm leading-6 text-emerald-50/75">
-              Your unlock is ready here.
+              Your recipe is ready here.
             </p>
             <button
               type="button"
@@ -1258,11 +1258,11 @@ export default function ShowcaseReelViewer({
               className="mt-3 inline-flex w-full items-center justify-center rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
               aria-expanded={showUnlockedDetails}
             >
-              View unlocked details
+              View recipe details
             </button>
             {showUnlockedDetails ? (
               unlockedResources ? renderRecipeResourcesCard(unlockedResources, {
-                title: 'Unlocked details',
+                title: 'Recipe details',
                 compact: true,
               }) : null
             ) : null}
@@ -1275,7 +1275,7 @@ export default function ShowcaseReelViewer({
             className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {unlockWorkingAction === 'free' ? <Loader2 className="h-4 w-4 animate-spin" /> : <LockKeyhole className="h-4 w-4" />}
-            Open free unlock
+            Unlock free recipe
           </button>
         ) : (
           <div className="mt-4 grid gap-2">
@@ -1428,11 +1428,11 @@ export default function ShowcaseReelViewer({
           className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
         >
           <X className="h-4 w-4" />
-          Feed
+          Showcase
         </button>
 
         <div className="min-w-0 text-center">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">Community reel</div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">Showcase reel</div>
           <div className="text-xs text-zinc-300">
             {selectedIndex + 1} / {items.length}
           </div>
@@ -1518,15 +1518,23 @@ export default function ShowcaseReelViewer({
             </div>
           ) : null}
 
-          <div className="absolute right-3 top-1/2 hidden -translate-y-1/2 flex-col gap-2 sm:flex">
+        </section>
+
+        <aside className="flex min-w-0 items-center justify-center gap-2 overflow-x-auto rounded-[24px] border border-white/10 bg-white/[0.035] p-2 backdrop-blur-xl lg:flex-col lg:overflow-visible lg:border-0 lg:bg-transparent lg:p-0">
+          <div
+            role="group"
+            aria-label="Browse posts"
+            data-showcase-post-navigation
+            className="hidden shrink-0 items-center gap-1 rounded-[20px] border border-white/10 bg-white/[0.035] p-1 sm:flex lg:flex-col"
+          >
             <button
               type="button"
               onClick={goPrevious}
               disabled={!previousItem}
               aria-label="Previous post"
-              className="ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-black/50 text-zinc-100 backdrop-blur-md transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
+              className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-black/45 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
             >
-              <ArrowUp className="h-4 w-4" />
+              <ArrowUp size={16} className="h-4 w-4 shrink-0" />
             </button>
             <button
               type="button"
@@ -1534,31 +1542,31 @@ export default function ShowcaseReelViewer({
               disabled={!nextItem && !hasMoreItems}
               aria-busy={!nextItem && hasMoreItems && isLoadingMoreItems}
               aria-label="Next post"
-              className="ui-focus-ring inline-flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-black/50 text-zinc-100 backdrop-blur-md transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
+              className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-black/45 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
             >
               {!nextItem && hasMoreItems && isLoadingMoreItems ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 size={16} className="h-4 w-4 shrink-0 animate-spin" />
               ) : (
-                <ArrowDown className="h-4 w-4" />
+                <ArrowDown size={16} className="h-4 w-4 shrink-0" />
               )}
             </button>
           </div>
-        </section>
 
-        <aside className="flex items-center justify-center gap-2 rounded-[24px] border border-white/10 bg-white/[0.035] p-2 backdrop-blur-xl lg:flex-col lg:border-0 lg:bg-transparent lg:p-0">
+          <div aria-hidden="true" className="hidden h-8 w-px shrink-0 bg-white/10 sm:block lg:h-px lg:w-10" />
+
           <button
             type="button"
             onClick={() => void onToggleSave(item.id)}
             disabled={isSaving}
             aria-pressed={isSaved}
             aria-label={`${isSaved ? 'Remove save from' : 'Save'} ${item.title}`}
-            className={`inline-flex h-14 min-w-16 flex-1 flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-semibold transition lg:h-[70px] lg:w-[70px] lg:flex-none ${
+            className={`inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-semibold transition lg:h-[70px] lg:w-[70px] lg:max-w-[70px] ${
               isSaved
                 ? 'border-[var(--ui-primary)]/35 bg-[var(--ui-primary-soft)] text-[var(--ui-primary-strong)]'
                 : 'border-white/10 bg-white/[0.05] text-zinc-100 hover:bg-white/[0.08]'
             } disabled:opacity-60`}
           >
-            <Heart className={`h-5 w-5 ${isSaved ? 'fill-[var(--ui-primary)] text-[var(--ui-primary)]' : ''}`} />
+            <Heart size={20} className={`h-5 w-5 shrink-0 ${isSaved ? 'fill-[var(--ui-primary)] text-[var(--ui-primary)]' : ''}`} />
             <AnimatePresence mode="popLayout" initial={false}>
               <motion.span
                 key={`${item.id}:${item.saveCount}`}
@@ -1589,17 +1597,17 @@ export default function ShowcaseReelViewer({
               }).catch(() => undefined);
             }}
             label="Share"
-            className="inline-flex h-14 min-w-16 flex-1 flex-col items-center justify-center gap-1 rounded-2xl border border-white/10 bg-white/[0.05] text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08] lg:h-[70px] lg:w-[70px] lg:flex-none"
+            className="inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-white/10 bg-white/[0.05] text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08] lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
           />
 
           {item.asset && !isPublicRecipeAsset ? (
             <button
               type="button"
               onClick={openUnlockCheckout}
-              aria-label={unlockCtaLabel ?? 'Open unlock'}
-              className="inline-flex h-14 min-w-16 flex-1 flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/25 bg-emerald-500/12 text-xs font-semibold text-emerald-100 transition hover:border-emerald-300/45 hover:bg-emerald-500/18 lg:h-[70px] lg:w-[70px] lg:flex-none"
+              aria-label={unlockCtaLabel ?? 'Open recipe'}
+              className="inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/25 bg-emerald-500/12 text-xs font-semibold text-emerald-100 transition hover:border-emerald-300/45 hover:bg-emerald-500/18 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
             >
-              <ShoppingBag className="h-5 w-5" />
+              <ShoppingBag size={20} className="h-5 w-5 shrink-0" />
               <span>{unlockCtaLabel}</span>
             </button>
           ) : null}
@@ -1608,9 +1616,9 @@ export default function ShowcaseReelViewer({
             <button
               type="button"
               onClick={() => void onRemix(item.id)}
-              className="ui-focus-ring inline-flex h-14 min-w-16 flex-1 flex-col items-center justify-center gap-1 rounded-2xl border border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary)] text-xs font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] lg:h-[70px] lg:w-[70px] lg:flex-none"
+              className="ui-focus-ring inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary)] text-xs font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
             >
-              <Wand2 className="h-5 w-5" />
+              <Wand2 size={20} className="h-5 w-5 shrink-0" />
               <span>Remix</span>
             </button>
           ) : null}
@@ -1684,7 +1692,7 @@ export default function ShowcaseReelViewer({
                   <div className="mt-5 rounded-[22px] border border-emerald-300/20 bg-emerald-500/10 p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300/80">Unlock</div>
+                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300/80">Recipe</div>
                         <h3 className="mt-2 text-base font-semibold text-white">{item.asset.title}</h3>
                       </div>
                       <span className="shrink-0 rounded-full border border-emerald-300/20 bg-emerald-300 px-2.5 py-1 text-xs font-bold text-slate-950">
@@ -1723,7 +1731,7 @@ export default function ShowcaseReelViewer({
 
                 {item.asset && hasReelUnlockAccess && !isUnlockCheckoutOpen && !isPublicRecipeAsset && unlockedResources ? (
                   renderRecipeResourcesCard(unlockedResources, {
-                    title: 'Unlocked details',
+                    title: 'Recipe details',
                   })
                 ) : null}
 
@@ -1754,7 +1762,7 @@ export default function ShowcaseReelViewer({
                     className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2.5 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
                   >
                     <ExternalLink className="h-4 w-4" />
-                    Open full page
+                    Post details
                   </Link>
                   <Link
                     href="/create"

@@ -321,6 +321,44 @@ describe('ShowcaseMediaCarousel', () => {
     expect(image).toHaveAttribute('loading', 'lazy');
   });
 
+  it('supports a bounded detail viewport with an explicit full-screen action', () => {
+    const requestFullscreen = vi.fn(async () => undefined);
+    Object.defineProperty(HTMLElement.prototype, 'requestFullscreen', {
+      configurable: true,
+      value: requestFullscreen,
+    });
+
+    try {
+      const { container } = render(
+        <ShowcaseMediaCarousel
+          title="Campaign still"
+          mode="detail"
+          allowFullscreen
+          viewportClassName="h-[min(62dvh,560px)]"
+          mediaItems={[
+            {
+              id: 'image-1',
+              url: 'https://example.com/original.jpg',
+              mediaKind: 'image',
+              contentType: 'image/jpeg',
+              originalName: 'original.jpg',
+              width: 1080,
+              height: 1920,
+              durationSeconds: null,
+              sortOrder: 0,
+            },
+          ]}
+        />
+      );
+
+      expect(container.querySelector('[data-showcase-media-viewport]')).toHaveClass('h-[min(62dvh,560px)]');
+      fireEvent.click(screen.getByRole('button', { name: 'Open media full screen' }));
+      expect(requestFullscreen).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).requestFullscreen;
+    }
+  });
+
   it('reports an already-ready reel video without waiting for a loadedmetadata event', async () => {
     vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockReturnValue(4);
     const onMediaReady = vi.fn();

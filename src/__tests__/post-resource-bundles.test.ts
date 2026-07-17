@@ -7,6 +7,7 @@ import {
   normalizePostResourceItems,
   normalizePostResourceSections,
   resolvePostRemixCapability,
+  sanitizePostResourceBundleLockedPreview,
   validatePostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
 
@@ -147,6 +148,46 @@ describe('post resource bundle validation', () => {
     expect(preview.sectionCount).toBe(2);
     expect(preview.sectionPreviews?.map((section) => section.title)).toEqual(['Hook', 'Section 2']);
     expect(formatPostResourceBundleCountSummary(preview)).toBe('2 sections, 1 prompt, 1 reference image');
+  });
+
+  it('removes paid input names and section metadata from locked previews', () => {
+    const preview = buildPostResourceBundleLockedPreview({
+      attachments: [{
+        label: 'Secret client brief.pdf',
+        kind: 'file',
+        storagePath: 'user-1/secret-client-brief.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 2048,
+      }],
+      sections: [{
+        id: 'private-hook',
+        title: 'Confidential launch hook',
+        kind: 'scene',
+        description: 'Reveal the unreleased product here.',
+      }],
+      items: [{
+        type: 'prompt',
+        title: 'Unreleased campaign prompt',
+        textContent: 'This text must never appear before purchase.',
+        sectionId: 'private-hook',
+      }],
+    });
+
+    const sanitized = sanitizePostResourceBundleLockedPreview(preview);
+    const serialized = JSON.stringify(sanitized);
+
+    expect(sanitized?.itemCounts).toEqual({ prompt: 1 });
+    expect(sanitized?.sectionCount).toBe(1);
+    expect(sanitized?.attachmentPreviews).toEqual([expect.objectContaining({ label: 'File 1' })]);
+    expect(sanitized?.itemPreviews).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'prompt', title: 'Prompt', sectionId: null }),
+    ]));
+    expect(sanitized?.sectionPreviews).toEqual([]);
+    expect(serialized).not.toContain('Secret client brief');
+    expect(serialized).not.toContain('Confidential launch hook');
+    expect(serialized).not.toContain('Reveal the unreleased product');
+    expect(serialized).not.toContain('Unreleased campaign prompt');
+    expect(serialized).not.toContain('application/pdf');
   });
 
   it('accepts real unlock content for free and paid bundles', () => {

@@ -1158,7 +1158,7 @@ export default function CreatorProfileCard({
               <div>
                 <h2 className="text-xl font-semibold text-white">Creator Profile</h2>
                 <p className="mt-1 max-w-2xl text-sm text-zinc-400">
-                  Keep the identity behind your posts, portfolio, and unlocks recognizable and trustworthy.
+                  Keep the identity behind your posts, portfolio, and recipes recognizable and trustworthy.
                 </p>
               </div>
             </div>
@@ -1227,7 +1227,7 @@ export default function CreatorProfileCard({
             </p>
             <p className={`mt-3 flex items-center gap-2 text-sm ${currentReadiness.hasAvatar ? 'text-emerald-200' : 'text-zinc-500'}`}>
               <CheckCircle2 className="h-4 w-4" aria-hidden />
-              {currentReadiness.hasAvatar ? 'Avatar added — ready to build buyer trust.' : 'Avatar recommended before selling unlocks.'}
+              {currentReadiness.hasAvatar ? 'Avatar added — ready to build buyer trust.' : 'Avatar recommended before selling recipes.'}
             </p>
           </div>
 
@@ -1332,7 +1332,7 @@ export default function CreatorProfileCard({
                   Avatar <span className="normal-case tracking-normal text-zinc-600">Recommended</span>
                 </span>
                 <p id="profile-avatar-help" className="mt-2 text-xs leading-5 text-zinc-500">
-                  A recognizable portrait builds trust and is required before selling unlocks. JPG, PNG, or WebP up to 5MB.
+                  A recognizable portrait builds trust and is required before selling recipes. JPG, PNG, or WebP up to 5MB.
                 </p>
               </div>
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center">

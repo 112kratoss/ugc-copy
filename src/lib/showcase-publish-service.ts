@@ -37,6 +37,7 @@ import {
   isCreatorProfileCheckError,
   isCreatorProfileReadinessError,
 } from '@/lib/marketplace-trust';
+import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 type ShowcaseCategory = Exclude<ShowcaseItemCategory, 'text'>;
@@ -496,10 +497,22 @@ export async function publishGenerationToShowcaseForRoute({
   }
 
   const normalizedBody = normalizeTextValue(body);
+  const hasRecipe = Boolean(effectiveResourceBundle && effectiveResourceBundle.accessMode !== 'none');
+  const isPaidRecipe = effectiveResourceBundle?.accessMode === 'paid';
+  const requestedDescription = normalizeTextValue(description);
+  const descriptionCandidate = requestedDescription
+    ?? (isPaidRecipe ? null : generation.description?.trim() ?? null);
+  const sanitizedPublicContent = sanitizePublicPostContent({
+    body: normalizedBody ?? '',
+    description: descriptionCandidate ?? '',
+    hasRecipe,
+    isPaidRecipe,
+    prompt: normalizeTextValue(prompt) ?? generation.prompt?.trim() ?? '',
+  });
   const resolvedTitle =
     normalizeTextValue(title)
     ?? generation.title?.trim()
-    ?? resolvedDependencies.deriveTitleFromBody(normalizedBody)
+    ?? resolvedDependencies.deriveTitleFromBody(sanitizedPublicContent.body || null)
     ?? null;
 
   const marketplaceQualityError = effectiveVisibility === 'public'
@@ -617,10 +630,10 @@ export async function publishGenerationToShowcaseForRoute({
     visibility: effectiveVisibility,
     category: detectedCategory ?? 'image',
     title: resolvedTitle,
-    description: normalizeTextValue(description) ?? generation.description?.trim() ?? null,
+    description: sanitizedPublicContent.description || null,
     prompt: shouldExposePromptPublic ? normalizeTextValue(prompt) ?? generation.prompt?.trim() ?? null : null,
-    body: normalizedBody,
-    post_format: normalizedBody ? 'mixed' : 'media',
+    body: sanitizedPublicContent.body || null,
+    post_format: sanitizedPublicContent.body ? 'mixed' : 'media',
     source_kind: MAGICBOOKLET_SOURCE_KIND,
     source_tool: normalizedAppSourceTool.label ?? 'magicbooklet',
     source_tool_slug: normalizedAppSourceTool.slug ?? 'magicbooklet',
@@ -694,8 +707,8 @@ export async function publishGenerationToShowcaseForRoute({
       ownerPath: postId ? `/post/${postId}/edit` : null,
       resourceBundlePath: postId
         ? resourceBundleStatus === 'draft' || effectiveVisibility === 'private'
-          ? `/post/${postId}/edit#resources`
-          : `/showcase/${postId}#resources`
+          ? `/post/${postId}/edit#recipe`
+          : `/showcase/${postId}#recipe`
         : null,
       resourceBundleStatus,
       message:

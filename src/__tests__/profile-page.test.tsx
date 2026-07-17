@@ -114,6 +114,14 @@ vi.mock('@/app/profile/DeferredCreatorProfileCard', () => ({
   ),
 }));
 
+vi.mock('@/app/profile/OwnerProfileMediaHub', () => ({
+  default: ({ creator }: { creator: { name: string; username: string | null } }) => (
+    <div data-testid="owner-profile-media-hub" data-creator-name={creator.name} data-username={creator.username ?? ''}>
+      Profile media hub
+    </div>
+  ),
+}));
+
 describe('ProfilePage', () => {
   beforeEach(() => {
     mockRedirect.mockClear();
@@ -150,6 +158,8 @@ describe('ProfilePage', () => {
     );
     expect(mockRedirect).not.toHaveBeenCalled();
     expect(screen.getByTestId('deferred-creator-profile-card')).toHaveAttribute('data-onboarding', 'false');
+    expect(screen.getByTestId('owner-profile-media-hub')).toHaveAttribute('data-username', 'persisted-name');
+    expect(screen.getByRole('link', { name: /edit profile/i })).toHaveAttribute('href', '#profile-settings');
   });
 
   it('keeps first-time users on /profile and prefills the suggested username', async () => {

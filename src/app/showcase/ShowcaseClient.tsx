@@ -143,7 +143,7 @@ function formatShowcaseDate(value: string): string {
 
 const UNLOCK_FILTERS: Array<{ id: ShowcaseUnlockFilter; label: string }> = [
     { id: 'all', label: 'All' },
-    { id: 'with-unlock', label: 'Unlocks' },
+    { id: 'with-unlock', label: 'Recipes' },
     { id: 'free', label: 'Free' },
     { id: 'paid', label: 'Paid' },
 ];
@@ -279,10 +279,10 @@ function getItemSummary(item: ShowcaseFeedItem): string {
         const kinds = getItemResourceKinds(item);
         const bundleCountSummary = formatPostResourceBundleCountSummary(item.asset.lockedPreview ?? null);
         const unlockSummary = bundleCountSummary
-            ? `Unlock includes ${bundleCountSummary}.`
+            ? `Recipe includes ${bundleCountSummary}.`
             : kinds.length > 0
-            ? `Unlock includes ${formatResourceKinds(kinds).toLowerCase()}.`
-            : 'Reusable unlock attached.';
+            ? `Recipe includes ${formatResourceKinds(kinds).toLowerCase()}.`
+            : 'Reusable recipe attached.';
 
         return [...metadata, unlockSummary].join(' · ');
     }
@@ -311,10 +311,10 @@ function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): str
         return formatBundleAccessLabel({
             accessMode: asset.accessMode,
             priceQuote: asset.priceQuote,
-        });
+        }).replace(/\s+unlock$/i, ' recipe');
     }
 
-    return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents);
+    return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+unlock$/i, ' recipe');
 }
 
 function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
@@ -323,10 +323,10 @@ function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>)
     }
 
     if (asset.accessMode === 'free' || asset.priceUsdCents === 0) {
-        return 'Open free unlock';
+        return 'Unlock free recipe';
     }
 
-    return `Unlock for ${asset.priceQuote?.formatted ?? getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+unlock$/i, '')}`;
+    return `Unlock for ${asset.priceQuote?.formatted ?? getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+(?:unlock|recipe)$/i, '')}`;
 }
 
 function setNonDefaultParam(params: URLSearchParams, key: string, value: string, defaultValue: string) {
@@ -1040,7 +1040,7 @@ export default function ShowcaseClient({
             });
         } catch (error) {
             console.error('Failed to fetch more showcase items:', error);
-            setLoadMoreError('Could not load more posts. Your current feed is still available.');
+            setLoadMoreError('Could not load more posts. Your current Showcase is still available.');
         } finally {
             isLoadingMoreRef.current = false;
             setIsLoadingMore(false);
@@ -1258,10 +1258,10 @@ export default function ShowcaseClient({
                             Creator community
                         </div>
                         <h1 className="text-4xl font-extrabold tracking-[-0.035em] text-[var(--ui-text-primary)] sm:text-5xl">
-                            Feed
+                            Showcase
                         </h1>
                         <p className="mt-3 max-w-2xl text-sm leading-6 text-[var(--ui-text-muted)] sm:text-base">
-                            Fresh creator posts with unlocks mixed in. Browse the result, then save it, remix it, or open the reusable process.
+                            Fresh creator posts with optional recipes. Browse the result, then save it, remix it, or open the reusable process.
                         </p>
                     </div>
 
@@ -1278,7 +1278,7 @@ export default function ShowcaseClient({
                             prefetch={false}
                             className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full border border-amber-300/20 bg-amber-400/10 px-5 text-sm font-bold text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-400/15"
                         >
-                            Browse unlocks
+                            Browse recipes
                         </Link>
                     </div>
                 </div>
@@ -1400,7 +1400,7 @@ export default function ShowcaseClient({
                                     </div>
                                 </div>
                                 <div>
-                                    <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Unlock</div>
+                                    <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Recipe</div>
                                     <div className="flex flex-wrap gap-2">
                                         {UNLOCK_FILTERS.map((option) => (
                         <button
@@ -1632,7 +1632,7 @@ export default function ShowcaseClient({
                                                 </div>
                                             </div>
 
-                                            {/* Unlock and Resource Badges */}
+                                            {/* Recipe and resource badges */}
                                             {(item.asset || resourceKinds.length > 0) && (
                                                 <div className="flex flex-wrap items-center gap-1.5 mt-1">
                                                     {item.asset ? (

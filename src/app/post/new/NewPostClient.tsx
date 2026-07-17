@@ -176,7 +176,7 @@ const RESOURCE_KIND_OPTIONS: Array<{
   { value: 'workflow', label: 'Workflow / setup', description: 'A workflow link, file link, or build path.' },
   { value: 'files', label: 'Files / links', description: 'Reference files, docs, presets, or source links.' },
   { value: 'notes', label: 'Notes', description: 'Usage notes, steps, or instructions.' },
-  { value: 'remix', label: 'Remix access', description: 'Require an unlock before someone can remix.' },
+  { value: 'remix', label: 'Remix access', description: 'Require recipe access before someone can remix.' },
 ];
 
 const RESOURCE_ITEM_TYPE_OPTIONS: Array<{
@@ -590,7 +590,7 @@ function getLockedSummary(selectedKinds: PostResourceKind[]): string {
 }
 
 function getVisibilityStatusLabel(v: PostVisibility): string {
-  if (v === 'public') return 'Visible in Feed';
+  if (v === 'public') return 'Visible in Showcase';
   if (v === 'unlisted') return 'Shareable by link only';
   return 'Saved privately in Studio';
 }
@@ -1059,9 +1059,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       detail: trimmedBody ? (proofMode === 'text' ? 'Post body is included' : 'Caption is included') : 'Add a short visible post',
     },
     {
-      label: 'Unlock optional',
+      label: 'Recipe optional',
       complete: resourceAccessMode === 'none' || hasResourceContent,
-      detail: resourceAccessMode === 'none' ? 'No unlock selected' : hasResourceContent ? getLockedSummary(selectedResourceKinds) : 'Add one asset',
+      detail: resourceAccessMode === 'none' ? 'No recipe selected' : hasResourceContent ? getLockedSummary(selectedResourceKinds) : 'Add one asset',
     },
   ];
   const stepBadgeLabel = hasGeneratedProof ? 'Generated media attached' : proofMode === 'text' ? 'Text post' : 'Media post';
@@ -1774,7 +1774,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     }
 
     if (mediaItems.some((item) => item.contentType?.startsWith('audio/'))) {
-      stopWithError('Audio posts are not supported in the community feed yet.', 'post');
+      stopWithError('Audio posts are not supported in Showcase yet.', 'post');
       return;
     }
 
@@ -1786,17 +1786,17 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     let resourceBundle: PostResourceBundleInput | undefined;
     if (resourceAccessMode !== 'none') {
       if (selectedResourceKinds.length === 0) {
-        stopWithError('Choose at least one thing people will unlock.', 'resources');
+        stopWithError('Choose at least one item to include in the recipe.', 'resources');
         return;
       }
 
       if (resourceAccessMode === 'paid' && (!Number.isFinite(parsedResourcePriceUsd) || parsedResourcePriceUsd < 1)) {
-        stopWithError('Paid unlocks must be priced at $1.00 or above.', 'resources');
+        stopWithError('Paid recipes must be priced at $1.00 or above.', 'resources');
         return;
       }
 
       if (!hasResourceContent) {
-        stopWithError('Add content for at least one selected unlock item before publishing.', 'resources');
+        stopWithError('Add content for at least one selected recipe item before publishing.', 'resources');
         return;
       }
 
@@ -1822,7 +1822,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
       if (!submittedMarketplaceAssessment.eligible) {
         const firstIssue = submittedMarketplaceAssessment.issues[0];
-        stopWithError(`Improve this unlock before publishing: ${firstIssue?.message ?? 'Finish the marketplace checklist.'}`, firstIssue?.field === 'post' || firstIssue?.field === 'title' ? 'story' : 'resources');
+        stopWithError(`Improve this recipe before publishing: ${firstIssue?.message ?? 'Finish the marketplace checklist.'}`, firstIssue?.field === 'post' || firstIssue?.field === 'title' ? 'story' : 'resources');
         return;
       }
 
@@ -2073,7 +2073,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             <div className="mb-6">
               <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
                 {isCreationPaywallManagementIntent
-                  ? 'Manage the unlock behind this post'
+                  ? 'Manage the recipe behind this post'
                   : isEditMode
                     ? 'Update post'
                     : 'Create post'}
@@ -2082,10 +2082,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 {isCreationPaywallManagementIntent
                   ? 'Adjust post settings, pricing, and visibility below.'
                   : isGeneratedPaywallIntent
-                    ? 'Your media is attached. Complete the optional unlock details below.'
+                    ? 'Your media is attached. Complete the optional recipe details below.'
                     : isEditMode
-                      ? 'Edit post content, visibility, and unlock settings.'
-                      : 'Share your work and add optional unlockable resources.'}
+                      ? 'Edit post content, visibility, and recipe settings.'
+                      : 'Share your work and add an optional reusable recipe.'}
               </p>
             </div>
 
@@ -2403,7 +2403,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                               <div className="text-sm font-semibold text-white">
                                 {mediaItems.length > 0 ? `${mediaItems.length} of 5 media added` : 'Upload images or videos'}
                               </div>
-                              <p className="mt-1 text-xs text-zinc-400">The first item is the feed cover.</p>
+                              <p className="mt-1 text-xs text-zinc-400">The first item is the Showcase cover.</p>
                             </div>
                           </div>
                           <button
@@ -2581,7 +2581,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                   <div>
                     <h2 className="text-lg font-semibold text-white">Story</h2>
                     <p className="mt-1 text-xs text-zinc-400">
-                      The public content visible in the community feed.
+                      The public content visible in Showcase.
                     </p>
                   </div>
                   <button
@@ -2589,7 +2589,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                     onClick={() => setIsDetailsOpen((current) => !current)}
                     className="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
                   >
-                    {isDetailsOpen ? 'Hide description' : 'Add feed description'}
+                    {isDetailsOpen ? 'Hide description' : 'Add Showcase description'}
                   </button>
                 </div>
 
@@ -2622,14 +2622,14 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
                 {isDetailsOpen ? (
                   <label className="mt-5 block">
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Feed description</div>
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Showcase description</div>
                     <textarea
                       value={description}
                       onChange={(event) => {
                         setDescription(event.target.value);
                         resetFeedback();
                       }}
-                      placeholder="Optional: give the post a short one-line setup for feeds and previews."
+                      placeholder="Optional: give the post a short one-line setup for Showcase and previews."
                       rows={3}
                       className="w-full rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
                     />
@@ -2638,41 +2638,42 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
               </div>
 
               <div
-                id="resources"
+                id="recipe"
                 ref={resourceSectionRef}
                 tabIndex={-1}
                 data-composer-section="resources"
                 className="rounded-3xl border border-emerald-500/15 bg-emerald-500/5 p-5 outline-none"
               >
+                <span id="resources" aria-hidden className="sr-only" />
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <h2 className="text-lg font-semibold text-white">Unlock</h2>
+                    <h2 className="text-lg font-semibold text-white">Recipe</h2>
                     <p className="mt-1 text-xs text-zinc-400">
-                      Add optional gated resources (prompts, files, notes, or remix access) to this post.
+                      Add optional reusable inputs (prompts, files, notes, or remix access) to this post. Paid inputs stay hidden until purchase.
                     </p>
                   </div>
                   <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-medium text-zinc-300">
-                    {resourceAccessMode === 'none' ? 'No unlock' : resourceAccessMode === 'free' ? 'Free unlock' : 'Paid unlock'}
+                    {resourceAccessMode === 'none' ? 'No recipe' : resourceAccessMode === 'free' ? 'Free recipe' : 'Paid recipe'}
                   </div>
                 </div>
 
                 {isGeneratedPaywallIntent ? (
                   <div className="mt-5 rounded-[24px] border border-emerald-300/18 bg-black/30 p-4 text-sm leading-6 text-zinc-200">
                     {isLoadingGeneration
-                      ? 'Preparing the saved prompt and generation setup for this paid unlock.'
+                      ? 'Preparing the saved prompt and generation setup for this paid recipe.'
                       : hasGenerationPaywallPrefill
                         ? 'Saved prompt, reusable setup notes, and remix access are ready where this creation supports them. Set the price first, then publish or edit anything below.'
-                        : 'This creation does not have enough saved inputs to auto-fill a paid unlock yet. The media is still attached, and you can add the prompt, notes, or remix access manually below.'}
+                        : 'This creation does not have enough saved inputs to auto-fill a paid recipe yet. The media is still attached, and you can add the prompt, notes, or remix access manually below.'}
                   </div>
                 ) : isCreationPaywallManagementIntent ? (
                   <div className="mt-5 rounded-[24px] border border-emerald-300/18 bg-black/30 p-4 text-sm leading-6 text-zinc-200">
-                    You came from My Studio to manage this post&apos;s unlock. The unlock mode is ready here, and the price field is focused so you can adjust the paid layer quickly.
+                    You came from My Studio to manage this post&apos;s recipe. The access mode is ready here, and the price field is focused so you can adjust the paid layer quickly.
                   </div>
                 ) : null}
 
                 {resourceAccessMode !== 'none' && displayVisibility !== 'public' ? (
                   <div className="mt-4 rounded-[24px] border border-white/8 bg-black/25 px-4 py-3 text-sm text-zinc-200">
-                    This unlock will save as a draft until the post is public.
+                    This recipe will save as a draft until the post is public.
                   </div>
                 ) : null}
 
@@ -2697,7 +2698,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                     }}
                     className="h-4 w-4 rounded border-white/10 bg-white/[0.03] text-emerald-400 focus:ring-0 focus:ring-offset-0"
                   />
-                  <span className="text-sm font-semibold text-white">Add references & unlockable resources</span>
+                  <span className="text-sm font-semibold text-white">Add a reusable recipe</span>
                 </label>
 
                 {resourceAccessMode !== 'none' && (
@@ -2814,7 +2815,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                             resetFeedback();
                           }}
                           rows={6}
-                          placeholder="Paste the exact prompt people should unlock."
+                          placeholder="Paste the exact prompt included in the recipe."
                           className="w-full rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-white/[0.05]"
                         />
                       </label>
@@ -2969,9 +2970,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
                     {resourceSelections.remix ? (
                       <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
-                        <div className="text-sm font-semibold text-white">Remix access is included in this unlock</div>
+                        <div className="text-sm font-semibold text-white">Remix access is included in this recipe</div>
                         <p className="mt-1 text-sm leading-6 text-zinc-400">
-                          People will need to open this unlock before remixing this post.
+                          People will need to unlock this recipe before remixing the post.
                         </p>
                       </div>
                     ) : null}
@@ -3195,9 +3196,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       {isEditMode
                         ? 'Changes saved'
                         : createdPost.resourceBundleStatus === 'draft'
-                          ? 'Draft saved with an unlock'
+                          ? 'Draft saved with a recipe'
                           : createdPostHasResources
-                            ? 'Post published with an unlock'
+                            ? 'Post published with a recipe'
                             : 'Post published'}
                     </div>
                     <div className="rounded-full border border-emerald-300/20 bg-black/20 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-50">
@@ -3210,9 +3211,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         ? 'Your changes are saved in the owner editor. This post is not publicly visible right now.'
                         : 'The post has been updated and the latest version is ready.'
                       : createdPost.resourceBundleStatus === 'draft'
-                        ? 'The public post and unlock are saved for you. Make the post public when you are ready to list the unlock.'
+                        ? 'The post and recipe are saved for you. Make the post public when you are ready to list the recipe.'
                         : createdPostHasResources
-                          ? 'The post is public and the unlockable process is ready on the same page.'
+                          ? 'The post is public and its reusable recipe is ready on the same page.'
                           : createdPost.visibility === 'public'
                             ? 'Your post is live.'
                             : 'Your post is saved with limited visibility.'}
@@ -3231,7 +3232,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         href={createdPost.resourceBundlePath}
                         className="rounded-full border border-emerald-300/30 bg-emerald-400/15 px-4 py-2.5 text-sm font-semibold text-emerald-50 transition hover:border-emerald-200/40 hover:bg-emerald-400/20"
                       >
-                        Open unlock section
+                        Open recipe section
                       </Link>
                     ) : null}
                   </div>
@@ -3255,8 +3256,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                     {resourceAccessMode === 'none'
                       ? getVisibilityStatusLabel(displayVisibility)
                       : resourceAccessMode === 'paid'
-                        ? `${getVisibilityStatusLabel(displayVisibility)} · paid unlock`
-                        : `${getVisibilityStatusLabel(displayVisibility)} · free unlock`}
+                        ? `${getVisibilityStatusLabel(displayVisibility)} · paid recipe`
+                        : `${getVisibilityStatusLabel(displayVisibility)} · free recipe`}
                   </div>
                 </div>
 
@@ -3316,7 +3317,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         className="ui-focus-ring rounded-2xl bg-[var(--ui-primary)] px-5 py-5 text-left transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-70"
                       >
                         <div className="text-sm font-extrabold text-[var(--ui-primary-on)]">Publish public</div>
-                        <p className="mt-1.5 text-xs leading-5 text-[#5c2c20]">Visible in Feed.</p>
+                        <p className="mt-1.5 text-xs leading-5 text-[#5c2c20]">Visible in Showcase.</p>
                       </button>
                     </div>
                   </div>

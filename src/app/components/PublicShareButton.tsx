@@ -68,11 +68,11 @@ export default function PublicShareButton({
         className={className}
       >
         {state === 'loading' ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
+          <Loader2 size={16} className="h-4 w-4 shrink-0 animate-spin" />
         ) : state === 'copied' || state === 'shared' ? (
-          <Check className="h-4 w-4" />
+          <Check size={16} className="h-4 w-4 shrink-0" />
         ) : (
-          <Share2 className="h-4 w-4" />
+          <Share2 size={16} className="h-4 w-4 shrink-0" />
         )}
         {!iconOnly && <span>{resolvedLabel}</span>}
       </button>

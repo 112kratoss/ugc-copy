@@ -292,7 +292,7 @@ describe('creator tool card links', () => {
       render(Home());
     });
     expect(screen.getByRole('link', { name: 'Start creating' })).not.toHaveAttribute('data-prefetch');
-    expect(screen.getByRole('link', { name: 'Browse the feed' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Browse Showcase' })).toHaveAttribute(
       'data-prefetch',
       'false'
     );
@@ -311,7 +311,7 @@ describe('creator tool card links', () => {
     });
 
     expect(screen.getByText(/What will you create/i)).toBeInTheDocument();
-    expect(await screen.findByText(/Could not load the creator feed/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Could not load the Showcase/i)).toBeInTheDocument();
     expect(screen.queryByTestId('home-showcase-preview-grid')).not.toBeInTheDocument();
     expect(homeShowcasePreviewGridMock).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith(

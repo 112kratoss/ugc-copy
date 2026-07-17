@@ -95,7 +95,7 @@ describe('publishPreparedPost', () => {
         visibility: 'public',
         showcasePath: '/showcase/post-1',
         ownerPath: '/post/post-1/edit',
-        resourceBundlePath: '/showcase/post-1#resources',
+        resourceBundlePath: '/showcase/post-1#recipe',
         resourceBundleStatus: null,
       },
     });

@@ -348,10 +348,10 @@ export default function ShowcaseScreen() {
     void runtime.api.recordShowcaseFeedEvent(request)
       .then(() => AccessibilityInfo.announceForAccessibility(eventType === 'hide_creator'
         ? user
-          ? `${formatCreatorLabel(item.creator.username || item.creator.name)} hidden from your feed.`
+          ? `${formatCreatorLabel(item.creator.username || item.creator.name)} hidden from your Showcase.`
           : `${formatCreatorLabel(item.creator.username || item.creator.name)} hidden for this visit.`
         : user
-          ? 'Post removed. Your feed will adapt.'
+          ? 'Post removed. Your Showcase will adapt.'
           : 'Post removed for this visit.'))
       .catch(() => {
         if (!user) forgetAnonymousShowcaseFeedRemoval(target);
@@ -359,11 +359,11 @@ export default function ShowcaseScreen() {
           queryClient.setQueryData(cachedQueryKey, cachedData);
         });
         Alert.alert(
-          'Couldn’t update your feed',
+          'Couldn’t update your Showcase',
           'The post was restored. Check your connection and try again.'
         );
         void AccessibilityInfo.announceForAccessibility(
-          'Couldn’t update your feed. The post was restored.'
+          'Couldn’t update your Showcase. The post was restored.'
         );
       });
   };
@@ -425,7 +425,7 @@ export default function ShowcaseScreen() {
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                 <View style={{ gap: 4, flex: 1 }}>
                   <Text accessibilityRole="header" selectable style={{ color: appTheme.colors.text, ...appTheme.type.pageTitle }}>
-                    Feed
+                    Showcase
                   </Text>
                   <Text selectable style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
                     {activeToolLabel ? `Creations made with ${activeToolLabel}.` : activeFilter.body}
@@ -433,7 +433,7 @@ export default function ShowcaseScreen() {
                 </View>
                 <IconButton
                   disabled={showcaseQuery.isFetching && !showcaseQuery.isFetchingNextPage}
-                  label="Refresh feed"
+                  label="Refresh Showcase"
                   onPress={handleRefresh}
                 >
                   <RefreshCw size={19} color={appTheme.colors.text} strokeWidth={2.4} />
@@ -478,10 +478,10 @@ export default function ShowcaseScreen() {
               <View style={{ gap: appTheme.spacing.gap }}>
                 <StatusBlock
                   tone="danger"
-                  title="Could not load feed"
+                  title="Could not load Showcase"
                   body={showcaseFeedErrorBody(showcaseQuery.error)}
                 />
-                <SecondaryButton label="Retry feed" onPress={handleRefresh} />
+                <SecondaryButton label="Retry Showcase" onPress={handleRefresh} />
               </View>
             ) : null}
             {isFirstLoad ? <ShowcaseSkeletonGrid layout={gridLayout} /> : null}
@@ -827,7 +827,7 @@ function MasonryPin({
           <PinStat icon={<Heart size={16} color={appTheme.colors.text} strokeWidth={2.4} />} label={card.saveLabel} />
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Feed controls for ${card.title}`}
+            accessibilityLabel={`Showcase controls for ${card.title}`}
             accessibilityHint="Hide this post or this creator from recommendations"
             hitSlop={4}
             onPress={(event) => {

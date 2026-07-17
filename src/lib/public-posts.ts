@@ -26,6 +26,7 @@ import {
 } from '@/lib/post-media';
 import { createServiceClient } from '@/lib/server-helpers';
 import { buildVisualMediaDescriptor } from '@/lib/media-descriptor';
+import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   normalizeShowcaseSourceKind,
@@ -352,13 +353,20 @@ export async function getPublicPostDetail(
     }
   }
 
-  const prompt = resourceBundle ? '' : row.prompt?.trim() || '';
-  const body = row.body?.trim() || '';
+  const publicContent = sanitizePublicPostContent({
+    prompt: row.prompt?.trim() || '',
+    body: row.body?.trim() || '',
+    description: row.description?.trim() || '',
+    hasRecipe: Boolean(resourceBundle),
+    isPaidRecipe: resourceBundle?.accessMode === 'paid',
+  });
+  const prompt = publicContent.prompt;
+  const body = publicContent.body;
   const title =
     row.title?.trim() ||
     deriveTitleFromBody(body) ||
     (row.post_format === 'text' ? 'Untitled Note' : 'Untitled Creation');
-  const description = row.description?.trim() || '';
+  const description = publicContent.description;
 
   const remix = resolvePostRemixCapability({
     generationId: row.generation_id,

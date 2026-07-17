@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CircleAlert, ChevronLeft, ChevronRight, Images, Play, RotateCcw } from 'lucide-react';
+import { CircleAlert, ChevronLeft, ChevronRight, Images, Maximize2, Play, RotateCcw } from 'lucide-react';
 
 import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
 import { useMediaLoadingPreferences } from '@/app/components/useMediaLoadingPreferences';
@@ -14,6 +14,8 @@ interface ShowcaseMediaCarouselProps {
   initialIndex?: number;
   mode?: 'feed' | 'detail' | 'reel';
   className?: string;
+  viewportClassName?: string;
+  allowFullscreen?: boolean;
   autoPlayVideo?: boolean;
   priority?: boolean;
   priorityPoster?: {
@@ -40,6 +42,8 @@ export default function ShowcaseMediaCarousel({
   initialIndex = 0,
   mode = 'feed',
   className = '',
+  viewportClassName = '',
+  allowFullscreen = false,
   autoPlayVideo,
   priority = false,
   priorityPoster = null,
@@ -299,6 +303,19 @@ export default function ShowcaseMediaCarousel({
     onIndexChange?.(clamped);
   };
 
+  const openFullscreen = () => {
+    const mediaViewport = carouselRef.current?.querySelector<HTMLElement>('[data-showcase-media-viewport]');
+
+    if (!mediaViewport?.requestFullscreen) {
+      window.open(activeItem?.url ?? '', '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    void mediaViewport.requestFullscreen().catch(() => {
+      window.open(activeItem?.url ?? '', '_blank', 'noopener,noreferrer');
+    });
+  };
+
   if (items.length === 0) {
     return null;
   }
@@ -323,7 +340,8 @@ export default function ShowcaseMediaCarousel({
   return (
     <div ref={carouselRef} className={className}>
       <div
-        className={`group/carousel relative overflow-hidden bg-black ${isDetail ? 'rounded-[22px]' : ''} ${isReel ? 'h-full' : ''} ${onOpen ? 'cursor-pointer' : ''}`}
+        data-showcase-media-viewport
+        className={`group/carousel relative overflow-hidden bg-black ${isDetail ? 'rounded-[22px]' : ''} ${isReel ? 'h-full' : ''} ${onOpen ? 'cursor-pointer' : ''} ${viewportClassName}`}
         style={isReel ? undefined : { aspectRatio: mode === 'feed' ? '4 / 5' : coverAspectRatio ?? '16 / 10' }}
         onClick={(event) => {
           if (!onOpen || event.target instanceof HTMLElement && event.target.closest('button, video[controls]')) {
@@ -470,17 +488,37 @@ export default function ShowcaseMediaCarousel({
           />
         ) : null}
 
+        {items.length > 1 || allowFullscreen ? (
+          <div className="absolute right-3 top-3 z-[5] flex items-center gap-2">
+            {items.length > 1 ? (
+              <div
+                role="status"
+                aria-live="polite"
+                aria-label={`Media ${activeIndex + 1} of ${items.length}`}
+                className="pointer-events-none inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/65 px-2.5 py-1 text-xs font-medium text-white backdrop-blur-md"
+              >
+                <Images className="h-3.5 w-3.5" />
+                {activeIndex + 1}/{items.length}
+              </div>
+            ) : null}
+            {allowFullscreen ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openFullscreen();
+                }}
+                aria-label="Open media full screen"
+                className="ui-focus-ring inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/10 bg-black/65 text-white backdrop-blur-md transition hover:bg-black/85"
+              >
+                <Maximize2 size={16} className="h-4 w-4 shrink-0" />
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
         {items.length > 1 ? (
           <>
-            <div
-              role="status"
-              aria-live="polite"
-              aria-label={`Media ${activeIndex + 1} of ${items.length}`}
-              className="pointer-events-none absolute right-3 top-3 z-[3] inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/65 px-2.5 py-1 text-xs font-medium text-white backdrop-blur-md"
-            >
-              <Images className="h-3.5 w-3.5" />
-              {activeIndex + 1}/{items.length}
-            </div>
             <button
               type="button"
               onClick={(event) => {

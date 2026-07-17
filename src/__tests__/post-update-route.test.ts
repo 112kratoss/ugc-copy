@@ -388,7 +388,7 @@ describe('/api/posts/[postId] route', () => {
     }));
     expect(data.visibility).toBe('private');
     expect(data.resourceBundleStatus).toBe('draft');
-    expect(data.resourceBundlePath).toBe('/post/post-1/edit#resources');
+    expect(data.resourceBundlePath).toBe('/post/post-1/edit#recipe');
   });
 
   it('reuses a single admin client while updating an owner post', async () => {
@@ -454,7 +454,7 @@ describe('/api/posts/[postId] route', () => {
     }));
     expect(data.visibility).toBe('public');
     expect(data.resourceBundleStatus).toBe('published');
-    expect(data.resourceBundlePath).toBe('/showcase/post-1#resources');
+    expect(data.resourceBundlePath).toBe('/showcase/post-1#recipe');
   });
 
   it('rejects publishing a draft unlock without resubmitting the bundle payload', async () => {

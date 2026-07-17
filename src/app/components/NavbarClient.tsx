@@ -11,7 +11,7 @@ import { supabase } from '@/lib/supabase';
 
 const COMMUNITY_LINKS = [
   { href: '/showcase', label: 'Community' },
-  { href: '/marketplace', label: 'Unlocks' },
+  { href: '/marketplace', label: 'Marketplace' },
   { href: '/blog', label: 'Blog' },
 ];
 
@@ -20,8 +20,8 @@ const PUBLIC_LINKS = [...COMMUNITY_LINKS, { href: '/pricing', label: 'Pricing' }
 
 const ACCOUNT_LINKS = [
   { href: '/profile', label: 'Profile', description: 'Manage your creator identity' },
-  { href: '/creations', label: 'My Studio', description: 'Manage creations, posts, and unlocks' },
-  { href: '/marketplace/sell', label: 'Seller Dashboard', description: 'Track unlocks, links, and sales' },
+  { href: '/creations', label: 'My Studio', description: 'Manage creations, posts, and recipes' },
+  { href: '/marketplace/sell', label: 'Seller Dashboard', description: 'Track recipes, links, and sales' },
   { href: '/pricing', label: 'Credits & Pricing', description: 'Top up or manage credits' },
 ];
 

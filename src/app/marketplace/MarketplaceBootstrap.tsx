@@ -160,7 +160,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
             <p className="mt-1 text-sm text-zinc-400">
               {activeFilterLabels.length > 0
                 ? `Showing ${activeFilterLabels.join(' + ')}`
-                : 'All quality-checked public unlocks from community posts.'}
+                : 'All quality-checked public recipes from community posts.'}
             </p>
           </div>
 
@@ -173,7 +173,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
           >
             <PreservedFilterInputs filters={initialFilters} />
             <label className="min-w-0 flex-1 px-3">
-              <span className="sr-only">Search marketplace unlocks</span>
+              <span className="sr-only">Search marketplace recipes</span>
               <input
                 type="search"
                 name="q"
@@ -231,7 +231,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
           />
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center gap-2" aria-label="Sort unlocks">
+        <div className="mt-4 flex flex-wrap items-center gap-2" aria-label="Sort recipes">
           {SORT_FILTERS.map((item) => (
             <BootstrapFilterLink
               key={item.value}
@@ -257,9 +257,9 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
 
       {bootstrapItems.length === 0 ? (
         <div className="mt-10 rounded-[30px] border border-white/8 bg-zinc-950/70 p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
-          <h2 className="text-2xl font-semibold text-white">No unlocks yet</h2>
+          <h2 className="text-2xl font-semibold text-white">No recipes yet</h2>
           <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-zinc-400">
-            Unlocks need a useful public post, creator profile, buyer preview, and reusable resources before they appear here.
+            Recipes need a useful public post, creator profile, buyer preview, and reusable resources before they appear here.
           </p>
           <a
             href="/post/new"
@@ -292,7 +292,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
                 disabled={isActivating}
                 className="rounded-full border border-white/10 bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:cursor-wait disabled:opacity-60"
               >
-                {isActivating ? 'Opening buyer tools…' : 'Load more unlocks'}
+                {isActivating ? 'Opening buyer tools…' : 'Load more recipes'}
               </button>
               {activationError ? (
                 <p role="status" className="text-sm text-rose-200">
@@ -378,9 +378,9 @@ function BootstrapMarketplaceCard({
   asset: MarketplaceResourceListItem;
   marketplaceReturnPath: string;
 }) {
-  const accessLabel = asset.accessMode === 'free' ? 'Free unlock' : asset.priceQuote.formatted;
+  const accessLabel = asset.accessMode === 'free' ? 'Free recipe' : `${asset.priceQuote.formatted} recipe`;
   const unlockLabel = asset.accessMode === 'free'
-    ? 'Open free unlock'
+    ? 'Unlock free recipe'
     : `Unlock for ${asset.priceQuote.formatted}`;
   const previewText = asset.summary || asset.previewText || (
     asset.post?.postFormat === 'text'
@@ -488,7 +488,7 @@ function BootstrapMediaPreview({
 
   return (
     <div className="relative flex h-44 items-center justify-center border-b border-white/8 bg-[radial-gradient(circle_at_top,rgba(52,211,153,0.2),transparent_48%),rgba(10,10,14,1)] text-sm font-medium text-zinc-400">
-      Reusable creator unlock
+      Reusable creator recipe
       <PreviewAccessBadge label={accessLabel} />
     </div>
   );
@@ -550,5 +550,5 @@ function buildMarketplaceDetailPath(postId: string, marketplaceReturnPath: strin
     returnTo: marketplaceReturnPath,
   });
 
-  return `/showcase/${encodeURIComponent(postId)}?${params.toString()}#resources`;
+  return `/showcase/${encodeURIComponent(postId)}?${params.toString()}#recipe`;
 }

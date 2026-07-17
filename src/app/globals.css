@@ -26,7 +26,6 @@
 @source "./components/HomeShowcasePreviewGridIsland.tsx";
 @source "./components/HoverVideo.tsx";
 @source "./components/JsonLd.tsx";
-@source "./components/MediaDetailsPreviewModal.tsx";
 @source "./components/OptimizedPreviewImage.tsx";
 @source "./components/PublicShareButton.tsx";
 @source "./components/RouteAuthBoundary.tsx";
@@ -413,6 +412,129 @@ select {
   max-width: 1860px;
   margin-inline: auto;
   padding-inline: clamp(1rem, 1.9vw, 2.25rem);
+}
+
+/*
+ * Canonical posts live beside the persistent app sidebar. Container queries
+ * keep the media/details split tied to usable page width instead of the full
+ * browser viewport, preventing narrow desktop layouts from being squeezed.
+ */
+.canonical-post-shell {
+  container-name: canonical-post;
+  container-type: inline-size;
+}
+
+.canonical-post-layout {
+  display: grid;
+  min-width: 0;
+  align-items: start;
+  gap: 1rem;
+}
+
+.canonical-post-stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.canonical-post-media-viewport {
+  height: min(62dvh, 560px);
+  min-height: 360px;
+}
+
+@media (min-width: 640px) {
+  .canonical-post-stats {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .canonical-post-media-viewport {
+    height: min(70dvh, 680px);
+    min-height: 420px;
+  }
+}
+
+@container canonical-post (min-width: 900px) {
+  .canonical-post-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 400px);
+    gap: 1.5rem;
+  }
+
+  .canonical-post-identity {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .canonical-post-media {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+  }
+
+  .canonical-post-actions {
+    position: sticky;
+    top: 76px;
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .canonical-post-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .canonical-post-media-viewport {
+    height: min(72dvh, 760px);
+  }
+}
+
+@container canonical-post (min-width: 1200px) {
+  .canonical-post-layout {
+    grid-template-columns: minmax(0, 1fr) 430px;
+  }
+}
+
+@media (min-width: 1180px) {
+  .canonical-post-mobile-cta {
+    display: none;
+  }
+}
+
+/*
+ * Generator pages sit inside the persistent app sidebar, so viewport-based
+ * Tailwind breakpoints can otherwise enable the three-column studio before
+ * its content area is actually wide enough. These layout classes also avoid
+ * display conflicts between the global and route-only Tailwind stylesheets.
+ */
+.studio-media-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.studio-media-rail {
+  display: none;
+}
+
+.studio-path-switcher {
+  margin-bottom: 1rem;
+}
+
+@media (min-width: 1200px) {
+  .studio-media-layout {
+    grid-template-columns: minmax(0, 1.12fr) minmax(340px, 0.88fr);
+  }
+}
+
+@media (min-width: 1440px) {
+  .studio-media-layout {
+    grid-template-columns: 108px minmax(0, 560px) minmax(0, 1fr);
+  }
+
+  .studio-media-rail {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .studio-path-switcher {
+    display: none;
+  }
 }
 
 .app-shell-root {

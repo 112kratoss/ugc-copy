@@ -26,17 +26,17 @@ describe('marketplace trust helpers', () => {
     expect(formatBundleAccessLabel({
       accessMode: 'free',
       priceQuote: { currency: 'USD', amountSubunits: 0, formatted: '$0.00', note: null },
-    })).toBe('Free unlock');
+    })).toBe('Free recipe');
 
     expect(formatBundleAccessLabel({
       accessMode: 'paid',
       priceQuote: { currency: 'INR', amountSubunits: 18900, formatted: '₹189', note: 'Charged in INR for buyers in India.' },
-    })).toBe('₹189 unlock');
+    })).toBe('₹189 recipe');
 
     expect(formatBundleAccessLabel({
       accessMode: 'paid',
       priceQuote: { currency: 'USD', amountSubunits: 200, formatted: '$2.00', note: null },
-    })).toBe('$2.00 unlock');
+    })).toBe('$2.00 recipe');
   });
 
   it('rejects placeholder and test-like listings', () => {

@@ -322,7 +322,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
         postId: 'post-1',
         showcasePath: null,
         ownerPath: '/post/post-1/edit',
-        resourceBundlePath: '/post/post-1/edit#resources',
+        resourceBundlePath: '/post/post-1/edit#recipe',
         resourceBundleStatus: null,
         message: 'Saved as a private post',
       },

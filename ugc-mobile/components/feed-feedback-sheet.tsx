@@ -35,7 +35,7 @@ export function FeedFeedbackSheet({
       <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.58)' }}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Close feed controls"
+          accessibilityLabel="Close Showcase preferences"
           onPress={onClose}
           style={{ position: 'absolute', inset: 0 }}
         />
@@ -64,15 +64,15 @@ export function FeedFeedbackSheet({
           />
           <View style={{ gap: 5, paddingHorizontal: appTheme.spacing.panel, paddingBottom: appTheme.spacing.gap }}>
             <Text accessibilityRole="header" numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>
-              Tune your feed
+              Shape your Showcase
             </Text>
             <Text numberOfLines={2} style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
-              Choose what you want to see less often. “{postTitle}” will leave this feed now.
+              Choose what you want to see less often. “{postTitle}” will leave your Showcase now.
             </Text>
           </View>
           <FeedbackAction
             body={sessionOnly
-              ? 'Remove this post from the feed for this visit.'
+              ? 'Remove this post from your Showcase for this visit.'
               : 'Remove this post and show fewer recommendations like it.'}
             label="Not interested"
             onPress={onNotInterested}

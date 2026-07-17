@@ -798,8 +798,8 @@ export async function updateOwnerPostForRoute({
         ownerPath: `/post/${postId}/edit`,
         resourceBundlePath:
           updatedPost.bundleStatus === 'draft' || updatedPost.visibility === 'private'
-            ? `/post/${postId}/edit#resources`
-            : `/showcase/${postId}#resources`,
+            ? `/post/${postId}/edit#recipe`
+            : `/showcase/${postId}#recipe`,
         resourceBundleStatus: updatedPost.bundleStatus,
       },
     };

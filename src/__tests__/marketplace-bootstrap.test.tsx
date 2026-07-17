@@ -70,7 +70,7 @@ describe('MarketplaceBootstrap', () => {
     expect(markup).toContain('Unlock 1');
     expect(markup).toContain('Unlock 3');
     expect(markup).not.toContain('Unlock 4');
-    expect(markup).toContain('Load more unlocks');
+    expect(markup).toContain('Load more recipes');
     expect(markup).not.toContain('Interactive marketplace browser');
     expect(browserModuleLoaded).not.toHaveBeenCalled();
   });
@@ -86,9 +86,9 @@ describe('MarketplaceBootstrap', () => {
       />
     );
 
-    expect(screen.getByRole('searchbox', { name: /search marketplace unlocks/i }))
+    expect(screen.getByRole('searchbox', { name: /search marketplace recipes/i }))
       .toHaveAttribute('name', 'q');
-    expect(screen.getByRole('searchbox', { name: /search marketplace unlocks/i }))
+    expect(screen.getByRole('searchbox', { name: /search marketplace recipes/i }))
       .toHaveClass('min-w-0');
     expect(screen.getByRole('link', { name: 'Recent' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: 'Paid' })).toHaveAttribute(
@@ -99,9 +99,9 @@ describe('MarketplaceBootstrap', () => {
       'href',
       '/marketplace?tool=runway&sort=recent'
     );
-    expect(screen.getByRole('link', { name: 'Open free unlock: Unlock 1' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Unlock free recipe: Unlock 1' })).toHaveAttribute(
       'href',
-      '/showcase/post-1?from=unlocks&returnTo=%2Fmarketplace%3Fsort%3Drecent#resources'
+      '/showcase/post-1?from=unlocks&returnTo=%2Fmarketplace%3Fsort%3Drecent#recipe'
     );
 
     await act(async () => Promise.resolve());
@@ -147,7 +147,7 @@ describe('MarketplaceBootstrap', () => {
       />
     );
 
-    fireEvent.focus(screen.getByRole('searchbox', { name: /search marketplace unlocks/i }));
+    fireEvent.focus(screen.getByRole('searchbox', { name: /search marketplace recipes/i }));
 
     await waitFor(() => {
       expect(browserModuleLoaded).toHaveBeenCalledTimes(1);
@@ -155,7 +155,7 @@ describe('MarketplaceBootstrap', () => {
     expect(screen.getByText('Unlock 1')).toBeInTheDocument();
     expect(screen.queryByTestId('interactive-marketplace-browser')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /load more unlocks/i }));
+    fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
 
     expect(await screen.findByTestId('interactive-marketplace-browser')).toBeInTheDocument();
     expect(screen.queryByText('Unlock 1')).not.toBeInTheDocument();

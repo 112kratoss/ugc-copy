@@ -1,12 +1,14 @@
-import type {
-    MarketplacePriceQuote,
-    PostRemixCapability,
-    PostRemixTarget,
-    PostResourceItemCounts,
-    PostResourceBundleLockedPreview,
-    PostResourceKind,
+import {
+    sanitizePostResourceBundleLockedPreview,
+    type MarketplacePriceQuote,
+    type PostRemixCapability,
+    type PostRemixTarget,
+    type PostResourceItemCounts,
+    type PostResourceBundleLockedPreview,
+    type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 import type { VisualMediaDescriptor } from '@/lib/media-descriptor';
+import { sanitizePublicPostContent } from '@/lib/post-public-content';
 
 export const SHOWCASE_PAGE_SIZE = 12;
 export const SHOWCASE_INITIAL_PAGE_SIZE = 2;
@@ -199,7 +201,7 @@ export function sanitizeShowcaseAssetSummary(
     }
 
     if (asset.lockedPreview) {
-        sanitized.lockedPreview = asset.lockedPreview;
+        sanitized.lockedPreview = sanitizePostResourceBundleLockedPreview(asset.lockedPreview);
     }
 
     if (asset.itemCounts) {
@@ -212,10 +214,23 @@ export function sanitizeShowcaseAssetSummary(
 export function sanitizeShowcaseFeedPage(feed: ShowcaseFeedPage): ShowcaseFeedPage {
     return {
         ...feed,
-        items: feed.items.map((item) => ({
-            ...item,
-            asset: sanitizeShowcaseAssetSummary(item.asset),
-        })),
+        items: feed.items.map((item) => {
+            const asset = sanitizeShowcaseAssetSummary(item.asset);
+            const publicContent = sanitizePublicPostContent({
+                prompt: item.prompt,
+                body: item.body,
+                description: '',
+                hasRecipe: Boolean(asset),
+                isPaidRecipe: asset?.accessMode === 'paid',
+            });
+
+            return {
+                ...item,
+                prompt: publicContent.prompt,
+                body: publicContent.body,
+                asset,
+            };
+        }),
     };
 }
 

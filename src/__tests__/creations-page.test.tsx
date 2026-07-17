@@ -407,7 +407,7 @@ describe('CreationsPage', () => {
     });
   });
 
-  it('opens the publish setup modal from a generated card Add unlock action', async () => {
+  it('opens the publish setup modal from a generated card Add recipe action', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
 
@@ -461,7 +461,7 @@ describe('CreationsPage', () => {
 
     render(<CreationsPage />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /^add unlock$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^add recipe$/i }));
 
     expect(await screen.findByRole('dialog', { name: /publish this creation/i })).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('/api/generations?includeArchived=true&id=gen-linked&limit=1', {
@@ -473,7 +473,7 @@ describe('CreationsPage', () => {
     expect(navigationState.push).not.toHaveBeenCalled();
   });
 
-  it('removes an existing unlock from a generation-backed Post Library Manage unlock action', async () => {
+  it('removes an existing recipe from a generation-backed Post Library Manage recipe action', async () => {
     navigationState.searchParams = new URLSearchParams('view=posts');
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
@@ -529,7 +529,7 @@ describe('CreationsPage', () => {
               updatedAt: '2026-06-01T10:00:00.000Z',
               publicPath: '/showcase/post-bundled',
               ownerPath: '/post/post-bundled/edit',
-              resourcePath: '/showcase/post-bundled#resources',
+              resourcePath: '/showcase/post-bundled#recipe',
               canShare: true,
               bundle: {
                 id: 'bundle-1',
@@ -569,7 +569,7 @@ describe('CreationsPage', () => {
 
     render(<CreationsPage />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /^manage unlock$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^manage recipe$/i }));
 
     expect(await screen.findByRole('dialog', { name: /publish this creation/i })).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('/api/generations?includeArchived=true&id=gen-bundled&limit=1', {

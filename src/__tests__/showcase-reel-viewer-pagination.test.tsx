@@ -235,6 +235,76 @@ describe('ShowcaseReelViewer pagination', () => {
     vi.spyOn(HTMLVideoElement.prototype, 'videoHeight', 'get').mockReturnValue(720);
   });
 
+  it('keeps reel navigation and action controls at stable fixed sizes', () => {
+    render(
+      <ShowcaseReelViewer
+        isOpen
+        items={[createShowcaseItem({
+          canRemix: true,
+          mediaItems: [
+            {
+              id: 'image-1',
+              url: 'https://example.com/image-1.jpg',
+              mediaKind: 'image',
+              contentType: 'image/jpeg',
+              originalName: 'image-1.jpg',
+              width: 1080,
+              height: 1350,
+              durationSeconds: null,
+              sortOrder: 0,
+            },
+            {
+              id: 'image-2',
+              url: 'https://example.com/image-2.jpg',
+              mediaKind: 'image',
+              contentType: 'image/jpeg',
+              originalName: 'image-2.jpg',
+              width: 1080,
+              height: 1350,
+              durationSeconds: null,
+              sortOrder: 1,
+            },
+          ],
+        })]}
+        selectedItemId="post-1"
+        savedItemIds={new Set()}
+        savingItemIds={new Set()}
+        accessToken={null}
+        hasMoreItems={false}
+        isLoadingMoreItems={false}
+        onLoadMoreItems={vi.fn()}
+        onClose={vi.fn()}
+        onSelectItemId={vi.fn()}
+        onToggleSave={vi.fn()}
+        onRemix={vi.fn()}
+        buildDetailPath={(id) => `/showcase/${id}`}
+      />
+    );
+
+    const reelActions = [
+      screen.getByRole('button', { name: 'Save Campaign Frame' }),
+      screen.getByRole('button', { name: 'Share' }),
+      screen.getByRole('button', { name: 'Remix' }),
+    ];
+
+    for (const action of reelActions) {
+      expect(action).toHaveClass('h-14', 'w-16', 'max-w-16', 'flex-none', 'lg:h-[70px]', 'lg:w-[70px]');
+      expect(action).not.toHaveClass('flex-1');
+    }
+
+    const postNavigation = screen.getByRole('group', { name: 'Browse posts' });
+    const previousPost = screen.getByRole('button', { name: 'Previous post' });
+    const nextPost = screen.getByRole('button', { name: 'Next post' });
+
+    expect(previousPost).toHaveClass('h-12', 'w-12', 'shrink-0');
+    expect(nextPost).toHaveClass('h-12', 'w-12', 'shrink-0');
+    expect(postNavigation.closest('aside')).not.toBeNull();
+    expect(postNavigation).toContainElement(previousPost);
+    expect(postNavigation).toContainElement(nextPost);
+    expect(postNavigation).not.toContainElement(screen.getByRole('button', { name: 'Previous media' }));
+    expect(postNavigation).not.toContainElement(screen.getByRole('button', { name: 'Next media' }));
+  });
+
   it('requests another page when next is pressed at the last loaded reel item', async () => {
     const loadMoreItems = vi.fn(async () => undefined);
 
@@ -605,7 +675,7 @@ describe('ShowcaseReelViewer pagination', () => {
     expect(screen.getByRole('button', { name: /pay with tokens/i })).toBeInTheDocument();
     expect(screen.queryByText(/buyer trust/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/included after unlock/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/digital unlocks are final sale/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/digital recipes are final sale/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /unlock for \$9\.00/i })).not.toBeInTheDocument();
   });
 
@@ -882,7 +952,7 @@ describe('ShowcaseReelViewer pagination', () => {
     });
     expect(mockUpdateCredits).toHaveBeenCalledWith(300);
     expect(await screen.findByText('Unlocked')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /view unlocked details/i }));
+    fireEvent.click(screen.getByRole('button', { name: /view recipe details/i }));
     expect(screen.getByText(/revealed prompt/i)).toBeInTheDocument();
     expect(screen.getByText(/revealed notes/i)).toBeInTheDocument();
   });

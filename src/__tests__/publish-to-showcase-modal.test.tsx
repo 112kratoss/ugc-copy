@@ -308,7 +308,7 @@ describe('PublishToShowcaseModal', () => {
       />
     );
 
-    expect(screen.getByText(/share it to the Feed or keep it private/i)).toBeInTheDocument();
+    expect(screen.getByText(/share it to Showcase or keep it private/i)).toBeInTheDocument();
     expect(screen.queryByText(/saved system package/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/sell the prompt/i)).not.toBeInTheDocument();
 

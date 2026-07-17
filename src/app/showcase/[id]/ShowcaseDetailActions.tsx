@@ -149,7 +149,7 @@ export default function ShowcaseDetailActions({
     }
 
     const confirmed = window.confirm(
-      'Delete this post permanently? If it has paid unlocks, you will get a second confirmation so you can still choose archive instead.'
+      'Delete this post permanently? If it has paid recipe purchases, you will get a second confirmation so you can still choose archive instead.'
     );
     if (!confirmed) {
       return;
@@ -172,7 +172,7 @@ export default function ShowcaseDetailActions({
 
       if (response.status === 409 && data?.requiresForceDelete) {
         const forceConfirmed = window.confirm(
-          'This post already has paid unlocks. Archive is safer, but you can still force delete it. Do you want to force delete it anyway?'
+          'This post already has paid recipe purchases. Archive is safer, but you can still force delete it. Do you want to force delete it anyway?'
         );
 
         if (!forceConfirmed) {
@@ -264,10 +264,10 @@ export default function ShowcaseDetailActions({
 
             {hasResourceBundle ? (
               <Link
-                href={`/post/${postId}/edit#resources`}
+                href={`/post/${postId}/edit#recipe`}
                 className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-50 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
               >
-                Manage unlock
+                Manage recipe
               </Link>
             ) : null}
 

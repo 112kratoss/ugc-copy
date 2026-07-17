@@ -371,8 +371,8 @@ export async function publishPreparedPost({
         ownerPath: `/post/${post.postId}/edit`,
         resourceBundlePath:
           post.bundleStatus === 'draft' || post.visibility === 'private'
-            ? `/post/${post.postId}/edit#resources`
-            : `/showcase/${post.postId}#resources`,
+            ? `/post/${post.postId}/edit#recipe`
+            : `/showcase/${post.postId}#recipe`,
         resourceBundleStatus: post.bundleStatus,
       },
     };

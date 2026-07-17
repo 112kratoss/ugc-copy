@@ -8,7 +8,7 @@ import { getCurrentInternalPath } from '@/lib/share';
 const REPORT_REASONS = [
   { value: 'spam', label: 'Spam' },
   { value: 'stolen_content', label: 'Stolen content' },
-  { value: 'misleading_unlock', label: 'Misleading unlock' },
+  { value: 'misleading_unlock', label: 'Misleading recipe' },
   { value: 'unsafe_content', label: 'Unsafe content' },
   { value: 'payment_issue', label: 'Payment issue' },
   { value: 'other', label: 'Other' },
@@ -75,7 +75,7 @@ export default function ReportPostButton({ postId, bundleId = null, accessToken 
         className="inline-flex items-center gap-2 text-sm font-medium text-zinc-400 transition hover:text-white"
       >
         <Flag className="h-4 w-4" />
-        Report post or unlock
+        Report post or recipe
       </button>
 
       {isOpen ? (

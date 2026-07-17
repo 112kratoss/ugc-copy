@@ -54,10 +54,10 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
 
   const profilePath = buildCreatorProfilePath(data.profile.username);
   const stats = [
-    { label: 'Creations', value: data.stats.publicCreations, icon: Images },
+    { label: 'Posts', value: data.stats.publicCreations, icon: Images },
     { label: 'Saves', value: data.stats.totalSaves, icon: Heart },
     { label: 'Remixes', value: data.stats.totalRemixes, icon: Repeat2 },
-    { label: 'Unlocks', value: data.stats.unlocks, icon: LockKeyhole },
+    { label: 'Recipes', value: data.stats.unlocks, icon: LockKeyhole },
   ];
   const profileForActions = {
     id: data.profile.id,

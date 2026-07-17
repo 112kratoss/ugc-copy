@@ -640,6 +640,7 @@ describe('showcase feed', () => {
     expect(page.items[0].generationId).toBe('gen-1');
     expect(page.items[0].mediaUrl).toBe('https://proxy.example.com/generated_images/user-1/example.jpg');
     expect(page.items[0].postFormat).toBe('media');
+    expect(page.items[0].prompt).toBe('');
     expect(page.items[0].canRemix).toBe(false);
     expect(page.items[0].asset).toEqual({
       id: 'asset-1',
@@ -675,6 +676,27 @@ describe('showcase feed', () => {
       }),
     });
     expect(nextCacheState.invocations).toHaveLength(1);
+  });
+
+  it('removes generated setup copy accidentally stored on a paid public post', async () => {
+    postsState[0] = {
+      ...postsState[0],
+      body: 'Saved generation setup\nModel: GPT Image 2\nInputs: 2 saved references',
+      prompt: 'SECRET_LEGACY_POST_PROMPT',
+    };
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+    });
+
+    expect(page.items[0].body).toBe('');
+    expect(page.items[0].prompt).toBe('');
+    expect(JSON.stringify(page)).not.toContain('SECRET_LEGACY_POST_PROMPT');
+    expect(JSON.stringify(page)).not.toContain('Saved generation setup');
   });
 
   it('keeps the post owner id when a public creator profile is missing', async () => {

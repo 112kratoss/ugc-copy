@@ -202,16 +202,16 @@ export default function PostResourceBundlePanel({
   const isRecipeVisible = hasAccess || viewerIsOwner;
   const accessLabel = useMemo(() => {
     if (viewerIsOwner) {
-      return 'You own this unlock.';
+      return 'You own this recipe.';
     }
 
     if (hasAccess) {
       return isFree
         ? 'Prompt, notes, references, and files are public on this post.'
-        : 'Unlock opened on this post.';
+        : 'Recipe unlocked on this post.';
     }
 
-    return isFree ? 'Open the full unlock for free.' : `Open the full unlock for ${priceLabel}.`;
+    return isFree ? 'Unlock the full recipe for free.' : `Unlock the full recipe for ${priceLabel}.`;
   }, [hasAccess, isFree, priceLabel, viewerIsOwner]);
   const creditCost = Math.max(0, priceUsdCents);
   const formattedCreditCost = creditCost.toLocaleString();
@@ -241,7 +241,7 @@ export default function PostResourceBundlePanel({
     const data = await response.json();
 
     if (!response.ok || !data?.bundle) {
-      throw new Error(data.error || 'Failed to refresh the unlock.');
+      throw new Error(data.error || 'Failed to refresh recipe access.');
     }
 
     const bundle = data.bundle as BundleRefreshPayload;
@@ -254,7 +254,7 @@ export default function PostResourceBundlePanel({
       return true;
     }
 
-    router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(`/showcase/${postId}#resources`))}`);
+    router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(`/showcase/${postId}#recipe`))}`);
     return false;
   };
 
@@ -277,12 +277,12 @@ export default function PostResourceBundlePanel({
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to open the free unlock.');
+        throw new Error(data.error || 'Failed to unlock the free recipe.');
       }
 
       await fetchLatestBundle();
     } catch (unlockError) {
-      setError(unlockError instanceof Error ? unlockError.message : 'Failed to open the free unlock.');
+      setError(unlockError instanceof Error ? unlockError.message : 'Failed to unlock the free recipe.');
     } finally {
       setWorkingAction(null);
     }
@@ -327,7 +327,7 @@ export default function PostResourceBundlePanel({
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
         amount: orderData.amount,
         currency: orderData.currency,
-        name: 'magicbooklet unlock',
+        name: 'Magicbooklet recipe',
         description: orderData.bundleTitle || title,
         order_id: orderData.orderId,
         handler: async (response: {
@@ -379,7 +379,7 @@ export default function PostResourceBundlePanel({
     }
 
     if (hasKnownInsufficientCredits) {
-      setError(`This unlock costs ${formattedCreditCost} credits. Add credits to continue.`);
+      setError(`This recipe costs ${formattedCreditCost} credits. Add credits to continue.`);
       setFeedback(null);
       return;
     }
@@ -406,7 +406,7 @@ export default function PostResourceBundlePanel({
       }
 
       await fetchLatestBundle();
-      setFeedback(data.alreadyProcessed ? 'This unlock was already available on your account.' : 'Unlocked with credits.');
+      setFeedback(data.alreadyProcessed ? 'This recipe was already available on your account.' : 'Recipe unlocked with credits.');
     } catch (unlockError) {
       setError(unlockError instanceof Error ? unlockError.message : 'Failed to unlock with credits.');
     } finally {
@@ -606,23 +606,24 @@ export default function PostResourceBundlePanel({
 
   return (
     <div
-      id="resources"
+      id="recipe"
       className="overflow-hidden rounded-[28px] border border-emerald-300/20 bg-[radial-gradient(circle_at_top_left,rgba(52,211,153,0.14),transparent_42%),linear-gradient(180deg,rgba(10,18,15,0.92),rgba(7,8,9,0.94))] shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl"
     >
+      <span id="resources" aria-hidden className="sr-only" />
       <Script id="post-resource-bundle-razorpay-checkout" src="https://checkout.razorpay.com/v1/checkout.js" />
 
       <div className="border-b border-emerald-300/10 p-5 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-xl">
             <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300/80">
-              {isRecipeVisible ? 'Creation recipe' : 'Unlock details'}
+              {isRecipeVisible ? 'Creation recipe' : 'Recipe access'}
             </div>
             <h2 className="mt-3 text-xl font-semibold tracking-tight text-white">{title}</h2>
             <p className="mt-2 text-sm leading-7 text-zinc-300">{summaryLine}</p>
           </div>
 
           <div className="rounded-full border border-emerald-300/25 bg-emerald-300 px-3.5 py-1.5 text-sm font-bold text-slate-950">
-            {isRecipeVisible ? (isFree ? 'Public recipe' : 'Unlocked') : isFree ? 'Free unlock' : priceLabel}
+            {isRecipeVisible ? (isFree ? 'Public recipe' : 'Unlocked') : isFree ? 'Free recipe' : priceLabel}
           </div>
         </div>
       </div>
@@ -668,7 +669,7 @@ export default function PostResourceBundlePanel({
             className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {workingAction === 'free' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
-            Open free unlock
+            Unlock free recipe
           </button>
         ) : null}
 
@@ -748,7 +749,7 @@ export default function PostResourceBundlePanel({
           <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
             <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Terms</div>
             <p className="mt-2 text-sm leading-6 text-zinc-300">
-              Digital unlocks are final sale. Use for personal or commercial creation; do not resell, redistribute, or claim the raw bundle as your own.
+              Digital recipes are final sale. Use for personal or commercial creation; do not resell, redistribute, or claim the raw bundle as your own.
             </p>
           </div>
           <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
@@ -785,7 +786,7 @@ export default function PostResourceBundlePanel({
             <p className="mt-3 text-sm leading-7 text-zinc-400">
               {hasAccess || viewerIsOwner
                 ? 'The prompt is available below.'
-                : 'The prompt text stays locked until this unlock is opened.'}
+                : 'The prompt text stays locked until this recipe is unlocked.'}
             </p>
           </>
         ) : (
@@ -812,7 +813,7 @@ export default function PostResourceBundlePanel({
                       {getPostResourceKindLabel(kind)}
                     </span>
                   )) : (
-                    <span className="text-sm text-zinc-400">Reusable unlock metadata</span>
+                    <span className="text-sm text-zinc-400">Reusable recipe metadata</span>
                   )}
                 </div>
               </div>
@@ -1073,7 +1074,7 @@ export default function PostResourceBundlePanel({
               </pre>
               {viewerIsOwner ? (
                 <p className="mt-3 rounded-2xl border border-emerald-300/15 bg-emerald-500/10 px-4 py-3 text-sm leading-6 text-emerald-50/85">
-                  Owner preview. Buyers must unlock before seeing this.
+                  Owner preview. Buyers must unlock the recipe before seeing this.
                 </p>
               ) : null}
             </div>
@@ -1163,8 +1164,8 @@ export default function PostResourceBundlePanel({
       ) : (
         <div className="mt-6 rounded-[24px] border border-white/8 bg-black/30 p-5 text-sm leading-7 text-zinc-300">
           {isPromptOnlyUnlock
-            ? 'The prompt appears here after this unlock is opened.'
-            : 'The public post stays visible. Prompt text, workflow links, notes, files, and optional remix access reveal here after unlock.'}
+            ? 'The prompt appears here after this recipe is unlocked.'
+            : 'The public post stays visible. Prompt text, workflow links, notes, files, and optional remix access reveal here after the recipe is unlocked.'}
         </div>
       )}
     </div>

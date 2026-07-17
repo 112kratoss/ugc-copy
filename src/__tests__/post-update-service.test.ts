@@ -146,7 +146,7 @@ describe('updateOwnerPostForRoute', () => {
         visibility: 'private',
         showcasePath: null,
         ownerPath: '/post/post-1/edit',
-        resourceBundlePath: '/post/post-1/edit#resources',
+        resourceBundlePath: '/post/post-1/edit#recipe',
         resourceBundleStatus: 'draft',
       },
     });
