@@ -1004,13 +1004,32 @@ function MadeWithSection({
       style={COMPOSER_SECTION_STYLE}
     >
       <View style={{ gap: appTheme.spacing.gap }}>
+        <AppText variant="caption" color="faint">
+          Popular tools appear first. Search for more editors, workflows, or older tools.
+        </AppText>
         {rows.map((row, index) => {
           const selectedTool = toolOptions.find((tool) => (
             row.toolSlug ? tool.slug === row.toolSlug : tool.label === row.toolLabel
           ));
           const provisionalToolRows = rows.filter((candidate) => candidate.createTool && candidate.toolLabel.trim());
           const toolPickerOptions = uniquePickerOptions([
-            ...toolOptions.map((tool) => ({ value: tool.slug, label: tool.label })),
+            ...toolOptions.map((tool) => ({
+              value: tool.slug,
+              label: tool.label,
+              keywords: [
+                ...(tool.aliases ?? []),
+                tool.toolType ?? '',
+                ...(tool.capabilities ?? []),
+                tool.providerSlug ?? '',
+              ],
+              meta: tool.status && tool.status !== 'current'
+                ? 'Historical'
+                : readableSourceToolType(tool.toolType),
+              hiddenUntilSearch: Boolean(
+                (tool.catalogTier && tool.catalogTier !== 'featured')
+                || (tool.status && tool.status !== 'current')
+              ),
+            })),
             ...provisionalToolRows
               .filter((candidate) => !toolOptions.some((tool) => tool.slug === candidate.toolSlug))
               .map((candidate) => ({
@@ -1026,7 +1045,19 @@ function MadeWithSection({
             && candidate.modelLabel.trim()
           ));
           const modelPickerOptions = uniquePickerOptions([
-            ...catalogModels.map((model) => ({ value: model.slug, label: model.label })),
+            ...catalogModels.map((model) => ({
+              value: model.slug,
+              label: model.label,
+              keywords: [
+                ...(model.aliases ?? []),
+                model.providerSlug ?? '',
+                ...(model.capabilities ?? []),
+              ],
+              meta: model.status && model.status !== 'current'
+                ? 'Historical'
+                : readableCatalogName(model.providerSlug),
+              hiddenUntilSearch: Boolean(model.status && model.status !== 'current'),
+            })),
             ...provisionalModelRows
               .filter((candidate) => !catalogModels.some((model) => model.slug === candidate.modelSlug))
               .map((candidate) => ({
@@ -1160,6 +1191,9 @@ type MobilePickerOption = {
   value: string;
   label: string;
   provisional?: boolean;
+  keywords?: string[];
+  meta?: string;
+  hiddenUntilSearch?: boolean;
 };
 
 type MobilePickerEntry =
@@ -1181,6 +1215,31 @@ function uniquePickerOptions(options: MobilePickerOption[]) {
 
 function normalizePickerSearch(value: string) {
   return value.trim().toLocaleLowerCase();
+}
+
+function readableCatalogName(value?: string | null) {
+  if (!value) return undefined;
+
+  return value
+    .split('-')
+    .filter(Boolean)
+    .map((part) => part.length <= 3 ? part.toUpperCase() : `${part[0]?.toUpperCase()}${part.slice(1)}`)
+    .join(' ');
+}
+
+function readableSourceToolType(toolType?: SourceToolOption['toolType']) {
+  switch (toolType) {
+    case 'api-marketplace':
+      return 'API marketplace';
+    case 'editor':
+      return 'Editor';
+    case 'workflow':
+      return 'Workflow';
+    case 'platform':
+      return 'Platform';
+    default:
+      return undefined;
+  }
 }
 
 function MobileCreatablePicker({
@@ -1217,11 +1276,12 @@ function MobileCreatablePicker({
   const query = isOpen ? draftQuery ?? value : value;
   const normalizedQuery = normalizePickerSearch(query);
   const matchingOptions = useMemo(() => {
-    if (!normalizedQuery) return options;
+    if (!normalizedQuery) return options.filter((option) => !option.hiddenUntilSearch);
 
     return options.filter((option) => (
       normalizePickerSearch(option.label).includes(normalizedQuery)
       || normalizePickerSearch(option.value).includes(normalizedQuery)
+      || (option.keywords ?? []).some((keyword) => normalizePickerSearch(keyword).includes(normalizedQuery))
     ));
   }, [normalizedQuery, options]);
   const hasExactMatch = options.some((option) => (
@@ -1386,6 +1446,11 @@ function MobileCreatablePicker({
                   {entry.type === 'option' && entry.option.provisional ? (
                     <AppText variant="caption" color="image">New</AppText>
                   ) : null}
+                  {entry.type === 'option' && !entry.option.provisional && entry.option.meta ? (
+                    <AppText variant="caption" color="faint" numberOfLines={1}>
+                      {entry.option.meta}
+                    </AppText>
+                  ) : null}
                 </Pressable>
               );
             }) : (
@@ -1406,10 +1471,15 @@ function getMadeWithToolOptions(sourceTools: SourceToolOption[]): SourceToolOpti
     const key = tool.slug || tool.label.toLowerCase();
     const existing = optionsByKey.get(key);
     const normalizedTool: SourceToolOption = {
-      slug: tool.slug,
-      label: tool.label,
-      models: tool.models.map((model) => ({ ...model })),
+      ...tool,
+      models: tool.models.map((model) => ({
+        ...model,
+        capabilities: model.capabilities ? [...model.capabilities] : undefined,
+        aliases: model.aliases ? [...model.aliases] : undefined,
+      })),
       supportedMediaKinds: [...tool.supportedMediaKinds],
+      capabilities: tool.capabilities ? [...tool.capabilities] : undefined,
+      aliases: tool.aliases ? [...tool.aliases] : undefined,
     };
 
     if (!existing) {
@@ -1431,7 +1501,13 @@ function getMadeWithToolOptions(sourceTools: SourceToolOption[]): SourceToolOpti
   const tools = sourceTools.length > 0 ? sourceTools : POST_COMPOSER_SOURCE_OPTIONS;
   tools.forEach(addTool);
 
-  return [...optionsByKey.values()];
+  const catalogTierRank = (tool: SourceToolOption) => {
+    if (tool.catalogTier === 'historical' || (tool.status && tool.status !== 'current')) return 2;
+    if (tool.catalogTier === 'extended') return 1;
+    return 0;
+  };
+
+  return [...optionsByKey.values()].sort((left, right) => catalogTierRank(left) - catalogTierRank(right));
 }
 
 function ProofSection({

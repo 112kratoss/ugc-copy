@@ -12,6 +12,8 @@ import type {
   PostResourceRemixUse,
   PostResourceSection,
   PostResourceSectionKind,
+  SourceToolCapability,
+  SourceToolModel,
   SourceToolOption,
   ShowcaseFeedItem,
 } from '@/lib/types';
@@ -167,104 +169,258 @@ export const POST_COMPOSER_CATEGORY_OPTIONS: Array<{ id: PostComposerCategory; l
   { id: 'video', label: 'Video' },
 ];
 
+type FallbackSourceToolInput = Omit<SourceToolOption, 'models' | 'supportedMediaKinds'> & {
+  media: Array<'image' | 'video'>;
+  models?: SourceToolModel[];
+};
+
+function catalogModel(
+  slug: string,
+  label: string,
+  capabilities: SourceToolCapability[],
+  providerSlug: string,
+  aliases: string[] = [],
+): SourceToolModel {
+  return { slug, label, capabilities, providerSlug, aliases, status: 'current' };
+}
+
+function fallbackSourceTool({ media, models = [], ...tool }: FallbackSourceToolInput): SourceToolOption {
+  return {
+    ...tool,
+    models,
+    supportedMediaKinds: media,
+    status: tool.status ?? 'current',
+    providerSlug: tool.providerSlug === undefined ? tool.slug : tool.providerSlug,
+    aliases: tool.aliases ?? [],
+  };
+}
+
+const IMAGE: SourceToolCapability[] = ['image'];
+const VIDEO: SourceToolCapability[] = ['video'];
+const IMAGE_VIDEO: SourceToolCapability[] = ['image', 'video'];
+
 export const POST_COMPOSER_SOURCE_OPTIONS: SourceToolOption[] = [
-  {
-    label: 'Manual',
-    slug: 'manual',
-    models: [],
-    supportedMediaKinds: ['image', 'video'],
-  },
-  {
-    label: 'Magicbooklet',
-    slug: 'magicbooklet',
+  fallbackSourceTool({
+    slug: 'manual', label: 'Manual', media: ['image', 'video'], toolType: 'workflow',
+    capabilities: IMAGE_VIDEO, catalogTier: 'featured', aliases: ['camera', 'handmade', 'traditional'],
+  }),
+  fallbackSourceTool({
+    slug: 'magicbooklet', label: 'Magicbooklet', media: ['image', 'video'], toolType: 'platform',
+    capabilities: IMAGE_VIDEO, catalogTier: 'featured', aliases: ['magic booklet', 'creator studio'],
     models: [
-      { slug: 'nano-banana-2-lite', label: 'Nano Banana 2 Lite' },
-      { slug: 'nano-banana-2', label: 'Nano Banana 2.0' },
-      { slug: 'nano-banana-pro', label: 'Nano Banana Pro' },
-      { slug: 'gpt-image-2', label: 'GPT Image 2' },
-      { slug: 'seedream-5-pro', label: 'Seedream 5 Pro' },
-      { slug: 'flux-2-pro', label: 'FLUX.2 Pro' },
-      { slug: 'z-image', label: 'Z-Image' },
-      { slug: 'grok-imagine-image', label: 'Grok Imagine' },
-      { slug: 'kling-2.6', label: 'Kling 2.6 Motion' },
-      { slug: 'kling-3.0', label: 'Kling 3.0 Motion' },
-      { slug: 'kling-3.0-video', label: 'Kling 3.0 Cinematic' },
-      { slug: 'seedance-1.5-pro', label: 'Seedance 1.5 Pro' },
-      { slug: 'seedance-2', label: 'Seedance 2' },
-      { slug: 'seedance-2-fast', label: 'Seedance 2 Fast' },
-      { slug: 'veo-3.1', label: 'Veo 3.1' },
-      { slug: 'grok-imagine-video', label: 'Grok Imagine Video' },
+      catalogModel('nano-banana-2-lite', 'Nano Banana 2 Lite', IMAGE, 'google', ['gemini image']),
+      catalogModel('nano-banana-2', 'Nano Banana 2.0', IMAGE, 'google', ['gemini image']),
+      catalogModel('nano-banana-pro', 'Nano Banana Pro', IMAGE, 'google', ['gemini image']),
+      catalogModel('gpt-image-2', 'GPT Image 2', IMAGE, 'openai'),
+      catalogModel('seedream-5-pro', 'Seedream 5 Pro', IMAGE, 'bytedance'),
+      catalogModel('flux-2-pro', 'FLUX.2 Pro', IMAGE, 'black-forest-labs', ['bfl']),
+      catalogModel('z-image', 'Z-Image', IMAGE, 'tongyi'),
+      catalogModel('grok-imagine-image', 'Grok Imagine', IMAGE, 'xai'),
+      catalogModel('kling-2.6', 'Kling 2.6 Motion', VIDEO, 'kling-ai'),
+      catalogModel('kling-3.0', 'Kling 3.0 Motion', VIDEO, 'kling-ai'),
+      catalogModel('kling-3.0-video', 'Kling 3.0 Cinematic', VIDEO, 'kling-ai'),
+      catalogModel('seedance-1.5-pro', 'Seedance 1.5 Pro', VIDEO, 'bytedance'),
+      catalogModel('seedance-2', 'Seedance 2', VIDEO, 'bytedance'),
+      catalogModel('seedance-2-fast', 'Seedance 2 Fast', VIDEO, 'bytedance'),
+      catalogModel('veo-3.1', 'Veo 3.1', VIDEO, 'google'),
+      catalogModel('grok-imagine-video', 'Grok Imagine Video', VIDEO, 'xai'),
     ],
-    supportedMediaKinds: ['image', 'video'],
-  },
-  {
-    label: 'Higgsfield',
-    slug: 'higgsfield',
+  }),
+  fallbackSourceTool({
+    slug: 'adobe-firefly', label: 'Adobe Firefly', media: ['image', 'video'], toolType: 'platform',
+    capabilities: ['image', 'video', 'design'], catalogTier: 'featured', providerSlug: 'adobe', aliases: ['firefly'],
     models: [
-      { slug: 'soul', label: 'Soul' },
-      { slug: 'k2', label: 'K2' },
+      catalogModel('firefly-image-5', 'Firefly Image 5', IMAGE, 'adobe'),
+      catalogModel('firefly-image-4-ultra', 'Firefly Image 4 Ultra', IMAGE, 'adobe'),
+      catalogModel('firefly-video', 'Firefly Video', VIDEO, 'adobe'),
     ],
-    supportedMediaKinds: ['image', 'video'],
-  },
-  {
-    label: 'Freepik',
-    slug: 'freepik',
+  }),
+  fallbackSourceTool({
+    slug: 'midjourney', label: 'Midjourney', media: ['image', 'video'], toolType: 'platform',
+    capabilities: IMAGE_VIDEO, catalogTier: 'featured', aliases: ['mj', 'niji'],
     models: [
-      { slug: 'mystic', label: 'Mystic' },
-      { slug: 'classic', label: 'Classic' },
+      catalogModel('v8.1', 'V8.1', IMAGE, 'midjourney', ['midjourney v8.1']),
+      catalogModel('v7', 'V7', IMAGE, 'midjourney', ['midjourney v7']),
+      catalogModel('niji-7', 'Niji 7', IMAGE, 'midjourney'),
+      catalogModel('midjourney-video', 'Midjourney Video', VIDEO, 'midjourney'),
     ],
-    supportedMediaKinds: ['image'],
-  },
-  {
-    label: 'Runway',
-    slug: 'runway',
+  }),
+  fallbackSourceTool({
+    slug: 'runway', label: 'Runway', media: ['image', 'video'], toolType: 'platform',
+    capabilities: ['image', 'video', 'vfx'], catalogTier: 'featured', aliases: ['runwayml'],
     models: [
-      { slug: 'gen-3', label: 'Gen-3' },
-      { slug: 'gen-4', label: 'Gen-4' },
+      catalogModel('gen-4.5', 'Gen-4.5', VIDEO, 'runway'),
+      catalogModel('gen-4', 'Gen-4', VIDEO, 'runway'),
+      catalogModel('gen-4-turbo', 'Gen-4 Turbo', VIDEO, 'runway'),
+      { ...catalogModel('gen-3', 'Gen-3', VIDEO, 'runway'), status: 'legacy' },
+      catalogModel('aleph-2', 'Aleph 2', ['video', 'vfx'], 'runway'),
+      catalogModel('act-two', 'Act-Two', ['video', 'avatar'], 'runway'),
     ],
-    supportedMediaKinds: ['image', 'video'],
-  },
-  {
-    label: 'Midjourney',
-    slug: 'midjourney',
-    models: [],
-    supportedMediaKinds: ['image'],
-  },
-  {
-    label: 'Sora',
-    slug: 'sora',
-    models: [],
-    supportedMediaKinds: ['video'],
-  },
-  {
-    label: 'Kling',
-    slug: 'kling',
+  }),
+  fallbackSourceTool({
+    slug: 'google-gemini-flow', label: 'Google Gemini / Flow', media: ['image', 'video'], toolType: 'platform',
+    capabilities: IMAGE_VIDEO, catalogTier: 'featured', providerSlug: 'google', aliases: ['gemini', 'flow', 'veo', 'nano banana'],
     models: [
-      { slug: 'kling-2.6', label: 'Kling 2.6' },
-      { slug: 'kling-3.0', label: 'Kling 3.0' },
+      catalogModel('nano-banana-2', 'Nano Banana 2', IMAGE, 'google', ['gemini image']),
+      catalogModel('nano-banana-pro', 'Nano Banana Pro', IMAGE, 'google'),
+      catalogModel('veo-3.1', 'Veo 3.1', VIDEO, 'google'),
+      catalogModel('veo-3.1-fast', 'Veo 3.1 Fast', VIDEO, 'google'),
     ],
-    supportedMediaKinds: ['image', 'video'],
-  },
-  {
-    label: 'Veo',
-    slug: 'veo',
+  }),
+  fallbackSourceTool({
+    slug: 'openai-chatgpt', label: 'ChatGPT', media: ['image'], toolType: 'platform', capabilities: IMAGE,
+    catalogTier: 'featured', providerSlug: 'openai', aliases: ['openai', 'gpt image', 'dall-e', 'dalle'],
     models: [
-      { slug: 'veo-3.1', label: 'Veo 3.1' },
+      catalogModel('gpt-image-2', 'GPT Image 2', IMAGE, 'openai'),
+      catalogModel('gpt-image-1.5', 'GPT Image 1.5', IMAGE, 'openai'),
+      catalogModel('gpt-image-1', 'GPT Image 1', IMAGE, 'openai'),
     ],
-    supportedMediaKinds: ['video'],
-  },
-  {
-    label: 'CapCut',
-    slug: 'capcut',
-    models: [],
-    supportedMediaKinds: ['image', 'video'],
-  },
-  {
-    label: 'Other',
-    slug: 'other',
-    models: [],
-    supportedMediaKinds: ['image', 'video'],
-  },
+  }),
+  fallbackSourceTool({
+    slug: 'kling', label: 'Kling AI', media: ['image', 'video'], toolType: 'platform', capabilities: IMAGE_VIDEO,
+    catalogTier: 'featured', providerSlug: 'kuaishou', aliases: ['kling', 'kolors'],
+    models: [
+      catalogModel('kling-3.0', 'Kling 3.0', VIDEO, 'kuaishou'),
+      catalogModel('kling-o3', 'Kling O3', VIDEO, 'kuaishou'),
+      catalogModel('kling-2.6', 'Kling 2.6', VIDEO, 'kuaishou'),
+      catalogModel('motion-control', 'Motion Control', VIDEO, 'kuaishou'),
+    ],
+  }),
+  fallbackSourceTool({
+    slug: 'higgsfield', label: 'Higgsfield', media: ['image', 'video'], toolType: 'platform', capabilities: IMAGE_VIDEO,
+    catalogTier: 'featured', aliases: ['higgs field'], models: [
+      catalogModel('soul', 'Soul', IMAGE, 'higgsfield'),
+      catalogModel('k2', 'K2', VIDEO, 'higgsfield'),
+    ],
+  }),
+  fallbackSourceTool({
+    slug: 'freepik', label: 'Freepik', media: ['image', 'video'], toolType: 'platform',
+    capabilities: ['image', 'video', 'design'], catalogTier: 'featured', aliases: ['freepik ai suite'], models: [
+      catalogModel('mystic', 'Mystic', IMAGE, 'freepik'),
+      catalogModel('classic', 'Classic', IMAGE, 'freepik'),
+    ],
+  }),
+  fallbackSourceTool({
+    slug: 'leonardo-ai', label: 'Leonardo.Ai', media: ['image', 'video'], toolType: 'platform', capabilities: IMAGE_VIDEO,
+    catalogTier: 'featured', aliases: ['leonardo'], models: [
+      catalogModel('lucid-origin', 'Lucid Origin', IMAGE, 'leonardo-ai'),
+      catalogModel('lucid-realism', 'Lucid Realism', IMAGE, 'leonardo-ai'),
+      catalogModel('phoenix-1.0', 'Phoenix 1.0', IMAGE, 'leonardo-ai'),
+    ],
+  }),
+  fallbackSourceTool({
+    slug: 'black-forest-labs', label: 'Black Forest Labs', media: ['image'], toolType: 'platform', capabilities: IMAGE,
+    catalogTier: 'featured', providerSlug: 'black-forest-labs', aliases: ['flux', 'bfl'], models: [
+      catalogModel('flux.2-max', 'FLUX.2 Max', IMAGE, 'black-forest-labs'),
+      catalogModel('flux.2-pro', 'FLUX.2 Pro', IMAGE, 'black-forest-labs'),
+      catalogModel('flux.2-flex', 'FLUX.2 Flex', IMAGE, 'black-forest-labs'),
+      catalogModel('flux.1-kontext-max', 'FLUX.1 Kontext Max', IMAGE, 'black-forest-labs'),
+    ],
+  }),
+  fallbackSourceTool({
+    slug: 'stability-ai', label: 'Stability AI', media: ['image'], toolType: 'platform', capabilities: IMAGE,
+    catalogTier: 'featured', aliases: ['stable diffusion', 'stable image', 'sdxl'], models: [
+      catalogModel('stable-image-ultra', 'Stable Image Ultra', IMAGE, 'stability-ai'),
+      catalogModel('stable-image-core', 'Stable Image Core', IMAGE, 'stability-ai'),
+      catalogModel('stable-diffusion-3.5-large', 'Stable Diffusion 3.5 Large', IMAGE, 'stability-ai', ['sd 3.5']),
+    ],
+  }),
+  fallbackSourceTool({
+    slug: 'ideogram', label: 'Ideogram', media: ['image'], toolType: 'platform', capabilities: IMAGE,
+    catalogTier: 'featured', aliases: ['ideogram ai', 'text rendering'], models: [
+      catalogModel('ideogram-3.0', 'Ideogram 3.0', IMAGE, 'ideogram'),
+      catalogModel('ideogram-2a', 'Ideogram 2a', IMAGE, 'ideogram'),
+    ],
+  }),
+  fallbackSourceTool({
+    slug: 'recraft', label: 'Recraft', media: ['image'], toolType: 'platform', capabilities: ['image', 'design'],
+    catalogTier: 'featured', aliases: ['recraft ai', 'vector'], models: [catalogModel('recraft-v3', 'Recraft V3', ['image', 'design'], 'recraft')],
+  }),
+  fallbackSourceTool({
+    slug: 'krea', label: 'Krea', media: ['image', 'video'], toolType: 'platform', capabilities: IMAGE_VIDEO,
+    catalogTier: 'featured', aliases: ['krea ai', 'realtime generation'],
+  }),
+  fallbackSourceTool({
+    slug: 'luma-dream-machine', label: 'Luma Dream Machine', media: ['image', 'video'], toolType: 'platform', capabilities: IMAGE_VIDEO,
+    catalogTier: 'featured', providerSlug: 'luma-ai', aliases: ['luma', 'dream machine', 'ray'], models: [
+      catalogModel('ray-2', 'Ray 2', VIDEO, 'luma-ai'),
+      catalogModel('ray-2-flash', 'Ray 2 Flash', VIDEO, 'luma-ai'),
+    ],
+  }),
+  fallbackSourceTool({
+    slug: 'pika', label: 'Pika', media: ['image', 'video'], toolType: 'platform', capabilities: IMAGE_VIDEO,
+    catalogTier: 'featured', aliases: ['pika labs', 'pikaframes'], models: [
+      catalogModel('pika-2.2', 'Pika 2.2', VIDEO, 'pika'),
+      catalogModel('pika-2.1', 'Pika 2.1', VIDEO, 'pika'),
+      catalogModel('pika-turbo', 'Pika Turbo', VIDEO, 'pika'),
+    ],
+  }),
+  fallbackSourceTool({
+    slug: 'capcut', label: 'CapCut', media: ['image', 'video'], toolType: 'editor',
+    capabilities: ['image', 'video', 'audio'], catalogTier: 'featured', providerSlug: 'bytedance', aliases: ['cap cut', 'video editor'],
+  }),
+  fallbackSourceTool({
+    slug: 'canva', label: 'Canva', media: ['image', 'video'], toolType: 'editor',
+    capabilities: ['image', 'video', 'design'], catalogTier: 'featured', aliases: ['magic media', 'design editor'],
+  }),
+  fallbackSourceTool({
+    slug: 'adobe-photoshop', label: 'Adobe Photoshop', media: ['image'], toolType: 'editor',
+    capabilities: ['image', 'design'], catalogTier: 'featured', providerSlug: 'adobe', aliases: ['photoshop', 'ps', 'photo editor'],
+  }),
+  fallbackSourceTool({
+    slug: 'adobe-premiere-pro', label: 'Adobe Premiere Pro', media: ['video'], toolType: 'editor',
+    capabilities: ['video', 'audio'], catalogTier: 'featured', providerSlug: 'adobe', aliases: ['premiere', 'pr', 'video editor'],
+  }),
+  fallbackSourceTool({
+    slug: 'adobe-after-effects', label: 'Adobe After Effects', media: ['video'], toolType: 'editor',
+    capabilities: ['video', 'vfx'], catalogTier: 'featured', providerSlug: 'adobe', aliases: ['after effects', 'ae', 'motion graphics'],
+  }),
+  fallbackSourceTool({
+    slug: 'davinci-resolve', label: 'DaVinci Resolve', media: ['video'], toolType: 'editor',
+    capabilities: ['video', 'audio', 'vfx'], catalogTier: 'featured', providerSlug: 'blackmagic-design', aliases: ['resolve', 'fusion', 'color grading'],
+  }),
+  fallbackSourceTool({
+    slug: 'final-cut-pro', label: 'Final Cut Pro', media: ['video'], toolType: 'editor',
+    capabilities: ['video', 'audio'], catalogTier: 'featured', providerSlug: 'apple', aliases: ['final cut', 'fcp', 'fcp x'],
+  }),
+  fallbackSourceTool({
+    slug: 'blender', label: 'Blender', media: ['image', 'video'], toolType: 'editor',
+    capabilities: ['image', 'video', '3d', 'vfx'], catalogTier: 'featured', aliases: ['3d', 'cycles', 'eevee'],
+  }),
+  fallbackSourceTool({
+    slug: 'figma', label: 'Figma', media: ['image', 'video'], toolType: 'editor',
+    capabilities: ['image', 'design'], catalogTier: 'featured', aliases: ['figma design', 'prototype', 'ui design'],
+  }),
+  fallbackSourceTool({
+    slug: 'comfyui', label: 'ComfyUI', media: ['image', 'video'], toolType: 'workflow',
+    capabilities: IMAGE_VIDEO, catalogTier: 'featured', providerSlug: null, aliases: ['comfy ui', 'node workflow', 'stable diffusion workflow'],
+  }),
+  fallbackSourceTool({
+    slug: 'heygen', label: 'HeyGen', media: ['video'], toolType: 'platform',
+    capabilities: ['video', 'audio', 'avatar'], catalogTier: 'featured', aliases: ['hey gen', 'ai avatar', 'digital twin'], models: [
+      catalogModel('avatar-iv', 'Avatar IV', ['video', 'avatar'], 'heygen'),
+      catalogModel('digital-twin', 'Digital Twin', ['video', 'avatar'], 'heygen'),
+    ],
+  }),
+  fallbackSourceTool({
+    slug: 'elevenlabs', label: 'ElevenLabs', media: ['video'], toolType: 'platform',
+    capabilities: ['audio'], catalogTier: 'featured', aliases: ['eleven labs', 'voice ai', 'text to speech', 'tts'], models: [
+      catalogModel('eleven-v3', 'Eleven v3', ['audio'], 'elevenlabs'),
+      catalogModel('multilingual-v2', 'Multilingual v2', ['audio'], 'elevenlabs'),
+      catalogModel('flash-v2-5', 'Flash v2.5', ['audio'], 'elevenlabs'),
+    ],
+  }),
+  fallbackSourceTool({
+    slug: 'sora', label: 'Sora', media: ['video'], toolType: 'platform', capabilities: VIDEO,
+    catalogTier: 'historical', status: 'sunset', providerSlug: 'openai', aliases: ['sora 2', 'openai video'], models: [
+      { ...catalogModel('sora-2', 'Sora 2', VIDEO, 'openai'), status: 'sunset' },
+      { ...catalogModel('sora-2-pro', 'Sora 2 Pro', VIDEO, 'openai'), status: 'sunset' },
+    ],
+  }),
+  fallbackSourceTool({
+    slug: 'other', label: 'Other', media: ['image', 'video'], toolType: 'platform', capabilities: IMAGE_VIDEO,
+    catalogTier: 'extended', providerSlug: null, aliases: ['another tool', 'custom'],
+  }),
 ];
 
 export const POST_COMPOSER_VISIBILITY_OPTIONS: Array<{ id: PostComposerVisibility; label: string; body: string }> = [

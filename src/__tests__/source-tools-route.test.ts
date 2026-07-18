@@ -55,6 +55,12 @@ describe('/api/source-tools route', () => {
           label: 'Higgsfield',
           supported_media_kinds: ['image', 'video'],
           sort_order: 10,
+          tool_type: 'platform',
+          capabilities: ['image', 'video'],
+          catalog_tier: 'featured',
+          status: 'current',
+          provider_slug: 'higgsfield',
+          aliases: ['Higgsfield AI'],
         },
       ],
       error: null,
@@ -66,6 +72,10 @@ describe('/api/source-tools route', () => {
           slug: 'soul',
           label: 'Soul',
           sort_order: 0,
+          capabilities: ['image'],
+          status: 'current',
+          provider_slug: 'higgsfield',
+          aliases: [],
         },
       ],
       error: null,
@@ -80,7 +90,20 @@ describe('/api/source-tools route', () => {
         slug: 'higgsfield',
         label: 'Higgsfield',
         supportedMediaKinds: ['image', 'video'],
-        models: [{ slug: 'soul', label: 'Soul' }],
+        toolType: 'platform',
+        capabilities: ['image', 'video'],
+        catalogTier: 'featured',
+        status: 'current',
+        providerSlug: 'higgsfield',
+        aliases: ['Higgsfield AI'],
+        models: [{
+          slug: 'soul',
+          label: 'Soul',
+          capabilities: ['image'],
+          status: 'current',
+          providerSlug: 'higgsfield',
+          aliases: [],
+        }],
       },
     ]);
   });
@@ -205,8 +228,15 @@ describe('/api/source-tools route', () => {
     const payload = await response.json();
     const magicbooklet = payload.tools.find((tool: { slug: string }) => tool.slug === 'magicbooklet');
 
-    expect(magicbooklet.models).toContainEqual({ slug: 'nano-banana-2', label: 'Nano Banana 2.0' });
-    expect(magicbooklet.models).not.toContainEqual({ slug: 'stale-hardcoded-model', label: 'Stale Hardcoded Model' });
+    expect(magicbooklet.models).toContainEqual(expect.objectContaining({
+      slug: 'nano-banana-2',
+      label: 'Nano Banana 2.0',
+      status: 'current',
+    }));
+    expect(magicbooklet.models).not.toContainEqual(expect.objectContaining({
+      slug: 'stale-hardcoded-model',
+      label: 'Stale Hardcoded Model',
+    }));
   });
 
   it('reuses the server catalog cache for repeated reads', async () => {

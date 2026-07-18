@@ -2176,6 +2176,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-300">
                           Add the tool and model you used.{hasGeneratedProof ? ' magicbooklet is already set.' : ''}
                         </p>
+                        <p className="mt-1 text-xs leading-5 text-zinc-500">
+                          Popular tools appear first. Search to find more editors, workflows, API platforms, or older tools.
+                        </p>
                       </div>
                     </div>
                     <div className="mt-4 space-y-3">
@@ -2188,6 +2191,25 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                           ...sourceToolsData.map((tool) => ({
                             value: tool.slug,
                             label: tool.label,
+                            keywords: [
+                              ...(tool.aliases ?? []),
+                              tool.toolType ?? 'platform',
+                              ...(tool.capabilities ?? []),
+                              tool.providerSlug ?? '',
+                            ],
+                            meta: tool.status && tool.status !== 'current'
+                              ? 'Historical'
+                              : tool.toolType === 'api-marketplace'
+                                ? 'API platform'
+                                : tool.toolType === 'editor'
+                                  ? 'Editor'
+                                  : tool.toolType === 'workflow'
+                                    ? 'Workflow'
+                                    : 'AI platform',
+                            hiddenUntilSearch: Boolean(
+                              (tool.catalogTier && tool.catalogTier !== 'featured')
+                              || (tool.status && tool.status !== 'current')
+                            ),
                           })),
                           ...provisionalToolRows
                             .filter((candidate, candidateIndex, candidates) => (
@@ -2210,6 +2232,13 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                           ...catalogModels.map((model) => ({
                             value: model.slug,
                             label: model.label,
+                            keywords: [
+                              ...(model.aliases ?? []),
+                              ...(model.capabilities ?? []),
+                              model.providerSlug ?? '',
+                            ],
+                            meta: model.status && model.status !== 'current' ? 'Historical' : undefined,
+                            hiddenUntilSearch: Boolean(model.status && model.status !== 'current'),
                           })),
                           ...provisionalModelRows
                             .filter((candidate, candidateIndex, candidates) => (

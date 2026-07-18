@@ -853,9 +853,21 @@ export interface PostResourceBundleInput {
   resources?: Partial<PostResourceBundleResources> | null;
 }
 
+export type SourceToolType = 'platform' | 'editor' | 'workflow' | 'api-marketplace';
+
+export type SourceToolCapability = 'image' | 'video' | 'audio' | 'avatar' | 'design' | '3d' | 'vfx';
+
+export type SourceToolCatalogTier = 'featured' | 'extended' | 'historical';
+
+export type SourceToolStatus = 'current' | 'legacy' | 'deprecated' | 'sunset';
+
 export interface SourceToolModel {
   slug: string;
   label: string;
+  capabilities?: SourceToolCapability[];
+  status?: SourceToolStatus;
+  providerSlug?: string | null;
+  aliases?: string[];
 }
 
 export interface SourceToolOption {
@@ -863,6 +875,12 @@ export interface SourceToolOption {
   label: string;
   models: SourceToolModel[];
   supportedMediaKinds: Array<'image' | 'video'>;
+  toolType?: SourceToolType;
+  capabilities?: SourceToolCapability[];
+  catalogTier?: SourceToolCatalogTier;
+  status?: SourceToolStatus;
+  providerSlug?: string | null;
+  aliases?: string[];
 }
 
 export interface SourceToolSelection {

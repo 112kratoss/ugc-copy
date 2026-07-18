@@ -20,6 +20,7 @@ import {
   isTemplateGeneration,
   getPublishGenerationMediaKind,
   getPublishGenerationSubtitle,
+  POST_COMPOSER_SOURCE_OPTIONS,
   validatePostComposerDraft,
 } from '../lib/post-new-view-model';
 import type { GenerationListItem } from '../lib/types';
@@ -42,6 +43,60 @@ function generation(overrides: Partial<GenerationListItem>): GenerationListItem 
 }
 
 describe('post new view model', () => {
+  it('ships a useful taxonomized source-tool catalog for offline post attribution', () => {
+    const expectedSlugs = [
+      'magicbooklet',
+      'adobe-firefly',
+      'midjourney',
+      'runway',
+      'google-gemini-flow',
+      'openai-chatgpt',
+      'kling',
+      'higgsfield',
+      'freepik',
+      'leonardo-ai',
+      'black-forest-labs',
+      'stability-ai',
+      'ideogram',
+      'recraft',
+      'krea',
+      'luma-dream-machine',
+      'pika',
+      'capcut',
+      'canva',
+      'adobe-photoshop',
+      'adobe-premiere-pro',
+      'adobe-after-effects',
+      'davinci-resolve',
+      'final-cut-pro',
+      'blender',
+      'figma',
+      'comfyui',
+      'heygen',
+      'elevenlabs',
+      'sora',
+      'other',
+    ];
+
+    expect(POST_COMPOSER_SOURCE_OPTIONS.map((tool) => tool.slug)).toEqual(expect.arrayContaining(expectedSlugs));
+    expect(POST_COMPOSER_SOURCE_OPTIONS.every((tool) => (
+      Boolean(tool.toolType)
+      && Boolean(tool.catalogTier)
+      && Boolean(tool.status)
+      && Array.isArray(tool.capabilities)
+      && Array.isArray(tool.aliases)
+    ))).toBe(true);
+    expect(POST_COMPOSER_SOURCE_OPTIONS.flatMap((tool) => tool.models).every((model) => (
+      Boolean(model.status)
+      && Array.isArray(model.capabilities)
+      && Array.isArray(model.aliases)
+    ))).toBe(true);
+    expect(POST_COMPOSER_SOURCE_OPTIONS.find((tool) => tool.slug === 'sora')).toMatchObject({
+      catalogTier: 'historical',
+      status: 'sunset',
+    });
+  });
+
   it('keeps only succeeded unposted generations with output media', () => {
     const items = [
       generation({ id: 'ready' }),

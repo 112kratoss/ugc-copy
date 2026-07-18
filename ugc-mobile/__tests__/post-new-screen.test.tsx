@@ -4,6 +4,7 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SourceToolOption } from '../lib/types';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
@@ -42,7 +43,7 @@ const sourceToolsState = vi.hoisted(() => ({
     label: 'Runway',
     models: [{ slug: 'gen-4', label: 'Gen-4' }],
     supportedMediaKinds: ['image', 'video'],
-  }],
+  }] as SourceToolOption[],
 }));
 
 const mutationState = vi.hoisted(() => ({
@@ -795,6 +796,7 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     expect(text).toContain('Tool 1');
     expect(text).toContain('Model');
     expect(text).toContain('Add another tool');
+    expect(text).toContain('Popular tools appear first. Search for more editors, workflows, or older tools.');
     expect(text).not.toContain('Category');
   });
 
@@ -821,6 +823,64 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     expect(openedText).toContain('Manual');
     expect(openedText).toContain('Magicbooklet');
     expect(openedText).toContain('Runway');
+    expect(openedText.indexOf('Stability AI')).toBeLessThan(openedText.indexOf('CapCut'));
+    expect(openedText).not.toContain('Sora');
+  });
+
+  it('finds historical tools by aliases while keeping them out of the default list', () => {
+    paramsState.params = {};
+    sourceToolsState.tools = [];
+    authState.api.listSourceTools.mockResolvedValue({ tools: [] });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    const toolInput = findTextInputByPlaceholder(tree!.root, 'Choose or search tool');
+    renderer.act(() => {
+      toolInput.props.onFocus();
+    });
+
+    expect(collectText(tree!.root)).not.toContain('Sora');
+
+    renderer.act(() => {
+      findTextInputByPlaceholder(tree!.root, 'Choose or search tool').props.onChangeText('openai video');
+    });
+
+    const searchText = collectText(tree!.root);
+    expect(searchText).toContain('Sora');
+    expect(searchText).toContain('Historical');
+  });
+
+  it('labels API tools by type and searches their taxonomy keywords', () => {
+    paramsState.params = {};
+    sourceToolsState.tools = [{
+      slug: 'node-lab',
+      label: 'Node Lab',
+      models: [],
+      supportedMediaKinds: ['image'],
+      toolType: 'workflow',
+      capabilities: ['image'],
+      catalogTier: 'extended',
+      status: 'current',
+      providerSlug: null,
+      aliases: ['graph studio'],
+    }];
+    authState.api.listSourceTools.mockResolvedValue({ tools: sourceToolsState.tools });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    renderer.act(() => {
+      findTextInputByPlaceholder(tree!.root, 'Choose or search tool').props.onChangeText('graph studio');
+    });
+
+    const text = collectText(tree!.root);
+    expect(text).toContain('Node Lab');
+    expect(text).toContain('Workflow');
   });
 
   it('does not merge bundled fallback tools into a non-empty server source catalog', () => {
@@ -930,8 +990,35 @@ describe('NewPostScreen Phase 4 creation publishing workspace', () => {
     });
 
     const modelText = collectText(tree!.root);
-    expect(modelText).toContain('Gen-3');
+    expect(modelText).not.toContain('Gen-3');
     expect(modelText).toContain('Gen-4');
+
+    renderer.act(() => {
+      findTextInputByPlaceholder(tree!.root, 'Any model').props.onChangeText('Gen-3');
+    });
+
+    const historicalModelText = collectText(tree!.root);
+    expect(historicalModelText).toContain('Gen-3');
+    expect(historicalModelText).toContain('Historical');
+  });
+
+  it('keeps Made With attribution capped at five tools', () => {
+    paramsState.params = {};
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<NewPostScreen />);
+    });
+
+    for (let index = 0; index < 4; index += 1) {
+      renderer.act(() => {
+        findPressableByText(tree!.root, 'Add another tool').props.onPress();
+      });
+    }
+
+    const text = collectText(tree!.root);
+    expect(text).toContain('Tool 5');
+    expect(text).not.toContain('Add another tool');
   });
 
   it('updates the resource package when the exact prompt toggle is enabled', () => {

@@ -7,6 +7,9 @@ export interface CreatableComboboxOption {
   value: string;
   label: string;
   provisional?: boolean;
+  keywords?: string[];
+  meta?: string;
+  hiddenUntilSearch?: boolean;
 }
 
 interface CreatableComboboxProps {
@@ -69,12 +72,13 @@ export default function CreatableCombobox({
   const normalizedQuery = normalizeSearch(query);
   const matchingOptions = useMemo(() => {
     if (!normalizedQuery) {
-      return options;
+      return options.filter((option) => !option.hiddenUntilSearch);
     }
 
     return options.filter((option) => (
       normalizeSearch(option.label).includes(normalizedQuery)
       || normalizeSearch(option.value).includes(normalizedQuery)
+      || (option.keywords ?? []).some((keyword) => normalizeSearch(keyword).includes(normalizedQuery))
     ));
   }, [normalizedQuery, options]);
 
@@ -206,6 +210,7 @@ export default function CreatableCombobox({
                 type="button"
                 role="option"
                 aria-selected={isSelected}
+                aria-label={entry.type === 'create' ? `Create “${label}”` : label}
                 onMouseDown={(event) => event.preventDefault()}
                 onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => chooseEntry(entry)}
@@ -218,7 +223,11 @@ export default function CreatableCombobox({
                   {entry.type === 'create' ? `Create “${label}”` : label}
                 </span>
                 {entry.type === 'option' && entry.option.provisional ? (
-                  <span className="text-[10px] uppercase text-sky-300">New</span>
+                  <span aria-hidden="true" className="text-[10px] uppercase text-sky-300">New</span>
+                ) : entry.type === 'option' && entry.option.meta ? (
+                  <span aria-hidden="true" className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-zinc-500">
+                    {entry.option.meta}
+                  </span>
                 ) : null}
               </button>
             );

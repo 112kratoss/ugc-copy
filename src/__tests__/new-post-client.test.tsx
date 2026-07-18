@@ -37,7 +37,18 @@ const SOURCE_TOOLS_RESPONSE = {
     { slug: 'runway', label: 'Runway', models: [{ slug: 'gen-4', label: 'Gen-4' }], supportedMediaKinds: ['image', 'video'] },
     { slug: 'midjourney', label: 'Midjourney', models: [], supportedMediaKinds: ['image'] },
     { slug: 'kling', label: 'Kling', models: [], supportedMediaKinds: ['image', 'video'] },
-    { slug: 'sora', label: 'Sora', models: [], supportedMediaKinds: ['video'] },
+    {
+      slug: 'sora',
+      label: 'Sora',
+      models: [],
+      supportedMediaKinds: ['video'],
+      toolType: 'platform',
+      capabilities: ['video'],
+      catalogTier: 'historical',
+      status: 'sunset',
+      providerSlug: 'openai',
+      aliases: ['OpenAI video'],
+    },
     { slug: 'veo', label: 'Veo', models: [], supportedMediaKinds: ['video'] },
     { slug: 'capcut', label: 'CapCut', models: [], supportedMediaKinds: ['image', 'video'] },
     { slug: 'freepik', label: 'Freepik', models: [], supportedMediaKinds: ['image'] },
@@ -179,6 +190,19 @@ describe('NewPostClient', () => {
     fireEvent.focus(toolPicker);
     expect(await screen.findByRole('option', { name: 'Higgsfield' })).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: /model for tool 1/i })).toBeDisabled();
+  });
+
+  it('keeps historical tools out of the default list but finds them by alias', async () => {
+    render(<NewPostClient />);
+
+    const toolPicker = screen.getByRole('combobox', { name: 'Tool 1' });
+    fireEvent.focus(toolPicker);
+
+    expect(screen.queryByRole('option', { name: 'Sora' })).not.toBeInTheDocument();
+
+    fireEvent.change(toolPicker, { target: { value: 'OpenAI video' } });
+
+    expect(await screen.findByRole('option', { name: 'Sora' })).toBeInTheDocument();
   });
 
   it('creates provisional tools and models from the searchable Made With comboboxes', async () => {

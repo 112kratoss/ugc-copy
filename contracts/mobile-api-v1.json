@@ -495,10 +495,20 @@
             "models": [
               {
                 "slug": "nano-banana",
-                "label": "Nano Banana 2.0"
+                "label": "Nano Banana 2.0",
+                "capabilities": ["image"],
+                "status": "current",
+                "providerSlug": "magicbooklet",
+                "aliases": []
               }
             ],
-            "supportedMediaKinds": ["image", "video"]
+            "supportedMediaKinds": ["image", "video"],
+            "toolType": "platform",
+            "capabilities": ["image", "video"],
+            "catalogTier": "featured",
+            "status": "current",
+            "providerSlug": "magicbooklet",
+            "aliases": ["Magic Booklet"]
           }
         ]
       }

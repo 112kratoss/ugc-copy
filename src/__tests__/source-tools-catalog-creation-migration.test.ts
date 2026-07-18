@@ -21,4 +21,24 @@ describe('source tool catalog creation migration', () => {
     expect(sql).toMatch(/revoke all on function[\s\S]+from public, anon, authenticated/i);
     expect(sql).toMatch(/grant execute on function[\s\S]+to service_role/i);
   });
+
+  it('adds a curated taxonomy without removing historical attribution entries', () => {
+    const migrationsDirectory = path.join(process.cwd(), 'supabase', 'migrations');
+    const migrationName = fs.readdirSync(migrationsDirectory)
+      .find((name) => name.endsWith('_expand_source_tool_catalog.sql'));
+
+    expect(migrationName).toBeDefined();
+
+    const sql = fs.readFileSync(path.join(migrationsDirectory, migrationName!), 'utf8');
+    expect(sql).toMatch(/tool_type text not null default 'platform'/i);
+    expect(sql).toMatch(/catalog_tier text not null default 'extended'/i);
+    expect(sql).toMatch(/status text not null default 'current'/i);
+    expect(sql).toMatch(/'api-marketplace'/i);
+    expect(sql).toMatch(/'adobe-after-effects'/i);
+    expect(sql).toMatch(/'comfyui'/i);
+    expect(sql).toMatch(/'kie-ai'/i);
+    expect(sql).toMatch(/'sora'.*'historical'.*'sunset'/i);
+    expect(sql).toMatch(/on conflict \(slug\) do update/i);
+    expect(sql).not.toMatch(/delete from public\.source_tools/i);
+  });
 });
