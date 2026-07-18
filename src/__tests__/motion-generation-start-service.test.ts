@@ -180,7 +180,7 @@ describe('startMotionGenerationForRoute', () => {
       duration: 6,
       characterOrientation: 'image',
       mode: '1080p',
-      quotedCostCredits: 120,
+      quotedCostCredits: 162,
       sourceGenerationId: 'source-1',
       characterImage: expect.objectContaining({
         kind: 'image',

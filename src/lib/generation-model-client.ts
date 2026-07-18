@@ -86,11 +86,20 @@ function isDescriptor(value: unknown): value is GenerationModelDescriptor {
   const imageReferences = parseReferenceLimit(value.inputs.imageReferences, true);
   const videoReferences = parseReferenceLimit(value.inputs.videoReferences, false);
   const audioReferences = parseReferenceLimit(value.inputs.audioReferences, false);
+  const preparedAudioReferences = value.inputs.preparedAudioReferences === undefined
+    ? null
+    : parseReferenceLimit(value.inputs.preparedAudioReferences, false);
+  const characterReferences = value.inputs.characterReferences === undefined
+    ? null
+    : parseReferenceLimit(value.inputs.characterReferences, false);
   return imageReferences !== undefined
     && videoReferences !== undefined
     && audioReferences !== undefined
+    && preparedAudioReferences !== undefined
+    && characterReferences !== undefined
     && typeof value.inputs.startFrame === 'boolean'
-    && typeof value.inputs.endFrame === 'boolean';
+    && typeof value.inputs.endFrame === 'boolean'
+    && (value.inputs.combineFramesWithReferences === undefined || typeof value.inputs.combineFramesWithReferences === 'boolean');
 }
 
 function defaultMatchesCatalog(
@@ -314,7 +323,12 @@ export function useWebGenerationModelCatalog() {
 }
 
 export class WebCatalogRequestError extends Error {
-  constructor(message: string, public readonly status: number, public readonly code?: string) {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly code?: string,
+    public readonly fieldErrors: Record<string, string> = {}
+  ) {
     super(message);
     this.name = 'WebCatalogRequestError';
   }
@@ -345,7 +359,7 @@ export function resolveWebGenerationQuoteUi({
   if (quoteStatus === 'ready' && typeof quotedCost === 'number') {
     return {
       costCredits: quotedCost,
-      costLabel: `${quotedCost} credits`,
+      costLabel: `${quotedCost} ${quotedCost === 1 ? 'credit' : 'credits'}`,
       blocksGenerate: false,
       message: null,
     };
@@ -383,8 +397,21 @@ export async function requestWebGenerationQuote(
     body: JSON.stringify(input),
     signal,
   });
-  const body = await response.json() as GenerationModelQuote & { error?: string; code?: string };
-  if (!response.ok) throw new WebCatalogRequestError(body.error ?? 'Could not calculate generation cost.', response.status, body.code);
+  const body = await response.json() as GenerationModelQuote & {
+    error?: string;
+    code?: string;
+    fieldErrors?: Record<string, string>;
+  };
+  if (!response.ok) {
+    const fieldErrors = body.fieldErrors ?? {};
+    const fieldMessage = Object.values(fieldErrors).find((message) => typeof message === 'string' && message.trim());
+    throw new WebCatalogRequestError(
+      fieldMessage ?? body.error ?? 'Could not calculate generation cost.',
+      response.status,
+      body.code,
+      fieldErrors
+    );
+  }
   return body;
 }
 

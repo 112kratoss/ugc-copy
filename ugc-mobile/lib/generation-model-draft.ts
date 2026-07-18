@@ -70,6 +70,7 @@ export function applyCatalogModelDefaults(draft: CreationDraft, model: Generatio
     } as ImageCreationDraft;
   }
   if (draft.tool === 'video') {
+    const usesReusableReferences = draft.referenceMode === 'elements';
     return {
       ...draft,
       ...values,
@@ -86,6 +87,12 @@ export function applyCatalogModelDefaults(draft: CreationDraft, model: Generatio
       referenceAudios: model.inputs.audioReferences
         ? draft.referenceAudios.slice(0, model.inputs.audioReferences.max)
         : [],
+      preparedAudioIds: model.inputs.preparedAudioReferences
+        ? draft.preparedAudioIds.slice(0, model.inputs.preparedAudioReferences.max)
+        : [],
+      characterIds: model.inputs.characterReferences
+        ? draft.characterIds.slice(0, model.inputs.characterReferences.max)
+        : [],
       startFrame: model.inputs.startFrame ? draft.startFrame : null,
       endFrame: model.inputs.endFrame ? draft.endFrame : null,
       referenceMode: !model.inputs.startFrame && model.inputs.imageReferences ? 'elements' : draft.referenceMode,
@@ -101,7 +108,7 @@ export function applyCatalogModelDefaults(draft: CreationDraft, model: Generatio
 function referenceSummary(draft: CreationDraft) {
   if (draft.tool === 'image') return draft.references.length === 0 ? 'No references' : `${draft.references.length} image reference${draft.references.length === 1 ? '' : 's'}`;
   if (draft.tool === 'video') {
-    const count = draft.references.length + draft.referenceVideos.length + draft.referenceAudios.length + (draft.startFrame ? 1 : 0) + (draft.endFrame ? 1 : 0);
+    const count = draft.references.length + draft.referenceVideos.length + draft.referenceAudios.length + draft.preparedAudioIds.length + draft.characterIds.length + (draft.startFrame ? 1 : 0) + (draft.endFrame ? 1 : 0);
     return count === 0 ? 'No references' : `${count} reference asset${count === 1 ? '' : 's'}`;
   }
   return `${draft.characterImage ? 'Character ready' : 'Character missing'} · ${draft.referenceVideo ? 'motion ready' : 'motion missing'}`;
@@ -212,6 +219,20 @@ export function validateCatalogCreationDraft(
       (max) => `${model.displayName} supports up to ${max} audio references.`,
       errors
     );
+    validateCatalogInputLimit(
+      draft.preparedAudioIds.length,
+      model.inputs.preparedAudioReferences ?? null,
+      `${model.displayName} does not support prepared voice references.`,
+      (max) => `${model.displayName} supports up to ${max} prepared voice references.`,
+      errors
+    );
+    validateCatalogInputLimit(
+      draft.characterIds.length,
+      model.inputs.characterReferences ?? null,
+      `${model.displayName} does not support prepared character references.`,
+      (max) => `${model.displayName} supports up to ${max} prepared character references.`,
+      errors
+    );
   }
 
   const references = draft.tool === 'image' ? draft.references : draft.tool === 'video' ? draft.references : [];
@@ -233,18 +254,24 @@ export function buildCatalogQuoteRequest(
   catalogRevision: string
 ): GenerationModelQuoteRequest {
   const settings = Object.fromEntries(model.controls.map((control) => [control.key, currentControlValue(draft, control) ?? control.defaultValue]));
+  if (draft.tool === 'video') settings.referenceMode = draft.referenceMode;
   if (draft.tool === 'image') {
     return { kind: 'image', modelId: model.id, settings, inputCounts: { images: draft.references.length, videos: 0, audios: 0 }, catalogRevision };
   }
   if (draft.tool === 'video') {
+    const usesReusableReferences = draft.referenceMode === 'elements';
     return {
       kind: 'video',
       modelId: model.id,
       settings,
       inputCounts: {
-        images: draft.references.length + (draft.startFrame ? 1 : 0) + (draft.endFrame ? 1 : 0),
-        videos: draft.referenceVideos.length,
-        audios: draft.referenceAudios.length,
+        images: usesReusableReferences
+          ? draft.references.length
+          : (draft.startFrame ? 1 : 0) + (draft.endFrame ? 1 : 0),
+        videos: usesReusableReferences ? draft.referenceVideos.length : 0,
+        audios: usesReusableReferences ? draft.referenceAudios.length : 0,
+        preparedAudios: usesReusableReferences ? draft.preparedAudioIds.length : 0,
+        characters: usesReusableReferences ? draft.characterIds.length : 0,
       },
       catalogRevision,
     };
@@ -304,7 +331,9 @@ export function buildCatalogGenerationPayload(
     };
   }
   if (draft.tool === 'video') {
-    const imageUrls = draft.references.map((reference) => reference.url);
+    const usesReusableReferences = draft.referenceMode === 'elements';
+    const activeReferences = usesReusableReferences ? draft.references : [];
+    const imageUrls = activeReferences.map((reference) => reference.url);
     return {
       model: model.id,
       isMultiShot: model.capabilities.multiShot ? draft.isMultiShot : false,
@@ -314,15 +343,17 @@ export function buildCatalogGenerationPayload(
         prompt: shot.prompt.trim(),
         duration: Math.max(1, Math.round(shot.duration || 5)),
       })) : undefined,
-      elements: elementDescriptors(draft),
+      elements: usesReusableReferences ? elementDescriptors(draft) : [],
       elementImageUrls: imageUrls,
       imageUrls,
-      referenceVideoUrls: draft.referenceVideos.map((media) => media.url),
-      referenceAudioUrls: draft.referenceAudios.map((media) => media.url),
-      startImageUrl: draft.startFrame?.url ?? null,
-      endImageUrl: draft.endFrame?.url ?? null,
-      startFrame: mediaDescriptor(draft.startFrame),
-      endFrame: mediaDescriptor(draft.endFrame),
+      referenceVideoUrls: usesReusableReferences ? draft.referenceVideos.map((media) => media.url) : [],
+      referenceAudioUrls: usesReusableReferences ? draft.referenceAudios.map((media) => media.url) : [],
+      preparedAudioIds: usesReusableReferences ? draft.preparedAudioIds : [],
+      characterIds: usesReusableReferences ? draft.characterIds : [],
+      startImageUrl: usesReusableReferences && !model.inputs.combineFramesWithReferences ? null : draft.startFrame?.url ?? null,
+      endImageUrl: usesReusableReferences ? null : draft.endFrame?.url ?? null,
+      startFrame: usesReusableReferences && !model.inputs.combineFramesWithReferences ? null : mediaDescriptor(draft.startFrame),
+      endFrame: usesReusableReferences ? null : mediaDescriptor(draft.endFrame),
       mode: draft.mode,
       aspectRatio: draft.aspectRatio,
       sound: model.capabilities.sound ? draft.sound : false,

@@ -584,7 +584,11 @@ export function MediaCreationScreen({
       if (role === 'character') {
         setMotionDraft((current) => ({ ...current, characterImage: draft }));
       } else {
-        setVideoDraft((current) => ({ ...current, referenceMode: 'frames', [role === 'start' ? 'startFrame' : 'endFrame']: draft }));
+        setVideoDraft((current) => ({
+          ...current,
+          referenceMode: current.model === 'wan-2.7' && current.referenceMode === 'elements' && role === 'start' ? 'elements' : 'frames',
+          [role === 'start' ? 'startFrame' : 'endFrame']: draft,
+        }));
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Upload failed.');
@@ -1572,13 +1576,13 @@ function CreationReferences({
       <View style={{ gap: appTheme.spacing.gap }}>
         {supportsFrames && supportsElements ? (
           <OptionRow title="Reference mode">
-            <Chip label="Frames" active={referenceMode === 'frames'} onPress={() => onVideoChange((draft) => ({ ...draft, referenceMode: 'frames' }))} />
-            <Chip label="Elements" active={referenceMode === 'elements'} onPress={() => onVideoChange((draft) => ({ ...draft, referenceMode: 'elements' }))} />
+            <Chip label="Start / end" active={referenceMode === 'frames'} onPress={() => onVideoChange((draft) => ({ ...draft, referenceMode: 'frames' }))} />
+            <Chip label="Reusable refs" active={referenceMode === 'elements'} onPress={() => onVideoChange((draft) => ({ ...draft, referenceMode: 'elements' }))} />
           </OptionRow>
         ) : null}
         {referenceMode === 'frames' && supportsFrames ? (
           <View style={{ gap: 10 }}>
-            {model?.inputs.startFrame ? <UploadBlock title="Start frame" actionLabel={videoDraft.startFrame ? 'Replace start' : 'Add start'} onPress={onUploadStart} disabled={isUploading} /> : null}
+            {model?.inputs.startFrame ? <UploadBlock title={model.id === 'hailuo-2.3' ? 'Start frame · required' : 'Start frame'} actionLabel={videoDraft.startFrame ? 'Replace start' : 'Add start'} onPress={onUploadStart} disabled={isUploading} /> : null}
             {model?.inputs.startFrame && videoDraft.startFrame ? (
               <MediaList
                 items={[videoDraft.startFrame]}
@@ -1598,10 +1602,10 @@ function CreationReferences({
         ) : supportsElements ? (
           <View style={{ gap: 10 }}>
             <UploadBlock
-              title="Named image elements"
+              title="Reusable image references"
               badge={`${videoDraft.references.length} / ${elementLimit}`}
-              body="Attach elements you can mention by name in the prompt."
-              actionLabel="Add elements"
+              body="Keep characters, products, or styles consistent and mention them by name in the prompt."
+              actionLabel="Add references"
               onPress={onUploadVideoReferences}
               disabled={isUploading}
             />
@@ -1611,6 +1615,24 @@ function CreationReferences({
               onRename={(id, displayName) => onVideoChange((draft) => ({ ...draft, references: renameMediaInList(draft.references, id, displayName) }))}
               onUseHandle={onUseVideoHandle}
             />
+            {model?.inputs.combineFramesWithReferences && model.inputs.startFrame ? (
+              <>
+                <UploadBlock
+                  title="First frame · optional"
+                  body="Wan can combine this frame with reusable image, video, and voice references."
+                  actionLabel={videoDraft.startFrame ? 'Replace frame' : 'Add first frame'}
+                  onPress={onUploadStart}
+                  disabled={isUploading}
+                />
+                {videoDraft.startFrame ? (
+                  <MediaList
+                    items={[videoDraft.startFrame]}
+                    onRemove={() => onVideoChange((draft) => ({ ...draft, startFrame: null }))}
+                    onRename={(id, displayName) => onVideoChange((draft) => ({ ...draft, startFrame: renameOptionalMedia(draft.startFrame, id, displayName) }))}
+                  />
+                ) : null}
+              </>
+            ) : null}
           </View>
         ) : <AppText variant="bodySm" color="muted">This model does not accept image references.</AppText>}
       </View>
@@ -1675,7 +1697,7 @@ function CreationAdvanced({
     <View style={{ gap: appTheme.spacing.gap }}>
       <CatalogAdvancedControls model={model} draft={draft} onChange={onChange} />
       {draft.tool === 'video' && draft.isMultiShot ? <ShotEditor draft={draft} onChange={(nextDraft) => onChange(nextDraft)} /> : null}
-      {draft.tool === 'video' && model.inputs.videoReferences ? (
+      {draft.tool === 'video' && draft.referenceMode === 'elements' && model.inputs.videoReferences ? (
         <View style={{ gap: 10 }}>
           <UploadBlock title={`Reference videos (${draft.referenceVideos.length}/${model.inputs.videoReferences.max})`} actionLabel="Add video" onPress={onUploadVideo} disabled={isUploading} />
           <MediaList
@@ -1685,7 +1707,7 @@ function CreationAdvanced({
           />
         </View>
       ) : null}
-      {draft.tool === 'video' && model.inputs.audioReferences ? (
+      {draft.tool === 'video' && draft.referenceMode === 'elements' && model.inputs.audioReferences ? (
         <View style={{ gap: 10 }}>
           <UploadBlock title={`Reference audio (${draft.referenceAudios.length}/${model.inputs.audioReferences.max})`} actionLabel="Add audio" onPress={onUploadAudio} disabled={isUploading} />
           <MediaList
@@ -1695,6 +1717,109 @@ function CreationAdvanced({
           />
         </View>
       ) : null}
+      {draft.tool === 'video' && draft.referenceMode === 'elements' && model.inputs.preparedAudioReferences ? (
+        <PreparedReferenceIds
+          title="Prepared voice IDs"
+          accessibilityLabel="Gemini Omni voice ID"
+          placeholder="Paste prepared voice ID"
+          items={draft.preparedAudioIds}
+          max={model.inputs.preparedAudioReferences.max}
+          onChange={(items) => onVideoChange((current) => ({ ...current, preparedAudioIds: items }))}
+        />
+      ) : null}
+      {draft.tool === 'video' && draft.referenceMode === 'elements' && model.inputs.characterReferences ? (
+        <PreparedReferenceIds
+          title="Prepared character IDs"
+          accessibilityLabel="Gemini Omni character ID"
+          placeholder="Paste prepared character ID"
+          items={draft.characterIds}
+          max={model.inputs.characterReferences.max}
+          onChange={(items) => onVideoChange((current) => ({ ...current, characterIds: items }))}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+function PreparedReferenceIds({
+  title,
+  accessibilityLabel,
+  placeholder,
+  items,
+  max,
+  onChange,
+}: {
+  title: string;
+  accessibilityLabel: string;
+  placeholder: string;
+  items: string[];
+  max: number;
+  onChange: (items: string[]) => void;
+}) {
+  const [draft, setDraft] = useState('');
+  const add = () => {
+    const value = draft.trim();
+    if (!/^[A-Za-z0-9._:-]{3,256}$/.test(value) || items.includes(value) || items.length >= max) return;
+    onChange([...items, value]);
+    setDraft('');
+  };
+
+  return (
+    <View style={{ gap: 10 }}>
+      <AppText variant="label" color="secondary">{title} ({items.length}/{max})</AppText>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <TextInput
+          accessibilityLabel={accessibilityLabel}
+          value={draft}
+          onChangeText={setDraft}
+          onSubmitEditing={add}
+          placeholder={placeholder}
+          placeholderTextColor={appTheme.colors.faint}
+          autoCapitalize="none"
+          autoCorrect={false}
+          style={{
+            flex: 1,
+            minHeight: appTheme.touch.default,
+            borderRadius: 16,
+            borderCurve: 'continuous',
+            borderWidth: 1,
+            borderColor: 'rgba(255,255,255,0.12)',
+            backgroundColor: '#0B0C0C',
+            color: '#ffffff',
+            paddingHorizontal: 12,
+            fontSize: 13,
+          }}
+        />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Add ${title.toLowerCase()}`}
+          onPress={add}
+          disabled={items.length >= max}
+          style={{
+            minWidth: 64,
+            minHeight: appTheme.touch.default,
+            borderRadius: 16,
+            borderCurve: 'continuous',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: 'rgba(255,122,89,0.16)',
+            borderWidth: 1,
+            borderColor: 'rgba(255,122,89,0.38)',
+            opacity: items.length >= max ? 0.45 : 1,
+          }}
+        >
+          <AppText variant="label">Add</AppText>
+        </Pressable>
+      </View>
+      {items.map((item) => (
+        <View key={item} style={{ minHeight: 46, borderRadius: 15, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', backgroundColor: 'rgba(255,255,255,0.035)', paddingLeft: 12, paddingRight: 6, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Text selectable numberOfLines={1} style={{ flex: 1, color: appTheme.colors.textSecondary, fontFamily: 'monospace', fontSize: 12 }}>{item}</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item}`} onPress={() => onChange(items.filter((value) => value !== item))} hitSlop={8} style={{ padding: 9 }}>
+            <Trash2 size={16} color={appTheme.colors.muted} />
+          </Pressable>
+        </View>
+      ))}
+      <AppText variant="caption" color="muted">Use IDs created by Gemini Omni’s voice or character preparation endpoints.</AppText>
     </View>
   );
 }

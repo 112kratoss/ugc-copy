@@ -934,7 +934,36 @@ function getKieImageModelId(model: ImageModelId, referenceCount: number): string
     return referenceCount > 0 ? 'gpt-image-2-image-to-image' : 'gpt-image-2-text-to-image';
   }
 
+  if (model === 'seedream-5-pro') {
+    return referenceCount > 0 ? 'seedream/5-pro-image-to-image' : 'seedream/5-pro-text-to-image';
+  }
+
+  if (model === 'seedream-5-lite') {
+    return referenceCount > 0 ? 'seedream/5-lite-image-to-image' : 'seedream/5-lite-text-to-image';
+  }
+
+  if (model === 'imagen-4-fast') return 'google/imagen4-fast';
+  if (model === 'imagen-4') return 'google/imagen4';
+  if (model === 'imagen-4-ultra') return 'google/imagen4-ultra';
+  if (model === 'ideogram-v3') {
+    return referenceCount > 0 ? 'ideogram/v3-remix' : 'ideogram/v3-text-to-image';
+  }
+
+  if (model === 'flux-2-pro') {
+    return referenceCount > 0 ? 'flux-2/pro-image-to-image' : 'flux-2/pro-text-to-image';
+  }
+
   return model;
+}
+
+function getIdeogramImageSize(aspectRatio: string): string {
+  return ({
+    '1:1': 'square_hd',
+    '4:3': 'landscape_4_3',
+    '3:4': 'portrait_4_3',
+    '16:9': 'landscape_16_9',
+    '9:16': 'portrait_16_9',
+  } as Record<string, string>)[aspectRatio] ?? 'square_hd';
 }
 
 async function createGenerationPreviewQuietly({
@@ -1575,7 +1604,7 @@ export async function startImageGeneration(params: {
   if (!modelConfig) {
     throw new GenerationServiceError(`Unsupported image model: ${model}`, 400);
   }
-  const aspectRatio = requestedAspectRatio ?? (model === 'grok-imagine-image' ? modelConfig.aspectRatios[0] : 'auto');
+  const aspectRatio = requestedAspectRatio ?? modelConfig.aspectRatios[0];
 
   assertGenerationRequest(
     (modelConfig.aspectRatios as readonly string[]).includes(aspectRatio),
@@ -1587,13 +1616,19 @@ export async function startImageGeneration(params: {
     `${modelConfig.displayName} supports ${getImageResolutionOptions(model, aspectRatio).join(', ')} at aspect ratio ${aspectRatio}.`
   );
 
-  if (model === 'grok-imagine-image') {
+  if (model === 'grok-imagine-image' || model === 'ideogram-v3') {
     assertGenerationRequest(
       isValidImageQualityMode(qualityMode),
-      'Unsupported quality mode for Grok Imagine.'
+      `Unsupported quality mode for ${modelConfig.displayName}.`
     );
   }
 
+  if (model === 'ideogram-v3') {
+    assertGenerationRequest(
+      qualityMode === 'turbo' || qualityMode === 'balanced' || qualityMode === 'quality',
+      'Ideogram V3 supports Turbo, Balanced, or Quality speed.'
+    );
+  }
   if (modelConfig.supportsOutputFormat) {
     assertGenerationRequest(
       (modelConfig.outputFormats as readonly string[]).includes(outputFormat),
@@ -1629,6 +1664,10 @@ export async function startImageGeneration(params: {
     resolvedImageUrls.length <= modelConfig.maxImages,
     `${modelConfig.displayName} supports up to ${modelConfig.maxImages} total reference images.`
   );
+
+  if (model === 'wan-2.7-image-pro' && resolution === '4K' && resolvedImageUrls.length > 0) {
+    throw new GenerationServiceError('Wan 2.7 Image Pro supports 4K for text-to-image only.', 400);
+  }
 
   const unknownPromptHandles = findUnknownPromptHandles(
     trimmedPrompt,
@@ -1679,6 +1718,79 @@ export async function startImageGeneration(params: {
       if (resolvedImageUrls.length > 0) {
         input.input_urls = resolvedImageUrls;
       }
+    } else if (model === 'nano-banana-2-lite') {
+      input = {
+        prompt: compiledPrompt,
+        aspect_ratio: aspectRatio,
+      };
+
+      if (resolvedImageUrls.length > 0) {
+        input.image_urls = resolvedImageUrls;
+      }
+    } else if (model === 'seedream-5-pro') {
+      input = {
+        prompt: compiledPrompt,
+        aspect_ratio: aspectRatio,
+        quality: resolution === '2K' ? 'high' : 'basic',
+        output_format: outputFormat === 'jpg' ? 'jpeg' : outputFormat,
+        nsfw_checker: true,
+      };
+
+      if (resolvedImageUrls.length > 0) {
+        input.image_urls = resolvedImageUrls;
+      }
+    } else if (model === 'seedream-5-lite') {
+      input = {
+        prompt: compiledPrompt,
+        aspect_ratio: aspectRatio,
+        quality: resolution === '3K' ? 'high' : 'basic',
+        output_format: outputFormat === 'jpg' ? 'jpeg' : outputFormat,
+        nsfw_checker: true,
+      };
+      if (resolvedImageUrls.length > 0) input.image_urls = resolvedImageUrls;
+    } else if (model === 'wan-2.7-image' || model === 'wan-2.7-image-pro') {
+      input = {
+        prompt: compiledPrompt,
+        input_urls: resolvedImageUrls,
+        n: 1,
+        enable_sequential: false,
+        resolution,
+        thinking_mode: false,
+        watermark: false,
+        bbox_list: resolvedImageUrls.map(() => []),
+      };
+    } else if (model === 'imagen-4-fast' || model === 'imagen-4' || model === 'imagen-4-ultra') {
+      input = { prompt: compiledPrompt, aspect_ratio: aspectRatio };
+    } else if (model === 'ideogram-v3') {
+      input = {
+        prompt: compiledPrompt,
+        rendering_speed: qualityMode.toUpperCase(),
+        style: 'AUTO',
+        expand_prompt: true,
+        image_size: getIdeogramImageSize(aspectRatio),
+      };
+      if (resolvedImageUrls[0]) {
+        input.image_url = resolvedImageUrls[0];
+        input.num_images = 1;
+        input.strength = 0.6;
+      }
+    } else if (model === 'flux-2-pro') {
+      input = {
+        prompt: compiledPrompt,
+        aspect_ratio: aspectRatio,
+        resolution,
+        nsfw_checker: true,
+      };
+
+      if (resolvedImageUrls.length > 0) {
+        input.input_urls = resolvedImageUrls;
+      }
+    } else if (model === 'z-image') {
+      input = {
+        prompt: compiledPrompt,
+        aspect_ratio: aspectRatio,
+        nsfw_checker: true,
+      };
     } else {
       input = {
         prompt: compiledPrompt,
@@ -1709,7 +1821,7 @@ export async function startImageGeneration(params: {
         providerModel,
         aspectRatio,
         resolution,
-        ...(model === 'grok-imagine-image' ? { qualityMode } : {}),
+        ...(model === 'grok-imagine-image' || model === 'ideogram-v3' ? { qualityMode } : {}),
         outputFormat,
         googleSearch,
         ...(normalizedElements.length > 0
@@ -1790,6 +1902,8 @@ export async function startVideoGeneration(params: {
   imageUrls?: string[];
   referenceVideoUrls?: string[];
   referenceAudioUrls?: string[];
+  preparedAudioIds?: string[];
+  characterIds?: string[];
   klingVideoElements?: KlingVideoElementInput[];
   isMultiShot?: boolean;
   multiPrompts?: VideoMultiPromptInput[];
@@ -1825,6 +1939,8 @@ export async function startVideoGeneration(params: {
     imageUrls = [],
     referenceVideoUrls = [],
     referenceAudioUrls = [],
+    preparedAudioIds = [],
+    characterIds = [],
     klingVideoElements = [],
     isMultiShot = false,
     multiPrompts,
@@ -1876,7 +1992,8 @@ export async function startVideoGeneration(params: {
   const normalizedReferenceMode = referenceMode === 'elements' ? 'elements' : 'frames';
   const normalizedStartFrame = normalizeRemixMediaAssetDescriptor(startFrame, 'image');
   const normalizedEndFrame = normalizeRemixMediaAssetDescriptor(endFrame, 'image');
-  const useLegacyFrameUrls = normalizedReferences.length === 0 && (
+  const combinesFrameWithReferences = model === 'wan-2.7' && normalizedReferenceMode === 'elements';
+  const useLegacyFrameUrls = normalizedReferences.length === 0 && !combinesFrameWithReferences && (
     normalizedReferenceMode === 'frames'
     || Boolean(startImageUrl)
     || Boolean(endImageUrl)
@@ -1912,16 +2029,23 @@ export async function startVideoGeneration(params: {
 
   const videoElementSupport = getVideoElementSupport(model, { mode, isMultiShot });
   const isSeedance2Family = isSeedance2VideoModelId(model);
+  const supportsMultimodalReferences = isSeedance2Family || model === 'wan-2.7' || model === 'gemini-omni-video';
   const resolvedReferenceImageUrls = normalizedReferences.length > 0
     ? await resolveMediaUrls(supabase, normalizedReferences.map((reference) => reference.url))
     : useLegacyFrameUrls
       ? []
       : await resolveMediaUrls(supabase, normalizeMediaUrlList(imageUrls));
-  const resolvedReferenceVideoUrls = isSeedance2Family
+  const resolvedReferenceVideoUrls = supportsMultimodalReferences
     ? await resolveMediaUrls(supabase, normalizeMediaUrlList(referenceVideoUrls))
     : [];
-  const resolvedReferenceAudioUrls = isSeedance2Family
+  const resolvedReferenceAudioUrls = supportsMultimodalReferences
     ? await resolveMediaUrls(supabase, normalizeMediaUrlList(referenceAudioUrls))
+    : [];
+  const normalizedPreparedAudioIds = model === 'gemini-omni-video'
+    ? Array.from(new Set(preparedAudioIds.map((value) => value.trim()).filter(Boolean)))
+    : [];
+  const normalizedCharacterIds = model === 'gemini-omni-video'
+    ? Array.from(new Set(characterIds.map((value) => value.trim()).filter(Boolean)))
     : [];
   const resolvedKlingVideoElements = model === 'kling-3.0-video'
     ? await Promise.all(normalizedKlingVideoElements.map(async (element) => ({
@@ -1953,11 +2077,50 @@ export async function startVideoGeneration(params: {
     );
   }
 
-  if (resolvedReferenceVideoUrls.length > 3) {
+  if (isSeedance2Family && resolvedReferenceVideoUrls.length > 3) {
     throw new GenerationServiceError(
       'Seedance 2 supports up to 3 reference videos per run.',
       400
     );
+  }
+
+  if (isSeedance2Family && resolvedReferenceAudioUrls.length > 3) {
+    throw new GenerationServiceError(
+      'Seedance 2 supports up to 3 reference audio files per run.',
+      400
+    );
+  }
+
+  if (model === 'wan-2.7' && (
+    resolvedReferenceImageUrls.length
+    + resolvedReferenceVideoUrls.length
+    + resolvedReferenceAudioUrls.length
+  ) > 5) {
+    throw new GenerationServiceError(
+      'Wan 2.7 supports up to 5 reusable image, video, and audio references in total.',
+      400
+    );
+  }
+
+  if (model === 'wan-2.7' && resolvedReferenceAudioUrls.length > 1) {
+    throw new GenerationServiceError('Wan 2.7 supports one reference voice per run.', 400);
+  }
+
+  if (model === 'gemini-omni-video' && resolvedReferenceVideoUrls.length > 1) {
+    throw new GenerationServiceError('Gemini Omni supports one reference video per run.', 400);
+  }
+
+  if (model === 'gemini-omni-video' && resolvedReferenceImageUrls.length + (resolvedReferenceVideoUrls.length * 2) > 7) {
+    throw new GenerationServiceError('Gemini Omni supports seven reference slots; a video uses two slots.', 400);
+  }
+  if (model === 'gemini-omni-video' && normalizedPreparedAudioIds.length > 3) {
+    throw new GenerationServiceError('Gemini Omni supports up to 3 prepared voice references.', 400);
+  }
+  if (model === 'gemini-omni-video' && normalizedCharacterIds.length > 3) {
+    throw new GenerationServiceError('Gemini Omni supports up to 3 prepared character references.', 400);
+  }
+  if (model === 'gemini-omni-video' && resolvedReferenceImageUrls.length + (resolvedReferenceVideoUrls.length * 2) + normalizedCharacterIds.length > 7) {
+    throw new GenerationServiceError('Gemini Omni supports seven reference slots; videos use two and characters use one.', 400);
   }
 
   if (normalizedKlingVideoElements.length > 0 && model !== 'kling-3.0-video') {
@@ -1989,7 +2152,7 @@ export async function startVideoGeneration(params: {
       )
     : [];
 
-  if (totalReferenceImageCount > 0 && frameImageUrls.length > 0) {
+  if (totalReferenceImageCount > 0 && frameImageUrls.length > 0 && !combinesFrameWithReferences) {
     throw new GenerationServiceError(
       'Image references cannot be combined with start or end frames in the same run.',
       400
@@ -2001,6 +2164,17 @@ export async function startVideoGeneration(params: {
       'End frames are not available in multi-shot mode.',
       400
     );
+  }
+
+  if ((model === 'kling-3.0-turbo' || model === 'hailuo-2.3') && frameImageUrls.length > 1) {
+    throw new GenerationServiceError(
+      `${selectedModel.displayName} supports a start frame only.`,
+      400
+    );
+  }
+
+  if (model === 'hailuo-2.3' && frameImageUrls.length === 0) {
+    throw new GenerationServiceError('Hailuo 2.3 requires a start image.', 400);
   }
 
   if (model === 'grok-imagine-video' && grokVideoImageUrls.length > 1) {
@@ -2047,19 +2221,15 @@ export async function startVideoGeneration(params: {
       );
     }
   }
-  const hasAnySeedanceReference = isSeedance2Family && (
-    totalReferenceImageCount > 0
-    || frameImageUrls.length > 0
+  const hasReusableReference = totalReferenceImageCount > 0
     || resolvedReferenceVideoUrls.length > 0
     || resolvedReferenceAudioUrls.length > 0
-  );
-  const effectiveReferenceMode = isSeedance2Family
-    ? (hasAnySeedanceReference ? 'references' : normalizedReferenceMode)
-    : totalReferenceImageCount > 0
-      ? 'references'
-      : frameImageUrls.length > 0
-        ? 'frames'
-        : normalizedReferenceMode;
+  ;
+  const effectiveReferenceMode = hasReusableReference
+    ? 'references'
+    : frameImageUrls.length > 0
+      ? 'frames'
+      : normalizedReferenceMode;
 
   assertGenerationRequest(
     (selectedModel.aspectRatios as readonly string[]).includes(aspectRatio),
@@ -2077,6 +2247,9 @@ export async function startVideoGeneration(params: {
       `Unsupported resolution for ${selectedModel.displayName}`
     );
   }
+  if (model === 'hailuo-2.3' && resolution === '1080P' && duration === 10) {
+    throw new GenerationServiceError('Hailuo 2.3 supports 1080P output at 6 seconds only.', 400);
+  }
   if (!isMultiShot && selectedModel.provider !== 'veo' && !isValidVideoDuration(model, duration)) {
     throw new GenerationServiceError(`Unsupported duration for ${selectedModel.displayName}`, 400);
   }
@@ -2091,6 +2264,7 @@ export async function startVideoGeneration(params: {
     durationSeconds: totalDuration,
     resolution,
     hasReferenceVideo: resolvedReferenceVideoUrls.length > 0,
+    hasReferenceImage: resolvedReferenceImageUrls.length > 0 || frameImageUrls.length > 0,
   });
   const cost = resolveQuotedGenerationCost(computedCost, quotedCostCredits);
 
@@ -2101,15 +2275,31 @@ export async function startVideoGeneration(params: {
     let body: Record<string, unknown>;
     let providerModelId = selectedModel.apiModelId || mode;
     const referenceImageUrls = resolvedReferenceImageUrls;
-    const seedanceReferenceImageUrls = referenceImageUrls.length > 0
+    const providerReferenceImageUrls = referenceImageUrls.length > 0
       ? referenceImageUrls
-      : (resolvedElementImageUrls.length > 0 ? resolvedElementImageUrls : frameImageUrls);
+      : resolvedElementImageUrls;
     const requestedMode = mode;
     const providerMode = model === 'grok-imagine-video' && grokVideoImageUrls.length > 0 && mode === 'spicy'
       ? 'normal'
       : mode;
 
-    if (selectedModel.provider === 'kling') {
+    if (model === 'kling-3.0-turbo') {
+      const firstFrameUrl = frameImageUrls[0] || null;
+      providerModelId = firstFrameUrl
+        ? 'kling/v3-turbo-image-to-video'
+        : 'kling/v3-turbo-text-to-video';
+      const input: Record<string, unknown> = {
+        prompt: compiledPrompt,
+        duration,
+        resolution,
+      };
+      if (firstFrameUrl) {
+        input.image_urls = [firstFrameUrl];
+      } else {
+        input.aspect_ratio = aspectRatio;
+      }
+      body = { model: providerModelId, input };
+    } else if (selectedModel.provider === 'kling') {
       const input: Record<string, unknown> = {
         mode,
         aspect_ratio: aspectRatio,
@@ -2155,16 +2345,19 @@ export async function startVideoGeneration(params: {
           return_last_frame: false,
         };
 
-        if (seedanceReferenceImageUrls.length > 0) {
-          input.reference_image_urls = seedanceReferenceImageUrls;
-        }
-
-        if (resolvedReferenceVideoUrls.length > 0) {
-          input.reference_video_urls = resolvedReferenceVideoUrls;
-        }
-
-        if (resolvedReferenceAudioUrls.length > 0) {
-          input.reference_audio_urls = resolvedReferenceAudioUrls;
+        if (effectiveReferenceMode === 'frames') {
+          if (frameImageUrls[0]) input.first_frame_url = frameImageUrls[0];
+          if (frameImageUrls[1]) input.last_frame_url = frameImageUrls[1];
+        } else {
+          if (providerReferenceImageUrls.length > 0) {
+            input.reference_image_urls = providerReferenceImageUrls;
+          }
+          if (resolvedReferenceVideoUrls.length > 0) {
+            input.reference_video_urls = resolvedReferenceVideoUrls;
+          }
+          if (resolvedReferenceAudioUrls.length > 0) {
+            input.reference_audio_urls = resolvedReferenceAudioUrls;
+          }
         }
 
         body = {
@@ -2192,6 +2385,76 @@ export async function startVideoGeneration(params: {
           input,
         };
       }
+    } else if (selectedModel.provider === 'wan') {
+      const input: Record<string, unknown> = {
+        prompt: compiledPrompt,
+        resolution,
+        duration,
+        prompt_extend: true,
+        watermark: false,
+      };
+      if (effectiveReferenceMode === 'references') {
+        providerModelId = 'wan/2-7-r2v';
+        input.aspect_ratio = aspectRatio;
+        if (providerReferenceImageUrls.length > 0) input.reference_image = providerReferenceImageUrls;
+        if (resolvedReferenceVideoUrls.length > 0) input.reference_video = resolvedReferenceVideoUrls;
+        if (resolvedReferenceAudioUrls[0]) input.reference_voice = resolvedReferenceAudioUrls[0];
+        if (frameImageUrls[0]) input.first_frame = frameImageUrls[0];
+      } else if (frameImageUrls.length > 0) {
+        providerModelId = 'wan/2-7-image-to-video';
+        input.first_frame_url = frameImageUrls[0];
+        if (frameImageUrls[1]) input.last_frame_url = frameImageUrls[1];
+      } else {
+        providerModelId = 'wan/2-7-text-to-video';
+        input.ratio = aspectRatio;
+      }
+      body = { model: providerModelId, input };
+    } else if (selectedModel.provider === 'happyhorse') {
+      const input: Record<string, unknown> = {
+        prompt: compiledPrompt,
+        resolution,
+        duration,
+      };
+      if (effectiveReferenceMode === 'references' && providerReferenceImageUrls.length > 0) {
+        providerModelId = 'happyhorse-1-1/reference-to-video';
+        input.reference_image = providerReferenceImageUrls;
+        input.aspect_ratio = aspectRatio;
+      } else if (frameImageUrls[0]) {
+        providerModelId = 'happyhorse-1-1/image-to-video';
+        input.image_urls = [frameImageUrls[0]];
+      } else {
+        providerModelId = 'happyhorse-1-1/text-to-video';
+        input.aspect_ratio = aspectRatio;
+      }
+      body = { model: providerModelId, input };
+    } else if (selectedModel.provider === 'gemini-omni') {
+      providerModelId = 'gemini-omni-video';
+      const input: Record<string, unknown> = {
+        prompt: compiledPrompt,
+        image_urls: providerReferenceImageUrls,
+        duration: String(duration),
+        aspect_ratio: aspectRatio,
+        resolution,
+      };
+      if (resolvedReferenceVideoUrls[0]) {
+        input.video_list = [{ url: resolvedReferenceVideoUrls[0], start: 0, ends: duration }];
+      }
+      if (normalizedPreparedAudioIds.length > 0) input.audio_ids = normalizedPreparedAudioIds;
+      if (normalizedCharacterIds.length > 0) input.character_ids = normalizedCharacterIds;
+      body = { model: providerModelId, input };
+    } else if (selectedModel.provider === 'hailuo') {
+      providerModelId = mode === 'pro'
+        ? 'hailuo/2-3-image-to-video-pro'
+        : 'hailuo/2-3-image-to-video-standard';
+      body = {
+        model: providerModelId,
+        input: {
+          prompt: compiledPrompt,
+          image_url: frameImageUrls[0],
+          duration: String(duration),
+          resolution,
+        },
+      };
     } else if (selectedModel.provider === 'grok') {
       providerModelId = grokVideoImageUrls.length > 0
         ? 'grok-imagine/image-to-video'
@@ -2217,11 +2480,12 @@ export async function startVideoGeneration(params: {
       };
     } else {
       endpoint = 'https://api.kie.ai/api/v1/veo/generate';
-      providerModelId = mode === 'veo3' ? 'veo3' : 'veo3_fast';
+      providerModelId = mode === 'veo3' || mode === 'veo3_lite' ? mode : 'veo3_fast';
       body = {
         prompt: compiledPrompt,
         model: providerModelId,
         aspectRatio,
+        resolution,
         generationType: referenceImageUrls.length > 0
           ? 'REFERENCE_2_VIDEO'
           : (frameImageUrls.length > 0 ? 'FIRST_AND_LAST_FRAMES_2_VIDEO' : 'TEXT_2_VIDEO'),
@@ -2263,8 +2527,8 @@ export async function startVideoGeneration(params: {
         resolution,
         fixedLens,
         referenceMode: effectiveReferenceMode,
-        ...(seedanceReferenceImageUrls.length > 0
-          ? { referenceImageUrls: seedanceReferenceImageUrls }
+        ...(providerReferenceImageUrls.length > 0
+          ? { referenceImageUrls: providerReferenceImageUrls }
           : {}),
         ...(resolvedReferenceVideoUrls.length > 0
           ? { referenceVideoUrls: resolvedReferenceVideoUrls }
@@ -2272,6 +2536,8 @@ export async function startVideoGeneration(params: {
         ...(resolvedReferenceAudioUrls.length > 0
           ? { referenceAudioUrls: resolvedReferenceAudioUrls }
           : {}),
+        ...(normalizedPreparedAudioIds.length > 0 ? { preparedAudioIds: normalizedPreparedAudioIds } : {}),
+        ...(normalizedCharacterIds.length > 0 ? { characterIds: normalizedCharacterIds } : {}),
         ...(resolvedKlingVideoElements.length > 0
           ? {
               klingVideoElements: resolvedKlingVideoElements.map((element) => ({
@@ -2294,7 +2560,7 @@ export async function startVideoGeneration(params: {
               compiledPrompt,
             }
           : {}),
-        ...(effectiveReferenceMode === 'frames' && normalizedStartFrame
+        ...((effectiveReferenceMode === 'frames' || model === 'wan-2.7') && normalizedStartFrame
           ? { startFrame: normalizedStartFrame }
           : {}),
         ...(effectiveReferenceMode === 'frames' && normalizedEndFrame

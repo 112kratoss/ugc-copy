@@ -4,19 +4,19 @@ import { getDefaultVideoDuration, getMotionCost, getImageCost, getImageResolutio
 describe('Model Pricing', () => {
     describe('getMotionCost', () => {
         it('calculates Kling 2.6 720p cost', () => {
-            expect(getMotionCost('kling-2.6', '720p', 10)).toBe(60);
+            expect(getMotionCost('kling-2.6', '720p', 10)).toBe(110);
         });
         it('calculates Kling 2.6 1080p cost', () => {
-            expect(getMotionCost('kling-2.6', '1080p', 10)).toBe(90);
+            expect(getMotionCost('kling-2.6', '1080p', 10)).toBe(180);
         });
         it('calculates Kling 3.0 720p cost', () => {
-            expect(getMotionCost('kling-3.0', '720p', 10)).toBe(120);
+            expect(getMotionCost('kling-3.0', '720p', 10)).toBe(200);
         });
         it('calculates Kling 3.0 1080p cost', () => {
-            expect(getMotionCost('kling-3.0', '1080p', 10)).toBe(200);
+            expect(getMotionCost('kling-3.0', '1080p', 10)).toBe(270);
         });
         it('rounds up fractional costs', () => {
-            expect(getMotionCost('kling-2.6', '720p', 3.5)).toBe(21); // 3.5 * 6 = 21
+            expect(getMotionCost('kling-2.6', '720p', 3.5)).toBe(39); // 3.5 * 11 = 38.5
         });
     });
 
@@ -41,10 +41,31 @@ describe('Model Pricing', () => {
             expect(getImageCost('gpt-image-2', '2K')).toBe(10);
             expect(getImageCost('gpt-image-2', '4K')).toBe(16);
         });
+        it('prices the new Kie image models and rounds Seedream reference surcharges', () => {
+            expect(getImageCost('nano-banana-2-lite', '1K')).toBe(4);
+            expect(getImageCost('seedream-5-pro', '1K')).toBe(7);
+            expect(getImageCost('seedream-5-pro', '1K', { referenceCount: 2 })).toBe(8);
+            expect(getImageCost('seedream-5-pro', '1K', { referenceCount: 3 })).toBe(8);
+            expect(getImageCost('seedream-5-pro', '2K', { referenceCount: 4 })).toBe(16);
+            expect(getImageCost('flux-2-pro', '1K')).toBe(5);
+            expect(getImageCost('flux-2-pro', '2K')).toBe(7);
+            expect(getImageCost('z-image', '1K')).toBe(1);
+        });
         it('grok image pricing follows quality and reference mode', () => {
             expect(getImageCost('grok-imagine-image', '1K')).toBe(4);
             expect(getImageCost('grok-imagine-image', '1K', { qualityMode: 'quality' })).toBe(5);
             expect(getImageCost('grok-imagine-image', '1K', { qualityMode: 'quality', referenceCount: 1 })).toBe(4);
+        });
+        it('prices the expanded non-Runway image catalog', () => {
+            expect(getImageCost('seedream-5-lite', '3K')).toBe(5.5);
+            expect(getImageCost('wan-2.7-image', '2K')).toBe(4.8);
+            expect(getImageCost('wan-2.7-image-pro', '4K')).toBe(12);
+            expect(getImageCost('imagen-4-fast', '1K')).toBe(4);
+            expect(getImageCost('imagen-4', '1K')).toBe(8);
+            expect(getImageCost('imagen-4-ultra', '1K')).toBe(12);
+            expect(getImageCost('ideogram-v3', '1K', { qualityMode: 'turbo' })).toBe(3.5);
+            expect(getImageCost('ideogram-v3', '1K', { qualityMode: 'balanced' })).toBe(7);
+            expect(getImageCost('ideogram-v3', '1K', { qualityMode: 'quality' })).toBe(10);
         });
     });
 
@@ -71,20 +92,20 @@ describe('Model Pricing', () => {
 
     describe('getVideoCost', () => {
         it('std mode without sound', () => {
-            expect(getVideoCost('kling-3.0-video', { mode: 'std', sound: false, durationSeconds: 5 })).toBe(100);
+            expect(getVideoCost('kling-3.0-video', { mode: 'std', sound: false, durationSeconds: 5 })).toBe(70);
         });
         it('std mode with sound', () => {
-            expect(getVideoCost('kling-3.0-video', { mode: 'std', sound: true, durationSeconds: 5 })).toBe(150);
+            expect(getVideoCost('kling-3.0-video', { mode: 'std', sound: true, durationSeconds: 5 })).toBe(100);
         });
         it('pro mode without sound', () => {
-            expect(getVideoCost('kling-3.0-video', { mode: 'pro', sound: false, durationSeconds: 10 })).toBe(270);
+            expect(getVideoCost('kling-3.0-video', { mode: 'pro', sound: false, durationSeconds: 10 })).toBe(180);
         });
         it('pro mode with sound', () => {
-            expect(getVideoCost('kling-3.0-video', { mode: 'pro', sound: true, durationSeconds: 10 })).toBe(400);
+            expect(getVideoCost('kling-3.0-video', { mode: 'pro', sound: true, durationSeconds: 10 })).toBe(270);
         });
         it('supports variable Kling durations within the allowed range', () => {
             expect(isValidVideoDuration('kling-3.0-video', 7)).toBe(true);
-            expect(getVideoCost('kling-3.0-video', { mode: 'std', sound: false, durationSeconds: 7 })).toBe(140);
+            expect(getVideoCost('kling-3.0-video', { mode: 'std', sound: false, durationSeconds: 7 })).toBe(98);
         });
         it('seedance 720p 8s without sound', () => {
             expect(getVideoCost('seedance-1.5-pro', { resolution: '720p', sound: false, durationSeconds: 8 })).toBe(28);
@@ -96,13 +117,35 @@ describe('Model Pricing', () => {
             expect(getVideoCost('seedance-2', { resolution: '720p', durationSeconds: 12 })).toBe(492);
         });
         it('seedance 2 fast 480p 12s with reference video uses the lower tier', () => {
-            expect(getVideoCost('seedance-2-fast', { resolution: '480p', durationSeconds: 12, hasReferenceVideo: true })).toBe(96);
+            expect(getVideoCost('seedance-2-fast', { resolution: '480p', durationSeconds: 12, hasReferenceVideo: true })).toBe(108);
+        });
+        it('prices the new Kie video models from their provider tiers', () => {
+            expect(getVideoCost('seedance-2-mini', { resolution: '720p', durationSeconds: 10 })).toBe(205);
+            expect(getVideoCost('seedance-2-mini', { resolution: '480p', durationSeconds: 10, hasReferenceVideo: true })).toBe(60);
+            expect(getVideoCost('kling-3.0-turbo', { resolution: '1080p', durationSeconds: 5 })).toBe(113);
+            expect(getVideoCost('wan-2.7', { resolution: '720p', durationSeconds: 5 })).toBe(80);
+            expect(getVideoCost('hailuo-2.3', { mode: 'standard', resolution: '768P', durationSeconds: 10 })).toBe(50);
+            expect(getVideoCost('hailuo-2.3', { mode: 'pro', resolution: '1080P', durationSeconds: 6 })).toBe(80);
+        });
+        it('prices HappyHorse per second and Gemini Omni by input mode', () => {
+            expect(getVideoCost('happyhorse-1.1', { resolution: '720p', durationSeconds: 5 })).toBe(113);
+            expect(getVideoCost('happyhorse-1.1', { resolution: '1080p', durationSeconds: 5 })).toBe(145);
+            expect(getVideoCost('gemini-omni-video', { resolution: '1080p', durationSeconds: 8 })).toBe(105);
+            expect(getVideoCost('gemini-omni-video', { resolution: '4k', durationSeconds: 10 })).toBe(210);
+            expect(getVideoCost('gemini-omni-video', { resolution: '720p', durationSeconds: 4, hasReferenceVideo: true })).toBe(168);
+            expect(getVideoCost('gemini-omni-video', { resolution: '4k', durationSeconds: 4, hasReferenceVideo: true })).toBe(252);
         });
         it('veo 3.1 fast has flat pricing', () => {
             expect(getVideoCost('veo-3.1', { mode: 'veo3_fast' })).toBe(60);
         });
         it('veo 3.1 quality has flat pricing', () => {
             expect(getVideoCost('veo-3.1', { mode: 'veo3' })).toBe(250);
+        });
+        it('prices Veo Lite and resolution-aware Veo output', () => {
+            expect(getVideoCost('veo-3.1', { mode: 'veo3_lite', resolution: '1080p' })).toBe(35);
+            expect(getVideoCost('veo-3.1', { mode: 'veo3_fast', resolution: '4k' })).toBe(180);
+            expect(getVideoCost('veo-3.1', { mode: 'veo3', resolution: '4k' })).toBe(380);
+            expect(getVideoCost('veo-3.1', { mode: 'veo3', resolution: '4k', hasReferenceImage: true })).toBe(370);
         });
         it('grok video scales by duration and resolution', () => {
             expect(getVideoCost('grok-imagine-video', { resolution: '480p', durationSeconds: 6 })).toBe(10);
@@ -157,9 +200,13 @@ describe('Model Pricing', () => {
 
 describe('Model Type Checks', () => {
     it('identifies image models correctly', () => {
+        expect(isImageModel('nano-banana-2-lite')).toBe(true);
         expect(isImageModel('nano-banana-2')).toBe(true);
         expect(isImageModel('nano-banana-pro')).toBe(true);
         expect(isImageModel('gpt-image-2')).toBe(true);
+        expect(isImageModel('seedream-5-pro')).toBe(true);
+        expect(isImageModel('flux-2-pro')).toBe(true);
+        expect(isImageModel('z-image')).toBe(true);
         expect(isImageModel('grok-imagine-image')).toBe(true);
         expect(isImageModel('kling-2.6')).toBe(false);
     });
@@ -178,6 +225,10 @@ describe('Model Type Checks', () => {
 
     it('identifies video models correctly', () => {
         expect(isVideoModel('grok-imagine-video')).toBe(true);
+        expect(isVideoModel('seedance-2-mini')).toBe(true);
+        expect(isVideoModel('kling-3.0-turbo')).toBe(true);
+        expect(isVideoModel('wan-2.7')).toBe(true);
+        expect(isVideoModel('hailuo-2.3')).toBe(true);
         expect(isVideoModel('grok-imagine-image')).toBe(false);
     });
 });

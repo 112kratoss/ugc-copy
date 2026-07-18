@@ -2215,7 +2215,7 @@ function NodeEditorContent({
             helperText="Optional global @handle for this node’s generated image output. Downstream generators can mention it whenever they connect this output as an Image reference."
             onChange={(referenceHandle) => onUpdateNode(node.id, { ...node.data, referenceHandle } as Partial<WorkflowNodeData>)}
           />
-          {imageGenerateNode && imageModel && (
+          {imageGenerateNode && imageModel && imageModel.maxImages > 0 && (
             <ImageReferencesCard
               title="Image references"
               references={connectedImageReferences}

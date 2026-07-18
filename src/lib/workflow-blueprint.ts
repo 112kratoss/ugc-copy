@@ -156,7 +156,15 @@ function normalizeStringArray(value: unknown, fallback: string[]): string[] {
 }
 
 function normalizeBlueprintImageModel(value: unknown): ImageModelId {
-  if (value === 'nano-banana-pro' || value === 'gpt-image-2' || value === 'grok-imagine-image') {
+  if (
+    value === 'nano-banana-2-lite' ||
+    value === 'nano-banana-pro' ||
+    value === 'gpt-image-2' ||
+    value === 'seedream-5-pro' ||
+    value === 'flux-2-pro' ||
+    value === 'z-image' ||
+    value === 'grok-imagine-image'
+  ) {
     return value;
   }
 
@@ -207,7 +215,7 @@ export function buildWorkflowSystemPrompt(input: WorkflowPlannerInput): string {
     'You are an expert creative strategist building a production-ready AI generation workflow for short-form ads and videos.',
     'Return valid JSON only. No markdown. No commentary.',
     'The JSON schema is: {"title":string,"creativeStrategy":string,"hook":string,"narrative":string,"voiceover":string,"editingNotes":string[],"assetChecklist":string[],"shots":[{"id":string,"title":string,"purpose":string,"beat":string,"visualPrompt":string,"videoPrompt":string,"motionPrompt":string,"duration":number}],"deliveryPlan":{"primaryModel":string,"stillImageModel":string,"motionModel":string,"recommendedSequence":string[]}}.',
-    'Use the existing models only: stillImageModel must be nano-banana-2, nano-banana-pro, gpt-image-2, or grok-imagine-image; primaryModel must be kling-3.0-video, seedance-1.5-pro, seedance-2, seedance-2-fast, veo-3.1, or grok-imagine-video; motionModel must be kling-2.6 or kling-3.0.',
+    'Use the existing models only: stillImageModel must be nano-banana-2-lite, nano-banana-2, nano-banana-pro, gpt-image-2, seedream-5-pro, flux-2-pro, z-image, or grok-imagine-image; primaryModel must be kling-3.0-video, seedance-1.5-pro, seedance-2, seedance-2-fast, veo-3.1, or grok-imagine-video; motionModel must be kling-2.6 or kling-3.0.',
     `Plan for a ${input.durationSeconds}-second ${input.objective} in ${input.aspectRatio} for ${input.platform}.`,
     'Generate 3 to 6 shots. Each prompt should be directly usable in an AI generation UI and must stay commercially focused.',
     buildWorkflowPromptFieldGuidance({
@@ -215,7 +223,7 @@ export function buildWorkflowSystemPrompt(input: WorkflowPlannerInput): string {
       modelSelector: 'stillImageModel',
       medium: 'image',
       scenario: 'image.text_to_image',
-      modelIds: ['nano-banana-2', 'nano-banana-pro', 'gpt-image-2', 'grok-imagine-image'],
+      modelIds: ['nano-banana-2-lite', 'nano-banana-2', 'nano-banana-pro', 'gpt-image-2', 'seedream-5-pro', 'flux-2-pro', 'z-image', 'grok-imagine-image'],
       context: plannerContext,
     }),
     buildWorkflowPromptFieldGuidance({

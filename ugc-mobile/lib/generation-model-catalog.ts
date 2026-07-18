@@ -58,8 +58,11 @@ export interface GenerationModelDescriptor {
     imageReferences: { max: number; supportsNaming: boolean } | null;
     videoReferences: { max: number } | null;
     audioReferences: { max: number } | null;
+    preparedAudioReferences?: { max: number } | null;
+    characterReferences?: { max: number } | null;
     startFrame: boolean;
     endFrame: boolean;
+    combineFramesWithReferences?: boolean;
   };
 }
 
@@ -74,7 +77,7 @@ export interface GenerationModelQuoteRequest {
   kind: GenerationModelKind;
   modelId: string;
   settings: Record<string, unknown>;
-  inputCounts: { images: number; videos: number; audios: number };
+  inputCounts: { images: number; videos: number; audios: number; preparedAudios?: number; characters?: number };
   catalogRevision?: string | null;
 }
 
@@ -158,7 +161,21 @@ function parseModel(value: unknown): GenerationModelDescriptor | null {
   const imageReferences = parseReferenceLimit(value.inputs.imageReferences, true);
   const videoReferences = parseReferenceLimit(value.inputs.videoReferences, false);
   const audioReferences = parseReferenceLimit(value.inputs.audioReferences, false);
-  if (imageReferences === undefined || videoReferences === undefined || audioReferences === undefined || typeof value.inputs.startFrame !== 'boolean' || typeof value.inputs.endFrame !== 'boolean') return null;
+  const hasPreparedAudioReferences = value.inputs.preparedAudioReferences !== undefined;
+  const hasCharacterReferences = value.inputs.characterReferences !== undefined;
+  const hasCombineFramesWithReferences = value.inputs.combineFramesWithReferences !== undefined;
+  const preparedAudioReferences = hasPreparedAudioReferences ? parseReferenceLimit(value.inputs.preparedAudioReferences, false) : undefined;
+  const characterReferences = hasCharacterReferences ? parseReferenceLimit(value.inputs.characterReferences, false) : undefined;
+  if (
+    imageReferences === undefined
+    || videoReferences === undefined
+    || audioReferences === undefined
+    || (hasPreparedAudioReferences && preparedAudioReferences === undefined)
+    || (hasCharacterReferences && characterReferences === undefined)
+    || (hasCombineFramesWithReferences && typeof value.inputs.combineFramesWithReferences !== 'boolean')
+    || typeof value.inputs.startFrame !== 'boolean'
+    || typeof value.inputs.endFrame !== 'boolean'
+  ) return null;
 
   return {
     id: value.id,
@@ -181,8 +198,11 @@ function parseModel(value: unknown): GenerationModelDescriptor | null {
       imageReferences: imageReferences as GenerationModelDescriptor['inputs']['imageReferences'],
       videoReferences,
       audioReferences,
+      ...(hasPreparedAudioReferences ? { preparedAudioReferences } : {}),
+      ...(hasCharacterReferences ? { characterReferences } : {}),
       startFrame: value.inputs.startFrame,
       endFrame: value.inputs.endFrame,
+      ...(hasCombineFramesWithReferences ? { combineFramesWithReferences: value.inputs.combineFramesWithReferences as boolean } : {}),
     },
   };
 }

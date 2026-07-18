@@ -20,8 +20,8 @@ export const MOTION_MODELS = {
         resolutions: ['720p', '1080p'] as const,
         /** Credits per second of output video */
         pricing: {
-            '720p': 6,
-            '1080p': 9,
+            '720p': 11,
+            '1080p': 18,
         },
     },
     'kling-3.0': {
@@ -35,8 +35,8 @@ export const MOTION_MODELS = {
         characterOrientations: ['video', 'image'] as const,
         resolutions: ['720p', '1080p'] as const,
         pricing: {
-            '720p': 12,
-            '1080p': 20,
+            '720p': 20,
+            '1080p': 27,
         },
     },
 } as const;
@@ -46,6 +46,25 @@ export type MotionModelId = keyof typeof MOTION_MODELS;
 // ─── Image Models ─────────────────────────────────────────────────────────────
 
 export const IMAGE_MODELS = {
+    'nano-banana-2-lite': {
+        id: 'nano-banana-2-lite' as const,
+        displayName: 'Nano Banana 2 Lite',
+        description: 'Fast 1K generation and edits for high-volume creative iteration',
+        badge: 'Fast',
+        badgeColor: 'from-cyan-500 to-blue-500',
+        accentColor: 'blue',
+        maxImages: 10,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: false,
+        aspectRatios: ['auto', '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'] as const,
+        resolutions: ['1K'] as const,
+        outputFormats: ['jpg'] as const,
+        pricing: {
+            '1K': 4,
+            '2K': 4,
+            '4K': 4,
+        },
+    },
     'nano-banana-2': {
         id: 'nano-banana-2' as const,
         displayName: 'Nano Banana 2.0',
@@ -103,6 +122,170 @@ export const IMAGE_MODELS = {
             '4K': 16,
         },
     },
+    'seedream-5-pro': {
+        id: 'seedream-5-pro' as const,
+        displayName: 'Seedream 5 Pro',
+        description: 'Production-ready portraits, products, typography, and precise edits',
+        badge: 'Creator',
+        badgeColor: 'from-blue-500 to-indigo-500',
+        accentColor: 'blue',
+        maxImages: 10,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: true,
+        aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16', '2:3', '3:2', '21:9'] as const,
+        resolutions: ['1K', '2K'] as const,
+        outputFormats: ['jpg', 'png'] as const,
+        pricing: {
+            '1K': 7,
+            '2K': 14,
+            '4K': 14,
+        },
+        additionalReferenceCredit: 0.5,
+    },
+    'seedream-5-lite': {
+        id: 'seedream-5-lite' as const,
+        displayName: 'Seedream 5 Lite',
+        description: 'Fast, low-cost generation and multi-image editing up to 3K',
+        badge: 'Value',
+        badgeColor: 'from-cyan-500 to-blue-500',
+        accentColor: 'blue',
+        maxImages: 14,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: true,
+        aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16', '2:3', '3:2', '21:9'] as const,
+        resolutions: ['2K', '3K'] as const,
+        outputFormats: ['jpg', 'png'] as const,
+        pricing: { '2K': 5.5, '3K': 5.5 },
+    },
+    'wan-2.7-image': {
+        id: 'wan-2.7-image' as const,
+        displayName: 'Wan 2.7 Image',
+        description: 'Affordable text generation and editing with up to nine references',
+        badge: 'Value',
+        badgeColor: 'from-emerald-500 to-cyan-500',
+        accentColor: 'blue',
+        maxImages: 9,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: false,
+        aspectRatios: ['auto'] as const,
+        resolutions: ['1K', '2K'] as const,
+        outputFormats: ['jpg'] as const,
+        pricing: { '1K': 4.8, '2K': 4.8 },
+    },
+    'wan-2.7-image-pro': {
+        id: 'wan-2.7-image-pro' as const,
+        displayName: 'Wan 2.7 Image Pro',
+        description: 'High-fidelity Wan generation and editing with optional 4K output',
+        badge: 'Pro',
+        badgeColor: 'from-blue-500 to-indigo-500',
+        accentColor: 'blue',
+        maxImages: 9,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: false,
+        aspectRatios: ['auto'] as const,
+        resolutions: ['1K', '2K', '4K'] as const,
+        outputFormats: ['jpg'] as const,
+        pricing: { '1K': 12, '2K': 12, '4K': 12 },
+    },
+    'imagen-4-fast': {
+        id: 'imagen-4-fast' as const,
+        displayName: 'Imagen 4 Fast',
+        description: 'Fast Google image generation for polished everyday creative',
+        badge: 'Fast',
+        badgeColor: 'from-cyan-500 to-blue-500',
+        accentColor: 'blue',
+        maxImages: 0,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: false,
+        aspectRatios: ['auto', '1:1', '16:9', '9:16', '3:4', '4:3'] as const,
+        resolutions: ['1K'] as const,
+        outputFormats: ['jpg'] as const,
+        pricing: { '1K': 4 },
+    },
+    'imagen-4': {
+        id: 'imagen-4' as const,
+        displayName: 'Imagen 4',
+        description: 'Balanced Google image generation with stronger detail and typography',
+        badge: 'Quality',
+        badgeColor: 'from-blue-500 to-indigo-500',
+        accentColor: 'blue',
+        maxImages: 0,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: false,
+        aspectRatios: ['auto', '1:1', '16:9', '9:16', '3:4', '4:3'] as const,
+        resolutions: ['1K'] as const,
+        outputFormats: ['jpg'] as const,
+        pricing: { '1K': 8 },
+    },
+    'imagen-4-ultra': {
+        id: 'imagen-4-ultra' as const,
+        displayName: 'Imagen 4 Ultra',
+        description: 'Highest-quality Imagen 4 output for final production assets',
+        badge: 'Ultra',
+        badgeColor: 'from-violet-500 to-fuchsia-500',
+        accentColor: 'blue',
+        maxImages: 0,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: false,
+        aspectRatios: ['auto', '1:1', '16:9', '9:16', '3:4', '4:3'] as const,
+        resolutions: ['1K'] as const,
+        outputFormats: ['jpg'] as const,
+        pricing: { '1K': 12 },
+    },
+    'ideogram-v3': {
+        id: 'ideogram-v3' as const,
+        displayName: 'Ideogram V3',
+        description: 'Strong typography, logos, posters, and single-image remixing',
+        badge: 'Design',
+        badgeColor: 'from-fuchsia-500 to-violet-500',
+        accentColor: 'amber',
+        maxImages: 1,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: false,
+        aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'] as const,
+        resolutions: ['1K'] as const,
+        outputFormats: ['jpg'] as const,
+        qualityModes: ['turbo', 'balanced', 'quality'] as const,
+        qualityPricing: { turbo: 3.5, balanced: 7, quality: 10 },
+    },
+    'flux-2-pro': {
+        id: 'flux-2-pro' as const,
+        displayName: 'FLUX.2 Pro',
+        description: 'Photoreal product work with strong multi-reference consistency',
+        badge: 'Studio',
+        badgeColor: 'from-sky-500 to-cyan-500',
+        accentColor: 'blue',
+        maxImages: 8,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: false,
+        aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3'] as const,
+        resolutions: ['1K', '2K'] as const,
+        outputFormats: ['jpg'] as const,
+        pricing: {
+            '1K': 5,
+            '2K': 7,
+            '4K': 7,
+        },
+    },
+    'z-image': {
+        id: 'z-image' as const,
+        displayName: 'Z-Image',
+        description: 'Low-cost photoreal generation for drafts and rapid exploration',
+        badge: 'Economy',
+        badgeColor: 'from-emerald-500 to-cyan-500',
+        accentColor: 'blue',
+        maxImages: 0,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: false,
+        aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'] as const,
+        resolutions: ['1K'] as const,
+        outputFormats: ['jpg'] as const,
+        pricing: {
+            '1K': 1,
+            '2K': 1,
+            '4K': 1,
+        },
+    },
     'grok-imagine-image': {
         id: 'grok-imagine-image' as const,
         displayName: 'Grok Imagine',
@@ -126,13 +309,14 @@ export const IMAGE_MODELS = {
             quality: 5,
             imageToImage: 4,
         },
+        qualityModes: ['standard', 'quality'] as const,
     },
 } as const;
 
 export type ImageModelId = keyof typeof IMAGE_MODELS;
-export type ImageResolution = '1K' | '2K' | '4K';
+export type ImageResolution = '1K' | '2K' | '3K' | '4K';
 export type ImageOutputFormat = 'jpg' | 'png';
-export type ImageQualityMode = 'standard' | 'quality';
+export type ImageQualityMode = 'standard' | 'turbo' | 'balanced' | 'quality';
 
 const GPT_IMAGE_2_AUTO_RESOLUTIONS = ['1K'] as const satisfies readonly ImageResolution[];
 const GPT_IMAGE_2_SQUARE_RESOLUTIONS = ['1K', '2K'] as const satisfies readonly ImageResolution[];
@@ -171,11 +355,17 @@ export function isValidImageResolution(
 }
 
 export function supportsImageResolutionControl(modelId: ImageModelId): boolean {
-    return modelId !== 'grok-imagine-image';
+    return !['grok-imagine-image', 'ideogram-v3', 'imagen-4-fast', 'imagen-4', 'imagen-4-ultra'].includes(modelId);
 }
 
 export function isValidImageQualityMode(value: string): value is ImageQualityMode {
-    return value === 'standard' || value === 'quality';
+    return value === 'standard' || value === 'turbo' || value === 'balanced' || value === 'quality';
+}
+
+export function getImageQualityModes(modelId: ImageModelId): readonly ImageQualityMode[] {
+    if (modelId === 'ideogram-v3') return IMAGE_MODELS[modelId].qualityModes;
+    if (modelId === 'grok-imagine-image') return IMAGE_MODELS[modelId].qualityModes;
+    return [];
 }
 
 // ─── Video Models ─────────────────────────────────────────────────────────────
@@ -205,8 +395,32 @@ export const VIDEO_MODELS = {
         ] as const,
         /** Credits per second, keyed by mode + sound */
         pricing: {
-            std: { noSound: 20, withSound: 30 },
-            pro: { noSound: 27, withSound: 40 },
+            std: { noSound: 14, withSound: 20 },
+            pro: { noSound: 18, withSound: 27 },
+        },
+    },
+    'kling-3.0-turbo': {
+        id: 'kling-3.0-turbo' as const,
+        displayName: 'Kling 3 Turbo',
+        description: 'Fast Kling generation for text or a single animated start frame',
+        provider: 'kling' as const,
+        apiModelId: 'kling/v3-turbo-text-to-video',
+        enhancerModelId: 'kling-3.0-video',
+        supportsMultiShot: false,
+        supportsSound: false,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '9:16', '1:1'] as const,
+        durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+        singleShotDurationRange: {
+            min: 3,
+            max: 15,
+            default: 5,
+        } as const,
+        resolutions: ['720p', '1080p'] as const,
+        modeOptions: [] as const,
+        pricing: {
+            '720p': 18,
+            '1080p': 22.5,
         },
     },
     'seedance-1.5-pro': {
@@ -290,11 +504,131 @@ export const VIDEO_MODELS = {
         pricing: {
             '480p': {
                 noVideo: 15.5,
-                withVideo: 8,
+                withVideo: 9,
             },
             '720p': {
                 noVideo: 33,
                 withVideo: 20,
+            },
+        },
+    },
+    'seedance-2-mini': {
+        id: 'seedance-2-mini' as const,
+        displayName: 'Seedance 2 Mini',
+        description: 'Lower-cost Seedance 2 generation with multimodal references and generated audio',
+        provider: 'seedance' as const,
+        apiModelId: 'bytedance/seedance-2-mini',
+        enhancerModelId: 'seedance-2',
+        supportsMultiShot: false,
+        supportsSound: true,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9'] as const,
+        durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+        singleShotDurationRange: {
+            min: 4,
+            max: 15,
+            default: 10,
+        } as const,
+        modeOptions: [] as const,
+        resolutions: ['480p', '720p'] as const,
+        pricing: {
+            '480p': {
+                noVideo: 9.5,
+                withVideo: 6,
+            },
+            '720p': {
+                noVideo: 20.5,
+                withVideo: 12.5,
+            },
+        },
+    },
+    'wan-2.7': {
+        id: 'wan-2.7' as const,
+        displayName: 'Wan 2.7',
+        description: 'Flexible text, frame, and multimodal reference-to-video generation',
+        provider: 'wan' as const,
+        apiModelId: 'wan/2-7-text-to-video',
+        enhancerModelId: 'wan-2.7',
+        supportsMultiShot: false,
+        supportsSound: false,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] as const,
+        durations: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+        singleShotDurationRange: {
+            min: 2,
+            max: 15,
+            default: 5,
+        } as const,
+        resolutions: ['720p', '1080p'] as const,
+        modeOptions: [] as const,
+        pricing: {
+            '720p': 16,
+            '1080p': 24,
+        },
+    },
+    'happyhorse-1.1': {
+        id: 'happyhorse-1.1' as const,
+        displayName: 'HappyHorse 1.1',
+        description: 'Flexible text, image, and multi-reference video generation up to 1080p',
+        provider: 'happyhorse' as const,
+        apiModelId: 'happyhorse-1-1/text-to-video',
+        enhancerModelId: 'happyhorse-1.1',
+        supportsMultiShot: false,
+        supportsSound: false,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '4:5', '5:4', '21:9', '9:21'] as const,
+        durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+        singleShotDurationRange: { min: 3, max: 15, default: 5 } as const,
+        resolutions: ['720p', '1080p'] as const,
+        modeOptions: [] as const,
+        pricing: { '720p': 22.5, '1080p': 29 },
+    },
+    'gemini-omni-video': {
+        id: 'gemini-omni-video' as const,
+        displayName: 'Gemini Omni Video',
+        description: 'Google multimodal video creation from text, images, or one reference clip',
+        provider: 'gemini-omni' as const,
+        apiModelId: 'gemini-omni-video',
+        enhancerModelId: 'gemini-omni-video',
+        supportsMultiShot: false,
+        supportsSound: false,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '9:16'] as const,
+        durations: [4, 6, 8, 10] as const,
+        resolutions: ['720p', '1080p', '4k'] as const,
+        modeOptions: [] as const,
+        pricing: {
+            '720p': { 4: 63, 6: 84, 8: 105, 10: 126 },
+            '1080p': { 4: 63, 6: 84, 8: 105, 10: 126 },
+            '4k': { 4: 147, 6: 168, 8: 189, 10: 210 },
+            withVideo: { standard: 168, '4k': 252 },
+        },
+    },
+    'hailuo-2.3': {
+        id: 'hailuo-2.3' as const,
+        displayName: 'Hailuo 2.3',
+        description: 'Image-to-video generation with standard and high-fidelity Pro modes',
+        provider: 'hailuo' as const,
+        apiModelId: 'hailuo/2-3-image-to-video-standard',
+        enhancerModelId: 'hailuo-2.3',
+        supportsMultiShot: false,
+        supportsSound: false,
+        supportsFixedLens: false,
+        aspectRatios: ['Auto'] as const,
+        durations: [6, 10] as const,
+        resolutions: ['768P', '1080P'] as const,
+        modeOptions: [
+            { value: 'standard', label: 'Standard' },
+            { value: 'pro', label: 'Pro' },
+        ] as const,
+        pricing: {
+            standard: {
+                '768P': { 6: 30, 10: 50 },
+                '1080P': { 6: 50 },
+            },
+            pro: {
+                '768P': { 6: 45, 10: 90 },
+                '1080P': { 6: 80 },
             },
         },
     },
@@ -310,14 +644,19 @@ export const VIDEO_MODELS = {
         supportsFixedLens: false,
         aspectRatios: ['16:9', '9:16', 'Auto'] as const,
         durations: [8] as const,
-        resolutions: [] as const,
+        resolutions: ['720p', '1080p', '4k'] as const,
         modeOptions: [
+            { value: 'veo3_lite', label: 'Lite' },
             { value: 'veo3_fast', label: 'Fast' },
             { value: 'veo3', label: 'Quality' },
         ] as const,
         pricing: {
-            veo3_fast: 60,
-            veo3: 250,
+            veo3_lite: { '720p': 30, '1080p': 35, '4k': 150 },
+            veo3_fast: { '720p': 60, '1080p': 65, '4k': 180 },
+            veo3: {
+                text: { '720p': 250, '1080p': 255, '4k': 380 },
+                reference: { '720p': 250, '1080p': 255, '4k': 370 },
+            },
         },
     },
     'grok-imagine-video': {
@@ -360,7 +699,7 @@ export function getVideoElementSupport(
         return {
             enabled: false,
             maxElements: 0,
-            reason: 'Named elements are available in single-shot only.',
+            reason: 'Reusable references are available in single-shot only.',
         };
     }
 
@@ -372,7 +711,7 @@ export function getVideoElementSupport(
         };
     }
 
-    if (modelId === 'seedance-2' || modelId === 'seedance-2-fast') {
+    if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini' || modelId === 'wan-2.7') {
         return {
             enabled: true,
             maxElements: 5,
@@ -380,8 +719,16 @@ export function getVideoElementSupport(
         };
     }
 
+    if (modelId === 'happyhorse-1.1') {
+        return { enabled: true, maxElements: 9, reason: null };
+    }
+
+    if (modelId === 'gemini-omni-video') {
+        return { enabled: true, maxElements: 7, reason: null };
+    }
+
     if (modelId === 'veo-3.1') {
-        if (options.mode === 'veo3_fast') {
+        if (options.mode === 'veo3_fast' || options.mode === 'veo3_lite') {
             return {
                 enabled: true,
                 maxElements: 3,
@@ -392,7 +739,7 @@ export function getVideoElementSupport(
         return {
             enabled: false,
             maxElements: 0,
-            reason: 'Named elements require Veo Fast.',
+            reason: 'Reusable references require Veo Lite or Fast.',
         };
     }
 
@@ -408,14 +755,14 @@ export function getVideoElementSupport(
         return {
             enabled: false,
             maxElements: 0,
-            reason: 'Named elements are not available for Kling yet.',
+            reason: 'Reusable image references are not available for Kling yet.',
         };
     }
 
     return {
         enabled: false,
         maxElements: 0,
-        reason: 'Named elements are not available for this model yet.',
+        reason: 'Reusable references are not available for this model yet.',
     };
 }
 
@@ -539,7 +886,24 @@ export function getImageCost(
         return options.qualityMode === 'quality' ? pricing.quality : pricing.standard;
     }
 
-    return IMAGE_MODELS[modelId].pricing[resolution];
+    if (modelId === 'ideogram-v3') {
+        const pricing = IMAGE_MODELS['ideogram-v3'].qualityPricing;
+        const qualityMode = options.qualityMode === 'quality'
+            ? 'quality'
+            : options.qualityMode === 'balanced'
+                ? 'balanced'
+                : 'turbo';
+        return pricing[qualityMode];
+    }
+
+    if (modelId === 'seedream-5-pro') {
+        const baseCost = (IMAGE_MODELS[modelId].pricing as Partial<Record<ImageResolution, number>>)[resolution] ?? IMAGE_MODELS[modelId].pricing['1K'];
+        const additionalReferences = Math.max(0, (options.referenceCount ?? 0) - 1);
+        return Math.ceil(baseCost + (additionalReferences * IMAGE_MODELS[modelId].additionalReferenceCredit));
+    }
+
+    const pricing = IMAGE_MODELS[modelId].pricing as Partial<Record<ImageResolution, number>>;
+    return pricing[resolution] ?? pricing[IMAGE_MODELS[modelId].resolutions[0] as ImageResolution] ?? 0;
 }
 
 /** Calculate credits for a video generation. */
@@ -551,6 +915,7 @@ export function getVideoCost(
         durationSeconds?: number;
         resolution?: string;
         hasReferenceVideo?: boolean;
+        hasReferenceImage?: boolean;
     }
 ): number {
     if (modelId === 'kling-3.0-video') {
@@ -572,7 +937,7 @@ export function getVideoCost(
         return options.sound ? pricing.withSound[durationKey] : pricing.noSound[durationKey];
     }
 
-    if (modelId === 'seedance-2' || modelId === 'seedance-2-fast') {
+    if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini') {
         const pricingTable = VIDEO_MODELS[modelId].pricing;
         const resolution = options.resolution && options.resolution in pricingTable
             ? options.resolution as keyof typeof pricingTable
@@ -581,6 +946,41 @@ export function getVideoCost(
         const pricing = pricingTable[resolution];
         const perSecond = options.hasReferenceVideo ? pricing.withVideo : pricing.noVideo;
         return Math.ceil(durationSeconds * perSecond);
+    }
+
+    if (modelId === 'kling-3.0-turbo' || modelId === 'wan-2.7') {
+        const pricingTable = VIDEO_MODELS[modelId].pricing;
+        const resolution = options.resolution && options.resolution in pricingTable
+            ? options.resolution as keyof typeof pricingTable
+            : '720p';
+        const durationSeconds = options.durationSeconds ?? getDefaultVideoDuration(modelId);
+        return Math.ceil(durationSeconds * pricingTable[resolution]);
+    }
+
+    if (modelId === 'happyhorse-1.1') {
+        const pricing = VIDEO_MODELS['happyhorse-1.1'].pricing;
+        const resolution = options.resolution === '1080p' ? '1080p' : '720p';
+        return Math.ceil((options.durationSeconds ?? 5) * pricing[resolution]);
+    }
+
+    if (modelId === 'gemini-omni-video') {
+        const pricing = VIDEO_MODELS['gemini-omni-video'].pricing;
+        const resolution = options.resolution === '4k' ? '4k' : options.resolution === '1080p' ? '1080p' : '720p';
+        if (options.hasReferenceVideo) {
+            return pricing.withVideo[resolution === '4k' ? '4k' : 'standard'];
+        }
+        const duration = ([4, 6, 8, 10] as const).includes(options.durationSeconds as 4 | 6 | 8 | 10)
+            ? options.durationSeconds as 4 | 6 | 8 | 10
+            : 4;
+        return pricing[resolution][duration];
+    }
+
+    if (modelId === 'hailuo-2.3') {
+        const mode = options.mode === 'pro' ? 'pro' : 'standard';
+        const resolution = options.resolution === '1080P' ? '1080P' : '768P';
+        const duration = options.durationSeconds === 10 ? 10 : 6;
+        const table = VIDEO_MODELS['hailuo-2.3'].pricing[mode][resolution];
+        return duration in table ? table[duration as keyof typeof table] : table[6];
     }
 
     if (modelId === 'grok-imagine-video') {
@@ -592,8 +992,15 @@ export function getVideoCost(
         return Math.ceil(durationSeconds * pricingTable[resolution]);
     }
 
-    const mode = options.mode === 'veo3' ? 'veo3' : 'veo3_fast';
-    return VIDEO_MODELS['veo-3.1'].pricing[mode];
+    const resolution = options.resolution === '1080p' || options.resolution === '4k'
+        ? options.resolution
+        : '720p';
+    if (options.mode === 'veo3') {
+        const variant = options.hasReferenceImage ? 'reference' : 'text';
+        return VIDEO_MODELS['veo-3.1'].pricing.veo3[variant][resolution];
+    }
+    const mode = options.mode === 'veo3_lite' ? 'veo3_lite' : 'veo3_fast';
+    return VIDEO_MODELS['veo-3.1'].pricing[mode][resolution];
 }
 
 /** Calculate credits for a voiceover generation. */

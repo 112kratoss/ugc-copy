@@ -88,7 +88,12 @@ export async function startVideoGenerationForRoute({
   const elementImageUrls = readArray<string>(body.elementImageUrls);
   const referenceVideoUrls = readArray<string>(body.referenceVideoUrls);
   const referenceAudioUrls = readArray<string>(body.referenceAudioUrls);
+  const preparedAudioIds = readArray<string>(body.preparedAudioIds);
+  const characterIds = readArray<string>(body.characterIds);
   const klingVideoElements = readArray<KlingVideoElementInput>(body.klingVideoElements);
+  const usesReusableReferences = body.referenceMode === 'elements';
+  const startImageUrl = readOptionalString(body.startImageUrl);
+  const endImageUrl = readOptionalString(body.endImageUrl);
   const quote = quoteGenerationModel({
     kind: 'video',
     modelId: selectedModel,
@@ -100,11 +105,16 @@ export async function startVideoGenerationForRoute({
       resolution: body.resolution ?? '720p',
       fixedLens: body.fixedLens ?? false,
       isMultiShot: Boolean(body.isMultiShot),
+      referenceMode: usesReusableReferences ? 'elements' : 'frames',
     },
     inputCounts: {
-      images: Math.max(elements.length, elementImageUrls.length),
-      videos: Math.max(referenceVideoUrls.length, klingVideoElements.length),
-      audios: referenceAudioUrls.length,
+      images: usesReusableReferences
+        ? Math.max(elements.length, elementImageUrls.length)
+        : Number(Boolean(startImageUrl)) + Number(Boolean(endImageUrl)),
+      videos: (usesReusableReferences ? referenceVideoUrls.length : 0) + klingVideoElements.length,
+      audios: usesReusableReferences ? referenceAudioUrls.length : 0,
+      preparedAudios: usesReusableReferences ? preparedAudioIds.length : 0,
+      characters: usesReusableReferences ? characterIds.length : 0,
     },
     catalogRevision: readOptionalString(body.catalogRevision),
   });
@@ -121,8 +131,6 @@ export async function startVideoGenerationForRoute({
   });
 
   const normalizedSettings = quote.normalizedSettings;
-  const startImageUrl = readOptionalString(body.startImageUrl);
-  const endImageUrl = readOptionalString(body.endImageUrl);
   const result = await withGenerationStartIdempotency({
     client: adminSupabase,
     userId,
@@ -144,6 +152,8 @@ export async function startVideoGenerationForRoute({
       elementImageUrls,
       referenceVideoUrls,
       referenceAudioUrls,
+      preparedAudioIds,
+      characterIds,
       klingVideoElements,
       startImageUrl,
       endImageUrl,

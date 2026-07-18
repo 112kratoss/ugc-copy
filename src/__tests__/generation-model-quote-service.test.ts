@@ -91,7 +91,7 @@ describe('createGenerationModelQuote', () => {
       quote: {
         modelId: 'kling-2.6',
         catalogRevision,
-        costCredits: 90,
+        costCredits: 180,
       },
     });
   });

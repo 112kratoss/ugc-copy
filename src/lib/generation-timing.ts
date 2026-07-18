@@ -47,9 +47,13 @@ export function getCurrentTimestampMs(): number {
 }
 
 const IMAGE_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
+  'nano-banana-2-lite': 75_000,
   'nano-banana-2': 120_000,
   'nano-banana-pro': 165_000,
   'gpt-image-2': 120_000,
+  'seedream-5-pro': 135_000,
+  'flux-2-pro': 120_000,
+  'z-image': 75_000,
   'grok-imagine-image': 105_000,
 };
 

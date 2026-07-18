@@ -499,7 +499,7 @@ export interface ImageGenerationRequest {
   elements?: GenerationElementDescriptor[];
   aspectRatio?: string;
   resolution?: string;
-  qualityMode?: 'standard' | 'quality';
+  qualityMode?: 'standard' | 'turbo' | 'balanced' | 'quality';
   outputFormat?: 'jpg' | 'png';
   googleSearch?: boolean;
   sourceGenerationId?: string | null;
@@ -522,6 +522,8 @@ export interface VideoGenerationRequest {
   imageUrls?: string[];
   referenceVideoUrls?: string[];
   referenceAudioUrls?: string[];
+  preparedAudioIds?: string[];
+  characterIds?: string[];
   startImageUrl?: string | null;
   endImageUrl?: string | null;
   mode?: string;

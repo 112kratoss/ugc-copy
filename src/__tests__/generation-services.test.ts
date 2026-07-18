@@ -1446,6 +1446,226 @@ describe('generation services', () => {
     });
   });
 
+  it('uses Nano Banana 2 Lite with its image_urls reference contract', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-nano-lite-1' } }),
+      } as Response;
+    });
+
+    const { supabase, rpcCalls } = createSupabaseMock();
+    await startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Keep @hero and create a bright campaign draft.',
+      model: 'nano-banana-2-lite',
+      imageUrls: ['https://cdn.example.com/hero.png'],
+      elements: [{
+        id: 'element-1',
+        displayName: 'Hero',
+        handle: '@hero',
+        storagePath: null,
+        sourceGenerationId: null,
+      }],
+      aspectRatio: '4:5',
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'nano-banana-2-lite',
+      input: {
+        aspect_ratio: '4:5',
+        image_urls: ['https://cdn.example.com/hero.png'],
+      },
+    });
+    expect((providerBody as unknown as { input: Record<string, unknown> }).input).not.toHaveProperty('resolution');
+    expect(rpcCalls[0]).toMatchObject({ fn: 'start_generation', args: { p_cost: 4 } });
+  });
+
+  it('maps Seedream 5 Pro text generation to quality and provider output fields', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-seedream-pro-text-1' } }),
+      } as Response;
+    });
+
+    const { supabase, rpcCalls } = createSupabaseMock();
+    await startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'A realistic multilingual skincare campaign.',
+      model: 'seedream-5-pro',
+      aspectRatio: '9:16',
+      resolution: '2K',
+      outputFormat: 'png',
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'seedream/5-pro-text-to-image',
+      input: {
+        aspect_ratio: '9:16',
+        quality: 'high',
+        output_format: 'png',
+        nsfw_checker: true,
+      },
+    });
+    expect(rpcCalls[0]).toMatchObject({ fn: 'start_generation', args: { p_cost: 14 } });
+  });
+
+  it('uses Seedream 5 Pro edit mode and rounds its reference surcharge', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-seedream-pro-edit-1' } }),
+      } as Response;
+    });
+
+    const { supabase, rpcCalls } = createSupabaseMock();
+    await startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Combine the product and material references.',
+      model: 'seedream-5-pro',
+      imageUrls: ['https://cdn.example.com/product.png', 'https://cdn.example.com/material.png'],
+      aspectRatio: '1:1',
+      resolution: '1K',
+      outputFormat: 'jpg',
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'seedream/5-pro-image-to-image',
+      input: {
+        image_urls: ['https://cdn.example.com/product.png', 'https://cdn.example.com/material.png'],
+        quality: 'basic',
+        output_format: 'jpeg',
+      },
+    });
+    expect(rpcCalls[0]).toMatchObject({ fn: 'start_generation', args: { p_cost: 8 } });
+  });
+
+  it('maps Seedream 5 Lite and Ideogram V3 to their provider contracts', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const providerBodies: Record<string, unknown>[] = [];
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBodies.push(JSON.parse(String(init?.body)));
+      return { ok: true, json: async () => ({ code: 200, data: { taskId: `task-expanded-image-${providerBodies.length}` } }) } as Response;
+    });
+
+    const liteClient = createSupabaseMock();
+    await startImageGeneration({
+      supabase: liteClient.supabase, creditSupabase: liteClient.supabase, userId: 'user-1',
+      prompt: 'A crisp editorial portrait.', model: 'seedream-5-lite', aspectRatio: '9:16', resolution: '3K', outputFormat: 'jpg',
+    });
+    const ideogramClient = createSupabaseMock();
+    await startImageGeneration({
+      supabase: ideogramClient.supabase, creditSupabase: ideogramClient.supabase, userId: 'user-1',
+      prompt: 'A bold typographic launch poster.', model: 'ideogram-v3', aspectRatio: '16:9', resolution: '1K', qualityMode: 'balanced',
+    });
+
+    expect(providerBodies[0]).toMatchObject({ model: 'seedream/5-lite-text-to-image', input: { quality: 'high', output_format: 'jpeg' } });
+    expect(providerBodies[1]).toMatchObject({ model: 'ideogram/v3-text-to-image', input: { rendering_speed: 'BALANCED', image_size: 'landscape_16_9' } });
+    expect(liteClient.rpcCalls[0]).toMatchObject({ fn: 'start_generation', args: { p_cost: 5.5 } });
+    expect(ideogramClient.rpcCalls[0]).toMatchObject({ fn: 'start_generation', args: { p_cost: 7 } });
+  });
+
+  it('uses FLUX.2 Pro text and edit provider modes', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const providerBodies: Record<string, unknown>[] = [];
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBodies.push(JSON.parse(String(init?.body)));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: `task-flux-${providerBodies.length}` } }),
+      } as Response;
+    });
+
+    const textClient = createSupabaseMock();
+    await startImageGeneration({
+      supabase: textClient.supabase,
+      creditSupabase: textClient.supabase,
+      userId: 'user-1',
+      prompt: 'A photoreal product hero on reflective glass.',
+      model: 'flux-2-pro',
+      aspectRatio: '4:3',
+      resolution: '2K',
+    });
+
+    const editClient = createSupabaseMock();
+    await startImageGeneration({
+      supabase: editClient.supabase,
+      creditSupabase: editClient.supabase,
+      userId: 'user-1',
+      prompt: 'Apply the material reference to the product.',
+      model: 'flux-2-pro',
+      imageUrls: ['https://cdn.example.com/product.png'],
+      aspectRatio: '1:1',
+      resolution: '1K',
+    });
+
+    expect(providerBodies[0]).toMatchObject({
+      model: 'flux-2/pro-text-to-image',
+      input: { aspect_ratio: '4:3', resolution: '2K', nsfw_checker: true },
+    });
+    expect(providerBodies[1]).toMatchObject({
+      model: 'flux-2/pro-image-to-image',
+      input: { input_urls: ['https://cdn.example.com/product.png'], resolution: '1K' },
+    });
+    expect(textClient.rpcCalls[0]).toMatchObject({ fn: 'start_generation', args: { p_cost: 7 } });
+    expect(editClient.rpcCalls[0]).toMatchObject({ fn: 'start_generation', args: { p_cost: 5 } });
+  });
+
+  it('uses the prompt-only Z-Image contract and enforces its zero-reference limit', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-z-image-1' } }),
+      } as Response;
+    });
+
+    const successClient = createSupabaseMock();
+    await startImageGeneration({
+      supabase: successClient.supabase,
+      creditSupabase: successClient.supabase,
+      userId: 'user-1',
+      prompt: 'A candid creator portrait in soft morning light.',
+      model: 'z-image',
+      aspectRatio: '3:4',
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'z-image',
+      input: { aspect_ratio: '3:4', nsfw_checker: true },
+    });
+    expect(successClient.rpcCalls[0]).toMatchObject({ fn: 'start_generation', args: { p_cost: 1 } });
+
+    const rejectedClient = createSupabaseMock();
+    await expect(startImageGeneration({
+      supabase: rejectedClient.supabase,
+      creditSupabase: rejectedClient.supabase,
+      userId: 'user-1',
+      prompt: 'Use this reference.',
+      model: 'z-image',
+      imageUrls: ['https://cdn.example.com/reference.png'],
+    })).rejects.toThrow('Z-Image supports up to 0 total reference images.');
+    expect(rejectedClient.rpcCalls).toHaveLength(0);
+  });
+
   it('rejects invalid GPT Image 2 resolution combinations before deducting credits', async () => {
     const { startImageGeneration } = await import('@/lib/generation-services');
     const { supabase, rpcCalls } = createSupabaseMock();
@@ -2314,7 +2534,7 @@ describe('generation services', () => {
         return_last_frame: false,
       },
     });
-    expect(generations[0].cost).toBe(96);
+    expect(generations[0].cost).toBe(108);
     expect(generations[0].workflow_settings).toMatchObject({
       referenceVideoUrls: ['asset-video-1'],
       referenceAudioUrls: ['asset-audio-1'],
@@ -2322,6 +2542,195 @@ describe('generation services', () => {
         images: [expect.objectContaining({ assetId: 'asset-image-1' })],
       },
     });
+  });
+
+  it('keeps Seedance frame guidance separate from reusable references', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return { ok: true, json: async () => ({ code: 200, data: { taskId: 'task-seedance-frames-1' } }) } as Response;
+    });
+
+    const { supabase } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Transition between the supplied compositions.',
+      model: 'seedance-2-mini',
+      duration: 6,
+      aspectRatio: '16:9',
+      resolution: '720p',
+      referenceMode: 'frames',
+      startImageUrl: 'https://cdn.example.com/start.jpg',
+      endImageUrl: 'https://cdn.example.com/end.jpg',
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'bytedance/seedance-2-mini',
+      input: {
+        first_frame_url: 'https://cdn.example.com/start.jpg',
+        last_frame_url: 'https://cdn.example.com/end.jpg',
+      },
+    });
+    expect((providerBody as { input: Record<string, unknown> }).input).not.toHaveProperty('reference_image_urls');
+  });
+
+  it('routes Kling 3 Turbo between text and image endpoints', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const providerBodies: Record<string, unknown>[] = [];
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBodies.push(JSON.parse(String(init?.body)));
+      return { ok: true, json: async () => ({ code: 200, data: { taskId: `task-kling-turbo-${providerBodies.length}` } }) } as Response;
+    });
+
+    const { supabase } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase, creditSupabase: supabase, userId: 'user-1', prompt: 'A camera glides through a gallery.',
+      model: 'kling-3.0-turbo', duration: 5, aspectRatio: '16:9', resolution: '720p',
+    });
+    await startVideoGeneration({
+      supabase, creditSupabase: supabase, userId: 'user-1', prompt: 'Animate this portrait.',
+      model: 'kling-3.0-turbo', duration: 5, aspectRatio: '9:16', resolution: '1080p',
+      startImageUrl: 'https://cdn.example.com/portrait.jpg',
+    });
+
+    expect(providerBodies[0]).toMatchObject({ model: 'kling/v3-turbo-text-to-video', input: { aspect_ratio: '16:9' } });
+    expect(providerBodies[1]).toMatchObject({ model: 'kling/v3-turbo-image-to-video', input: { image_urls: ['https://cdn.example.com/portrait.jpg'] } });
+  });
+
+  it('routes Wan 2.7 reusable media through reference-to-video', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return { ok: true, json: async () => ({ code: 200, data: { taskId: 'task-wan-r2v-1' } }) } as Response;
+    });
+
+    const { supabase } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Keep the product consistent while matching the movement.',
+      model: 'wan-2.7',
+      duration: 5,
+      aspectRatio: '9:16',
+      resolution: '1080p',
+      referenceMode: 'elements',
+      startImageUrl: 'https://cdn.example.com/first-frame.jpg',
+      imageUrls: ['https://cdn.example.com/product.jpg'],
+      referenceVideoUrls: ['https://cdn.example.com/motion.mp4'],
+      referenceAudioUrls: ['https://cdn.example.com/voice.wav'],
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'wan/2-7-r2v',
+      input: {
+        reference_image: ['https://cdn.example.com/product.jpg'],
+        reference_video: ['https://cdn.example.com/motion.mp4'],
+        first_frame: 'https://cdn.example.com/first-frame.jpg',
+        reference_voice: 'https://cdn.example.com/voice.wav',
+        aspect_ratio: '9:16',
+      },
+    });
+  });
+
+  it('routes HappyHorse and Gemini Omni through their reference endpoints', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const providerBodies: Record<string, unknown>[] = [];
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBodies.push(JSON.parse(String(init?.body)));
+      return { ok: true, json: async () => ({ code: 200, data: { taskId: `task-expanded-video-${providerBodies.length}` } }) } as Response;
+    });
+
+    const happyClient = createSupabaseMock();
+    await startVideoGeneration({
+      supabase: happyClient.supabase, creditSupabase: happyClient.supabase, userId: 'user-1',
+      prompt: 'Keep the character consistent.', model: 'happyhorse-1.1', duration: 5,
+      aspectRatio: '9:16', resolution: '720p', referenceMode: 'elements',
+      imageUrls: ['https://cdn.example.com/character.jpg'],
+    });
+    const geminiClient = createSupabaseMock();
+    await startVideoGeneration({
+      supabase: geminiClient.supabase, creditSupabase: geminiClient.supabase, userId: 'user-1',
+      prompt: 'Use the clip as motion guidance.', model: 'gemini-omni-video', duration: 8,
+      aspectRatio: '16:9', resolution: '4k', referenceMode: 'elements',
+      imageUrls: ['https://cdn.example.com/product.jpg'],
+      referenceVideoUrls: ['https://cdn.example.com/motion.mp4'],
+      preparedAudioIds: ['voice-prepared-1'],
+      characterIds: ['character-prepared-1'],
+    });
+
+    expect(providerBodies[0]).toMatchObject({ model: 'happyhorse-1-1/reference-to-video', input: { reference_image: ['https://cdn.example.com/character.jpg'] } });
+    expect(providerBodies[1]).toMatchObject({
+      model: 'gemini-omni-video',
+      input: {
+        image_urls: ['https://cdn.example.com/product.jpg'],
+        video_list: [{ url: 'https://cdn.example.com/motion.mp4', start: 0, ends: 8 }],
+        audio_ids: ['voice-prepared-1'],
+        character_ids: ['character-prepared-1'],
+      },
+    });
+    expect(happyClient.rpcCalls[0]).toMatchObject({ fn: 'start_generation', args: { p_cost: 113 } });
+    expect(geminiClient.rpcCalls[0]).toMatchObject({ fn: 'start_generation', args: { p_cost: 252 } });
+  });
+
+  it('submits Hailuo 2.3 with its required start image and provider mode', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return { ok: true, json: async () => ({ code: 200, data: { taskId: 'task-hailuo-1' } }) } as Response;
+    });
+
+    const { supabase } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Add a subtle cinematic push in.',
+      model: 'hailuo-2.3',
+      duration: 6,
+      mode: 'pro',
+      aspectRatio: 'Auto',
+      resolution: '1080P',
+      startImageUrl: 'https://cdn.example.com/keyframe.jpg',
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'hailuo/2-3-image-to-video-pro',
+      input: {
+        image_url: 'https://cdn.example.com/keyframe.jpg',
+        duration: '6',
+        resolution: '1080P',
+      },
+    });
+  });
+
+  it('sends Veo Lite with the selected resolution', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return { ok: true, json: async () => ({ code: 200, data: { taskId: 'task-veo-lite-1' } }) } as Response;
+    });
+
+    const { supabase, generations } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'A calm ocean at sunrise.',
+      model: 'veo-3.1',
+      mode: 'veo3_lite',
+      aspectRatio: '16:9',
+      resolution: '1080p',
+    });
+
+    expect(providerBody).toMatchObject({ model: 'veo3_lite', resolution: '1080p', generationType: 'TEXT_2_VIDEO' });
+    expect(generations[0].cost).toBe(35);
   });
 
   it('syncs processing audio generations into succeeded storage-backed outputs', async () => {

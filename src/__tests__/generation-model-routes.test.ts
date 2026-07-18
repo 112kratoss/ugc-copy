@@ -103,7 +103,7 @@ describe('POST /api/generation-models/quote', () => {
       p_limit: 240,
       p_window_seconds: 600,
     });
-    expect(body.costCredits).toBe(90);
+    expect(body.costCredits).toBe(180);
   });
 
   it('returns structured validation errors', async () => {

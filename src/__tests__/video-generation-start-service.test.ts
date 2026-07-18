@@ -174,7 +174,7 @@ describe('startVideoGenerationForRoute', () => {
       resolution: '720p',
       fixedLens: false,
       referenceMode: 'frames',
-      quotedCostCredits: 100,
+      quotedCostCredits: 70,
       sourceGenerationId: 'source-1',
     }));
     expect(result).toEqual({

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  applyModelDefaults,
   buildGenerationPayload,
   buildPromptEnhancementRequest,
   createDefaultCreationDraft,
@@ -181,10 +182,12 @@ describe('media creation view model', () => {
       prompt: 'Animate the attached references.',
       references: [imageReference(), imageReference({ displayName: 'Second Product' })],
       startFrame: imageReference({ displayName: 'Start Frame' }),
+      referenceMode: 'elements' as const,
     };
-    expect(getVisibleGenerationCheckMessages(validateCreationDraft(invalidVideoDraft), null).errors).toContain(
+    expect(getVisibleGenerationCheckMessages(validateCreationDraft(invalidVideoDraft), null).errors).not.toContain(
       'Image references cannot be combined with start or end frames in the same run.'
     );
+    expect(buildGenerationPayload(invalidVideoDraft)).toMatchObject({ startImageUrl: null, endImageUrl: null });
   });
 
   it('summarizes image creation readiness and progressive sections', () => {
@@ -238,7 +241,7 @@ describe('media creation view model', () => {
     };
     expect(getCreationSectionSummary(videoDraft)).toEqual({
       essentials: 'Seedance 2 Fast · 9:16 · 12s',
-      references: 'Elements mode · 1 image element',
+      references: 'Reusable refs · 1 image reference',
       advanced: '720p · sound off',
     });
 
@@ -577,6 +580,50 @@ describe('media creation view model', () => {
     });
   });
 
+  it('applies the added image model capabilities to mobile drafts', () => {
+    const base = createDefaultCreationDraft('image');
+    const zImageDraft = applyModelDefaults({
+      ...base,
+      model: 'z-image',
+      prompt: 'A candid creator portrait in morning light.',
+      aspectRatio: '4:5',
+      resolution: '4K',
+      references: [imageReference()],
+    });
+
+    expect(zImageDraft).toMatchObject({
+      tool: 'image',
+      model: 'z-image',
+      aspectRatio: '1:1',
+      resolution: '1K',
+      references: [],
+    });
+    const zImageValidation = validateCreationDraft(zImageDraft, { credits: 999 });
+    expect(
+      getCreationReadiness(zImageDraft, zImageValidation).find((item) => item.id === 'media'),
+    ).toMatchObject({
+      label: 'Prompt-only model',
+    });
+
+    const seedreamPayload = buildGenerationPayload({
+      ...base,
+      model: 'seedream-5-pro',
+      prompt: 'Use @hero in a premium product campaign.',
+      aspectRatio: '9:16',
+      resolution: '2K',
+      outputFormat: 'png',
+      references: [imageReference()],
+    });
+
+    expect(seedreamPayload).toMatchObject({
+      model: 'seedream-5-pro',
+      aspectRatio: '9:16',
+      resolution: '2K',
+      outputFormat: 'png',
+      imageUrls: ['https://cdn.example.com/ref.png'],
+    });
+  });
+
   it('builds video payloads with multi-shot, element, frame, Seedance, and Grok validation rules', () => {
     const draft = createDefaultCreationDraft('video');
     expect(validateCreationDraft(draft).errors).toContain('Prompt is required.');
@@ -599,7 +646,7 @@ describe('media creation view model', () => {
       references: [imageReference()],
       referenceMode: 'elements' as const,
     };
-    expect(validateCreationDraft(klingElements).errors).toContain('Named elements are not available for Kling yet.');
+    expect(validateCreationDraft(klingElements).errors).toContain('Reusable image references are not available for Kling yet.');
 
     const frameConflict = {
       ...draft,
@@ -609,7 +656,8 @@ describe('media creation view model', () => {
       startFrame: imageReference({ displayName: 'Start Frame' }),
       referenceMode: 'elements' as const,
     };
-    expect(validateCreationDraft(frameConflict).errors).toContain('Image references cannot be combined with start or end frames in the same run.');
+    expect(validateCreationDraft(frameConflict).errors).not.toContain('Image references cannot be combined with start or end frames in the same run.');
+    expect(buildGenerationPayload(frameConflict)).toMatchObject({ startImageUrl: null, endImageUrl: null });
 
     const seedanceVideoOverflow = {
       ...draft,
@@ -620,6 +668,7 @@ describe('media creation view model', () => {
         videoReference({ durationSeconds: 6 }),
         videoReference({ durationSeconds: 4 }),
       ],
+      referenceMode: 'elements' as const,
     };
     expect(validateCreationDraft(seedanceVideoOverflow).errors).toContain('Seedance 2 reference videos must be 15 seconds or less combined.');
 
@@ -628,6 +677,7 @@ describe('media creation view model', () => {
       prompt: 'Animate the attached images.',
       model: 'grok-imagine-video' as const,
       references: [imageReference(), imageReference({ displayName: 'Second Product' })],
+      referenceMode: 'elements' as const,
     };
     expect(validateCreationDraft(grokTooManyImages).errors).toContain('Grok Imagine Video supports up to 1 image reference per run.');
 
@@ -710,6 +760,7 @@ describe('media creation view model', () => {
       sound: true,
       references: [imageReference()],
       referenceVideos: [videoReference({ durationSeconds: 5 })],
+      referenceMode: 'elements' as const,
       duration: 10,
     };
 

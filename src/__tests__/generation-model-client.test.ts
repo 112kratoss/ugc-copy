@@ -126,6 +126,25 @@ describe('web generation model catalog client', () => {
     }));
   });
 
+  it('surfaces the first quote field error as an actionable message', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      error: 'The quote request could not be processed.',
+      code: 'INVALID_MODEL_SETTINGS',
+      fieldErrors: { images: 'Hailuo 2.3 requires a start image.' },
+    }), { status: 422, headers: { 'Content-Type': 'application/json' } }));
+
+    await expect(requestWebGenerationQuote({
+      kind: 'video',
+      modelId: 'hailuo-2.3',
+      settings: { referenceMode: 'frames' },
+      inputCounts: { images: 0, videos: 0, audios: 0 },
+    }, null, undefined, fetcher as unknown as typeof fetch)).rejects.toMatchObject({
+      message: 'Hailuo 2.3 requires a start image.',
+      code: 'INVALID_MODEL_SETTINGS',
+      fieldErrors: { images: 'Hailuo 2.3 requires a start image.' },
+    });
+  });
+
   it('does not expose a fallback cost when the catalog is unavailable', () => {
     expect(resolveWebGenerationQuoteUi({
       hasCatalog: false,
@@ -161,6 +180,18 @@ describe('web generation model catalog client', () => {
     })).toMatchObject({
       costCredits: 42,
       costLabel: '42 credits',
+      blocksGenerate: false,
+      message: null,
+    });
+
+    expect(resolveWebGenerationQuoteUi({
+      hasCatalog: true,
+      quoteStatus: 'ready',
+      quotedCost: 1,
+      quoteErrorMessage: null,
+    })).toMatchObject({
+      costCredits: 1,
+      costLabel: '1 credit',
       blocksGenerate: false,
       message: null,
     });

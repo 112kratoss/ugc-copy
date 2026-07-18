@@ -289,6 +289,9 @@ const SCENARIO_EXAMPLES: Record<PromptScenario, PromptExample> = {
 };
 
 const TEXT_RENDERING_RULES: Record<string, string[]> = {
+  'nano-banana-2-lite': [
+    'If the user requests readable text, keep the exact words in quotes and avoid complex multi-block layouts.',
+  ],
   'nano-banana-2': [
     'If the user requests readable text, keep the exact words in quotes and make the text treatment explicit but brief.',
   ],
@@ -297,6 +300,15 @@ const TEXT_RENDERING_RULES: Record<string, string[]> = {
   ],
   'gpt-image-2': [
     'If the user requests readable text, keep the exact words in quotes and describe the placement and hierarchy plainly.',
+  ],
+  'seedream-5-pro': [
+    'If the user requests readable text, preserve the exact copy, language, placement, and visual hierarchy.',
+  ],
+  'flux-2-pro': [
+    'If the user requests readable text, keep the exact words in quotes with direct placement and material guidance.',
+  ],
+  'z-image': [
+    'If the user requests readable text, keep it short, exact, and limited to one clear placement.',
   ],
   'grok-imagine-image': [
     'If the user requests readable text, keep the exact words in quotes and keep the layout instruction direct.',
@@ -318,6 +330,23 @@ const SEEDANCE_PLAYBOOK_MODEL_IDS = new Set([
 ]);
 
 const ENHANCER_PLAYBOOKS: Record<string, EnhancerPlaybook> = {
+  'nano-banana-2-lite': {
+    modelId: 'nano-banana-2-lite',
+    label: 'Nano Banana 2 Lite',
+    medium: 'image',
+    plannerMode: 'structured-image',
+    strategyRules: [
+      'Treat Nano Banana 2 Lite as a fast draft and iteration model: center the prompt on one decisive visual idea.',
+      'Keep composition, subject, and lighting explicit while avoiding dense modifier stacks.',
+      'When references are attached, state only the traits that must remain consistent.',
+    ],
+    workflowRules: [
+      'If stillImageModel is nano-banana-2-lite, use a concise prompt with one clear subject, composition, and finish.',
+    ],
+    plannerNotes: [
+      'Optimize for fast visual exploration and clean 1K output.',
+    ],
+  },
   'nano-banana-2': {
     modelId: 'nano-banana-2',
     label: 'Nano Banana 2',
@@ -376,6 +405,57 @@ const ENHANCER_PLAYBOOKS: Record<string, EnhancerPlaybook> = {
     plannerNotes: [
       'Use the plan to capture the intended edit or generated still in direct, natural language.',
       'Favor concrete instructions over long modifier chains.',
+    ],
+  },
+  'seedream-5-pro': {
+    modelId: 'seedream-5-pro',
+    label: 'Seedream 5 Pro',
+    medium: 'image',
+    plannerMode: 'structured-image',
+    strategyRules: [
+      'Treat Seedream 5 Pro as a production image model for realistic people, products, multilingual layouts, and precise edits.',
+      'Specify composition, material behavior, lighting, skin or product texture, and information hierarchy when relevant.',
+      'For edits, separate what must stay fixed from the exact local or material change requested.',
+    ],
+    workflowRules: [
+      'If stillImageModel is seedream-5-pro, write a production-ready prompt with precise structure, realism, and reference preservation.',
+    ],
+    plannerNotes: [
+      'Use richer structure for campaign assets, product graphics, portraits, and text-heavy layouts.',
+    ],
+  },
+  'flux-2-pro': {
+    modelId: 'flux-2-pro',
+    label: 'FLUX.2 Pro',
+    medium: 'image',
+    plannerMode: 'structured-image',
+    strategyRules: [
+      'Treat FLUX.2 Pro as a photoreal commercial model with strong material detail and multi-reference consistency.',
+      'Describe camera framing, lighting, surface behavior, and product identity with concrete language.',
+      'For reference-led work, assign each reference a clear role and avoid contradictory transformations.',
+    ],
+    workflowRules: [
+      'If stillImageModel is flux-2-pro, emphasize photoreal detail, controlled composition, and clear reference roles.',
+    ],
+    plannerNotes: [
+      'Favor product photography, polished campaign stills, and consistent reference combinations.',
+    ],
+  },
+  'z-image': {
+    modelId: 'z-image',
+    label: 'Z-Image',
+    medium: 'image',
+    plannerMode: 'structured-image',
+    strategyRules: [
+      'Treat Z-Image as a prompt-only economy model for rapid photoreal concepts and drafts.',
+      'Keep the prompt self-contained because reference images are not available.',
+      'Use one clear subject, setting, camera treatment, and lighting direction.',
+    ],
+    workflowRules: [
+      'If stillImageModel is z-image, write a self-contained prompt with no dependency on reference images.',
+    ],
+    plannerNotes: [
+      'Optimize for inexpensive exploration before moving a chosen concept to a reference-capable model.',
     ],
   },
   'grok-imagine-image': {

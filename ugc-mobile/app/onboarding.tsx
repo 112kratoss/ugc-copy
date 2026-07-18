@@ -316,7 +316,10 @@ export default function OnboardingScreen() {
       void trackOnboardingEvent(api, 'reward_deferred', { goal, step: 'reward' });
     }
     void trackOnboardingEvent(api, 'guided_creator_opened', { goal, step: 'creator' });
-    router.replace(`/create/${goal}?guided=1` as never);
+    router.replace({
+      pathname: '/(tabs)/creator',
+      params: { tool: goal, guided: '1' },
+    } as never);
   };
 
   const claimReady = welcome?.status === 'eligible';
