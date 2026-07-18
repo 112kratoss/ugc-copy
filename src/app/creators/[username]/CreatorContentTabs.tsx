@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import type { ReactNode } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
@@ -311,6 +311,22 @@ export function CreatorContentTabs({
     window.history.replaceState(null, '', `${pathname}${query}${tabHashes[tab]}`);
   };
 
+  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, currentTab: CreatorTab) => {
+    const currentIndex = tabs.findIndex((tab) => tab.id === currentTab);
+    let nextIndex = currentIndex;
+
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tabs.length;
+    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = tabs.length - 1;
+    else return;
+
+    event.preventDefault();
+    const nextTab = tabs[nextIndex];
+    handleTabSelect(nextTab.id);
+    document.getElementById(`creator-tab-${nextTab.id}`)?.focus();
+  };
+
   const handleRemix = async (id: string) => {
     if (!user || !session?.access_token) {
       router.push(`/login?returnUrl=${encodeURIComponent(profilePath)}`);
@@ -349,8 +365,12 @@ export function CreatorContentTabs({
                 key={tab.id}
                 type="button"
                 role="tab"
+                id={`creator-tab-${tab.id}`}
+                aria-controls={`creator-panel-${tab.id}`}
                 aria-selected={selected}
+                tabIndex={selected ? 0 : -1}
                 onClick={() => handleTabSelect(tab.id)}
+                onKeyDown={(event) => handleTabKeyDown(event, tab.id)}
                 className={`ui-focus-ring min-h-11 rounded-[15px] px-2 text-sm font-bold transition ${
                   selected ? 'bg-white text-black' : 'text-zinc-400 hover:bg-white/[0.06] hover:text-white'
                 }`}
@@ -362,7 +382,13 @@ export function CreatorContentTabs({
         </div>
       </div>
 
-      <div className="mt-6">
+      <div
+        id={`creator-panel-${activeTab}`}
+        role="tabpanel"
+        aria-labelledby={`creator-tab-${activeTab}`}
+        tabIndex={0}
+        className="mt-6 outline-none"
+      >
         {activeTab === 'tools' ? (
           <ToolsGrid tools={initialData.stats.toolsUsed} />
         ) : visibleItems.length > 0 ? (

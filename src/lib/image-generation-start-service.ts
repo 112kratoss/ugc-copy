@@ -66,7 +66,7 @@ export async function startImageGenerationForRoute({
     kind: 'image',
     modelId: selectedModel,
     settings: {
-      aspectRatio: body.aspectRatio ?? 'auto',
+      aspectRatio: body.aspectRatio,
       resolution: body.resolution ?? '1K',
       qualityMode: body.qualityMode ?? 'standard',
       outputFormat: body.outputFormat ?? 'jpg',

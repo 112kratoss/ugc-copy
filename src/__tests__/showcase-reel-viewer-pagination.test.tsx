@@ -191,6 +191,21 @@ const paidAsset: NonNullable<ShowcaseFeedItem['asset']> = {
   },
 };
 
+const freeAsset: NonNullable<ShowcaseFeedItem['asset']> = {
+  ...paidAsset,
+  id: 'bundle-free-1',
+  title: 'Free prompt pack',
+  accessMode: 'free',
+  priceUsdCents: 0,
+  priceQuote: {
+    currency: 'USD',
+    amountSubunits: 0,
+    formatted: 'Free',
+    note: null,
+  },
+  previewText: 'Get the reusable prompt and notes free.',
+};
+
 function renderPaidReel() {
   return render(
     <ShowcaseReelViewer
@@ -200,6 +215,33 @@ function renderPaidReel() {
           id: 'post-1',
           title: 'Paid Frame',
           asset: paidAsset,
+        }),
+      ]}
+      selectedItemId="post-1"
+      savedItemIds={new Set()}
+      savingItemIds={new Set()}
+      accessToken={null}
+      hasMoreItems={false}
+      isLoadingMoreItems={false}
+      onLoadMoreItems={vi.fn()}
+      onClose={vi.fn()}
+      onSelectItemId={vi.fn()}
+      onToggleSave={vi.fn()}
+      onRemix={vi.fn()}
+      buildDetailPath={(id, section) => section ? `/showcase/${id}#${section}` : `/showcase/${id}`}
+    />
+  );
+}
+
+function renderFreeReel() {
+  return render(
+    <ShowcaseReelViewer
+      isOpen
+      items={[
+        createShowcaseItem({
+          id: 'post-1',
+          title: 'Free Frame',
+          asset: freeAsset,
         }),
       ]}
       selectedItemId="post-1"
@@ -677,6 +719,49 @@ describe('ShowcaseReelViewer pagination', () => {
     expect(screen.queryByText(/included after unlock/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/digital recipes are final sale/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /unlock for \$9\.00/i })).not.toBeInTheDocument();
+  });
+
+  it('gets a free recipe in one click without opening checkout', async () => {
+    authState.session = { access_token: 'token-1' };
+    let hasAddedRecipe = false;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+
+      if (url.endsWith('/unlock-free')) {
+        hasAddedRecipe = true;
+        return new Response(JSON.stringify({ success: true }));
+      }
+
+      if (url.endsWith('/resource-bundle')) {
+        return new Response(JSON.stringify({
+          bundle: {
+            viewerCanAccess: hasAddedRecipe,
+            viewerIsOwner: false,
+            resources: hasAddedRecipe ? {
+              promptText: 'free revealed prompt',
+              notesMarkdown: null,
+              workflowShareUrl: null,
+              attachments: [],
+              allowRemix: false,
+            } : null,
+          },
+        }));
+      }
+
+      return new Response(JSON.stringify({ error: 'Unexpected request' }), { status: 500 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderFreeReel();
+    fireEvent.click(screen.getAllByRole('button', { name: /get free recipe/i })[0]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/unlock-free', expect.objectContaining({
+        method: 'POST',
+      }));
+    });
+    expect(screen.queryByRole('button', { name: /pay with cash/i })).not.toBeInTheDocument();
+    expect(await screen.findByText(/added to your recipes/i)).toBeInTheDocument();
   });
 
   it('shows public generation recipes inline without purchase', async () => {

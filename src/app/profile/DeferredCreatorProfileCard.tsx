@@ -13,6 +13,8 @@ interface DeferredCreatorProfileCardProps {
   onboardingMode?: boolean;
   nextPath?: string;
   returnAfterSave?: boolean;
+  collapseOptionalDetails?: boolean;
+  hideIntro?: boolean;
 }
 
 type IdleWindow = Window & {

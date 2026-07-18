@@ -284,7 +284,7 @@ describe('CreateVideoClient Kling video elements', () => {
     const view = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
 
     await screen.findByText('Reference mode');
-    fireEvent.click(screen.getByRole('button', { name: /Elements Upload named references/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Reusable references/i }));
 
     const file = new File(['image-bytes'], 'video-element.png', { type: 'image/png' });
     const input = view.container.querySelector<HTMLInputElement>('input[type="file"][accept="image/*"][multiple]');

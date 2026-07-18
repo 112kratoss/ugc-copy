@@ -226,8 +226,12 @@ const VIDEO_MODEL_ALIASES: Array<{ id: VideoModelId; patterns: RegExp[] }> = [
 const IMAGE_MODEL_ALIASES: Array<{ id: ImageModelId; patterns: RegExp[] }> = [
   { id: 'grok-imagine-image', patterns: [/\bgrok(?:\s|-)?imagine(?:\s|-)?image\b/i, /\bgrok(?:\s|-)?imagine\b/i, /\bgrok\b/i, /\bxai(?:\s|-)?image\b/i] },
   { id: 'gpt-image-2', patterns: [/\bgpt(?:\s|-)?image(?:\s|-)?2\b/i, /\bchatgpt(?:\s|-)?image\b/i, /\bchat(?:\s|-)?gpt(?:\s|-)?image\b/i] },
+  { id: 'nano-banana-2-lite', patterns: [/\bnano(?:\s|-)?banana(?:\s|-)?2(?:\.0)?(?:\s|-)?lite\b/i] },
   { id: 'nano-banana-2', patterns: [/\bnano(?:\s|-)?banana(?:\s|-)?2(?:\.0)?\b/i] },
   { id: 'nano-banana-pro', patterns: [/\bnano(?:\s|-)?banana(?:\s|-)?pro\b/i] },
+  { id: 'seedream-5-pro', patterns: [/\bseedream(?:\s|-)?5(?:\.0)?(?:\s|-)?pro\b/i] },
+  { id: 'flux-2-pro', patterns: [/\bflux(?:\s|-)?2(?:\.0)?(?:\s|-)?pro\b/i, /\bflux(?:\s|-)?2(?:\.0)?\b/i] },
+  { id: 'z-image', patterns: [/\bz(?:\s|-)?image\b/i] },
 ];
 
 const MOTION_MODEL_ALIASES: Array<{ id: MotionModelId; patterns: RegExp[] }> = [
@@ -505,7 +509,7 @@ export function buildWorkflowAssistantSystemPrompt(
     'Generate a runnable workflow that uses named media placeholder slots plus prompt-driven generator nodes.',
     'The JSON schema is:',
     '{"title":string,"assistantReply":string,"changeSummary":string,"creativeStrategy":string,"narrative":string,"voiceover":string,"assetSlots":[{"slotKey":string,"kind":"image"|"video"|"audio","label":string,"purpose":string,"required":boolean}],"shots":[{"shotKey":string,"title":string,"purpose":string,"beat":string,"visualPrompt":string,"videoPrompt":string,"motionPrompt":string,"duration":number,"startSlotKey":string|null,"endSlotKey":string|null,"referenceImageSlotKeys":string[],"referenceVideoSlotKeys":string[],"referenceAudioSlotKeys":string[]}],"deliveryPlan":{"primaryModel":string,"stillImageModel":string,"motionModel":string,"aspectRatio":"9:16"|"16:9"|"1:1"}}',
-    'Use the existing models only: stillImageModel must be nano-banana-2, nano-banana-pro, gpt-image-2, or grok-imagine-image; primaryModel must be kling-3.0-video, seedance-1.5-pro, seedance-2, seedance-2-fast, veo-3.1, or grok-imagine-video; motionModel must be kling-2.6 or kling-3.0.',
+    'Use the existing models only: stillImageModel must be nano-banana-2-lite, nano-banana-2, nano-banana-pro, gpt-image-2, seedream-5-pro, flux-2-pro, z-image, or grok-imagine-image; primaryModel must be kling-3.0-video, seedance-1.5-pro, seedance-2, seedance-2-fast, veo-3.1, or grok-imagine-video; motionModel must be kling-2.6 or kling-3.0.',
     'Use stable slotKey and shotKey slugs so follow-up edits can revise the same region without unnecessary churn.',
     'Every asset slot should correspond to a real image, video, or audio placeholder a user can replace later.',
     'If the user explicitly names one of the supported models, preserve that model choice in deliveryPlan unless the request is internally contradictory.',
@@ -516,7 +520,7 @@ export function buildWorkflowAssistantSystemPrompt(
       modelSelector: 'stillImageModel',
       medium: 'image',
       scenario: 'image.reference_guided',
-      modelIds: ['nano-banana-2', 'nano-banana-pro', 'gpt-image-2', 'grok-imagine-image'],
+      modelIds: ['nano-banana-2-lite', 'nano-banana-2', 'nano-banana-pro', 'gpt-image-2', 'seedream-5-pro', 'flux-2-pro', 'z-image', 'grok-imagine-image'],
       context: plannerContext,
     }),
     buildWorkflowPromptFieldGuidance({

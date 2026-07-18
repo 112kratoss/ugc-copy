@@ -262,7 +262,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
             Recipes need a useful public post, creator profile, buyer preview, and reusable resources before they appear here.
           </p>
           <a
-            href="/post/new"
+            href="/post/new?from=marketplace&returnTo=%2Fmarketplace"
             className="mt-6 inline-flex rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
           >
             Share a post
@@ -380,7 +380,7 @@ function BootstrapMarketplaceCard({
 }) {
   const accessLabel = asset.accessMode === 'free' ? 'Free recipe' : `${asset.priceQuote.formatted} recipe`;
   const unlockLabel = asset.accessMode === 'free'
-    ? 'Unlock free recipe'
+    ? 'View free recipe'
     : `Unlock for ${asset.priceQuote.formatted}`;
   const previewText = asset.summary || asset.previewText || (
     asset.post?.postFormat === 'text'
@@ -388,11 +388,13 @@ function BootstrapMarketplaceCard({
       : asset.post?.body || 'Reusable creator resources included.'
   );
   const detailHref = buildMarketplaceDetailPath(asset.postId, marketplaceReturnPath);
+  const postTitle = asset.post?.title?.trim() || asset.title;
+  const showRecipeTitle = asset.title.trim().toLocaleLowerCase() !== postTitle.trim().toLocaleLowerCase();
 
   return (
     <a
       href={detailHref}
-      aria-label={`${unlockLabel}: ${asset.title}`}
+      aria-label={`${unlockLabel}: ${postTitle}`}
       className="group overflow-hidden rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,rgba(18,18,22,0.98),rgba(10,10,14,0.98))] shadow-[0_24px_70px_rgba(0,0,0,0.35)] transition hover:border-white/14"
     >
       <BootstrapMediaPreview asset={asset} accessLabel={accessLabel} previewText={previewText} />
@@ -403,7 +405,10 @@ function BootstrapMarketplaceCard({
             <div className="truncate text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
               {asset.seller.username ? `@${asset.seller.username}` : asset.seller.name}
             </div>
-            <h2 className="mt-2 text-xl font-semibold text-white">{asset.title}</h2>
+            <h2 className="mt-2 text-xl font-semibold text-white">{postTitle}</h2>
+            {showRecipeTitle ? (
+              <div className="mt-1 truncate text-xs font-medium text-zinc-500">Recipe: {asset.title}</div>
+            ) : null}
           </div>
           <span className="shrink-0 rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1.5 text-sm font-semibold text-emerald-50">
             {asset.priceQuote.formatted}

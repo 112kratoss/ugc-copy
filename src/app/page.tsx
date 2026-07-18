@@ -36,10 +36,10 @@ export const revalidate = 60;
 
 const LATEST_MODELS = [
   {
-    name: IMAGE_MODELS['grok-imagine-image'].displayName,
-    description: 'xAI multi-output image runs',
-    href: '/create-image?model=grok-imagine-image',
-    accent: 'border-amber-300/15 bg-amber-400/[0.07] text-amber-100',
+    name: IMAGE_MODELS['seedream-5-pro'].displayName,
+    description: 'Production-ready stills and edits',
+    href: '/create-image?model=seedream-5-pro',
+    accent: 'border-sky-300/15 bg-sky-400/[0.07] text-sky-100',
   },
   {
     name: VIDEO_MODELS['grok-imagine-video'].displayName,
@@ -48,15 +48,15 @@ const LATEST_MODELS = [
     accent: 'border-rose-300/15 bg-rose-400/[0.07] text-rose-100',
   },
   {
-    name: IMAGE_MODELS['gpt-image-2'].displayName,
-    description: 'ChatGPT image generation',
-    href: '/create-image?model=gpt-image-2',
-    accent: 'border-amber-300/15 bg-amber-400/[0.07] text-amber-100',
+    name: IMAGE_MODELS['nano-banana-2-lite'].displayName,
+    description: 'Fast, affordable 1K image runs',
+    href: '/create-image?model=nano-banana-2-lite',
+    accent: 'border-cyan-300/15 bg-cyan-400/[0.07] text-cyan-100',
   },
   {
-    name: IMAGE_MODELS['nano-banana-pro'].displayName,
-    description: 'High-fidelity stills',
-    href: '/create-image?model=nano-banana-pro',
+    name: IMAGE_MODELS['flux-2-pro'].displayName,
+    description: 'Photoreal multi-reference product work',
+    href: '/create-image?model=flux-2-pro',
     accent: 'border-sky-300/15 bg-sky-400/[0.07] text-sky-100',
   },
   {

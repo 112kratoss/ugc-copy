@@ -23,8 +23,8 @@ export const PRICING_PLANS: PricingPlan[] = [
         description: 'Perfect for trying out our service',
         features: [
             '500 Credits included',
-            'Approx. 50 seconds of video',
-            'Starts at 6 Credits per second cost',
+            'Generation cost shown before every run',
+            'Rates vary by model, quality, and duration',
             'HD quality output',
             'Download in MP4 format',
             'Email support',
@@ -40,8 +40,8 @@ export const PRICING_PLANS: PricingPlan[] = [
         description: 'Best value for content creators',
         features: [
             '2,000 Credits included',
-            'Approx. 3.3 minutes of video',
-            'Starts at 6 Credits per second cost',
+            'Generation cost shown before every run',
+            'Rates vary by model, quality, and duration',
             'HD quality output',
             'Priority processing',
             'Priority email support',
@@ -57,8 +57,8 @@ export const PRICING_PLANS: PricingPlan[] = [
         description: 'For professional creators & agencies',
         features: [
             '10,000 Credits included',
-            'Approx. 16.6 minutes of video',
-            'Starts at 6 Credits per second cost',
+            'Generation cost shown before every run',
+            'Rates vary by model, quality, and duration',
             'HD quality output',
             'Priority processing',
             'Dedicated support',
@@ -71,4 +71,3 @@ export const PRICING_PLANS: PricingPlan[] = [
 export const PRICING_PLAN_MAP = Object.fromEntries(
     PRICING_PLANS.map((plan) => [plan.id, plan])
 ) as Record<PricingPlanId, PricingPlan>;
-

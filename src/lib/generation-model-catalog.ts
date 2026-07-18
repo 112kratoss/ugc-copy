@@ -6,10 +6,12 @@ import {
   VIDEO_MODELS,
   getDefaultVideoDuration,
   getImageCost,
+  getImageQualityModes,
   getImageResolutionOptions,
   getMotionCost,
   getVideoCost,
   getVideoDurationRange,
+  getVideoElementSupport,
   isValidVideoDuration,
   type ImageModelId,
   type ImageOutputFormat,
@@ -82,8 +84,11 @@ export interface GenerationModelDescriptor {
     imageReferences: { max: number; supportsNaming: boolean } | null;
     videoReferences: { max: number } | null;
     audioReferences: { max: number } | null;
+    preparedAudioReferences?: { max: number } | null;
+    characterReferences?: { max: number } | null;
     startFrame: boolean;
     endFrame: boolean;
+    combineFramesWithReferences?: boolean;
   };
 }
 
@@ -102,6 +107,8 @@ export interface GenerationModelQuoteInput {
     images?: number;
     videos?: number;
     audios?: number;
+    preparedAudios?: number;
+    characters?: number;
   };
   catalogRevision?: string | null;
 }
@@ -177,8 +184,9 @@ function imageDescriptors(): GenerationModelDescriptor[] {
     if (model.supportsGoogleSearch) {
       controls.push(booleanControl('googleSearch', 'Google Search'));
     }
-    if (model.id === 'grok-imagine-image') {
-      controls.push(choiceControl('qualityMode', 'Quality', ['standard', 'quality']));
+    const qualityModes = getImageQualityModes(model.id);
+    if (qualityModes.length > 0) {
+      controls.push(choiceControl('qualityMode', model.id === 'ideogram-v3' ? 'Speed' : 'Quality', qualityModes));
     }
 
     return {
@@ -199,19 +207,24 @@ function imageDescriptors(): GenerationModelDescriptor[] {
         outputFormat: model.supportsOutputFormat,
       },
       inputs: {
-        imageReferences: { max: model.maxImages, supportsNaming: true },
+        imageReferences: model.maxImages > 0
+          ? { max: model.maxImages, supportsNaming: true }
+          : null,
         videoReferences: null,
         audioReferences: null,
+        preparedAudioReferences: null,
+        characterReferences: null,
         startFrame: false,
         endFrame: false,
+        combineFramesWithReferences: false,
       },
     };
   });
 }
 
 function getVideoInputLimits(modelId: VideoModelId) {
-  if (modelId === 'seedance-2' || modelId === 'seedance-2-fast') {
-    return { images: 5, videos: 3, audios: 3, startFrame: false, endFrame: false };
+  if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini') {
+    return { images: 5, videos: 3, audios: 3, startFrame: true, endFrame: true };
   }
   if (modelId === 'seedance-1.5-pro') {
     return { images: 2, videos: 0, audios: 0, startFrame: true, endFrame: true };
@@ -221,6 +234,21 @@ function getVideoInputLimits(modelId: VideoModelId) {
   }
   if (modelId === 'kling-3.0-video') {
     return { images: 0, videos: 3, audios: 0, startFrame: true, endFrame: true };
+  }
+  if (modelId === 'kling-3.0-turbo') {
+    return { images: 0, videos: 0, audios: 0, startFrame: true, endFrame: false };
+  }
+  if (modelId === 'wan-2.7') {
+    return { images: 5, videos: 5, audios: 1, startFrame: true, endFrame: true };
+  }
+  if (modelId === 'happyhorse-1.1') {
+    return { images: 9, videos: 0, audios: 0, startFrame: true, endFrame: false };
+  }
+  if (modelId === 'gemini-omni-video') {
+    return { images: 7, videos: 1, audios: 0, startFrame: false, endFrame: false };
+  }
+  if (modelId === 'hailuo-2.3') {
+    return { images: 0, videos: 0, audios: 0, startFrame: true, endFrame: false };
   }
   return { images: 3, videos: 0, audios: 0, startFrame: true, endFrame: true };
 }
@@ -263,7 +291,7 @@ function videoDescriptors(): GenerationModelDescriptor[] {
       kind: 'video',
       displayName: model.displayName,
       description: model.description,
-      badge: model.id === 'grok-imagine-video' ? 'New' : null,
+      badge: ['grok-imagine-video', 'kling-3.0-turbo', 'seedance-2-mini', 'wan-2.7', 'hailuo-2.3'].includes(model.id) ? 'New' : null,
       recommended: model.id === DEFAULT_MODEL_IDS.video,
       sortOrder: index * 10,
       minClientSchemaVersion: 1,
@@ -279,8 +307,11 @@ function videoDescriptors(): GenerationModelDescriptor[] {
         imageReferences: limits.images > 0 ? { max: limits.images, supportsNaming: true } : null,
         videoReferences: limits.videos > 0 ? { max: limits.videos } : null,
         audioReferences: limits.audios > 0 ? { max: limits.audios } : null,
+        preparedAudioReferences: model.id === 'gemini-omni-video' ? { max: 3 } : null,
+        characterReferences: model.id === 'gemini-omni-video' ? { max: 3 } : null,
         startFrame: limits.startFrame,
         endFrame: limits.endFrame,
+        combineFramesWithReferences: model.id === 'wan-2.7',
       },
     };
   });
@@ -322,8 +353,11 @@ function motionDescriptors(): GenerationModelDescriptor[] {
       imageReferences: { max: 1, supportsNaming: false },
       videoReferences: { max: 1 },
       audioReferences: null,
+      preparedAudioReferences: null,
+      characterReferences: null,
       startFrame: false,
       endFrame: false,
+      combineFramesWithReferences: false,
     },
   }));
 }
@@ -414,16 +448,20 @@ function quoteImage(modelId: ImageModelId, settings: Record<string, unknown>, im
   if (imageCount > model.maxImages) {
     fieldErrors.references = `${model.displayName} supports up to ${model.maxImages} image references.`;
   }
-  const qualityMode = stringSetting(settings, 'qualityMode', 'standard') as ImageQualityMode;
-  if (modelId === 'grok-imagine-image') {
-    validateChoice(fieldErrors, 'qualityMode', qualityMode, ['standard', 'quality'], model.displayName);
+  if (modelId === 'wan-2.7-image-pro' && resolution === '4K' && imageCount > 0) {
+    fieldErrors.resolution = 'Wan 2.7 Image Pro supports 4K for text-to-image only.';
+  }
+  const qualityModes = getImageQualityModes(modelId);
+  const normalizedQualityMode = stringSetting(settings, 'qualityMode', qualityModes[0] ?? 'standard') as ImageQualityMode;
+  if (qualityModes.length > 0) {
+    validateChoice(fieldErrors, 'qualityMode', normalizedQualityMode, qualityModes, model.displayName);
   }
   assertValid(fieldErrors);
 
   const normalizedSettings: Record<string, CatalogPrimitive> = {
     aspectRatio,
     resolution,
-    ...(modelId === 'grok-imagine-image' ? { qualityMode } : {}),
+    ...(qualityModes.length > 0 ? { qualityMode: normalizedQualityMode } : {}),
     outputFormat: model.supportsOutputFormat ? outputFormat : 'jpg',
     googleSearch: model.supportsGoogleSearch ? booleanSetting(settings, 'googleSearch') : false,
   };
@@ -432,7 +470,7 @@ function quoteImage(modelId: ImageModelId, settings: Record<string, unknown>, im
     modelId,
     catalogRevision,
     normalizedSettings,
-    costCredits: getImageCost(modelId, resolution, { qualityMode, referenceCount: imageCount }),
+    costCredits: getImageCost(modelId, resolution, { qualityMode: normalizedQualityMode, referenceCount: imageCount }),
   };
 }
 
@@ -447,15 +485,45 @@ function quoteVideo(modelId: VideoModelId, settings: Record<string, unknown>, in
   if (model.modeOptions.length > 0) validateChoice(fieldErrors, 'mode', mode, model.modeOptions.map((option) => option.value), model.displayName);
   const resolution = stringSetting(settings, 'resolution', model.resolutions[0] ?? '');
   if (model.resolutions.length > 0) validateChoice(fieldErrors, 'resolution', resolution, model.resolutions as readonly string[], model.displayName);
+  if (modelId === 'hailuo-2.3' && resolution === '1080P' && duration === 10) {
+    fieldErrors.duration = 'Hailuo 2.3 supports 1080P output at 6 seconds only.';
+  }
   const limits = getVideoInputLimits(modelId);
-  if (inputCounts.images > limits.images && limits.images >= 0) fieldErrors.images = `${model.displayName} supports up to ${limits.images} image references.`;
+  const referenceMode = stringSetting(settings, 'referenceMode', 'frames') === 'elements' ? 'elements' : 'frames';
+  const elementSupport = getVideoElementSupport(modelId, { mode });
+  const maxImages = referenceMode === 'elements'
+    ? elementSupport.maxElements
+    : Number(limits.startFrame) + Number(limits.endFrame);
+  if (referenceMode === 'elements' && inputCounts.images > 0 && !elementSupport.enabled) {
+    fieldErrors.images = elementSupport.reason || `${model.displayName} does not support reusable references in this mode.`;
+  } else if (inputCounts.images > maxImages) {
+    fieldErrors.images = `${model.displayName} supports up to ${maxImages} image ${referenceMode === 'elements' ? 'references' : 'frames'}.`;
+  }
   if (inputCounts.videos > limits.videos) fieldErrors.videos = `${model.displayName} supports up to ${limits.videos} video references.`;
   if (inputCounts.audios > limits.audios) fieldErrors.audios = `${model.displayName} supports up to ${limits.audios} audio references.`;
+  if (modelId === 'wan-2.7' && referenceMode === 'elements' && inputCounts.images + inputCounts.videos + inputCounts.audios > 5) {
+    fieldErrors.references = 'Wan 2.7 supports up to 5 reusable references in total.';
+  }
+  if (modelId === 'gemini-omni-video' && inputCounts.images + (inputCounts.videos * 2) > 7) {
+    fieldErrors.references = 'Gemini Omni supports seven reference slots; a video uses two slots.';
+  }
+  if (modelId === 'gemini-omni-video' && inputCounts.characters > 3) {
+    fieldErrors.characters = 'Gemini Omni supports up to 3 prepared character references.';
+  }
+  if (modelId === 'gemini-omni-video' && inputCounts.preparedAudios > 3) {
+    fieldErrors.preparedAudios = 'Gemini Omni supports up to 3 prepared voice references.';
+  }
+  if (modelId === 'gemini-omni-video' && inputCounts.images + (inputCounts.videos * 2) + inputCounts.characters > 7) {
+    fieldErrors.references = 'Gemini Omni supports seven reference slots; videos use two and characters use one.';
+  }
+  if (modelId === 'hailuo-2.3' && referenceMode === 'frames' && inputCounts.images === 0) {
+    fieldErrors.images = 'Hailuo 2.3 requires a start image.';
+  }
   assertValid(fieldErrors);
 
   const sound = model.supportsSound ? booleanSetting(settings, 'sound') : false;
   const fixedLens = model.supportsFixedLens ? booleanSetting(settings, 'fixedLens') : false;
-  const normalizedSettings: Record<string, CatalogPrimitive> = { aspectRatio, duration, mode, resolution, sound, fixedLens };
+  const normalizedSettings: Record<string, CatalogPrimitive> = { aspectRatio, duration, mode, resolution, sound, fixedLens, referenceMode };
   const catalogRevision = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 1 }).revision;
   return {
     modelId,
@@ -467,6 +535,7 @@ function quoteVideo(modelId: VideoModelId, settings: Record<string, unknown>, in
       durationSeconds: duration,
       resolution,
       hasReferenceVideo: inputCounts.videos > 0,
+      hasReferenceImage: inputCounts.images > 0,
     }),
   };
 }
@@ -508,6 +577,8 @@ export function quoteGenerationModel(input: GenerationModelQuoteInput): Generati
     images: Math.max(0, Math.floor(input.inputCounts?.images ?? 0)),
     videos: Math.max(0, Math.floor(input.inputCounts?.videos ?? 0)),
     audios: Math.max(0, Math.floor(input.inputCounts?.audios ?? 0)),
+    preparedAudios: Math.max(0, Math.floor(input.inputCounts?.preparedAudios ?? 0)),
+    characters: Math.max(0, Math.floor(input.inputCounts?.characters ?? 0)),
   };
   if (input.kind === 'image') return quoteImage(input.modelId as ImageModelId, settings, inputCounts.images);
   if (input.kind === 'video') return quoteVideo(input.modelId as VideoModelId, settings, inputCounts);

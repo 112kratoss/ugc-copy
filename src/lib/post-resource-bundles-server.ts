@@ -28,7 +28,6 @@ import {
 } from '@/lib/server-helpers';
 import {
   buildPostResourceBundleLockedPreview,
-  formatPostResourceBundleCountSummary,
   normalizePostResourceAttachments,
   normalizePostResourceItems,
   normalizePostResourceSections,
@@ -41,6 +40,7 @@ import {
   CREATOR_PROFILE_CHECK_ERROR,
   getCreatorPublishReadinessError,
   getMarketplaceQualityError,
+  getPublicPostQualityError,
   type MarketplaceQualityAssessment,
 } from '@/lib/marketplace-trust';
 import type {
@@ -63,7 +63,6 @@ import type {
   PostResourceRemixUse,
   PostResourceKind,
 } from '@/lib/post-resource-bundles';
-import { buildGenerationPaywallPrefill, buildGenerationRecipeResourceItems } from '@/lib/generation-paywall';
 import {
   buildLegacyGenerationInputMedia,
   loadGenerationInputMediaMap,
@@ -79,11 +78,10 @@ import {
 import { MARKETPLACE_RESOURCE_LIST_CACHE_TAG } from '@/lib/marketplace-resource-list-cache';
 import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 import {
-  GENERATION_RECIPE_ASSET_ID_PREFIX,
+  isGenerationRecipeAssetId,
   MAGICBOOKLET_SOURCE_KIND,
   normalizeShowcaseSourceKind,
   type RawShowcaseSourceKind,
-  type ShowcaseAssetSummary,
   type ShowcaseItemCategory,
   type ShowcaseMediaKind,
   type ShowcasePostFormat,
@@ -372,6 +370,11 @@ function normalizeText(value: string | null | undefined): string | null {
 
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function normalizeBundleDisplayTitle(value: string | null | undefined): string {
+  const title = value?.trim();
+  return !title || /^attached unlock$/i.test(title) ? 'Recipe' : title;
 }
 
 function sanitizePathSegment(value: string | null | undefined, fallback: string): string {
@@ -709,32 +712,6 @@ async function loadGenerationRecipeRow(
   return (data as GenerationRecipeRow | null) ?? null;
 }
 
-async function loadGenerationRecipeInputMedia(params: {
-  adminSupabase: SupabaseClient;
-  generation: GenerationRecipeRow;
-  post: { category: string | null; user_id: string | null };
-}): Promise<GenerationInputMediaItem[]> {
-  const inputMediaMap = await loadGenerationInputMediaMap({
-    supabase: params.adminSupabase,
-    generationIds: [params.generation.id],
-    urlMode: 'none',
-  });
-  const durableInputMedia = inputMediaMap.get(params.generation.id) ?? [];
-
-  if (durableInputMedia.length > 0) {
-    return durableInputMedia;
-  }
-
-  return buildLegacyGenerationInputMedia({
-    supabase: params.adminSupabase,
-    generationId: params.generation.id,
-    ownerUserId: params.post.user_id,
-    category: params.generation.category ?? params.post.category,
-    workflowSettings: normalizeWorkflowSettings(params.generation.workflow_settings) ?? {},
-    urlMode: 'none',
-  });
-}
-
 export async function loadGenerationRecipeRemixInputMediaByPostId(params: {
   postId: string;
   generationId: string;
@@ -783,321 +760,6 @@ export async function loadGenerationRecipeRemixInputMediaByPostId(params: {
     category: generation.category ?? post.category,
     workflowSettings: normalizeWorkflowSettings(generation.workflow_settings) ?? {},
   });
-}
-
-async function loadGenerationRecipeInputMediaMap(params: {
-  adminSupabase: SupabaseClient;
-  generations: GenerationRecipeRow[];
-  postsByGenerationId: Map<string, { category: string | null; user_id: string | null }>;
-}): Promise<Map<string, GenerationInputMediaItem[]>> {
-  const generationIds = params.generations.map((generation) => generation.id);
-  const durableInputMediaMap = await loadGenerationInputMediaMap({
-    supabase: params.adminSupabase,
-    generationIds,
-    urlMode: 'none',
-  });
-  const result = new Map(durableInputMediaMap);
-
-  await Promise.all(params.generations.map(async (generation) => {
-    if ((result.get(generation.id) ?? []).length > 0) {
-      return;
-    }
-
-    const post = params.postsByGenerationId.get(generation.id);
-    if (!post) {
-      return;
-    }
-
-    const legacyInputMedia = await buildLegacyGenerationInputMedia({
-      supabase: params.adminSupabase,
-      generationId: generation.id,
-      ownerUserId: post.user_id,
-      category: generation.category ?? post.category,
-      workflowSettings: normalizeWorkflowSettings(generation.workflow_settings) ?? {},
-      urlMode: 'none',
-    });
-
-    if (legacyInputMedia.length > 0) {
-      result.set(generation.id, legacyInputMedia);
-    }
-  }));
-
-  return result;
-}
-
-function buildGenerationRecipeCopy(preview: PostResourceBundleLockedPreview) {
-  const countSummary = formatPostResourceBundleCountSummary(preview);
-  const summary = countSummary
-    ? `Public creation recipe with ${countSummary}.`
-    : 'Public creation recipe for this generated result.';
-
-  return {
-    title: 'Creation recipe',
-    summary,
-    previewText: 'Prompt, notes, references, and remix setup used to create this result.',
-  };
-}
-
-async function buildPublicGenerationRecipeBundleDetail(params: {
-  postId: string;
-  viewerUserId?: string | null;
-  countryCode?: string | null;
-  adminSupabase?: SupabaseClient;
-}): Promise<PostResourceBundleDetail | null> {
-  const adminSupabase = params.adminSupabase ?? createServiceClient();
-  const post = await loadGenerationRecipePostRow(adminSupabase, params.postId);
-  if (!post || !isGenerationRecipePostEligible(post) || !post.generation_id || !post.user_id) {
-    return null;
-  }
-
-  const generation = await loadGenerationRecipeRow(adminSupabase, post.generation_id);
-  if (!generation) {
-    return null;
-  }
-
-  const inputMedia = await loadGenerationRecipeInputMedia({
-    adminSupabase,
-    generation,
-    post,
-  });
-  const workflowSettings = normalizeWorkflowSettings(generation.workflow_settings);
-  const paywallPrefill = buildGenerationPaywallPrefill({
-    category: generation.category ?? post.category,
-    model: generation.model,
-    prompt: generation.prompt ?? post.prompt,
-    workflowSettings,
-    inputMedia,
-  });
-
-  if (!paywallPrefill) {
-    return null;
-  }
-
-  const resources: PostResourceBundleResources = {
-    promptText: paywallPrefill.promptText,
-    notesMarkdown: paywallPrefill.notesMarkdown,
-    workflowShareUrl: null,
-    workflowSnapshot: null,
-    attachments: [],
-    allowRemix: paywallPrefill.allowRemix,
-    sections: [],
-    items: buildGenerationRecipeResourceItems({
-      promptText: paywallPrefill.promptText,
-      notesMarkdown: paywallPrefill.notesMarkdown,
-      allowRemix: paywallPrefill.allowRemix,
-      inputMedia,
-    }),
-  };
-  const lockedPreview = buildPostResourceBundleLockedPreview(resources, post.created_at);
-  if (lockedPreview.resourceKinds.length === 0) {
-    return null;
-  }
-
-  const profileMap = await loadProfileMap([post.user_id]);
-  const postMediaUrl = await resolvePostMediaUrl(adminSupabase, post);
-  const linkedPost: PostResourceBundleLinkedPost = {
-    id: post.id,
-    generationId: post.generation_id,
-    title: post.title?.trim() || deriveTitleFromBody(post.body) || (post.post_format === 'text' ? 'Untitled note' : 'Untitled creation'),
-    category: post.category,
-    body: post.body?.trim() || '',
-    postFormat: post.post_format,
-    visibility: post.visibility,
-    archivedAt: post.archived_at,
-    reviewStatus: post.review_status ?? 'visible',
-    sourceKind: normalizeShowcaseSourceKind(post.source_kind),
-    sourceTool: post.source_tool,
-    sourceToolSlug: post.source_tool_slug ?? slugifySourceTool(post.source_tool),
-    mediaUrl: postMediaUrl,
-    mediaPreviewUrl: null,
-    mediaKind: getPostMediaKind(post.category, post.post_format),
-    saveCount: post.save_count ?? 0,
-    remixCount: post.remix_count ?? 0,
-    shareVisitCount: post.share_visit_count ?? 0,
-  };
-  const remix = resolvePostRemixCapability({
-    generationId: linkedPost.generationId,
-    postFormat: linkedPost.postFormat,
-    category: linkedPost.category,
-    sourceKind: linkedPost.sourceKind,
-    resourceBundle: {
-      viewerCanAccess: true,
-      allowRemix: resources.allowRemix,
-      items: resources.items ?? [],
-    },
-  });
-  const copy = buildGenerationRecipeCopy(lockedPreview);
-
-  return {
-    id: `${GENERATION_RECIPE_ASSET_ID_PREFIX}${post.id}`,
-    postId: post.id,
-    legacyAssetId: null,
-    title: copy.title,
-    summary: copy.summary,
-    previewText: copy.previewText,
-    accessMode: 'free',
-    priceUsdCents: 0,
-    salesCount: 0,
-    earningsUsdCents: 0,
-    allowRemix: resources.allowRemix,
-    resourceKinds: lockedPreview.resourceKinds,
-    lockedPreview,
-    createdAt: post.created_at,
-    updatedAt: post.created_at,
-    seller: toSellerSummary(post.user_id, profileMap),
-    post: linkedPost,
-    priceQuote: await buildPriceQuote(0, params.countryCode),
-    remixCapability: remix.capability,
-    remixTarget: remix.target,
-    status: 'published',
-    resources,
-    viewerIsOwner: Boolean(params.viewerUserId && params.viewerUserId === post.user_id),
-    viewerHasPurchased: false,
-    viewerCanAccess: true,
-  };
-}
-
-export async function getPublicGenerationRecipeAssetSummaryMap(
-  posts: Array<{
-    id: string;
-    user_id: string | null;
-    generation_id: string | null;
-    prompt: string | null;
-    category: string | null;
-    source_kind: RawShowcaseSourceKind;
-  }>,
-  adminSupabase: SupabaseClient = createServiceClient(),
-  options?: {
-    knownBundlePostIds?: ReadonlySet<string>;
-  }
-): Promise<Map<string, ShowcaseAssetSummary>> {
-  const eligiblePosts = posts.filter((post) =>
-    post.user_id &&
-    post.generation_id &&
-    normalizeShowcaseSourceKind(post.source_kind) === MAGICBOOKLET_SOURCE_KIND
-  );
-  if (eligiblePosts.length === 0) {
-    return new Map();
-  }
-
-  let fallbackPosts: typeof eligiblePosts;
-  if (options?.knownBundlePostIds) {
-    fallbackPosts = eligiblePosts.filter((post) => !options.knownBundlePostIds?.has(post.id));
-  } else {
-    const eligiblePostIds = eligiblePosts.map((post) => post.id);
-    const { data: existingBundleRows, error: existingBundleError } = await adminSupabase
-      .from('post_resource_bundles')
-      .select('post_id')
-      .in('post_id', eligiblePostIds);
-    const bundledPostIds = new Set(
-      ((existingBundleRows ?? []) as Array<{ post_id?: string | null }>)
-        .map((row) => row.post_id)
-        .filter((postId): postId is string => Boolean(postId))
-    );
-
-    if (existingBundleError) {
-      if (isMissingPostResourceBundlesSchemaError(existingBundleError)) {
-        fallbackPosts = eligiblePosts;
-      } else {
-        // Bundle presence is the privacy boundary for synthetic recipes. If that
-        // boundary cannot be checked conclusively, do not infer that any post is
-        // bundle-free: an unpublished bundle may intentionally suppress a recipe.
-        console.error('Failed to check existing post resource bundles before recipe fallback:', existingBundleError);
-        return new Map();
-      }
-    } else {
-      fallbackPosts = eligiblePosts.filter((post) => !bundledPostIds.has(post.id));
-    }
-  }
-  if (fallbackPosts.length === 0) {
-    return new Map();
-  }
-
-  const generationIds = Array.from(new Set(fallbackPosts.map((post) => post.generation_id).filter(Boolean))) as string[];
-  const { data, error } = await adminSupabase
-    .from('generations')
-    .select('id, model, category, prompt, workflow_settings')
-    .in('id', generationIds);
-
-  if (error) {
-    console.error('Failed to load generation recipe summaries:', error);
-    return new Map();
-  }
-
-  const generationMap = new Map(
-    ((data ?? []) as GenerationRecipeRow[]).map((generation) => [generation.id, generation])
-  );
-  const postsByGenerationId = new Map(
-    fallbackPosts
-      .filter((post) => post.generation_id)
-      .map((post) => [post.generation_id as string, post])
-  );
-  const inputMediaMap = await loadGenerationRecipeInputMediaMap({
-    adminSupabase,
-    generations: Array.from(generationMap.values()),
-    postsByGenerationId,
-  });
-  const assetMap = new Map<string, ShowcaseAssetSummary>();
-
-  for (const post of fallbackPosts) {
-    if (!post.generation_id) {
-      continue;
-    }
-
-    const generation = generationMap.get(post.generation_id);
-    if (!generation) {
-      continue;
-    }
-
-    const inputMedia = inputMediaMap.get(post.generation_id) ?? [];
-    const paywallPrefill = buildGenerationPaywallPrefill({
-      category: generation.category ?? post.category,
-      model: generation.model,
-      prompt: generation.prompt ?? post.prompt,
-      workflowSettings: normalizeWorkflowSettings(generation.workflow_settings),
-      inputMedia,
-    });
-    if (!paywallPrefill) {
-      continue;
-    }
-
-    const resources: PostResourceBundleResources = {
-      promptText: paywallPrefill.promptText,
-      notesMarkdown: paywallPrefill.notesMarkdown,
-      workflowShareUrl: null,
-      workflowSnapshot: null,
-      attachments: [],
-      allowRemix: paywallPrefill.allowRemix,
-      sections: [],
-      items: buildGenerationRecipeResourceItems({
-        promptText: paywallPrefill.promptText,
-        notesMarkdown: paywallPrefill.notesMarkdown,
-        allowRemix: paywallPrefill.allowRemix,
-        inputMedia,
-      }),
-    };
-    const lockedPreview = buildPostResourceBundleLockedPreview(resources);
-    if (lockedPreview.resourceKinds.length === 0) {
-      continue;
-    }
-
-    const copy = buildGenerationRecipeCopy(lockedPreview);
-    assetMap.set(post.id, {
-      id: `${GENERATION_RECIPE_ASSET_ID_PREFIX}${post.id}`,
-      postId: post.id,
-      title: copy.title,
-      accessMode: 'free',
-      priceUsdCents: 0,
-      previewText: copy.previewText,
-      allowRemix: resources.allowRemix,
-      salesCount: 0,
-      resourceKinds: lockedPreview.resourceKinds,
-      itemCounts: lockedPreview.itemCounts,
-      lockedPreview,
-    });
-  }
-
-  return assetMap;
 }
 
 async function buildPriceQuote(
@@ -1379,7 +1041,7 @@ async function hydrateBundleRows(
         id: row.id,
         postId: row.post_id,
         legacyAssetId: row.legacy_asset_id,
-        title: row.title,
+        title: normalizeBundleDisplayTitle(row.title),
         summary: row.summary,
         previewText: row.preview_text,
         accessMode: row.access_mode,
@@ -1508,19 +1170,22 @@ export async function getMarketplaceQualityErrorForPostBundle(params: {
     return profileReadinessError;
   }
 
-  if (accessMode === 'none') {
-    return null;
-  }
-
   const postHasMedia = Boolean(
     params.post.hasMedia ||
     params.post.mediaUrl ||
     params.post.showcaseAssetPath ||
     params.post.outputUrl
   );
+  if (accessMode === 'none') {
+    return getPublicPostQualityError({
+      title: params.post.title,
+      body: params.post.body,
+      hasMedia: postHasMedia,
+    });
+  }
 
   return getMarketplaceQualityError({
-    title: params.post.title ?? 'Attached unlock',
+    title: params.post.title ?? 'Recipe',
     summary: params.bundle?.summary ?? null,
     previewText: params.bundle?.previewText ?? null,
     accessMode,
@@ -1643,7 +1308,7 @@ function canViewerAccessBundle(row: BundleRow, viewerUserId?: string | null, vie
   return (
     Boolean(viewerUserId && viewerUserId === row.owner_user_id) ||
     viewerHasPurchased ||
-    (row.access_mode === 'free' && row.status === 'published')
+    (row.status === 'published' && isGenerationRecipeAssetId(row.id))
   );
 }
 
@@ -1681,7 +1346,7 @@ export async function savePostResourceBundle(params: {
   }
 
   const status: PostResourceBundleStatus = postVisibility === 'public' ? 'published' : 'draft';
-  const normalizedTitle = normalizeText(postTitle) ?? 'Attached unlock';
+  const normalizedTitle = normalizeText(postTitle) ?? 'Recipe';
   const priceUsdCents = accessMode === 'free'
     ? 0
     : Math.max(100, Number.isFinite(bundle?.priceUsdCents) ? Math.round(bundle?.priceUsdCents ?? 0) : 0);
@@ -2123,12 +1788,7 @@ export async function getPostResourceBundleDetailByPostId(
 
   if (error) {
     if (isMissingPostResourceBundlesSchemaError(error)) {
-      return buildPublicGenerationRecipeBundleDetail({
-        postId,
-        viewerUserId,
-        countryCode,
-        adminSupabase,
-      });
+      return null;
     }
 
     console.error('Failed to load post resource bundle:', error);
@@ -2137,12 +1797,7 @@ export async function getPostResourceBundleDetailByPostId(
 
   const row = (data as BundleRow | null) ?? null;
   if (!row) {
-    return buildPublicGenerationRecipeBundleDetail({
-      postId,
-      viewerUserId,
-      countryCode,
-      adminSupabase,
-    });
+    return null;
   }
 
   if (!isBundlePublishedForMarketplace(row) && row.owner_user_id !== viewerUserId) {
@@ -2276,7 +1931,7 @@ export async function getSellerPostResourceBundleDashboard(
       return {
         id: row.id,
         bundleId: row.bundle_id,
-        bundleTitle: bundleIdToTitle.get(row.bundle_id) ?? 'Attached unlock',
+        bundleTitle: bundleIdToTitle.get(row.bundle_id) ?? 'Recipe',
         buyerUserId: row.buyer_user_id,
         buyerLabel,
         amountSubunits: row.amount_subunits,

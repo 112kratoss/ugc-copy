@@ -401,7 +401,7 @@ describe('PublishToShowcaseModal', () => {
     });
   });
 
-  it('includes saved generation references when publishing from the simple Studio modal', async () => {
+  it('keeps saved generation references private for media-only publishing', async () => {
     render(
       <PublishToShowcaseModal
         isOpen
@@ -438,14 +438,14 @@ describe('PublishToShowcaseModal', () => {
     expect(body).toMatchObject({
       generationId: 'gen-1',
       visibility: 'public',
-      includeGenerationReferences: true,
       resourceBundle: {
         accessMode: 'none',
       },
     });
+    expect(body).not.toHaveProperty('includeGenerationReferences');
   });
 
-  it('requires seller readiness when public references become a free unlock', async () => {
+  it('does not require a seller avatar for a media-only post with private references', async () => {
     vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => new Response(
       JSON.stringify(String(url) === '/api/profile'
         ? {
@@ -474,11 +474,12 @@ describe('PublishToShowcaseModal', () => {
       />
     );
 
-    expect(await screen.findByText(/seller profile needs attention/i)).toBeInTheDocument();
+    expect(await screen.findByText(/ready for public publishing/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/profile photo/i);
-    expect(vi.mocked(fetch).mock.calls.some(([url]) => url === '/api/showcase/publish')).toBe(false);
+    await waitFor(() => {
+      expect(vi.mocked(fetch).mock.calls.some(([url]) => url === '/api/showcase/publish')).toBe(true);
+    });
   });
 
   it('opens unlock management with the saved package selected', async () => {

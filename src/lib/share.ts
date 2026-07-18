@@ -77,7 +77,7 @@ function normalizeShowcaseReturnSource(value: string | null | undefined): Showca
     : null;
 }
 
-function getSafeInternalReturnPath(value: string | null | undefined, fallback: string): string {
+export function getSafeInternalReturnPath(value: string | null | undefined, fallback: string): string {
   const candidate = value?.trim();
 
   if (

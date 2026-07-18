@@ -361,7 +361,7 @@ describe('Showcase detail page', () => {
 
     const unlockSummary = screen.getByTestId('unlock-summary-link');
     expect(within(unlockSummary).getByText(/free recipe available/i)).toBeInTheDocument();
-    expect(within(unlockSummary).getByText(/unlock free recipe/i)).toBeInTheDocument();
+    expect(within(unlockSummary).getByText(/view free recipe/i)).toBeInTheDocument();
     expect(within(unlockSummary).queryByText(/view unlock details/i)).not.toBeInTheDocument();
     expect(
       screen.getByTestId('canonical-post-actions').compareDocumentPosition(

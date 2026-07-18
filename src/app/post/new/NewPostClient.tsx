@@ -23,9 +23,11 @@ import { useAuth } from '@/app/components/AuthProvider';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import {
   assessMarketplaceListingQuality,
+  getPublicPostQualityError,
   isCreatorProfileReadinessError,
 } from '@/lib/marketplace-trust';
-import { getCurrentInternalPath } from '@/lib/share';
+import { getCurrentInternalPath, getSafeInternalReturnPath } from '@/lib/share';
+import { trackProductEvent } from '@/lib/product-analytics';
 import {
   getPostResourceKindLabel,
   normalizePostResourceBundleAccessMode,
@@ -1054,9 +1056,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       detail: hasMediaProof ? 'Media is attached' : trimmedBody.length >= 24 ? 'Text proof is ready' : 'Add media or switch to text',
     },
     {
-      label: 'Story ready',
+      label: proofMode === 'text' ? 'Story ready' : 'Caption optional',
       complete: proofMode !== 'text' || trimmedBody.length > 0,
-      detail: trimmedBody ? (proofMode === 'text' ? 'Post body is included' : 'Caption is included') : 'Add a short visible post',
+      detail: trimmedBody
+        ? (proofMode === 'text' ? 'Post body is included' : 'Caption gives viewers context')
+        : (proofMode === 'text' ? 'Add a useful visible post' : 'Add context to help this media perform'),
     },
     {
       label: 'Recipe optional',
@@ -1737,6 +1741,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
   const completePublish = (nextPost: CreatedPostState, options: { redirect?: boolean } = {}) => {
     setCreatedPost(nextPost);
+    trackProductEvent(isEditMode ? 'post_update_success' : 'post_publish_success', {
+      visibility: nextPost.visibility,
+      recipe_access: nextPost.resourceAccessMode,
+      entry_surface: entrySurface ?? 'direct',
+    });
 
     if (options.redirect) {
       const nextPath = nextPost.showcasePath ?? nextPost.ownerPath;
@@ -1752,6 +1761,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     setCreatedPost(null);
 
     const effectiveVisibility = submitVisibilityRef.current;
+    trackProductEvent(isEditMode ? 'post_update_attempt' : 'post_publish_attempt', {
+      visibility: effectiveVisibility,
+      recipe_access: resourceAccessMode,
+      proof_mode: proofMode,
+      entry_surface: entrySurface ?? 'direct',
+    });
 
     if (!session?.access_token) {
       router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath('/post/new'))}`);
@@ -1781,6 +1796,18 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     if (bodyCount > BODY_MAX_LENGTH) {
       stopWithError(`Story posts are limited to ${BODY_MAX_LENGTH} characters.`, 'story');
       return;
+    }
+
+    if (effectiveVisibility === 'public') {
+      const publicPostQualityError = getPublicPostQualityError({
+        title: publicPostTitle,
+        body: trimmedBody,
+        hasMedia: hasMediaProof,
+      });
+      if (publicPostQualityError) {
+        stopWithError(publicPostQualityError, 'story');
+        return;
+      }
     }
 
     let resourceBundle: PostResourceBundleInput | undefined;
@@ -1980,6 +2007,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           : null,
       }, { redirect: true });
     } catch (submitError) {
+      trackProductEvent(isEditMode ? 'post_update_failed' : 'post_publish_failed', {
+        visibility: effectiveVisibility,
+        recipe_access: resourceAccessMode,
+        error_section: submitError instanceof ComposerSubmissionError ? submitError.section : 'publish',
+      });
       setError({
         section: submitError instanceof ComposerSubmissionError ? submitError.section : 'publish',
         message: submitError instanceof Error ? submitError.message : 'Failed to publish post.',
@@ -1999,8 +2031,29 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       ? 'View post'
       : 'Open editor';
   const isEditingUnlisted = isEditMode && displayVisibility === 'unlisted';
-  const backHref = isEditMode || entrySurface === 'creations' ? '/creations' : '/showcase';
-  const backLabel = isEditMode || entrySurface === 'creations' ? 'Back to studio' : 'Back to community';
+  const fallbackBackHref = isEditMode || entrySurface === 'creations'
+    ? '/creations?view=posts'
+    : entrySurface === 'profile'
+      ? '/profile?tab=posts'
+      : entrySurface === 'marketplace'
+        ? '/marketplace'
+        : entrySurface === 'seller'
+          ? '/marketplace/sell'
+          : entrySurface === 'home'
+            ? '/'
+            : '/showcase';
+  const backHref = getSafeInternalReturnPath(searchParams.get('returnTo'), fallbackBackHref);
+  const backLabel = isEditMode || entrySurface === 'creations'
+    ? 'Back to studio'
+    : entrySurface === 'profile'
+      ? 'Back to profile'
+      : entrySurface === 'marketplace'
+        ? 'Back to marketplace'
+        : entrySurface === 'seller'
+          ? 'Back to seller dashboard'
+          : entrySurface === 'home'
+            ? 'Back to home'
+            : 'Back to showcase';
 
   return (
     <div className="ui-page ui-page-ambient min-h-screen">
@@ -2720,6 +2773,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                                   type="button"
                                   onClick={() => {
                                     setResourceAccessMode(mode.value);
+                                    trackProductEvent('recipe_access_mode_selected', {
+                                      access_mode: mode.value,
+                                      entry_surface: entrySurface ?? 'direct',
+                                    });
                                     resetFeedback();
                                   }}
                                   className={`rounded-full px-4 py-1 text-xs font-semibold transition ${
@@ -2755,6 +2812,18 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                             </div>
                           </div>
                         ) : null}
+                      </div>
+
+                      <div className="rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-3 text-xs leading-5 text-zinc-400">
+                        {resourceAccessMode === 'paid' ? (
+                          <>
+                            Buyers see the full price before payment. Your sales appear in Seller Dashboard;
+                            payment processing may affect the final payout. Before purchase, only the recipe
+                            summary and included resource types are visible.
+                          </>
+                        ) : (
+                          <>People can add a free recipe to their library with one click.</>
+                        )}
                       </div>
 
                       {/* Resource Kind Selection */}

@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { SHOWCASE_PUBLIC_MEDIA_MINIMUM_CACHE_TTL_SECONDS } from "./src/lib/showcase-media-cache";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   ? new URL(process.env.NEXT_PUBLIC_SUPABASE_URL)
@@ -47,6 +48,7 @@ const nextConfig: NextConfig = {
     ],
   },
   images: {
+    minimumCacheTTL: SHOWCASE_PUBLIC_MEDIA_MINIMUM_CACHE_TTL_SECONDS,
     remotePatterns: supabaseUrl
       ? [
           {

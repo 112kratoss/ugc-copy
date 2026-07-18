@@ -7,7 +7,7 @@ import {
   getCatalogCreationSectionSummary,
   validateCatalogCreationDraft,
 } from '../lib/generation-model-draft';
-import { createDefaultCreationDraft } from '../lib/media-creation-view-model';
+import { createDefaultCreationDraft, createMediaDraftFromUpload } from '../lib/media-creation-view-model';
 import { createTestGenerationModelCatalog, remoteImageModel } from './fixtures/generation-model-catalog';
 
 describe('catalog-backed mobile creation drafts', () => {
@@ -122,5 +122,79 @@ describe('catalog-backed mobile creation drafts', () => {
     const catalog = createTestGenerationModelCatalog();
     expect(catalog.models.some((model) => model.id === 'retired-image')).toBe(false);
     expect(catalog.defaults.image).toBe('nano-banana-2');
+  });
+
+  it('includes Gemini prepared voice and character IDs in quotes and generation payloads', () => {
+    const baseVideoModel = createTestGenerationModelCatalog().models.find((model) => model.kind === 'video');
+    if (!baseVideoModel) throw new Error('Expected a video model fixture.');
+    const geminiModel = {
+      ...baseVideoModel,
+      id: 'gemini-omni-video',
+      displayName: 'Gemini Omni Video',
+      inputs: {
+        ...baseVideoModel.inputs,
+        imageReferences: { max: 7, supportsNaming: true },
+        videoReferences: { max: 1 },
+        audioReferences: null,
+        preparedAudioReferences: { max: 3 },
+        characterReferences: { max: 3 },
+        startFrame: false,
+        endFrame: false,
+      },
+    };
+    const draft = {
+      ...createDefaultCreationDraft('video'),
+      model: 'gemini-omni-video' as const,
+      prompt: 'Keep the prepared voice and character consistent.',
+      referenceMode: 'elements' as const,
+      preparedAudioIds: ['voice-prepared-1'],
+      characterIds: ['character-prepared-1'],
+    };
+
+    expect(buildCatalogQuoteRequest(draft, geminiModel, 'revision-1')).toMatchObject({
+      inputCounts: { preparedAudios: 1, characters: 1 },
+    });
+    expect(buildCatalogGenerationPayload(draft, geminiModel, 'revision-1')).toMatchObject({
+      preparedAudioIds: ['voice-prepared-1'],
+      characterIds: ['character-prepared-1'],
+    });
+  });
+
+  it('keeps Wan first-frame guidance alongside reusable references', () => {
+    const baseVideoModel = createTestGenerationModelCatalog().models.find((model) => model.kind === 'video');
+    if (!baseVideoModel) throw new Error('Expected a video model fixture.');
+    const wanModel = {
+      ...baseVideoModel,
+      id: 'wan-2.7',
+      displayName: 'Wan 2.7',
+      inputs: {
+        ...baseVideoModel.inputs,
+        imageReferences: { max: 5, supportsNaming: true },
+        videoReferences: { max: 3 },
+        audioReferences: { max: 1 },
+        combineFramesWithReferences: true,
+        endFrame: false,
+      },
+    };
+    const startFrame = createMediaDraftFromUpload({
+      signedUrl: 'https://cdn.example.com/first-frame.jpg',
+      storagePath: 'uploads/user/first-frame.jpg',
+      mimeType: 'image/jpeg',
+      fileName: 'first-frame.jpg',
+      kind: 'image',
+    }, { displayName: 'First frame' });
+    const draft = {
+      ...createDefaultCreationDraft('video'),
+      model: 'wan-2.7' as const,
+      prompt: 'Keep the product consistent from this opening frame.',
+      referenceMode: 'elements' as const,
+      startFrame,
+    };
+
+    expect(buildCatalogGenerationPayload(draft, wanModel, 'revision-1')).toMatchObject({
+      referenceMode: 'elements',
+      startImageUrl: 'https://cdn.example.com/first-frame.jpg',
+      startFrame: { storagePath: 'uploads/user/first-frame.jpg' },
+    });
   });
 });

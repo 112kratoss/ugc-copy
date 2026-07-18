@@ -204,6 +204,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
       priceUsdCents={bundle.priceUsdCents}
       priceNote={bundle.priceQuote.note}
       isFree={bundle.accessMode === 'free'}
+      isPublic={isPublicRecipeBundle}
       viewerCanAccess={bundle.viewerCanAccess}
       viewerIsOwner={bundle.viewerIsOwner}
       resourceKinds={bundle.resourceKinds}
@@ -373,25 +374,17 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
                     </span>
                   </div>
                   <div className="mt-3 text-lg font-semibold tracking-tight">
-                    {bundle.accessMode === 'free'
-                      ? isPublicRecipeBundle ? 'Creation recipe available' : 'Free recipe available'
+                    {isPublicRecipeBundle
+                      ? 'Public recipe available'
+                      : bundle.accessMode === 'free'
+                      ? 'Free recipe available'
                       : `${bundle.priceQuote.formatted} recipe available`}
                   </div>
                   <p className="mt-2 text-sm leading-6 text-emerald-50/80">
-                    {previewKindSummary} included. The public post stays visible; reusable parts open after verified access.
+                    Includes {previewKindSummary}.
                   </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {previewKinds.map((kind) => (
-                      <span
-                        key={kind}
-                        className="rounded-full border border-emerald-300/20 bg-black/25 px-2.5 py-1 text-xs font-medium text-emerald-50"
-                      >
-                        {getPostResourceKindLabel(kind)}
-                      </span>
-                    ))}
-                  </div>
                   <div className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950">
-                    {isPublicRecipeBundle ? 'View recipe' : bundle.accessMode === 'free' ? 'Unlock free recipe' : `Unlock for ${bundle.priceQuote.formatted}`}
+                    {isPublicRecipeBundle ? 'View recipe' : bundle.accessMode === 'free' ? 'View free recipe' : `Unlock recipe for ${bundle.priceQuote.formatted}`}
                     <ShoppingBag className="h-4 w-4" />
                   </div>
                 </Link>
@@ -476,7 +469,7 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
         >
           <span>
             <span className="block text-sm font-bold">
-              {isPublicRecipeBundle ? 'View recipe' : bundle.accessMode === 'free' ? 'Unlock free recipe' : `Unlock for ${bundle.priceQuote.formatted}`}
+              {isPublicRecipeBundle ? 'View recipe' : bundle.accessMode === 'free' ? 'View free recipe' : `Unlock recipe for ${bundle.priceQuote.formatted}`}
             </span>
             <span className="block text-xs font-medium text-slate-800">{previewKindSummary}</span>
           </span>

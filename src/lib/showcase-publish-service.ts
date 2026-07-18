@@ -1,6 +1,7 @@
 import 'server-only';
 
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
@@ -9,7 +10,6 @@ import {
 } from '@/lib/durable-generation-media';
 import { isAudioModel } from '@/lib/models';
 import {
-  buildFreeGenerationReferenceBundle,
   buildGenerationReferenceResourceItems,
   getMarketplaceQualityErrorForPostBundle,
   mergeGenerationReferenceItemsIntoBundle,
@@ -39,6 +39,7 @@ import {
 } from '@/lib/marketplace-trust';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
 
 type ShowcaseCategory = Exclude<ShowcaseItemCategory, 'text'>;
 
@@ -47,6 +48,11 @@ const MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR =
   'Posts are working, but atomic unlock publishing is not enabled on the connected Supabase project yet. Apply the post resource bundle migrations, including 20260508120000_post_system_marketplace_reliability.sql, and try again.';
 const GENERATION_SELECT_WITH_SHOWCASE_ASSET = 'id, user_id, status, model, category, creation_mode, output_url, showcase_asset_path, title, description, prompt';
 const GENERATION_SELECT_WITHOUT_SHOWCASE_ASSET = 'id, user_id, status, model, category, output_url, title, description, prompt';
+
+function isExistingStorageObjectError(error: { message?: string; statusCode?: string } | null) {
+  return error?.statusCode === '409'
+    || /already exists|duplicate/i.test(error?.message ?? '');
+}
 
 type GenerationRow = {
   id: string;
@@ -84,7 +90,6 @@ export type ShowcasePublishServiceDependencies = {
   openAllowlistedRemoteMedia: typeof openAllowlistedRemoteMedia;
   getStoredMediaLocation: typeof getStoredMediaLocation;
   buildGenerationReferenceResourceItems: typeof buildGenerationReferenceResourceItems;
-  buildFreeGenerationReferenceBundle: typeof buildFreeGenerationReferenceBundle;
   mergeGenerationReferenceItemsIntoBundle: typeof mergeGenerationReferenceItemsIntoBundle;
   validatePostResourceBundleInput: typeof validatePostResourceBundleInput;
   getMarketplaceQualityErrorForPostBundle: typeof getMarketplaceQualityErrorForPostBundle;
@@ -132,8 +137,6 @@ function resolveDependencies(
     getStoredMediaLocation: dependencies?.getStoredMediaLocation ?? getStoredMediaLocation,
     buildGenerationReferenceResourceItems:
       dependencies?.buildGenerationReferenceResourceItems ?? buildGenerationReferenceResourceItems,
-    buildFreeGenerationReferenceBundle:
-      dependencies?.buildFreeGenerationReferenceBundle ?? buildFreeGenerationReferenceBundle,
     mergeGenerationReferenceItemsIntoBundle:
       dependencies?.mergeGenerationReferenceItemsIntoBundle ?? mergeGenerationReferenceItemsIntoBundle,
     validatePostResourceBundleInput: dependencies?.validatePostResourceBundleInput ?? validatePostResourceBundleInput,
@@ -268,17 +271,18 @@ async function createShowcaseDerivative({
   }
 
   const baseName = path.basename(sourceName, path.extname(sourceName)) || generationId;
-  const showcaseAssetPath = `showcase/${generationId}/${baseName}.${inferExtension(sourceName, category)}`;
+  const sourceVersion = createHash('sha256').update(outputUrl).digest('hex').slice(0, 12);
+  const showcaseAssetPath = `showcase/${generationId}/${baseName}.${sourceVersion}.${inferExtension(sourceName, category)}`;
 
   const { error: uploadError } = await adminSupabase.storage
     .from(SHOWCASE_MEDIA_BUCKET)
     .upload(showcaseAssetPath, fileBody, {
-      cacheControl: '3600',
+      cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
       contentType: contentType || inferShowcaseContentType(sourceName, category),
-      upsert: true,
+      upsert: false,
     });
 
-  if (uploadError) {
+  if (uploadError && !isExistingStorageObjectError(uploadError)) {
     throw new Error(`Failed to upload showcase derivative: ${uploadError.message}`);
   }
 
@@ -454,7 +458,7 @@ export async function publishGenerationToShowcaseForRoute({
 
   if (
     shouldIncludeGenerationReferences &&
-    (requestedAccessMode !== 'none' || effectiveVisibility === 'public')
+    requestedAccessMode !== 'none'
   ) {
     const referenceItems = await resolvedDependencies.buildGenerationReferenceResourceItems({
       supabase: adminSupabase,
@@ -463,12 +467,7 @@ export async function publishGenerationToShowcaseForRoute({
     });
 
     if (referenceItems.length > 0) {
-      if (requestedAccessMode === 'none') {
-        if (effectiveVisibility === 'public') {
-          effectiveResourceBundle = resolvedDependencies.buildFreeGenerationReferenceBundle(referenceItems);
-          effectiveHasResourceBundlePayload = true;
-        }
-      } else if (effectiveResourceBundle) {
+      if (effectiveResourceBundle) {
         effectiveResourceBundle = resolvedDependencies.mergeGenerationReferenceItemsIntoBundle(
           effectiveResourceBundle,
           referenceItems,

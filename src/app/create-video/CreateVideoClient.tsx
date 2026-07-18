@@ -150,6 +150,8 @@ interface VideoWorkflowSettings {
     endFrame?: RemixMediaAssetDescriptor;
     referenceVideoUrls?: string[];
     referenceAudioUrls?: string[];
+    preparedAudioIds?: string[];
+    characterIds?: string[];
     klingVideoElements?: KlingVideoElementDescriptor[];
     seedanceAssets?: SeedanceAssetCollections;
 }
@@ -424,6 +426,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [elements, setElements] = useState<VideoElementDraft[]>([]);
     const [referenceVideos, setReferenceVideos] = useState<SeedanceMediaReferenceDraft[]>([]);
     const [referenceAudios, setReferenceAudios] = useState<SeedanceMediaReferenceDraft[]>([]);
+    const [preparedAudioIds, setPreparedAudioIds] = useState<string[]>([]);
+    const [characterIds, setCharacterIds] = useState<string[]>([]);
+    const [preparedAudioIdDraft, setPreparedAudioIdDraft] = useState('');
+    const [characterIdDraft, setCharacterIdDraft] = useState('');
     const [klingVideoElements, setKlingVideoElements] = useState<KlingVideoElementDraft[]>([]);
     const [referenceMode, setReferenceMode] = useState<'frames' | 'elements'>('frames');
     const [elementNameDrafts, setElementNameDrafts] = useState<Record<string, string>>({});
@@ -530,6 +536,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     }, [modelCatalog.catalog, selectedModel, videoModel, prefillModel, remixId]);
     const isSeedance2Family = isSeedance2VideoModelId(selectedModel);
     const isKlingVideoModel = selectedModel === 'kling-3.0-video';
+    const isWanVideoModel = selectedModel === 'wan-2.7';
+    const isGeminiOmniVideoModel = selectedModel === 'gemini-omni-video';
+    const supportsMultimodalReferences = isSeedance2Family || isWanVideoModel || isGeminiOmniVideoModel;
+    const supportsReferenceAudio = isSeedance2Family || isWanVideoModel;
     const commitElements = (nextElements: VideoElementDraft[]) => {
         elementsRef.current = nextElements;
         setElements(nextElements);
@@ -666,15 +676,20 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         isMultiShot: currentIsMultiShot,
     });
     const canUseVideoElements = videoElementSupport.enabled;
-    const activeReferenceMode = isSeedance2Family ? 'elements' : (canUseVideoElements ? referenceMode : 'frames');
+    const activeReferenceMode = canUseVideoElements ? (isGeminiOmniVideoModel ? 'elements' : referenceMode) : 'frames';
+    const combinesFrameWithReferences = isWanVideoModel && activeReferenceMode === 'elements';
+    const supportsEndFrame = !['grok-imagine-video', 'kling-3.0-turbo', 'hailuo-2.3', 'happyhorse-1.1', 'gemini-omni-video'].includes(selectedModel);
+    const activeSupportsEndFrame = supportsEndFrame && !combinesFrameWithReferences;
+    const referenceVideoLimit = isGeminiOmniVideoModel ? 1 : isWanVideoModel ? 5 : 3;
+    const referenceAudioLimit = supportsReferenceAudio ? (isWanVideoModel ? 1 : 3) : 0;
     const totalDuration = currentIsMultiShot
         ? multiPrompts.reduce((acc, curr) => acc + curr.duration, 0)
         : (selectedModel === 'veo-3.1' ? videoModel.durations[0] : currentDuration);
-    const hasReferenceVideoForRun = referenceVideos.length > 0 || (isKlingVideoModel && klingVideoElements.length > 0);
-    const frameReferenceCount = Number(Boolean(startImageUrl || startImageFile)) + (isGrokVideoModel ? 0 : Number(Boolean(endImageUrl || endImageFile)));
+    const hasReferenceVideoForRun = (activeReferenceMode === 'elements' && referenceVideos.length > 0) || (isKlingVideoModel && klingVideoElements.length > 0);
+    const frameReferenceCount = Number(Boolean(startImageUrl || startImageFile)) + (activeSupportsEndFrame ? Number(Boolean(endImageUrl || endImageFile)) : 0);
     const estimatedReferenceCount =
         activeReferenceMode === 'elements'
-            ? elements.length + referenceVideos.length + referenceAudios.length
+            ? elements.length + referenceVideos.length + referenceAudios.length + preparedAudioIds.length + characterIds.length + (combinesFrameWithReferences && (startImageUrl || startImageFile) ? 1 : 0)
             : frameReferenceCount + (isKlingVideoModel ? klingVideoElements.length : 0);
     const quoteRequest = useMemo(() => modelCatalog.catalog ? {
         kind: 'video' as const,
@@ -687,14 +702,17 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             resolution: currentResolution,
             fixedLens: currentFixedLens,
             isMultiShot: currentIsMultiShot,
+            referenceMode: activeReferenceMode,
         },
         inputCounts: {
-            images: elements.length + frameReferenceCount,
-            videos: referenceVideos.length + klingVideoElements.length,
-            audios: referenceAudios.length,
+            images: activeReferenceMode === 'elements' ? elements.length : frameReferenceCount,
+            videos: (activeReferenceMode === 'elements' ? referenceVideos.length : 0) + klingVideoElements.length,
+            audios: activeReferenceMode === 'elements' ? referenceAudios.length : 0,
+            preparedAudios: isGeminiOmniVideoModel ? preparedAudioIds.length : 0,
+            characters: isGeminiOmniVideoModel ? characterIds.length : 0,
         },
         catalogRevision: modelCatalog.catalog.revision,
-    } : null, [currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, elements.length, frameReferenceCount, klingVideoElements.length, modelCatalog.catalog, referenceAudios.length, referenceVideos.length, selectedModel, totalDuration]);
+    } : null, [activeReferenceMode, characterIds.length, currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, elements.length, frameReferenceCount, isGeminiOmniVideoModel, klingVideoElements.length, modelCatalog.catalog, preparedAudioIds.length, referenceAudios.length, referenceVideos.length, selectedModel, totalDuration]);
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED') return;
@@ -777,12 +795,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         : [];
     const showKlingVideoElementEditor = isKlingVideoModel;
     const showElementEditor = !currentIsMultiShot && canUseVideoElements && activeReferenceMode === 'elements';
-    const showFramesEditor = !isSeedance2Family && activeReferenceMode === 'frames';
+    const showFramesEditor = activeReferenceMode === 'frames' || combinesFrameWithReferences;
     const hiddenElementDraftCount = activeReferenceMode === 'frames' ? elements.length : 0;
-    const hiddenFrameDraftCount = activeReferenceMode === 'elements'
+    const hiddenFrameDraftCount = activeReferenceMode === 'elements' && !combinesFrameWithReferences
         ? [startImageUrl, endImageUrl].filter(Boolean).length
         : 0;
-    const showSavedElementNotice = !isSeedance2Family && !canUseVideoElements && !currentIsMultiShot && (elements.length > 0 || referenceMode === 'elements');
+    const showSavedElementNotice = !canUseVideoElements && !currentIsMultiShot && (elements.length > 0 || referenceMode === 'elements');
     const showMultiShotElementNotice = currentIsMultiShot && (elements.length > 0 || referenceMode === 'elements' || (hasKnownElementMentions && !hasKnownKlingVideoMentions));
     const buildSinglePromptQualityContext = () => ({
         modelId: selectedModel,
@@ -794,8 +812,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         resolution: currentResolution,
         isMultiShot: currentIsMultiShot,
         shotCount: multiPrompts.length,
-        hasStartImage: !isSeedance2Family && activeReferenceMode === 'frames' && Boolean(startImageFile || startImageUrl),
-        hasEndImage: !isSeedance2Family && activeReferenceMode === 'frames' && Boolean(endImageFile || endImageUrl),
+        hasStartImage: (activeReferenceMode === 'frames' || combinesFrameWithReferences) && Boolean(startImageFile || startImageUrl),
+        hasEndImage: activeReferenceMode === 'frames' && activeSupportsEndFrame && Boolean(endImageFile || endImageUrl),
         referenceImageCount: activeReferenceMode === 'elements' ? elements.length : 0,
         hasReferenceVideo: hasReferenceVideoForRun,
         elementReferences: activeReferenceMode === 'elements' || klingVideoElements.length > 0
@@ -984,6 +1002,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 if (settings?.referenceMode === 'frames' || settings?.referenceMode === 'elements') {
                     setReferenceMode(settings.referenceMode);
                 }
+                setPreparedAudioIds(settings?.preparedAudioIds?.filter((value) => typeof value === 'string' && value.trim()).slice(0, 3) ?? []);
+                setCharacterIds(settings?.characterIds?.filter((value) => typeof value === 'string' && value.trim()).slice(0, 3) ?? []);
                 setMode(nextMode);
 
                 const restoredVideoInputs = bundle.inputs.video;
@@ -1404,7 +1424,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         const validFiles = Array.from(files).filter((file) => file.type.startsWith('video/'));
         if (validFiles.length === 0) return;
 
-        const availableSlots = Math.max(0, 3 - referenceVideosRef.current.length);
+        const availableSlots = Math.max(0, referenceVideoLimit - referenceVideosRef.current.length);
         const filesToAdd = validFiles.slice(0, availableSlots);
         if (filesToAdd.length === 0) return;
 
@@ -1465,7 +1485,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         const validFiles = Array.from(files).filter((file) => file.type.startsWith('audio/'));
         if (validFiles.length === 0) return;
 
-        const availableSlots = Math.max(0, 3 - referenceAudiosRef.current.length);
+        const availableSlots = Math.max(0, referenceAudioLimit - referenceAudiosRef.current.length);
         const filesToAdd = validFiles.slice(0, availableSlots);
         if (filesToAdd.length === 0) return;
 
@@ -1589,6 +1609,31 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         commitReferenceAudios(nextReferences);
         await persistReferenceAudios(nextReferences);
         await persistSeedanceAssets(elementsRef.current, referenceVideosRef.current, nextReferences);
+    };
+
+    const addPreparedReferenceId = (kind: 'audio' | 'character') => {
+        const draft = (kind === 'audio' ? preparedAudioIdDraft : characterIdDraft).trim();
+        if (!draft || !/^[A-Za-z0-9._:-]{3,256}$/.test(draft)) {
+            setError(`Enter a valid prepared ${kind === 'audio' ? 'voice' : 'character'} ID.`);
+            return;
+        }
+        const current = kind === 'audio' ? preparedAudioIds : characterIds;
+        if (current.includes(draft)) {
+            setError('That prepared reference is already added.');
+            return;
+        }
+        if (current.length >= 3) {
+            setError(`Gemini Omni supports up to 3 prepared ${kind === 'audio' ? 'voice' : 'character'} references.`);
+            return;
+        }
+        if (kind === 'audio') {
+            setPreparedAudioIds([...current, draft]);
+            setPreparedAudioIdDraft('');
+        } else {
+            setCharacterIds([...current, draft]);
+            setCharacterIdDraft('');
+        }
+        setError(null);
     };
 
     const handleElementRename = async (elementId: string, nextDisplayName: string) => {
@@ -2112,58 +2157,6 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         throw new Error(BACKGROUND_PROCESSING_ERROR);
     };
 
-    const migrateFramesToSeedanceReferences = async () => {
-        const nextSeeds: VideoElementSeed[] = [];
-
-        if (startImageUrl) {
-            nextSeeds.push({
-                displayName: 'Image reference 1',
-                file: startImageFile,
-                previewUrl: startImageUrl,
-                providerUrl: startImageFile ? null : startImageUrl,
-                storagePath: startFrameDescriptor?.storagePath ?? null,
-                source: startImageFile ? 'upload' : 'remix',
-                sourceGenerationId: startFrameDescriptor?.sourceGenerationId ?? null,
-            });
-        }
-
-        if (endImageUrl) {
-            nextSeeds.push({
-                displayName: `Image reference ${nextSeeds.length + 1}`,
-                file: endImageFile,
-                previewUrl: endImageUrl,
-                providerUrl: endImageFile ? null : endImageUrl,
-                storagePath: endFrameDescriptor?.storagePath ?? null,
-                source: endImageFile ? 'upload' : 'remix',
-                sourceGenerationId: endFrameDescriptor?.sourceGenerationId ?? null,
-            });
-        }
-
-        if (nextSeeds.length === 0) {
-            return;
-        }
-
-        const nextElements = hydrateVideoElements([...elementsRef.current, ...nextSeeds]);
-        commitElements(nextElements);
-        await persistVideoElements(nextElements);
-        await persistSeedanceAssets(nextElements, referenceVideosRef.current, referenceAudiosRef.current);
-
-        revokeObjectUrl(startImageUrl);
-        revokeObjectUrl(endImageUrl);
-        setStartImageFile(null);
-        setStartImageUrl(null);
-        setStartFrameDescriptor(null);
-        setEndImageFile(null);
-        setEndImageUrl(null);
-        setEndFrameDescriptor(null);
-        if (!remixId) {
-            await Promise.all([
-                removePersistedMedia(PERSISTED_MEDIA_KEYS.createVideoStartImage),
-                removePersistedMedia(PERSISTED_MEDIA_KEYS.createVideoEndImage),
-            ]);
-        }
-    };
-
     const handleSelectModel = (modelId: VideoModelId) => {
         const nextModel = VIDEO_MODELS[modelId];
 
@@ -2182,15 +2175,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             setIsMultiShot(false);
         }
 
-        if (modelId === 'grok-imagine-video' && endImageUrl) {
+        if (['grok-imagine-video', 'kling-3.0-turbo', 'hailuo-2.3', 'happyhorse-1.1', 'gemini-omni-video'].includes(modelId) && endImageUrl) {
             void clearImage('end');
-        }
-
-        if (isSeedance2VideoModelId(modelId)) {
-            void setReferenceModeWithPersistence('elements');
-            if (startImageUrl || endImageUrl) {
-                void migrateFramesToSeedanceReferences();
-            }
         }
     };
 
@@ -2274,12 +2260,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         }
 
         if (!currentIsMultiShot && hasInactiveElementMentions) {
-            setError(videoElementSupport.reason || 'Named elements are not available in this video mode.');
+            setError(videoElementSupport.reason || 'Reusable references are not available in this video mode.');
             return;
         }
 
         if (!currentIsMultiShot && activeReferenceMode !== 'elements' && hasKnownElementMentions) {
-            setError('Switch the reference mode to Elements to use @mentions in the video prompt.');
+            setError('Switch to Reusable references to use @mentions in the video prompt.');
             return;
         }
 
@@ -2288,8 +2274,40 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return;
         }
 
-        if (isSeedance2Family && referenceVideos.length > 3) {
-            setError('Seedance 2 supports up to 3 reference videos per run.');
+        if (supportsMultimodalReferences && activeReferenceMode === 'elements' && referenceVideos.length > referenceVideoLimit) {
+            setError(`${videoModel.displayName} supports up to ${referenceVideoLimit} reference videos per run.`);
+            return;
+        }
+
+        if (supportsMultimodalReferences && activeReferenceMode === 'elements' && referenceAudios.length > referenceAudioLimit) {
+            setError(`${videoModel.displayName} supports up to ${referenceAudioLimit} reference audio file${referenceAudioLimit === 1 ? '' : 's'} per run.`);
+            return;
+        }
+
+        if (isWanVideoModel && activeReferenceMode === 'elements' && elements.length + referenceVideos.length + referenceAudios.length > 5) {
+            setError('Wan 2.7 supports up to 5 reusable image, video, and audio references in total.');
+            return;
+        }
+
+        if (isGeminiOmniVideoModel && activeReferenceMode === 'elements' && elements.length + (referenceVideos.length * 2) > 7) {
+            setError('Gemini Omni supports seven reference slots; a video uses two slots.');
+            return;
+        }
+        if (isGeminiOmniVideoModel && preparedAudioIds.length > 3) {
+            setError('Gemini Omni supports up to 3 prepared voice references.');
+            return;
+        }
+        if (isGeminiOmniVideoModel && characterIds.length > 3) {
+            setError('Gemini Omni supports up to 3 prepared character references.');
+            return;
+        }
+        if (isGeminiOmniVideoModel && activeReferenceMode === 'elements' && elements.length + (referenceVideos.length * 2) + characterIds.length > 7) {
+            setError('Gemini Omni supports seven reference slots; videos use two and characters use one.');
+            return;
+        }
+
+        if (selectedModel === 'hailuo-2.3' && !startImageFile && !startImageUrl) {
+            setError('Hailuo 2.3 needs a start image to animate.');
             return;
         }
 
@@ -2366,8 +2384,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         }));
 
         try {
-            let startUrl: string | null = activeReferenceMode === 'frames' ? startImageUrl : null;
-            let endUrl: string | null = activeReferenceMode === 'frames' ? endImageUrl : null;
+            let startUrl: string | null = activeReferenceMode === 'frames' || combinesFrameWithReferences ? startImageUrl : null;
+            let endUrl: string | null = activeReferenceMode === 'frames' && activeSupportsEndFrame ? endImageUrl : null;
             let nextStartFrameDescriptor = startFrameDescriptor;
             let nextEndFrameDescriptor = endFrameDescriptor;
             const requestElements: ImageElementDescriptor[] = [];
@@ -2427,7 +2445,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 nextSeedanceAssets.images = uploadedElements.map((item) => item.asset);
             }
 
-            if (isSeedance2Family && referenceVideos.length > 0) {
+            if (supportsMultimodalReferences && activeReferenceMode === 'elements' && referenceVideos.length > 0) {
                 setGenerationTiming(createLocalGenerationTiming({
                     kind: 'video',
                     phaseLabel: referenceVideos.length === 1 ? 'Uploading 1 reference video' : `Uploading ${referenceVideos.length} reference videos`,
@@ -2457,7 +2475,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 nextSeedanceAssets.videos = uploadedReferences.map((item) => item.asset);
             }
 
-            if (isSeedance2Family && referenceAudios.length > 0) {
+            if (supportsReferenceAudio && activeReferenceMode === 'elements' && referenceAudios.length > 0) {
                 setGenerationTiming(createLocalGenerationTiming({
                     kind: 'video',
                     phaseLabel: referenceAudios.length === 1 ? 'Uploading 1 reference audio clip' : `Uploading ${referenceAudios.length} reference audio clips`,
@@ -2520,7 +2538,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 })));
             }
 
-            if (activeReferenceMode === 'frames' && startImageFile) {
+            if ((activeReferenceMode === 'frames' || combinesFrameWithReferences) && startImageFile) {
                 setGenerationTiming(createLocalGenerationTiming({
                     kind: 'video',
                     phaseLabel: 'Uploading start frame',
@@ -2537,7 +2555,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 };
             }
 
-            if (activeReferenceMode === 'frames' && endImageFile && !isMultiShot) {
+            if (activeReferenceMode === 'frames' && activeSupportsEndFrame && endImageFile && !isMultiShot) {
                 setGenerationTiming(createLocalGenerationTiming({
                     kind: 'video',
                     phaseLabel: 'Uploading end frame',
@@ -2577,6 +2595,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 elementImageUrls,
                 referenceVideoUrls: requestReferenceVideoUrls,
                 referenceAudioUrls: requestReferenceAudioUrls,
+                preparedAudioIds: isGeminiOmniVideoModel ? preparedAudioIds : [],
+                characterIds: isGeminiOmniVideoModel ? characterIds : [],
                 klingVideoElements: requestKlingVideoElements,
                 startImageUrl: startUrl,
                 endImageUrl: endUrl,
@@ -2586,7 +2606,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 resolution: currentResolution,
                 fixedLens: currentFixedLens,
                 referenceMode: activeReferenceMode,
-                startFrame: activeReferenceMode === 'frames' ? nextStartFrameDescriptor : undefined,
+                startFrame: activeReferenceMode === 'frames' || combinesFrameWithReferences ? nextStartFrameDescriptor : undefined,
                 endFrame: activeReferenceMode === 'frames' ? nextEndFrameDescriptor : undefined,
                 seedanceAssets: isSeedance2Family ? nextSeedanceAssets : undefined,
                 sourceGenerationId: remixId || undefined,
@@ -2663,10 +2683,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             ? 'Track the active run here while the model handles timing, frames, and render.'
             : isBackgroundProcessing
                 ? backgroundProcessingCopy.description
-            : isSeedance2Family
-                ? 'The workspace will show the current run and latest result once your Seedance references are ready to render.'
             : activeReferenceMode === 'elements'
-                ? 'The workspace will show the current run and latest result once your named-element scene starts rendering.'
+                ? isSeedance2Family
+                    ? 'The workspace will show the current run and latest result once your Seedance references are ready to render.'
+                    : 'The workspace will show the current run and latest result once your reusable-reference scene starts rendering.'
                 : 'The workspace will show the current run and latest result once you generate.';
     const primarySharePrompt = publishedMeta?.description
         || prompt.trim()
@@ -2841,7 +2861,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         selectedModel={selectedModel}
                                         helperText={
                                             activeReferenceMode === 'elements' && elements.length > 0
-                                                ? 'Named elements keep their @handles. This enhances the scene while preserving those references.'
+                                                ? 'Reusable references keep their @handles. This enhances the scene while preserving those identities.'
                                                 : undefined
                                         }
                                         context={buildSinglePromptQualityContext()}
@@ -2849,11 +2869,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         showWarnings={false}
                                     />
                                     <PromptQualityWarnings warnings={promptQualityWarnings} />
-	                                    {(canUseVideoElements || elements.length > 0 || promptMentionCandidates.length > 0) && (
+	                                    {((activeReferenceMode === 'elements' && (canUseVideoElements || elements.length > 0)) || (isKlingVideoModel && promptMentionCandidates.length > 0)) && (
 	                                        <div className="mb-4 mt-4 space-y-3">
 	                                            <div className="flex items-center justify-between gap-3">
 	                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-	                                                    {isKlingVideoModel ? 'Prompt references' : isSeedance2Family ? 'Image references' : 'Named elements'}
+	                                                    {isKlingVideoModel ? 'Prompt references' : 'Reusable image references'}
 	                                                </p>
 	                                                <span className="text-xs text-zinc-500">
 	                                                    Type <span className="font-semibold text-zinc-300">@</span> to reference them in the prompt.
@@ -2875,9 +2895,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                                </div>
                                             ) : (
                                                 <p className="text-sm text-zinc-500">
-                                                    {isSeedance2Family
-                                                        ? 'Upload reference images below to anchor characters, products, or scenes directly in the prompt.'
-                                                        : 'Upload element images below to mention people, products, or objects directly in the prompt.'}
+                                                    Upload reference images below to anchor characters, products, or scenes directly in the prompt.
                                                 </p>
                                             )}
                                         </div>
@@ -2900,7 +2918,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             </span>
 	                                        ) : activeReferenceMode !== 'elements' && hasKnownElementMentions ? (
 	                                            <span className="text-right text-amber-300">
-	                                                Switch reference mode to Elements to use {knownElementMentions.join(', ')}.
+	                                                Switch to Reusable references to use {knownElementMentions.join(', ')}.
 	                                            </span>
                                         ) : null}
                                     </div>
@@ -3096,7 +3114,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             )}
                         </AnimatePresence>
 
-                        {!currentIsMultiShot && canUseVideoElements && !isSeedance2Family && (
+                        {!currentIsMultiShot && canUseVideoElements && !isGeminiOmniVideoModel && (
                             <motion.div
                                 initial={{ opacity: 0, y: 16 }}
                                 animate={{ opacity: 1, y: 0 }}
@@ -3106,11 +3124,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     <div>
                                         <h2 className="text-sm font-semibold text-white">Reference mode</h2>
                                         <p className="mt-1 text-sm text-zinc-400">
-                                            Use frames for continuity beats, or switch to named elements for reusable characters and products.
+                                            Choose whether media controls the opening and ending composition, or stays reusable throughout the scene.
                                         </p>
                                     </div>
                                     <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
-                                        {videoElementSupport.maxElements} elements max
+                                        {videoElementSupport.maxElements} references max
                                     </span>
                                 </div>
                                 <div className="mt-4 grid gap-2 sm:grid-cols-2">
@@ -3119,11 +3137,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         onClick={() => void setReferenceModeWithPersistence('frames')}
                                         className={`rounded-2xl border px-4 py-3 text-left transition ${activeReferenceMode === 'frames' ? 'border-[#ff7a59]/40 bg-[#ff7a59]/15 text-white' : 'border-white/8 bg-black/40 text-zinc-400 hover:border-white/15 hover:text-white'}`}
                                     >
-                                        <div className="text-sm font-semibold">Frames</div>
+                                        <div className="text-sm font-semibold">Start / end frames</div>
                                         <div className="mt-1 text-xs leading-5 text-inherit/80">
                                             {isGrokVideoModel
                                                 ? 'Attach one image to animate it, or leave empty for text-to-video.'
-                                                : 'Start from a single frame or define a clear start and end transition.'}
+                                                : supportsEndFrame
+                                                    ? 'Animate one start frame, or define both the opening and ending composition.'
+                                                    : 'Animate one start image, or leave it empty for text-to-video.'}
                                         </div>
                                     </button>
                                     <button
@@ -3131,48 +3151,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         onClick={() => void setReferenceModeWithPersistence('elements')}
                                         className={`rounded-2xl border px-4 py-3 text-left transition ${activeReferenceMode === 'elements' ? 'border-[#ff7a59]/40 bg-[#ff7a59]/15 text-white' : 'border-white/8 bg-black/40 text-zinc-400 hover:border-white/15 hover:text-white'}`}
                                     >
-                                        <div className="text-sm font-semibold">Elements</div>
+                                        <div className="text-sm font-semibold">Reusable references</div>
                                         <div className="mt-1 text-xs leading-5 text-inherit/80">
-                                            Upload named references like <span className="font-semibold">@person</span> or <span className="font-semibold">@product</span> and mention them in the prompt.
+                                            Keep characters, products, motion clips, or audio guidance available throughout the generated scene.
                                         </div>
                                     </button>
                                 </div>
                             </motion.div>
                         )}
-
-	                        {!currentIsMultiShot && canUseVideoElements && isSeedance2Family && (
-	                            <motion.div
-	                                initial={{ opacity: 0, y: 16 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                className="bg-zinc-900/30 border border-white/5 rounded-3xl p-5 backdrop-blur-sm"
-                            >
-                                <div className="flex items-start justify-between gap-4">
-                                    <div>
-                                        <h2 className="text-sm font-semibold text-white">Seedance references</h2>
-                                        <p className="mt-1 text-sm text-zinc-400">
-                                            Seedance 2 uses one unified reference surface. Add image references for identity, then layer video and audio clips when you want motion or timing guidance.
-                                        </p>
-                                    </div>
-                                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
-                                        {videoElementSupport.maxElements} image refs max
-                                    </span>
-                                </div>
-                                <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                                    <div className="rounded-2xl border border-white/8 bg-black/30 p-3">
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Image refs</div>
-                                        <div className="mt-2 text-sm text-zinc-100">{elements.length} connected</div>
-                                    </div>
-                                    <div className="rounded-2xl border border-white/8 bg-black/30 p-3">
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Video refs</div>
-                                        <div className="mt-2 text-sm text-zinc-100">{referenceVideos.length}/3</div>
-                                    </div>
-                                    <div className="rounded-2xl border border-white/8 bg-black/30 p-3">
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Audio refs</div>
-                                        <div className="mt-2 text-sm text-zinc-100">{referenceAudios.length}/3</div>
-                                    </div>
-                                </div>
-	                            </motion.div>
-	                        )}
 
 	                        {showKlingVideoElementEditor && (
 	                            <motion.div
@@ -3315,29 +3301,34 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
 	                        {showSavedElementNotice && (
                             <div className="rounded-[26px] border border-amber-500/20 bg-amber-500/10 p-5">
-                                <p className="text-sm font-semibold text-white">Saved named elements are on standby</p>
+                                <p className="text-sm font-semibold text-white">
+                                    {elements.length > 0 ? 'Saved references are on standby' : 'Reusable references are unavailable in this mode'}
+                                </p>
                                 <p className="mt-2 text-sm leading-6 text-zinc-300">
-                                    You have {elements.length} saved element{elements.length === 1 ? '' : 's'}, but this setup can&apos;t use them right now.
-                                    {videoElementSupport.reason ? ` ${videoElementSupport.reason}` : ''} Switch to Seedance 1.5 Pro or Veo Fast single-shot to use those references.
+                                    {elements.length > 0
+                                        ? `Your ${elements.length} saved image reference${elements.length === 1 ? ' remains' : 's remain'} available. `
+                                        : ''}
+                                    {videoElementSupport.reason || `${videoModel.displayName} cannot use reusable references with the current settings.`}
+                                    {' '}Use start / end frames for this run, or choose a supported single-shot mode to use reusable references.
                                 </p>
                             </div>
                         )}
 
                         {showMultiShotElementNotice && (
                             <div className="rounded-[26px] border border-amber-500/20 bg-amber-500/10 p-5">
-                                <p className="text-sm font-semibold text-white">Named elements are paused in multi-shot</p>
+                                <p className="text-sm font-semibold text-white">Reusable references are paused in multi-shot</p>
                                 <p className="mt-2 text-sm leading-6 text-zinc-300">
-                                    Your saved elements stay available, but multi-shot runs use shot prompts only in v1. Switch back to single-shot to reuse those named references.
+                                    Your saved references stay available, but multi-shot runs use shot prompts only in v1. Switch back to single-shot to reuse them.
                                 </p>
                             </div>
                         )}
 
                         {showFramesEditor && (
                             <>
-                                <div className={`grid gap-4 ${!currentIsMultiShot ? 'sm:grid-cols-2' : ''}`}>
+                                <div className={`grid gap-4 ${!currentIsMultiShot && activeSupportsEndFrame ? 'sm:grid-cols-2' : ''}`}>
                                     <div className="bg-zinc-900/30 border border-white/5 rounded-3xl p-5 backdrop-blur-sm">
                                         <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center justify-between">
-                                            Start Frame <span className="text-[10px] text-zinc-600 normal-case">optional</span>
+                                            Start Frame <span className="text-[10px] text-zinc-600 normal-case">{selectedModel === 'hailuo-2.3' ? 'required' : 'optional'}</span>
                                         </h2>
                                         {startImageUrl ? (
                                             <div className="h-[140px]">
@@ -3378,7 +3369,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         />
                                     </div>
 
-                                    {!currentIsMultiShot && !isGrokVideoModel && (
+                                    {!currentIsMultiShot && activeSupportsEndFrame && (
                                         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-zinc-900/30 border border-white/5 rounded-3xl p-5 backdrop-blur-sm">
                                             <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center justify-between">
                                                 End Frame <span className="text-[10px] text-zinc-600 normal-case">optional</span>
@@ -3428,9 +3419,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         Grok image-to-video accepts one image reference. If Spicy is selected with an uploaded image, we submit Normal to match the provider&apos;s external-image rules.
                                     </div>
                                 ) : null}
+                                {combinesFrameWithReferences ? (
+                                    <div className="rounded-[22px] border border-[#ff7a59]/20 bg-[#ff7a59]/10 px-4 py-3 text-sm leading-6 text-zinc-200">
+                                        Wan Reference-to-Video can use this first frame together with your reusable images, clips, and voice reference.
+                                    </div>
+                                ) : null}
                                 {hiddenElementDraftCount > 0 && !currentIsMultiShot ? (
                                     <div className="rounded-[22px] border border-white/8 bg-white/[0.03] px-4 py-3 text-sm text-zinc-400">
-                                        {hiddenElementDraftCount} saved element{hiddenElementDraftCount === 1 ? '' : 's'} will be ready if you switch the reference mode back to Elements.
+                                        {hiddenElementDraftCount} saved reference{hiddenElementDraftCount === 1 ? '' : 's'} will be ready if you switch back to Reusable references.
                                     </div>
                                 ) : null}
                             </>
@@ -3444,9 +3440,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             >
                                 <div className="mb-4 flex items-start justify-between gap-3">
                                     <div>
-                                        <h2 className="text-sm font-semibold text-white">Elements</h2>
+                                        <h2 className="text-sm font-semibold text-white">Reusable image references</h2>
                                         <p className="mt-1 text-sm text-zinc-400">
-                                            Upload named references, rename them, and mention them directly in the prompt for identity-aware video generation.
+                                            Upload images, give each one a clear name, and use its @handle in the prompt to preserve identity.
                                         </p>
                                     </div>
                                     <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
@@ -3550,7 +3546,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     >
                                         <div className="flex flex-col items-center gap-2 text-zinc-500">
                                             <ImageIcon className={`w-6 h-6 transition-colors ${isDraggingElements ? 'text-cyan-400' : ''}`} />
-                                            <span className="text-sm">{isDraggingElements ? 'Drop element images here' : 'Drop element images or click'}</span>
+                                            <span className="text-sm">{isDraggingElements ? 'Drop reference images here' : 'Drop reference images or click'}</span>
                                         </div>
                                         <input
                                             ref={elementInputRef}
@@ -3565,35 +3561,37 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
                                 {hiddenFrameDraftCount > 0 ? (
                                     <p className="mt-4 text-sm text-zinc-500">
-                                        Your start and end frames are still saved. Switch the reference mode back to Frames whenever you want to use that transition path again.
+                                        Your start and end frames are still saved. Switch back to Start / end frames whenever you want to use that transition path again.
                                     </p>
                                 ) : null}
                             </motion.div>
                         )}
 
-                        {isSeedance2Family && !currentIsMultiShot && (
+                        {supportsMultimodalReferences && !currentIsMultiShot && activeReferenceMode === 'elements' && (
                             <>
                                 <div className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(17,17,21,0.98),rgba(8,8,10,0.95))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6">
                                     <div className="mb-4 flex items-start justify-between gap-3">
                                         <div>
-                                            <h2 className="text-sm font-semibold text-white">Reference video and audio</h2>
+                                            <h2 className="text-sm font-semibold text-white">{supportsReferenceAudio ? 'Video and audio references' : 'Video references'}</h2>
                                             <p className="mt-1 text-sm text-zinc-400">
-                                                Add motion clips or timing/audio references to steer Seedance 2 beyond still-image guidance.
+                                                {supportsReferenceAudio
+                                                    ? 'Add motion clips or timing and voice guidance alongside your reusable image references.'
+                                                    : 'Add one motion clip alongside your reusable image references.'}
                                             </p>
                                         </div>
                                         <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
-                                            3 video refs max
+                                            {isWanVideoModel ? '5 total references max' : `${referenceVideoLimit} video refs max`}
                                         </span>
                                     </div>
 
-                                    <div className="grid gap-4 lg:grid-cols-2">
+                                    <div className={`grid gap-4 ${supportsReferenceAudio ? 'lg:grid-cols-2' : ''}`}>
                                         <div className="space-y-3">
                                             <div className="flex items-center justify-between gap-3">
                                                 <h3 className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">Reference videos</h3>
                                                 <button
                                                     type="button"
                                                     onClick={() => referenceVideoInputRef.current?.click()}
-                                                    disabled={referenceVideos.length >= 3}
+                                                    disabled={referenceVideos.length >= referenceVideoLimit}
                                                     className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
                                                 >
                                                     Add video
@@ -3642,18 +3640,18 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 </div>
                                             ) : (
                                                 <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 px-4 py-6 text-sm text-zinc-500">
-                                                    Add up to 3 short clips. Seedance 2 uses them as motion and framing references.
+                                                    Add up to {referenceVideoLimit} short clips as motion and framing guidance.
                                                 </div>
                                             )}
                                         </div>
 
-                                        <div className="space-y-3">
+                                        {supportsReferenceAudio ? <div className="space-y-3">
                                             <div className="flex items-center justify-between gap-3">
                                                 <h3 className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">Reference audio</h3>
                                                 <button
                                                     type="button"
                                                     onClick={() => referenceAudioInputRef.current?.click()}
-                                                    disabled={referenceAudios.length >= 3}
+                                                    disabled={referenceAudios.length >= referenceAudioLimit}
                                                     className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
                                                 >
                                                     Add audio
@@ -3704,14 +3702,76 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 </div>
                                             ) : (
                                                 <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 px-4 py-6 text-sm text-zinc-500">
-                                                    Add up to 3 audio clips when you want beat, rhythm, or dialogue timing references.
+                                                    Add up to {referenceAudioLimit} audio clip{referenceAudioLimit === 1 ? '' : 's'} for beat, voice, or dialogue timing guidance.
                                                 </div>
                                             )}
-                                        </div>
+                                        </div> : null}
                                     </div>
                                 </div>
 
-                                <div className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(17,17,21,0.98),rgba(8,8,10,0.95))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6">
+                                {isGeminiOmniVideoModel ? (
+                                    <div className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(17,17,21,0.98),rgba(8,8,10,0.95))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6">
+                                        <div className="mb-4">
+                                            <h2 className="text-sm font-semibold text-white">Prepared Omni references</h2>
+                                            <p className="mt-1 text-sm text-zinc-400">
+                                                Add reusable voice and character IDs created with Gemini Omni. Characters count toward the seven-slot media limit; voices do not.
+                                            </p>
+                                        </div>
+                                        <div className="grid gap-5 lg:grid-cols-2">
+                                            {([
+                                                { kind: 'audio' as const, label: 'Voice IDs', value: preparedAudioIdDraft, setValue: setPreparedAudioIdDraft, items: preparedAudioIds },
+                                                { kind: 'character' as const, label: 'Character IDs', value: characterIdDraft, setValue: setCharacterIdDraft, items: characterIds },
+                                            ]).map((group) => (
+                                                <div key={group.kind} className="space-y-3">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <h3 className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">{group.label}</h3>
+                                                        <span className="text-xs text-zinc-500">{group.items.length}/3</span>
+                                                    </div>
+                                                    <div className="flex gap-2">
+                                                        <input
+                                                            aria-label={`Gemini Omni ${group.kind} ID`}
+                                                            value={group.value}
+                                                            onChange={(event) => group.setValue(event.target.value)}
+                                                            onKeyDown={(event) => {
+                                                                if (event.key === 'Enter') {
+                                                                    event.preventDefault();
+                                                                    addPreparedReferenceId(group.kind);
+                                                                }
+                                                            }}
+                                                            placeholder={group.kind === 'audio' ? 'Paste prepared voice ID' : 'Paste prepared character ID'}
+                                                            className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-[#ff7a59]/50"
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => addPreparedReferenceId(group.kind)}
+                                                            disabled={group.items.length >= 3}
+                                                            className="rounded-2xl border border-white/10 bg-white/[0.05] px-4 text-sm font-semibold text-white transition hover:bg-white/[0.1] disabled:opacity-40"
+                                                        >
+                                                            Add
+                                                        </button>
+                                                    </div>
+                                                    {group.items.map((id) => (
+                                                        <div key={id} className="flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-black/30 px-3 py-2.5">
+                                                            <code className="truncate text-xs text-zinc-300">{id}</code>
+                                                            <button
+                                                                type="button"
+                                                                aria-label={`Remove ${group.kind} ID ${id}`}
+                                                                onClick={() => group.kind === 'audio'
+                                                                    ? setPreparedAudioIds((current) => current.filter((item) => item !== id))
+                                                                    : setCharacterIds((current) => current.filter((item) => item !== id))}
+                                                                className="rounded-full p-2 text-zinc-400 transition hover:bg-rose-500/15 hover:text-rose-200"
+                                                            >
+                                                                <X className="h-3.5 w-3.5" />
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ) : null}
+
+                                {isSeedance2Family ? <div className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(17,17,21,0.98),rgba(8,8,10,0.95))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6">
                                     <div className="mb-4 flex items-start justify-between gap-3">
                                         <div>
                                             <h2 className="text-sm font-semibold text-white">Seedance Assets</h2>
@@ -3806,7 +3866,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                             );
                                         })}
                                     </div>
-                                </div>
+                                </div> : null}
                             </>
                         )}
 
@@ -3929,13 +3989,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                        <div className="mt-1 text-zinc-200">
 	                                            {currentIsMultiShot
 	                                                ? (isKlingVideoModel && klingVideoElements.length > 0 ? 'Shot prompts + Kling refs' : 'Shot prompts')
-	                                                : isSeedance2Family
-	                                                    ? 'Unified references'
-	                                                    : isKlingVideoModel && klingVideoElements.length > 0
+	                                                : isKlingVideoModel && klingVideoElements.length > 0
 	                                                        ? 'Frames + Kling refs'
 	                                                    : activeReferenceMode === 'elements'
-	                                                        ? 'Named elements'
-	                                                        : 'Frames'}
+	                                                        ? 'Reusable references'
+	                                                        : 'Start / end frames'}
                                         </div>
                                     </div>
                                     <div>
@@ -3943,13 +4001,11 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                        <div className="mt-1 text-zinc-200">
 	                                            {currentIsMultiShot
 	                                                ? `${multiPrompts.length} shot${multiPrompts.length === 1 ? '' : 's'}${isKlingVideoModel && klingVideoElements.length > 0 ? ` + ${klingVideoElements.length} video ref${klingVideoElements.length === 1 ? '' : 's'}` : ''}`
-	                                                : isSeedance2Family
-	                                                    ? `${elements.length + referenceVideos.length + referenceAudios.length} reference${elements.length + referenceVideos.length + referenceAudios.length === 1 ? '' : 's'}`
 	                                                : isKlingVideoModel
 	                                                    ? `${frameReferenceCount} frame${frameReferenceCount === 1 ? '' : 's'} + ${klingVideoElements.length} video ref${klingVideoElements.length === 1 ? '' : 's'}`
 	                                                : activeReferenceMode === 'elements'
-	                                                    ? `${elements.length} element${elements.length === 1 ? '' : 's'}`
-                                                    : `${[startImageUrl, endImageUrl].filter(Boolean).length} frame${[startImageUrl, endImageUrl].filter(Boolean).length === 1 ? '' : 's'}`}
+	                                                    ? `${elements.length + referenceVideos.length + referenceAudios.length} reference${elements.length + referenceVideos.length + referenceAudios.length === 1 ? '' : 's'}`
+                                                    : `${frameReferenceCount} frame${frameReferenceCount === 1 ? '' : 's'}`}
                                         </div>
                                     </div>
                                     <div>
@@ -3999,6 +4055,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         />
                                     ) : error ? (
                                         <p className="text-sm text-red-400">{error}</p>
+                                    ) : quoteState.status === 'error' ? (
+                                        <p className="text-sm text-amber-300">{quoteUi.message}</p>
                                     ) : (
                                         <p className="text-sm text-zinc-500">The current run will replace this workspace as soon as generation starts.</p>
                                     )}
@@ -4111,10 +4169,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                     <div>
                                         <h3 className="text-xl font-semibold text-white">No video yet</h3>
                                         <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
-                                            {isSeedance2Family
-                                                ? 'Upload image, video, or audio references, prepare assets when needed, and the latest Seedance render will take over this workspace.'
-                                                : activeReferenceMode === 'elements'
-                                                ? 'Name your references, write the scene with @elements, and the latest render will take over this workspace.'
+                                            {activeReferenceMode === 'elements'
+                                                ? isSeedance2Family
+                                                    ? 'Upload image, video, or audio references, prepare assets when needed, and the latest Seedance render will take over this workspace.'
+                                                    : 'Add reusable references, describe how they behave, and the latest render will take over this workspace.'
                                                 : 'Choose the shot structure, write the prompt, and set your frames. The latest render will take over this workspace.'}
                                         </p>
                                     </div>

@@ -1576,7 +1576,7 @@ export default function CreationsPage() {
                             Create
                         </Link>
                         <Link
-                            href="/post/new"
+                            href="/post/new?from=creations&returnTo=%2Fcreations%3Fview%3Dposts"
                             className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-5 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
                         >
                             <Plus className="h-4 w-4" />
@@ -2283,7 +2283,7 @@ export default function CreationsPage() {
                             <p className="text-sm text-rose-300">{postsLoadMoreError}</p>
                         ) : null}
                         <Link
-                            href="/post/new"
+                            href="/post/new?from=creations&returnTo=%2Fcreations%3Fview%3Dposts"
                             className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.08]"
                         >
                             Open post composer

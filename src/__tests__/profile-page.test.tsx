@@ -115,9 +115,17 @@ vi.mock('@/app/profile/DeferredCreatorProfileCard', () => ({
 }));
 
 vi.mock('@/app/profile/OwnerProfileMediaHub', () => ({
-  default: ({ creator }: { creator: { name: string; username: string | null } }) => (
+  default: ({
+    creator,
+    publicProfilePath,
+  }: {
+    creator: { name: string; username: string | null };
+    publicProfilePath?: string | null;
+  }) => (
     <div data-testid="owner-profile-media-hub" data-creator-name={creator.name} data-username={creator.username ?? ''}>
       Profile media hub
+      {publicProfilePath ? <a href={publicProfilePath}>View public profile</a> : null}
+      <a href="/profile/edit">Edit profile</a>
     </div>
   ),
 }));
@@ -150,16 +158,15 @@ describe('ProfilePage', () => {
 
     render(await ProfilePage({}));
 
-    expect(screen.getByTestId('deferred-creator-profile-card')).toHaveTextContent('persisted-name');
+    expect(screen.queryByTestId('deferred-creator-profile-card')).not.toBeInTheDocument();
     expect(screen.queryByTestId('direct-creator-profile-card')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: /view public profile/i })).toHaveAttribute(
       'href',
       '/creators/persisted-name'
     );
     expect(mockRedirect).not.toHaveBeenCalled();
-    expect(screen.getByTestId('deferred-creator-profile-card')).toHaveAttribute('data-onboarding', 'false');
     expect(screen.getByTestId('owner-profile-media-hub')).toHaveAttribute('data-username', 'persisted-name');
-    expect(screen.getByRole('link', { name: /edit profile/i })).toHaveAttribute('href', '#profile-settings');
+    expect(screen.getByRole('link', { name: /edit profile/i })).toHaveAttribute('href', '/profile/edit');
   });
 
   it('keeps first-time users on /profile and prefills the suggested username', async () => {
@@ -247,7 +254,7 @@ describe('ProfilePage', () => {
 
     render(await ProfilePage({ searchParams: Promise.resolve({ welcome: '1' }) }));
 
-    expect(screen.getByTestId('deferred-creator-profile-card')).toHaveAttribute('data-onboarding', 'false');
+    expect(screen.getByTestId('owner-profile-media-hub')).toBeInTheDocument();
     expect(screen.queryByText(/profile setup/i)).not.toBeInTheDocument();
   });
 });

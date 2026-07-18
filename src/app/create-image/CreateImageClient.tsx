@@ -67,6 +67,7 @@ import {
 } from '@/lib/generation-timing';
 import { buildMediaProxyUrl, getStoredMediaLocation } from '@/lib/media-urls';
 import {
+    getImageQualityModes,
     getImageResolutionOptions,
     IMAGE_MODELS,
     supportsImageResolutionControl,
@@ -315,7 +316,11 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         if (!model.supportsGoogleSearch) {
             setGoogleSearch(false);
         }
-    }, [aspectRatio, commitElements, elements, model, persistUploadedImageElements, resolution, selectedModel]);
+        const qualityModes = getImageQualityModes(selectedModel);
+        if (qualityModes.length > 0 && !qualityModes.includes(qualityMode)) {
+            setQualityMode(qualityModes[0]);
+        }
+    }, [aspectRatio, commitElements, elements, model, persistUploadedImageElements, qualityMode, resolution, selectedModel]);
 
     // Close dropdown on click outside
     useEffect(() => {
@@ -378,7 +383,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                 ) {
                     setResolution(settings.resolution as ImageResolution);
                 }
-                if (settings?.qualityMode === 'quality' || settings?.qualityMode === 'standard') {
+                if (settings?.qualityMode && getImageQualityModes(nextModelId).includes(settings.qualityMode)) {
                     setQualityMode(settings.qualityMode);
                 }
                 if (settings?.googleSearch !== undefined) setGoogleSearch(settings.googleSearch);
@@ -794,6 +799,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const availableResolutions = getImageResolutionOptions(selectedModel, aspectRatio);
     const showResolutionControl = supportsImageResolutionControl(selectedModel);
     const isGrokImageModel = selectedModel === 'grok-imagine-image';
+    const qualityModes = getImageQualityModes(selectedModel);
     const insufficientCredits = userCredits !== null && currentCost !== null && userCredits < currentCost;
     const quotePending = quoteUi.blocksGenerate;
     const elementHandles = elements.map((element) => element.handle);
@@ -1200,7 +1206,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         animate={{ opacity: 1, y: 0, scaleY: 1 }}
                                         exit={{ opacity: 0, y: -8, scaleY: 0.95 }}
                                         transition={{ duration: 0.15 }}
-                                        className="absolute z-50 mt-2 w-[calc(100%-3rem)] bg-zinc-900/95 border border-white/10 rounded-2xl overflow-hidden backdrop-blur-xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.8)]"
+                                        className="absolute z-50 mt-2 max-h-[min(70vh,34rem)] w-[calc(100%-3rem)] overflow-y-auto rounded-2xl border border-white/10 bg-zinc-900/95 backdrop-blur-xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.8)]"
                                         style={{ transformOrigin: 'top' }}
                                     >
                                         {imageModelOptions.map((m) => {
@@ -1233,7 +1239,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                                                 </span>
                                                             )}
                                                             <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-500 border border-white/5">
-                                                                Up to {m.maxImages} ref images
+                                                                {m.maxImages > 0 ? `Up to ${m.maxImages} ref images` : 'Prompt only'}
                                                             </span>
                                                         </div>
                                                     </div>
@@ -1279,35 +1285,37 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 }}
                                 disabled={isGenerating}
                             />
-                            <div className="mb-4 mt-4 space-y-3">
-                                <div className="flex items-center justify-between gap-3">
-                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                                        Named elements
-                                    </p>
-                                    <span className="text-xs text-zinc-500">
-                                        Type <span className="font-semibold text-zinc-300">@</span> to reference them in the prompt.
-                                    </span>
-                                </div>
-                                {elements.length > 0 ? (
-                                    <div className="flex flex-wrap gap-2">
-                                        {elements.map((element) => (
-                                            <button
-                                                key={element.id}
-                                                type="button"
-                                                onClick={() => handleInsertElementHandle(element.handle)}
-                                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
-                                            >
-                                                <span className="text-zinc-400">{element.displayName}</span>
-                                                <span className="text-sky-300">{element.handle}</span>
-                                            </button>
-                                        ))}
+                            {model.maxImages > 0 && (
+                                <div className="mb-4 mt-4 space-y-3">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                                            Named elements
+                                        </p>
+                                        <span className="text-xs text-zinc-500">
+                                            Type <span className="font-semibold text-zinc-300">@</span> to reference them in the prompt.
+                                        </span>
                                     </div>
-                                ) : (
-                                    <p className="text-sm text-zinc-500">
-                                        Upload one or more element images below to mention them by name in the prompt.
-                                    </p>
-                                )}
-                            </div>
+                                    {elements.length > 0 ? (
+                                        <div className="flex flex-wrap gap-2">
+                                            {elements.map((element) => (
+                                                <button
+                                                    key={element.id}
+                                                    type="button"
+                                                    onClick={() => handleInsertElementHandle(element.handle)}
+                                                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
+                                                >
+                                                    <span className="text-zinc-400">{element.displayName}</span>
+                                                    <span className="text-sky-300">{element.handle}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <p className="text-sm text-zinc-500">
+                                            Upload one or more element images below to mention them by name in the prompt.
+                                        </p>
+                                    )}
+                                </div>
+                            )}
                             <textarea
                                 ref={promptTextareaRef}
                                 value={prompt}
@@ -1365,12 +1373,13 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                             ) : null}
                         </motion.div>
 
-                        <motion.div
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: 0.04 }}
-                            className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
-                        >
+                        {model.maxImages > 0 ? (
+                            <motion.div
+                                initial={{ opacity: 0, y: 20 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.04 }}
+                                className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
+                            >
                             <div className="mb-4 flex items-start justify-between gap-3">
                                 <div>
                                     <h2 className="text-sm font-semibold text-white">Elements</h2>
@@ -1482,7 +1491,18 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     <input type="file" accept="image/*" multiple onChange={handleImageUpload} className="hidden" />
                                 </label>
                             )}
-                        </motion.div>
+                            </motion.div>
+                        ) : (
+                            <div className="flex items-start gap-3 rounded-[24px] border border-blue-400/15 bg-blue-400/[0.06] p-4 text-sm text-blue-100">
+                                <ImageIcon className="mt-0.5 h-4 w-4 shrink-0 text-blue-300" />
+                                <div>
+                                    <div className="font-semibold">Prompt-only model</div>
+                                    <p className="mt-1 leading-relaxed text-blue-100/70">
+                                        {model.displayName} does not accept reference images. Switch models whenever you need identity, product, or style anchors.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
 
                         <div className="grid gap-4 sm:grid-cols-2">
                             <motion.div
@@ -1533,19 +1553,23 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         ))}
                                     </div>
                                 </motion.div>
-                            ) : (
+                            ) : qualityModes.length > 0 ? (
                                 <motion.div
                                     initial={{ opacity: 0, y: 20 }}
                                     animate={{ opacity: 1, y: 0 }}
                                     transition={{ delay: 0.08 }}
                                     className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
                                 >
-                                    <h2 className="text-sm font-semibold text-white mb-1">Grok quality</h2>
+                                    <h2 className="text-sm font-semibold text-white mb-1">
+                                        {selectedModel === 'ideogram-v3' ? 'Generation speed' : 'Grok quality'}
+                                    </h2>
                                     <p className="text-sm text-zinc-400 mb-4">
-                                        Quality applies to prompt-only Grok runs; edits use fixed image-to-image pricing.
+                                        {selectedModel === 'ideogram-v3'
+                                            ? 'Choose faster drafts or spend more credits for final-detail output.'
+                                            : 'Quality applies to prompt-only Grok runs; edits use fixed image-to-image pricing.'}
                                     </p>
-                                    <div className="grid grid-cols-2 gap-3">
-                                        {(['standard', 'quality'] as const).map((mode) => (
+                                    <div className={`grid gap-3 ${qualityModes.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                                        {qualityModes.map((mode) => (
                                             <button
                                                 key={mode}
                                                 onClick={() => setQualityMode(mode)}
@@ -1559,7 +1583,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                         ))}
                                     </div>
                                 </motion.div>
-                            )}
+                            ) : null}
                         </div>
 
                         <AnimatePresence>
@@ -1618,7 +1642,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     </div>
                                     <div>
                                         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Elements</div>
-                                        <div className="mt-1 text-zinc-200">{elements.length}/{model.maxImages}</div>
+                                        <div className="mt-1 text-zinc-200">
+                                            {model.maxImages > 0 ? `${elements.length}/${model.maxImages}` : 'Prompt only'}
+                                        </div>
                                     </div>
                                     <div>
                                         <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Credits left</div>
@@ -1838,7 +1864,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     <div>
                                         <h3 className="text-xl font-semibold text-white">No image yet</h3>
                                         <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
-                                            Write the prompt, optionally add a few named elements, then generate. The latest result will take over this workspace.
+                                            {model.maxImages > 0
+                                                ? 'Write the prompt, optionally add a few named elements, then generate. The latest result will take over this workspace.'
+                                                : 'Write the prompt, then generate. The latest result will take over this workspace.'}
                                         </p>
                                     </div>
                                 </div>

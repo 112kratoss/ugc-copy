@@ -1313,9 +1313,9 @@ describe('workflow canvas helpers', () => {
     expect(kling.fixedLens).toBe(false);
 
     expect(veo.duration).toBe(8);
-    expect(veo.mode).toBe('veo3_fast');
+    expect(veo.mode).toBe('veo3_lite');
     expect(veo.sound).toBe(false);
-    expect(veo.resolution).toBe('');
+    expect(veo.resolution).toBe('1080p');
     expect(veo.fixedLens).toBe(false);
   });
 

@@ -143,7 +143,7 @@ export function assessMarketplaceListingQuality(input: MarketplaceQualityInput):
     issues.push({
       code: 'post_not_public',
       field: 'post',
-      message: 'Publish a visible public post before listing this unlock in the marketplace.',
+      message: 'Publish a visible public post before listing this recipe in the marketplace.',
     });
   } else if (!hasUsefulPublicProof(post)) {
     issues.push({
@@ -173,7 +173,26 @@ export function getMarketplaceQualityError(input: MarketplaceQualityInput): stri
     return null;
   }
 
-  return `Improve this unlock before publishing: ${assessment.issues[0].message}`;
+  return `Improve this recipe before publishing: ${assessment.issues[0].message}`;
+}
+
+export function getPublicPostQualityError(input: {
+  title?: string | null;
+  body?: string | null;
+  hasMedia?: boolean | null;
+}): string | null {
+  const title = normalizeText(input.title);
+  const body = normalizeText(input.body);
+
+  if (title && isPlaceholderText(title)) {
+    return 'Replace the placeholder title with something specific to this post.';
+  }
+
+  if (!input.hasMedia && (body.length < 18 || isPlaceholderText(body))) {
+    return 'Add useful text so viewers can understand the post before publishing.';
+  }
+
+  return null;
 }
 
 function normalizeText(value: string | null | undefined): string {

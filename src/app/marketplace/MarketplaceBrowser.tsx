@@ -301,7 +301,7 @@ export default function MarketplaceBrowser({
           </p>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
             <Link
-              href="/post/new"
+              href="/post/new?from=marketplace&returnTo=%2Fmarketplace"
               className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
             >
               Share a post
@@ -388,7 +388,7 @@ function MarketplaceCard({
     priceQuote: asset.priceQuote,
   }).replace(/\s+unlock$/i, ' recipe');
   const unlockCtaLabel = asset.accessMode === 'free'
-    ? 'Unlock free recipe'
+    ? 'View free recipe'
     : `Unlock for ${asset.priceQuote.formatted}`;
   const updatedLabel = formatMarketplaceDate(asset.updatedAt);
   const bundleCountSummary = formatPostResourceBundleCountSummary(asset.lockedPreview);
@@ -400,11 +400,13 @@ function MarketplaceCard({
     returnTo: marketplaceReturnPath,
     section: 'resources',
   });
+  const postTitle = asset.post?.title?.trim() || asset.title;
+  const showRecipeTitle = asset.title.trim().toLocaleLowerCase() !== postTitle.trim().toLocaleLowerCase();
 
   return (
     <Link
       href={detailHref}
-      aria-label={`${unlockCtaLabel}: ${asset.title}`}
+      aria-label={`${unlockCtaLabel}: ${postTitle}`}
       className="group mb-6 block break-inside-avoid overflow-hidden rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(18,18,22,0.98),rgba(10,10,14,0.98))] shadow-[0_24px_70px_rgba(0,0,0,0.35)] transition hover:border-white/14 hover:shadow-[0_28px_90px_rgba(0,0,0,0.45)]"
     >
       <div className={`relative overflow-hidden border-b border-white/8 bg-black/60 ${
@@ -461,7 +463,10 @@ function MarketplaceCard({
             <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">
               {asset.seller.username ? `@${asset.seller.username}` : asset.seller.name}
             </div>
-            <h2 className="mt-2 text-xl font-semibold text-white">{asset.title}</h2>
+            <h2 className="mt-2 text-xl font-semibold text-white">{postTitle}</h2>
+            {showRecipeTitle ? (
+              <div className="mt-1 line-clamp-1 text-xs font-medium text-zinc-500">Recipe: {asset.title}</div>
+            ) : null}
           </div>
           <div className="shrink-0 rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1.5 text-sm font-semibold text-emerald-50">
             {asset.priceQuote.formatted}

@@ -531,7 +531,7 @@ describe('WorkflowNodeEditors', () => {
     });
 
     expect(screen.getByLabelText(/model variant/i)).toBeInTheDocument();
-    expect(screen.queryByLabelText('Resolution')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Resolution')).toHaveValue('720p');
     expect(screen.queryByLabelText(/native audio/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/fixed lens/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('spinbutton', { name: 'Duration' })).not.toBeInTheDocument();

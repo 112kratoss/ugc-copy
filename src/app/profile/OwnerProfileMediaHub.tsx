@@ -3,19 +3,25 @@
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import {
+  ChevronRight,
+  Crown,
   ExternalLink,
   FileText,
   Film,
+  Gift,
   Heart,
   ImageIcon,
   Layers3,
   Loader2,
   PencilLine,
   Plus,
+  Store,
   Sparkles,
+  UserRound,
   Volume2,
+  WalletCards,
 } from 'lucide-react';
 
 import { useAuth } from '@/app/components/AuthProvider';
@@ -25,6 +31,7 @@ import MediaDetailsPreviewModal, {
   type MediaDetailsType,
 } from '@/app/components/MediaDetailsPreviewModal';
 import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
+import ProfileShareButton from '@/app/components/ProfileShareButton';
 import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
 import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
@@ -102,6 +109,17 @@ interface OffsetPageInfo {
 interface GenerationPageInfo {
   hasMore: boolean;
   nextCursor: string | null;
+}
+
+interface OwnerProfileMediaHubProps {
+  creator: ShowcaseCreator;
+  profile?: {
+    bio: string;
+    coverUrl: string | null;
+    credits: number | null;
+  };
+  publicProfilePath?: string | null;
+  publicProfileDisplayName?: string;
 }
 
 const PAGE_SIZE = 24;
@@ -216,6 +234,7 @@ function MediaCard({
   badges,
   onClick,
   href,
+  actionLabel,
 }: {
   title: string;
   subtitle: string;
@@ -226,7 +245,9 @@ function MediaCard({
   badges?: string[];
   onClick?: () => void;
   href?: string;
+  actionLabel?: string;
 }) {
+  const isTextCard = Boolean(textBody && !mediaUrl);
   const content = (
     <>
       <div className="relative aspect-[4/5] overflow-hidden bg-zinc-950">
@@ -262,18 +283,24 @@ function MediaCard({
           </div>
         )}
 
-        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/75 to-transparent p-4 pt-16">
-          {badges?.length ? (
-            <div className="mb-2 flex flex-wrap gap-1.5">
-              {badges.map((badge) => (
-                <span key={badge} className="rounded-full border border-white/12 bg-black/45 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-200 backdrop-blur-sm">
-                  {badge}
-                </span>
-              ))}
-            </div>
-          ) : null}
-          <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-white">{title}</h3>
-          <p className="mt-1 text-xs text-zinc-400">{subtitle}</p>
+        {badges?.length ? (
+          <div className="absolute left-3 top-3 flex max-w-[calc(100%-1.5rem)] flex-wrap gap-1.5">
+            {badges.map((badge) => (
+              <span key={badge} className="rounded-full border border-white/12 bg-black/60 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-100 backdrop-blur-md">
+                {badge}
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        <div className={`absolute inset-x-0 bottom-0 p-4 ${isTextCard ? 'bg-black/70 pt-3 backdrop-blur-sm' : 'bg-gradient-to-t from-black via-black/75 to-transparent pt-16'}`}>
+          {!isTextCard ? <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-white">{title}</h3> : null}
+          <div className={`${isTextCard ? '' : 'mt-1'} flex items-center justify-between gap-3`}>
+            <p className="min-w-0 truncate text-xs text-zinc-400">{subtitle}</p>
+            <span className="shrink-0 text-[10px] font-bold uppercase tracking-[0.14em] text-white">
+              {actionLabel || (href ? 'Edit' : 'View')}
+            </span>
+          </div>
         </div>
       </div>
     </>
@@ -288,7 +315,12 @@ function MediaCard({
   return <button type="button" onClick={onClick} className={className} aria-label={`Open ${title}`}>{content}</button>;
 }
 
-export default function OwnerProfileMediaHub({ creator }: { creator: ShowcaseCreator }) {
+export default function OwnerProfileMediaHub({
+  creator,
+  profile = { bio: '', coverUrl: null, credits: null },
+  publicProfilePath = null,
+  publicProfileDisplayName = '',
+}: OwnerProfileMediaHubProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -304,9 +336,8 @@ export default function OwnerProfileMediaHub({ creator }: { creator: ShowcaseCre
     return Number.isInteger(value) && value >= 0 ? value : 0;
   });
   const [selectedGeneration, setSelectedGeneration] = useState<OwnerGeneration | null>(null);
-  const [loadingTabs, setLoadingTabs] = useState<Set<ProfileMediaTab>>(
-    () => new Set<ProfileMediaTab>(['posts', 'saved', 'creations'])
-  );
+  const [loadingTabs, setLoadingTabs] = useState<Set<ProfileMediaTab>>(() => new Set([initialTab]));
+  const [loadedTabs, setLoadedTabs] = useState<Set<ProfileMediaTab>>(() => new Set());
   const [loadingMoreTab, setLoadingMoreTab] = useState<ProfileMediaTab | null>(null);
   const [postsPageInfo, setPostsPageInfo] = useState<OffsetPageInfo>({ hasMore: false, nextOffset: null });
   const [savedPageInfo, setSavedPageInfo] = useState<OffsetPageInfo>({ hasMore: false, nextOffset: null });
@@ -391,33 +422,48 @@ export default function OwnerProfileMediaHub({ creator }: { creator: ShowcaseCre
     });
   }, [authHeaders]);
 
+  const runTabLoad = useCallback(async (tab: ProfileMediaTab) => {
+    setLoadingTabs((current) => new Set(current).add(tab));
+    setErrors((current) => ({ ...current, [tab]: undefined }));
+
+    try {
+      if (tab === 'posts') await loadPosts();
+      if (tab === 'saved') await loadSaved();
+      if (tab === 'creations') await loadGenerations();
+    } catch (error) {
+      const fallback = tab === 'posts'
+        ? 'Could not load your posts.'
+        : tab === 'saved'
+          ? 'Could not load saved posts.'
+          : 'Could not load your creations.';
+      setErrors((current) => ({
+        ...current,
+        [tab]: error instanceof Error ? error.message : fallback,
+      }));
+    } finally {
+      setLoadedTabs((current) => new Set(current).add(tab));
+      setLoadingTabs((current) => {
+        const next = new Set(current);
+        next.delete(tab);
+        return next;
+      });
+    }
+  }, [loadGenerations, loadPosts, loadSaved]);
+
   useEffect(() => {
     if (!accessToken || loadedTokenRef.current === accessToken) return;
     loadedTokenRef.current = accessToken;
-    setLoadingTabs(new Set<ProfileMediaTab>(['posts', 'saved', 'creations']));
+    setLoadingTabs(new Set<ProfileMediaTab>([initialTab]));
+    setLoadedTabs(new Set());
     setErrors({});
 
-    const runInitialLoad = async (tab: ProfileMediaTab, load: () => Promise<void>, fallbackError: string) => {
-      try {
-        await load();
-      } catch (error) {
-        setErrors((current) => ({
-          ...current,
-          [tab]: error instanceof Error ? error.message : fallbackError,
-        }));
-      } finally {
-        setLoadingTabs((current) => {
-          const next = new Set(current);
-          next.delete(tab);
-          return next;
-        });
-      }
-    };
-
-    void runInitialLoad('posts', () => loadPosts(), 'Could not load your posts.');
-    void runInitialLoad('saved', () => loadSaved(), 'Could not load saved posts.');
-    void runInitialLoad('creations', () => loadGenerations(), 'Could not load your creations.');
-  }, [accessToken, loadGenerations, loadPosts, loadSaved]);
+    void (async () => {
+      await runTabLoad(initialTab);
+      const remainingTabs = (['posts', 'saved', 'creations'] as ProfileMediaTab[])
+        .filter((tab) => tab !== initialTab);
+      await Promise.all(remainingTabs.map((tab) => runTabLoad(tab)));
+    })();
+  }, [accessToken, initialTab, runTabLoad]);
 
   useEffect(() => {
     const requestedGenerationId = searchParams.get('generation');
@@ -470,6 +516,21 @@ export default function OwnerProfileMediaHub({ creator }: { creator: ShowcaseCre
     setSelectedPostId(null);
     setSelectedGeneration(null);
     updateLocation({ tab, postId: null, generationId: null }, 'push');
+  };
+
+  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, tab: ProfileMediaTab) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const tabOrder: ProfileMediaTab[] = ['posts', 'saved', 'creations'];
+    const currentIndex = tabOrder.indexOf(tab);
+    const nextIndex = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? tabOrder.length - 1
+        : (currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + tabOrder.length) % tabOrder.length;
+    const nextTab = tabOrder[nextIndex];
+    selectTab(nextTab);
+    document.getElementById(`profile-tab-${nextTab}`)?.focus();
   };
 
   const openPost = (item: ShowcaseFeedItem) => {
@@ -527,9 +588,9 @@ export default function OwnerProfileMediaHub({ creator }: { creator: ShowcaseCre
   const activeSaveState = activeTab === 'saved' ? savedSaveState : postSaveState;
   const activePageInfo = activeTab === 'saved' ? savedPageInfo : postsPageInfo;
   const tabs = [
-    { id: 'posts' as const, label: 'Posts', count: ownerPosts.length, icon: Layers3 },
-    { id: 'saved' as const, label: 'Saved', count: savedSaveState.items.length, icon: Heart },
-    { id: 'creations' as const, label: 'Creations', count: generations.length, icon: Sparkles },
+    { id: 'posts' as const, label: 'Posts', count: loadedTabs.has('posts') ? ownerPosts.length : null, icon: Layers3 },
+    { id: 'saved' as const, label: 'Saved', count: loadedTabs.has('saved') ? savedSaveState.items.length : null, icon: Heart },
+    { id: 'creations' as const, label: 'Creations', count: loadedTabs.has('creations') ? generations.length : null, icon: Sparkles },
   ];
 
   const loadMore = async () => {
@@ -553,7 +614,7 @@ export default function OwnerProfileMediaHub({ creator }: { creator: ShowcaseCre
     posts: {
       title: 'Your published story starts here',
       body: 'Turn a finished creation into a post, add context, then attach an optional recipe.',
-      href: '/post/new',
+      href: '/post/new?from=profile&returnTo=%2Fprofile%3Ftab%3Dposts',
       cta: 'Create a post',
     },
     saved: {
@@ -579,7 +640,98 @@ export default function OwnerProfileMediaHub({ creator }: { creator: ShowcaseCre
   const isLoading = loadingTabs.has(activeTab);
 
   return (
-    <section id="profile-media" className="mb-8 overflow-hidden rounded-[30px] border border-white/8 bg-[linear-gradient(145deg,rgba(24,24,27,0.78),rgba(8,8,10,0.94))] shadow-[0_28px_90px_rgba(0,0,0,0.3)]">
+    <>
+      <section className="ui-enter mb-5 overflow-hidden rounded-[30px] border border-white/10 bg-[var(--ui-surface-1)] shadow-[0_28px_90px_rgba(0,0,0,0.28)]">
+        <div className="relative h-36 overflow-hidden bg-[radial-gradient(circle_at_20%_0%,rgba(255,122,89,0.28),transparent_42%),radial-gradient(circle_at_85%_20%,rgba(56,189,248,0.18),transparent_36%),#151519] sm:h-52">
+          {profile.coverUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={profile.coverUrl} alt="" className="h-full w-full object-cover" />
+          ) : null}
+          <div className="absolute inset-0 bg-gradient-to-t from-[#151518] via-black/5 to-black/10" />
+        </div>
+
+        <div className="relative px-5 pb-6 sm:px-7 sm:pb-7">
+          <div className="-mt-11 flex flex-col gap-5 sm:-mt-12 sm:flex-row sm:items-end sm:justify-between">
+            <div className="flex min-w-0 items-end gap-4">
+              <div className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-full border-4 border-[#151518] bg-zinc-900 shadow-xl sm:h-28 sm:w-28">
+                {creator.avatar ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={creator.avatar} alt={`${creator.name} avatar`} className="h-full w-full object-cover" />
+                ) : (
+                  <UserRound className="h-10 w-10 text-zinc-500" aria-hidden />
+                )}
+              </div>
+              <div className="min-w-0 pb-1">
+                <h2 className="truncate text-2xl font-extrabold tracking-tight text-white sm:text-3xl">{creator.name}</h2>
+                {creator.username ? <p className="mt-1 text-sm font-bold text-[var(--ui-primary)]">@{creator.username}</p> : null}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2 sm:justify-end">
+              {publicProfilePath ? (
+                <Link href={publicProfilePath} className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 text-sm font-bold text-zinc-100 transition hover:bg-white/10">
+                  <ExternalLink className="h-4 w-4" aria-hidden />
+                  View public
+                </Link>
+              ) : null}
+              {creator.username ? (
+                <ProfileShareButton
+                  username={creator.username}
+                  displayName={publicProfileDisplayName || creator.name}
+                  label="Share"
+                  className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 text-sm font-bold text-zinc-100 transition hover:bg-white/10 disabled:opacity-60"
+                />
+              ) : null}
+              <Link href="/profile/edit" className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]">
+                <PencilLine className="h-4 w-4" aria-hidden />
+                Edit profile
+              </Link>
+            </div>
+          </div>
+
+          <p className="mt-5 max-w-2xl text-sm leading-6 text-zinc-300">
+            {profile.bio.trim() || 'Add a short bio so people understand what you create.'}
+          </p>
+
+          <dl className="mt-6 grid grid-cols-3 border-t border-white/8 pt-5">
+            {[
+              { label: 'Creations', value: loadedTabs.has('creations') ? generations.length : '—' },
+              { label: 'Posts', value: loadedTabs.has('posts') ? ownerPosts.length : '—' },
+              { label: 'Saved by you', value: loadedTabs.has('saved') ? savedSaveState.items.length : '—' },
+            ].map((stat, index) => (
+              <div key={stat.label} className={`text-center ${index > 0 ? 'border-l border-white/8' : ''}`}>
+                <dd className="text-lg font-extrabold text-white sm:text-xl">{stat.value}</dd>
+                <dt className="mt-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-500 sm:text-xs">{stat.label}</dt>
+              </div>
+            ))}
+          </dl>
+        </div>
+      </section>
+
+      <section aria-label="Creator account shortcuts" className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Link href="/pricing" className="ui-focus-ring group flex min-h-28 items-center gap-3 rounded-[24px] border border-white/8 bg-[var(--ui-surface-1)] p-4 transition hover:-translate-y-0.5 hover:border-amber-300/20 hover:bg-[var(--ui-surface-2)]">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-amber-400/10 text-amber-300"><Crown className="h-5 w-5" aria-hidden /></span>
+          <span className="min-w-0"><span className="block text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Credits</span><span className="mt-1 block truncate text-lg font-extrabold text-white">{profile.credits ?? '—'}</span></span>
+          <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-zinc-600 transition group-hover:translate-x-0.5 group-hover:text-zinc-300" aria-hidden />
+        </Link>
+        <Link href="/marketplace/sell" className="ui-focus-ring group flex min-h-28 items-center gap-3 rounded-[24px] border border-white/8 bg-[var(--ui-surface-1)] p-4 transition hover:-translate-y-0.5 hover:border-[rgba(255,122,89,0.24)] hover:bg-[var(--ui-surface-2)]">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--ui-primary-soft)] text-[var(--ui-primary)]"><WalletCards className="h-5 w-5" aria-hidden /></span>
+          <span className="min-w-0"><span className="block text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Wallet</span><span className="mt-1 block truncate text-sm font-extrabold text-white sm:text-base">Open</span></span>
+          <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-zinc-600 transition group-hover:translate-x-0.5 group-hover:text-zinc-300" aria-hidden />
+        </Link>
+        <Link href="/invite" className="ui-focus-ring group col-span-2 flex min-h-24 items-center gap-3 rounded-[24px] border border-amber-300/15 bg-[linear-gradient(135deg,rgba(245,158,11,0.08),rgba(24,24,27,0.86))] p-4 transition hover:-translate-y-0.5 hover:border-amber-300/25 lg:col-span-1">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-amber-400/10 text-amber-300"><Gift className="h-5 w-5" aria-hidden /></span>
+          <span className="min-w-0"><span className="block font-bold text-white">Invite &amp; Earn</span><span className="mt-1 block truncate text-xs text-zinc-500">Earn bonus credits</span></span>
+          <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-zinc-600 transition group-hover:translate-x-0.5 group-hover:text-zinc-300" aria-hidden />
+        </Link>
+        <Link href="/marketplace/sell" className="ui-focus-ring group col-span-2 flex min-h-24 items-center gap-3 rounded-[24px] border border-white/8 bg-[var(--ui-surface-1)] p-4 transition hover:-translate-y-0.5 hover:border-[rgba(255,122,89,0.24)] hover:bg-[var(--ui-surface-2)] lg:col-span-1">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--ui-primary-soft)] text-[var(--ui-primary)]"><Store className="h-5 w-5" aria-hidden /></span>
+          <span className="min-w-0"><span className="block font-bold text-white">Seller dashboard</span><span className="mt-1 block truncate text-xs text-zinc-500">Listings and sales</span></span>
+          <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-zinc-600 transition group-hover:translate-x-0.5 group-hover:text-zinc-300" aria-hidden />
+        </Link>
+      </section>
+
+      <section id="profile-media" className="mb-8 overflow-hidden rounded-[30px] border border-white/8 bg-[linear-gradient(145deg,rgba(24,24,27,0.78),rgba(8,8,10,0.94))] shadow-[0_28px_90px_rgba(0,0,0,0.3)]">
       <div className="border-b border-white/8 px-5 py-6 sm:px-7">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
@@ -590,7 +742,7 @@ export default function OwnerProfileMediaHub({ creator }: { creator: ShowcaseCre
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Link href="/post/new" className="inline-flex min-h-11 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-bold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]">
+            <Link href="/post/new?from=profile&returnTo=%2Fprofile%3Ftab%3Dposts" className="inline-flex min-h-11 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-bold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]">
               <Plus className="h-4 w-4" />
               New post
             </Link>
@@ -601,37 +753,50 @@ export default function OwnerProfileMediaHub({ creator }: { creator: ShowcaseCre
           </div>
         </div>
 
-        <div className="mt-6 flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Profile media">
+        <div className="mt-6 grid grid-cols-3 gap-2 rounded-[22px] border border-white/8 bg-black/25 p-1" role="tablist" aria-label="Profile media">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             const selected = activeTab === tab.id;
             return (
               <button
                 key={tab.id}
+                id={`profile-tab-${tab.id}`}
                 type="button"
                 role="tab"
                 aria-selected={selected}
-                aria-label={`${tab.label} ${tab.count}`}
+                aria-controls={`profile-panel-${tab.id}`}
+                aria-label={`${tab.label} ${tab.count ?? 'loading'}`}
+                tabIndex={selected ? 0 : -1}
                 onClick={() => selectTab(tab.id)}
-                className={`inline-flex min-h-11 shrink-0 items-center gap-2 rounded-full border px-4 text-sm font-semibold transition ${selected
-                  ? 'border-[rgba(255,122,89,0.35)] bg-[var(--ui-primary)] text-[var(--ui-primary-on)]'
-                  : 'border-white/10 bg-white/[0.04] text-zinc-300 hover:bg-white/[0.08] hover:text-white'}`}
+                onKeyDown={(event) => handleTabKeyDown(event, tab.id)}
+                className={`ui-focus-ring inline-flex min-h-11 min-w-0 items-center justify-center gap-1.5 rounded-[18px] px-2 text-xs font-semibold transition sm:gap-2 sm:px-4 sm:text-sm ${selected
+                  ? 'bg-[var(--ui-primary)] text-[var(--ui-primary-on)] shadow-[0_8px_24px_rgba(255,122,89,0.18)]'
+                  : 'text-zinc-400 hover:bg-white/[0.06] hover:text-white'}`}
               >
-                <Icon className="h-4 w-4" />
-                {tab.label}
-                <span className={`rounded-full px-2 py-0.5 text-xs ${selected ? 'bg-black/20' : 'bg-black/25 text-zinc-400'}`}>{tab.count}</span>
+                <Icon className="hidden h-4 w-4 shrink-0 sm:block" aria-hidden />
+                <span className="truncate">{tab.label}</span>
+                <span className={`hidden rounded-full px-2 py-0.5 text-xs sm:inline ${selected ? 'bg-black/20' : 'bg-black/25 text-zinc-500'}`}>{tab.count ?? '—'}</span>
               </button>
             );
           })}
         </div>
       </div>
 
-      <div className="p-4 sm:p-6">
+      <div id={`profile-panel-${activeTab}`} role="tabpanel" aria-labelledby={`profile-tab-${activeTab}`} className="p-4 sm:p-6">
         {isLoading ? (
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4" aria-label="Loading profile media">
             {Array.from({ length: 8 }, (_, index) => (
               <div key={index} className="aspect-[4/5] animate-pulse rounded-[22px] border border-white/8 bg-white/[0.04]" />
             ))}
+          </div>
+        ) : errors[activeTab] && activeCount === 0 ? (
+          <div className="flex min-h-72 flex-col items-center justify-center px-6 py-12 text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-full border border-rose-300/15 bg-rose-500/10 text-rose-200"><FileText className="h-6 w-6" aria-hidden /></div>
+            <h3 className="mt-5 text-xl font-semibold text-white">This section did not load</h3>
+            <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">{errors[activeTab]}</p>
+            <button type="button" onClick={() => void runTabLoad(activeTab)} className="ui-focus-ring mt-5 inline-flex min-h-11 items-center gap-2 rounded-full bg-white px-5 text-sm font-bold text-black transition hover:bg-zinc-200">
+              Retry
+            </button>
           </div>
         ) : activeCount === 0 ? (
           <div className="flex min-h-72 flex-col items-center justify-center px-6 py-12 text-center">
@@ -667,6 +832,7 @@ export default function OwnerProfileMediaHub({ creator }: { creator: ShowcaseCre
                     badges={[post.visibility, ...(recipeLabel ? [recipeLabel] : [])]}
                     onClick={feedItem && post.canShare ? () => openPost(feedItem) : undefined}
                     href={!post.canShare ? post.ownerPath : undefined}
+                    actionLabel={post.canShare ? 'View' : 'Edit'}
                   />
                 );
               }) : activeTab === 'saved' ? savedSaveState.items.map((item) => {
@@ -682,6 +848,7 @@ export default function OwnerProfileMediaHub({ creator }: { creator: ShowcaseCre
                     textBody={item.postFormat === 'text' ? item.body || item.prompt : undefined}
                     badges={item.asset ? ['Recipe attached'] : undefined}
                     onClick={() => openPost(item)}
+                    actionLabel="View"
                   />
                 );
               }) : generations.map((generation) => {
@@ -699,6 +866,7 @@ export default function OwnerProfileMediaHub({ creator }: { creator: ShowcaseCre
                       generation.origin === 'template' ? 'Template' : generation.model,
                     ]}
                     onClick={generation.output_url ? () => void openGeneration(generation) : undefined}
+                    actionLabel="Preview"
                   />
                 );
               })}
@@ -776,7 +944,7 @@ export default function OwnerProfileMediaHub({ creator }: { creator: ShowcaseCre
         ] : []}
         actions={selectedGeneration ? (
           <>
-            <Link href={`/post/new?generationId=${encodeURIComponent(selectedGeneration.id)}&from=profile`} className="inline-flex min-h-11 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-bold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]">
+            <Link href={`/post/new?generationId=${encodeURIComponent(selectedGeneration.id)}&from=profile&returnTo=%2Fprofile%3Ftab%3Dposts`} className="inline-flex min-h-11 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-bold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]">
               <Plus className="h-4 w-4" />
               {selectedGeneration.linked_post_id ? 'Create another post' : 'Turn into post'}
             </Link>
@@ -793,6 +961,7 @@ export default function OwnerProfileMediaHub({ creator }: { creator: ShowcaseCre
           </>
         ) : null}
       />
-    </section>
+      </section>
+    </>
   );
 }

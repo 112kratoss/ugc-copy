@@ -29,6 +29,8 @@ interface CreatorProfileCardProps {
   onboardingMode?: boolean;
   nextPath?: string;
   returnAfterSave?: boolean;
+  collapseOptionalDetails?: boolean;
+  hideIntro?: boolean;
 }
 
 const EMPTY_ERRORS: ProfileFieldErrors = {};
@@ -238,6 +240,8 @@ export default function CreatorProfileCard({
   onboardingMode = false,
   nextPath = '/creations',
   returnAfterSave = false,
+  collapseOptionalDetails = false,
+  hideIntro = false,
 }: CreatorProfileCardProps) {
   const router = useRouter();
   const [form, setForm] = useState<EditableCreatorProfile | null>(initialProfile);
@@ -968,18 +972,8 @@ export default function CreatorProfileCard({
   ];
   const completedEssentialCount = essentialTasks.filter((task) => task.done).length;
 
-  const optionalProfileFields = (
-    <div className={onboardingMode
-      ? 'p-5 sm:p-6'
-      : 'rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6'}>
-      <div className="mb-6">
-        <h3 className="text-lg font-semibold text-white">More about you</h3>
-        <p className="mt-1 text-sm leading-6 text-zinc-400">
-          Optional details add context and credibility. None of them block your first creation.
-        </p>
-      </div>
-
-      <div className="grid gap-6 md:grid-cols-2">
+  const profileStoryFields = (
+    <div className="grid gap-6 md:grid-cols-2">
         <label className="block md:col-span-2" htmlFor="profile-bio">
           <span className="mb-2 flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
             <span>Bio <span className="normal-case tracking-normal text-zinc-600">Optional</span></span>
@@ -1078,6 +1072,11 @@ export default function CreatorProfileCard({
           {fieldErrors.coverUrl ? <p id="profile-cover-error" className="text-xs text-red-300">{fieldErrors.coverUrl}</p> : null}
         </div>
 
+    </div>
+  );
+
+  const profileLinkFields = (
+    <div className="grid gap-6 md:grid-cols-2">
         <label className="block" htmlFor="profile-website">
           <span className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
             <Globe2 className="h-3.5 w-3.5" aria-hidden /> Website
@@ -1142,13 +1141,29 @@ export default function CreatorProfileCard({
             {fieldErrors[field] ? <p id={`profile-${field}-error`} className="mt-2 text-xs text-red-300">{fieldErrors[field]}</p> : null}
           </label>
         ))}
+    </div>
+  );
+
+  const optionalProfileFields = (
+    <div className={onboardingMode
+      ? 'p-5 sm:p-6'
+      : 'rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6'}>
+      <div className="mb-6">
+        <h3 className="text-lg font-semibold text-white">More about you</h3>
+        <p className="mt-1 text-sm leading-6 text-zinc-400">
+          Optional details add context and credibility. None of them block your first creation.
+        </p>
+      </div>
+      <div className="space-y-6">
+        {profileStoryFields}
+        {profileLinkFields}
       </div>
     </div>
   );
 
   return (
     <section className="space-y-6">
-      {!isEmbedded && (
+      {!isEmbedded && !hideIntro && (
         <div className="flex flex-col gap-4 rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] md:flex-row md:items-start md:justify-between">
           <div>
             <div className="flex items-center gap-3">
@@ -1396,7 +1411,27 @@ export default function CreatorProfileCard({
           </div>
         </div>
 
-        {onboardingMode ? (
+        {collapseOptionalDetails && !onboardingMode ? (
+          <>
+            <div className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6">
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold text-white">Profile story</h3>
+                <p className="mt-1 text-sm leading-6 text-zinc-400">Add a cover and short bio that make your work recognizable.</p>
+              </div>
+              {profileStoryFields}
+            </div>
+            <details ref={optionalDetailsRef} className="group rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]">
+              <summary className="ui-focus-ring flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 rounded-3xl px-5 py-4 text-sm font-bold text-[var(--ui-text-primary)] marker:content-none sm:px-6">
+                <span>
+                  Links and location
+                  <span className="ml-2 font-normal text-[var(--ui-text-muted)]">Website and social handles</span>
+                </span>
+                <Plus className="h-4 w-4 transition-transform group-open:rotate-45" aria-hidden />
+              </summary>
+              <div className="border-t border-[var(--ui-border-subtle)] p-5 sm:p-6">{profileLinkFields}</div>
+            </details>
+          </>
+        ) : onboardingMode ? (
           <details ref={optionalDetailsRef} className="group rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]">
             <summary className="ui-focus-ring flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 rounded-3xl px-5 py-4 text-sm font-bold text-[var(--ui-text-primary)] marker:content-none sm:px-6">
               <span>
@@ -1414,10 +1449,8 @@ export default function CreatorProfileCard({
             <div className="text-sm text-zinc-400">
               {onboardingMode ? (
                 'Only the handle and display name are required to continue.'
-              ) : form.credits !== null ? (
-                <span><strong className="text-amber-200">{form.credits} credits</strong> available right now.</span>
               ) : (
-                'Credits will update automatically from your account.'
+                'Changes appear anywhere your creator identity is shown.'
               )}
             </div>
             <div className="flex flex-col items-start gap-3 sm:items-end">
@@ -1448,7 +1481,7 @@ export default function CreatorProfileCard({
                 ) : null}
                 <button
                   type="submit"
-                  disabled={isSaving || isSkipping}
+                  disabled={isSaving || isSkipping || (!onboardingMode && !returnAfterSave && !isDirty)}
                   className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-7 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {isSaving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : !onboardingMode ? <Save className="h-4 w-4" aria-hidden /> : null}

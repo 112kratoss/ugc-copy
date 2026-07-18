@@ -11,7 +11,6 @@ import {
   Link2,
   LockKeyhole,
   Loader2,
-  ShieldCheck,
   ShoppingCart,
   Sparkles,
 } from 'lucide-react';
@@ -31,6 +30,7 @@ import {
   type PostResourceSection,
 } from '@/lib/post-resource-bundles';
 import { getCurrentInternalPath } from '@/lib/share';
+import { trackProductEvent } from '@/lib/product-analytics';
 
 declare global {
   interface Window {
@@ -50,6 +50,7 @@ interface PostResourceBundlePanelProps {
   priceUsdCents: number;
   priceNote: string | null;
   isFree: boolean;
+  isPublic?: boolean;
   viewerCanAccess: boolean;
   viewerIsOwner: boolean;
   resourceKinds: PostResourceKind[];
@@ -142,6 +143,7 @@ export default function PostResourceBundlePanel({
   priceUsdCents,
   priceNote,
   isFree,
+  isPublic = false,
   viewerCanAccess,
   viewerIsOwner,
   resourceKinds,
@@ -199,20 +201,24 @@ export default function PostResourceBundlePanel({
   );
   const hasSectionedResourceItems = (resources?.sections?.length ?? 0) > 0 && groupedSectionResources.length > 0;
   const hasStructuredResourceItems = groupedResourceItems.length > 0;
-  const isRecipeVisible = hasAccess || viewerIsOwner;
+  const isRecipeVisible = isPublic || hasAccess || viewerIsOwner;
   const accessLabel = useMemo(() => {
+    if (isPublic) {
+      return 'This public recipe is available immediately.';
+    }
+
     if (viewerIsOwner) {
       return 'You own this recipe.';
     }
 
     if (hasAccess) {
       return isFree
-        ? 'Prompt, notes, references, and files are public on this post.'
+        ? 'Your free recipe is ready and saved to your library.'
         : 'Recipe unlocked on this post.';
     }
 
-    return isFree ? 'Unlock the full recipe for free.' : `Unlock the full recipe for ${priceLabel}.`;
-  }, [hasAccess, isFree, priceLabel, viewerIsOwner]);
+    return isFree ? 'Get the full recipe free with one click.' : `Unlock the full recipe for ${priceLabel}.`;
+  }, [hasAccess, isFree, isPublic, priceLabel, viewerIsOwner]);
   const creditCost = Math.max(0, priceUsdCents);
   const formattedCreditCost = creditCost.toLocaleString();
   const formattedCreditBalance = typeof credits === 'number' ? credits.toLocaleString() : null;
@@ -264,6 +270,7 @@ export default function PostResourceBundlePanel({
     }
 
     try {
+      trackProductEvent('recipe_unlock_started', { method: 'free', post_id: postId });
       setWorkingAction('free');
       setFeedback(null);
       setError(null);
@@ -277,12 +284,14 @@ export default function PostResourceBundlePanel({
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to unlock the free recipe.');
+        throw new Error(data.error || 'Failed to get the free recipe.');
       }
 
       await fetchLatestBundle();
+      trackProductEvent('recipe_unlock_succeeded', { method: 'free', post_id: postId });
     } catch (unlockError) {
-      setError(unlockError instanceof Error ? unlockError.message : 'Failed to unlock the free recipe.');
+      trackProductEvent('recipe_unlock_failed', { method: 'free', post_id: postId });
+      setError(unlockError instanceof Error ? unlockError.message : 'Failed to get the free recipe.');
     } finally {
       setWorkingAction(null);
     }
@@ -294,6 +303,7 @@ export default function PostResourceBundlePanel({
     }
 
     try {
+      trackProductEvent('recipe_checkout_started', { method: 'razorpay', post_id: postId });
       setWorkingAction('razorpay');
       setFeedback(null);
       setError(null);
@@ -351,7 +361,9 @@ export default function PostResourceBundlePanel({
             }
 
             await fetchLatestBundle();
+            trackProductEvent('recipe_checkout_succeeded', { method: 'razorpay', post_id: postId });
           } catch (verifyError) {
+            trackProductEvent('recipe_checkout_failed', { method: 'razorpay', post_id: postId });
             setError(verifyError instanceof Error ? verifyError.message : 'Payment verification failed.');
           }
         },
@@ -361,12 +373,14 @@ export default function PostResourceBundlePanel({
       });
 
       razorpay.on('payment.failed', (payload: unknown) => {
+        trackProductEvent('recipe_checkout_failed', { method: 'razorpay', post_id: postId });
         const errorPayload = payload as { error?: { description?: string } } | null;
         setError(errorPayload?.error?.description || 'Payment failed. Please try again.');
       });
 
       razorpay.open();
     } catch (checkoutError) {
+      trackProductEvent('recipe_checkout_failed', { method: 'razorpay', post_id: postId });
       setError(checkoutError instanceof Error ? checkoutError.message : 'Failed to start checkout.');
     } finally {
       setWorkingAction(null);
@@ -385,6 +399,7 @@ export default function PostResourceBundlePanel({
     }
 
     try {
+      trackProductEvent('recipe_unlock_started', { method: 'credits', post_id: postId });
       setWorkingAction('credits');
       setFeedback(null);
       setError(null);
@@ -407,7 +422,9 @@ export default function PostResourceBundlePanel({
 
       await fetchLatestBundle();
       setFeedback(data.alreadyProcessed ? 'This recipe was already available on your account.' : 'Recipe unlocked with credits.');
+      trackProductEvent('recipe_unlock_succeeded', { method: 'credits', post_id: postId });
     } catch (unlockError) {
+      trackProductEvent('recipe_unlock_failed', { method: 'credits', post_id: postId });
       setError(unlockError instanceof Error ? unlockError.message : 'Failed to unlock with credits.');
     } finally {
       setWorkingAction(null);
@@ -544,10 +561,6 @@ export default function PostResourceBundlePanel({
         year: 'numeric',
       })
     : null;
-  const includedResourceLabel = preview.resourceKinds.length > 0
-    ? bundleCountSummary || preview.resourceKinds.map((kind) => getPostResourceKindLabel(kind)).join(', ')
-    : 'Reusable resources';
-
   const formatFileSize = (sizeBytes: number | null | undefined) => {
     if (!sizeBytes) {
       return null;
@@ -623,7 +636,7 @@ export default function PostResourceBundlePanel({
           </div>
 
           <div className="rounded-full border border-emerald-300/25 bg-emerald-300 px-3.5 py-1.5 text-sm font-bold text-slate-950">
-            {isRecipeVisible ? (isFree ? 'Public recipe' : 'Unlocked') : isFree ? 'Free recipe' : priceLabel}
+            {isPublic ? 'Public recipe' : isRecipeVisible ? (isFree ? 'Free recipe' : 'Unlocked') : isFree ? 'Free recipe' : priceLabel}
           </div>
         </div>
       </div>
@@ -636,7 +649,7 @@ export default function PostResourceBundlePanel({
           </div>
 
           <div className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-semibold text-zinc-200">
-            {viewerIsOwner ? 'Owner access' : hasAccess ? 'Unlocked' : 'Locked'}
+            {viewerIsOwner ? 'Owner access' : isPublic ? 'Public access' : hasAccess ? (isFree ? 'Added' : 'Unlocked') : isFree ? 'Free to get' : 'Locked'}
           </div>
         </div>
 
@@ -657,7 +670,9 @@ export default function PostResourceBundlePanel({
           <span>
             {hasAccess || viewerIsOwner
               ? 'Everything attached is available below.'
-              : 'Reusable parts reveal here after unlock.'}
+              : isFree
+                ? 'Reusable parts appear here as soon as you get the recipe.'
+                : 'Reusable parts reveal here after unlock.'}
           </span>
         </div>
 
@@ -668,8 +683,8 @@ export default function PostResourceBundlePanel({
             disabled={isAnyActionWorking}
             className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
           >
-            {workingAction === 'free' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
-            Unlock free recipe
+            {workingAction === 'free' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {workingAction === 'free' ? 'Adding recipe…' : 'Get free recipe'}
           </button>
         ) : null}
 
@@ -703,6 +718,12 @@ export default function PostResourceBundlePanel({
           </div>
         ) : null}
 
+        {!isRecipeVisible ? (
+          <p className="mt-4 text-xs leading-5 text-zinc-500">
+            Digital recipes are final sale. Use the result in personal or commercial work; do not resell, redistribute, or claim the raw bundle as your own.
+          </p>
+        ) : null}
+
         {!hasAccess && !viewerIsOwner && !isFree ? (
           <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-zinc-400">
             <span>
@@ -728,40 +749,6 @@ export default function PostResourceBundlePanel({
           </div>
         ) : null}
       </div>
-
-      {!isRecipeVisible ? (
-      <div className="mx-5 rounded-[22px] border border-sky-300/12 bg-sky-500/[0.06] p-5 sm:mx-6">
-        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-sky-200/80">
-          <ShieldCheck className="h-4 w-4" />
-          Buyer trust
-        </div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Included after unlock</div>
-            <p className="mt-2 text-sm leading-6 text-zinc-200">{includedResourceLabel}</p>
-          </div>
-          <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Access</div>
-            <p className="mt-2 text-sm leading-6 text-zinc-200">
-              {isFree ? 'Instant access after login.' : 'Pay with Razorpay or spend credits for instant access.'}
-            </p>
-          </div>
-          <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Terms</div>
-            <p className="mt-2 text-sm leading-6 text-zinc-300">
-              Digital recipes are final sale. Use for personal or commercial creation; do not resell, redistribute, or claim the raw bundle as your own.
-            </p>
-          </div>
-          <div className="rounded-2xl border border-white/8 bg-black/25 p-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Proof</div>
-            <p className="mt-2 text-sm leading-6 text-zinc-300">
-              {formatUnlockCountLabel(isFree ? 'free' : 'paid', salesCount)}
-              {formattedUpdatedAt ? ` · Updated ${formattedUpdatedAt}` : ''}
-            </p>
-          </div>
-        </div>
-      </div>
-      ) : null}
 
       <div className="m-5 rounded-[22px] border border-white/8 bg-black/35 p-5 sm:m-6">
         <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
@@ -1074,7 +1061,7 @@ export default function PostResourceBundlePanel({
               </pre>
               {viewerIsOwner ? (
                 <p className="mt-3 rounded-2xl border border-emerald-300/15 bg-emerald-500/10 px-4 py-3 text-sm leading-6 text-emerald-50/85">
-                  Owner preview. Buyers must unlock the recipe before seeing this.
+                  Owner preview. {isFree ? 'People add this recipe before seeing it.' : 'Buyers must unlock the recipe before seeing it.'}
                 </p>
               ) : null}
             </div>

@@ -351,7 +351,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     expect(result).toEqual({
       ok: false,
       status: 500,
-      body: { error: 'Failed to unlock the free recipe.' },
+      body: { error: 'Failed to get the free recipe.' },
     });
     expect(admin.rpcCalls.map((call) => call.fn)).toEqual(['check_backend_rate_limit']);
     expect(notifyPostResourceUnlockCompleted).not.toHaveBeenCalled();
@@ -375,7 +375,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     expect(result).toEqual({
       ok: false,
       status: 500,
-      body: { error: 'Failed to unlock the free recipe.' },
+      body: { error: 'Failed to get the free recipe.' },
     });
     expect(notifyPostResourceUnlockCompleted).not.toHaveBeenCalled();
   });

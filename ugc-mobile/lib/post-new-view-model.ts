@@ -178,9 +178,13 @@ export const POST_COMPOSER_SOURCE_OPTIONS: SourceToolOption[] = [
     label: 'Magicbooklet',
     slug: 'magicbooklet',
     models: [
+      { slug: 'nano-banana-2-lite', label: 'Nano Banana 2 Lite' },
       { slug: 'nano-banana-2', label: 'Nano Banana 2.0' },
       { slug: 'nano-banana-pro', label: 'Nano Banana Pro' },
       { slug: 'gpt-image-2', label: 'GPT Image 2' },
+      { slug: 'seedream-5-pro', label: 'Seedream 5 Pro' },
+      { slug: 'flux-2-pro', label: 'FLUX.2 Pro' },
+      { slug: 'z-image', label: 'Z-Image' },
       { slug: 'grok-imagine-image', label: 'Grok Imagine' },
       { slug: 'kling-2.6', label: 'Kling 2.6 Motion' },
       { slug: 'kling-3.0', label: 'Kling 3.0 Motion' },

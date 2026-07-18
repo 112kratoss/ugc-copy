@@ -115,7 +115,7 @@ describe('NewPostClient', () => {
 
     const checklist = screen.getByLabelText(/publish checklist/i);
     expect(checklist).toHaveTextContent(/proof added/i);
-    expect(checklist).toHaveTextContent(/story ready/i);
+    expect(checklist).toHaveTextContent(/caption optional/i);
     expect(checklist).toHaveTextContent(/recipe optional/i);
   });
 

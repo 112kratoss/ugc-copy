@@ -782,7 +782,7 @@ describe('/api/showcase/publish route', () => {
     expect(data.resourceBundlePath).toBe('/showcase/post-1#recipe');
   });
 
-  it('creates one free reference unlock when a public generated post has saved references and no paid bundle', async () => {
+  it('keeps saved references private when publishing without a recipe', async () => {
     generationInputMediaRows = [{
       id: 'input-1',
       generation_id: 'gen-1',
@@ -813,35 +813,17 @@ describe('/api/showcase/publish route', () => {
     }) as NextRequest);
 
     const data = await response.json();
-    const publishedBundle = publishRpcCalls[0]?.p_bundle as Record<string, unknown>;
-    const resources = publishedBundle.resources as Record<string, unknown>;
-    const items = resources.items as Array<Record<string, unknown>>;
-
     expect(response.status).toBe(200);
-    expect(data.resourceBundleStatus).toBe('published');
+    expect(data.success).toBe(true);
     expect(publishRpcCalls[0]).toMatchObject({
       p_has_bundle: true,
+      p_bundle: { accessMode: 'none' },
     });
-    expect(publishedBundle).toMatchObject({
-      accessMode: 'free',
-    });
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({
-      type: 'reference_image',
-      role: 'style_reference',
-      title: 'Hero reference',
-      storagePath: expect.stringMatching(/^user-1\/generation-references\/gen-1\/00-reference-image-input-1\.png$/),
-      remixUse: 'reference_only',
-    });
-    expect(JSON.stringify(publishedBundle)).not.toContain('generation_inputs/');
-    expect(downloadMock).toHaveBeenCalledWith('user-1/gen-1/00-reference_image.png');
-    expect(uploadMock).toHaveBeenCalledWith(
-      'user-1/generation-references/gen-1/00-reference-image-input-1.png',
-      expect.any(Blob),
-      expect.objectContaining({
-        contentType: 'image/png',
-        upsert: true,
-      })
+    expect(downloadMock).not.toHaveBeenCalledWith('user-1/gen-1/00-reference_image.png');
+    expect(uploadMock).not.toHaveBeenCalledWith(
+      expect.stringContaining('generation-references'),
+      expect.anything(),
+      expect.anything()
     );
   });
 

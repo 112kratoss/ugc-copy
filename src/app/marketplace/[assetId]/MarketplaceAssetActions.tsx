@@ -59,11 +59,15 @@ export default function MarketplaceAssetActions({
     }
 
     if (viewerCanAccess) {
-      return 'Unlocked in your library.';
+      return isFree ? 'This free recipe is in your library.' : 'Unlocked in your library.';
+    }
+
+    if (isFree) {
+      return 'Add this free recipe to your library with one click.';
     }
 
     return `Unlock this ${getMarketplaceAssetTypeLabel(type).toLowerCase()} for ${priceLabel}.`;
-  }, [priceLabel, type, viewerCanAccess, viewerIsSeller]);
+  }, [isFree, priceLabel, type, viewerCanAccess, viewerIsSeller]);
   const creditCost = Math.max(0, priceUsdCents);
   const formattedCreditCost = creditCost.toLocaleString();
   const formattedCreditBalance = typeof credits === 'number' ? credits.toLocaleString() : null;
@@ -106,7 +110,7 @@ export default function MarketplaceAssetActions({
 
       const orderData = await orderResponse.json();
       if (!orderResponse.ok) {
-        throw new Error(orderData.error || 'Failed to start checkout.');
+        throw new Error(orderData.error || (isFree ? 'Failed to get the free recipe.' : 'Failed to start checkout.'));
       }
 
       if (orderData.alreadyPurchased || orderData.free) {
@@ -162,7 +166,9 @@ export default function MarketplaceAssetActions({
 
       razorpay.open();
     } catch (checkoutError) {
-      setError(checkoutError instanceof Error ? checkoutError.message : 'Failed to start checkout.');
+      setError(checkoutError instanceof Error
+        ? checkoutError.message
+        : isFree ? 'Failed to get the free recipe.' : 'Failed to start checkout.');
     } finally {
       setWorkingAction(null);
     }
@@ -258,8 +264,8 @@ export default function MarketplaceAssetActions({
             disabled={isAnyActionWorking}
             className="inline-flex items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
           >
-            {workingAction === 'razorpay' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
-            Get free access
+            {workingAction === 'razorpay' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {workingAction === 'razorpay' ? 'Adding recipe…' : 'Get free recipe'}
           </button>
         ) : null}
 

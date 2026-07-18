@@ -47,6 +47,12 @@ import { buildShowcaseDetailPath } from '@/lib/share';
 import { formatSourceToolsCompact, type SourceToolOption } from '@/lib/source-tools';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import { mergeShowcaseFeedKeepingVisibleItems } from '@/lib/showcase-feed-stability';
+import {
+    buildShowcaseClientCacheKey,
+    readShowcaseClientSnapshot,
+    writeShowcaseClientSnapshot,
+    type ShowcaseClientSnapshot,
+} from '@/lib/showcase-client-cache';
 
 function ShowcaseReelLoadingFallback() {
     return (
@@ -304,7 +310,7 @@ function formatResourceKinds(kinds: PostResourceKind[]): string {
 
 function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
     if (isGenerationRecipeAssetId(asset.id)) {
-        return 'Public recipe';
+        return 'Free recipe';
     }
 
     if (asset.priceQuote) {
@@ -323,7 +329,7 @@ function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>)
     }
 
     if (asset.accessMode === 'free' || asset.priceUsdCents === 0) {
-        return 'Unlock free recipe';
+        return 'View free recipe';
     }
 
     return `Unlock for ${asset.priceQuote?.formatted ?? getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+(?:unlock|recipe)$/i, '')}`;
@@ -383,8 +389,43 @@ export default function ShowcaseClient({
     const searchParams = useSearchParams();
     const { session, user, isLoading: isAuthLoading } = useAuth();
     const [isPending, startTransition] = useTransition();
-    const feedItemsForEventsRef = useRef<ShowcaseFeedItem[]>(initialFeed.items);
-    const feedSessionIdForEventsRef = useRef<string | null>(getShowcaseFeedSessionId(initialFeed));
+    const showcaseClientCacheKey = buildShowcaseClientCacheKey({
+        viewerId: user?.id ?? null,
+        category: initialCategory,
+        sort: initialSort,
+        tool: initialTool,
+        unlock: initialUnlock,
+        resource: initialResource,
+    });
+    const [restoredClientState] = useState(() => {
+        const cacheKey = buildShowcaseClientCacheKey({
+            viewerId: user?.id ?? null,
+            category: initialCategory,
+            sort: initialSort,
+            tool: initialTool,
+            unlock: initialUnlock,
+            resource: initialResource,
+        });
+        const snapshot = readShowcaseClientSnapshot(cacheKey);
+        if (!snapshot) {
+            return { snapshot: null, feed: initialFeed };
+        }
+
+        const restoredSavedItemIds = new Set(snapshot.savedItemIds);
+        return {
+            snapshot,
+            feed: {
+                ...snapshot.feed,
+                items: snapshot.feed.items.map((item) => ({
+                    ...item,
+                    isSaved: restoredSavedItemIds.has(item.id),
+                })),
+            },
+        };
+    });
+    const restoredInitialFeed = restoredClientState.feed;
+    const feedItemsForEventsRef = useRef<ShowcaseFeedItem[]>(restoredInitialFeed.items);
+    const feedSessionIdForEventsRef = useRef<string | null>(getShowcaseFeedSessionId(restoredInitialFeed));
     const {
         items,
         setItems,
@@ -393,7 +434,7 @@ export default function ShowcaseClient({
         savingItemIds,
         toggleSave,
     } = useOptimisticPostSave({
-        initialItems: initialFeed.items,
+        initialItems: restoredInitialFeed.items,
         accessToken: session?.access_token ?? null,
         isSignedIn: Boolean(user && session?.access_token),
         onAuthRequired: () => router.push('/login?returnUrl=/showcase'),
@@ -422,13 +463,16 @@ export default function ShowcaseClient({
     const [unlock, setUnlock] = useState<ShowcaseUnlockFilter>(initialUnlock);
     const [resource, setResource] = useState<ShowcaseResourceFilter>(initialResource);
     const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(false);
-    const [pageInfo, setPageInfo] = useState(initialFeed.pageInfo);
-    const [feedSessionId, setFeedSessionId] = useState(() => getShowcaseFeedSessionId(initialFeed));
+    const [pageInfo, setPageInfo] = useState(restoredInitialFeed.pageInfo);
+    const [feedSessionId, setFeedSessionId] = useState(() => getShowcaseFeedSessionId(restoredInitialFeed));
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
     const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
     const [renderedItemCount, setRenderedItemCount] = useState(() => (
-        Math.min(SHOWCASE_INITIAL_RENDER_COUNT, initialFeed.items.length)
+        Math.min(
+            restoredClientState.snapshot?.renderedItemCount ?? SHOWCASE_INITIAL_RENDER_COUNT,
+            restoredInitialFeed.items.length
+        )
     ));
     const renderedItemCountRef = useRef(renderedItemCount);
     const [hasActivatedInitialAnonymousCard, setHasActivatedInitialAnonymousCard] = useState(false);
@@ -493,6 +537,24 @@ export default function ShowcaseClient({
     const priorityMediaItemId = renderedItems.find((item) => (
         item.postFormat !== 'text' && getItemMediaItems(item).length > 0
     ))?.id ?? null;
+
+    useEffect(() => {
+        const itemsWithSavedState = items.map((item) => ({
+            ...item,
+            isSaved: savedItemIds.has(item.id),
+        }));
+        const snapshot: Omit<ShowcaseClientSnapshot, 'cachedAt'> = {
+            feed: {
+                ...initialFeed,
+                items: itemsWithSavedState,
+                pageInfo,
+                feedSessionId,
+            },
+            renderedItemCount,
+            savedItemIds: [...savedItemIds],
+        };
+        writeShowcaseClientSnapshot(showcaseClientCacheKey, snapshot);
+    }, [feedSessionId, initialFeed, items, pageInfo, renderedItemCount, savedItemIds, showcaseClientCacheKey]);
 
     useEffect(() => {
         const postParam = searchParams.get('post');
@@ -1267,7 +1329,7 @@ export default function ShowcaseClient({
 
                     <div className="flex flex-wrap gap-2">
                         <Link
-                            href="/post/new"
+                            href="/post/new?from=community&returnTo=%2Fshowcase"
                             prefetch={false}
                             className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
                         >
@@ -1285,7 +1347,11 @@ export default function ShowcaseClient({
 
                 <div className="sticky top-[72px] z-30 mb-7 rounded-[28px] border border-[var(--ui-border-default)] bg-[rgba(25,25,28,0.92)] p-3 shadow-[0_12px_30px_rgba(0,0,0,0.24)] backdrop-blur-xl sm:p-4">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="flex gap-2 overflow-x-auto pb-1 sm:pb-0 w-full sm:w-auto hide-scrollbar">
+                    <div className="relative min-w-0 w-full sm:w-auto">
+                      <div
+                        className="flex gap-2 overflow-x-auto pb-1 pr-12 sm:pb-0 sm:pr-0 hide-scrollbar"
+                        aria-label="Filter posts by media type"
+                      >
                         {CATEGORIES.map((cat) => {
                             const Icon = cat.icon;
                             const isActive = category === cat.id;
@@ -1311,6 +1377,8 @@ export default function ShowcaseClient({
                                 </button>
                             );
                         })}
+                      </div>
+                      <div aria-hidden className="pointer-events-none absolute inset-y-0 right-0 w-12 bg-gradient-to-l from-[rgba(25,25,28,0.98)] to-transparent sm:hidden" />
                     </div>
                     <div className="flex items-center gap-2">
                         <select
@@ -1458,7 +1526,7 @@ export default function ShowcaseClient({
                         </span>
                         <p className="text-lg font-bold text-[var(--ui-text-primary)]">Nothing in this lane yet</p>
                         <p className="mt-2 text-sm">Clear a filter or share a result, tip, prompt, or workflow to start it.</p>
-                        <Link href="/post/new" className="ui-focus-ring mt-5 inline-flex min-h-12 items-center rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)]">
+                        <Link href="/post/new?from=community&returnTo=%2Fshowcase" className="ui-focus-ring mt-5 inline-flex min-h-12 items-center rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)]">
                             Share the first post
                         </Link>
                     </div>

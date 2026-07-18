@@ -75,7 +75,10 @@ describe('MarketplacePage', () => {
     });
 
     expect(await screen.findByRole('link', { name: /^recent$/i })).toHaveAttribute('href', '/marketplace?sort=recent');
-    expect(screen.getAllByRole('link', { name: /share a post/i })[0]).toHaveAttribute('href', '/post/new');
+    expect(screen.getAllByRole('link', { name: /share a post/i })[0]).toHaveAttribute(
+      'href',
+      '/post/new?from=marketplace&returnTo=%2Fmarketplace'
+    );
     expect(screen.queryByRole('link', { name: /create a listing/i })).not.toBeInTheDocument();
   });
 
@@ -153,7 +156,7 @@ describe('MarketplacePage', () => {
     });
 
     expect(await screen.findByText('Tip / note')).toBeInTheDocument();
-    expect(screen.getByText('Prompt pacing tip')).toBeInTheDocument();
+    expect(screen.getAllByText('Prompt pacing tip')).toHaveLength(2);
     expect(screen.getByText('Lead with the product benefit before adding style language.')).toBeInTheDocument();
     expect(screen.getByText('Free recipe')).toBeInTheDocument();
     expect(screen.queryByText('Text-only attached post')).not.toBeInTheDocument();

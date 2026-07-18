@@ -83,7 +83,7 @@ describe('workflow canvas node summaries', () => {
     ]);
     expect(getVideoGenerateNodeSummary(veo)).toEqual([
       '16:9 • 8s fixed',
-      'Quality',
+      'Quality • 720p',
       'Frames mode',
     ]);
   });

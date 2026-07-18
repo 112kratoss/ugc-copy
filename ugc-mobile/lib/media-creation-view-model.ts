@@ -14,6 +14,18 @@ import type {
 } from './types';
 
 export const IMAGE_MODELS = {
+  'nano-banana-2-lite': {
+    id: 'nano-banana-2-lite',
+    displayName: 'Nano Banana 2 Lite',
+    description: 'Fast 1K generation and edits for high-volume creative iteration.',
+    badge: 'Fast',
+    maxImages: 10,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: false,
+    aspectRatios: ['auto', '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'],
+    resolutions: ['1K'],
+    outputFormats: ['jpg'],
+  },
   'nano-banana-2': {
     id: 'nano-banana-2',
     displayName: 'Nano Banana 2.0',
@@ -50,6 +62,49 @@ export const IMAGE_MODELS = {
     resolutions: ['1K', '2K', '4K'],
     outputFormats: ['jpg'],
   },
+  'seedream-5-pro': {
+    id: 'seedream-5-pro',
+    displayName: 'Seedream 5 Pro',
+    description: 'Production-ready portraits, products, typography, and precise edits.',
+    badge: 'Creator',
+    maxImages: 10,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: true,
+    aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16', '2:3', '3:2', '21:9'],
+    resolutions: ['1K', '2K'],
+    outputFormats: ['jpg', 'png'],
+  },
+  'seedream-5-lite': { id: 'seedream-5-lite', displayName: 'Seedream 5 Lite', description: 'Fast, low-cost generation and editing up to 3K.', badge: 'Value', maxImages: 14, supportsGoogleSearch: false, supportsOutputFormat: true, aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16', '2:3', '3:2', '21:9'], resolutions: ['2K', '3K'], outputFormats: ['jpg', 'png'] },
+  'wan-2.7-image': { id: 'wan-2.7-image', displayName: 'Wan 2.7 Image', description: 'Affordable generation and editing with up to nine references.', badge: 'Value', maxImages: 9, supportsGoogleSearch: false, supportsOutputFormat: false, aspectRatios: ['auto'], resolutions: ['1K', '2K'], outputFormats: ['jpg'] },
+  'wan-2.7-image-pro': { id: 'wan-2.7-image-pro', displayName: 'Wan 2.7 Image Pro', description: 'High-fidelity Wan generation and editing with optional 4K output.', badge: 'Pro', maxImages: 9, supportsGoogleSearch: false, supportsOutputFormat: false, aspectRatios: ['auto'], resolutions: ['1K', '2K', '4K'], outputFormats: ['jpg'] },
+  'imagen-4-fast': { id: 'imagen-4-fast', displayName: 'Imagen 4 Fast', description: 'Fast Google image generation.', badge: 'Fast', maxImages: 0, supportsGoogleSearch: false, supportsOutputFormat: false, aspectRatios: ['auto', '1:1', '16:9', '9:16', '3:4', '4:3'], resolutions: ['1K'], outputFormats: ['jpg'] },
+  'imagen-4': { id: 'imagen-4', displayName: 'Imagen 4', description: 'Balanced Google image generation.', badge: 'Quality', maxImages: 0, supportsGoogleSearch: false, supportsOutputFormat: false, aspectRatios: ['auto', '1:1', '16:9', '9:16', '3:4', '4:3'], resolutions: ['1K'], outputFormats: ['jpg'] },
+  'imagen-4-ultra': { id: 'imagen-4-ultra', displayName: 'Imagen 4 Ultra', description: 'Highest-quality Imagen 4 output.', badge: 'Ultra', maxImages: 0, supportsGoogleSearch: false, supportsOutputFormat: false, aspectRatios: ['auto', '1:1', '16:9', '9:16', '3:4', '4:3'], resolutions: ['1K'], outputFormats: ['jpg'] },
+  'ideogram-v3': { id: 'ideogram-v3', displayName: 'Ideogram V3', description: 'Typography, logos, posters, and image remixing.', badge: 'Design', maxImages: 1, supportsGoogleSearch: false, supportsOutputFormat: false, aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'], resolutions: ['1K'], outputFormats: ['jpg'] },
+  'flux-2-pro': {
+    id: 'flux-2-pro',
+    displayName: 'FLUX.2 Pro',
+    description: 'Photoreal product work with strong multi-reference consistency.',
+    badge: 'Studio',
+    maxImages: 8,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: false,
+    aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3'],
+    resolutions: ['1K', '2K'],
+    outputFormats: ['jpg'],
+  },
+  'z-image': {
+    id: 'z-image',
+    displayName: 'Z-Image',
+    description: 'Low-cost photoreal generation for drafts and rapid exploration.',
+    badge: 'Economy',
+    maxImages: 0,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: false,
+    aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'],
+    resolutions: ['1K'],
+    outputFormats: ['jpg'],
+  },
   'grok-imagine-image': {
     id: 'grok-imagine-image',
     displayName: 'Grok Imagine',
@@ -80,6 +135,19 @@ export const VIDEO_MODELS = {
       { value: 'std', label: 'Standard (720p)' },
       { value: 'pro', label: 'Pro (1080p)' },
     ],
+  },
+  'kling-3.0-turbo': {
+    id: 'kling-3.0-turbo',
+    displayName: 'Kling 3 Turbo',
+    description: 'Fast text-to-video or single-frame animation.',
+    supportsMultiShot: false,
+    supportsSound: false,
+    supportsFixedLens: false,
+    aspectRatios: ['16:9', '9:16', '1:1'],
+    durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    singleShotDurationRange: { min: 3, max: 15, default: 5 },
+    resolutions: ['720p', '1080p'],
+    modeOptions: [],
   },
   'seedance-1.5-pro': {
     id: 'seedance-1.5-pro',
@@ -119,6 +187,49 @@ export const VIDEO_MODELS = {
     resolutions: ['480p', '720p'],
     modeOptions: [],
   },
+  'seedance-2-mini': {
+    id: 'seedance-2-mini',
+    displayName: 'Seedance 2 Mini',
+    description: 'Lower-cost Seedance with multimodal references and generated audio.',
+    supportsMultiShot: false,
+    supportsSound: true,
+    supportsFixedLens: false,
+    aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9'],
+    durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    singleShotDurationRange: { min: 4, max: 15, default: 10 },
+    resolutions: ['480p', '720p'],
+    modeOptions: [],
+  },
+  'wan-2.7': {
+    id: 'wan-2.7',
+    displayName: 'Wan 2.7',
+    description: 'Text, frame, and multimodal reference-to-video generation.',
+    supportsMultiShot: false,
+    supportsSound: false,
+    supportsFixedLens: false,
+    aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+    durations: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    singleShotDurationRange: { min: 2, max: 15, default: 5 },
+    resolutions: ['720p', '1080p'],
+    modeOptions: [],
+  },
+  'happyhorse-1.1': { id: 'happyhorse-1.1', displayName: 'HappyHorse 1.1', description: 'Text, image, and multi-reference video generation.', supportsMultiShot: false, supportsSound: false, supportsFixedLens: false, aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '4:5', '5:4', '21:9', '9:21'], durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], singleShotDurationRange: { min: 3, max: 15, default: 5 }, resolutions: ['720p', '1080p'], modeOptions: [] },
+  'gemini-omni-video': { id: 'gemini-omni-video', displayName: 'Gemini Omni Video', description: 'Video creation from text, images, or one reference clip.', supportsMultiShot: false, supportsSound: false, supportsFixedLens: false, aspectRatios: ['16:9', '9:16'], durations: [4, 6, 8, 10], resolutions: ['720p', '1080p', '4k'], modeOptions: [] },
+  'hailuo-2.3': {
+    id: 'hailuo-2.3',
+    displayName: 'Hailuo 2.3',
+    description: 'Image-to-video generation in Standard and Pro modes.',
+    supportsMultiShot: false,
+    supportsSound: false,
+    supportsFixedLens: false,
+    aspectRatios: ['Auto'],
+    durations: [6, 10],
+    resolutions: ['768P', '1080P'],
+    modeOptions: [
+      { value: 'standard', label: 'Standard' },
+      { value: 'pro', label: 'Pro' },
+    ],
+  },
   'veo-3.1': {
     id: 'veo-3.1',
     displayName: 'Veo 3.1',
@@ -128,8 +239,9 @@ export const VIDEO_MODELS = {
     supportsFixedLens: false,
     aspectRatios: ['16:9', '9:16', 'Auto'],
     durations: [8],
-    resolutions: [],
+    resolutions: ['720p', '1080p', '4k'],
     modeOptions: [
+      { value: 'veo3_lite', label: 'Lite' },
       { value: 'veo3_fast', label: 'Fast' },
       { value: 'veo3', label: 'Quality' },
     ],
@@ -177,9 +289,9 @@ export const MOTION_MODELS = {
 export type ImageModelId = keyof typeof IMAGE_MODELS;
 export type VideoModelId = keyof typeof VIDEO_MODELS;
 export type MotionModelId = keyof typeof MOTION_MODELS;
-export type ImageResolution = '1K' | '2K' | '4K';
+export type ImageResolution = '1K' | '2K' | '3K' | '4K';
 export type ImageOutputFormat = 'jpg' | 'png';
-export type ImageQualityMode = 'standard' | 'quality';
+export type ImageQualityMode = 'standard' | 'turbo' | 'balanced' | 'quality';
 export type MotionResolution = '720p' | '1080p';
 export type ReferenceMode = 'frames' | 'elements';
 export type MediaKind = 'image' | 'video' | 'audio';
@@ -236,6 +348,8 @@ export interface VideoCreationDraft {
   references: MediaDraft[];
   referenceVideos: MediaDraft[];
   referenceAudios: MediaDraft[];
+  preparedAudioIds: string[];
+  characterIds: string[];
   startFrame: MediaDraft | null;
   endFrame: MediaDraft | null;
   mode: string;
@@ -382,7 +496,11 @@ function isMotionModelId(value: string): value is MotionModelId {
 }
 
 export function isSeedance2Family(model: VideoModelId) {
-  return model === 'seedance-2' || model === 'seedance-2-fast';
+  return model === 'seedance-2' || model === 'seedance-2-fast' || model === 'seedance-2-mini';
+}
+
+export function supportsMultimodalVideoReferences(model: VideoModelId) {
+  return isSeedance2Family(model) || model === 'wan-2.7' || model === 'gemini-omni-video';
 }
 
 export function defaultVideoMode(model: VideoModelId) {
@@ -496,7 +614,7 @@ function numberSetting(settings: Record<string, unknown>, key: string) {
 }
 
 function isImageResolution(value: string | null): value is ImageResolution {
-  return value === '1K' || value === '2K' || value === '4K';
+  return value === '1K' || value === '2K' || value === '3K' || value === '4K';
 }
 
 function isImageOutputFormat(value: string | null): value is ImageOutputFormat {
@@ -504,7 +622,7 @@ function isImageOutputFormat(value: string | null): value is ImageOutputFormat {
 }
 
 function isImageQualityMode(value: string | null): value is ImageQualityMode {
-  return value === 'standard' || value === 'quality';
+  return value === 'standard' || value === 'turbo' || value === 'balanced' || value === 'quality';
 }
 
 function isReferenceMode(value: string | null): value is ReferenceMode {
@@ -703,6 +821,8 @@ export function createDefaultCreationDraft(tool: CreatorToolId): CreationDraft {
       references: [],
       referenceVideos: [],
       referenceAudios: [],
+      preparedAudioIds: [],
+      characterIds: [],
       startFrame: null,
       endFrame: null,
       mode: 'std',
@@ -821,6 +941,8 @@ function hydrateVideoDraftFromRemixSource(
     references: restoredElements.drafts,
     referenceVideos: restoredReferenceVideos.drafts,
     referenceAudios: restoredReferenceAudios.drafts,
+    preparedAudioIds: Array.isArray(settings.preparedAudioIds) ? settings.preparedAudioIds.filter((value): value is string => typeof value === 'string' && Boolean(value.trim())).slice(0, 3) : [],
+    characterIds: Array.isArray(settings.characterIds) ? settings.characterIds.filter((value): value is string => typeof value === 'string' && Boolean(value.trim())).slice(0, 3) : [],
     startFrame: restoredStartFrame.draft,
     endFrame: restoredEndFrame.draft,
     referenceMode,
@@ -952,18 +1074,20 @@ export function hydrateCreationDraftFromRemixSource(
 
 export function getVideoElementSupport(model: VideoModelId, options: { mode?: string; isMultiShot?: boolean } = {}) {
   if (options.isMultiShot) {
-    return { enabled: false, maxElements: 0, reason: 'Named elements are available in single-shot only.' };
+    return { enabled: false, maxElements: 0, reason: 'Reusable references are available in single-shot only.' };
   }
   if (model === 'seedance-1.5-pro') return { enabled: true, maxElements: 2, reason: null };
-  if (model === 'seedance-2' || model === 'seedance-2-fast') return { enabled: true, maxElements: 5, reason: null };
+  if (model === 'seedance-2' || model === 'seedance-2-fast' || model === 'seedance-2-mini' || model === 'wan-2.7') return { enabled: true, maxElements: 5, reason: null };
+  if (model === 'happyhorse-1.1') return { enabled: true, maxElements: 9, reason: null };
+  if (model === 'gemini-omni-video') return { enabled: true, maxElements: 7, reason: null };
   if (model === 'veo-3.1') {
-    return options.mode === 'veo3_fast'
+    return options.mode === 'veo3_fast' || options.mode === 'veo3_lite'
       ? { enabled: true, maxElements: 3, reason: null }
-      : { enabled: false, maxElements: 0, reason: 'Named elements require Veo Fast.' };
+      : { enabled: false, maxElements: 0, reason: 'Reusable references require Veo Lite or Fast.' };
   }
   if (model === 'grok-imagine-video') return { enabled: true, maxElements: 1, reason: null };
-  if (model === 'kling-3.0-video') return { enabled: false, maxElements: 0, reason: 'Named elements are not available for Kling yet.' };
-  return { enabled: false, maxElements: 0, reason: 'Named elements are not available for this model yet.' };
+  if (model === 'kling-3.0-video') return { enabled: false, maxElements: 0, reason: 'Reusable image references are not available for Kling yet.' };
+  return { enabled: false, maxElements: 0, reason: 'Reusable references are not available for this model yet.' };
 }
 
 export function getMotionDuration(draft: MotionCreationDraft) {
@@ -1009,6 +1133,9 @@ function validateImageDraft(draft: ImageCreationDraft): CreationValidationResult
   if (draft.references.length > model.maxImages) {
     errors.push(`${model.displayName} supports up to ${model.maxImages} total reference image${model.maxImages === 1 ? '' : 's'}.`);
   }
+  if (draft.model === 'wan-2.7-image-pro' && draft.resolution === '4K' && draft.references.length > 0) {
+    errors.push('Wan 2.7 Image Pro supports 4K for text-to-image only.');
+  }
 
   const handles = namedReferences(draft.references).map((reference) => reference.handle).filter((handle): handle is string => Boolean(handle));
   const unknown = unknownPromptHandles(draft.prompt, handles);
@@ -1022,6 +1149,12 @@ function validateImageDraft(draft: ImageCreationDraft): CreationValidationResult
 function validateVideoDraft(draft: VideoCreationDraft): CreationValidationResult {
   const errors: string[] = [];
   const model = VIDEO_MODELS[draft.model];
+  const usesReusableReferences = draft.referenceMode === 'elements';
+  const activeReferences = usesReusableReferences ? draft.references : [];
+  const activeReferenceVideos = usesReusableReferences ? draft.referenceVideos : [];
+  const activeReferenceAudios = usesReusableReferences ? draft.referenceAudios : [];
+  const activeStartFrame = usesReusableReferences ? null : draft.startFrame;
+  const activeEndFrame = usesReusableReferences ? null : draft.endFrame;
 
   if (!isVideoModelId(draft.model)) {
     errors.push(`Unsupported video model: ${draft.model}`);
@@ -1042,14 +1175,14 @@ function validateVideoDraft(draft: VideoCreationDraft): CreationValidationResult
   }
 
   const elementSupport = getVideoElementSupport(draft.model, { mode: draft.mode, isMultiShot: draft.isMultiShot });
-  if (draft.references.length > 0 && !elementSupport.enabled) {
+  if (activeReferences.length > 0 && !elementSupport.enabled) {
     errors.push(elementSupport.reason ?? 'Image references are not available in this video mode.');
   }
-  if (draft.references.length > elementSupport.maxElements) {
+  if (activeReferences.length > elementSupport.maxElements) {
     errors.push(`This video mode supports up to ${elementSupport.maxElements} image reference${elementSupport.maxElements === 1 ? '' : 's'}.`);
   }
 
-  const handles = namedReferences(draft.references).map((reference) => reference.handle).filter((handle): handle is string => Boolean(handle));
+  const handles = namedReferences(activeReferences).map((reference) => reference.handle).filter((handle): handle is string => Boolean(handle));
   const mentioned = extractPromptHandles(draft.prompt);
   const knownMentions = mentioned.filter((handle) => handles.includes(handle));
   const unknown = draft.isMultiShot ? [] : unknownPromptHandles(draft.prompt, handles);
@@ -1060,28 +1193,58 @@ function validateVideoDraft(draft: VideoCreationDraft): CreationValidationResult
     errors.push('Switch reference mode to Elements before using @handles.');
   }
 
-  if (draft.references.length > 0 && (draft.startFrame || draft.endFrame)) {
-    errors.push('Image references cannot be combined with start or end frames in the same run.');
-  }
-  if (draft.isMultiShot && draft.endFrame) {
+  if (draft.isMultiShot && activeEndFrame) {
     errors.push('End frames are not available in multi-shot mode.');
   }
-  if (draft.model === 'grok-imagine-video' && draft.references.length + (draft.startFrame ? 1 : 0) + (draft.endFrame ? 1 : 0) > 1) {
+  if (draft.model === 'grok-imagine-video' && activeReferences.length + (activeStartFrame ? 1 : 0) + (activeEndFrame ? 1 : 0) > 1) {
     errors.push('Grok Imagine Video supports up to 1 image reference per run.');
   }
 
-  if (!isSeedance2Family(draft.model) && draft.referenceVideos.length > 0) {
-    errors.push('Reference videos are available for Seedance 2 models only.');
+  if (!supportsMultimodalVideoReferences(draft.model) && activeReferenceVideos.length > 0) {
+    errors.push('Reference videos are not available for this model.');
   }
-  if (!isSeedance2Family(draft.model) && draft.referenceAudios.length > 0) {
-    errors.push('Reference audio is available for Seedance 2 models only.');
+  if (!supportsMultimodalVideoReferences(draft.model) && activeReferenceAudios.length > 0) {
+    errors.push('Reference audio is not available for this model.');
   }
-  if (draft.referenceVideos.length > 3) {
+  if (isSeedance2Family(draft.model) && activeReferenceVideos.length > 3) {
     errors.push('Seedance 2 supports up to 3 reference videos per run.');
   }
-  const knownReferenceDuration = draft.referenceVideos.reduce((total, media) => total + (media.durationSeconds ?? 0), 0);
-  if (knownReferenceDuration > 15) {
+  if (isSeedance2Family(draft.model) && activeReferenceAudios.length > 3) {
+    errors.push('Seedance 2 supports up to 3 reference audio files per run.');
+  }
+  if (draft.model === 'wan-2.7' && activeReferenceAudios.length > 1) {
+    errors.push('Wan 2.7 supports one reference voice per run.');
+  }
+  if (draft.model === 'wan-2.7' && activeReferences.length + activeReferenceVideos.length + activeReferenceAudios.length > 5) {
+    errors.push('Wan 2.7 supports up to 5 reusable references in total.');
+  }
+  if (draft.model === 'gemini-omni-video' && activeReferenceVideos.length > 1) {
+    errors.push('Gemini Omni supports one reference video per run.');
+  }
+  if (draft.model === 'gemini-omni-video' && activeReferenceAudios.length > 0) {
+    errors.push('Gemini Omni audio IDs are not supported by this upload flow.');
+  }
+  if (draft.model === 'gemini-omni-video' && activeReferences.length + (activeReferenceVideos.length * 2) > 7) {
+    errors.push('Gemini Omni supports seven reference slots; a video uses two slots.');
+  }
+  if (draft.model === 'gemini-omni-video' && draft.preparedAudioIds.length > 3) {
+    errors.push('Gemini Omni supports up to 3 prepared voice references.');
+  }
+  if (draft.model === 'gemini-omni-video' && draft.characterIds.length > 3) {
+    errors.push('Gemini Omni supports up to 3 prepared character references.');
+  }
+  if (draft.model === 'gemini-omni-video' && activeReferences.length + (activeReferenceVideos.length * 2) + draft.characterIds.length > 7) {
+    errors.push('Gemini Omni supports seven reference slots; videos use two and characters use one.');
+  }
+  const knownReferenceDuration = activeReferenceVideos.reduce((total, media) => total + (media.durationSeconds ?? 0), 0);
+  if (isSeedance2Family(draft.model) && knownReferenceDuration > 15) {
     errors.push('Seedance 2 reference videos must be 15 seconds or less combined.');
+  }
+  if (draft.model === 'hailuo-2.3' && !activeStartFrame) {
+    errors.push('Hailuo 2.3 requires a start image.');
+  }
+  if ((draft.model === 'kling-3.0-turbo' || draft.model === 'hailuo-2.3' || draft.model === 'happyhorse-1.1' || draft.model === 'gemini-omni-video') && activeEndFrame) {
+    errors.push(`${model.displayName} supports a start frame only.`);
   }
 
   const aspectRatios = asStringList(model.aspectRatios);
@@ -1094,6 +1257,9 @@ function validateVideoDraft(draft: VideoCreationDraft): CreationValidationResult
   const resolutions = asStringList(model.resolutions);
   if (resolutions.length > 0 && !resolutions.includes(draft.resolution)) {
     errors.push(`Unsupported resolution for ${model.displayName}.`);
+  }
+  if (draft.model === 'hailuo-2.3' && draft.resolution === '1080P' && draft.duration === 10) {
+    errors.push('Hailuo 2.3 supports 1080P output at 6 seconds only.');
   }
   if (!draft.isMultiShot && draft.model !== 'veo-3.1' && !isValidVideoDuration(draft.model, draft.duration)) {
     errors.push(`Unsupported duration for ${model.displayName}.`);
@@ -1252,7 +1418,7 @@ function imageReferenceSummary(count: number) {
 
 function videoReferenceSummary(draft: VideoCreationDraft) {
   if (draft.referenceMode === 'elements') {
-    return `Elements mode · ${draft.references.length === 0 ? 'no image elements' : `${draft.references.length} image element${draft.references.length === 1 ? '' : 's'}`}`;
+    return `Reusable refs · ${draft.references.length === 0 ? 'no image references' : `${draft.references.length} image reference${draft.references.length === 1 ? '' : 's'}`}`;
   }
 
   const frameCount = [draft.startFrame, draft.endFrame].filter(Boolean).length;
@@ -1326,6 +1492,16 @@ function mediaReadiness(draft: CreationDraft): CreationReadinessItem {
     };
   }
 
+  const imageModel = IMAGE_MODELS[draft.model];
+  if (imageModel?.maxImages === 0) {
+    return {
+      id: 'media',
+      label: 'Prompt-only model',
+      body: `${imageModel.displayName} generates without reference images.`,
+      state: 'neutral',
+    };
+  }
+
   return {
     id: 'media',
     label: 'References optional',
@@ -1367,15 +1543,20 @@ export function buildGenerationPayload(draft: CreationDraft): ImageGenerationReq
       elements: elementDescriptors(references),
       aspectRatio: draft.aspectRatio,
       resolution: draft.resolution,
-      qualityMode: draft.model === 'grok-imagine-image' ? draft.qualityMode : undefined,
       outputFormat: config.supportsOutputFormat && asStringList(config.outputFormats).includes(draft.outputFormat) ? draft.outputFormat : 'jpg',
       googleSearch: config.supportsGoogleSearch ? draft.googleSearch : false,
+      qualityMode: draft.model === 'ideogram-v3'
+        ? (draft.qualityMode === 'turbo' || draft.qualityMode === 'balanced' || draft.qualityMode === 'quality' ? draft.qualityMode : 'turbo')
+        : draft.model === 'grok-imagine-image'
+          ? (draft.qualityMode === 'quality' ? 'quality' : 'standard')
+          : 'standard',
       sourceGenerationId: draft.sourceGenerationId ?? null,
     };
   }
 
   if (draft.tool === 'video') {
-    const references = namedReferences(draft.references);
+    const usesReusableReferences = draft.referenceMode === 'elements';
+    const references = namedReferences(usesReusableReferences ? draft.references : []);
     const imageUrls = references.map((reference) => reference.url);
     return {
       model: draft.model,
@@ -1385,12 +1566,14 @@ export function buildGenerationPayload(draft: CreationDraft): ImageGenerationReq
       elements: elementDescriptors(references),
       elementImageUrls: imageUrls,
       imageUrls,
-      referenceVideoUrls: draft.referenceVideos.map((media) => media.url),
-      referenceAudioUrls: draft.referenceAudios.map((media) => media.url),
-      startImageUrl: draft.startFrame?.url ?? null,
-      endImageUrl: draft.endFrame?.url ?? null,
-      startFrame: mediaAssetDescriptor(draft.startFrame),
-      endFrame: mediaAssetDescriptor(draft.endFrame),
+      referenceVideoUrls: usesReusableReferences ? draft.referenceVideos.map((media) => media.url) : [],
+      referenceAudioUrls: usesReusableReferences ? draft.referenceAudios.map((media) => media.url) : [],
+      preparedAudioIds: usesReusableReferences ? draft.preparedAudioIds : [],
+      characterIds: usesReusableReferences ? draft.characterIds : [],
+      startImageUrl: usesReusableReferences && draft.model !== 'wan-2.7' ? null : draft.startFrame?.url ?? null,
+      endImageUrl: usesReusableReferences ? null : draft.endFrame?.url ?? null,
+      startFrame: usesReusableReferences && draft.model !== 'wan-2.7' ? null : mediaAssetDescriptor(draft.startFrame),
+      endFrame: usesReusableReferences ? null : mediaAssetDescriptor(draft.endFrame),
       mode: draft.mode,
       aspectRatio: draft.aspectRatio,
       sound: VIDEO_MODELS[draft.model].supportsSound ? draft.sound : false,
@@ -1435,7 +1618,8 @@ export function buildPromptEnhancementRequest(draft: CreationDraft): PromptEnhan
   }
 
   if (draft.tool === 'video') {
-    const references = namedReferences(draft.references);
+    const usesReusableReferences = draft.referenceMode === 'elements';
+    const references = namedReferences(usesReusableReferences ? draft.references : []);
     return {
       medium: 'video',
       selectedModel: draft.model,
@@ -1443,9 +1627,9 @@ export function buildPromptEnhancementRequest(draft: CreationDraft): PromptEnhan
       context: {
         duration: draft.duration,
         sound: draft.sound,
-        hasStartImage: Boolean(draft.startFrame),
-        hasEndImage: Boolean(draft.endFrame),
-        hasReferenceVideo: draft.referenceVideos.length > 0,
+        hasStartImage: !usesReusableReferences && Boolean(draft.startFrame),
+        hasEndImage: !usesReusableReferences && Boolean(draft.endFrame),
+        hasReferenceVideo: usesReusableReferences && draft.referenceVideos.length > 0,
         referenceImageCount: references.length,
         isMultiShot: draft.isMultiShot,
         shotCount: draft.multiPrompts.length,
@@ -1480,6 +1664,11 @@ export function applyModelDefaults(draft: CreationDraft): CreationDraft {
       resolution: resolutions.includes(draft.resolution) ? draft.resolution : resolutions[0],
       outputFormat: config.supportsOutputFormat && asStringList(config.outputFormats).includes(draft.outputFormat) ? draft.outputFormat : 'jpg',
       googleSearch: config.supportsGoogleSearch ? draft.googleSearch : false,
+      qualityMode: draft.model === 'ideogram-v3'
+        ? (draft.qualityMode === 'turbo' || draft.qualityMode === 'balanced' || draft.qualityMode === 'quality' ? draft.qualityMode : 'turbo')
+        : draft.model === 'grok-imagine-image'
+          ? (draft.qualityMode === 'quality' ? 'quality' : 'standard')
+          : draft.qualityMode,
       references: draft.references.slice(0, config.maxImages),
     };
   }
@@ -1496,8 +1685,11 @@ export function applyModelDefaults(draft: CreationDraft): CreationDraft {
       sound: config.supportsSound ? draft.sound : false,
       fixedLens: config.supportsFixedLens ? draft.fixedLens : false,
       isMultiShot: config.supportsMultiShot ? draft.isMultiShot : false,
-      referenceAudios: isSeedance2Family(draft.model) ? draft.referenceAudios : [],
-      referenceVideos: isSeedance2Family(draft.model) ? draft.referenceVideos.slice(0, 3) : [],
+      referenceAudios: supportsMultimodalVideoReferences(draft.model) && draft.model !== 'gemini-omni-video' ? draft.referenceAudios.slice(0, draft.model === 'wan-2.7' ? 1 : 3) : [],
+      referenceVideos: supportsMultimodalVideoReferences(draft.model) ? draft.referenceVideos.slice(0, draft.model === 'gemini-omni-video' ? 1 : draft.model === 'wan-2.7' ? 5 : 3) : [],
+      preparedAudioIds: draft.model === 'gemini-omni-video' ? draft.preparedAudioIds.slice(0, 3) : [],
+      characterIds: draft.model === 'gemini-omni-video' ? draft.characterIds.slice(0, 3) : [],
+      referenceMode: draft.model === 'gemini-omni-video' ? 'elements' : draft.referenceMode,
       references: draft.references.slice(0, getVideoElementSupport(draft.model, { mode: draft.mode, isMultiShot: draft.isMultiShot }).maxElements),
     };
   }

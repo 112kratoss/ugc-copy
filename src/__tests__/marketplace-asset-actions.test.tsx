@@ -119,7 +119,7 @@ describe('MarketplaceAssetActions', () => {
     const { rerender } = renderActions({ isFree: true, priceUsdCents: 0, priceLabel: '$0.00' });
 
     expect(screen.queryByRole('button', { name: /pay with razorpay/i })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /get free access/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /get free recipe/i })).toBeInTheDocument();
 
     rerender(
       <MarketplaceAssetActions

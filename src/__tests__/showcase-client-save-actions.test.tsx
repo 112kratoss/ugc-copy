@@ -9,6 +9,7 @@ import {
   type ShowcaseFeedPage,
 } from '@/lib/showcase';
 import type { SourceToolOption } from '@/lib/source-tools';
+import { clearShowcaseClientCacheForTests } from '@/lib/showcase-client-cache';
 
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
@@ -139,6 +140,7 @@ describe('ShowcaseClient save actions', () => {
   }> = [];
 
   beforeEach(() => {
+    clearShowcaseClientCacheForTests();
     window.history.replaceState(null, '', '/showcase');
     mockPush.mockReset();
     mockReplace.mockReset();
