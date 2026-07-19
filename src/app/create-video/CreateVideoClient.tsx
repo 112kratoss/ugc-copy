@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera, ChevronDown, Check, Share2 } from 'lucide-react';
+import { Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera, ChevronDown, Check, Share2, Search } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import {
@@ -460,6 +460,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [promptQualityWarnings, setPromptQualityWarnings] = useState<PromptEnhancementWarning[]>([]);
     const [multiPromptQualityWarnings, setMultiPromptQualityWarnings] = useState<Record<string, PromptEnhancementWarning[]>>({});
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
+    const [modelSearchQuery, setModelSearchQuery] = useState('');
     const modelDropdownRef = useRef<HTMLDivElement>(null);
     const hasResolvedInitialCatalogModel = useRef(false);
     const activeGenerationRequestKeyRef = useRef<string | null>(null);
@@ -521,6 +522,20 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const videoModelOptions = getActiveRegistryModels(
         VIDEO_MODELS as unknown as Record<string, typeof VIDEO_MODELS[VideoModelId]>
     );
+    const normalizedModelSearchQuery = modelSearchQuery.trim().toLowerCase();
+    const filteredVideoModelOptions = normalizedModelSearchQuery
+        ? videoModelOptions.filter((modelOption) => {
+            const searchableModelText = [
+                modelOption.displayName,
+                modelOption.description,
+                modelOption.supportsMultiShot ? 'multi-shot multi shot' : '',
+                modelOption.supportsSound ? 'sound audio' : '',
+                modelOption.supportsFixedLens ? 'fixed lens' : '',
+            ].join(' ').toLowerCase();
+
+            return searchableModelText.includes(normalizedModelSearchQuery);
+        })
+        : videoModelOptions;
     useEffect(() => {
         if (!modelCatalog.catalog) return;
         const preferDefault = !hasResolvedInitialCatalogModel.current && !remixId && !prefillModel;
@@ -2162,6 +2177,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
         setSelectedModel(modelId);
         setIsModelDropdownOpen(false);
+        setModelSearchQuery('');
         setMode(nextModel.modeOptions[0]?.value || '');
         setAspectRatio(nextModel.aspectRatios[0]);
         setSingleDuration(getDefaultVideoDuration(modelId));
@@ -2749,6 +2765,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Video Model</p>
                             <button
                                 onClick={() => setIsModelDropdownOpen((prev) => !prev)}
+                                aria-expanded={isModelDropdownOpen}
+                                aria-haspopup="listbox"
                                 className="w-full flex items-center justify-between gap-3 px-5 py-4 bg-zinc-900/50 border border-white/10 rounded-2xl hover:bg-zinc-900/70 hover:border-white/15 transition-all backdrop-blur-sm"
                             >
                                 <div className="flex items-center gap-3">
@@ -2768,53 +2786,98 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         animate={{ opacity: 1, y: 0, scaleY: 1 }}
                                         exit={{ opacity: 0, y: -8, scaleY: 0.95 }}
                                         transition={{ duration: 0.15 }}
-                                        className="absolute z-50 mt-2 w-full bg-zinc-900/95 border border-white/10 rounded-2xl overflow-hidden backdrop-blur-xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.8)]"
+                                        className="fixed inset-x-4 bottom-4 z-50 flex max-h-[calc(100dvh-2rem)] w-auto flex-col overflow-hidden rounded-2xl border border-white/10 bg-zinc-900/95 backdrop-blur-xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.8)] sm:absolute sm:inset-x-auto sm:bottom-auto sm:mt-2 sm:max-h-[min(70vh,34rem)] sm:w-full"
                                         style={{ transformOrigin: 'top' }}
                                     >
-                                        {videoModelOptions.map((modelOption) => {
-                                            const isActive = selectedModel === modelOption.id;
-                                            const modelOptionDurationRange = getVideoDurationRange(modelOption.id);
+                                        <div className="shrink-0 border-b border-white/8 p-3">
+                                            <div className="relative">
+                                                <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                                                <input
+                                                    autoFocus
+                                                    type="search"
+                                                    value={modelSearchQuery}
+                                                    onChange={(event) => setModelSearchQuery(event.target.value)}
+                                                    onKeyDown={(event) => {
+                                                        if (event.key === 'Escape') {
+                                                            setIsModelDropdownOpen(false);
+                                                            setModelSearchQuery('');
+                                                        }
+                                                    }}
+                                                    placeholder="Search video models..."
+                                                    aria-label="Search video models"
+                                                    className="h-11 w-full rounded-xl border border-white/10 bg-black/25 pl-10 pr-10 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-[#ff7a59]/50 focus:ring-2 focus:ring-[#ff7a59]/10"
+                                                />
+                                                {modelSearchQuery ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setModelSearchQuery('')}
+                                                        aria-label="Clear model search"
+                                                        className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-zinc-500 transition hover:bg-white/5 hover:text-white"
+                                                    >
+                                                        <X className="h-3.5 w-3.5" />
+                                                    </button>
+                                                ) : null}
+                                            </div>
+                                            <p className="mt-2 px-1 text-[11px] text-zinc-500" aria-live="polite">
+                                                {filteredVideoModelOptions.length} {filteredVideoModelOptions.length === 1 ? 'model' : 'models'}
+                                            </p>
+                                        </div>
 
-                                            return (
-                                                <button
-                                                    key={modelOption.id}
-                                                    onClick={() => handleSelectModel(modelOption.id)}
-                                                    className={`w-full text-left px-5 py-4 flex items-center gap-3 transition-all ${isActive ? 'bg-white/5' : 'hover:bg-white/[0.03]'}`}
-                                                >
-                                                    <div className="flex-1 min-w-0">
-                                                        <span className={`text-sm font-bold ${isActive ? 'text-white' : 'text-zinc-300'}`}>
-                                                            {modelOption.displayName}
-                                                        </span>
-                                                        <p className="text-xs text-zinc-500 mt-0.5">{modelOption.description}</p>
-                                                        <div className="flex flex-wrap gap-1.5 mt-2">
-                                                            {modelOption.supportsMultiShot && (
-                                                                <span className="rounded-full border border-[#ff7a59]/20 bg-[#ff7a59]/10 px-2 py-0.5 text-[10px] text-[#ffb09c]">
-                                                                    Multi-shot
-                                                                </span>
-                                                            )}
-                                                            {modelOption.supportsSound && (
-                                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
-                                                                    Sound
-                                                                </span>
-                                                            )}
-                                                            {modelOption.supportsFixedLens && (
-                                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20">
-                                                                    Fixed Lens
-                                                                </span>
-                                                            )}
-                                                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-500 border border-white/5">
-                                                                {modelOptionDurationRange
-                                                                    ? `${modelOptionDurationRange.min}-${modelOptionDurationRange.max}s`
-                                                                    : (modelOption.durations.length > 1
-                                                                        ? `${modelOption.durations.join('/')}s`
-                                                                        : `${modelOption.durations[0]}s fixed`)}
+                                        <div role="listbox" aria-label="Video models" className="min-h-0 overflow-y-auto overscroll-contain app-scrollbar">
+                                            {filteredVideoModelOptions.length > 0 ? filteredVideoModelOptions.map((modelOption) => {
+                                                const isActive = selectedModel === modelOption.id;
+                                                const modelOptionDurationRange = getVideoDurationRange(modelOption.id);
+
+                                                return (
+                                                    <button
+                                                        key={modelOption.id}
+                                                        type="button"
+                                                        role="option"
+                                                        aria-selected={isActive}
+                                                        onClick={() => handleSelectModel(modelOption.id)}
+                                                        className={`w-full text-left px-5 py-4 flex items-center gap-3 transition-all ${isActive ? 'bg-white/5' : 'hover:bg-white/[0.03]'}`}
+                                                    >
+                                                        <div className="flex-1 min-w-0">
+                                                            <span className={`text-sm font-bold ${isActive ? 'text-white' : 'text-zinc-300'}`}>
+                                                                {modelOption.displayName}
                                                             </span>
+                                                            <p className="text-xs text-zinc-500 mt-0.5">{modelOption.description}</p>
+                                                            <div className="flex flex-wrap gap-1.5 mt-2">
+                                                                {modelOption.supportsMultiShot && (
+                                                                    <span className="rounded-full border border-[#ff7a59]/20 bg-[#ff7a59]/10 px-2 py-0.5 text-[10px] text-[#ffb09c]">
+                                                                        Multi-shot
+                                                                    </span>
+                                                                )}
+                                                                {modelOption.supportsSound && (
+                                                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                                                                        Sound
+                                                                    </span>
+                                                                )}
+                                                                {modelOption.supportsFixedLens && (
+                                                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20">
+                                                                        Fixed Lens
+                                                                    </span>
+                                                                )}
+                                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-500 border border-white/5">
+                                                                    {modelOptionDurationRange
+                                                                        ? `${modelOptionDurationRange.min}-${modelOptionDurationRange.max}s`
+                                                                        : (modelOption.durations.length > 1
+                                                                            ? `${modelOption.durations.join('/')}s`
+                                                                            : `${modelOption.durations[0]}s fixed`)}
+                                                                </span>
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                    {isActive && <Check className="h-4 w-4 shrink-0 text-[#ff9a80]" />}
-                                                </button>
-                                            );
-                                        })}
+                                                        {isActive && <Check className="h-4 w-4 shrink-0 text-[#ff9a80]" />}
+                                                    </button>
+                                                );
+                                            }) : (
+                                                <div className="px-5 py-10 text-center">
+                                                    <Search className="mx-auto h-5 w-5 text-zinc-600" />
+                                                    <p className="mt-3 text-sm font-medium text-zinc-300">No models found</p>
+                                                    <p className="mt-1 text-xs text-zinc-500">Try a model name or capability.</p>
+                                                </div>
+                                            )}
+                                        </div>
                                     </motion.div>
                                 )}
                             </AnimatePresence>
