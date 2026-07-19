@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera, ChevronDown, Check, Share2, Search } from 'lucide-react';
+import { Sparkles, Loader2, Download, X, Image as ImageIcon, Video, Plus, Trash2, Volume2, VolumeX, Play, Camera, ChevronDown, Check, Share2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import {
@@ -17,6 +17,7 @@ import {
     StudioUploadedMediaPreview,
     StudioWorkspacePanel,
 } from '@/app/components/CreatorStudio';
+import StudioModelPicker from '@/app/components/StudioModelPicker';
 import PublicShareButton from '@/app/components/PublicShareButton';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
@@ -866,6 +867,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         const handleClickOutside = (event: MouseEvent) => {
             if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) {
                 setIsModelDropdownOpen(false);
+                setModelSearchQuery('');
             }
         };
 
@@ -2764,7 +2766,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         >
                             <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Video Model</p>
                             <button
-                                onClick={() => setIsModelDropdownOpen((prev) => !prev)}
+                                onClick={() => {
+                                    if (isModelDropdownOpen) setModelSearchQuery('');
+                                    setIsModelDropdownOpen(!isModelDropdownOpen);
+                                }}
                                 aria-expanded={isModelDropdownOpen}
                                 aria-haspopup="listbox"
                                 className="w-full flex items-center justify-between gap-3 px-5 py-4 bg-zinc-900/50 border border-white/10 rounded-2xl hover:bg-zinc-900/70 hover:border-white/15 transition-all backdrop-blur-sm"
@@ -2779,52 +2784,21 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 <ChevronDown className={`w-4 h-4 text-zinc-400 transition-transform duration-200 ${isModelDropdownOpen ? 'rotate-180' : ''}`} />
                             </button>
 
-                            <AnimatePresence>
-                                {isModelDropdownOpen && (
-                                    <motion.div
-                                        initial={{ opacity: 0, y: -8, scaleY: 0.95 }}
-                                        animate={{ opacity: 1, y: 0, scaleY: 1 }}
-                                        exit={{ opacity: 0, y: -8, scaleY: 0.95 }}
-                                        transition={{ duration: 0.15 }}
-                                        className="fixed inset-x-4 bottom-4 z-50 flex max-h-[calc(100dvh-2rem)] w-auto flex-col overflow-hidden rounded-2xl border border-white/10 bg-zinc-900/95 backdrop-blur-xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.8)] sm:absolute sm:inset-x-auto sm:bottom-auto sm:mt-2 sm:max-h-[min(70vh,34rem)] sm:w-full"
-                                        style={{ transformOrigin: 'top' }}
-                                    >
-                                        <div className="shrink-0 border-b border-white/8 p-3">
-                                            <div className="relative">
-                                                <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
-                                                <input
-                                                    autoFocus
-                                                    type="search"
-                                                    value={modelSearchQuery}
-                                                    onChange={(event) => setModelSearchQuery(event.target.value)}
-                                                    onKeyDown={(event) => {
-                                                        if (event.key === 'Escape') {
-                                                            setIsModelDropdownOpen(false);
-                                                            setModelSearchQuery('');
-                                                        }
-                                                    }}
-                                                    placeholder="Search video models..."
-                                                    aria-label="Search video models"
-                                                    className="h-11 w-full rounded-xl border border-white/10 bg-black/25 pl-10 pr-10 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-[#ff7a59]/50 focus:ring-2 focus:ring-[#ff7a59]/10"
-                                                />
-                                                {modelSearchQuery ? (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setModelSearchQuery('')}
-                                                        aria-label="Clear model search"
-                                                        className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-zinc-500 transition hover:bg-white/5 hover:text-white"
-                                                    >
-                                                        <X className="h-3.5 w-3.5" />
-                                                    </button>
-                                                ) : null}
-                                            </div>
-                                            <p className="mt-2 px-1 text-[11px] text-zinc-500" aria-live="polite">
-                                                {filteredVideoModelOptions.length} {filteredVideoModelOptions.length === 1 ? 'model' : 'models'}
-                                            </p>
-                                        </div>
-
-                                        <div role="listbox" aria-label="Video models" className="min-h-0 overflow-y-auto overscroll-contain app-scrollbar">
-                                            {filteredVideoModelOptions.length > 0 ? filteredVideoModelOptions.map((modelOption) => {
+                            <StudioModelPicker
+                                isOpen={isModelDropdownOpen}
+                                query={modelSearchQuery}
+                                onQueryChange={setModelSearchQuery}
+                                onDismiss={() => {
+                                    setIsModelDropdownOpen(false);
+                                    setModelSearchQuery('');
+                                }}
+                                searchLabel="Search video models"
+                                searchPlaceholder="Search video models..."
+                                resultListLabel="Video models"
+                                resultCount={filteredVideoModelOptions.length}
+                                accent="rose"
+                            >
+                                            {filteredVideoModelOptions.map((modelOption) => {
                                                 const isActive = selectedModel === modelOption.id;
                                                 const modelOptionDurationRange = getVideoDurationRange(modelOption.id);
 
@@ -2870,17 +2844,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                         {isActive && <Check className="h-4 w-4 shrink-0 text-[#ff9a80]" />}
                                                     </button>
                                                 );
-                                            }) : (
-                                                <div className="px-5 py-10 text-center">
-                                                    <Search className="mx-auto h-5 w-5 text-zinc-600" />
-                                                    <p className="mt-3 text-sm font-medium text-zinc-300">No models found</p>
-                                                    <p className="mt-1 text-xs text-zinc-500">Try a model name or capability.</p>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </motion.div>
-                                )}
-                            </AnimatePresence>
+                                            })}
+                            </StudioModelPicker>
                         </motion.div>
 
                         {videoModel.supportsMultiShot && (

@@ -16,6 +16,7 @@ import {
     StudioRunPanel,
     StudioWorkspacePanel,
 } from '@/app/components/CreatorStudio';
+import StudioModelPicker from '@/app/components/StudioModelPicker';
 import PublicShareButton from '@/app/components/PublicShareButton';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
@@ -197,6 +198,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const [error, setError] = useState<string | null>(null);
     const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
+    const [modelSearchQuery, setModelSearchQuery] = useState('');
     const dropdownRef = useRef<HTMLDivElement>(null);
     const hasResolvedInitialCatalogModel = useRef(false);
     const hasRestoredPersistedMedia = useRef(false);
@@ -246,6 +248,16 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const imageModelOptions = getActiveRegistryModels(
         IMAGE_MODELS as unknown as Record<string, typeof IMAGE_MODELS[ImageModelId]>
     );
+    const normalizedModelSearchQuery = modelSearchQuery.trim().toLowerCase();
+    const filteredImageModelOptions = normalizedModelSearchQuery
+        ? imageModelOptions.filter((imageModel) => [
+            imageModel.displayName,
+            imageModel.description,
+            imageModel.badge,
+            imageModel.supportsGoogleSearch ? 'google search grounded grounding' : '',
+            imageModel.maxImages > 0 ? `reference images ${imageModel.maxImages}` : 'prompt only',
+        ].join(' ').toLowerCase().includes(normalizedModelSearchQuery))
+        : imageModelOptions;
 
     useEffect(() => {
         if (!modelCatalog.catalog) return;
@@ -327,6 +339,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         const handleClickOutside = (e: MouseEvent) => {
             if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
                 setIsModelDropdownOpen(false);
+                setModelSearchQuery('');
             }
         };
         document.addEventListener('mousedown', handleClickOutside);
@@ -1181,7 +1194,12 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                         >
                             <p className="mb-3 text-xs font-bold uppercase tracking-widest text-zinc-500">Model</p>
                             <button
-                                onClick={() => setIsModelDropdownOpen(prev => !prev)}
+                                onClick={() => {
+                                    if (isModelDropdownOpen) setModelSearchQuery('');
+                                    setIsModelDropdownOpen(!isModelDropdownOpen);
+                                }}
+                                aria-expanded={isModelDropdownOpen}
+                                aria-haspopup="listbox"
                                 className="w-full flex items-center justify-between gap-3 px-5 py-4 bg-zinc-900/50 border border-white/10 rounded-2xl hover:bg-zinc-900/70 hover:border-white/15 transition-all backdrop-blur-sm"
                             >
                                 <div className="flex items-center gap-3">
@@ -1199,24 +1217,33 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 <ChevronDown className={`w-4 h-4 text-zinc-400 transition-transform duration-200 ${isModelDropdownOpen ? 'rotate-180' : ''}`} />
                             </button>
 
-                            <AnimatePresence>
-                                {isModelDropdownOpen && (
-                                    <motion.div
-                                        initial={{ opacity: 0, y: -8, scaleY: 0.95 }}
-                                        animate={{ opacity: 1, y: 0, scaleY: 1 }}
-                                        exit={{ opacity: 0, y: -8, scaleY: 0.95 }}
-                                        transition={{ duration: 0.15 }}
-                                        className="absolute z-50 mt-2 max-h-[min(70vh,34rem)] w-[calc(100%-3rem)] overflow-y-auto rounded-2xl border border-white/10 bg-zinc-900/95 backdrop-blur-xl shadow-[0_16px_48px_-12px_rgba(0,0,0,0.8)]"
-                                        style={{ transformOrigin: 'top' }}
-                                    >
-                                        {imageModelOptions.map((m) => {
+                            <StudioModelPicker
+                                isOpen={isModelDropdownOpen}
+                                query={modelSearchQuery}
+                                onQueryChange={setModelSearchQuery}
+                                onDismiss={() => {
+                                    setIsModelDropdownOpen(false);
+                                    setModelSearchQuery('');
+                                }}
+                                searchLabel="Search image models"
+                                searchPlaceholder="Search image models..."
+                                resultListLabel="Image models"
+                                resultCount={filteredImageModelOptions.length}
+                                accent="blue"
+                                desktopInset="card"
+                            >
+                                        {filteredImageModelOptions.map((m) => {
                                             const isActive = selectedModel === m.id;
                                             return (
                                                 <button
                                                     key={m.id}
+                                                    type="button"
+                                                    role="option"
+                                                    aria-selected={isActive}
                                                     onClick={() => {
                                                         setSelectedModel(m.id as ModelId);
                                                         setIsModelDropdownOpen(false);
+                                                        setModelSearchQuery('');
                                                     }}
                                                     className={`w-full text-left px-5 py-4 flex items-center gap-3 transition-all ${
                                                         isActive ? 'bg-white/5' : 'hover:bg-white/[0.03]'
@@ -1247,9 +1274,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                                 </button>
                                             );
                                         })}
-                                    </motion.div>
-                                )}
-                            </AnimatePresence>
+                            </StudioModelPicker>
                         </motion.div>
 
                         <motion.div
