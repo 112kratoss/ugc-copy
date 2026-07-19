@@ -18,6 +18,7 @@ import {
     StudioUploadedMediaPreview,
     StudioWorkspacePanel,
 } from '@/app/components/CreatorStudio';
+import StudioModelPicker from '@/app/components/StudioModelPicker';
 import PublicShareButton from '@/app/components/PublicShareButton';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
@@ -115,6 +116,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const refetchModelCatalog = modelCatalog.refetch;
     const [selectedModel, setSelectedModel] = useState<ModelId>('kling-3.0');
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
+    const [modelSearchQuery, setModelSearchQuery] = useState('');
     const dropdownRef = useRef<HTMLDivElement>(null);
     const hasResolvedInitialCatalogModel = useRef(false);
     const activeGenerationRequestKeyRef = useRef<string | null>(null);
@@ -173,6 +175,15 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
 
     const model = MOTION_MODELS[selectedModel];
     const motionModelOptions = getActiveRegistryModels(MOTION_MODELS as unknown as Record<string, typeof MOTION_MODELS[ModelId]>);
+    const normalizedModelSearchQuery = modelSearchQuery.trim().toLowerCase();
+    const filteredMotionModelOptions = normalizedModelSearchQuery
+        ? motionModelOptions.filter((motionModel) => [
+            motionModel.displayName,
+            motionModel.description,
+            motionModel.badge,
+            'motion transfer character animation video image 720p 1080p',
+        ].join(' ').toLowerCase().includes(normalizedModelSearchQuery))
+        : motionModelOptions;
     const maxVideoDuration = Number((model as unknown as { maxVideoDuration?: number; maxDuration?: number }).maxVideoDuration ?? (model as unknown as { maxDuration?: number }).maxDuration ?? 30);
     useEffect(() => {
         if (!modelCatalog.catalog) return;
@@ -199,6 +210,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         const handleClickOutside = (e: MouseEvent) => {
             if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
                 setIsModelDropdownOpen(false);
+                setModelSearchQuery('');
             }
         };
         document.addEventListener('mousedown', handleClickOutside);
@@ -816,7 +828,12 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                         >
                             <StudioControlCard title="Motion model" description="Choose the engine and quality ceiling for this run.">
                                 <button
-                                    onClick={() => setIsModelDropdownOpen((prev) => !prev)}
+                                    onClick={() => {
+                                        if (isModelDropdownOpen) setModelSearchQuery('');
+                                        setIsModelDropdownOpen(!isModelDropdownOpen);
+                                    }}
+                                    aria-expanded={isModelDropdownOpen}
+                                    aria-haspopup="listbox"
                                     className="w-full flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/40 px-4 py-4 text-left transition hover:border-white/15 hover:bg-black/55"
                                 >
                                     <div className="flex items-center gap-3">
@@ -836,25 +853,34 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                     <ChevronDown className={`h-4 w-4 text-zinc-400 transition-transform ${isModelDropdownOpen ? 'rotate-180' : ''}`} />
                                 </button>
 
-                                <AnimatePresence>
-                                    {isModelDropdownOpen && (
-                                        <motion.div
-                                            initial={{ opacity: 0, y: -8, scaleY: 0.95 }}
-                                            animate={{ opacity: 1, y: 0, scaleY: 1 }}
-                                            exit={{ opacity: 0, y: -8, scaleY: 0.95 }}
-                                            transition={{ duration: 0.15 }}
-                                            className="absolute z-50 mt-2 w-full overflow-hidden rounded-2xl border border-white/10 bg-zinc-950/95 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.8)] backdrop-blur-xl"
-                                            style={{ transformOrigin: 'top' }}
-                                        >
-                                            {motionModelOptions.map((motionModel) => {
+                                <StudioModelPicker
+                                    isOpen={isModelDropdownOpen}
+                                    query={modelSearchQuery}
+                                    onQueryChange={setModelSearchQuery}
+                                    onDismiss={() => {
+                                        setIsModelDropdownOpen(false);
+                                        setModelSearchQuery('');
+                                    }}
+                                    searchLabel="Search motion models"
+                                    searchPlaceholder="Search motion models..."
+                                    resultListLabel="Motion models"
+                                    resultCount={filteredMotionModelOptions.length}
+                                    accent="violet"
+                                    desktopInset="card"
+                                >
+                                            {filteredMotionModelOptions.map((motionModel) => {
                                                 const isActive = selectedModel === motionModel.id;
 
                                                 return (
                                                     <button
                                                         key={motionModel.id}
+                                                        type="button"
+                                                        role="option"
+                                                        aria-selected={isActive}
                                                         onClick={() => {
                                                             setSelectedModel(motionModel.id as ModelId);
                                                             setIsModelDropdownOpen(false);
+                                                            setModelSearchQuery('');
                                                         }}
                                                         className={`flex w-full items-center gap-3 px-5 py-4 text-left transition ${isActive ? 'bg-white/5' : 'hover:bg-white/[0.03]'}`}
                                                     >
@@ -881,9 +907,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                                     </button>
                                                 );
                                             })}
-                                        </motion.div>
-                                    )}
-                                </AnimatePresence>
+                                </StudioModelPicker>
                             </StudioControlCard>
                         </motion.div>
 
