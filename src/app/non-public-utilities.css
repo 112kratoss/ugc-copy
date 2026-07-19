@@ -46,6 +46,7 @@
 @source "./components/NavbarClient.tsx";
 @source "./components/ProfileShareButton.tsx";
 @source "./components/PublishToShowcaseModal.tsx";
+@source "./components/StudioModelPicker.tsx";
 @source "./components/enhancePromptClient.ts";
 @source "./components/templates/CreateTemplateRunClient.tsx";
 @source "./components/templates/TemplateCatalogClient.tsx";
