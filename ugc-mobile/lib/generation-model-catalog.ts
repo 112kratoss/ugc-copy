@@ -73,6 +73,12 @@ export interface GenerationModelCatalog {
   models: GenerationModelDescriptor[];
 }
 
+export interface GenerationModelCatalogCacheEnvelope {
+  catalog: GenerationModelCatalog;
+  etag: string | null;
+  fetchedAt: number;
+}
+
 export interface GenerationModelQuoteRequest {
   kind: GenerationModelKind;
   modelId: string;
@@ -229,17 +235,44 @@ export function parseGenerationModelCatalog(value: unknown): GenerationModelCata
   };
 }
 
-export async function loadCachedGenerationModelCatalog(storage: CatalogStorage = AsyncStorage): Promise<GenerationModelCatalog | null> {
+export async function loadCachedGenerationModelCatalogEnvelope(
+  storage: CatalogStorage = AsyncStorage,
+): Promise<GenerationModelCatalogCacheEnvelope | null> {
   try {
     const cached = await storage.getItem(GENERATION_MODEL_CATALOG_CACHE_KEY);
-    return cached ? parseGenerationModelCatalog(JSON.parse(cached)) : null;
+    if (!cached) return null;
+    const parsed = JSON.parse(cached) as unknown;
+    if (isRecord(parsed) && 'catalog' in parsed) {
+      return {
+        catalog: parseGenerationModelCatalog(parsed.catalog),
+        etag: typeof parsed.etag === 'string' ? parsed.etag : null,
+        fetchedAt: typeof parsed.fetchedAt === 'number' && Number.isFinite(parsed.fetchedAt)
+          ? parsed.fetchedAt
+          : 0,
+      };
+    }
+    return { catalog: parseGenerationModelCatalog(parsed), etag: null, fetchedAt: 0 };
   } catch {
     return null;
   }
 }
 
-export async function saveCachedGenerationModelCatalog(catalog: GenerationModelCatalog, storage: CatalogStorage = AsyncStorage) {
-  await storage.setItem(GENERATION_MODEL_CATALOG_CACHE_KEY, JSON.stringify(catalog));
+export async function loadCachedGenerationModelCatalog(
+  storage: CatalogStorage = AsyncStorage,
+): Promise<GenerationModelCatalog | null> {
+  return (await loadCachedGenerationModelCatalogEnvelope(storage))?.catalog ?? null;
+}
+
+export async function saveCachedGenerationModelCatalog(
+  catalog: GenerationModelCatalog,
+  storage: CatalogStorage = AsyncStorage,
+  metadata: { etag?: string | null; fetchedAt?: number } = {},
+) {
+  await storage.setItem(GENERATION_MODEL_CATALOG_CACHE_KEY, JSON.stringify({
+    catalog,
+    etag: metadata.etag ?? null,
+    fetchedAt: metadata.fetchedAt ?? Date.now(),
+  } satisfies GenerationModelCatalogCacheEnvelope));
 }
 
 export function getCatalogModels(catalog: GenerationModelCatalog, kind: GenerationModelKind) {

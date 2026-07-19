@@ -306,13 +306,14 @@ function mediaDescriptor(media: ImageCreationDraft['references'][number] | null)
   } : null;
 }
 
-export function buildCatalogGenerationPayload(draft: ImageCreationDraft, model: GenerationModelDescriptor, catalogRevision: string): ImageGenerationRequest;
-export function buildCatalogGenerationPayload(draft: VideoCreationDraft, model: GenerationModelDescriptor, catalogRevision: string): VideoGenerationRequest;
-export function buildCatalogGenerationPayload(draft: MotionCreationDraft, model: GenerationModelDescriptor, catalogRevision: string): MotionGenerationRequest;
+export function buildCatalogGenerationPayload(draft: ImageCreationDraft, model: GenerationModelDescriptor, catalogRevision: string, normalizedSettings?: Record<string, CatalogPrimitive>): ImageGenerationRequest;
+export function buildCatalogGenerationPayload(draft: VideoCreationDraft, model: GenerationModelDescriptor, catalogRevision: string, normalizedSettings?: Record<string, CatalogPrimitive>): VideoGenerationRequest;
+export function buildCatalogGenerationPayload(draft: MotionCreationDraft, model: GenerationModelDescriptor, catalogRevision: string, normalizedSettings?: Record<string, CatalogPrimitive>): MotionGenerationRequest;
 export function buildCatalogGenerationPayload(
   draft: CreationDraft,
   model: GenerationModelDescriptor,
-  catalogRevision: string
+  catalogRevision: string,
+  normalizedSettings: Record<string, CatalogPrimitive> = {},
 ): ImageGenerationRequest | VideoGenerationRequest | MotionGenerationRequest {
   if (draft.tool === 'image') {
     const hasQualityControl = model.controls.some((control) => control.key === 'qualityMode');
@@ -328,6 +329,7 @@ export function buildCatalogGenerationPayload(
       googleSearch: model.capabilities.googleSearch ? draft.googleSearch : false,
       sourceGenerationId: draft.sourceGenerationId ?? null,
       catalogRevision,
+      settings: normalizedSettings,
     };
   }
   if (draft.tool === 'video') {
@@ -364,6 +366,7 @@ export function buildCatalogGenerationPayload(
       seedanceAssets: null,
       sourceGenerationId: draft.sourceGenerationId ?? null,
       catalogRevision,
+      settings: normalizedSettings,
     };
   }
   return {
@@ -378,5 +381,6 @@ export function buildCatalogGenerationPayload(
     referenceVideo: mediaDescriptor(draft.referenceVideo),
     sourceGenerationId: draft.sourceGenerationId ?? null,
     catalogRevision,
+    settings: normalizedSettings,
   };
 }

@@ -5,11 +5,12 @@ import {
 } from '@/lib/backend-rate-limit';
 import {
   CatalogError,
-  quoteGenerationModel,
+  type CatalogPlatform,
   type GenerationModelKind,
   type GenerationModelQuote,
   type GenerationModelQuoteInput,
 } from '@/lib/generation-model-catalog';
+import { quotePublishedGenerationModel } from '@/lib/generation-model-catalog-store';
 
 export type GenerationModelQuoteRateLimitClient = Parameters<typeof enforceBackendRateLimit>[0];
 
@@ -34,6 +35,7 @@ type CreateGenerationModelQuoteInput = {
   body: Partial<GenerationModelQuoteInput>;
   rateLimitKey: string;
   rateLimitClient: GenerationModelQuoteRateLimitClient;
+  platform?: CatalogPlatform;
 };
 
 function isGenerationModelKind(value: unknown): value is GenerationModelKind {
@@ -44,6 +46,7 @@ export async function createGenerationModelQuote({
   body,
   rateLimitKey,
   rateLimitClient,
+  platform = 'web',
 }: CreateGenerationModelQuoteInput): Promise<GenerationModelQuoteServiceResult> {
   if (!isGenerationModelKind(body.kind) || typeof body.modelId !== 'string' || !body.modelId) {
     return {
@@ -87,13 +90,13 @@ export async function createGenerationModelQuote({
   try {
     return {
       ok: true,
-      quote: quoteGenerationModel({
+      quote: await quotePublishedGenerationModel({
         kind: body.kind,
         modelId: body.modelId,
         settings: body.settings,
         inputCounts: body.inputCounts,
         catalogRevision: body.catalogRevision,
-      }),
+      }, { platform }),
     };
   } catch (error) {
     if (error instanceof CatalogError) {

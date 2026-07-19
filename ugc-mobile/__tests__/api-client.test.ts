@@ -657,6 +657,52 @@ describe('mobile api client caching', () => {
     expect((init.headers as Headers).get('Authorization')).toBeNull();
   });
 
+  it('conditionally refreshes the generation model catalog without authentication', async () => {
+    const fetcher = vi.fn(async () => new Response(null, {
+      status: 304,
+      headers: { ETag: '"catalog-2"' },
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await expect(api.fetchGenerationModels({ etag: '"catalog-1"' })).resolves.toEqual({
+      catalog: null,
+      etag: '"catalog-2"',
+      notModified: true,
+    });
+
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    const headers = init.headers as Headers;
+    expect(url).toBe('https://magicbooklet.test/api/generation-models?platform=mobile&schemaVersion=1');
+    expect(headers.get('If-None-Match')).toBe('"catalog-1"');
+    expect(headers.get('x-magicbooklet-client')).toBe('mobile');
+    expect(headers.get('Authorization')).toBeNull();
+  });
+
+  it('bypasses the catalog etag on a forced refresh', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      schemaVersion: 1,
+      revision: '0123456789abcdef',
+      defaults: { image: null, video: null, motion: null },
+      models: [],
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.fetchGenerationModels({ etag: '"catalog-1"', forceRefresh: true });
+
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/generation-models?platform=mobile&schemaVersion=1&refresh=1');
+    expect((init.headers as Headers).get('If-None-Match')).toBeNull();
+    expect(init.cache).toBe('no-store');
+  });
+
   it('requests an authenticated authoritative generation quote', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       modelId: 'nano-banana-2',

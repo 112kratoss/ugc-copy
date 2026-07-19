@@ -7,6 +7,7 @@ import {
   runBackendAlertDeliveryJob,
   runFeedMaintenanceBackendJob,
   runGenerationCompletionsBackendJob,
+  runGenerationModelVerificationBackendJob,
   runMediaPreviewRepairBackendJob,
   runMobilePushReceiptsBackendJob,
   runReferralRewardReconciliationBackendJob,
@@ -27,6 +28,7 @@ type BackendJobsRouteDependencies = {
   runBackendAlertDeliveryJob?: typeof runBackendAlertDeliveryJob;
   runFeedMaintenanceBackendJob?: typeof runFeedMaintenanceBackendJob;
   runGenerationCompletionsBackendJob?: typeof runGenerationCompletionsBackendJob;
+  runGenerationModelVerificationBackendJob?: typeof runGenerationModelVerificationBackendJob;
   runMediaPreviewRepairBackendJob?: typeof runMediaPreviewRepairBackendJob;
   runMobilePushReceiptsBackendJob?: typeof runMobilePushReceiptsBackendJob;
   runReferralRewardReconciliationBackendJob?: typeof runReferralRewardReconciliationBackendJob;
@@ -64,6 +66,8 @@ function resolveDependencies(dependencies: BackendJobsRouteDependencies | undefi
       ?? runFeedMaintenanceBackendJob,
     runGenerationCompletionsBackendJob: dependencies?.runGenerationCompletionsBackendJob
       ?? runGenerationCompletionsBackendJob,
+    runGenerationModelVerificationBackendJob: dependencies?.runGenerationModelVerificationBackendJob
+      ?? runGenerationModelVerificationBackendJob,
     runMediaPreviewRepairBackendJob: dependencies?.runMediaPreviewRepairBackendJob
       ?? runMediaPreviewRepairBackendJob,
     runMobilePushReceiptsBackendJob: dependencies?.runMobilePushReceiptsBackendJob
@@ -97,6 +101,8 @@ async function runDueBackendJob(
       return options.dependencies.runFeedMaintenanceBackendJob(runOptions);
     case 'generation-completions':
       return options.dependencies.runGenerationCompletionsBackendJob(runOptions);
+    case 'generation-model-verification':
+      return options.dependencies.runGenerationModelVerificationBackendJob(runOptions);
     case 'media-preview-repair':
       return options.dependencies.runMediaPreviewRepairBackendJob(runOptions);
     case 'mobile-push-receipts':

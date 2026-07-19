@@ -72,6 +72,8 @@ import {
 } from '@/lib/provider-fetch';
 import type { RemoteMediaKind } from '@/lib/remote-media-security';
 import { stageAllowlistedRemoteMedia } from '@/lib/staged-remote-media';
+import { loadGenerationModelOperationalConfig } from '@/lib/generation-model-catalog-store';
+import { resolveProviderModelId } from '@/lib/generation-model-runtime';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 const PROVIDER_TASK_ATTACH_ATTEMPTS = 3;
@@ -1689,7 +1691,12 @@ export async function startImageGeneration(params: {
     referenceCount: resolvedImageUrls.length,
   });
   const cost = resolveQuotedGenerationCost(computedCost, quotedCostCredits);
-  const providerModel = getKieImageModelId(model, resolvedImageUrls.length);
+  const runtimeConfig = await loadGenerationModelOperationalConfig(model);
+  const providerModel = resolveProviderModelId(
+    runtimeConfig,
+    resolvedImageUrls.length > 0 ? 'reference' : 'text',
+    getKieImageModelId(model, resolvedImageUrls.length),
+  );
 
   let generationId: string | null = null;
   let predictionId: string | null = null;
@@ -1973,6 +1980,7 @@ export async function startVideoGeneration(params: {
   if (!selectedModel) {
     throw new GenerationServiceError(`Unsupported video model: ${model}`, 400);
   }
+  const runtimeConfig = await loadGenerationModelOperationalConfig(model);
 
   const rawPrompt = typeof prompt === 'string' ? prompt : '';
   const trimmedPrompt = rawPrompt.trim();
@@ -2273,7 +2281,7 @@ export async function startVideoGeneration(params: {
   try {
     let endpoint = 'https://api.kie.ai/api/v1/jobs/createTask';
     let body: Record<string, unknown>;
-    let providerModelId = selectedModel.apiModelId || mode;
+    let providerModelId = resolveProviderModelId(runtimeConfig, 'default', selectedModel.apiModelId || mode);
     const referenceImageUrls = resolvedReferenceImageUrls;
     const providerReferenceImageUrls = referenceImageUrls.length > 0
       ? referenceImageUrls
@@ -2285,9 +2293,11 @@ export async function startVideoGeneration(params: {
 
     if (model === 'kling-3.0-turbo') {
       const firstFrameUrl = frameImageUrls[0] || null;
-      providerModelId = firstFrameUrl
-        ? 'kling/v3-turbo-image-to-video'
-        : 'kling/v3-turbo-text-to-video';
+      providerModelId = resolveProviderModelId(
+        runtimeConfig,
+        firstFrameUrl ? 'image' : 'text',
+        firstFrameUrl ? 'kling/v3-turbo-image-to-video' : 'kling/v3-turbo-text-to-video',
+      );
       const input: Record<string, unknown> = {
         prompt: compiledPrompt,
         duration,
@@ -2330,7 +2340,7 @@ export async function startVideoGeneration(params: {
       }
 
       body = {
-        model: selectedModel.apiModelId,
+        model: providerModelId,
         input,
       };
     } else if (selectedModel.provider === 'seedance') {
@@ -2361,7 +2371,7 @@ export async function startVideoGeneration(params: {
         }
 
         body = {
-          model: selectedModel.apiModelId,
+          model: providerModelId,
           input,
         };
       } else {
@@ -2381,7 +2391,7 @@ export async function startVideoGeneration(params: {
         }
 
         body = {
-          model: selectedModel.apiModelId,
+          model: providerModelId,
           input,
         };
       }
@@ -2394,18 +2404,18 @@ export async function startVideoGeneration(params: {
         watermark: false,
       };
       if (effectiveReferenceMode === 'references') {
-        providerModelId = 'wan/2-7-r2v';
+        providerModelId = resolveProviderModelId(runtimeConfig, 'reference', 'wan/2-7-r2v');
         input.aspect_ratio = aspectRatio;
         if (providerReferenceImageUrls.length > 0) input.reference_image = providerReferenceImageUrls;
         if (resolvedReferenceVideoUrls.length > 0) input.reference_video = resolvedReferenceVideoUrls;
         if (resolvedReferenceAudioUrls[0]) input.reference_voice = resolvedReferenceAudioUrls[0];
         if (frameImageUrls[0]) input.first_frame = frameImageUrls[0];
       } else if (frameImageUrls.length > 0) {
-        providerModelId = 'wan/2-7-image-to-video';
+        providerModelId = resolveProviderModelId(runtimeConfig, 'image', 'wan/2-7-image-to-video');
         input.first_frame_url = frameImageUrls[0];
         if (frameImageUrls[1]) input.last_frame_url = frameImageUrls[1];
       } else {
-        providerModelId = 'wan/2-7-text-to-video';
+        providerModelId = resolveProviderModelId(runtimeConfig, 'text', 'wan/2-7-text-to-video');
         input.ratio = aspectRatio;
       }
       body = { model: providerModelId, input };
@@ -2416,19 +2426,19 @@ export async function startVideoGeneration(params: {
         duration,
       };
       if (effectiveReferenceMode === 'references' && providerReferenceImageUrls.length > 0) {
-        providerModelId = 'happyhorse-1-1/reference-to-video';
+        providerModelId = resolveProviderModelId(runtimeConfig, 'reference', 'happyhorse-1-1/reference-to-video');
         input.reference_image = providerReferenceImageUrls;
         input.aspect_ratio = aspectRatio;
       } else if (frameImageUrls[0]) {
-        providerModelId = 'happyhorse-1-1/image-to-video';
+        providerModelId = resolveProviderModelId(runtimeConfig, 'image', 'happyhorse-1-1/image-to-video');
         input.image_urls = [frameImageUrls[0]];
       } else {
-        providerModelId = 'happyhorse-1-1/text-to-video';
+        providerModelId = resolveProviderModelId(runtimeConfig, 'text', 'happyhorse-1-1/text-to-video');
         input.aspect_ratio = aspectRatio;
       }
       body = { model: providerModelId, input };
     } else if (selectedModel.provider === 'gemini-omni') {
-      providerModelId = 'gemini-omni-video';
+      providerModelId = resolveProviderModelId(runtimeConfig, 'default', 'gemini-omni-video');
       const input: Record<string, unknown> = {
         prompt: compiledPrompt,
         image_urls: providerReferenceImageUrls,
@@ -2443,9 +2453,11 @@ export async function startVideoGeneration(params: {
       if (normalizedCharacterIds.length > 0) input.character_ids = normalizedCharacterIds;
       body = { model: providerModelId, input };
     } else if (selectedModel.provider === 'hailuo') {
-      providerModelId = mode === 'pro'
-        ? 'hailuo/2-3-image-to-video-pro'
-        : 'hailuo/2-3-image-to-video-standard';
+      providerModelId = resolveProviderModelId(
+        runtimeConfig,
+        mode === 'pro' ? 'pro' : 'standard',
+        mode === 'pro' ? 'hailuo/2-3-image-to-video-pro' : 'hailuo/2-3-image-to-video-standard',
+      );
       body = {
         model: providerModelId,
         input: {
@@ -2456,9 +2468,11 @@ export async function startVideoGeneration(params: {
         },
       };
     } else if (selectedModel.provider === 'grok') {
-      providerModelId = grokVideoImageUrls.length > 0
-        ? 'grok-imagine/image-to-video'
-        : 'grok-imagine/text-to-video';
+      providerModelId = resolveProviderModelId(
+        runtimeConfig,
+        grokVideoImageUrls.length > 0 ? 'image' : 'text',
+        grokVideoImageUrls.length > 0 ? 'grok-imagine/image-to-video' : 'grok-imagine/text-to-video',
+      );
 
       const input: Record<string, unknown> = {
         prompt: compiledPrompt,
@@ -2480,7 +2494,11 @@ export async function startVideoGeneration(params: {
       };
     } else {
       endpoint = 'https://api.kie.ai/api/v1/veo/generate';
-      providerModelId = mode === 'veo3' || mode === 'veo3_lite' ? mode : 'veo3_fast';
+      providerModelId = resolveProviderModelId(
+        runtimeConfig,
+        mode === 'veo3' || mode === 'veo3_lite' ? mode : 'veo3_fast',
+        mode === 'veo3' || mode === 'veo3_lite' ? mode : 'veo3_fast',
+      );
       body = {
         prompt: compiledPrompt,
         model: providerModelId,
@@ -2737,6 +2755,8 @@ export async function startMotionGeneration(params: {
   if (!selectedModel) {
     throw new Error(`Unsupported motion model: ${model}`);
   }
+  const runtimeConfig = await loadGenerationModelOperationalConfig(model);
+  const providerModelId = resolveProviderModelId(runtimeConfig, 'default', selectedModel.apiModelId);
 
   const computedCost = getMotionCost(model, mode, duration);
   const cost = resolveQuotedGenerationCost(computedCost, quotedCostCredits);
@@ -2745,7 +2765,7 @@ export async function startMotionGeneration(params: {
   try {
     const reservation = await startGenerationRecord(creditSupabase, {
       user_id: userId,
-      model: selectedModel.apiModelId,
+      model: providerModelId,
       duration,
       cost,
       client_request_key_hash: clientRequestKeyHash,
@@ -2775,7 +2795,7 @@ export async function startMotionGeneration(params: {
     }
 
     predictionId = await createKieTask({
-      model: selectedModel.apiModelId,
+      model: providerModelId,
       input: {
         prompt: prompt.trim() || 'The character follows the reference performance naturally.',
         input_urls: [characterImageUrl],

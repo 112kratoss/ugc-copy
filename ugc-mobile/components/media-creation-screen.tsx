@@ -55,6 +55,7 @@ import {
 import {
   getCatalogModel,
   getCatalogModels,
+  type CatalogPrimitive,
   type GenerationModelCatalog,
 } from '@/lib/generation-model-catalog';
 import {
@@ -333,26 +334,33 @@ export function MediaCreationScreen({
     status: 'idle' | 'pending' | 'ready' | 'error';
     cost: number | null;
     error: string | null;
-  }>({ key: null, status: 'idle', cost: null, error: null });
+    normalizedSettings: Record<string, CatalogPrimitive> | null;
+  }>({ key: null, status: 'idle', cost: null, error: null, normalizedSettings: null });
 
   useEffect(() => {
     if (!quoteRequest || !quoteKey) {
-      setQuoteState({ key: null, status: 'idle', cost: null, error: null });
+      setQuoteState({ key: null, status: 'idle', cost: null, error: null, normalizedSettings: null });
       return;
     }
     const controller = new AbortController();
-    setQuoteState({ key: quoteKey, status: 'pending', cost: null, error: null });
+    setQuoteState({ key: quoteKey, status: 'pending', cost: null, error: null, normalizedSettings: null });
     const timer = setTimeout(() => {
       void api.quoteGenerationModel(quoteRequest, controller.signal)
         .then((quote) => {
-          if (!controller.signal.aborted) setQuoteState({ key: quoteKey, status: 'ready', cost: quote.costCredits, error: null });
+          if (!controller.signal.aborted) setQuoteState({
+            key: quoteKey,
+            status: 'ready',
+            cost: quote.costCredits,
+            error: null,
+            normalizedSettings: quote.normalizedSettings,
+          });
         })
         .catch((error) => {
           if (controller.signal.aborted) return;
           const details = error && typeof error === 'object' && 'details' in error
             ? (error as { details?: { code?: string } }).details
             : null;
-          if (details?.code === 'CATALOG_CHANGED') {
+          if (details?.code === 'CATALOG_CHANGED' || details?.code === 'MODEL_UNAVAILABLE') {
             void refetchCatalog();
             setMessage('Model settings changed. Review the refreshed options before generating.');
           }
@@ -361,6 +369,7 @@ export function MediaCreationScreen({
             status: 'error',
             cost: null,
             error: error instanceof Error ? error.message : 'Could not calculate generation cost.',
+            normalizedSettings: null,
           });
         });
     }, 200);
@@ -370,7 +379,9 @@ export function MediaCreationScreen({
     };
   }, [api, quoteKey, refetchCatalog]);
 
-  const activeQuote = quoteState.key === quoteKey ? quoteState : { status: 'pending' as const, cost: null, error: null };
+  const activeQuote = quoteState.key === quoteKey
+    ? quoteState
+    : { status: 'pending' as const, cost: null, error: null, normalizedSettings: null };
   const validation = useMemo(
     () => currentCatalogModel
       ? validateCatalogCreationDraft(currentDraft, currentCatalogModel, { credits, quotedCost: activeQuote.cost })
@@ -715,7 +726,7 @@ export function MediaCreationScreen({
       let finalStatus: GenerationStatusResponse;
       if (currentDraft.tool === 'image') {
         started = await api.startImageGeneration(
-          buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? ''),
+          buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? '', activeQuote.normalizedSettings ?? undefined),
           idempotencyKey
         );
         setLastGenerationId(started.generationId ?? null);
@@ -723,7 +734,7 @@ export function MediaCreationScreen({
         finalStatus = await pollGenerationStatus(() => api.getImageGeneration(started.predictionId), { onTick: setStatus, signal: pollController.signal, waitUntilReady: waitUntilAppActive });
       } else if (currentDraft.tool === 'video') {
         started = await api.startVideoGeneration(
-          buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? ''),
+          buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? '', activeQuote.normalizedSettings ?? undefined),
           idempotencyKey
         );
         setLastGenerationId(started.generationId ?? null);
@@ -731,7 +742,7 @@ export function MediaCreationScreen({
         finalStatus = await pollGenerationStatus(() => api.getVideoGeneration(started.predictionId), { onTick: setStatus, signal: pollController.signal, waitUntilReady: waitUntilAppActive });
       } else {
         started = await api.startMotionGeneration(
-          buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? ''),
+          buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? '', activeQuote.normalizedSettings ?? undefined),
           idempotencyKey
         );
         setLastGenerationId(started.generationId ?? null);
@@ -752,7 +763,15 @@ export function MediaCreationScreen({
       }
     } catch (error) {
       if (pollController.signal.aborted) return;
-      setMessage(error instanceof Error ? error.message : 'Generation failed.');
+      const details = error && typeof error === 'object' && 'details' in error
+        ? (error as { details?: { code?: string } }).details
+        : null;
+      if (details?.code === 'CATALOG_CHANGED' || details?.code === 'MODEL_UNAVAILABLE') {
+        void refetchCatalog();
+        setMessage('The model catalog changed before generation started. Review the refreshed options and generate again.');
+      } else {
+        setMessage(error instanceof Error ? error.message : 'Generation failed.');
+      }
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       if (generationPollControllerRef.current === pollController) {
@@ -2033,7 +2052,14 @@ function ModelPicker({
             />
           </View>
 
-          <View style={{ gap: 2 }}>
+          <ScrollView
+            accessibilityLabel="Available generation models"
+            nestedScrollEnabled
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator
+            style={{ maxHeight: 340 }}
+            contentContainerStyle={{ gap: 2 }}
+          >
             {filteredItems.map((item) => {
             const active = item.id === value;
             return (
@@ -2081,7 +2107,7 @@ function ModelPicker({
                 <Text style={{ color: appTheme.colors.muted, fontSize: 12, fontWeight: '800' }}>No models found</Text>
               </View>
             ) : null}
-          </View>
+          </ScrollView>
         </View>
       ) : null}
     </View>

@@ -29,17 +29,14 @@ class FakeQueryBuilder {
 }
 
 function createClient(results: Record<string, QueryResult | QueryResult[]>) {
-  const withHealthyReferralRun = (result: QueryResult): QueryResult => {
+  const withHealthyRequiredRuns = (result: QueryResult): QueryResult => {
     if (result.error || !Array.isArray(result.data)) return result;
-    if (result.data.some((row) => (
+    const rows = [...result.data];
+    if (!rows.some((row) => (
       row && typeof row === 'object'
       && (row as { job_name?: unknown }).job_name === 'referral-reward-reconciliation'
-    ))) return result;
-
-    return {
-      ...result,
-      data: [
-        ...result.data,
+    ))) {
+      rows.push(
         {
           job_name: 'referral-reward-reconciliation',
           status: 'skipped',
@@ -49,8 +46,23 @@ function createClient(results: Record<string, QueryResult | QueryResult[]>) {
           skip_reason: 'no_unsettled_referral_rewards',
           error_message: null,
         },
-      ],
-    };
+      );
+    }
+    if (!rows.some((row) => (
+      row && typeof row === 'object'
+      && (row as { job_name?: unknown }).job_name === 'generation-model-verification'
+    ))) {
+      rows.push({
+        job_name: 'generation-model-verification',
+        status: 'succeeded',
+        started_at: '2026-06-21T00:30:00.000Z',
+        finished_at: '2026-06-21T00:30:01.000Z',
+        duration_ms: 1000,
+        skip_reason: null,
+        error_message: null,
+      });
+    }
+    return { ...result, data: rows };
   };
   const backendJobRuns = results.backend_job_runs;
   const tableResultsByName: Record<string, QueryResult | QueryResult[]> = {
@@ -64,8 +76,8 @@ function createClient(results: Record<string, QueryResult | QueryResult[]>) {
     ...(backendJobRuns
       ? {
           backend_job_runs: Array.isArray(backendJobRuns)
-            ? backendJobRuns.map(withHealthyReferralRun)
-            : withHealthyReferralRun(backendJobRuns),
+            ? backendJobRuns.map(withHealthyRequiredRuns)
+            : withHealthyRequiredRuns(backendJobRuns),
         }
       : {}),
   };
@@ -194,8 +206,8 @@ describe('collectBackendHealth', () => {
       cadenceMinutes: 10,
       dailyInvocations: 144,
       dailyInvocationBudget: 180,
-      logicalDailyInvocations: 504,
-      coveredJobCount: 6,
+      logicalDailyInvocations: 505,
+      coveredJobCount: 7,
       coveredJobs: expect.arrayContaining([
         expect.objectContaining({
           name: 'backend-alert-delivery',
@@ -229,7 +241,7 @@ describe('collectBackendHealth', () => {
         }),
       ]),
     });
-    expect(health.jobs).toHaveLength(6);
+    expect(health.jobs).toHaveLength(7);
     expect(health.jobs.find((job) => job.name === 'backend-alert-delivery')).toMatchObject({
       status: 'ok',
       dailyInvocations: 144,

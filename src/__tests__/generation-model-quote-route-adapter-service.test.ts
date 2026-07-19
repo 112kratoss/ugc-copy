@@ -50,6 +50,7 @@ describe('generation model quote route adapter service', () => {
     expect(createServiceClient).toHaveBeenCalledTimes(1);
     expect(createGenerationModelQuote).toHaveBeenCalledWith({
       body,
+      platform: 'web',
       rateLimitClient,
       rateLimitKey: '203.0.113.10',
     });

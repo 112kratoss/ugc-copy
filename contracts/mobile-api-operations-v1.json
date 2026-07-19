@@ -40,6 +40,7 @@
     "createPost": { "method": "POST", "path": "/api/posts", "auth": "required" },
     "listSourceTools": { "method": "GET", "path": "/api/source-tools", "auth": "required" },
     "listGenerationModels": { "method": "GET", "path": "/api/generation-models", "auth": "none" },
+    "fetchGenerationModels": { "method": "GET", "path": "/api/generation-models", "auth": "none" },
     "quoteGenerationModel": { "method": "POST", "path": "/api/generation-models/quote", "auth": "required" },
     "uploadPostResourceFile": { "method": "POST", "path": "/api/posts/resource-files", "auth": "required" },
     "createMediaUpload": { "method": "POST", "path": "/api/uploads/media/sign", "auth": "required" },

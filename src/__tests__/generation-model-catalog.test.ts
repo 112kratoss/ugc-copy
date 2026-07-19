@@ -5,6 +5,7 @@ import {
   buildGenerationModelCatalog,
   quoteGenerationModel,
 } from '@/lib/generation-model-catalog';
+import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 
 describe('generation model catalog', () => {
   it('returns a deterministic schema-v1 catalog without private provider fields', () => {
@@ -125,6 +126,26 @@ describe('generation model catalog', () => {
 });
 
 describe('generation model quotes', () => {
+  it('keeps catalog-backed pricing equivalent to the verified code catalog', () => {
+    const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 1 });
+    const operations = new Map(buildCodeGenerationModelOperations().map((entry) => [entry.modelId, entry]));
+
+    for (const model of catalog.models) {
+      const settings = Object.fromEntries(model.controls.map((control) => [control.key, control.defaultValue]));
+      const inputCounts = {
+        images: model.id === 'hailuo-2.3' ? 1 : 0,
+        videos: 0,
+        audios: 0,
+      };
+      const input = { kind: model.kind, modelId: model.id, settings, inputCounts };
+
+      const legacyQuote = quoteGenerationModel(input);
+      const catalogBackedQuote = quoteGenerationModel(input, { catalog, operations });
+
+      expect(catalogBackedQuote, model.id).toEqual(legacyQuote);
+    }
+  });
+
   it('quotes image settings with the authoritative server pricing', () => {
     const catalog = buildGenerationModelCatalog({ platform: 'mobile', schemaVersion: 1 });
     const quote = quoteGenerationModel({

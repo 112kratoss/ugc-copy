@@ -4,6 +4,7 @@ import contractFixture from '../../contracts/generation-model-catalog-v1.json';
 import {
   GENERATION_MODEL_CATALOG_CACHE_KEY,
   loadCachedGenerationModelCatalog,
+  loadCachedGenerationModelCatalogEnvelope,
   parseGenerationModelCatalog,
   saveCachedGenerationModelCatalog,
 } from '../lib/generation-model-catalog';
@@ -32,13 +33,22 @@ describe('mobile generation model catalog', () => {
     };
 
     await expect(loadCachedGenerationModelCatalog(storage)).resolves.toMatchObject({ revision: '0123456789abcdef' });
-    await saveCachedGenerationModelCatalog(parseGenerationModelCatalog(contractFixture), storage);
+    await saveCachedGenerationModelCatalog(parseGenerationModelCatalog(contractFixture), storage, {
+      etag: '"catalog-1"',
+      fetchedAt: 123,
+    });
 
     expect(storage.getItem).toHaveBeenCalledWith(GENERATION_MODEL_CATALOG_CACHE_KEY);
     expect(storage.setItem).toHaveBeenCalledWith(
       GENERATION_MODEL_CATALOG_CACHE_KEY,
-      JSON.stringify(contractFixture)
+      JSON.stringify({ catalog: contractFixture, etag: '"catalog-1"', fetchedAt: 123 })
     );
+    storage.getItem.mockResolvedValue(JSON.stringify({ catalog: contractFixture, etag: '"catalog-1"', fetchedAt: 123 }));
+    await expect(loadCachedGenerationModelCatalogEnvelope(storage)).resolves.toMatchObject({
+      catalog: { revision: '0123456789abcdef' },
+      etag: '"catalog-1"',
+      fetchedAt: 123,
+    });
   });
 
   it('ignores corrupt cached data', async () => {

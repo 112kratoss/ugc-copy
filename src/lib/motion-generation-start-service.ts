@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { enforceBackendRateLimit, MEDIA_GENERATION_RATE_LIMIT } from '@/lib/backend-rate-limit';
-import { quoteGenerationModel } from '@/lib/generation-model-catalog';
+import { quotePublishedGenerationModel } from '@/lib/generation-model-catalog-store';
 import { startMotionGeneration } from '@/lib/generation-services';
 import {
   getGenerationStartIdempotencyKey,
@@ -60,6 +60,12 @@ function requireString(value: unknown): string | null {
   return typeof value === 'string' && value ? value : null;
 }
 
+function readObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
 export async function startMotionGenerationForRoute({
   request,
   body,
@@ -68,6 +74,7 @@ export async function startMotionGenerationForRoute({
   adminSupabase,
 }: StartMotionGenerationForRouteInput): Promise<MotionGenerationStartRoutePayload> {
   const selectedModel = readString(body.model, 'kling-2.6');
+  const requestedSettings = readObject(body.settings);
   const selectedSourceGenerationId = readOptionalString(body.sourceGenerationId);
   const referenceVideoUrl = requireString(body.referenceVideoUrl);
   const characterImageUrl = requireString(body.characterImageUrl);
@@ -80,24 +87,24 @@ export async function startMotionGenerationForRoute({
     throw new MotionGenerationStartValidationError(`Unsupported model: ${selectedModel}`);
   }
 
-  const requestedDuration = readFiniteNumber(body.duration ?? 10, 10);
+  const requestedDuration = readFiniteNumber(requestedSettings.duration ?? body.duration ?? 10, 10);
   if (requestedDuration <= 0 || requestedDuration > modelConfig.maxDuration) {
     throw new MotionGenerationStartValidationError(
       `Invalid duration. Must be between 1 and ${modelConfig.maxDuration} seconds.`,
     );
   }
 
-  const quote = quoteGenerationModel({
+  const quote = await quotePublishedGenerationModel({
     kind: 'motion',
     modelId: selectedModel,
     settings: {
-      resolution: body.mode ?? '720p',
-      characterOrientation: body.characterOrientation ?? 'video',
+      resolution: requestedSettings.resolution ?? body.mode ?? '720p',
+      characterOrientation: requestedSettings.characterOrientation ?? body.characterOrientation ?? 'video',
       duration: requestedDuration,
     },
     inputCounts: { images: 1, videos: 1, audios: 0 },
     catalogRevision: readOptionalString(body.catalogRevision),
-  });
+  }, { platform: request.headers.get('x-magicbooklet-client') === 'mobile' ? 'mobile' : 'web' });
 
   const sourceGenerationId = await resolveSourceGenerationId(
     supabase,

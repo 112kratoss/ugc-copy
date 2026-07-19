@@ -1,6 +1,7 @@
 import 'server-only';
 
-import { buildGenerationModelCatalog } from '@/lib/generation-model-catalog';
+import type { GenerationModelCatalog } from '@/lib/generation-model-catalog';
+import { loadPublishedGenerationModelCatalog } from '@/lib/generation-model-catalog-store';
 import { createServiceClient } from '@/lib/server-helpers';
 import {
   FALLBACK_SOURCE_TOOLS,
@@ -88,8 +89,10 @@ function normalizeStatus(value: string | null): SourceToolStatus {
   return value && SOURCE_TOOL_STATUSES.has(value as SourceToolStatus) ? value as SourceToolStatus : 'current';
 }
 
-function withGenerationCatalogModels(tools: SourceToolOption[]): SourceToolOption[] {
-  const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 1 });
+function withGenerationCatalogModels(
+  tools: SourceToolOption[],
+  catalog: GenerationModelCatalog,
+): SourceToolOption[] {
   const generationModels = catalog.models.map((model) => ({
     slug: model.id,
     label: model.displayName,
@@ -120,6 +123,10 @@ function cloneCatalog(tools: SourceToolOption[]): SourceToolOption[] {
 
 async function loadSourceToolsCatalog(): Promise<SourceToolOption[]> {
   const supabase = createServiceClient();
+  const { catalog: generationCatalog } = await loadPublishedGenerationModelCatalog({
+    platform: 'web',
+    schemaVersion: 1,
+  });
 
   const { data: tools, error: toolsError } = await supabase
     .from('source_tools')
@@ -130,14 +137,14 @@ async function loadSourceToolsCatalog(): Promise<SourceToolOption[]> {
 
   if (toolsError) {
     if (isMissingCatalogSchemaError(toolsError)) {
-      return withGenerationCatalogModels(FALLBACK_SOURCE_TOOLS);
+      return withGenerationCatalogModels(FALLBACK_SOURCE_TOOLS, generationCatalog);
     }
     throw toolsError;
   }
 
   const toolRows = (tools ?? []) as SourceToolRow[];
   if (toolRows.length === 0) {
-    return withGenerationCatalogModels(FALLBACK_SOURCE_TOOLS);
+    return withGenerationCatalogModels(FALLBACK_SOURCE_TOOLS, generationCatalog);
   }
 
   const toolIds = toolRows.map((tool) => tool.id);
@@ -151,7 +158,7 @@ async function loadSourceToolsCatalog(): Promise<SourceToolOption[]> {
 
   if (modelsError) {
     if (isMissingCatalogSchemaError(modelsError)) {
-      return withGenerationCatalogModels(FALLBACK_SOURCE_TOOLS);
+      return withGenerationCatalogModels(FALLBACK_SOURCE_TOOLS, generationCatalog);
     }
     throw modelsError;
   }
@@ -181,7 +188,7 @@ async function loadSourceToolsCatalog(): Promise<SourceToolOption[]> {
       providerSlug: model.provider_slug,
       aliases: model.aliases ?? [],
     })),
-  })));
+  })), generationCatalog);
 }
 
 export async function listSourceToolsCatalog(): Promise<SourceToolOption[]> {

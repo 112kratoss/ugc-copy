@@ -91,6 +91,12 @@ export interface MobileClientInfo {
   catalogSchemaVersion: number;
 }
 
+export type GenerationModelCatalogFetchResult = {
+  catalog: GenerationModelCatalog | null;
+  etag: string | null;
+  notModified: boolean;
+};
+
 type QueryValue = string | number | boolean | null | undefined;
 type RequestOptions = {
   auth?: boolean;
@@ -545,6 +551,53 @@ export function createApiClient({
         { auth: false, cacheTtlMs: CONTENT_CACHE_TTL_MS }
       );
       return parseGenerationModelCatalog(response);
+    },
+    fetchGenerationModels: async ({
+      etag = null,
+      forceRefresh = false,
+    }: {
+      etag?: string | null;
+      forceRefresh?: boolean;
+    } = {}): Promise<GenerationModelCatalogFetchResult> => {
+      const path = `/api/generation-models?platform=mobile&schemaVersion=1${forceRefresh ? '&refresh=1' : ''}`;
+      const headers = new Headers();
+      headers.set(REQUEST_ID_HEADER, createMobileRequestId());
+      headers.set('x-magicbooklet-client', 'mobile');
+      if (clientInfo) {
+        headers.set('x-magicbooklet-app-version', clientInfo.appVersion);
+        headers.set('x-magicbooklet-api-version', String(clientInfo.apiVersion));
+        headers.set('x-magicbooklet-catalog-schema-version', String(clientInfo.catalogSchemaVersion));
+      }
+      if (etag && !forceRefresh) headers.set('If-None-Match', etag);
+      const url = `${root}${path}`;
+      let response: Response;
+      try {
+        response = await fetcher(url, {
+          headers,
+          ...(forceRefresh ? { cache: 'no-store' } : {}),
+        });
+      } catch (error) {
+        throw new ApiError(networkFailureMessage(root), 0, {
+          url,
+          cause: error instanceof Error ? error.message : String(error),
+        }, headers.get(REQUEST_ID_HEADER) ?? undefined);
+      }
+      const responseEtag = response.headers.get('etag') ?? etag;
+      if (response.status === 304) {
+        return { catalog: null, etag: responseEtag, notModified: true };
+      }
+      const body = await parseResponse(response);
+      if (!response.ok) {
+        const message = typeof body === 'object' && body && 'error' in body
+          ? String((body as { error?: unknown }).error)
+          : `Request failed with status ${response.status}`;
+        throw new ApiError(message, response.status, body, response.headers.get(REQUEST_ID_HEADER) ?? undefined);
+      }
+      return {
+        catalog: parseGenerationModelCatalog(body),
+        etag: responseEtag,
+        notModified: false,
+      };
     },
     quoteGenerationModel: (body: GenerationModelQuoteRequest, signal?: AbortSignal) =>
       request<GenerationModelQuote>('/api/generation-models/quote', {

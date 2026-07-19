@@ -17,6 +17,7 @@ const mobileCorsAllowedHeaders = [
   'Content-Type',
   'Authorization',
   'Idempotency-Key',
+  'If-None-Match',
   'X-Request-Id',
   'X-Magicbooklet-Client',
   'X-Magicbooklet-App-Version',
@@ -31,6 +32,7 @@ const mobileCorsExposedHeaders = [
   'X-Magicbooklet-Min-Api-Version',
   'X-Magicbooklet-Min-App-Version',
   'X-Magicbooklet-Catalog-Schema-Version',
+  'ETag',
 ].join(', ');
 
 const mobileCorsHeaders = {

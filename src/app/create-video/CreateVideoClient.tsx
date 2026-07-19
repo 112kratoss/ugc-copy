@@ -731,7 +731,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     } : null, [activeReferenceMode, characterIds.length, currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, elements.length, frameReferenceCount, isGeminiOmniVideoModel, klingVideoElements.length, modelCatalog.catalog, preparedAudioIds.length, referenceAudios.length, referenceVideos.length, selectedModel, totalDuration]);
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
     useEffect(() => {
-        if (quoteState.error?.code !== 'CATALOG_CHANGED') return;
+        if (quoteState.error?.code !== 'CATALOG_CHANGED' && quoteState.error?.code !== 'MODEL_UNAVAILABLE') return;
         // The quote response is the external signal that the local catalog is stale.
         setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
         refetchModelCatalog();
@@ -2643,7 +2643,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
             const data = await response.json();
             if (!data.success) {
-                if (data.code === 'CATALOG_CHANGED') {
+                if (data.code === 'CATALOG_CHANGED' || data.code === 'MODEL_UNAVAILABLE') {
                     setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
                     modelCatalog.refetch();
                 }

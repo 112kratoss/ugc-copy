@@ -31,6 +31,10 @@ function getQuoteRateLimitKey(request: Request) {
   return forwardedFor || realIp || '127.0.0.1';
 }
 
+function getQuotePlatform(request: Request) {
+  return request.headers.get('x-magicbooklet-client') === 'mobile' ? 'mobile' as const : 'web' as const;
+}
+
 function createQuoteErrorResponse(
   request: Request,
   result: GenerationModelQuoteServiceResult & { ok: false },
@@ -81,6 +85,7 @@ export async function postGenerationModelQuoteRouteResponse({
       body,
       rateLimitKey: getQuoteRateLimitKey(request),
       rateLimitClient: resolvedDependencies.createServiceClient(),
+      platform: getQuotePlatform(request),
     });
 
     if (!result.ok) {

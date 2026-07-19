@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { enforceBackendRateLimit, MEDIA_GENERATION_RATE_LIMIT } from '@/lib/backend-rate-limit';
-import { quoteGenerationModel } from '@/lib/generation-model-catalog';
+import { quotePublishedGenerationModel } from '@/lib/generation-model-catalog-store';
 import {
   startVideoGeneration,
   type KlingVideoElementInput,
@@ -84,6 +84,7 @@ export async function startVideoGenerationForRoute({
   persistInputMedia = true,
 }: StartVideoGenerationForRouteInput): Promise<VideoGenerationStartRoutePayload> {
   const selectedModel = readString(body.model, 'kling-3.0-video');
+  const requestedSettings = readObject<Record<string, unknown>>(body.settings) ?? {};
   const elements = readArray<ImageElementDescriptor>(body.elements);
   const elementImageUrls = readArray<string>(body.elementImageUrls);
   const referenceVideoUrls = readArray<string>(body.referenceVideoUrls);
@@ -94,18 +95,18 @@ export async function startVideoGenerationForRoute({
   const usesReusableReferences = body.referenceMode === 'elements';
   const startImageUrl = readOptionalString(body.startImageUrl);
   const endImageUrl = readOptionalString(body.endImageUrl);
-  const quote = quoteGenerationModel({
+  const quote = await quotePublishedGenerationModel({
     kind: 'video',
     modelId: selectedModel,
     settings: {
-      mode: body.mode ?? 'std',
-      aspectRatio: body.aspectRatio ?? '16:9',
-      sound: body.sound ?? false,
-      duration: getQuotedDuration(body),
-      resolution: body.resolution ?? '720p',
-      fixedLens: body.fixedLens ?? false,
-      isMultiShot: Boolean(body.isMultiShot),
-      referenceMode: usesReusableReferences ? 'elements' : 'frames',
+      mode: requestedSettings.mode ?? body.mode ?? 'std',
+      aspectRatio: requestedSettings.aspectRatio ?? body.aspectRatio ?? '16:9',
+      sound: requestedSettings.sound ?? body.sound ?? false,
+      duration: requestedSettings.duration ?? getQuotedDuration(body),
+      resolution: requestedSettings.resolution ?? body.resolution ?? '720p',
+      fixedLens: requestedSettings.fixedLens ?? body.fixedLens ?? false,
+      isMultiShot: requestedSettings.isMultiShot ?? Boolean(body.isMultiShot),
+      referenceMode: requestedSettings.referenceMode ?? (usesReusableReferences ? 'elements' : 'frames'),
     },
     inputCounts: {
       images: usesReusableReferences
@@ -117,7 +118,7 @@ export async function startVideoGenerationForRoute({
       characters: usesReusableReferences ? characterIds.length : 0,
     },
     catalogRevision: readOptionalString(body.catalogRevision),
-  });
+  }, { platform: request.headers.get('x-magicbooklet-client') === 'mobile' ? 'mobile' : 'web' });
 
   const sourceGenerationId = await resolveSourceGenerationId(
     supabase,

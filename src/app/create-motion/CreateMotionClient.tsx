@@ -658,7 +658,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
 
             const data = await response.json();
             if (!data.success) {
-                if (data.code === 'CATALOG_CHANGED') {
+                if (data.code === 'CATALOG_CHANGED' || data.code === 'MODEL_UNAVAILABLE') {
                     setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
                     modelCatalog.refetch();
                 }
@@ -701,7 +701,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     } : null, [characterImage, characterOrientation, duration, mode, modelCatalog.catalog, referenceVideo, selectedModel]);
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
     useEffect(() => {
-        if (quoteState.error?.code !== 'CATALOG_CHANGED') return;
+        if (quoteState.error?.code !== 'CATALOG_CHANGED' && quoteState.error?.code !== 'MODEL_UNAVAILABLE') return;
         // The quote response is the external signal that the local catalog is stale.
         setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
         refetchModelCatalog();

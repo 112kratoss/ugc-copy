@@ -196,6 +196,7 @@ const extendedOperationCases: Array<{
   { key: 'getCreatorFollowState', call: (api) => api.getCreatorFollowState('creator-1') },
   { key: 'setCreatorFollowing', call: (api) => api.setCreatorFollowing('creator-1', true) },
   { key: 'getRemixSourceBundle', call: (api) => api.getRemixSourceBundle('generation-1') },
+  { key: 'fetchGenerationModels', call: (api) => api.fetchGenerationModels() },
   { key: 'listMediaTemplates', call: (api) => api.listMediaTemplates({ limit: 10 }) },
   { key: 'getMediaTemplate', call: (api) => api.getMediaTemplate('product-reveal') },
   { key: 'createMediaTemplateRun', call: (api) => api.createMediaTemplateRun('template-1') },

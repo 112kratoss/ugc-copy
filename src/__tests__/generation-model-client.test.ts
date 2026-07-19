@@ -99,8 +99,8 @@ describe('web generation model catalog client', () => {
     });
 
     expect(fetcher).toHaveBeenCalledWith(
-      '/api/generation-models?platform=web&schemaVersion=1',
-      { cache: 'no-store' }
+      '/api/generation-models?platform=web&schemaVersion=1&refresh=1',
+      { cache: 'no-store', headers: expect.any(Headers) }
     );
   });
 

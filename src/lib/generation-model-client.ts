@@ -16,6 +16,11 @@ const WEB_CATALOG_CACHE_KEY = 'generation-model-catalog:v1';
 type Registry = Record<string, Record<string, unknown>>;
 type CatalogRegistries = { image: Registry; video: Registry; motion: Registry };
 type WebStorage = Pick<Storage, 'getItem' | 'setItem'>;
+type WebCatalogCacheEnvelope = {
+  catalog: GenerationModelCatalog;
+  etag: string | null;
+  fetchedAt: number;
+};
 
 let catalogRequest: Promise<GenerationModelCatalog> | null = null;
 
@@ -124,6 +129,21 @@ export function parseClientGenerationModelCatalog(value: unknown): GenerationMod
     throw new Error('Invalid generation model catalog.');
   }
   return catalog;
+}
+
+function parseWebCatalogCache(value: string | null): WebCatalogCacheEnvelope | null {
+  if (!value) return null;
+  const parsed = JSON.parse(value) as unknown;
+  if (isRecord(parsed) && 'catalog' in parsed) {
+    return {
+      catalog: parseClientGenerationModelCatalog(parsed.catalog),
+      etag: typeof parsed.etag === 'string' ? parsed.etag : null,
+      fetchedAt: typeof parsed.fetchedAt === 'number' && Number.isFinite(parsed.fetchedAt)
+        ? parsed.fetchedAt
+        : 0,
+    };
+  }
+  return { catalog: parseClientGenerationModelCatalog(parsed), etag: null, fetchedAt: 0 };
 }
 
 function choiceControl(model: GenerationModelDescriptor, key: string) {
@@ -263,18 +283,39 @@ export async function loadWebGenerationModelCatalog({
   storage?: WebStorage;
   forceRefresh?: boolean;
 } = {}): Promise<GenerationModelCatalog> {
+  const cachedEnvelope = (() => {
+    try {
+      return parseWebCatalogCache(storage?.getItem(WEB_CATALOG_CACHE_KEY) ?? null);
+    } catch {
+      return null;
+    }
+  })();
   try {
+    const headers = new Headers();
+    if (!forceRefresh && cachedEnvelope?.etag) headers.set('If-None-Match', cachedEnvelope.etag);
     const response = await fetcher(
-      '/api/generation-models?platform=web&schemaVersion=1',
-      forceRefresh ? { cache: 'no-store' } : undefined
+      `/api/generation-models?platform=web&schemaVersion=1${forceRefresh ? '&refresh=1' : ''}`,
+      forceRefresh
+        ? { cache: 'no-store', headers }
+        : (headers.has('If-None-Match') ? { headers } : undefined),
     );
+    if (response.status === 304 && cachedEnvelope) {
+      storage?.setItem(WEB_CATALOG_CACHE_KEY, JSON.stringify({
+        ...cachedEnvelope,
+        fetchedAt: Date.now(),
+      }));
+      return cachedEnvelope.catalog;
+    }
     if (!response.ok) throw new Error(`Catalog request failed with ${response.status}.`);
     const catalog = parseClientGenerationModelCatalog(await response.json());
-    storage?.setItem(WEB_CATALOG_CACHE_KEY, JSON.stringify(catalog));
+    storage?.setItem(WEB_CATALOG_CACHE_KEY, JSON.stringify({
+      catalog,
+      etag: (response.headers as Headers | undefined)?.get('etag') ?? null,
+      fetchedAt: Date.now(),
+    } satisfies WebCatalogCacheEnvelope));
     return catalog;
   } catch (error) {
-    const cached = forceRefresh ? null : storage?.getItem(WEB_CATALOG_CACHE_KEY);
-    if (cached) return parseClientGenerationModelCatalog(JSON.parse(cached));
+    if (!forceRefresh && cachedEnvelope) return cachedEnvelope.catalog;
     throw error;
   }
 }

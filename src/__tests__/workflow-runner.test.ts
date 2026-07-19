@@ -59,9 +59,9 @@ vi.mock('@/lib/generation-services', () => ({
     syncGenerationStatusesMock(...args),
 }));
 
-vi.mock('@/lib/generation-model-catalog', () => ({
-  quoteGenerationModel: (...args: Parameters<typeof quoteGenerationModelMock>) =>
-    quoteGenerationModelMock(...args),
+vi.mock('@/lib/generation-model-catalog-store', () => ({
+  quotePublishedGenerationModel: (input: Parameters<typeof quoteGenerationModelMock>[0]) =>
+    quoteGenerationModelMock(input),
 }));
 
 type RunnerTestState = {

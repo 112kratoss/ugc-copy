@@ -8,15 +8,19 @@ import {
   buildGenerationModelCatalog,
   type CatalogPlatform,
 } from '@/lib/generation-model-catalog';
+import { loadPublishedGenerationModelCatalog } from '@/lib/generation-model-catalog-store';
 
 type GenerationModelCatalogRouteDependencies = {
   buildGenerationModelCatalog?: typeof buildGenerationModelCatalog;
+  loadPublishedGenerationModelCatalog?: typeof loadPublishedGenerationModelCatalog;
 };
 
 function resolveDependencies(dependencies: GenerationModelCatalogRouteDependencies | undefined) {
   return {
     buildGenerationModelCatalog:
       dependencies?.buildGenerationModelCatalog ?? buildGenerationModelCatalog,
+    loadPublishedGenerationModelCatalog:
+      dependencies?.loadPublishedGenerationModelCatalog ?? loadPublishedGenerationModelCatalog,
   };
 }
 
@@ -47,9 +51,20 @@ export async function getGenerationModelCatalogRouteResponse({
   const searchParams = new URL(request.url).searchParams;
   const platform = readCatalogPlatform(searchParams);
   const schemaVersion = readCatalogSchemaVersion(searchParams);
-  const catalog = resolvedDependencies.buildGenerationModelCatalog({ platform, schemaVersion });
+  const forceRefresh = searchParams.get('refresh') === '1';
+  const catalog = dependencies?.buildGenerationModelCatalog
+    ? resolvedDependencies.buildGenerationModelCatalog({ platform, schemaVersion })
+    : (await resolvedDependencies.loadPublishedGenerationModelCatalog({
+        platform,
+        schemaVersion,
+        forceRefresh,
+      })).catalog;
   const etag = `"${catalog.revision}"`;
-  const headers = createApiResponseHeaders(request, API_CACHE_CONTROL.publicCatalog, { etag });
+  const headers = createApiResponseHeaders(
+    request,
+    forceRefresh ? API_CACHE_CONTROL.noStore : API_CACHE_CONTROL.publicCatalog,
+    { etag, vary: ['x-magicbooklet-client', 'x-magicbooklet-catalog-schema-version'] },
+  );
 
   if (request.headers.get('if-none-match') === etag) {
     return new NextResponse(null, { status: 304, headers });

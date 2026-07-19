@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { enforceBackendRateLimit, MEDIA_GENERATION_RATE_LIMIT } from '@/lib/backend-rate-limit';
-import { quoteGenerationModel } from '@/lib/generation-model-catalog';
+import { quotePublishedGenerationModel } from '@/lib/generation-model-catalog-store';
 import { startImageGeneration } from '@/lib/generation-services';
 import {
   getGenerationStartIdempotencyKey,
@@ -51,6 +51,12 @@ function readArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? value as T[] : [];
 }
 
+function readObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
 export async function startImageGenerationForRoute({
   request,
   body,
@@ -60,17 +66,18 @@ export async function startImageGenerationForRoute({
   persistInputMedia = true,
 }: StartImageGenerationForRouteInput): Promise<ImageGenerationStartRoutePayload> {
   const selectedModel = readString(body.model, 'nano-banana-2');
+  const requestedSettings = readObject(body.settings);
   const imageUrls = readArray<string>(body.imageUrls);
   const elements = readArray<ImageElementDescriptor>(body.elements);
-  const quote = quoteGenerationModel({
+  const quote = await quotePublishedGenerationModel({
     kind: 'image',
     modelId: selectedModel,
     settings: {
-      aspectRatio: body.aspectRatio,
-      resolution: body.resolution ?? '1K',
-      qualityMode: body.qualityMode ?? 'standard',
-      outputFormat: body.outputFormat ?? 'jpg',
-      googleSearch: body.googleSearch ?? false,
+      aspectRatio: requestedSettings.aspectRatio ?? body.aspectRatio,
+      resolution: requestedSettings.resolution ?? body.resolution ?? '1K',
+      qualityMode: requestedSettings.qualityMode ?? body.qualityMode ?? 'standard',
+      outputFormat: requestedSettings.outputFormat ?? body.outputFormat ?? 'jpg',
+      googleSearch: requestedSettings.googleSearch ?? body.googleSearch ?? false,
     },
     inputCounts: {
       images: Math.max(imageUrls.length, elements.length),
@@ -78,7 +85,7 @@ export async function startImageGenerationForRoute({
       audios: 0,
     },
     catalogRevision: readOptionalString(body.catalogRevision),
-  });
+  }, { platform: request.headers.get('x-magicbooklet-client') === 'mobile' ? 'mobile' : 'web' });
 
   const sourceGenerationId = await resolveSourceGenerationId(
     supabase,

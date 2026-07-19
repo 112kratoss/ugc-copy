@@ -2,6 +2,7 @@ export type BackendJobName =
   | 'backend-alert-delivery'
   | 'feed-maintenance'
   | 'generation-completions'
+  | 'generation-model-verification'
   | 'media-preview-repair'
   | 'mobile-push-receipts'
   | 'referral-reward-reconciliation';
@@ -188,6 +189,15 @@ export const BACKEND_JOB_REGISTRY = [
     lockTtlSeconds: 14 * 60,
     noWorkSkipReason: 'no_due_jobs',
     maxMissedRunsBeforeDegraded: 3,
+  }),
+  defineBackendJob({
+    name: 'generation-model-verification',
+    route: '/api/cron/generation-model-verification',
+    schedule: '30 */24 * * *',
+    maxDurationSeconds: 300,
+    lockTtlSeconds: 14 * 60,
+    noWorkSkipReason: 'no_published_generation_models',
+    maxMissedRunsBeforeDegraded: 2,
   }),
   defineBackendJob({
     name: 'media-preview-repair',

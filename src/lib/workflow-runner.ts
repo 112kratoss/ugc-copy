@@ -46,7 +46,7 @@ import {
   type SeedanceAssetCollections,
   type SeedanceAssetMetadata,
 } from '@/lib/seedance-assets';
-import { quoteGenerationModel } from '@/lib/generation-model-catalog';
+import { quotePublishedGenerationModel } from '@/lib/generation-model-catalog-store';
 
 export interface WorkflowRunExecutionResult {
   runId: string;
@@ -621,7 +621,7 @@ export async function executeWorkflowRunnableNode(params: {
     if (!inputs.prompt) return buildBlockedError('Image generator is missing a prompt input.');
     const data = normalizeNodeData('image-generate', node.data as Partial<ImageGenerateNodeData>) as ImageGenerateNodeData;
     const elementPayload = getRunnableElementPayload(graph, node.id);
-    const quote = quoteGenerationModel({
+    const quote = await quotePublishedGenerationModel({
       kind: 'image',
       modelId: data.model,
       settings: {
@@ -632,7 +632,7 @@ export async function executeWorkflowRunnableNode(params: {
       },
       inputCounts: { images: elementPayload.references.length, videos: 0, audios: 0 },
       catalogRevision,
-    });
+    }, { platform: 'web' });
     const result = await startImageGeneration({
       supabase,
       creditSupabase,
@@ -685,7 +685,7 @@ export async function executeWorkflowRunnableNode(params: {
     const quotedDuration = data.isMultiShot
       ? data.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration || 0)), 0)
       : data.duration;
-    const quote = quoteGenerationModel({
+    const quote = await quotePublishedGenerationModel({
       kind: 'video',
       modelId: data.model,
       settings: {
@@ -705,7 +705,7 @@ export async function executeWorkflowRunnableNode(params: {
         audios: elementPayload.referenceAudioUrls.length,
       },
       catalogRevision,
-    });
+    }, { platform: 'web' });
     const result = await startVideoGeneration({
       supabase,
       creditSupabase,
@@ -757,6 +757,17 @@ export async function executeWorkflowRunnableNode(params: {
       return buildBlockedError('Motion control requires both an image input and a video input.');
     }
 
+    const quote = await quotePublishedGenerationModel({
+      kind: 'motion',
+      modelId: data.model,
+      settings: {
+        resolution: data.mode,
+        characterOrientation: data.characterOrientation,
+        duration: 10,
+      },
+      inputCounts: { images: 1, videos: 1, audios: 0 },
+      catalogRevision,
+    }, { platform: 'web' });
     const result = await startMotionGeneration({
       supabase,
       creditSupabase,
@@ -768,17 +779,7 @@ export async function executeWorkflowRunnableNode(params: {
       duration: 10,
       characterOrientation: data.characterOrientation,
       mode: data.mode,
-      quotedCostCredits: quoteGenerationModel({
-        kind: 'motion',
-        modelId: data.model,
-        settings: {
-          resolution: data.mode,
-          characterOrientation: data.characterOrientation,
-          duration: 10,
-        },
-        inputCounts: { images: 1, videos: 1, audios: 0 },
-        catalogRevision,
-      }).costCredits,
+      quotedCostCredits: quote.costCredits,
     });
 
     return {

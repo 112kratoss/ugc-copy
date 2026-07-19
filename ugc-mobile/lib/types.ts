@@ -504,6 +504,7 @@ export interface ImageGenerationRequest {
   googleSearch?: boolean;
   sourceGenerationId?: string | null;
   catalogRevision?: string | null;
+  settings?: Record<string, string | number | boolean>;
 }
 
 export interface VideoMultiPromptInput {
@@ -538,6 +539,7 @@ export interface VideoGenerationRequest {
   seedanceAssets?: unknown | null;
   sourceGenerationId?: string | null;
   catalogRevision?: string | null;
+  settings?: Record<string, string | number | boolean>;
 }
 
 export interface MotionGenerationRequest {
@@ -552,6 +554,7 @@ export interface MotionGenerationRequest {
   referenceVideo?: RemixMediaAssetDescriptor | null;
   sourceGenerationId?: string | null;
   catalogRevision?: string | null;
+  settings?: Record<string, string | number | boolean>;
 }
 
 export type PromptEnhancementMedium = 'image' | 'video' | 'motion';

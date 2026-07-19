@@ -12,8 +12,8 @@ import {
 } from '@/lib/backend-jobs';
 import {
   GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
-  buildGenerationModelCatalog,
 } from '@/lib/generation-model-catalog';
+import { loadPublishedGenerationModelCatalog } from '@/lib/generation-model-catalog-store';
 
 export type BackendHealthStatus = 'ok' | 'warning' | 'degraded';
 
@@ -190,6 +190,8 @@ export type BackendHealth = {
     revision: string;
     schemaVersion: number;
     activeModels: number;
+    source: 'code' | 'shadow' | 'database';
+    releaseId: string | null;
   };
   scheduler: BackendSchedulerHealth;
   jobs: BackendJobHealth[];
@@ -844,7 +846,7 @@ export async function collectBackendHealth(
         message: `Missing required backend environment capabilities: ${environment.missing.join(', ')}.`,
       }]
     : [];
-  const catalog = buildGenerationModelCatalog({
+  const { catalog, source: catalogSource, releaseId: catalogReleaseId } = await loadPublishedGenerationModelCatalog({
     platform: 'web',
     schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
   });
@@ -876,6 +878,8 @@ export async function collectBackendHealth(
       revision: catalog.revision,
       schemaVersion: catalog.schemaVersion,
       activeModels: catalog.models.length,
+      source: catalogSource,
+      releaseId: catalogReleaseId,
     },
     scheduler: schedulerResult.health,
     jobs: jobResults.map((result) => result.health),

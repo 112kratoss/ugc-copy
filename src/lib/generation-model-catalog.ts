@@ -20,6 +20,11 @@ import {
   type MotionModelId,
   type VideoModelId,
 } from '@/lib/models';
+import {
+  buildCodeGenerationModelOperations,
+  calculateGenerationModelRuntimeCost,
+  type GenerationModelOperationalConfig,
+} from '@/lib/generation-model-runtime';
 
 export const GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 1;
 
@@ -376,7 +381,12 @@ const PRIVATE_GENERATION_MODEL_ALIASES = [
 
 function buildRevision(models: GenerationModelDescriptor[]): string {
   return createHash('sha256')
-    .update(JSON.stringify({ schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION, models, status: MODEL_STATUS }))
+    .update(JSON.stringify({
+      schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
+      models,
+      status: MODEL_STATUS,
+      operations: buildCodeGenerationModelOperations(),
+    }))
     .digest('hex')
     .slice(0, 16);
 }
@@ -435,7 +445,12 @@ function assertValid(fieldErrors: Record<string, string>) {
   }
 }
 
-function quoteImage(modelId: ImageModelId, settings: Record<string, unknown>, imageCount: number): GenerationModelQuote {
+function quoteImage(
+  modelId: ImageModelId,
+  settings: Record<string, unknown>,
+  imageCount: number,
+  catalogRevision: string,
+): GenerationModelQuote {
   const model = IMAGE_MODELS[modelId];
   const fieldErrors: Record<string, string> = {};
   const aspectRatio = stringSetting(settings, 'aspectRatio', model.aspectRatios[0]);
@@ -465,7 +480,6 @@ function quoteImage(modelId: ImageModelId, settings: Record<string, unknown>, im
     outputFormat: model.supportsOutputFormat ? outputFormat : 'jpg',
     googleSearch: model.supportsGoogleSearch ? booleanSetting(settings, 'googleSearch') : false,
   };
-  const catalogRevision = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 1 }).revision;
   return {
     modelId,
     catalogRevision,
@@ -474,7 +488,12 @@ function quoteImage(modelId: ImageModelId, settings: Record<string, unknown>, im
   };
 }
 
-function quoteVideo(modelId: VideoModelId, settings: Record<string, unknown>, inputCounts: Required<NonNullable<GenerationModelQuoteInput['inputCounts']>>): GenerationModelQuote {
+function quoteVideo(
+  modelId: VideoModelId,
+  settings: Record<string, unknown>,
+  inputCounts: Required<NonNullable<GenerationModelQuoteInput['inputCounts']>>,
+  catalogRevision: string,
+): GenerationModelQuote {
   const model = VIDEO_MODELS[modelId];
   const fieldErrors: Record<string, string> = {};
   const aspectRatio = stringSetting(settings, 'aspectRatio', model.aspectRatios[0]);
@@ -524,7 +543,6 @@ function quoteVideo(modelId: VideoModelId, settings: Record<string, unknown>, in
   const sound = model.supportsSound ? booleanSetting(settings, 'sound') : false;
   const fixedLens = model.supportsFixedLens ? booleanSetting(settings, 'fixedLens') : false;
   const normalizedSettings: Record<string, CatalogPrimitive> = { aspectRatio, duration, mode, resolution, sound, fixedLens, referenceMode };
-  const catalogRevision = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 1 }).revision;
   return {
     modelId,
     catalogRevision,
@@ -540,7 +558,11 @@ function quoteVideo(modelId: VideoModelId, settings: Record<string, unknown>, in
   };
 }
 
-function quoteMotion(modelId: MotionModelId, settings: Record<string, unknown>): GenerationModelQuote {
+function quoteMotion(
+  modelId: MotionModelId,
+  settings: Record<string, unknown>,
+  catalogRevision: string,
+): GenerationModelQuote {
   const model = MOTION_MODELS[modelId];
   const fieldErrors: Record<string, string> = {};
   const resolution = stringSetting(settings, 'resolution', model.resolutions[0]) as '720p' | '1080p';
@@ -552,7 +574,6 @@ function quoteMotion(modelId: MotionModelId, settings: Record<string, unknown>):
     fieldErrors.duration = `Duration must be between 1 and ${model.maxDuration} seconds.`;
   }
   assertValid(fieldErrors);
-  const catalogRevision = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 1 }).revision;
   return {
     modelId,
     catalogRevision,
@@ -561,8 +582,14 @@ function quoteMotion(modelId: MotionModelId, settings: Record<string, unknown>):
   };
 }
 
-export function quoteGenerationModel(input: GenerationModelQuoteInput): GenerationModelQuote {
-  const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 1 });
+export function quoteGenerationModel(
+  input: GenerationModelQuoteInput,
+  options: {
+    catalog?: GenerationModelCatalog;
+    operations?: Map<string, GenerationModelOperationalConfig>;
+  } = {},
+): GenerationModelQuote {
+  const catalog = options.catalog ?? buildGenerationModelCatalog({ platform: 'web', schemaVersion: 1 });
   if (input.catalogRevision && input.catalogRevision !== catalog.revision) {
     throw new CatalogError('The model catalog has changed. Refresh settings before generating.', 'CATALOG_CHANGED', 409);
   }
@@ -580,9 +607,18 @@ export function quoteGenerationModel(input: GenerationModelQuoteInput): Generati
     preparedAudios: Math.max(0, Math.floor(input.inputCounts?.preparedAudios ?? 0)),
     characters: Math.max(0, Math.floor(input.inputCounts?.characters ?? 0)),
   };
-  if (input.kind === 'image') return quoteImage(input.modelId as ImageModelId, settings, inputCounts.images);
-  if (input.kind === 'video') return quoteVideo(input.modelId as VideoModelId, settings, inputCounts);
-  return quoteMotion(input.modelId as MotionModelId, settings);
+  const quote = input.kind === 'image'
+    ? quoteImage(input.modelId as ImageModelId, settings, inputCounts.images, catalog.revision)
+    : input.kind === 'video'
+      ? quoteVideo(input.modelId as VideoModelId, settings, inputCounts, catalog.revision)
+      : quoteMotion(input.modelId as MotionModelId, settings, catalog.revision);
+  const runtimeConfig = options.operations?.get(input.modelId);
+  return runtimeConfig
+    ? {
+        ...quote,
+        costCredits: calculateGenerationModelRuntimeCost(runtimeConfig, quote.normalizedSettings, inputCounts),
+      }
+    : quote;
 }
 
 export function getGenerationModelDisplayName(modelId: string): string | null {

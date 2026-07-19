@@ -22,6 +22,7 @@ import {
   maybePruneGenerationCompletionJobs,
   processGenerationCompletionJobs,
 } from '@/lib/generation-completion-jobs';
+import { verifyPublishedGenerationModels } from '@/lib/generation-model-provider-verification';
 import { hasRepairableMediaPreviews, repairMediaPreviews } from '@/lib/media-preview-repair';
 import { hasMobilePushMaintenanceWork, processMobilePushMaintenance } from '@/lib/mobile-notifications';
 import {
@@ -315,6 +316,30 @@ export function runGenerationCompletionsBackendJob(options: {
         pruned,
       };
     },
+  });
+}
+
+export function runGenerationModelVerificationBackendJob(options: {
+  requestId?: string;
+  startedAtMs?: number;
+  serviceClient?: SupabaseClient;
+  triggerRoute?: string;
+} = {}) {
+  const job = BACKEND_JOBS_BY_NAME['generation-model-verification'];
+  return runManagedBackendJob({
+    ...options,
+    job,
+    messages: {
+      started: 'generation_model_verification_started',
+      skippedNoWork: 'generation_model_verification_skipped_no_models',
+      skippedLocked: 'generation_model_verification_skipped',
+      completed: 'generation_model_verification_completed',
+      failed: 'generation_model_verification_failed',
+    },
+    hasWork: async () => true,
+    run: (client, context) => verifyPublishedGenerationModels(client, {
+      now: new Date(context.startedAtMs),
+    }),
   });
 }
 

@@ -24,6 +24,7 @@ The protected backend health endpoint reports only missing capability names, nev
 - Scheduler authentication: `CRON_SECRET`.
 - Protected ops dashboard authentication: `OPS_READ_SECRET`.
 - Generation provider: `KIE_AI_API_KEY`.
+- Generation model catalog: `GENERATION_MODEL_CATALOG_SOURCE` set to `shadow` while comparing a candidate database release, then `database` after the active release is verified. `code` is the emergency fallback.
 - Generation webhook ingress: `KIE_PROVIDER_WEBHOOK_SECRET` (with legacy `WEBHOOK_SECRET` accepted only during rotation). KIE callbacks go to the Supabase `kie-webhook` Edge Function, never directly to the HMAC-only application endpoint.
 - Generation webhook forwarding authentication: `KIE_WEBHOOK_HMAC_KEY`; the Edge Function signs the provider task id and a five-minute timestamp before forwarding to Vercel. `KIE_PROVIDER_WEBHOOK_SECRET_PREVIOUS`, `KIE_WEBHOOK_HMAC_KEY_PREVIOUS`, and `WEBHOOK_SECRET_PREVIOUS` are temporary rotation-only variables and should be removed after in-flight jobs expire.
 - Provider media import allowlist: `MEDIA_IMPORT_HOST_ALLOWLIST` (comma-separated HTTPS hostnames; `*.example.com` matches subdomains only). Include every provider CDN host that can appear in temporary generation output URLs. Imports fail closed when a host is absent, redirects leave the allowlist, DNS resolves privately, the media type is invalid, or the response exceeds its byte limit.
@@ -114,6 +115,21 @@ This probe does not replace the provider-dashboard gate. After it passes, send t
 7. Run the post-deployment smoke tests below.
 8. Monitor runtime errors, backend alerts, provider failures, and payment reconciliation for at least one scheduler interval.
 
+## Generation Model Catalog Control Plane
+
+The active Supabase release is the authoritative source for web and mobile model names, controls, lifecycle, provider IDs, and pricing when `GENERATION_MODEL_CATALOG_SOURCE=database`. Clients receive only the sanitized public descriptor through `/api/generation-models`; they never read the catalog tables or private provider configuration directly.
+
+Manage releases through Supabase Studio SQL or another service-role session. There is intentionally no public admin UI in v1:
+
+1. Clone the active revision with `clone_generation_model_catalog(active_revision, new_revision, change_note, operator)`.
+2. Edit only the new draft release and its entries. Keep model identity and kind unchanged.
+3. Review web/mobile defaults, public descriptors, adapter allowlists, provider IDs, pricing, and verification configuration.
+4. Set the release to `shadow`, run application checks with `GENERATION_MODEL_CATALOG_SOURCE=shadow`, and review `generation_model_catalog_shadow_mismatch` logs.
+5. Publish atomically with `publish_generation_model_catalog(release_id, expected_active_revision)` and switch the application to `database` after verification.
+6. Roll back without destructive edits using `rollback_generation_model_catalog(target_revision, expected_active_revision)`.
+
+Provider verification runs daily as `generation-model-verification`, records sanitized results in `generation_model_provider_checks`, and never publishes or retires a model automatically. Two consecutive discrepancies mark the check degraded for operator review.
+
 ## Post-Deployment Smoke Tests
 
 Store `OPS_READ_SECRET` and `CRON_SECRET` in temporary shell environments without printing them. Use `OPS_READ_SECRET` for read-only ops dashboard smoke tests and `CRON_SECRET` only for scheduler/cron tests. Do not place either value in documentation or command history.
@@ -163,7 +179,7 @@ Expect a configured environment, a current build id, no stale scheduler, no sett
 
 ## Durable Queue Graduation Decision
 
-Current decision: keep the Vercel cron orchestrator for `backend-alert-delivery`, `feed-maintenance`, `generation-completions`, `media-preview-repair`, `mobile-push-receipts`, and `referral-reward-reconciliation`.
+Current decision: keep the Vercel cron orchestrator for `backend-alert-delivery`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `media-preview-repair`, `mobile-push-receipts`, and `referral-reward-reconciliation`.
 
 This is the cost-efficient production baseline for the current workload because the jobs are idempotent, lock-protected in Supabase, bounded by 300-second function limits, and tolerant of the current ten-minute or hourly cadence. The single `/api/cron/backend-jobs` scheduler keeps Vercel cron invocations at 144 per day while logical jobs can still run at their own cadence.
 
