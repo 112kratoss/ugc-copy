@@ -24,6 +24,38 @@ npm run test
 npm run typecheck
 ```
 
+## Store release profiles
+
+The first iOS release is intentionally iPhone-only (`ios.supportsTablet: false`).
+Do not attach iPad screenshots to this version. Enabling iPad later requires a
+fresh build plus layout, purchase, authentication, generation, and account-flow
+QA on supported iPad sizes.
+
+Keep the version in `app.json`, `package.json`, and `package-lock.json` aligned
+before creating a store build. EAS owns the monotonically increasing native
+build/version codes through `appVersionSource: remote` and `autoIncrement`.
+
+```sh
+# Build store artifacts from the production environment
+eas build --profile production --platform ios
+eas build --profile production --platform android
+
+# Submit an Android test release without promoting it publicly
+eas submit --profile alpha --platform android
+
+# Submit the approved public releases
+eas submit --profile production --platform ios
+eas submit --profile production --platform android
+```
+
+The `alpha` submit profile targets Google Play's closed alpha track. The
+`production` profile targets Google Play production and must be used only after
+the release checklist, store listing, privacy disclosures, product catalog,
+sandbox purchases, signed webhooks, and staged-rollout decision are complete.
+The public legal URLs are `https://magicbooklet.com/terms`,
+`https://magicbooklet.com/privacy`, `https://magicbooklet.com/cancellation`, and
+`https://magicbooklet.com/delete-account`.
+
 ## Physical Android performance profile
 
 Connect and authorize one physical Android device, then provide a signed,

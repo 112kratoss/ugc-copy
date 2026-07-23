@@ -66,6 +66,8 @@ export interface ShowcaseAssetSummary {
 
 export interface ShowcaseMediaItem {
     id: string;
+    /** Stable across edits/reordering; legacy clients may omit it during rollout. */
+    mediaKey?: string;
     url: string;
     previewUrl?: string | null;
     previewThumbhash?: string | null;

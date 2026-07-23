@@ -31,6 +31,7 @@ import {
   normalizePostResourceAttachments,
   normalizePostResourceItems,
   normalizePostResourceSections,
+  POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS,
   resolvePostRemixCapability,
   sanitizePostResourceBundleLockedPreview,
   validatePostResourceBundleInput,
@@ -426,7 +427,9 @@ function inferReferenceContentType(
 }
 
 function mapGenerationInputResourceType(row: GenerationInputMediaRow): PostResourceItemType {
-  return row.media_type === 'image' ? 'reference_image' : 'source_file';
+  if (row.media_type === 'image') return 'reference_image';
+  if (row.media_type === 'audio') return 'reference_audio';
+  return 'reference_video';
 }
 
 function mapGenerationInputResourceRole(role: string): PostResourceItemRole {
@@ -439,7 +442,9 @@ function mapGenerationInputResourceRole(role: string): PostResourceItemRole {
 }
 
 function mapGenerationInputRemixUse(row: GenerationInputMediaRow): PostResourceRemixUse {
-  return row.media_type === 'image' ? 'reference_only' : 'none';
+  return row.media_type === 'image' || row.media_type === 'video' || row.media_type === 'audio'
+    ? 'reference_only'
+    : 'none';
 }
 
 function buildReferenceResourceStoragePath(ownerUserId: string, generationId: string, row: GenerationInputMediaRow): string {
@@ -581,6 +586,8 @@ export async function buildGenerationReferenceResourceItems(params: {
       }
 
       items.push({
+        id: `reference-${sanitizePathSegment(row.id, String(index + 1))}`,
+        scope: { kind: 'all' },
         type: mapGenerationInputResourceType(row),
         role: mapGenerationInputResourceRole(row.role),
         sectionId: null,
@@ -648,7 +655,7 @@ function isGenerationRecipePostEligible(row: GenerationRecipePostRow): boolean {
     row.generation_id &&
     (row.visibility === 'public' || row.visibility === 'unlisted') &&
     row.archived_at === null &&
-    row.review_status !== 'hidden' &&
+    row.review_status === 'visible' &&
     normalizeShowcaseSourceKind(row.source_kind) === MAGICBOOKLET_SOURCE_KIND
   );
 }
@@ -856,10 +863,14 @@ async function loadLinkedPostMap(
     .in('id', uniquePostIds);
 
   if (scope === 'public') {
-    resultQuery = resultQuery.eq('visibility', 'public').is('archived_at', null).neq('review_status', 'hidden');
+    resultQuery = resultQuery.eq('visibility', 'public').is('archived_at', null).eq('review_status', 'visible');
   }
 
   let result: LinkedPostQueryResult = await resultQuery;
+  if (scope === 'public' && isMissingPostReviewStatusColumnError(result.error)) {
+    console.error('Cannot enforce the marketplace moderation boundary:', result.error);
+    return new Map();
+  }
   if (isMissingSourceToolSlugColumn(result.error) || isMissingPostReviewStatusColumnError(result.error)) {
     const includeSourceToolSlug = !isMissingSourceToolSlugColumn(result.error);
     const includeReviewStatus = !isMissingPostReviewStatusColumnError(result.error);
@@ -891,11 +902,15 @@ async function loadLinkedPostMap(
     if (scope === 'public') {
       fallbackQuery = fallbackQuery.eq('visibility', 'public').is('archived_at', null);
       if (includeReviewStatus) {
-        fallbackQuery = fallbackQuery.neq('review_status', 'hidden');
+        fallbackQuery = fallbackQuery.eq('review_status', 'visible');
       }
     }
 
     result = await fallbackQuery;
+    if (scope === 'public' && isMissingPostReviewStatusColumnError(result.error)) {
+      console.error('Cannot enforce the marketplace moderation boundary:', result.error);
+      return new Map();
+    }
   }
 
   let rows: LinkedPostRow[] = [];
@@ -907,10 +922,14 @@ async function loadLinkedPostMap(
       .in('id', uniquePostIds);
 
     if (scope === 'public') {
-      legacyQuery = legacyQuery.eq('visibility', 'public').is('archived_at', null).neq('review_status', 'hidden');
+      legacyQuery = legacyQuery.eq('visibility', 'public').is('archived_at', null).eq('review_status', 'visible');
     }
 
     let legacyResult: LinkedPostQueryResult = await legacyQuery;
+    if (scope === 'public' && isMissingPostReviewStatusColumnError(legacyResult.error)) {
+      console.error('Cannot enforce the marketplace moderation boundary:', legacyResult.error);
+      return new Map();
+    }
     if (isMissingSourceToolSlugColumn(legacyResult.error) || isMissingPostReviewStatusColumnError(legacyResult.error)) {
       const includeSourceToolSlug = !isMissingSourceToolSlugColumn(legacyResult.error);
       const includeReviewStatus = !isMissingPostReviewStatusColumnError(legacyResult.error);
@@ -940,11 +959,15 @@ async function loadLinkedPostMap(
       if (scope === 'public') {
         fallbackLegacyQuery = fallbackLegacyQuery.eq('visibility', 'public').is('archived_at', null);
         if (includeReviewStatus) {
-          fallbackLegacyQuery = fallbackLegacyQuery.neq('review_status', 'hidden');
+          fallbackLegacyQuery = fallbackLegacyQuery.eq('review_status', 'visible');
         }
       }
 
       legacyResult = await fallbackLegacyQuery;
+      if (scope === 'public' && isMissingPostReviewStatusColumnError(legacyResult.error)) {
+        console.error('Cannot enforce the marketplace moderation boundary:', legacyResult.error);
+        return new Map();
+      }
     }
 
     if (legacyResult.error) {
@@ -1106,7 +1129,7 @@ function buildBundleMutationPayload(bundle: PostResourceBundleInput | null | und
     summary: normalizeText(bundle?.summary ?? null) ?? '',
     previewText: normalizeText(bundle?.previewText ?? null) ?? '',
     priceUsdCents: accessMode === 'paid'
-      ? Math.max(100, Number.isFinite(bundle?.priceUsdCents) ? Math.round(bundle?.priceUsdCents ?? 0) : 0)
+      ? Math.max(POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS, Number.isFinite(bundle?.priceUsdCents) ? Math.round(bundle?.priceUsdCents ?? 0) : 0)
       : 0,
     resources: {
       promptText: normalizeText(resources.promptText ?? null),
@@ -1349,7 +1372,7 @@ export async function savePostResourceBundle(params: {
   const normalizedTitle = normalizeText(postTitle) ?? 'Recipe';
   const priceUsdCents = accessMode === 'free'
     ? 0
-    : Math.max(100, Number.isFinite(bundle?.priceUsdCents) ? Math.round(bundle?.priceUsdCents ?? 0) : 0);
+    : Math.max(POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS, Number.isFinite(bundle?.priceUsdCents) ? Math.round(bundle?.priceUsdCents ?? 0) : 0);
 
   const payload = {
     post_id: postId,
@@ -1823,6 +1846,9 @@ export async function getPostResourceBundleDetailByPostId(
   const viewerIsOwner = Boolean(viewerUserId && viewerUserId === row.owner_user_id);
   const viewerCanAccess = canViewerAccessBundle(row, viewerUserId, viewerHasPurchased);
   const [hydrated] = await hydrateBundleRows([row], countryCode, viewerIsOwner ? 'owner' : 'public');
+  if (!viewerIsOwner && !hydrated.post) {
+    return null;
+  }
   const normalizedResources = normalizeResources(row);
   const remix = resolvePostRemixCapability({
     generationId: hydrated.post?.generationId ?? null,

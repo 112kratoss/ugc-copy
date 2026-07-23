@@ -19,11 +19,11 @@ describe('mobile pricing selection', () => {
     expect(resolveSelectedPricingPlan('missing' as never).id).toBe('creator');
   });
 
-  it('prefers a native store price and formats the web estimate otherwise', () => {
+  it('prefers a native store price and does not steer to web pricing otherwise', () => {
     const plan = resolveSelectedPricingPlan('creator');
 
     expect(formatPricingDisplayPrice(plan, '₹1,799')).toBe('₹1,799');
-    expect(formatPricingDisplayPrice(plan, null)).toBe('Web estimate Rs 1,660');
+    expect(formatPricingDisplayPrice(plan, null)).toBe('Store price unavailable');
   });
 
   it('builds concise purchase button states', () => {

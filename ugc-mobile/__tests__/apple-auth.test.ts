@@ -19,6 +19,7 @@ vi.mock('expo-apple-authentication', () => appleAuth);
 vi.mock('expo-crypto', () => cryptoMock);
 
 import {
+  authorizeNativeAppleAccountDeletion,
   isAppleAuthCanceled,
   signInWithNativeApple,
 } from '../lib/apple-auth';
@@ -59,7 +60,10 @@ describe('native Apple auth', () => {
     supabase.auth.signInWithIdToken.mockResolvedValue({ data: {}, error: null });
     supabase.auth.updateUser.mockResolvedValue({ data: {}, error: null });
 
-    await signInWithNativeApple(supabase as never);
+    await expect(signInWithNativeApple(supabase as never)).resolves.toEqual({
+      authorizationCode: 'apple-authorization-code',
+      appleUser: undefined,
+    });
 
     expect(appleAuth.signInAsync).toHaveBeenCalledWith({
       requestedScopes: ['FULL_NAME', 'EMAIL'],
@@ -79,6 +83,18 @@ describe('native Apple auth', () => {
     });
   });
 
+  it('returns a one-time deletion code without another Supabase sign-in', async () => {
+    await expect(authorizeNativeAppleAccountDeletion()).resolves.toEqual({
+      authorizationCode: 'apple-authorization-code',
+      appleUser: undefined,
+    });
+
+    expect(appleAuth.signInAsync).toHaveBeenCalledWith({
+      requestedScopes: ['FULL_NAME', 'EMAIL'],
+      nonce: 'hashed-apple-nonce',
+    });
+  });
+
   it('fails before Supabase sign-in when Apple does not return an identity token', async () => {
     const supabase = createSupabaseMock();
     appleAuth.signInAsync.mockResolvedValue({
@@ -89,6 +105,20 @@ describe('native Apple auth', () => {
 
     await expect(signInWithNativeApple(supabase as never)).rejects.toThrow(
       'Apple did not return an identity token.'
+    );
+    expect(supabase.auth.signInWithIdToken).not.toHaveBeenCalled();
+  });
+
+  it('fails before Supabase sign-in when Apple does not return an authorization code', async () => {
+    const supabase = createSupabaseMock();
+    appleAuth.signInAsync.mockResolvedValue({
+      identityToken: 'apple-id-token',
+      authorizationCode: null,
+      fullName: null,
+    });
+
+    await expect(signInWithNativeApple(supabase as never)).rejects.toThrow(
+      'Apple did not return an authorization code.'
     );
     expect(supabase.auth.signInWithIdToken).not.toHaveBeenCalled();
   });

@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { resolveStoredMediaUrl } from '@/lib/server-helpers';
 import { buildVisualMediaDescriptor, type VisualMediaDescriptor } from '@/lib/media-descriptor';
+import { defaultPostMediaKey, normalizePostMediaKey } from '@/lib/post-media-key';
 import { getPostMediaKind, resolvePostMediaUrl, type PostMediaRow as LegacyPostMediaRow } from '@/lib/posts-server';
 import type { ShowcaseMediaKind, ShowcasePostFormat, ShowcaseItemCategory } from '@/lib/showcase';
 
@@ -13,6 +14,7 @@ export const MAX_POST_MEDIA_ITEMS = 5;
 
 export interface PostMediaSummary {
   id: string;
+  mediaKey: string;
   url: string;
   previewUrl: string | null;
   previewThumbhash: string | null;
@@ -30,6 +32,7 @@ export interface PostMediaSummary {
 }
 
 export interface PostMediaPersistInput {
+  mediaKey: string;
   storagePath: string | null;
   previewStoragePath?: string | null;
   previewThumbhash?: string | null;
@@ -50,6 +53,7 @@ export interface PostMediaPersistInput {
 interface PostMediaDbRow {
   id: string;
   post_id: string;
+  media_key?: string | null;
   storage_path: string | null;
   preview_storage_path?: string | null;
   preview_thumbhash?: string | null;
@@ -79,6 +83,15 @@ function isMissingPostMediaPreviewColumnError(error: unknown): boolean {
 
   const { code, message = '' } = error as SupabaseSchemaError;
   return (code === '42703' || code === 'PGRST204') && /preview_(storage_path|thumbhash|status|attempt_count|error|generated_at)/.test(message);
+}
+
+function isMissingPostMediaKeyColumnError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const { code, message = '' } = error as SupabaseSchemaError;
+  return (code === '42703' || code === 'PGRST204') && /media_key/.test(message);
 }
 
 export function isMissingPostMediaSchemaError(error: unknown): boolean {
@@ -160,6 +173,7 @@ async function resolvePostMediaDbRows(
         });
         return {
           id: row.id,
+          mediaKey: normalizePostMediaKey(row.media_key) ?? defaultPostMediaKey(row.sort_order),
           url,
           previewUrl,
           previewThumbhash: row.preview_thumbhash ?? null,
@@ -192,11 +206,21 @@ export async function loadPostMediaItemsMap(
 
   const previewResult = await supabase
     .from('post_media')
-    .select('id, post_id, storage_path, preview_storage_path, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
+    .select('id, post_id, media_key, storage_path, preview_storage_path, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
     .in('post_id', uniquePostIds)
     .order('sort_order', { ascending: true });
   let data = previewResult.data as PostMediaDbRow[] | null;
   let error = previewResult.error;
+
+  if (isMissingPostMediaKeyColumnError(error)) {
+    const keylessPreviewResult = await supabase
+      .from('post_media')
+      .select('id, post_id, storage_path, preview_storage_path, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
+      .in('post_id', uniquePostIds)
+      .order('sort_order', { ascending: true });
+    data = keylessPreviewResult.data as PostMediaDbRow[] | null;
+    error = keylessPreviewResult.error;
+  }
 
   if (isMissingPostMediaPreviewColumnError(error)) {
     const legacyResult = await supabase
@@ -263,6 +287,7 @@ export async function buildLegacyPostMediaItems(params: {
   });
   return [{
     id: `${params.postId}:cover`,
+    mediaKey: defaultPostMediaKey(0),
     url,
     previewUrl: null,
     previewThumbhash: null,
@@ -291,6 +316,7 @@ export async function insertPostMediaItems(params: {
 
   const rows = params.mediaItems.map((item) => ({
       post_id: params.postId,
+      media_key: normalizePostMediaKey(item.mediaKey) ?? defaultPostMediaKey(item.sortOrder),
       storage_path: item.storagePath,
       preview_storage_path: item.previewStoragePath ?? null,
       preview_thumbhash: item.previewThumbhash ?? null,
@@ -307,23 +333,33 @@ export async function insertPostMediaItems(params: {
       duration_seconds: item.durationSeconds ?? null,
       sort_order: item.sortOrder,
     }));
-  let { error } = await params.supabase
-    .from('post_media')
-    .insert(rows);
+  let insertRows: Array<Record<string, unknown>> = rows;
+  let { error } = await params.supabase.from('post_media').insert(insertRows);
 
-  if (isMissingPostMediaPreviewColumnError(error)) {
-    const legacyRows = rows.map((row) => {
-      const legacyRow = { ...row };
-      delete (legacyRow as Partial<typeof row>).preview_storage_path;
-      delete (legacyRow as Partial<typeof row>).preview_thumbhash;
-      delete (legacyRow as Partial<typeof row>).preview_status;
-      delete (legacyRow as Partial<typeof row>).preview_attempt_count;
-      delete (legacyRow as Partial<typeof row>).preview_error;
-      delete (legacyRow as Partial<typeof row>).preview_generated_at;
-      return legacyRow;
+  for (let fallbackAttempt = 0; error && fallbackAttempt < 2; fallbackAttempt += 1) {
+    const removeMediaKey = isMissingPostMediaKeyColumnError(error);
+    const removePreviewFields = isMissingPostMediaPreviewColumnError(error);
+    if (!removeMediaKey && !removePreviewFields) {
+      break;
+    }
+
+    insertRows = insertRows.map((row) => {
+      const fallbackRow = { ...row };
+      if (removeMediaKey) {
+        delete fallbackRow.media_key;
+      }
+      if (removePreviewFields) {
+        delete fallbackRow.preview_storage_path;
+        delete fallbackRow.preview_thumbhash;
+        delete fallbackRow.preview_status;
+        delete fallbackRow.preview_attempt_count;
+        delete fallbackRow.preview_error;
+        delete fallbackRow.preview_generated_at;
+      }
+      return fallbackRow;
     });
-    const legacyResult = await params.supabase.from('post_media').insert(legacyRows);
-    error = legacyResult.error;
+    const fallbackResult = await params.supabase.from('post_media').insert(insertRows);
+    error = fallbackResult.error;
   }
 
   if (error) {

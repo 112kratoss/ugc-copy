@@ -1,5 +1,6 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
@@ -110,8 +111,30 @@ describe('AuthScreen Apple sign-in', () => {
     authState.user = null;
     authState.signInWithApple.mockReset();
     authState.signInWithApple.mockResolvedValue(undefined);
+    authState.signUpWithPassword.mockReset();
     authState.signInWithGoogle.mockReset();
     authState.signInWithGoogle.mockResolvedValue(undefined);
+  });
+
+  it('keeps auth modal options in the root navigator so typing does not remount the form', () => {
+    const authSource = readFileSync('app/auth.tsx', 'utf8');
+    const layoutSource = readFileSync('app/_layout.tsx', 'utf8');
+
+    expect(authSource).not.toContain('<Stack.Screen');
+    expect(layoutSource).toMatch(/name="auth"[\s\S]*?headerShown: false/);
+  });
+
+  it('retains the controlled email value while typing', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<AuthScreen />);
+    });
+
+    renderer.act(() => {
+      tree!.root.findByProps({ accessibilityLabel: 'Email' }).props.onChangeText('creator@example.com');
+    });
+
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Email' }).props.value).toBe('creator@example.com');
   });
 
   it('starts Apple sign-in in login mode on iOS', async () => {
@@ -125,6 +148,28 @@ describe('AuthScreen Apple sign-in', () => {
     });
 
     expect(authState.signInWithApple).toHaveBeenCalledWith('login');
+  });
+
+  it('uses Apple for new iOS accounts and keeps email/password sign-up unavailable', async () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<AuthScreen />);
+    });
+
+    renderer.act(() => {
+      tree!.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.onPress();
+    });
+
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Email' })).toHaveLength(0);
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Password' })).toHaveLength(0);
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Create account' })).toHaveLength(0);
+
+    await renderer.act(async () => {
+      tree!.root.findByProps({ accessibilityLabel: 'Sign up with Apple' }).props.onPress();
+    });
+
+    expect(authState.signInWithApple).toHaveBeenCalledWith('signup');
+    expect(authState.signUpWithPassword).not.toHaveBeenCalled();
   });
 
   it('dismisses the auth flow after Apple sign-in succeeds', async () => {
@@ -183,6 +228,28 @@ describe('AuthScreen Apple sign-in', () => {
     });
 
     expect(authState.signInWithGoogle).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses Google for new Android accounts and keeps email/password sign-up unavailable', async () => {
+    platformState.os = 'android';
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<AuthScreen />);
+    });
+
+    renderer.act(() => {
+      tree!.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.onPress();
+    });
+
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Email' })).toHaveLength(0);
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Password' })).toHaveLength(0);
+
+    await renderer.act(async () => {
+      tree!.root.findByProps({ accessibilityLabel: 'Sign up with Google' }).props.onPress();
+    });
+
+    expect(authState.signInWithGoogle).toHaveBeenCalledTimes(1);
+    expect(authState.signUpWithPassword).not.toHaveBeenCalled();
   });
 
   it('does not show Google sign-in on iOS', () => {

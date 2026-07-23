@@ -18,6 +18,7 @@ function createClient({
   rateLimitLimit = 60,
   initialFollows = [] as Array<{ follower_id: string; following_id: string }>,
   profileRows = [{ id: 'follower-1', username: 'athul' }] as Array<{ id: string; username: string | null }>,
+  userBlocks = [] as Array<{ blocker_user_id: string; blocked_user_id: string }>,
 } = {}) {
   let followRows = [...initialFollows];
   const rpc = vi.fn(async () => ({
@@ -37,6 +38,34 @@ function createClient({
   const deleteFollow = vi.fn();
 
   const from = vi.fn((table: string) => {
+    if (table === 'user_blocks') {
+      const filters: Record<string, unknown> = {};
+      const inFilters: Record<string, unknown[]> = {};
+      const query = {
+        select() {
+          return query;
+        },
+        eq(column: string, value: unknown) {
+          filters[column] = value;
+          return query;
+        },
+        in(column: string, values: unknown[]) {
+          inFilters[column] = values;
+          return query;
+        },
+        then(resolve: (value: { data: typeof userBlocks; error: null }) => void) {
+          resolve({
+            data: userBlocks.filter((row) => (
+              Object.entries(filters).every(([column, value]) => row[column as keyof typeof row] === value)
+              && Object.entries(inFilters).every(([column, values]) => values.includes(row[column as keyof typeof row]))
+            )),
+            error: null,
+          });
+        },
+      };
+      return query;
+    }
+
     if (table === 'follows') {
       const filters: Record<string, unknown> = {};
       const query = {
@@ -183,6 +212,24 @@ describe('profile follow service', () => {
     });
   });
 
+  it('does not allow a follow across a block in either direction', async () => {
+    const client = createClient({
+      userBlocks: [{ blocker_user_id: 'creator-1', blocked_user_id: 'follower-1' }],
+    });
+
+    await expect(updateCreatorFollowForRoute({
+      adminSupabase: client.client,
+      followerId: 'follower-1',
+      body: { followingId: 'creator-1', following: true },
+    })).resolves.toEqual({
+      ok: false,
+      status: 404,
+      body: { error: 'Creator not found.' },
+    });
+    expect(client.insertFollow).not.toHaveBeenCalled();
+    expect(notifyCreatorFollowedMock).not.toHaveBeenCalled();
+  });
+
   it('rate limits standalone follow notifications before lookup or notification work', async () => {
     const client = createClient({ rateLimitAllowed: false, rateLimitLimit: 30 });
 
@@ -226,6 +273,25 @@ describe('profile follow service', () => {
       followingUserId: 'creator-1',
       followerUsername: 'athul',
     });
+  });
+
+  it('suppresses standalone follow notifications across a block in either direction', async () => {
+    const client = createClient({
+      rateLimitLimit: 30,
+      initialFollows: [{ follower_id: 'follower-1', following_id: 'creator-1' }],
+      userBlocks: [{ blocker_user_id: 'creator-1', blocked_user_id: 'follower-1' }],
+    });
+
+    await expect(notifyCreatorFollowForRoute({
+      adminSupabase: client.client,
+      followerId: 'follower-1',
+      body: { followingId: 'creator-1' },
+    })).resolves.toEqual({
+      ok: false,
+      status: 404,
+      body: { error: 'Follow not found.' },
+    });
+    expect(notifyCreatorFollowedMock).not.toHaveBeenCalled();
   });
 
   it('rejects standalone notifications when the follow no longer exists', async () => {

@@ -1,10 +1,10 @@
 import { DarkTheme, ThemeProvider } from '@react-navigation/native';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import Constants from 'expo-constants';
-import { AppMetrics, AppMetricsRoot } from 'expo-observe';
+import { AppMetricsRoot } from 'expo-observe';
 import { Stack, router, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import 'react-native-reanimated';
 import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -15,11 +15,7 @@ import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
 import { useReducedMotion } from '@/lib/motion';
 import { navigateToNotificationDeepLink, subscribeToNotificationResponses } from '@/lib/notifications';
 import { OnboardingProvider, useOnboarding } from '@/lib/onboarding';
-import {
-  isStartupInteractiveReady,
-  STARTUP_VERSION_CHECK_FALLBACK_MS,
-  type StartupVersionCheckStatus,
-} from '@/lib/startup-readiness';
+import { STARTUP_VERSION_CHECK_FALLBACK_MS, type StartupVersionCheckStatus } from '@/lib/startup-readiness';
 import { appTheme } from '@/lib/theme';
 
 export {
@@ -87,12 +83,29 @@ function RootLayoutNav() {
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                 <Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false, animation: reducedMotion ? 'none' : 'fade' }} />
                 <Stack.Screen name="update-required" options={{ headerShown: false, gestureEnabled: false, animation: 'none' }} />
-                <Stack.Screen name="auth" options={{ title: 'Sign in', presentation: 'modal', animation: reducedMotion ? 'none' : 'fade_from_bottom' }} />
-                <Stack.Screen name="create/[tool]" options={{ title: 'Create', animation: reducedMotion ? 'none' : 'simple_push' }} />
+                <Stack.Screen
+                  name="auth"
+                  options={{
+                    headerShown: false,
+                    title: 'Sign in',
+                    presentation: 'modal',
+                    animation: reducedMotion ? 'none' : 'fade_from_bottom',
+                    contentStyle: { backgroundColor: appTheme.colors.background },
+                  }}
+                />
+                <Stack.Screen name="create/[tool]" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="templates/index" options={{ title: 'Templates', animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="templates/[slug]" options={{ title: 'Template', animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="template-runs/[runId]" options={{ title: 'Template creation', animation: reducedMotion ? 'none' : 'simple_push' }} />
-                <Stack.Screen name="post/new" options={{ title: 'Post', presentation: 'modal', animation: reducedMotion ? 'none' : 'slide_from_bottom' }} />
+                <Stack.Screen
+                  name="post/new"
+                  options={{
+                    headerShown: false,
+                    presentation: 'card',
+                    animation: reducedMotion ? 'none' : 'simple_push',
+                    contentStyle: { backgroundColor: appTheme.colors.background },
+                  }}
+                />
                 <Stack.Screen name="viewer" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
                 <Stack.Screen name="profile-media-feed" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
                 <Stack.Screen name="showcase" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
@@ -119,29 +132,8 @@ function StartupCoordinator() {
   const { api, isLoading, user } = useAuth();
   const { isHydrated, state, storageAvailable } = useOnboarding();
   const pathname = usePathname();
-  const hasMarkedInteractive = useRef(false);
   const [versionCheckStatus, setVersionCheckStatus] =
     useState<StartupVersionCheckStatus>('idle');
-  const onboardingRedirectPending = Boolean(
-    isHydrated &&
-    !isLoading &&
-    !user &&
-    storageAvailable &&
-    pathname === '/' &&
-    (state.status === 'not_started' || state.status === 'in_progress')
-  );
-  const startupInteractiveReady = isStartupInteractiveReady({
-    isAuthLoading: isLoading,
-    isOnboardingHydrated: isHydrated,
-    onboardingRedirectPending,
-    versionCheckStatus,
-  });
-
-  useEffect(() => {
-    if (!startupInteractiveReady || hasMarkedInteractive.current) return;
-    hasMarkedInteractive.current = true;
-    AppMetrics.markInteractive();
-  }, [startupInteractiveReady]);
 
   useEffect(() => {
     if (!isHydrated || isLoading) {

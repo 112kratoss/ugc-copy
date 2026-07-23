@@ -1,4 +1,4 @@
-import { Stack, router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { ActivityIndicator, Image, Linking, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -30,7 +30,7 @@ export default function AuthScreen() {
     returnTo?: string | string[];
     mode?: string | string[];
   }>();
-  const { user, signInWithPassword, signUpWithPassword, signInWithApple, signInWithGoogle, isAuthConfigured, missingEnvKeys } = useAuth();
+  const { user, signInWithPassword, signInWithApple, signInWithGoogle, isAuthConfigured, missingEnvKeys } = useAuth();
   const initialMode = (Array.isArray(requestedMode) ? requestedMode[0] : requestedMode) === 'signup'
     ? 'signup'
     : 'login';
@@ -45,7 +45,10 @@ export default function AuthScreen() {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const isCompact = width < 390 || height < 820;
-  const canSubmit = isAuthConfigured && email.trim().length > 0 && password.length >= 6;
+  const canSubmit = mode === 'login'
+    && isAuthConfigured
+    && email.trim().length > 0
+    && password.length >= 6;
   const hasCompletedAuth = useRef(false);
 
   const finishAuth = useCallback(() => {
@@ -64,14 +67,11 @@ export default function AuthScreen() {
   }, [finishAuth, user]);
 
   const submit = async () => {
+    if (mode !== 'login') return;
     setIsSubmitting(true);
     setError(null);
     try {
-      if (mode === 'login') {
-        await signInWithPassword(email.trim(), password);
-      } else {
-        await signUpWithPassword(email.trim(), password);
-      }
+      await signInWithPassword(email.trim(), password);
       finishAuth();
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Authentication failed.');
@@ -112,7 +112,6 @@ export default function AuthScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: workspace.background }}>
-      <Stack.Screen options={{ headerShown: false, contentStyle: { backgroundColor: workspace.background } }} />
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         keyboardShouldPersistTaps="handled"
@@ -260,37 +259,50 @@ function AuthPanel({
         />
       ) : null}
 
-      <View style={{ gap: 10 }}>
-        <WorkspaceInput
-          icon={<Mail size={19} color={workspace.primary} />}
-          accessibilityLabel="Email"
-          autoCapitalize="none"
-          keyboardType="email-address"
-          value={email}
-          onChangeText={onEmailChange}
-          placeholder="you@example.com"
-        />
-        <WorkspaceInput
-          icon={<LockKeyhole size={19} color={workspace.primary} />}
-          accessibilityLabel="Password"
-          secureTextEntry={!showPassword}
-          value={password}
-          onChangeText={onPasswordChange}
-          placeholder="Minimum 6 characters"
-          trailingIcon={
-            <Pressable accessibilityRole="button" accessibilityLabel={showPassword ? 'Hide password' : 'Show password'} onPress={onTogglePassword} hitSlop={10}>
-              <Eye size={18} color={showPassword ? workspace.primary : workspace.muted} />
-            </Pressable>
-          }
-        />
-      </View>
+      {mode === 'login' ? (
+        <>
+          <View style={{ gap: 10 }}>
+            <WorkspaceInput
+              icon={<Mail size={19} color={workspace.primary} />}
+              accessibilityLabel="Email"
+              autoCapitalize="none"
+              keyboardType="email-address"
+              value={email}
+              onChangeText={onEmailChange}
+              placeholder="you@example.com"
+            />
+            <WorkspaceInput
+              icon={<LockKeyhole size={19} color={workspace.primary} />}
+              accessibilityLabel="Password"
+              secureTextEntry={!showPassword}
+              value={password}
+              onChangeText={onPasswordChange}
+              placeholder="Minimum 6 characters"
+              trailingIcon={
+                <Pressable accessibilityRole="button" accessibilityLabel={showPassword ? 'Hide password' : 'Show password'} onPress={onTogglePassword} hitSlop={10}>
+                  <Eye size={18} color={showPassword ? workspace.primary : workspace.muted} />
+                </Pressable>
+              }
+            />
+          </View>
 
-      <PrimaryButton
-        label={mode === 'login' ? 'Sign in' : 'Create account'}
-        onPress={onSubmit}
-        disabled={!canSubmit}
-        loading={isSubmitting}
-      />
+          <PrimaryButton
+            label="Sign in"
+            onPress={onSubmit}
+            disabled={!canSubmit}
+            loading={isSubmitting}
+          />
+        </>
+      ) : (
+        <InlineNotice
+          title="Choose a secure sign-up option"
+          body={showAppleSignIn
+            ? 'New accounts use Sign in with Apple. Existing email accounts can still sign in from the Sign in tab.'
+            : showGoogleSignIn
+              ? 'New accounts use Sign in with Google. Existing email accounts can still sign in from the Sign in tab.'
+              : 'Create your account with Apple or Google on a supported mobile device. Existing email accounts can still sign in.'}
+        />
+      )}
 
       {showAppleSignIn ? (
         <>
@@ -304,7 +316,7 @@ function AuthPanel({
             style={{ opacity: !isAuthConfigured || isAppleSubmitting ? appTheme.opacity.disabled : 1 }}
           >
             <AppleAuthentication.AppleAuthenticationButton
-              accessibilityLabel="Sign in with Apple"
+              accessibilityLabel={mode === 'signup' ? 'Sign up with Apple' : 'Sign in with Apple'}
               buttonType={mode === 'signup'
                 ? AppleAuthentication.AppleAuthenticationButtonType.SIGN_UP
                 : AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
@@ -400,6 +412,7 @@ function ModeTabs({ mode, onChange }: { mode: 'login' | 'signup'; onChange: (mod
           <Pressable
             key={item}
             accessibilityRole="button"
+            accessibilityLabel={item === 'login' ? 'Switch to sign in' : 'Switch to sign up'}
             accessibilityState={{ selected: active }}
             onPress={() => onChange(item)}
             style={({ pressed }) => ({

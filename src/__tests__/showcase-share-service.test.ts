@@ -23,6 +23,7 @@ function createDependencies(
 ) {
   return {
     findPublicPostReferenceByIdOrGenerationId: vi.fn(async () => post),
+    isUserRelationshipBlocked: vi.fn(async () => false),
     notifyPostSocialActivity: vi.fn(async () => undefined),
     recordPostShareEvent: vi.fn(async () => undefined),
   } satisfies Partial<ShowcaseShareServiceDependencies>;
@@ -123,6 +124,29 @@ describe('shareShowcasePostForRoute', () => {
       channel: 'native-share',
       actorUserId: null,
     }, serviceClient.client);
+    expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
+  });
+
+  it('rejects blocked creator interactions before recording or notifying shares', async () => {
+    const serviceClient = createServiceClientMock();
+    const dependencies = createDependencies();
+    dependencies.isUserRelationshipBlocked.mockResolvedValue(true);
+
+    const result = await shareShowcasePostForRoute({
+      actorUserId: 'user-1',
+      channel: 'copy-link',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      sourceSurface: 'showcase',
+      dependencies,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 404,
+      body: { error: 'Only public creations can be shared' },
+    });
+    expect(dependencies.recordPostShareEvent).not.toHaveBeenCalled();
     expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
   });
 

@@ -24,6 +24,23 @@ const RESOURCE_FILE_CONTENT_TYPE_BY_EXTENSION = new Map([
   ['.zip', 'application/zip'],
   ['.gz', 'application/gzip'],
   ['.workflow', 'application/json'],
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+  ['.png', 'image/png'],
+  ['.webp', 'image/webp'],
+  ['.gif', 'image/gif'],
+  ['.heic', 'image/heic'],
+  ['.heif', 'image/heif'],
+  ['.mp4', 'video/mp4'],
+  ['.m4v', 'video/x-m4v'],
+  ['.mov', 'video/quicktime'],
+  ['.webm', 'video/webm'],
+  ['.mp3', 'audio/mpeg'],
+  ['.wav', 'audio/wav'],
+  ['.m4a', 'audio/mp4'],
+  ['.aac', 'audio/aac'],
+  ['.ogg', 'audio/ogg'],
+  ['.flac', 'audio/flac'],
 ]);
 const ALLOWED_RESOURCE_FILE_TYPES = new Set([
   'application/csv',
@@ -43,6 +60,23 @@ const ALLOWED_RESOURCE_FILE_TYPES = new Set([
   'text/x-markdown',
   'text/x-yaml',
   'text/yaml',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'image/heic',
+  'image/heif',
+  'video/mp4',
+  'video/x-m4v',
+  'video/quicktime',
+  'video/webm',
+  'audio/mpeg',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/mp4',
+  'audio/aac',
+  'audio/ogg',
+  'audio/flac',
 ]);
 const BLOCKED_RESOURCE_FILE_EXTENSIONS = new Set([
   '.app',
@@ -128,6 +162,11 @@ function resolveResourceFileContentType(file: File): string | null {
     return inferredContentType;
   }
 
+  const inferredMediaFamily = /^(image|video|audio)\//.exec(inferredContentType)?.[1] ?? null;
+  if (inferredMediaFamily && !contentType.startsWith(`${inferredMediaFamily}/`)) {
+    return null;
+  }
+
   return ALLOWED_RESOURCE_FILE_TYPES.has(contentType) ? contentType : null;
 }
 
@@ -183,7 +222,7 @@ export async function uploadPostResourceFileForRoute({
       ok: false,
       status: 400,
       body: {
-        error: 'Upload a safe workflow or resource file: JSON, text, markdown, CSV, YAML, PDF, ZIP, or workflow export.',
+        error: 'Upload a safe image, video, audio, workflow, document, or archive resource file.',
       },
     };
   }

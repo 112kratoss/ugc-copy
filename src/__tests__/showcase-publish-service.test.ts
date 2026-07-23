@@ -12,6 +12,7 @@ import {
   publishGenerationToShowcaseForRoute,
   type ShowcasePublishServiceDependencies,
 } from '@/lib/showcase-publish-service';
+import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
 
 function createUserClientMock(generation: Record<string, unknown> | null) {
   const selects: string[] = [];
@@ -395,6 +396,47 @@ describe('publishGenerationToShowcaseForRoute', () => {
     });
     expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  it('blocks an unsafe originating prompt even when the prompt would stay hidden', async () => {
+    const generation = {
+      id: 'gen-unsafe',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: 'Generated portrait',
+      description: 'A generated portrait.',
+      prompt: 'Generate a nude portrait of an underage child.',
+    };
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn();
+    const marketplaceCheck = vi.fn();
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: createAdminClientMock().client,
+      body: {
+        generationId: 'gen-unsafe',
+        visibility: 'public',
+        exposePromptPublic: false,
+      },
+      supabase: createUserClientMock(generation).client,
+      userId: 'user-1',
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: marketplaceCheck,
+        publishGenerationPostWithResourceBundleAtomically,
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: PUBLIC_UGC_SAFETY_ERROR, field: 'prompt' },
+    });
+    expect(marketplaceCheck).not.toHaveBeenCalled();
+    expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
   });
 
   it('returns a retryable server failure when profile verification is unavailable', async () => {

@@ -21,10 +21,13 @@ import {
   Share2,
   UserCheck,
   UserPlus,
+  Ban,
+  Flag,
 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Linking,
   Pressable,
   Share,
@@ -179,6 +182,71 @@ export function CreatorProfileScreen({
     });
   };
 
+  const requireSafetySignIn = () => {
+    if (!data) return false;
+    if (user) return true;
+    router.push({
+      pathname: '/auth',
+      params: { returnTo: `/creators/${encodeURIComponent(data.profile.username)}` },
+    } as never);
+    return false;
+  };
+
+  const handleReportUser = () => {
+    if (!data || data.viewer.isOwner || !requireSafetySignIn()) return;
+    Alert.alert(
+      'Report user?',
+      `Magicbooklet will review @${data.profile.username} for unsafe or abusive behavior.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Report user',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.reportUser(data.profile.id, {
+                reason: 'unsafe_content',
+                sourceSurface: 'creator-profile',
+                details: `Reported from @${data.profile.username}'s mobile creator profile.`,
+              });
+              Alert.alert('Report received', 'Thank you. Our moderation team will review this user.');
+            } catch (error) {
+              Alert.alert('Could not report user', error instanceof Error ? error.message : 'Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleBlockUser = () => {
+    if (!data || data.viewer.isOwner || !requireSafetySignIn()) return;
+    Alert.alert(
+      `Block @${data.profile.username}?`,
+      'Their posts will be hidden, and neither of you will be able to follow the other.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Block user',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.blockUser(data.profile.id);
+              await Promise.all([
+                queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
+                queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
+                queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] }),
+              ]);
+              router.replace('/(tabs)/showcase' as never);
+            } catch (error) {
+              Alert.alert('Could not block user', error instanceof Error ? error.message : 'Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const openProfileItem = (item: ShowcaseFeedItem) => {
     queryClient.setQueryData(createShowcasePostQueryKey(item.id, user?.id), { success: true, item });
     router.push(immersiveViewerHref({
@@ -264,6 +332,8 @@ export function CreatorProfileScreen({
             isFollowLoading={followMutation.isPending}
             onEditProfile={() => router.push('/edit-profile' as never)}
             onFollowPress={handleFollowPress}
+            onBlockUser={handleBlockUser}
+            onReportUser={handleReportUser}
             onShareProfile={handleShareProfile}
             socialLinks={socialLinks}
           />
@@ -362,6 +432,8 @@ function CreatorHeader({
   isFollowLoading,
   onEditProfile,
   onFollowPress,
+  onBlockUser,
+  onReportUser,
   onShareProfile,
   socialLinks,
 }: {
@@ -370,6 +442,8 @@ function CreatorHeader({
   isFollowLoading: boolean;
   onEditProfile: () => void;
   onFollowPress: () => void;
+  onBlockUser: () => void;
+  onReportUser: () => void;
   onShareProfile: () => void;
   socialLinks: Array<{ label: string; url: string }>;
 }) {
@@ -424,6 +498,16 @@ function CreatorHeader({
         ) : null}
 
         <CreatorStats data={data} />
+        {!data.viewer.isOwner ? (
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <SafetyAction label="Report user" onPress={onReportUser}>
+              <Flag size={16} color={appTheme.colors.danger} strokeWidth={2.3} />
+            </SafetyAction>
+            <SafetyAction label="Block user" onPress={onBlockUser}>
+              <Ban size={16} color={appTheme.colors.danger} strokeWidth={2.3} />
+            </SafetyAction>
+          </View>
+        ) : null}
       </View>
     </View>
   );
@@ -579,6 +663,32 @@ function SocialChip({ label, url }: { label: string; url: string }) {
 function CircleAction({ children, label, onPress }: { children: ReactNode; label: string; onPress: () => void }) {
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: appTheme.colors.border, backgroundColor: appTheme.colors.panelSoft, opacity: pressed ? appTheme.opacity.pressed : 1 })}>{children}</Pressable>
+  );
+}
+
+function SafetyAction({ children, label, onPress }: { children: ReactNode; label: string; onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        minHeight: appTheme.touch.default,
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexDirection: 'row',
+        gap: 7,
+        borderRadius: appTheme.radii.pill,
+        borderWidth: 1,
+        borderColor: `${appTheme.colors.danger}66`,
+        backgroundColor: `${appTheme.colors.danger}12`,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+      })}
+    >
+      {children}
+      <Text style={{ color: appTheme.colors.danger, ...appTheme.type.label, fontWeight: '800' }}>{label}</Text>
+    </Pressable>
   );
 }
 

@@ -104,6 +104,7 @@ describe('creator profile route adapter service', () => {
         createUserClient: vi.fn(() => createUserClient('viewer-1')),
         getCreatorFollowStateForRoute,
         getCreatorProfilePageData: getCreatorProfilePageDataMock as unknown as typeof getCreatorProfilePageData,
+        isUserRelationshipBlocked: vi.fn(async () => false),
       },
     });
 
@@ -125,6 +126,24 @@ describe('creator profile route adapter service', () => {
       context: { params: Promise.resolve({ username: 'missing' }) },
       dependencies: {
         getCreatorProfilePageData: vi.fn(async () => null) as unknown as typeof getCreatorProfilePageData,
+      },
+    });
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: 'Creator not found.' });
+  });
+
+  it('returns not found when either user has blocked the other', async () => {
+    const response = await getCreatorProfileRouteResponse({
+      request: new Request('http://localhost/api/creators/luna', {
+        headers: { Authorization: 'Bearer viewer-token' },
+      }),
+      context: { params: Promise.resolve({ username: 'luna' }) },
+      dependencies: {
+        createServiceClient: vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient),
+        createUserClient: vi.fn(() => createUserClient('viewer-1')),
+        getCreatorProfilePageData: vi.fn(async () => createProfileData()) as unknown as typeof getCreatorProfilePageData,
+        isUserRelationshipBlocked: vi.fn(async () => true),
       },
     });
 

@@ -10,7 +10,11 @@ export default function TabLayout() {
   return (
     <Tabs
       backBehavior="history"
-      tabBar={(props) => <MagicTabBar {...props} />}
+      tabBar={(props) => (
+        props.state.routes[props.state.index]?.name === 'creator'
+          ? null
+          : <MagicTabBar {...props} />
+      )}
       screenOptions={{
         animation: reducedMotion ? 'none' : 'fade',
         headerShown: false,

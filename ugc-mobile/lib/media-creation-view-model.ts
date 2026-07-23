@@ -249,7 +249,7 @@ export const VIDEO_MODELS = {
   'grok-imagine-video': {
     id: 'grok-imagine-video',
     displayName: 'Grok Imagine Video',
-    description: 'xAI video generation with normal, fun, and spicy modes.',
+    description: 'xAI video generation with normal and fun modes.',
     supportsMultiShot: false,
     supportsSound: false,
     supportsFixedLens: false,
@@ -260,7 +260,6 @@ export const VIDEO_MODELS = {
     modeOptions: [
       { value: 'normal', label: 'Normal' },
       { value: 'fun', label: 'Fun' },
-      { value: 'spicy', label: 'Spicy' },
     ],
   },
 } as const;
@@ -546,6 +545,14 @@ function namedReferences(references: MediaDraft[]): MediaDraft[] {
   });
 }
 
+function preparedVideoAudioIds(draft: VideoCreationDraft): string[] {
+  return Array.isArray(draft.preparedAudioIds) ? draft.preparedAudioIds : [];
+}
+
+function preparedVideoCharacterIds(draft: VideoCreationDraft): string[] {
+  return Array.isArray(draft.characterIds) ? draft.characterIds : [];
+}
+
 function mediaAssetDescriptor(media: MediaDraft | null): RemixMediaAssetDescriptor | null {
   if (!media) return null;
   return {
@@ -781,11 +788,11 @@ function hydrateVideoMultiPrompts(value: unknown): VideoShotDraft[] | null {
 }
 
 export function renameMediaDraft(media: MediaDraft, displayName: string): MediaDraft {
-  const nextDisplayName = normalizeDisplayName(displayName, media.fileName.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ') || media.displayName);
+  const nextDisplayName = displayName.trim();
   return {
     ...media,
     displayName: nextDisplayName,
-    handle: media.kind === 'image' ? `@${toHandleBase(nextDisplayName)}` : undefined,
+    handle: (media.kind === 'image' || Boolean(media.handle)) && nextDisplayName ? `@${toHandleBase(nextDisplayName)}` : undefined,
   };
 }
 
@@ -1227,13 +1234,13 @@ function validateVideoDraft(draft: VideoCreationDraft): CreationValidationResult
   if (draft.model === 'gemini-omni-video' && activeReferences.length + (activeReferenceVideos.length * 2) > 7) {
     errors.push('Gemini Omni supports seven reference slots; a video uses two slots.');
   }
-  if (draft.model === 'gemini-omni-video' && draft.preparedAudioIds.length > 3) {
+  if (draft.model === 'gemini-omni-video' && preparedVideoAudioIds(draft).length > 3) {
     errors.push('Gemini Omni supports up to 3 prepared voice references.');
   }
-  if (draft.model === 'gemini-omni-video' && draft.characterIds.length > 3) {
+  if (draft.model === 'gemini-omni-video' && preparedVideoCharacterIds(draft).length > 3) {
     errors.push('Gemini Omni supports up to 3 prepared character references.');
   }
-  if (draft.model === 'gemini-omni-video' && activeReferences.length + (activeReferenceVideos.length * 2) + draft.characterIds.length > 7) {
+  if (draft.model === 'gemini-omni-video' && activeReferences.length + (activeReferenceVideos.length * 2) + preparedVideoCharacterIds(draft).length > 7) {
     errors.push('Gemini Omni supports seven reference slots; videos use two and characters use one.');
   }
   const knownReferenceDuration = activeReferenceVideos.reduce((total, media) => total + (media.durationSeconds ?? 0), 0);
@@ -1568,8 +1575,8 @@ export function buildGenerationPayload(draft: CreationDraft): ImageGenerationReq
       imageUrls,
       referenceVideoUrls: usesReusableReferences ? draft.referenceVideos.map((media) => media.url) : [],
       referenceAudioUrls: usesReusableReferences ? draft.referenceAudios.map((media) => media.url) : [],
-      preparedAudioIds: usesReusableReferences ? draft.preparedAudioIds : [],
-      characterIds: usesReusableReferences ? draft.characterIds : [],
+      preparedAudioIds: usesReusableReferences ? preparedVideoAudioIds(draft) : [],
+      characterIds: usesReusableReferences ? preparedVideoCharacterIds(draft) : [],
       startImageUrl: usesReusableReferences && draft.model !== 'wan-2.7' ? null : draft.startFrame?.url ?? null,
       endImageUrl: usesReusableReferences ? null : draft.endFrame?.url ?? null,
       startFrame: usesReusableReferences && draft.model !== 'wan-2.7' ? null : mediaAssetDescriptor(draft.startFrame),
@@ -1687,8 +1694,8 @@ export function applyModelDefaults(draft: CreationDraft): CreationDraft {
       isMultiShot: config.supportsMultiShot ? draft.isMultiShot : false,
       referenceAudios: supportsMultimodalVideoReferences(draft.model) && draft.model !== 'gemini-omni-video' ? draft.referenceAudios.slice(0, draft.model === 'wan-2.7' ? 1 : 3) : [],
       referenceVideos: supportsMultimodalVideoReferences(draft.model) ? draft.referenceVideos.slice(0, draft.model === 'gemini-omni-video' ? 1 : draft.model === 'wan-2.7' ? 5 : 3) : [],
-      preparedAudioIds: draft.model === 'gemini-omni-video' ? draft.preparedAudioIds.slice(0, 3) : [],
-      characterIds: draft.model === 'gemini-omni-video' ? draft.characterIds.slice(0, 3) : [],
+      preparedAudioIds: draft.model === 'gemini-omni-video' ? preparedVideoAudioIds(draft).slice(0, 3) : [],
+      characterIds: draft.model === 'gemini-omni-video' ? preparedVideoCharacterIds(draft).slice(0, 3) : [],
       referenceMode: draft.model === 'gemini-omni-video' ? 'elements' : draft.referenceMode,
       references: draft.references.slice(0, getVideoElementSupport(draft.model, { mode: draft.mode, isMultiShot: draft.isMultiShot }).maxElements),
     };

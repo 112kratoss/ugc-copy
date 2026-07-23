@@ -1,4 +1,8 @@
 import type { SerializedWorkflowCanvasGraph } from '@/lib/workflow-canvas';
+import { normalizePostMediaKey } from '@/lib/post-media-key';
+
+export const POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS = 10;
+export const POST_RESOURCE_PRICE_INCREMENT_USD_CENTS = 10;
 
 export type PostResourceBundleAccessMode = 'none' | 'free' | 'paid';
 export type PersistedPostResourceBundleAccessMode = Exclude<PostResourceBundleAccessMode, 'none'>;
@@ -24,11 +28,14 @@ export type PostResourceItemType =
   | 'prompt'
   | 'workflow'
   | 'reference_image'
+  | 'reference_video'
+  | 'reference_audio'
   | 'source_file'
   | 'preset'
   | 'settings'
   | 'note'
   | 'external_link'
+  | 'remix_link'
   | 'remix_access';
 export type PostResourceItemRole =
   | 'primary'
@@ -51,7 +58,15 @@ export type PostResourceRemixUse =
 export type PostRemixCapability = 'none' | 'public' | 'unlock_required' | 'unsupported';
 export type PostRemixTarget = 'image' | 'video' | 'motion' | 'workflow' | 'text_template' | null;
 
+export type PostResourceItemScope =
+  | { kind: 'all' }
+  | { kind: 'media'; mediaKeys: string[] };
+
 export interface PostResourceItem {
+  /** Optional only at legacy/client input boundaries; normalization always supplies it. */
+  id?: string;
+  /** Missing legacy scope is normalized to `{ kind: 'all' }`. */
+  scope?: PostResourceItemScope;
   type: PostResourceItemType;
   role: PostResourceItemRole;
   sectionId: string | null;
@@ -68,6 +83,11 @@ export interface PostResourceItem {
   remixUse: PostResourceRemixUse;
 }
 
+export interface NormalizedPostResourceItem extends Omit<PostResourceItem, 'id' | 'scope'> {
+  id: string;
+  scope: PostResourceItemScope;
+}
+
 export type PostResourceItemCounts = Partial<Record<PostResourceItemType, number>>;
 
 export interface PostResourceSection {
@@ -76,6 +96,12 @@ export interface PostResourceSection {
   kind: PostResourceSectionKind;
   description: string | null;
   sortOrder: number;
+  /** Explicit, creator-authored sales title. Private `title` must never be used as its fallback. */
+  publicTitle?: string | null;
+  /** Optional representative type for a grouped public resource card. */
+  resourceType?: PostResourceItemType | null;
+  /** Missing legacy scope applies the card to every proof-media item. */
+  scope?: PostResourceItemScope;
 }
 
 interface PostResourceSectionPreview {
@@ -83,9 +109,23 @@ interface PostResourceSectionPreview {
   title: string;
   kind: PostResourceSectionKind;
   description: string | null;
+  publicTitle?: string | null;
+  resourceType?: PostResourceItemType | null;
+  scope?: PostResourceItemScope;
+}
+
+export interface PostResourceCardPreview {
+  sectionId: string;
+  publicTitle: string;
+  resourceType: PostResourceItemType;
+  scope: PostResourceItemScope;
+  itemCount: number;
+  hasRemix: boolean;
 }
 
 export interface PostResourceItemPreview {
+  id?: string;
+  scope?: PostResourceItemScope;
   type: PostResourceItemType;
   title: string;
   role: PostResourceItemRole;
@@ -132,6 +172,8 @@ export interface PostResourceBundleLockedPreview {
   itemPreviews: PostResourceItemPreview[];
   sectionCount?: number;
   sectionPreviews?: PostResourceSectionPreview[];
+  /** Public card metadata exists only when the creator explicitly supplied it. */
+  cardPreviews?: PostResourceCardPreview[];
   hasPrompt: boolean;
   hasNotes: boolean;
   hasWorkflow: boolean;
@@ -149,6 +191,7 @@ export interface PostResourceBundleInput {
 
 export interface PostResourceBundleValidationOptions {
   ownerUserId?: string | null;
+  mediaKeys?: Iterable<string> | null;
 }
 
 export interface MarketplacePriceQuote {
@@ -176,11 +219,14 @@ const POST_RESOURCE_ITEM_TYPES: PostResourceItemType[] = [
   'prompt',
   'workflow',
   'reference_image',
+  'reference_video',
+  'reference_audio',
   'source_file',
   'preset',
   'settings',
   'note',
   'external_link',
+  'remix_link',
   'remix_access',
 ];
 
@@ -222,11 +268,14 @@ const RESOURCE_ITEM_COUNT_ORDER: PostResourceItemType[] = [
   'prompt',
   'workflow',
   'reference_image',
+  'reference_video',
+  'reference_audio',
   'source_file',
   'preset',
   'settings',
   'note',
   'external_link',
+  'remix_link',
   'remix_access',
 ];
 
@@ -236,11 +285,14 @@ const RESOURCE_ITEM_LABELS: Record<PostResourceItemType, { singular: string; plu
   prompt: { singular: 'prompt', plural: 'prompts' },
   workflow: { singular: 'workflow', plural: 'workflows' },
   reference_image: { singular: 'reference image', plural: 'reference images' },
+  reference_video: { singular: 'reference video', plural: 'reference videos' },
+  reference_audio: { singular: 'reference audio', plural: 'reference audio files' },
   source_file: { singular: 'source file', plural: 'source files' },
   preset: { singular: 'preset', plural: 'presets' },
   settings: { singular: 'settings note', plural: 'settings notes' },
   note: { singular: 'note', plural: 'notes' },
   external_link: { singular: 'link', plural: 'links' },
+  remix_link: { singular: 'remix link', plural: 'remix links' },
   remix_access: { singular: 'remix access', plural: 'remix access' },
 };
 
@@ -316,6 +368,38 @@ function isPostResourceSectionKind(value: string | null | undefined): value is P
   return Boolean(value && POST_RESOURCE_SECTION_KINDS.includes(value as PostResourceSectionKind));
 }
 
+function normalizeResourceItemId(value: unknown, fallbackIndex: number, usedIds: Set<string>): string {
+  const normalized = typeof value === 'string'
+    ? value.trim().replace(/\s+/g, '-').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80)
+    : '';
+  const baseId = normalized || `item-${fallbackIndex + 1}`;
+  let candidate = baseId;
+  let suffix = 2;
+
+  while (usedIds.has(candidate)) {
+    const suffixText = `-${suffix}`;
+    candidate = `${baseId.slice(0, 80 - suffixText.length)}${suffixText}`;
+    suffix += 1;
+  }
+
+  usedIds.add(candidate);
+  return candidate;
+}
+
+export function normalizePostResourceItemScope(value: unknown): PostResourceItemScope {
+  if (!isRecord(value) || value.kind !== 'media' || !Array.isArray(value.mediaKeys)) {
+    return { kind: 'all' };
+  }
+
+  const mediaKeys = Array.from(new Set(
+    value.mediaKeys
+      .map((mediaKey) => normalizePostMediaKey(mediaKey))
+      .filter((mediaKey): mediaKey is string => Boolean(mediaKey))
+  ));
+
+  return mediaKeys.length > 0 ? { kind: 'media', mediaKeys } : { kind: 'all' };
+}
+
 function normalizeResourceSectionId(value: unknown, fallbackIndex: number, usedIds: Set<string>): string {
   const normalized = typeof value === 'string'
     ? value.trim().replace(/\s+/g, '-').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48)
@@ -349,6 +433,7 @@ export function normalizePostResourceSections(value: unknown): PostResourceSecti
       const id = normalizeResourceSectionId(item.id, index, usedIds);
       const title = normalizeTextValue(item.title) ?? `Section ${index + 1}`;
       const kindValue = normalizeTextValue(item.kind);
+      const resourceTypeValue = normalizeTextValue(item.resourceType);
 
       return {
         id,
@@ -356,6 +441,9 @@ export function normalizePostResourceSections(value: unknown): PostResourceSecti
         kind: isPostResourceSectionKind(kindValue) ? kindValue : 'other',
         description: normalizeTextValue(item.description),
         sortOrder: normalizeNonNegativeNumber(item.sortOrder) ?? index,
+        publicTitle: normalizeTextValue(item.publicTitle),
+        resourceType: isPostResourceItemType(resourceTypeValue) ? resourceTypeValue : null,
+        scope: normalizePostResourceItemScope(item.scope),
       };
     })
     .filter((section): section is PostResourceSection => section !== null)
@@ -363,7 +451,7 @@ export function normalizePostResourceSections(value: unknown): PostResourceSecti
 }
 
 function defaultRoleForResourceItemType(type: PostResourceItemType): PostResourceItemRole {
-  if (type === 'reference_image') {
+  if (type === 'reference_image' || type === 'reference_video' || type === 'reference_audio') {
     return 'style_reference';
   }
 
@@ -382,6 +470,10 @@ function defaultTitleForResourceItemType(type: PostResourceItemType): string {
       return 'Workflow';
     case 'reference_image':
       return 'Reference image';
+    case 'reference_video':
+      return 'Reference video';
+    case 'reference_audio':
+      return 'Reference audio';
     case 'source_file':
       return 'Source file';
     case 'preset':
@@ -392,6 +484,8 @@ function defaultTitleForResourceItemType(type: PostResourceItemType): string {
       return 'Note';
     case 'external_link':
       return 'Link';
+    case 'remix_link':
+      return 'Remix link';
     case 'remix_access':
       return 'Remix access';
     default:
@@ -400,7 +494,7 @@ function defaultTitleForResourceItemType(type: PostResourceItemType): string {
 }
 
 function defaultRemixUseForResourceItemType(type: PostResourceItemType): PostResourceRemixUse {
-  if (type === 'reference_image') {
+  if (type === 'reference_image' || type === 'reference_video' || type === 'reference_audio') {
     return 'reference_only';
   }
 
@@ -410,6 +504,10 @@ function defaultRemixUseForResourceItemType(type: PostResourceItemType): PostRes
 
   if (type === 'remix_access') {
     return 'direct_remix';
+  }
+
+  if (type === 'remix_link') {
+    return 'none';
   }
 
   return 'none';
@@ -432,6 +530,14 @@ function inferResourceItemTypeFromAttachment(attachment: PostResourceAttachment)
     return 'reference_image';
   }
 
+  if (attachment.contentType?.startsWith('video/')) {
+    return 'reference_video';
+  }
+
+  if (attachment.contentType?.startsWith('audio/')) {
+    return 'reference_audio';
+  }
+
   if (searchable.includes('workflow') || searchable.endsWith('.json')) {
     return 'workflow';
   }
@@ -442,8 +548,9 @@ function inferResourceItemTypeFromAttachment(attachment: PostResourceAttachment)
 function normalizePostResourceItem(
   value: unknown,
   fallbackSortOrder: number,
+  usedIds: Set<string>,
   validSectionIds?: Set<string>
-): PostResourceItem | null {
+): NormalizedPostResourceItem | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -465,6 +572,8 @@ function normalizePostResourceItem(
     : null;
 
   return {
+    id: normalizeResourceItemId(value.id, fallbackSortOrder, usedIds),
+    scope: normalizePostResourceItemScope(value.scope),
     type: typeValue,
     role: isPostResourceItemRole(roleValue) ? roleValue : defaultRoleForResourceItemType(typeValue),
     sectionId: sectionId && (!validSectionIds || validSectionIds.has(sectionId)) ? sectionId : null,
@@ -478,15 +587,20 @@ function normalizePostResourceItem(
     workflowSnapshot,
     sortOrder: normalizeNonNegativeNumber(value.sortOrder) ?? fallbackSortOrder,
     isPrimary: typeof value.isPrimary === 'boolean' ? value.isPrimary : fallbackSortOrder === 0,
-    remixUse: isPostResourceRemixUse(remixUseValue) ? remixUseValue : defaultRemixUseForResourceItemType(typeValue),
+    remixUse: typeValue === 'remix_link'
+      ? 'none'
+      : isPostResourceRemixUse(remixUseValue)
+        ? remixUseValue
+        : defaultRemixUseForResourceItemType(typeValue),
   };
 }
 
 function createLegacyResourceItem(
   item: Partial<PostResourceItem> & Pick<PostResourceItem, 'type' | 'title'>,
   sortOrder: number
-): PostResourceItem {
+): NormalizedPostResourceItem {
   return {
+    ...item,
     role: item.role ?? defaultRoleForResourceItemType(item.type),
     sectionId: item.sectionId ?? null,
     description: item.description ?? null,
@@ -499,26 +613,28 @@ function createLegacyResourceItem(
     sortOrder,
     isPrimary: item.isPrimary ?? sortOrder === 0,
     remixUse: item.remixUse ?? defaultRemixUseForResourceItemType(item.type),
-    ...item,
+    id: item.id ?? `item-${sortOrder + 1}`,
+    scope: item.scope ?? { kind: 'all' },
   };
 }
 
 export function normalizePostResourceItems(
   value: unknown,
   legacyResources?: Partial<PostResourceBundleResources> | null
-): PostResourceItem[] {
+): NormalizedPostResourceItem[] {
   const sectionIds = new Set(normalizePostResourceSections(legacyResources?.sections).map((section) => section.id));
+  const usedIds = new Set<string>();
   const explicitItems = Array.isArray(value)
     ? value
-      .map((item, index) => normalizePostResourceItem(item, index, sectionIds.size > 0 ? sectionIds : undefined))
-      .filter((item): item is PostResourceItem => item !== null)
+      .map((item, index) => normalizePostResourceItem(item, index, usedIds, sectionIds.size > 0 ? sectionIds : undefined))
+      .filter((item): item is NormalizedPostResourceItem => item !== null)
     : [];
 
   if (explicitItems.length > 0) {
     return explicitItems.sort((first, second) => first.sortOrder - second.sortOrder);
   }
 
-  const legacyItems: PostResourceItem[] = [];
+  const legacyItems: NormalizedPostResourceItem[] = [];
   const pushLegacyItem = (item: Partial<PostResourceItem> & Pick<PostResourceItem, 'type' | 'title'>) => {
     legacyItems.push(createLegacyResourceItem(item, legacyItems.length));
   };
@@ -667,6 +783,7 @@ function getPostResourceKindForItemType(type: PostResourceItemType): PostResourc
     case 'note':
       return 'notes';
     case 'remix_access':
+    case 'remix_link':
       return 'remix';
     default:
       return 'files';
@@ -771,6 +888,63 @@ function isSafePostResourceStoragePath(value: string | null | undefined, ownerUs
   return ownerUserId ? normalizedPath.startsWith(`${ownerUserId}/`) : true;
 }
 
+function validateResourceItemIdentityAndScope(
+  value: unknown,
+  usedIds: Set<string>,
+  availableMediaKeys: Set<string> | null,
+  fallbackId?: string
+): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  if (value.id != null) {
+    const id = typeof value.id === 'string' ? value.id.trim() : '';
+    if (!id || id.length > 80 || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id)) {
+      return 'Resource item ids may only use letters, numbers, hyphens, and underscores.';
+    }
+    if (usedIds.has(id)) {
+      return 'Resource item ids must be unique within a recipe.';
+    }
+    usedIds.add(id);
+  } else if (fallbackId) {
+    if (usedIds.has(fallbackId)) {
+      return 'Resource item ids must be unique within a recipe.';
+    }
+    usedIds.add(fallbackId);
+  }
+
+  if (value.scope == null) {
+    return null;
+  }
+  if (!isRecord(value.scope) || (value.scope.kind !== 'all' && value.scope.kind !== 'media')) {
+    return 'Choose whether each resource applies to all outputs or selected media.';
+  }
+  if (value.scope.kind === 'all') {
+    return null;
+  }
+  if (!Array.isArray(value.scope.mediaKeys) || value.scope.mediaKeys.length === 0) {
+    return 'Select at least one proof media item for a media-scoped resource.';
+  }
+
+  const seenMediaKeys = new Set<string>();
+  for (const valueMediaKey of value.scope.mediaKeys) {
+    const mediaKey = normalizePostMediaKey(valueMediaKey);
+    if (!mediaKey) {
+      return 'Resource media keys may only use letters, numbers, hyphens, and underscores.';
+    }
+    if (seenMediaKeys.has(mediaKey)) {
+      return 'Resource media keys must be unique within an item scope.';
+    }
+    if (availableMediaKeys && !availableMediaKeys.has(mediaKey)) {
+      return 'A resource references proof media that is not part of this post.';
+    }
+    seenMediaKeys.add(mediaKey);
+  }
+
+  return null;
+}
+
 export function validatePostResourceBundleInput(
   bundle: unknown,
   options: PostResourceBundleValidationOptions = {}
@@ -794,8 +968,14 @@ export function validatePostResourceBundleInput(
     ? Math.round(typedBundle?.priceUsdCents ?? 0)
     : 0;
 
-  if (accessMode === 'paid' && priceUsdCents < 100) {
-    return 'Paid recipes must be priced at $1.00 or above.';
+  if (
+    accessMode === 'paid'
+    && (
+      priceUsdCents < POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS
+      || priceUsdCents % POST_RESOURCE_PRICE_INCREMENT_USD_CENTS !== 0
+    )
+  ) {
+    return 'Paid recipes must cost at least 10 tokens and use 10-token increments.';
   }
 
   const resources = typedBundle?.resources ?? {};
@@ -804,6 +984,52 @@ export function validatePostResourceBundleInput(
   const workflowShareUrl = resources.workflowShareUrl?.trim() ?? '';
   const attachments = normalizePostResourceAttachments(resources.attachments);
   const resourceItems = normalizePostResourceItems(resources.items, resources);
+  const availableMediaKeys = options.mediaKeys == null
+    ? null
+    : new Set(
+        Array.from(options.mediaKeys)
+          .map((mediaKey) => normalizePostMediaKey(mediaKey))
+          .filter((mediaKey): mediaKey is string => Boolean(mediaKey))
+      );
+  const usedItemIds = new Set<string>();
+
+  if (Array.isArray(resources.items)) {
+    for (const [index, item] of resources.items.entries()) {
+      const identityOrScopeError = validateResourceItemIdentityAndScope(
+        item,
+        usedItemIds,
+        availableMediaKeys,
+        `item-${index + 1}`
+      );
+      if (identityOrScopeError) {
+        return identityOrScopeError;
+      }
+    }
+  }
+
+  if (Array.isArray(resources.sections)) {
+    for (const section of resources.sections) {
+      if (!isRecord(section)) {
+        continue;
+      }
+
+      if (
+        section.publicTitle != null
+        && (typeof section.publicTitle !== 'string' || !section.publicTitle.trim() || section.publicTitle.trim().length > 80)
+      ) {
+        return 'Public resource card titles must be between 1 and 80 characters.';
+      }
+
+      const sectionScopeError = validateResourceItemIdentityAndScope(
+        { scope: section.scope },
+        new Set<string>(),
+        availableMediaKeys
+      );
+      if (sectionScopeError) {
+        return sectionScopeError;
+      }
+    }
+  }
 
   if (workflowShareUrl && !isSafePostResourceUrl(workflowShareUrl)) {
     return 'Workflow links must start with http:// or https://.';
@@ -822,6 +1048,10 @@ export function validatePostResourceBundleInput(
   for (const item of resourceItems) {
     if (item.externalUrl && !isSafePostResourceUrl(item.externalUrl)) {
       return 'Resource links must start with http:// or https://.';
+    }
+
+    if (item.type === 'remix_link' && !item.externalUrl) {
+      return 'Add an http:// or https:// remix link.';
     }
 
     if (item.storagePath && !isSafePostResourceStoragePath(item.storagePath, options.ownerUserId)) {
@@ -844,6 +1074,35 @@ export function validatePostResourceBundleInput(
   }
 
   return null;
+}
+
+function buildPostResourceCardPreviews(
+  sections: PostResourceSection[],
+  items: PostResourceItem[]
+): PostResourceCardPreview[] {
+  return sections.flatMap((section) => {
+    // Never fall back to the private section title. Existing bundles did not
+    // opt into publishing their creator-authored organization metadata.
+    if (!section.publicTitle) {
+      return [];
+    }
+
+    const sectionItems = items.filter((item) => item.sectionId === section.id);
+    const resourceType = section.resourceType ?? sectionItems[0]?.type ?? null;
+    if (!resourceType) {
+      return [];
+    }
+
+    return [{
+      sectionId: section.id,
+      publicTitle: section.publicTitle,
+      resourceType,
+      scope: section.scope ?? { kind: 'all' },
+      itemCount: sectionItems.length,
+      hasRemix: resourceType === 'remix_link'
+        || sectionItems.some((item) => item.type === 'remix_link' || item.type === 'remix_access'),
+    }];
+  });
 }
 
 export function buildPostResourceBundleLockedPreview(
@@ -887,8 +1146,14 @@ export function buildPostResourceBundleLockedPreview(
       title: section.title,
       kind: section.kind,
       description: section.description,
+      publicTitle: section.publicTitle,
+      resourceType: section.resourceType,
+      scope: section.scope,
     })),
+    cardPreviews: buildPostResourceCardPreviews(sections, items),
     itemPreviews: items.map((item) => ({
+      id: item.id,
+      scope: item.scope,
       type: item.type,
       title: item.title,
       role: item.role,
@@ -900,7 +1165,11 @@ export function buildPostResourceBundleLockedPreview(
     hasPrompt: Boolean(normalizedResources.promptText?.trim() || items.some((item) => item.type === 'prompt')),
     hasNotes: Boolean(normalizedResources.notesMarkdown?.trim() || items.some((item) => item.type === 'note' || item.type === 'settings')),
     hasWorkflow: Boolean(normalizedResources.workflowShareUrl?.trim() || normalizedResources.workflowSnapshot || items.some((item) => item.type === 'workflow')),
-    hasRemix: Boolean(normalizedResources.allowRemix || items.some((item) => item.type === 'remix_access' || item.remixUse === 'direct_remix')),
+    hasRemix: Boolean(normalizedResources.allowRemix || items.some((item) => (
+      item.type === 'remix_access'
+      || item.type === 'remix_link'
+      || item.remixUse === 'direct_remix'
+    ))),
     updatedAt,
   };
 }
@@ -930,6 +1199,8 @@ export function sanitizePostResourceBundleLockedPreview(
     itemPreviews: preview.itemPreviews.map((item) => {
       const typeLabel = getPostResourceItemTypeLabel(item.type);
       return {
+        id: item.id,
+        scope: item.scope,
         type: item.type,
         title: `${typeLabel.charAt(0).toUpperCase()}${typeLabel.slice(1)}`,
         role: 'other',
@@ -943,6 +1214,14 @@ export function sanitizePostResourceBundleLockedPreview(
     }),
     sectionCount: preview.sectionCount ?? 0,
     sectionPreviews: [],
+    cardPreviews: (preview.cardPreviews ?? []).map((card) => ({
+      sectionId: card.sectionId,
+      publicTitle: card.publicTitle,
+      resourceType: card.resourceType,
+      scope: normalizePostResourceItemScope(card.scope),
+      itemCount: Math.max(0, Math.round(card.itemCount)),
+      hasRemix: Boolean(card.hasRemix),
+    })),
     hasPrompt: preview.hasPrompt,
     hasNotes: preview.hasNotes,
     hasWorkflow: preview.hasWorkflow,
@@ -1046,7 +1325,11 @@ function normalizePostResourceRemixDescriptors(value: unknown): PostResourceRemi
       const remixUse = normalizeTextValue(item.remixUse);
       return {
         type,
-        remixUse: isPostResourceRemixUse(remixUse) ? remixUse : defaultRemixUseForResourceItemType(type),
+        remixUse: type === 'remix_link'
+          ? 'none'
+          : isPostResourceRemixUse(remixUse)
+            ? remixUse
+            : defaultRemixUseForResourceItemType(type),
       };
     })
     .filter((item): item is PostResourceRemixDescriptor => item !== null);
@@ -1057,7 +1340,7 @@ function resolveResourceRemixDescriptorTarget(items: PostResourceRemixDescriptor
     return 'text_template';
   }
 
-  if (items.some((item) => item.remixUse === 'direct_remix')) {
+  if (items.some((item) => item.type !== 'remix_link' && item.remixUse === 'direct_remix')) {
     return 'image';
   }
 
@@ -1065,7 +1348,7 @@ function resolveResourceRemixDescriptorTarget(items: PostResourceRemixDescriptor
     return 'workflow';
   }
 
-  if (items.some((item) => item.remixUse === 'reference_only')) {
+  if (items.some((item) => item.type !== 'remix_link' && item.remixUse === 'reference_only')) {
     return 'image';
   }
 

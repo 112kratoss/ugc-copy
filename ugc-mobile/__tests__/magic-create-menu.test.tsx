@@ -66,6 +66,7 @@ describe('create menu view model', () => {
   it('exposes exactly Create and Post actions in create-first order', () => {
     expect(CREATE_MENU_ACTIONS.map((action) => action.id)).toEqual(['create', 'post']);
     expect(CREATE_MENU_ACTIONS.map((action) => action.label)).toEqual(['Create', 'Post']);
+    expect(CREATE_MENU_ACTIONS.find((action) => action.id === 'post')?.body).toBe('Share finished media');
   });
 
   it('maps actions to their mobile routes', () => {

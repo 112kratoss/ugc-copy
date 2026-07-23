@@ -32,12 +32,14 @@ export function MagicCreateMenu({
   visible,
   onClose,
   onAction,
+  onExited,
   horizontalInset = 0,
   bottomInset = 0,
 }: {
   visible: boolean;
   onClose: () => void;
   onAction: (id: CreateMenuActionId) => void;
+  onExited?: () => void;
   horizontalInset?: number;
   bottomInset?: number;
 }) {
@@ -54,6 +56,10 @@ export function MagicCreateMenu({
   useEffect(() => {
     if (visible) setRendered(true);
   }, [visible]);
+
+  useEffect(() => {
+    if (!visible && !rendered) onExited?.();
+  }, [onExited, rendered, visible]);
 
   useEffect(() => {
     if (!rendered) return;

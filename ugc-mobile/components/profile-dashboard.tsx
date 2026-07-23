@@ -844,6 +844,8 @@ function ProfileMediaTile({
   const isSavedTile = item.label === 'Saved';
   const accessibilityLabel = isSavedTile
     ? `${item.label}, ${item.title}, ${countLabel} likes`
+    : item.label === 'Creation'
+      ? `${item.label}, ${item.title}, ${item.linkedPostLabel ?? item.statusLabel ?? 'Status unavailable'}`
     : `${item.label}, ${item.title}`;
 
   return (

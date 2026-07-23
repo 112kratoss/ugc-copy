@@ -5,20 +5,26 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  GripHorizontal,
   Image as ImageIcon,
   Layers,
+  Plus,
   Play,
   Search,
+  Settings2,
   Sparkles,
   Trash2,
   Video,
   Wand2,
+  X,
 } from 'lucide-react-native';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   AppState,
   Modal,
+  PanResponder,
   Pressable,
   ScrollView,
   Switch,
@@ -29,7 +35,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { MediaPreview } from '@/components/media-preview';
+import { MediaPreview, StableMediaImage } from '@/components/media-preview';
 import {
   AppText,
   ChoiceChip,
@@ -84,8 +90,13 @@ import {
   type VideoModelId,
 } from '@/lib/media-creation-view-model';
 import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia } from '@/lib/media';
+import {
+  findActiveReferenceMention,
+  insertHandleAtSelection,
+  normalizeTextSelection,
+  type TextSelection,
+} from '@/lib/reference-mentions';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
-import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse } from '@/lib/types';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
@@ -155,6 +166,90 @@ function appendHandle(prompt: string, handle: string) {
   return `${prompt.trim()} ${handle}`.trim();
 }
 
+function withUniqueReferenceHandle(media: MediaDraft, existing: MediaDraft[]) {
+  const base = media.displayName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'reference';
+  const used = new Set(existing.map((item) => item.handle).filter((handle): handle is string => Boolean(handle)));
+  let handle = `@${base}`;
+  let suffix = 2;
+  while (used.has(handle)) {
+    handle = `@${base}_${suffix}`;
+    suffix += 1;
+  }
+  return { ...media, handle };
+}
+
+function promptHandlePattern(handle: string, global = false) {
+  const escapedHandle = handle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^\\w@])${escapedHandle}(?![\\w])`, global ? 'g' : undefined);
+}
+
+function replacePromptHandle(prompt: string, handle: string, replacement = '') {
+  return prompt
+    .replace(promptHandlePattern(handle, true), `$1${replacement}`)
+    .replace(/[ \t]+([,.;!?])/g, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function promptContainsHandle(prompt: string, handle?: string | null) {
+  if (!handle) return false;
+  return promptHandlePattern(handle).test(prompt);
+}
+
+const ASPECT_RATIO_ORDER = ['auto', '1:1', '4:5', '3:4', '2:3', '9:16', '5:4', '4:3', '3:2', '16:9', '21:9'];
+
+function orderAspectRatioOptions<T extends { value: string }>(options: T[]) {
+  return options
+    .map((option, index) => ({ option, index }))
+    .sort((left, right) => {
+      const leftOrder = ASPECT_RATIO_ORDER.indexOf(left.option.value.toLowerCase());
+      const rightOrder = ASPECT_RATIO_ORDER.indexOf(right.option.value.toLowerCase());
+      const normalizedLeft = leftOrder === -1 ? ASPECT_RATIO_ORDER.length : leftOrder;
+      const normalizedRight = rightOrder === -1 ? ASPECT_RATIO_ORDER.length : rightOrder;
+      return normalizedLeft - normalizedRight || left.index - right.index;
+    })
+    .map(({ option }) => option);
+}
+
+type CreatorCatalogModel = ReturnType<typeof getCatalogModels>[number];
+
+function supportsReusableVideoInputs(model: CreatorCatalogModel | null) {
+  if (!model) return false;
+  return Boolean(
+    model.inputs.imageReferences
+    || model.inputs.videoReferences
+    || model.inputs.audioReferences
+    || model.inputs.preparedAudioReferences
+    || model.inputs.characterReferences
+  );
+}
+
+function creatorParameterSummary(draft: CreationDraft, model: CreatorCatalogModel | null) {
+  if (draft.tool === 'image') {
+    return [draft.resolution, draft.aspectRatio, draft.outputFormat.toUpperCase()].filter(Boolean).join(' · ');
+  }
+  if (draft.tool === 'video') {
+    const totalDuration = draft.isMultiShot
+      ? draft.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration || 0)), 0)
+      : draft.duration;
+    const modeControl = model?.controls.find((control) => control.key === 'mode' && control.type === 'choice');
+    const modeLabel = modeControl?.type === 'choice'
+      ? modeControl.options.find((option) => option.value === draft.mode)?.label ?? draft.mode
+      : draft.mode;
+    const inferredResolution = modeLabel.match(/(?:\d{3,4}p|4k)/i)?.[0] ?? draft.resolution ?? modeLabel;
+    return [inferredResolution.toUpperCase(), draft.aspectRatio, `${totalDuration}s`].filter(Boolean).join(' · ');
+  }
+  const duration = draft.referenceVideo ? getMotionDuration(draft) : null;
+  return [draft.mode.toUpperCase(), duration ? `${duration}s` : 'Add motion'].join(' · ');
+}
+
 function assetDurationSeconds(value?: number | null) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
   return value > 1000 ? value / 1000 : value;
@@ -166,6 +261,10 @@ function mediaSummary(media: MediaDraft) {
     bits.push(`${Math.ceil(media.durationSeconds)}s`);
   }
   return bits.join(' • ');
+}
+
+function mediaAccessibleName(media: MediaDraft) {
+  return media.displayName.trim() || media.fileName.trim() || 'unnamed reference';
 }
 
 function renameMediaInList(items: MediaDraft[], id: string, displayName: string) {
@@ -211,6 +310,7 @@ export function MediaCreationScreen({
   initialPrompt,
   remixSource,
   guided = false,
+  onClose,
 }: {
   initialTool?: CreatorToolId;
   insideTab?: boolean;
@@ -220,6 +320,7 @@ export function MediaCreationScreen({
     postId?: string | null;
   };
   guided?: boolean;
+  onClose?: () => void;
 }) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -245,15 +346,23 @@ export function MediaCreationScreen({
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [status, setStatus] = useState<GenerationStatusResponse | null>(null);
   const [lastGenerationId, setLastGenerationId] = useState<string | null>(null);
+  const [lastPredictionId, setLastPredictionId] = useState<string | null>(null);
+  const [generationTool, setGenerationTool] = useState<CreatorToolId | null>(null);
+  const [pollingInterrupted, setPollingInterrupted] = useState(false);
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
   const [guidedReferencesExpanded, setGuidedReferencesExpanded] = useState(false);
   const [draftsHydrated, setDraftsHydrated] = useState(false);
   const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [promptMessage, setPromptMessage] = useState<string | null>(null);
+  const [referenceNotice, setReferenceNotice] = useState<string | null>(null);
   const [isPromptFocused, setIsPromptFocused] = useState(false);
+  const [isReferenceMentionActive, setIsReferenceMentionActive] = useState(false);
   const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
   const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
+  const [modelPickerVisible, setModelPickerVisible] = useState(false);
+  const [parametersVisible, setParametersVisible] = useState(false);
+  const [workspaceVisible, setWorkspaceVisible] = useState(false);
   const modelSelectionTouched = useRef<Record<CreatorToolId, boolean>>({ image: false, video: false, motion: false });
   const activeGenerationRequestKeyRef = useRef<string | null>(null);
   const generationPollControllerRef = useRef<AbortController | null>(null);
@@ -336,6 +445,7 @@ export function MediaCreationScreen({
     error: string | null;
     normalizedSettings: Record<string, CatalogPrimitive> | null;
   }>({ key: null, status: 'idle', cost: null, error: null, normalizedSettings: null });
+  const [quoteRetryNonce, setQuoteRetryNonce] = useState(0);
 
   useEffect(() => {
     if (!quoteRequest || !quoteKey) {
@@ -377,11 +487,21 @@ export function MediaCreationScreen({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [api, quoteKey, refetchCatalog]);
+  }, [api, quoteKey, quoteRetryNonce, refetchCatalog]);
 
   const activeQuote = quoteState.key === quoteKey
     ? quoteState
     : { status: 'pending' as const, cost: null, error: null, normalizedSettings: null };
+  const catalogUnavailable = !catalog && Boolean(catalogQuery.error);
+  const creatorQuoteStatus = catalogUnavailable ? 'error' as const : activeQuote.status;
+  const creatorRetryLabel = catalogUnavailable ? 'Retry settings' : 'Retry quote';
+  const retryCreatorQuote = () => {
+    if (catalogUnavailable) {
+      void refetchCatalog();
+      return;
+    }
+    setQuoteRetryNonce((value) => value + 1);
+  };
   const validation = useMemo(
     () => currentCatalogModel
       ? validateCatalogCreationDraft(currentDraft, currentCatalogModel, { credits, quotedCost: activeQuote.cost })
@@ -422,7 +542,11 @@ export function MediaCreationScreen({
             references: 'Attached media is preserved',
             advanced: 'Review the refreshed options',
           }
-        : getCreationSectionSummary(currentDraft),
+        : {
+            essentials: 'Loading model settings',
+            references: currentDraft.tool === 'motion' ? 'Required media is preserved' : 'Attached media is preserved',
+            advanced: 'Settings will appear when the catalog is ready',
+          },
     [catalog, currentCatalogModel, currentDraft]
   );
   const readiness = useMemo(
@@ -435,16 +559,15 @@ export function MediaCreationScreen({
   const outputUrl = useMemo(() => (status ? getGenerationOutput(status) : null), [status]);
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
-  const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
   const isCompact = width < 380;
   const meta = TOOL_META[activeTool];
   const showFloatingReviewBar = insideTab && hasStartedCreationDraft(currentDraft) && !isPromptFocused;
-  const contentTopPadding = insideTab ? topInset + 14 : appTheme.spacing.screen;
+  const contentTopPadding = insideTab ? 10 : topInset + 8;
   const contentBottomPadding = insideTab
-    ? tabBarMetrics.contentBottomOverlapPadding + appTheme.spacing.section + (showFloatingReviewBar ? FLOATING_REVIEW_BAR_HEIGHT + appTheme.spacing.gap : 0)
+    ? bottomInset + appTheme.spacing.section + (showFloatingReviewBar ? FLOATING_REVIEW_BAR_HEIGHT + appTheme.spacing.gap : 0)
     : bottomInset + 36;
   const issueCount = validation.errors.length + validation.warnings.length + (message ? 1 : 0) + (remixRestoreWarning ? 1 : 0);
-  const generateDisabled = isGenerating || isUploading || !catalog || activeQuote.status !== 'ready' || validation.errors.length > 0;
+  const generateDisabled = isGenerating || pollingInterrupted || isUploading || !catalog || activeQuote.status !== 'ready' || validation.errors.length > 0;
   const openAuthForCurrentDraft = () => {
     router.push({
       pathname: '/auth',
@@ -455,8 +578,9 @@ export function MediaCreationScreen({
   };
 
   const changeTool = (tool: CreatorToolId) => {
-    if (isGenerating) {
+    if (isGenerating || pollingInterrupted) {
       setMessage('This generation is still running. You can switch tools when it finishes or leave and follow it in Alerts.');
+      setWorkspaceVisible(true);
       return;
     }
     setActiveTool(tool);
@@ -548,12 +672,20 @@ export function MediaCreationScreen({
   const uploadImageReferences = async (tool: 'image' | 'video') => {
     setMessage(null);
     setPromptMessage(null);
+    const selectedDraft = tool === 'image' ? imageDraft : videoDraft;
+    const selectedModel = catalog ? getCatalogModel(catalog, selectedDraft.model) : null;
+    const maxImages = selectedModel?.inputs.imageReferences?.max ?? 0;
+    const remainingSlots = Math.max(0, maxImages - selectedDraft.references.length);
+    if (remainingSlots === 0) {
+      setMessage(maxImages > 0 ? `This model supports up to ${maxImages} reference images.` : 'This model does not support image references.');
+      return;
+    }
     setIsUploading(true);
     try {
       const picked = await pickMediaList('image', { allowsMultipleSelection: true });
       if (picked.length === 0) return;
       const uploaded: MediaDraft[] = [];
-      for (const asset of picked) {
+      for (const asset of picked.slice(0, remainingSlots)) {
         const media = await uploadPickedMedia(asset.uri, {
           api,
           fileName: asset.fileName,
@@ -562,6 +694,9 @@ export function MediaCreationScreen({
           sizeBytes: asset.fileSize ?? null,
         });
         uploaded.push(createMediaDraftFromUpload(media));
+      }
+      if (picked.length > remainingSlots) {
+        setMessage(`Added ${remainingSlots} reference${remainingSlots === 1 ? '' : 's'} to stay within this model's ${maxImages}-image limit.`);
       }
       if (tool === 'image') {
         setImageDraft((draft) => normalizeCatalogDraft({ ...draft, references: [...draft.references, ...uploaded] }));
@@ -629,7 +764,12 @@ export function MediaCreationScreen({
       if (target === 'motion') {
         setMotionDraft((draft) => ({ ...draft, referenceVideo: media, duration: Math.ceil(media.durationSeconds ?? draft.duration) }));
       } else {
-        setVideoDraft((draft) => normalizeCatalogDraft({ ...draft, referenceVideos: [...draft.referenceVideos, media] }));
+        setVideoDraft((draft) => {
+          const nextMedia = draft.model === 'kling-3.0-video'
+            ? withUniqueReferenceHandle(media, draft.referenceVideos)
+            : media;
+          return normalizeCatalogDraft({ ...draft, referenceVideos: [...draft.referenceVideos, nextMedia] });
+        });
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Upload failed.');
@@ -688,8 +828,69 @@ export function MediaCreationScreen({
     }
   };
 
+  const pollGenerationForTool = (
+    tool: CreatorToolId,
+    predictionId: string,
+    controller: AbortController,
+  ) => pollGenerationStatus(
+    () => tool === 'image'
+      ? api.getImageGeneration(predictionId)
+      : tool === 'video'
+        ? api.getVideoGeneration(predictionId)
+        : api.getMotionGeneration(predictionId),
+    { onTick: setStatus, signal: controller.signal, waitUntilReady: waitUntilAppActive },
+  );
+
+  const finishGenerationPolling = async (finalStatus: GenerationStatusResponse, tool: CreatorToolId) => {
+    setStatus(finalStatus);
+    setPollingInterrupted(false);
+    setLastPredictionId(null);
+    if (finalStatus.status === 'failed') {
+      setMessage(finalStatus.error?.trim() || 'Generation failed. Your inputs are still here, so you can adjust them and retry.');
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      return;
+    }
+
+    setMessage(null);
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    void clearPersistedCreationDrafts();
+    if (guided) {
+      setShowNotificationPrompt(true);
+      void trackOnboardingEvent(api, 'first_generation_succeeded', { goal: tool, step: 'creator' });
+    }
+  };
+
+  const resumeGenerationPolling = async () => {
+    if (!lastPredictionId || !generationTool || isGenerating || activeGenerationRequestKeyRef.current) return;
+    const requestKey = `poll:${generationTool}:${lastPredictionId}`;
+    activeGenerationRequestKeyRef.current = requestKey;
+    generationPollControllerRef.current?.abort();
+    const pollController = new AbortController();
+    generationPollControllerRef.current = pollController;
+    setWorkspaceVisible(true);
+    setPollingInterrupted(false);
+    setMessage(null);
+    setIsGenerating(true);
+    try {
+      const finalStatus = await pollGenerationForTool(generationTool, lastPredictionId, pollController);
+      await finishGenerationPolling(finalStatus, generationTool);
+    } catch (error) {
+      if (pollController.signal.aborted) return;
+      setPollingInterrupted(true);
+      setMessage(error instanceof Error ? error.message : 'Could not refresh generation progress.');
+    } finally {
+      if (generationPollControllerRef.current === pollController) generationPollControllerRef.current = null;
+      if (activeGenerationRequestKeyRef.current === requestKey) activeGenerationRequestKeyRef.current = null;
+      setIsGenerating(false);
+    }
+  };
+
   const generate = async () => {
     if (activeGenerationRequestKeyRef.current) return;
+    if (pollingInterrupted) {
+      setWorkspaceVisible(true);
+      return;
+    }
     if (!user) {
       openAuthForCurrentDraft();
       return;
@@ -714,6 +915,10 @@ export function MediaCreationScreen({
     setPromptMessage(null);
     setStatus(null);
     setLastGenerationId(null);
+    setLastPredictionId(null);
+    setPollingInterrupted(false);
+    setGenerationTool(currentDraft.tool);
+    setWorkspaceVisible(true);
     const idempotencyKey = createMobileGenerationIdempotencyKey(currentDraft.tool);
     activeGenerationRequestKeyRef.current = idempotencyKey;
     generationPollControllerRef.current?.abort();
@@ -721,52 +926,40 @@ export function MediaCreationScreen({
     generationPollControllerRef.current = pollController;
     setIsGenerating(true);
     if (guided) void trackOnboardingEvent(api, 'first_generation_started', { goal: currentDraft.tool, step: 'creator' });
+    let startedPredictionId: string | null = null;
     try {
       let started: GenerationStartResponse;
-      let finalStatus: GenerationStatusResponse;
       if (currentDraft.tool === 'image') {
         started = await api.startImageGeneration(
           buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? '', activeQuote.normalizedSettings ?? undefined),
           idempotencyKey
         );
-        setLastGenerationId(started.generationId ?? null);
-        if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
-        finalStatus = await pollGenerationStatus(() => api.getImageGeneration(started.predictionId), { onTick: setStatus, signal: pollController.signal, waitUntilReady: waitUntilAppActive });
       } else if (currentDraft.tool === 'video') {
         started = await api.startVideoGeneration(
           buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? '', activeQuote.normalizedSettings ?? undefined),
           idempotencyKey
         );
-        setLastGenerationId(started.generationId ?? null);
-        if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
-        finalStatus = await pollGenerationStatus(() => api.getVideoGeneration(started.predictionId), { onTick: setStatus, signal: pollController.signal, waitUntilReady: waitUntilAppActive });
       } else {
         started = await api.startMotionGeneration(
           buildCatalogGenerationPayload(currentDraft, currentCatalogModel, catalog?.revision ?? '', activeQuote.normalizedSettings ?? undefined),
           idempotencyKey
         );
-        setLastGenerationId(started.generationId ?? null);
-        if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
-        finalStatus = await pollGenerationStatus(() => api.getMotionGeneration(started.predictionId), { onTick: setStatus, signal: pollController.signal, waitUntilReady: waitUntilAppActive });
       }
-      setStatus(finalStatus);
-      if (finalStatus.status === 'failed') {
-        setMessage(finalStatus.error?.trim() || 'Generation failed. Your inputs are still here, so you can adjust them and retry.');
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      } else {
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        void clearPersistedCreationDrafts();
-        if (guided) {
-          setShowNotificationPrompt(true);
-          void trackOnboardingEvent(api, 'first_generation_succeeded', { goal: currentDraft.tool, step: 'creator' });
-        }
-      }
+      startedPredictionId = started.predictionId;
+      setLastPredictionId(started.predictionId);
+      setLastGenerationId(started.generationId ?? null);
+      if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
+      const finalStatus = await pollGenerationForTool(currentDraft.tool, started.predictionId, pollController);
+      await finishGenerationPolling(finalStatus, currentDraft.tool);
     } catch (error) {
       if (pollController.signal.aborted) return;
       const details = error && typeof error === 'object' && 'details' in error
         ? (error as { details?: { code?: string } }).details
         : null;
-      if (details?.code === 'CATALOG_CHANGED' || details?.code === 'MODEL_UNAVAILABLE') {
+      if (startedPredictionId) {
+        setPollingInterrupted(true);
+        setMessage(error instanceof Error ? error.message : 'Could not refresh generation progress.');
+      } else if (details?.code === 'CATALOG_CHANGED' || details?.code === 'MODEL_UNAVAILABLE') {
         void refetchCatalog();
         setMessage('The model catalog changed before generation started. Review the refreshed options and generate again.');
       } else {
@@ -954,6 +1147,422 @@ export function MediaCreationScreen({
     );
   };
 
+  if (activeTool !== 'image') {
+    const creatorModels = catalog ? getCatalogModels(catalog, activeTool) : [];
+    const selectedCreatorModel = currentCatalogModel?.kind === activeTool
+      ? currentCatalogModel
+      : creatorModels[0] ?? null;
+    const activeGenerationStatus = generationTool === activeTool ? status : null;
+    const activeOutputUrl = generationTool === activeTool ? outputUrl : null;
+    const parameterSummary = creatorParameterSummary(currentDraft, selectedCreatorModel);
+    const visibleValidationError = validation.errors.find((error) => (
+      !isReferenceMentionActive || !error.startsWith('Unknown element mention:')
+    ));
+    const blocker = (promptMessage
+      ?? message
+      ?? (catalogUnavailable ? catalogQuery.error?.message : null)
+      ?? (activeQuote.status === 'error' ? activeQuote.error : null)
+      ?? visibleValidationError) ?? null;
+    const persistentAction: 'generate' | 'progress' | 'result' = activeOutputUrl
+      ? 'result'
+      : isGenerating || activeGenerationStatus || (pollingInterrupted && generationTool === activeTool)
+        ? 'progress'
+        : 'generate';
+    const contentBottom = bottomInset + 108;
+
+    return (
+      <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+        <ScrollView
+          ref={scrollRef}
+          contentInsetAdjustmentBehavior="automatic"
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          style={{ flex: 1 }}
+          contentContainerStyle={{
+            paddingTop: contentTopPadding,
+            paddingHorizontal: isCompact ? 16 : 20,
+            paddingBottom: contentBottom,
+            gap: 14,
+          }}
+        >
+          <CompactCreatorHeader
+            activeTool={activeTool}
+            modelName={selectedCreatorModel?.displayName ?? 'Loading models'}
+            modelDisabled={!selectedCreatorModel}
+            onChangeTool={changeTool}
+            onOpenModels={() => setModelPickerVisible(true)}
+            onClose={onClose}
+          />
+
+          {guided ? (
+            <GuidedPromptChips tool={activeTool} prompt={currentDraft.prompt} onSelectPrompt={updatePrompt} />
+          ) : null}
+
+          {catalogNotice ? (
+            <SlimCreatorBanner label="Model updated" body={catalogNotice} onDismiss={() => setCatalogNotice(null)} />
+          ) : null}
+          {remixRestoreWarning ? (
+            <SlimCreatorBanner label="Remix source" body={remixRestoreWarning} onDismiss={() => setRemixRestoreWarning(null)} />
+          ) : null}
+          {referenceNotice ? (
+            <SlimCreatorBanner label="Reference updated" body={referenceNotice} onDismiss={() => setReferenceNotice(null)} />
+          ) : null}
+
+          {activeTool === 'video' ? (
+            <VideoCreatorComposer
+              draft={videoDraft}
+              model={selectedCreatorModel}
+              isEnhancing={isEnhancing}
+              isUploading={isUploading}
+              promptMessage={promptMessage}
+              validationErrors={validation.errors}
+              onPromptChange={updatePrompt}
+              onEnhance={enhancePrompt}
+              onChange={(draft) => replaceDraft(draft)}
+              onUploadImages={() => uploadImageReferences('video')}
+              onUploadStart={() => uploadSingleImage('start')}
+              onUploadEnd={() => uploadSingleImage('end')}
+              onUploadVideo={() => uploadReferenceVideo('video')}
+              onUploadAudio={uploadReferenceAudio}
+              onReferenceNotice={setReferenceNotice}
+              onFocus={() => setIsPromptFocused(true)}
+              onBlur={() => setIsPromptFocused(false)}
+              onMentionStateChange={setIsReferenceMentionActive}
+            />
+          ) : (
+            <MotionCreatorComposer
+              draft={motionDraft}
+              model={selectedCreatorModel}
+              isEnhancing={isEnhancing}
+              isUploading={isUploading}
+              promptMessage={promptMessage}
+              validationErrors={validation.errors}
+              onPromptChange={updatePrompt}
+              onEnhance={enhancePrompt}
+              onChange={(draft) => replaceDraft(draft)}
+              onUploadCharacter={() => uploadSingleImage('character')}
+              onUploadMotion={() => uploadReferenceVideo('motion')}
+              onFocus={() => setIsPromptFocused(true)}
+              onBlur={() => setIsPromptFocused(false)}
+            />
+          )}
+        </ScrollView>
+
+        <CreatorPersistentBar
+          bottom={bottomInset + 8}
+          summary={parameterSummary}
+          blocker={persistentAction === 'generate' ? blocker : null}
+          quoteStatus={creatorQuoteStatus}
+          cost={activeQuote.cost}
+          retryLabel={creatorRetryLabel}
+          action={persistentAction}
+          disabled={persistentAction === 'generate' && generateDisabled}
+          onOpenParameters={() => setParametersVisible(true)}
+          onRetryQuote={retryCreatorQuote}
+          onAction={() => {
+            if (persistentAction === 'generate') void generate();
+            else setWorkspaceVisible(true);
+          }}
+        />
+
+        <SearchableModelPickerModal
+          visible={modelPickerVisible}
+          items={creatorModels}
+          value={currentDraft.model}
+          onClose={() => setModelPickerVisible(false)}
+          onChange={(modelId) => {
+            if (activeTool === 'video') replaceDraft({ ...videoDraft, model: modelId as VideoModelId });
+            else replaceDraft({ ...motionDraft, model: modelId as MotionModelId });
+            setModelPickerVisible(false);
+          }}
+        />
+
+        <CreatorParameterSheet
+          visible={parametersVisible}
+          bottomInset={bottomInset}
+          catalog={catalog}
+          model={selectedCreatorModel}
+          draft={currentDraft}
+          hiddenControlKeys={activeTool === 'video'
+            ? videoDraft.isMultiShot ? ['isMultiShot', 'duration'] : ['isMultiShot']
+            : ['duration']}
+          sourceDurationSeconds={activeTool === 'motion' && motionDraft.referenceVideo ? getMotionDuration(motionDraft) : null}
+          quoteStatus={creatorQuoteStatus}
+          cost={activeQuote.cost}
+          availableCredits={credits}
+          blocker={blocker}
+          retryLabel={creatorRetryLabel}
+          onClose={() => setParametersVisible(false)}
+          onRetryQuote={retryCreatorQuote}
+          onChange={replaceDraft}
+          onGenerate={() => {
+            setParametersVisible(false);
+            void generate();
+          }}
+          generateDisabled={generateDisabled}
+        />
+
+        <GenerationWorkspace
+          visible={workspaceVisible && generationTool === activeTool}
+          tool={activeTool}
+          status={activeGenerationStatus}
+          isGenerating={isGenerating && generationTool === activeTool}
+          outputUrl={activeOutputUrl}
+          generationId={generationTool === activeTool ? lastGenerationId : null}
+          settingsSummary={`${selectedCreatorModel?.displayName ?? meta.title} · ${parameterSummary}`}
+          error={activeGenerationStatus?.status === 'failed' ? activeGenerationStatus.error?.trim() || message : message}
+          pollingInterrupted={pollingInterrupted && generationTool === activeTool}
+          onResumePolling={() => void resumeGenerationPolling()}
+          showNotificationPrompt={showNotificationPrompt}
+          onEnableNotifications={() => {
+            void import('@/lib/notifications').then(({ registerForMobilePushNotifications }) => (
+              registerForMobilePushNotifications(api, { requestPermission: true })
+            ));
+            setShowNotificationPrompt(false);
+          }}
+          onDismissNotifications={() => setShowNotificationPrompt(false)}
+          onMinimize={() => setWorkspaceVisible(false)}
+          onOpenAlerts={() => {
+            setWorkspaceVisible(false);
+            router.push('/(tabs)/studio');
+          }}
+          onRetry={() => void generate()}
+          onBack={() => {
+            setWorkspaceVisible(false);
+            setStatus(null);
+            setLastPredictionId(null);
+            setPollingInterrupted(false);
+            setGenerationTool(null);
+            setMessage(null);
+          }}
+          onPost={() => {
+            if (!lastGenerationId) return;
+            setWorkspaceVisible(false);
+            router.push({ pathname: '/post/new', params: { generationId: lastGenerationId } } as never);
+          }}
+          onCreateAnother={() => {
+            setWorkspaceVisible(false);
+            setStatus(null);
+            setLastGenerationId(null);
+            setLastPredictionId(null);
+            setPollingInterrupted(false);
+            setGenerationTool(null);
+            setMessage(null);
+            setPromptMessage(null);
+          }}
+        />
+      </View>
+    );
+  }
+
+  if (activeTool === 'image') {
+    const imageModels = catalog ? getCatalogModels(catalog, 'image') : [];
+    const selectedImageModel = currentCatalogModel?.kind === 'image' ? currentCatalogModel : imageModels[0] ?? null;
+    const activeGenerationStatus = generationTool === 'image' ? status : null;
+    const activeOutputUrl = generationTool === 'image' ? outputUrl : null;
+    const imageRecord = imageDraft as unknown as Record<string, unknown>;
+    const parameterSummary = [imageRecord.resolution, imageRecord.aspectRatio, imageRecord.outputFormat]
+      .filter((value) => typeof value === 'string' && value.length > 0)
+      .map((value) => String(value).toUpperCase())
+      .join(' · ');
+    const visibleValidationError = validation.errors.find((error) => (
+      !isReferenceMentionActive || !error.startsWith('Unknown element mention:')
+    ));
+    const blocker = (promptMessage
+      ?? message
+      ?? (catalogUnavailable ? catalogQuery.error?.message : null)
+      ?? (activeQuote.status === 'error' ? activeQuote.error : null)
+      ?? visibleValidationError) ?? null;
+    const persistentAction: 'generate' | 'progress' | 'result' = activeOutputUrl
+      ? 'result'
+      : isGenerating || activeGenerationStatus || (pollingInterrupted && generationTool === 'image')
+        ? 'progress'
+        : 'generate';
+    const imageContentBottom = bottomInset + 108;
+
+    return (
+      <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+        <ScrollView
+          ref={scrollRef}
+          contentInsetAdjustmentBehavior="automatic"
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          style={{ flex: 1 }}
+          contentContainerStyle={{
+            paddingTop: contentTopPadding,
+            paddingHorizontal: isCompact ? 16 : 20,
+            paddingBottom: imageContentBottom,
+            gap: 14,
+          }}
+        >
+          <CompactCreatorHeader
+            activeTool={activeTool}
+            modelName={selectedImageModel?.displayName ?? 'Loading models'}
+            modelDisabled={!selectedImageModel}
+            onChangeTool={changeTool}
+            onOpenModels={() => setModelPickerVisible(true)}
+            onClose={onClose}
+          />
+
+          {guided ? (
+            <GuidedPromptChips tool="image" prompt={imageDraft.prompt} onSelectPrompt={updatePrompt} />
+          ) : null}
+
+          {catalogNotice ? (
+            <SlimCreatorBanner label="Model updated" body={catalogNotice} onDismiss={() => setCatalogNotice(null)} />
+          ) : null}
+          {remixRestoreWarning ? (
+            <SlimCreatorBanner label="Remix source" body={remixRestoreWarning} onDismiss={() => setRemixRestoreWarning(null)} />
+          ) : null}
+          {referenceNotice ? (
+            <SlimCreatorBanner label="Reference updated" body={referenceNotice} onDismiss={() => setReferenceNotice(null)} />
+          ) : null}
+
+          <ImagePromptComposer
+            draft={imageDraft}
+            maxReferences={selectedImageModel?.inputs.imageReferences?.max ?? 0}
+            isEnhancing={isEnhancing}
+            isUploading={isUploading}
+            promptMessage={promptMessage}
+            onPromptChange={updatePrompt}
+            onEnhance={enhancePrompt}
+            onUploadReferences={() => uploadImageReferences('image')}
+            onRenameReference={(id, displayName) => setImageDraft((draft) => {
+              const currentReference = draft.references.find((media) => media.id === id);
+              const renamedReference = currentReference ? renameMediaDraft(currentReference, displayName) : null;
+              const nextPrompt = currentReference?.handle && promptContainsHandle(draft.prompt, currentReference.handle)
+                ? replacePromptHandle(draft.prompt, currentReference.handle, renamedReference?.handle ?? '')
+                : draft.prompt;
+              return {
+                ...draft,
+                prompt: nextPrompt,
+                references: renameMediaInList(draft.references, id, displayName),
+              };
+            })}
+            onRemoveReference={(id) => {
+              const removedReference = imageDraft.references.find((media) => media.id === id);
+              const handleWasUsed = promptContainsHandle(imageDraft.prompt, removedReference?.handle);
+              if (removedReference) {
+                setReferenceNotice(handleWasUsed && removedReference.handle
+                  ? `${removedReference.displayName} and ${removedReference.handle} were removed from this draft.`
+                  : `${removedReference.displayName} was removed from this draft.`);
+              }
+              setImageDraft((draft) => ({
+                ...draft,
+                prompt: handleWasUsed && removedReference?.handle
+                  ? replacePromptHandle(draft.prompt, removedReference.handle)
+                  : draft.prompt,
+                references: draft.references.filter((media) => media.id !== id),
+              }));
+            }}
+            onFocus={() => setIsPromptFocused(true)}
+            onBlur={() => setIsPromptFocused(false)}
+            onMentionStateChange={setIsReferenceMentionActive}
+          />
+        </ScrollView>
+
+        <CreatorPersistentBar
+          bottom={bottomInset + 8}
+          summary={parameterSummary || 'Settings'}
+          blocker={persistentAction === 'generate' ? blocker : null}
+          quoteStatus={creatorQuoteStatus}
+          cost={activeQuote.cost}
+          retryLabel={creatorRetryLabel}
+          action={persistentAction}
+          disabled={persistentAction === 'generate' && generateDisabled}
+          onOpenParameters={() => setParametersVisible(true)}
+          onRetryQuote={retryCreatorQuote}
+          onAction={() => {
+            if (persistentAction === 'generate') void generate();
+            else setWorkspaceVisible(true);
+          }}
+        />
+
+        <SearchableModelPickerModal
+          visible={modelPickerVisible}
+          items={imageModels}
+          value={imageDraft.model}
+          onClose={() => setModelPickerVisible(false)}
+          onChange={(modelId) => {
+            replaceDraft({ ...imageDraft, model: modelId as ImageModelId });
+            setModelPickerVisible(false);
+          }}
+        />
+
+        <CreatorParameterSheet
+          visible={parametersVisible}
+          bottomInset={bottomInset}
+          catalog={catalog}
+          model={selectedImageModel}
+          draft={imageDraft}
+          quoteStatus={creatorQuoteStatus}
+          cost={activeQuote.cost}
+          availableCredits={credits}
+          blocker={blocker}
+          retryLabel={creatorRetryLabel}
+          onClose={() => setParametersVisible(false)}
+          onRetryQuote={retryCreatorQuote}
+          onChange={replaceDraft}
+          onGenerate={() => {
+            setParametersVisible(false);
+            void generate();
+          }}
+          generateDisabled={generateDisabled}
+        />
+
+        <GenerationWorkspace
+          visible={workspaceVisible && generationTool === 'image'}
+          tool="image"
+          status={activeGenerationStatus}
+          isGenerating={isGenerating && generationTool === 'image'}
+          outputUrl={activeOutputUrl}
+          generationId={generationTool === 'image' ? lastGenerationId : null}
+          settingsSummary={`${selectedImageModel?.displayName ?? 'Image'} · ${parameterSummary || 'Default settings'}`}
+          error={status?.status === 'failed' ? status.error?.trim() || message : message}
+          pollingInterrupted={pollingInterrupted && generationTool === 'image'}
+          onResumePolling={() => void resumeGenerationPolling()}
+          showNotificationPrompt={showNotificationPrompt}
+          onEnableNotifications={() => {
+            void import('@/lib/notifications').then(({ registerForMobilePushNotifications }) => (
+              registerForMobilePushNotifications(api, { requestPermission: true })
+            ));
+            setShowNotificationPrompt(false);
+          }}
+          onDismissNotifications={() => setShowNotificationPrompt(false)}
+          onMinimize={() => setWorkspaceVisible(false)}
+          onOpenAlerts={() => {
+            setWorkspaceVisible(false);
+            router.push('/(tabs)/studio');
+          }}
+          onRetry={() => void generate()}
+          onBack={() => {
+            setWorkspaceVisible(false);
+            setStatus(null);
+            setLastPredictionId(null);
+            setPollingInterrupted(false);
+            setGenerationTool(null);
+            setMessage(null);
+          }}
+          onPost={() => {
+            if (!lastGenerationId) return;
+            setWorkspaceVisible(false);
+            router.push({ pathname: '/post/new', params: { generationId: lastGenerationId } } as never);
+          }}
+          onCreateAnother={() => {
+            setWorkspaceVisible(false);
+            setStatus(null);
+            setLastGenerationId(null);
+            setLastPredictionId(null);
+            setPollingInterrupted(false);
+            setGenerationTool(null);
+            setMessage(null);
+            setPromptMessage(null);
+          }}
+        />
+      </View>
+    );
+  }
+
   return (
     <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
       <View style={{ position: 'absolute', inset: 0, backgroundColor: appTheme.colors.background }} />
@@ -971,7 +1580,7 @@ export function MediaCreationScreen({
           gap: 18,
         }}
       >
-        <CreateHeader meta={meta} activeTool={activeTool} onChange={changeTool} />
+        <CreateHeader meta={meta} activeTool={activeTool} onChange={changeTool} onClose={onClose} />
 
         {guided ? (
           <GuidedCreatorIntro
@@ -1019,7 +1628,7 @@ export function MediaCreationScreen({
         {outputUrl ? (
           <ResultPanel
             outputUrl={outputUrl}
-            kind={activeTool === 'image' ? 'image' : 'video'}
+            kind="video"
             generationId={lastGenerationId}
             accent={meta.accent}
             onPost={() => {
@@ -1061,7 +1670,7 @@ export function MediaCreationScreen({
       </ScrollView>
       {showFloatingReviewBar ? (
         <FloatingGenerateReviewBar
-          bottom={tabBarMetrics.contentBottomPadding + 8}
+          bottom={bottomInset + 8}
           credits={credits ?? 0}
           cost={activeQuote.status === 'ready' ? activeQuote.cost : null}
           disabled={generateDisabled}
@@ -1072,6 +1681,1706 @@ export function MediaCreationScreen({
         />
       ) : null}
     </View>
+  );
+}
+
+function CompactCreatorHeader({
+  activeTool,
+  modelName,
+  modelDisabled,
+  onChangeTool,
+  onOpenModels,
+  onClose,
+}: {
+  activeTool: CreatorToolId;
+  modelName: string;
+  modelDisabled: boolean;
+  onChangeTool: (tool: CreatorToolId) => void;
+  onOpenModels: () => void;
+  onClose?: () => void;
+}) {
+  const modelAccent = accentColor(TOOL_META[activeTool].accent);
+  return (
+    <View style={{ gap: 14 }}>
+      <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <View style={{ minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {onClose ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close creator"
+              accessibilityHint="Returns to the previous tab. Your draft is saved."
+              onPress={onClose}
+              style={({ pressed }) => ({
+                width: 48,
+                height: 48,
+                borderRadius: 24,
+                backgroundColor: pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong,
+                alignItems: 'center',
+                justifyContent: 'center',
+                opacity: pressed ? appTheme.opacity.pressed : 1,
+              })}
+            >
+              <X size={20} color={appTheme.colors.textSecondary} />
+            </Pressable>
+          ) : null}
+          <AppText variant="pageTitle">Create</AppText>
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Selected model ${modelName}. Change model`}
+          accessibilityState={{ disabled: modelDisabled }}
+          disabled={modelDisabled}
+          onPress={onOpenModels}
+          style={({ pressed }) => ({
+            minHeight: 48,
+            maxWidth: onClose ? '48%' : '64%',
+            borderRadius: appTheme.radii.pill,
+            borderCurve: 'continuous',
+            borderWidth: 1,
+            borderColor: `${modelAccent}57`,
+            backgroundColor: `${modelAccent}18`,
+            paddingHorizontal: 14,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 7,
+            opacity: modelDisabled ? 0.5 : pressed ? appTheme.opacity.pressed : 1,
+          })}
+        >
+          <Text numberOfLines={1} style={{ flexShrink: 1, color: appTheme.colors.text, fontSize: 13, fontWeight: '800' }}>
+            {modelName}
+          </Text>
+          <ChevronDown size={15} color={modelAccent} />
+        </Pressable>
+      </View>
+      <ToolSwitcher value={activeTool} onChange={onChangeTool} />
+    </View>
+  );
+}
+
+function GuidedPromptChips({
+  tool,
+  prompt,
+  onSelectPrompt,
+}: {
+  tool: CreatorToolId;
+  prompt: string;
+  onSelectPrompt: (prompt: string) => void;
+}) {
+  return (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 8 }}>
+      {GUIDED_PROMPTS[tool].map((starter, index) => {
+        const active = starter === prompt;
+        return (
+          <Pressable
+            key={starter}
+            accessibilityRole="button"
+            accessibilityLabel={`Starter ${index + 1}. ${starter}`}
+            accessibilityState={{ selected: active }}
+            onPress={() => onSelectPrompt(starter)}
+            style={({ pressed }) => ({
+              minHeight: 48,
+              maxWidth: 230,
+              borderRadius: appTheme.radii.pill,
+              borderWidth: 1,
+              borderColor: active ? 'rgba(115,191,242,0.58)' : appTheme.colors.border,
+              backgroundColor: active ? 'rgba(115,191,242,0.12)' : appTheme.colors.surfaceStrong,
+              paddingHorizontal: 14,
+              justifyContent: 'center',
+              opacity: pressed ? appTheme.opacity.pressed : 1,
+            })}
+          >
+            <Text numberOfLines={1} style={{ color: active ? appTheme.colors.image : appTheme.colors.textSecondary, fontSize: 12, fontWeight: '700' }}>
+              {starter}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+function SlimCreatorBanner({ label, body, onDismiss }: { label: string; body: string; onDismiss: () => void }) {
+  return (
+    <View
+      style={{
+        minHeight: 56,
+        borderRadius: 18,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: 'rgba(255,122,89,0.28)',
+        backgroundColor: 'rgba(255,122,89,0.08)',
+        paddingLeft: 13,
+        paddingRight: 5,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+      }}
+    >
+      <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
+        <Text style={{ color: appTheme.colors.primary, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>{label}</Text>
+        <Text numberOfLines={2} style={{ color: appTheme.colors.textSecondary, fontSize: 12, lineHeight: 16 }}>{body}</Text>
+      </View>
+      <Pressable accessibilityRole="button" accessibilityLabel={`Dismiss ${label}`} onPress={onDismiss} style={{ width: 48, height: 48, alignItems: 'center', justifyContent: 'center' }}>
+        <X size={17} color={appTheme.colors.muted} />
+      </Pressable>
+    </View>
+  );
+}
+
+function ImagePromptComposer({
+  draft,
+  maxReferences,
+  isEnhancing,
+  isUploading,
+  promptMessage,
+  onPromptChange,
+  onEnhance,
+  onUploadReferences,
+  onRenameReference,
+  onRemoveReference,
+  onFocus,
+  onBlur,
+  onMentionStateChange,
+}: {
+  draft: ImageCreationDraft;
+  maxReferences: number;
+  isEnhancing: boolean;
+  isUploading: boolean;
+  promptMessage: string | null;
+  onPromptChange: (prompt: string) => void;
+  onEnhance: () => void;
+  onUploadReferences: () => void;
+  onRenameReference: (id: string, displayName: string) => void;
+  onRemoveReference: (id: string) => void;
+  onFocus: () => void;
+  onBlur: () => void;
+  onMentionStateChange: (active: boolean) => void;
+}) {
+  const [referenceId, setReferenceId] = useState<string | null>(null);
+  const initialSelection = { start: draft.prompt.length, end: draft.prompt.length };
+  const [promptSelection, setPromptSelection] = useState<TextSelection>(initialSelection);
+  const [promptFocused, setPromptFocused] = useState(false);
+  const [dismissedMentionKey, setDismissedMentionKey] = useState<string | null>(null);
+  const promptInputRef = useRef<TextInput>(null);
+  const promptTextRef = useRef(draft.prompt);
+  const lastPromptSelectionRef = useRef<TextSelection>(initialSelection);
+  const restoringSelectionRef = useRef<TextSelection | null>(null);
+  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const selectedReference = draft.references.find((media) => media.id === referenceId) ?? null;
+  const referenceLimitReached = maxReferences === 0 || draft.references.length >= maxReferences;
+  const detectedMention = useMemo(
+    () => promptFocused ? findActiveReferenceMention(draft.prompt, promptSelection) : null,
+    [draft.prompt, promptFocused, promptSelection],
+  );
+  const mentionKey = detectedMention ? `${draft.prompt}:${promptSelection.start}:${promptSelection.end}` : null;
+  const activeMention = detectedMention && mentionKey !== dismissedMentionKey ? detectedMention : null;
+  const mentionReferences = useMemo(() => {
+    if (!activeMention) return [];
+    const query = activeMention.query.toLowerCase();
+    return draft.references.filter((media) => {
+      if (!media.handle) return false;
+      const normalizedHandle = media.handle.slice(1).toLowerCase();
+      return normalizedHandle.includes(query) || media.displayName.toLowerCase().includes(query);
+    });
+  }, [activeMention, draft.references]);
+
+  useEffect(() => {
+    promptTextRef.current = draft.prompt;
+    const normalized = normalizeTextSelection(draft.prompt, lastPromptSelectionRef.current);
+    if (normalized.start === lastPromptSelectionRef.current.start && normalized.end === lastPromptSelectionRef.current.end) return;
+    lastPromptSelectionRef.current = normalized;
+    setPromptSelection(normalized);
+  }, [draft.prompt]);
+
+  useEffect(() => () => {
+    if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+    if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    onMentionStateChange(Boolean(activeMention));
+    return () => onMentionStateChange(false);
+  }, [activeMention, onMentionStateChange]);
+
+  const clearPromptBlurTimer = () => {
+    if (!blurTimerRef.current) return;
+    clearTimeout(blurTimerRef.current);
+    blurTimerRef.current = null;
+  };
+
+  const restorePromptFocus = (delay = 0) => {
+    if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+    focusTimerRef.current = setTimeout(() => {
+      promptInputRef.current?.focus();
+      promptInputRef.current?.setNativeProps({ selection: lastPromptSelectionRef.current });
+      focusTimerRef.current = null;
+    }, delay);
+  };
+
+  const insertReferenceHandle = (handle: string, selection: TextSelection, focusDelay = 0) => {
+    clearPromptBlurTimer();
+    const prompt = promptTextRef.current;
+    if (promptContainsHandle(prompt, handle)) {
+      setPromptFocused(true);
+      restorePromptFocus(focusDelay);
+      return;
+    }
+    const result = insertHandleAtSelection(prompt, handle, selection);
+    promptTextRef.current = result.text;
+    lastPromptSelectionRef.current = result.selection;
+    restoringSelectionRef.current = result.selection;
+    setPromptSelection(result.selection);
+    setDismissedMentionKey(`${result.text}:${result.selection.start}:${result.selection.end}`);
+    setPromptFocused(true);
+    onPromptChange(result.text);
+    restorePromptFocus(focusDelay);
+  };
+
+  return (
+    <>
+      <View style={{ gap: 12 }}>
+      <View
+        style={{
+          borderRadius: 28,
+          borderCurve: 'continuous',
+          borderWidth: 1,
+          borderColor: 'rgba(115,191,242,0.2)',
+          backgroundColor: appTheme.colors.panel,
+          overflow: 'hidden',
+        }}
+      >
+        <View
+          testID="prompt-heading-inset"
+          style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8, backgroundColor: appTheme.colors.panel, zIndex: 1 }}
+        >
+          <Text style={{ color: appTheme.colors.image, fontSize: 11, fontWeight: '800', letterSpacing: 1, textTransform: 'uppercase' }}>Prompt</Text>
+        </View>
+        <View testID="prompt-scroll-viewport" style={{ height: 190, overflow: 'hidden' }}>
+          <TextInput
+            ref={promptInputRef}
+            accessibilityLabel="Generation prompt"
+            value={draft.prompt}
+            onChangeText={(prompt) => {
+              clearPromptBlurTimer();
+              setPromptFocused(true);
+              setDismissedMentionKey(null);
+              promptTextRef.current = prompt;
+              onPromptChange(prompt);
+            }}
+            onSelectionChange={(event) => {
+              const selection = normalizeTextSelection(promptTextRef.current, event.nativeEvent.selection);
+              const matchesRestoredSelection = restoringSelectionRef.current?.start === selection.start && restoringSelectionRef.current.end === selection.end;
+              lastPromptSelectionRef.current = selection;
+              setPromptSelection(selection);
+              if (!matchesRestoredSelection) setDismissedMentionKey(null);
+              if (matchesRestoredSelection) restoringSelectionRef.current = null;
+            }}
+            multiline
+            scrollEnabled
+            textAlignVertical="top"
+            placeholder="Describe the subject, setting, lighting, composition, and style..."
+            placeholderTextColor={appTheme.colors.faint}
+            onFocus={() => {
+              clearPromptBlurTimer();
+              setPromptFocused(true);
+              onFocus();
+            }}
+            onBlur={() => {
+              onBlur();
+              clearPromptBlurTimer();
+              blurTimerRef.current = setTimeout(() => {
+                setPromptFocused(false);
+                blurTimerRef.current = null;
+              }, 160);
+            }}
+            style={{
+              height: 190,
+              overflow: 'hidden',
+              color: appTheme.colors.text,
+              fontSize: 14,
+              lineHeight: 20,
+              paddingHorizontal: 16,
+              paddingTop: 12,
+              paddingBottom: 28,
+            }}
+          />
+          <View
+            testID="prompt-bottom-inset"
+            pointerEvents="none"
+            style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 16, backgroundColor: appTheme.colors.panel }}
+          />
+        </View>
+        {promptMessage ? (
+          <Text accessibilityRole="alert" selectable style={{ color: appTheme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 16, paddingBottom: 10 }}>
+            {promptMessage}
+          </Text>
+        ) : null}
+      </View>
+
+        {activeMention ? (
+          <ReferenceMentionSuggestions
+            references={mentionReferences}
+            prompt={draft.prompt}
+            query={activeMention.query}
+            onSelect={(handle) => insertReferenceHandle(handle, activeMention)}
+          />
+        ) : null}
+
+        <View testID="composer-action-grid" style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
+          <ComposerToolbarButton icon={<ImageIcon size={16} color={appTheme.colors.text} />} label="Reference" onPress={onUploadReferences} disabled={isUploading || referenceLimitReached} />
+          <ComposerToolbarButton icon={<Layers size={15} color={appTheme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
+          <ComposerToolbarButton icon={<Wand2 size={16} color={appTheme.colors.primary} />} label={isEnhancing ? 'Enhancing' : 'Enhance'} onPress={onEnhance} disabled={isEnhancing} accent />
+        </View>
+
+        <View
+          testID="image-reference-rail"
+          style={{
+            borderRadius: 24,
+            borderCurve: 'continuous',
+            borderWidth: 1,
+            borderColor: 'rgba(115,191,242,0.13)',
+            backgroundColor: appTheme.colors.panel,
+            paddingTop: 14,
+            paddingBottom: 14,
+            overflow: 'hidden',
+            gap: 10,
+          }}
+        >
+          <View style={{ paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+            <Text style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700' }}>Reference images</Text>
+            <Text style={{ color: appTheme.colors.faint, fontSize: 10, fontWeight: '700' }}>{draft.references.length} / {maxReferences}</Text>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingHorizontal: 16, paddingRight: 16 }}>
+            {draft.references.map((media) => (
+              <Pressable
+                key={media.id}
+                accessibilityRole="button"
+                accessibilityLabel={`Open details for ${mediaAccessibleName(media)}`}
+                onPress={() => setReferenceId(media.id)}
+                style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1, width: 72 })}
+              >
+                <ReferenceMediaPreview media={media} size={72} />
+              </Pressable>
+            ))}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Add reference images"
+              accessibilityState={{ disabled: isUploading || referenceLimitReached }}
+              disabled={isUploading || referenceLimitReached}
+              onPress={onUploadReferences}
+              style={({ pressed }) => ({
+                width: 72,
+                height: 72,
+                borderRadius: 16,
+                borderWidth: 1,
+                borderStyle: 'dashed',
+                borderColor: 'rgba(115,191,242,0.42)',
+                backgroundColor: 'rgba(115,191,242,0.08)',
+                alignItems: 'center',
+                justifyContent: 'center',
+                opacity: isUploading || referenceLimitReached ? 0.38 : pressed ? appTheme.opacity.pressed : 1,
+              })}
+            >
+              {isUploading ? <ActivityIndicator color={appTheme.colors.image} size="small" /> : <Plus size={22} color={appTheme.colors.image} />}
+            </Pressable>
+          </ScrollView>
+        </View>
+      </View>
+
+      <ReferenceDetailsOverlay
+        media={selectedReference}
+        handleUsedInPrompt={promptContainsHandle(draft.prompt, selectedReference?.handle)}
+        onClose={() => setReferenceId(null)}
+        onRename={(displayName) => {
+          if (selectedReference) onRenameReference(selectedReference.id, displayName);
+        }}
+        onUseHandle={(handle) => {
+          insertReferenceHandle(handle, lastPromptSelectionRef.current, 280);
+          setReferenceId(null);
+        }}
+        onRemove={() => {
+          if (selectedReference) onRemoveReference(selectedReference.id);
+          setReferenceId(null);
+        }}
+      />
+    </>
+  );
+}
+
+function CompactReferenceSlot({
+  testID,
+  title,
+  helper,
+  media,
+  required,
+  disabled = false,
+  isUploading,
+  onAdd,
+  onOpen,
+}: {
+  testID: string;
+  title: string;
+  helper?: string;
+  media: MediaDraft | null;
+  required?: boolean;
+  disabled?: boolean;
+  isUploading: boolean;
+  onAdd: () => void;
+  onOpen: () => void;
+}) {
+  const action = media ? onOpen : onAdd;
+  const label = media ? `Open details for ${mediaAccessibleName(media)}` : `Add ${title.toLowerCase()}`;
+  return (
+    <Pressable
+      testID={testID}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ busy: isUploading, disabled }}
+      disabled={isUploading || disabled}
+      onPress={action}
+      style={({ pressed }) => ({
+        flex: 1,
+        minWidth: 0,
+        minHeight: 148,
+        borderRadius: 22,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderStyle: media ? 'solid' : 'dashed',
+        borderColor: media ? 'rgba(115,191,242,0.28)' : 'rgba(115,191,242,0.38)',
+        backgroundColor: media ? appTheme.colors.surfaceStrong : 'rgba(115,191,242,0.055)',
+        padding: 11,
+        gap: 9,
+        opacity: isUploading || disabled ? 0.45 : pressed ? appTheme.opacity.pressed : 1,
+      })}
+    >
+      <View style={{ minHeight: required ? 29 : 16, alignItems: 'flex-start', justifyContent: 'flex-start', gap: 1 }}>
+        <Text numberOfLines={1} style={{ width: '100%', color: appTheme.colors.text, fontSize: 12, fontWeight: '800' }}>{title}</Text>
+        {required ? <Text style={{ color: appTheme.colors.primary, fontSize: 8, fontWeight: '900', textTransform: 'uppercase' }}>Required</Text> : null}
+      </View>
+      {media ? (
+        <>
+          <ReferenceMediaPreview media={media} size={78} />
+          <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 10, fontWeight: '700' }}>{media.displayName}</Text>
+        </>
+      ) : (
+        <View style={{ flex: 1, minHeight: 82, alignItems: 'center', justifyContent: 'center', gap: 7 }}>
+          {isUploading ? <ActivityIndicator color={appTheme.colors.image} size="small" /> : <Plus size={23} color={appTheme.colors.image} />}
+          <Text numberOfLines={2} style={{ color: appTheme.colors.muted, fontSize: 10, lineHeight: 14, textAlign: 'center' }}>{helper ?? 'Tap to add media'}</Text>
+        </View>
+      )}
+    </Pressable>
+  );
+}
+
+function CompactShotEditor({
+  draft,
+  onChange,
+  onFocus,
+  onBlur,
+}: {
+  draft: VideoCreationDraft;
+  onChange: (draft: VideoCreationDraft) => void;
+  onFocus: () => void;
+  onBlur: () => void;
+}) {
+  const [selectedId, setSelectedId] = useState(draft.multiPrompts[0]?.id ?? '');
+  const selectedShot = draft.multiPrompts.find((shot) => shot.id === selectedId) ?? draft.multiPrompts[0] ?? null;
+  const totalDuration = draft.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration || 0)), 0);
+
+  useEffect(() => {
+    if (selectedShot || draft.multiPrompts.length === 0) return;
+    setSelectedId(draft.multiPrompts[0].id);
+  }, [draft.multiPrompts, selectedShot]);
+
+  const updateSelected = (patch: Partial<{ prompt: string; duration: number }>) => {
+    if (!selectedShot) return;
+    onChange({
+      ...draft,
+      multiPrompts: draft.multiPrompts.map((shot) => shot.id === selectedShot.id ? { ...shot, ...patch } : shot),
+    });
+  };
+
+  return (
+    <View testID="video-shot-editor" style={{ gap: 10 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+        <View style={{ gap: 2 }}>
+          <Text style={{ color: appTheme.colors.video, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Multi-shot story</Text>
+          <Text style={{ color: appTheme.colors.muted, fontSize: 10 }}>{draft.multiPrompts.length} shots · {totalDuration}s total</Text>
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Add shot"
+          onPress={() => {
+            const id = `shot-${Date.now().toString(36)}`;
+            onChange({ ...draft, multiPrompts: [...draft.multiPrompts, { id, prompt: '', duration: 5 }] });
+            setSelectedId(id);
+          }}
+          style={({ pressed }) => ({ minHeight: 48, borderRadius: 16, paddingHorizontal: 13, backgroundColor: pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong, flexDirection: 'row', alignItems: 'center', gap: 6, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+        >
+          <Plus size={16} color={appTheme.colors.video} />
+          <Text style={{ color: appTheme.colors.text, fontSize: 11, fontWeight: '800' }}>Add shot</Text>
+        </Pressable>
+      </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 8 }}>
+        {draft.multiPrompts.map((shot, index) => {
+          const active = shot.id === selectedShot?.id;
+          return (
+            <Pressable
+              key={shot.id}
+              accessibilityRole="button"
+              accessibilityLabel={`Edit shot ${index + 1}`}
+              accessibilityState={{ selected: active }}
+              onPress={() => setSelectedId(shot.id)}
+              style={({ pressed }) => ({ minWidth: 76, minHeight: 48, borderRadius: 16, borderWidth: 1, borderColor: active ? 'rgba(115,191,242,0.55)' : appTheme.colors.border, backgroundColor: active ? 'rgba(115,191,242,0.12)' : appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', gap: 2, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+            >
+              <Text style={{ color: active ? appTheme.colors.text : appTheme.colors.muted, fontSize: 11, fontWeight: '900' }}>Shot {index + 1}</Text>
+              <Text style={{ color: appTheme.colors.faint, fontSize: 9 }}>{shot.duration}s</Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+      {selectedShot ? (
+        <View style={{ borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(115,191,242,0.2)', backgroundColor: appTheme.colors.panel, overflow: 'hidden' }}>
+          <TextInput
+            testID="selected-shot-prompt"
+            accessibilityLabel="Selected shot prompt"
+            value={selectedShot.prompt}
+            onChangeText={(prompt) => updateSelected({ prompt })}
+            multiline
+            scrollEnabled
+            textAlignVertical="top"
+            placeholder="Describe action, camera movement, and the beat for this shot..."
+            placeholderTextColor={appTheme.colors.faint}
+            onFocus={onFocus}
+            onBlur={onBlur}
+            style={{ height: 154, color: appTheme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 15, paddingTop: 15, paddingBottom: 22 }}
+          />
+          <View style={{ paddingHorizontal: 12, paddingBottom: 12, gap: 8 }}>
+            <Text style={{ color: appTheme.colors.muted, fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>Shot duration</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 7 }}>
+              {[3, 4, 5, 6, 8, 10, 12].map((duration) => (
+                <Chip key={duration} label={`${duration}s`} active={selectedShot.duration === duration} accent="video" onPress={() => updateSelected({ duration })} />
+              ))}
+            </ScrollView>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Remove shot ${draft.multiPrompts.findIndex((shot) => shot.id === selectedShot.id) + 1}`}
+            accessibilityState={{ disabled: draft.multiPrompts.length <= 1 }}
+            disabled={draft.multiPrompts.length <= 1}
+            onPress={() => {
+              const index = draft.multiPrompts.findIndex((shot) => shot.id === selectedShot.id);
+              const nextShots = draft.multiPrompts.filter((shot) => shot.id !== selectedShot.id);
+              onChange({ ...draft, multiPrompts: nextShots });
+              setSelectedId(nextShots[Math.max(0, index - 1)]?.id ?? nextShots[0]?.id ?? '');
+            }}
+            style={({ pressed }) => ({ width: 48, height: 48, position: 'absolute', right: 6, top: 6, borderRadius: 24, backgroundColor: pressed ? appTheme.colors.pressed : 'rgba(11,12,12,0.78)', alignItems: 'center', justifyContent: 'center', opacity: draft.multiPrompts.length <= 1 ? 0.35 : 1 })}
+          >
+            <Trash2 size={17} color={appTheme.colors.muted} />
+          </Pressable>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function VideoCreatorComposer({
+  draft,
+  model,
+  isEnhancing,
+  isUploading,
+  promptMessage,
+  validationErrors,
+  onPromptChange,
+  onEnhance,
+  onChange,
+  onUploadImages,
+  onUploadStart,
+  onUploadEnd,
+  onUploadVideo,
+  onUploadAudio,
+  onReferenceNotice,
+  onFocus,
+  onBlur,
+  onMentionStateChange,
+}: {
+  draft: VideoCreationDraft;
+  model: CreatorCatalogModel | null;
+  isEnhancing: boolean;
+  isUploading: boolean;
+  promptMessage: string | null;
+  validationErrors: string[];
+  onPromptChange: (prompt: string) => void;
+  onEnhance: () => void;
+  onChange: (draft: VideoCreationDraft) => void;
+  onUploadImages: () => void;
+  onUploadStart: () => void;
+  onUploadEnd: () => void;
+  onUploadVideo: () => void;
+  onUploadAudio: () => void;
+  onReferenceNotice: (message: string | null) => void;
+  onFocus: () => void;
+  onBlur: () => void;
+  onMentionStateChange: (active: boolean) => void;
+}) {
+  const [referenceId, setReferenceId] = useState<string | null>(null);
+  const initialSelection = { start: draft.prompt.length, end: draft.prompt.length };
+  const [promptSelection, setPromptSelection] = useState<TextSelection>(initialSelection);
+  const [promptFocused, setPromptFocused] = useState(false);
+  const [dismissedMentionKey, setDismissedMentionKey] = useState<string | null>(null);
+  const promptInputRef = useRef<TextInput>(null);
+  const promptTextRef = useRef(draft.prompt);
+  const lastPromptSelectionRef = useRef<TextSelection>(initialSelection);
+  const restoringSelectionRef = useRef<TextSelection | null>(null);
+  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const supportsFrames = Boolean(model?.inputs.startFrame || model?.inputs.endFrame);
+  const supportsReusable = !draft.isMultiShot && supportsReusableVideoInputs(model);
+  const referenceMode = supportsFrames && (draft.referenceMode === 'frames' || !supportsReusable) ? 'frames' : 'elements';
+  const imageLimit = model?.inputs.imageReferences?.max ?? 0;
+  const videoLimit = model?.inputs.videoReferences?.max ?? 0;
+  const audioLimit = model?.inputs.audioReferences?.max ?? 0;
+  const selectedReference = [
+    ...draft.references,
+    ...draft.referenceVideos,
+    draft.startFrame,
+    draft.endFrame,
+  ].find((media): media is MediaDraft => Boolean(media && media.id === referenceId)) ?? null;
+  const detectedMention = useMemo(
+    () => !draft.isMultiShot && promptFocused ? findActiveReferenceMention(draft.prompt, promptSelection) : null,
+    [draft.isMultiShot, draft.prompt, promptFocused, promptSelection],
+  );
+  const mentionKey = detectedMention ? `${draft.prompt}:${promptSelection.start}:${promptSelection.end}` : null;
+  const activeMention = detectedMention && mentionKey !== dismissedMentionKey ? detectedMention : null;
+  const mentionReferences = useMemo(() => {
+    if (!activeMention) return [];
+    const query = activeMention.query.toLowerCase();
+    const namedReferences = model?.id === 'kling-3.0-video'
+      ? [...draft.references, ...draft.referenceVideos]
+      : draft.references;
+    return namedReferences.filter((media) => media.handle && (
+      media.handle.slice(1).toLowerCase().includes(query) || media.displayName.toLowerCase().includes(query)
+    ));
+  }, [activeMention, draft.referenceVideos, draft.references, model?.id]);
+
+  useEffect(() => {
+    promptTextRef.current = draft.prompt;
+    const normalized = normalizeTextSelection(draft.prompt, lastPromptSelectionRef.current);
+    lastPromptSelectionRef.current = normalized;
+    setPromptSelection(normalized);
+  }, [draft.prompt]);
+
+  useEffect(() => () => {
+    if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+    if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    onMentionStateChange(Boolean(activeMention));
+    return () => onMentionStateChange(false);
+  }, [activeMention, onMentionStateChange]);
+
+  const restorePromptFocus = (delay = 0) => {
+    if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+    focusTimerRef.current = setTimeout(() => {
+      promptInputRef.current?.focus();
+      promptInputRef.current?.setNativeProps({ selection: lastPromptSelectionRef.current });
+      focusTimerRef.current = null;
+    }, delay);
+  };
+
+  const insertReferenceHandle = (handle: string, selection: TextSelection, focusDelay = 0) => {
+    if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+    if (promptContainsHandle(promptTextRef.current, handle)) {
+      setPromptFocused(true);
+      restorePromptFocus(focusDelay);
+      return;
+    }
+    const result = insertHandleAtSelection(promptTextRef.current, handle, selection);
+    promptTextRef.current = result.text;
+    lastPromptSelectionRef.current = result.selection;
+    restoringSelectionRef.current = result.selection;
+    setPromptSelection(result.selection);
+    setDismissedMentionKey(`${result.text}:${result.selection.start}:${result.selection.end}`);
+    setPromptFocused(true);
+    onPromptChange(result.text);
+    restorePromptFocus(focusDelay);
+  };
+
+  const renameSelectedReference = (displayName: string) => {
+    if (!selectedReference) return;
+    const renamed = renameMediaDraft(selectedReference, displayName);
+    if (draft.references.some((media) => media.id === selectedReference.id)) {
+      const prompt = selectedReference.handle && promptContainsHandle(draft.prompt, selectedReference.handle)
+        ? replacePromptHandle(draft.prompt, selectedReference.handle, renamed.handle ?? '')
+        : draft.prompt;
+      onChange({ ...draft, prompt, references: renameMediaInList(draft.references, selectedReference.id, displayName) });
+      return;
+    }
+    if (draft.referenceVideos.some((media) => media.id === selectedReference.id)) {
+      const prompt = selectedReference.handle && promptContainsHandle(draft.prompt, selectedReference.handle)
+        ? replacePromptHandle(draft.prompt, selectedReference.handle, renamed.handle ?? '')
+        : draft.prompt;
+      onChange({ ...draft, prompt, referenceVideos: renameMediaInList(draft.referenceVideos, selectedReference.id, displayName) });
+      return;
+    }
+    if (draft.startFrame?.id === selectedReference.id) onChange({ ...draft, startFrame: renameMediaDraft(selectedReference, displayName) });
+    if (draft.endFrame?.id === selectedReference.id) onChange({ ...draft, endFrame: renameMediaDraft(selectedReference, displayName) });
+  };
+
+  const removeSelectedReference = () => {
+    if (!selectedReference) return;
+    if (draft.references.some((media) => media.id === selectedReference.id)) {
+      const handleUsed = promptContainsHandle(draft.prompt, selectedReference.handle);
+      onReferenceNotice(handleUsed && selectedReference.handle
+        ? `${selectedReference.displayName} and ${selectedReference.handle} were removed from this draft.`
+        : `${selectedReference.displayName} was removed from this draft.`);
+      onChange({
+        ...draft,
+        prompt: handleUsed && selectedReference.handle ? replacePromptHandle(draft.prompt, selectedReference.handle) : draft.prompt,
+        references: draft.references.filter((media) => media.id !== selectedReference.id),
+      });
+    } else if (draft.referenceVideos.some((media) => media.id === selectedReference.id)) {
+      const handleUsed = promptContainsHandle(draft.prompt, selectedReference.handle);
+      onReferenceNotice(handleUsed && selectedReference.handle
+        ? `${selectedReference.displayName} and ${selectedReference.handle} were removed from this draft.`
+        : `${selectedReference.displayName} was removed from this draft.`);
+      onChange({
+        ...draft,
+        prompt: handleUsed && selectedReference.handle ? replacePromptHandle(draft.prompt, selectedReference.handle) : draft.prompt,
+        referenceVideos: draft.referenceVideos.filter((media) => media.id !== selectedReference.id),
+      });
+    } else if (draft.startFrame?.id === selectedReference.id) {
+      onChange({ ...draft, startFrame: null });
+    } else if (draft.endFrame?.id === selectedReference.id) {
+      onChange({ ...draft, endFrame: null });
+    }
+    setReferenceId(null);
+  };
+
+  const primaryReferenceAction = referenceMode === 'elements'
+    ? imageLimit > 0 ? onUploadImages : videoLimit > 0 ? onUploadVideo : onUploadAudio
+    : draft.isMultiShot
+      ? onUploadStart
+      : !draft.startFrame && model?.inputs.startFrame ? onUploadStart : !draft.endFrame && model?.inputs.endFrame ? onUploadEnd : onUploadStart;
+  const referenceActionDisabled = isUploading || (!supportsFrames && !supportsReusable);
+  const frameError = validationErrors.find((error) => /start image|start frame|end frame/i.test(error));
+
+  return (
+    <View testID="video-creator-composer" style={{ gap: 12 }}>
+      {model?.capabilities.multiShot ? (
+        <View testID="video-shot-mode" style={{ minHeight: 48, borderRadius: 18, backgroundColor: appTheme.colors.surfaceStrong, padding: 4, flexDirection: 'row', gap: 4 }}>
+          {[
+            { label: 'Single shot', value: false },
+            { label: 'Multi-shot', value: true },
+          ].map((option) => (
+            <Pressable
+              key={option.label}
+              accessibilityRole="button"
+              accessibilityLabel={option.label}
+              accessibilityState={{ selected: draft.isMultiShot === option.value }}
+              onPress={() => onChange({ ...draft, isMultiShot: option.value, referenceMode: option.value ? 'frames' : draft.referenceMode })}
+              style={({ pressed }) => ({ flex: 1, minHeight: 40, borderRadius: 14, backgroundColor: draft.isMultiShot === option.value ? 'rgba(115,191,242,0.14)' : pressed ? appTheme.colors.pressed : 'transparent', alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+            >
+              <Text style={{ color: draft.isMultiShot === option.value ? appTheme.colors.text : appTheme.colors.muted, fontSize: 12, fontWeight: '800' }}>{option.label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+
+      {draft.isMultiShot ? (
+        <CompactShotEditor draft={draft} onChange={onChange} onFocus={onFocus} onBlur={onBlur} />
+      ) : (
+        <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(115,191,242,0.2)', backgroundColor: appTheme.colors.panel, overflow: 'hidden' }}>
+          <View style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 }}>
+            <Text style={{ color: appTheme.colors.video, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Prompt</Text>
+          </View>
+          <TextInput
+            ref={promptInputRef}
+            testID="video-prompt-input"
+            accessibilityLabel="Generation prompt"
+            value={draft.prompt}
+            onChangeText={(prompt) => {
+              if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+              setPromptFocused(true);
+              setDismissedMentionKey(null);
+              promptTextRef.current = prompt;
+              onPromptChange(prompt);
+            }}
+            onSelectionChange={(event) => {
+              const selection = normalizeTextSelection(promptTextRef.current, event.nativeEvent.selection);
+              const restored = restoringSelectionRef.current?.start === selection.start && restoringSelectionRef.current.end === selection.end;
+              lastPromptSelectionRef.current = selection;
+              setPromptSelection(selection);
+              if (!restored) setDismissedMentionKey(null);
+              if (restored) restoringSelectionRef.current = null;
+            }}
+            multiline
+            scrollEnabled
+            textAlignVertical="top"
+            placeholder="Describe action, camera movement, lighting, pace, and sound..."
+            placeholderTextColor={appTheme.colors.faint}
+            onFocus={() => {
+              if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+              setPromptFocused(true);
+              onFocus();
+            }}
+            onBlur={() => {
+              onBlur();
+              if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+              blurTimerRef.current = setTimeout(() => setPromptFocused(false), 160);
+            }}
+            style={{ height: 188, color: appTheme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 28 }}
+          />
+          {promptMessage ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 16, paddingBottom: 11 }}>{promptMessage}</Text> : null}
+        </View>
+      )}
+
+      {activeMention ? (
+        <ReferenceMentionSuggestions references={mentionReferences} prompt={draft.prompt} query={activeMention.query} onSelect={(handle) => insertReferenceHandle(handle, activeMention)} />
+      ) : null}
+
+      <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
+        <ComposerToolbarButton icon={<ImageIcon size={16} color={appTheme.colors.text} />} label="Reference" onPress={primaryReferenceAction} disabled={referenceActionDisabled} />
+        <ComposerToolbarButton icon={<Layers size={15} color={appTheme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
+        <ComposerToolbarButton icon={<Wand2 size={16} color={appTheme.colors.primary} />} label={isEnhancing ? 'Enhancing' : 'Enhance'} onPress={onEnhance} disabled={isEnhancing || draft.isMultiShot} accent />
+      </View>
+
+      <View testID="video-reference-section" style={{ borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(115,191,242,0.13)', backgroundColor: appTheme.colors.panel, padding: 14, gap: 12 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <View style={{ gap: 2 }}>
+            <Text style={{ color: appTheme.colors.text, fontSize: 12, fontWeight: '800' }}>{draft.isMultiShot ? 'Story inputs' : 'Visual inputs'}</Text>
+            <Text style={{ color: appTheme.colors.muted, fontSize: 10 }}>
+              {referenceMode === 'frames' ? draft.isMultiShot ? 'Start frame for the story' : 'Start and end frames' : 'Reusable references'}
+            </Text>
+          </View>
+          {supportsFrames && supportsReusable ? (
+            <View testID="video-reference-mode" style={{ flexDirection: 'row', borderRadius: 14, backgroundColor: appTheme.colors.surfaceStrong, padding: 3 }}>
+              {(['frames', 'elements'] as const).map((mode) => (
+                <Pressable
+                  key={mode}
+                  accessibilityRole="button"
+                  accessibilityLabel={mode === 'frames' ? 'Frames' : 'Reusable'}
+                  accessibilityState={{ selected: referenceMode === mode }}
+                  onPress={() => onChange({ ...draft, referenceMode: mode })}
+                  style={({ pressed }) => ({ minHeight: 42, borderRadius: 11, paddingHorizontal: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: referenceMode === mode ? 'rgba(115,191,242,0.14)' : pressed ? appTheme.colors.pressed : 'transparent', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+                >
+                  <Text style={{ color: referenceMode === mode ? appTheme.colors.text : appTheme.colors.muted, fontSize: 10, fontWeight: '800' }}>{mode === 'frames' ? 'Frames' : 'Reusable'}</Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+        </View>
+
+        {referenceMode === 'frames' && supportsFrames ? (
+          <>
+            <View testID="video-frame-slots" style={{ flexDirection: 'row', gap: 9 }}>
+              {model?.inputs.startFrame ? (
+                <CompactReferenceSlot testID="video-start-frame-slot" title="Start frame" helper="First visual" media={draft.startFrame} required={model.id === 'hailuo-2.3'} isUploading={isUploading} onAdd={onUploadStart} onOpen={() => setReferenceId(draft.startFrame?.id ?? null)} />
+              ) : null}
+              {model?.inputs.endFrame ? (
+                <CompactReferenceSlot
+                  testID="video-end-frame-slot"
+                  title="End frame"
+                  helper={draft.isMultiShot ? 'Single shot only' : 'Optional finish'}
+                  media={draft.endFrame}
+                  disabled={draft.isMultiShot && !draft.endFrame}
+                  isUploading={isUploading}
+                  onAdd={onUploadEnd}
+                  onOpen={() => setReferenceId(draft.endFrame?.id ?? null)}
+                />
+              ) : null}
+            </View>
+            {frameError ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.amber, fontSize: 11, fontWeight: '700', lineHeight: 15 }}>{frameError}</Text> : null}
+          </>
+        ) : supportsReusable ? (
+          <View testID="video-reusable-reference-rail" style={{ gap: 10 }}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingRight: 6 }}>
+              {draft.references.map((media) => (
+                <Pressable key={media.id} accessibilityRole="button" accessibilityLabel={`Open details for ${mediaAccessibleName(media)}`} onPress={() => setReferenceId(media.id)} style={({ pressed }) => ({ width: 72, gap: 5, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+                  <ReferenceMediaPreview media={media} size={72} />
+                  <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 9, fontWeight: '700', textAlign: 'center' }}>{media.displayName}</Text>
+                </Pressable>
+              ))}
+              {draft.referenceVideos.map((media) => (
+                <Pressable key={media.id} accessibilityRole="button" accessibilityLabel={`Open details for ${mediaAccessibleName(media)}`} onPress={() => setReferenceId(media.id)} style={({ pressed }) => ({ width: 72, gap: 5, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+                  <ReferenceMediaPreview media={media} size={72} />
+                  <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 9, fontWeight: '700', textAlign: 'center' }}>{media.displayName}</Text>
+                </Pressable>
+              ))}
+              {draft.referenceAudios.map((media) => (
+                <View key={media.id} style={{ width: 72, gap: 4 }}>
+                  <ReferenceMediaPreview media={media} size={72} />
+                  <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${mediaAccessibleName(media)}`} onPress={() => onChange({ ...draft, referenceAudios: draft.referenceAudios.filter((item) => item.id !== media.id) })} style={{ minHeight: 48, alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={{ color: appTheme.colors.danger, fontSize: 9, fontWeight: '800' }}>Remove</Text>
+                  </Pressable>
+                </View>
+              ))}
+              {imageLimit > 0 ? <CompactRailAddButton label={`Images ${draft.references.length}/${imageLimit}`} onPress={onUploadImages} disabled={isUploading || draft.references.length >= imageLimit} /> : null}
+              {videoLimit > 0 ? <CompactRailAddButton label={`Video ${draft.referenceVideos.length}/${videoLimit}`} onPress={onUploadVideo} disabled={isUploading || draft.referenceVideos.length >= videoLimit} icon="video" /> : null}
+              {audioLimit > 0 ? <CompactRailAddButton label={`Audio ${draft.referenceAudios.length}/${audioLimit}`} onPress={onUploadAudio} disabled={isUploading || draft.referenceAudios.length >= audioLimit} icon="audio" /> : null}
+            </ScrollView>
+            {model?.inputs.combineFramesWithReferences && model.inputs.startFrame ? (
+              <View style={{ maxWidth: 170 }}>
+                <CompactReferenceSlot testID="video-optional-first-frame-slot" title="First frame" helper="Optional with reusable refs" media={draft.startFrame} isUploading={isUploading} onAdd={onUploadStart} onOpen={() => setReferenceId(draft.startFrame?.id ?? null)} />
+              </View>
+            ) : null}
+            {model?.inputs.preparedAudioReferences ? (
+              <PreparedReferenceIds title="Prepared voice IDs" accessibilityLabel="Gemini Omni voice ID" placeholder="Paste prepared voice ID" items={draft.preparedAudioIds} max={model.inputs.preparedAudioReferences.max} onChange={(items) => onChange({ ...draft, preparedAudioIds: items })} />
+            ) : null}
+            {model?.inputs.characterReferences ? (
+              <PreparedReferenceIds title="Prepared character IDs" accessibilityLabel="Gemini Omni character ID" placeholder="Paste prepared character ID" items={draft.characterIds} max={model.inputs.characterReferences.max} onChange={(items) => onChange({ ...draft, characterIds: items })} />
+            ) : null}
+          </View>
+        ) : (
+          <Text style={{ color: appTheme.colors.muted, fontSize: 11 }}>This model creates from text without reference media.</Text>
+        )}
+      </View>
+
+      <ReferenceDetailsOverlay
+        media={selectedReference}
+        handleUsedInPrompt={promptContainsHandle(draft.prompt, selectedReference?.handle)}
+        onClose={() => setReferenceId(null)}
+        onRename={renameSelectedReference}
+        onUseHandle={selectedReference && (
+          draft.references.some((media) => media.id === selectedReference.id)
+          || (model?.id === 'kling-3.0-video' && draft.referenceVideos.some((media) => media.id === selectedReference.id))
+        )
+          ? (handle) => {
+              insertReferenceHandle(handle, lastPromptSelectionRef.current, 280);
+              setReferenceId(null);
+            }
+          : undefined}
+        onRemove={removeSelectedReference}
+      />
+    </View>
+  );
+}
+
+function CompactRailAddButton({ label, icon = 'image', onPress, disabled }: { label: string; icon?: 'image' | 'video' | 'audio'; onPress: () => void; disabled: boolean }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Add ${label}`}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => ({ width: 80, minHeight: 96, borderRadius: 16, borderWidth: 1, borderStyle: 'dashed', borderColor: 'rgba(115,191,242,0.38)', backgroundColor: 'rgba(115,191,242,0.055)', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 6, opacity: disabled ? 0.38 : pressed ? appTheme.opacity.pressed : 1 })}
+    >
+      {icon === 'video' ? <Video size={20} color={appTheme.colors.video} /> : icon === 'audio' ? <AudioLines size={20} color={appTheme.colors.motion} /> : <Plus size={21} color={appTheme.colors.image} />}
+      <Text numberOfLines={2} style={{ color: appTheme.colors.muted, fontSize: 9, fontWeight: '800', lineHeight: 12, textAlign: 'center' }}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function MotionCreatorComposer({
+  draft,
+  model,
+  isEnhancing,
+  isUploading,
+  promptMessage,
+  validationErrors,
+  onPromptChange,
+  onEnhance,
+  onChange,
+  onUploadCharacter,
+  onUploadMotion,
+  onFocus,
+  onBlur,
+}: {
+  draft: MotionCreationDraft;
+  model: CreatorCatalogModel | null;
+  isEnhancing: boolean;
+  isUploading: boolean;
+  promptMessage: string | null;
+  validationErrors: string[];
+  onPromptChange: (prompt: string) => void;
+  onEnhance: () => void;
+  onChange: (draft: MotionCreationDraft) => void;
+  onUploadCharacter: () => void;
+  onUploadMotion: () => void;
+  onFocus: () => void;
+  onBlur: () => void;
+}) {
+  const [selectedRole, setSelectedRole] = useState<'character' | 'motion' | null>(null);
+  const selectedMedia = selectedRole === 'character' ? draft.characterImage : selectedRole === 'motion' ? draft.referenceVideo : null;
+  const duration = draft.referenceVideo ? getMotionDuration(draft) : null;
+  const characterError = validationErrors.find((error) => /character image/i.test(error));
+  const motionError = validationErrors.find((error) => /reference video|motion video|between 1 and/i.test(error));
+
+  return (
+    <View testID="motion-creator-composer" style={{ gap: 12 }}>
+      <View testID="motion-required-inputs" style={{ borderRadius: 26, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(240,171,252,0.18)', backgroundColor: appTheme.colors.panel, padding: 14, gap: 12 }}>
+        <View style={{ gap: 3 }}>
+          <Text style={{ color: appTheme.colors.motion, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Required inputs</Text>
+          <Text style={{ color: appTheme.colors.muted, fontSize: 11, lineHeight: 15 }}>Choose the character to preserve and the movement to transfer.</Text>
+        </View>
+        <View style={{ flexDirection: 'row', gap: 9 }}>
+          <CompactReferenceSlot testID="motion-character-slot" title="Character image" helper="Who should move?" media={draft.characterImage} required isUploading={isUploading} onAdd={onUploadCharacter} onOpen={() => setSelectedRole('character')} />
+          <CompactReferenceSlot testID="motion-video-slot" title="Motion video" helper="How should they move?" media={draft.referenceVideo} required isUploading={isUploading} onAdd={onUploadMotion} onOpen={() => setSelectedRole('motion')} />
+        </View>
+        <View style={{ gap: 4 }}>
+          {characterError ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.amber, fontSize: 10, fontWeight: '700' }}>{characterError}</Text> : null}
+          {motionError ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.amber, fontSize: 10, fontWeight: '700' }}>{motionError}</Text> : null}
+          {duration ? <Text style={{ color: appTheme.colors.textSecondary, fontSize: 10, fontWeight: '700' }}>Detected motion length · {duration}s</Text> : null}
+        </View>
+      </View>
+
+      <View style={{ borderRadius: 26, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(240,171,252,0.16)', backgroundColor: appTheme.colors.panel, overflow: 'hidden' }}>
+        <View style={{ paddingHorizontal: 16, paddingTop: 15, paddingBottom: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Text style={{ color: appTheme.colors.motion, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Optional direction</Text>
+          <Text style={{ color: appTheme.colors.faint, fontSize: 9, fontWeight: '800' }}>Optional</Text>
+        </View>
+        <TextInput
+          testID="motion-prompt-input"
+          accessibilityLabel="Optional motion prompt"
+          value={draft.prompt}
+          onChangeText={onPromptChange}
+          multiline
+          scrollEnabled
+          textAlignVertical="top"
+          placeholder="Add expression, timing, camera, or framing guidance..."
+          placeholderTextColor={appTheme.colors.faint}
+          onFocus={onFocus}
+          onBlur={onBlur}
+          style={{ height: 128, color: appTheme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 22 }}
+        />
+        {promptMessage ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 16, paddingBottom: 11 }}>{promptMessage}</Text> : null}
+      </View>
+
+      <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
+        <ComposerToolbarButton icon={<Layers size={16} color={appTheme.colors.text} />} label="Inputs" onPress={!draft.characterImage ? onUploadCharacter : onUploadMotion} disabled={isUploading} />
+        <ComposerToolbarButton icon={<Layers size={15} color={appTheme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
+        <ComposerToolbarButton icon={<Wand2 size={16} color={appTheme.colors.primary} />} label={isEnhancing ? 'Enhancing' : 'Enhance'} onPress={onEnhance} disabled={isEnhancing || !draft.prompt.trim()} accent />
+      </View>
+
+      <ReferenceDetailsOverlay
+        media={selectedMedia}
+        handleUsedInPrompt={false}
+        onClose={() => setSelectedRole(null)}
+        onRename={(displayName) => {
+          if (!selectedMedia) return;
+          if (selectedRole === 'character') onChange({ ...draft, characterImage: renameMediaDraft(selectedMedia, displayName) });
+          if (selectedRole === 'motion') onChange({ ...draft, referenceVideo: renameMediaDraft(selectedMedia, displayName) });
+        }}
+        onRemove={() => {
+          if (selectedRole === 'character') onChange({ ...draft, characterImage: null });
+          if (selectedRole === 'motion') onChange({ ...draft, referenceVideo: null });
+          setSelectedRole(null);
+        }}
+      />
+      {!model ? <Text style={{ color: appTheme.colors.muted, fontSize: 11 }}>Loading motion settings…</Text> : null}
+    </View>
+  );
+}
+
+function ReferenceMentionSuggestions({
+  references,
+  prompt,
+  query,
+  onSelect,
+}: {
+  references: MediaDraft[];
+  prompt: string;
+  query: string;
+  onSelect: (handle: string) => void;
+}) {
+  const matchLabel = references.length === 1 ? '1 reference' : `${references.length} references`;
+  return (
+    <View
+      testID="reference-mention-suggestions"
+      accessibilityRole="list"
+      accessibilityLabel={`Reference suggestions, ${matchLabel}`}
+      style={{
+        maxHeight: 210,
+        borderRadius: 20,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: 'rgba(115,191,242,0.26)',
+        backgroundColor: appTheme.colors.surfaceStrong,
+        overflow: 'hidden',
+      }}
+    >
+      <View style={{ minHeight: 40, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, borderBottomWidth: 1, borderBottomColor: appTheme.colors.border }}>
+        <Text style={{ color: appTheme.colors.textSecondary, fontSize: 12, fontWeight: '800' }}>References</Text>
+        <Text accessibilityLiveRegion="polite" style={{ color: appTheme.colors.faint, fontSize: 11, fontWeight: '700' }}>{matchLabel}</Text>
+      </View>
+      {references.length > 0 ? (
+        <ScrollView keyboardShouldPersistTaps="always" nestedScrollEnabled style={{ maxHeight: 168 }}>
+          {references.map((media) => {
+            const handle = media.handle;
+            if (!handle) return null;
+            const used = promptContainsHandle(prompt, handle);
+            return (
+              <Pressable
+                key={media.id}
+                accessibilityRole="button"
+                accessibilityLabel={used ? `${media.displayName}, ${handle}, already added` : `Insert ${handle}, ${media.displayName}`}
+                accessibilityState={{ disabled: used }}
+                disabled={used}
+                onPress={() => onSelect(handle)}
+                style={({ pressed }) => ({
+                  minHeight: 56,
+                  paddingHorizontal: 12,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 10,
+                  borderBottomWidth: 1,
+                  borderBottomColor: appTheme.colors.border,
+                  backgroundColor: pressed ? appTheme.colors.pressed : 'transparent',
+                  opacity: used ? 0.58 : pressed ? appTheme.opacity.pressed : 1,
+                })}
+              >
+                <ReferenceMediaPreview media={media} size={38} />
+                <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                  <Text numberOfLines={1} style={{ color: appTheme.colors.text, fontSize: 13, fontWeight: '800' }}>{media.displayName}</Text>
+                  <Text numberOfLines={1} style={{ color: appTheme.colors.image, fontSize: 11, fontWeight: '700' }}>{handle}</Text>
+                </View>
+                {used ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <Check size={14} color={appTheme.colors.image} />
+                    <Text style={{ color: appTheme.colors.muted, fontSize: 10, fontWeight: '800' }}>Added</Text>
+                  </View>
+                ) : null}
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      ) : (
+        <Text accessibilityLiveRegion="polite" style={{ color: appTheme.colors.muted, fontSize: 12, lineHeight: 17, paddingHorizontal: 14, paddingVertical: 16 }}>
+          {query ? `No named references match “@${query}”.` : 'Add and name a reference to mention it here.'}
+        </Text>
+      )}
+    </View>
+  );
+}
+
+function SheetDragHandle({ label, onDismiss }: { label: string; onDismiss: () => void }) {
+  const panResponder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_, gestureState) => gestureState.dy > 8 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx),
+    onPanResponderRelease: (_, gestureState) => {
+      if (gestureState.dy > 48 || gestureState.vy > 0.8) onDismiss();
+    },
+  }), [onDismiss]);
+
+  return (
+    <Pressable
+      {...panResponder.panHandlers}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityHint="Swipe down or double tap to close"
+      onPress={onDismiss}
+      hitSlop={8}
+      style={({ pressed }) => ({ minHeight: 28, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+    >
+      <GripHorizontal size={28} color={appTheme.colors.faint} />
+    </Pressable>
+  );
+}
+
+function ComposerToolbarButton({ icon, label, onPress, disabled, accent, quiet }: { icon: React.ReactNode; label: string; onPress: () => void; disabled?: boolean; accent?: boolean; quiet?: boolean }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        minHeight: 60,
+        flex: 1,
+        borderRadius: 18,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: accent ? 'rgba(255,122,89,0.3)' : quiet ? 'rgba(255,255,255,0.055)' : appTheme.colors.border,
+        backgroundColor: accent ? 'rgba(255,122,89,0.11)' : pressed ? appTheme.colors.pressed : quiet ? 'rgba(255,255,255,0.025)' : appTheme.colors.surfaceStrong,
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexDirection: 'column',
+        gap: 4,
+        opacity: disabled ? 0.45 : pressed ? appTheme.opacity.pressed : 1,
+      })}
+    >
+      {icon}
+      <Text style={{ color: accent ? appTheme.colors.primary : quiet ? appTheme.colors.muted : appTheme.colors.textSecondary, fontSize: quiet ? 10 : 11, fontWeight: '800' }}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function ReferenceDetailsOverlay({
+  media,
+  handleUsedInPrompt,
+  onClose,
+  onRename,
+  onUseHandle,
+  onRemove,
+}: {
+  media: MediaDraft | null;
+  handleUsedInPrompt: boolean;
+  onClose: () => void;
+  onRename: (displayName: string) => void;
+  onUseHandle?: (handle: string) => void;
+  onRemove: () => void;
+}) {
+  const reducedMotion = useReducedMotion();
+  const [renameStatus, setRenameStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const renameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    setRenameStatus('idle');
+    if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
+    return () => {
+      if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
+    };
+  }, [media?.id]);
+
+  if (!media) return null;
+  const accessibleName = mediaAccessibleName(media);
+
+  const markRenameSaved = () => {
+    if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
+    setRenameStatus('saved');
+  };
+
+  const handleRename = (displayName: string) => {
+    onRename(displayName);
+    setRenameStatus('saving');
+    if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
+    renameTimerRef.current = setTimeout(() => setRenameStatus('saved'), 650);
+  };
+
+  const confirmRemove = () => {
+    Alert.alert(
+      'Remove reference?',
+      handleUsedInPrompt && media.handle
+        ? `${accessibleName} and ${media.handle} will be removed from this draft.`
+        : `${accessibleName} will be removed from this draft.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Remove', style: 'destructive', onPress: onRemove },
+      ],
+    );
+  };
+
+  return (
+    <Modal visible transparent statusBarTranslucent animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose}>
+      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.68)' }}>
+        <Pressable accessible={false} onPress={onClose} style={{ position: 'absolute', inset: 0 }} />
+        <View accessibilityViewIsModal style={{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 30, gap: 14 }}>
+          <SheetDragHandle label="Dismiss reference details" onDismiss={onClose} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Text style={{ color: appTheme.colors.text, fontSize: 20, fontWeight: '800' }}>Reference details</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="Close reference details" onPress={onClose} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
+              <X size={20} color={appTheme.colors.text} />
+            </Pressable>
+          </View>
+          <MediaPreview url={media.url} kind={media.kind === 'video' ? 'video' : 'image'} height={300} radius={22} />
+          <View style={{ gap: 7 }}>
+            <Text style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>Reference name</Text>
+            <TextInput
+              accessibilityLabel={`Reference name for ${accessibleName}`}
+              value={media.displayName}
+              onChangeText={handleRename}
+              onBlur={renameStatus === 'saving' ? markRenameSaved : undefined}
+              placeholder="Reference name"
+              placeholderTextColor={appTheme.colors.faint}
+              style={{ minHeight: 52, borderRadius: 16, borderWidth: 1, borderColor: appTheme.colors.borderStrong, backgroundColor: appTheme.colors.surfaceInset, color: appTheme.colors.text, paddingHorizontal: 14, fontSize: 14, fontWeight: '700' }}
+            />
+            {renameStatus !== 'idle' ? (
+              <Text accessibilityLiveRegion="polite" style={{ color: renameStatus === 'saved' ? appTheme.colors.image : appTheme.colors.muted, fontSize: 11, fontWeight: '700' }}>
+                {renameStatus === 'saved' ? 'Saved to draft' : 'Saving…'}
+              </Text>
+            ) : null}
+          </View>
+          {media.handle && onUseHandle ? <SecondaryButton label={`Insert ${media.handle}`} onPress={() => onUseHandle(media.handle!)} /> : null}
+          <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${accessibleName}`} onPress={confirmRemove} style={{ minHeight: 52, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: 'rgba(251,113,133,0.34)', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 }}>
+            <Trash2 size={17} color={appTheme.colors.danger} />
+            <Text style={{ color: appTheme.colors.danger, fontSize: 13, fontWeight: '800' }}>Remove reference</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function CreatorPersistentBar({
+  bottom,
+  summary,
+  blocker,
+  quoteStatus,
+  cost,
+  retryLabel = 'Retry quote',
+  action,
+  disabled,
+  onOpenParameters,
+  onRetryQuote,
+  onAction,
+}: {
+  bottom: number;
+  summary: string;
+  blocker: string | null;
+  quoteStatus: 'idle' | 'pending' | 'ready' | 'error';
+  cost: number | null;
+  retryLabel?: string;
+  action: 'generate' | 'progress' | 'result';
+  disabled: boolean;
+  onOpenParameters: () => void;
+  onRetryQuote: () => void;
+  onAction: () => void;
+}) {
+  const actionLabel = action === 'result'
+    ? 'View result'
+    : action === 'progress'
+      ? 'View progress'
+      : quoteStatus === 'pending' || quoteStatus === 'idle'
+        ? 'Calculating…'
+        : quoteStatus === 'ready'
+          ? `Generate · ${cost ?? 0} credits`
+          : retryLabel;
+  const actionDisabled = disabled && !(action === 'generate' && quoteStatus === 'error');
+  return (
+    <View testID="creator-persistent-bar" pointerEvents="box-none" style={{ position: 'absolute', left: 14, right: 14, bottom, zIndex: 8, gap: 7 }}>
+      {blocker ? (
+        <View testID="creator-contextual-blocker" accessibilityRole="alert" style={{ minHeight: 40, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(251,191,36,0.28)', backgroundColor: 'rgba(34,29,20,0.97)', paddingHorizontal: 12, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: appTheme.colors.amber }} />
+          <Text numberOfLines={2} style={{ flex: 1, color: appTheme.colors.textSecondary, fontSize: 11, fontWeight: '700', lineHeight: 15 }}>{blocker}</Text>
+        </View>
+      ) : null}
+      <View style={{ minHeight: 72, borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderStrong, backgroundColor: 'rgba(20,20,23,0.98)', padding: 8, flexDirection: 'row', alignItems: 'center', gap: 8, boxShadow: '0 16px 46px rgba(0,0,0,0.42)' }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Generation parameters. ${summary}`}
+          onPress={onOpenParameters}
+          style={({ pressed }) => ({ minHeight: 54, flex: 0.9, borderRadius: 18, backgroundColor: pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+        >
+          <Settings2 size={16} color={appTheme.colors.textSecondary} />
+          <Text numberOfLines={1} style={{ color: appTheme.colors.text, fontSize: 12, fontWeight: '800' }}>{summary}</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={actionLabel}
+          accessibilityState={{ disabled: actionDisabled }}
+          disabled={actionDisabled}
+          onPress={action === 'generate' && quoteStatus === 'error' ? onRetryQuote : onAction}
+          style={({ pressed }) => ({ minHeight: 54, flex: 1.2, borderRadius: 18, backgroundColor: actionDisabled ? appTheme.colors.surfaceStrong : appTheme.colors.primary, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center', opacity: actionDisabled ? 0.58 : pressed ? appTheme.opacity.pressed : 1 })}
+        >
+          <Text accessibilityLiveRegion="polite" numberOfLines={1} style={{ color: actionDisabled ? appTheme.colors.muted : appTheme.colors.onPrimary, fontSize: 12, fontWeight: '900' }}>{actionLabel}</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function SearchableModelPickerModal({
+  visible,
+  items,
+  value,
+  onClose,
+  onChange,
+}: {
+  visible: boolean;
+  items: ReturnType<typeof getCatalogModels>;
+  value: string;
+  onClose: () => void;
+  onChange: (modelId: string) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const reducedMotion = useReducedMotion();
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredItems = useMemo(() => items.filter((item) => (
+    !normalizedQuery || `${item.displayName} ${item.description} ${item.badge ?? ''}`.toLowerCase().includes(normalizedQuery)
+  )), [items, normalizedQuery]);
+
+  return (
+    <Modal visible={visible} transparent statusBarTranslucent animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose} onDismiss={() => setQuery('')}>
+      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.7)' }}>
+        <Pressable accessible={false} onPress={onClose} style={{ position: 'absolute', inset: 0 }} />
+        <View accessibilityViewIsModal style={{ height: '78%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 20, gap: 12 }}>
+          <SheetDragHandle label="Dismiss model picker" onDismiss={onClose} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={{ color: appTheme.colors.text, fontSize: 21, fontWeight: '800' }}>Choose model</Text>
+              <Text style={{ color: appTheme.colors.muted, fontSize: 12 }}>Defaults and quote update after selection.</Text>
+            </View>
+            <Pressable accessibilityRole="button" accessibilityLabel="Close model picker" onPress={onClose} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
+              <X size={20} color={appTheme.colors.text} />
+            </Pressable>
+          </View>
+          <View style={{ minHeight: 52, borderRadius: 17, borderWidth: 1, borderColor: appTheme.colors.borderStrong, backgroundColor: appTheme.colors.surfaceInset, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 9 }}>
+            <Search size={18} color={appTheme.colors.muted} />
+            <TextInput accessibilityLabel="Search model names" value={query} onChangeText={setQuery} placeholder="Search models" placeholderTextColor={appTheme.colors.faint} autoCapitalize="none" autoCorrect={false} style={{ flex: 1, color: appTheme.colors.text, fontSize: 14, paddingVertical: 12 }} />
+          </View>
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 8, paddingBottom: 28 }}>
+            {filteredItems.map((item) => {
+              const selected = item.id === value;
+              return (
+                <Pressable
+                  key={item.id}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={`${item.displayName}. ${item.description}`}
+                  onPress={() => onChange(item.id)}
+                  style={({ pressed }) => ({ minHeight: 76, borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: selected ? 'rgba(115,191,242,0.55)' : appTheme.colors.border, backgroundColor: selected ? 'rgba(115,191,242,0.1)' : appTheme.colors.surfaceStrong, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 12, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+                >
+                  <View style={{ width: 40, height: 40, borderRadius: 14, backgroundColor: selected ? 'rgba(115,191,242,0.18)' : appTheme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center' }}>
+                    <ImageIcon size={19} color={selected ? appTheme.colors.image : appTheme.colors.muted} />
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+                      <Text numberOfLines={1} style={{ flexShrink: 1, color: appTheme.colors.text, fontSize: 14, fontWeight: '800' }}>{item.displayName}</Text>
+                      {item.badge ? <Text style={{ color: appTheme.colors.image, fontSize: 10, fontWeight: '800' }}>{item.badge}</Text> : null}
+                    </View>
+                    <Text numberOfLines={2} style={{ color: appTheme.colors.muted, fontSize: 11, lineHeight: 15 }}>{item.description}</Text>
+                  </View>
+                  {selected ? <Check size={19} color={appTheme.colors.image} /> : null}
+                </Pressable>
+              );
+            })}
+            {filteredItems.length === 0 ? <Text style={{ color: appTheme.colors.muted, textAlign: 'center', paddingVertical: 28 }}>No models found.</Text> : null}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function CreatorParameterSheet({
+  visible,
+  bottomInset,
+  catalog,
+  model,
+  draft,
+  quoteStatus,
+  cost,
+  availableCredits,
+  blocker,
+  retryLabel = 'Retry quote',
+  hiddenControlKeys = [],
+  sourceDurationSeconds,
+  onClose,
+  onRetryQuote,
+  onChange,
+  onGenerate,
+  generateDisabled,
+}: {
+  visible: boolean;
+  bottomInset: number;
+  catalog: GenerationModelCatalog | null;
+  model: ReturnType<typeof getCatalogModels>[number] | null;
+  draft: CreationDraft;
+  quoteStatus: 'idle' | 'pending' | 'ready' | 'error';
+  cost: number | null;
+  availableCredits: number | null;
+  blocker: string | null;
+  retryLabel?: string;
+  hiddenControlKeys?: readonly string[];
+  sourceDurationSeconds?: number | null;
+  onClose: () => void;
+  onRetryQuote: () => void;
+  onChange: (draft: CreationDraft) => void;
+  onGenerate: () => void;
+  generateDisabled: boolean;
+}) {
+  const reducedMotion = useReducedMotion();
+  const quoteLabel = quoteStatus === 'ready' ? `${cost ?? 0} credits` : quoteStatus === 'error' ? 'Unavailable' : 'Calculating…';
+  const balanceLabel = typeof availableCredits === 'number'
+    ? `${availableCredits.toLocaleString('en-IN')} credits`
+    : 'Unavailable';
+  return (
+    <Modal visible={visible} transparent statusBarTranslucent animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose}>
+      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.7)' }}>
+        <Pressable accessible={false} onPress={onClose} style={{ position: 'absolute', inset: 0 }} />
+        <View testID="creator-parameter-sheet" accessibilityViewIsModal style={{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingTop: 6, paddingBottom: bottomInset + 12 }}>
+          <SheetDragHandle label="Dismiss generation parameters" onDismiss={onClose} />
+          <View style={{ paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={{ color: appTheme.colors.text, fontSize: 21, fontWeight: '800' }}>Generation parameters</Text>
+              <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 12 }}>{model?.displayName ?? `${TOOL_META[draft.tool].title} settings`}</Text>
+            </View>
+            <Pressable accessibilityRole="button" accessibilityLabel="Close generation parameters" onPress={onClose} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
+              <X size={20} color={appTheme.colors.text} />
+            </Pressable>
+          </View>
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20, gap: 18 }}>
+            {!catalog || !model ? (
+              <View style={{ minHeight: 100, alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+                <ActivityIndicator color={appTheme.colors.image} />
+                <Text style={{ color: appTheme.colors.muted }}>Loading parameters…</Text>
+              </View>
+            ) : (
+              <>
+                <CatalogEssentialControls model={model} draft={draft} onChange={onChange} hiddenControlKeys={hiddenControlKeys} />
+                {draft.tool === 'motion' ? (
+                  <OptionRow title="Source duration">
+                    <ReadOnlyParameterValue value={sourceDurationSeconds ? `${sourceDurationSeconds}s from motion video` : 'Add motion video'} />
+                  </OptionRow>
+                ) : null}
+                <View style={{ height: 1, backgroundColor: appTheme.colors.border }} />
+                {draft.tool === 'image' && !model.controls.some((control) => control.key === 'outputFormat') ? (
+                  <OptionRow title="Output format">
+                    <ReadOnlyParameterValue value={draft.outputFormat.toUpperCase()} />
+                  </OptionRow>
+                ) : null}
+                <CatalogAdvancedControls model={model} draft={draft} onChange={onChange} hiddenControlKeys={hiddenControlKeys} />
+              </>
+            )}
+            {blocker ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.danger, fontSize: 12, fontWeight: '700', lineHeight: 17 }}>{blocker}</Text> : null}
+          </ScrollView>
+          <View style={{ paddingHorizontal: 20, paddingTop: 12, borderTopWidth: 1, borderTopColor: appTheme.colors.border, gap: 10 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={{ color: appTheme.colors.muted, fontSize: 12, fontWeight: '700' }}>Live quote</Text>
+              <Text accessibilityLiveRegion="polite" style={{ color: quoteStatus === 'error' ? appTheme.colors.danger : appTheme.colors.text, fontSize: 13, fontWeight: '800' }}>{quoteLabel}</Text>
+            </View>
+            <View
+              accessibilityRole="text"
+              accessibilityLabel={`Available balance, ${balanceLabel}`}
+              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+            >
+              <Text style={{ color: appTheme.colors.muted, fontSize: 12, fontWeight: '700' }}>Available balance</Text>
+              <Text style={{ color: appTheme.colors.textSecondary, fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{balanceLabel}</Text>
+            </View>
+            <PrimaryButton
+              label={quoteStatus === 'ready' ? `Generate · ${cost ?? 0} credits` : quoteStatus === 'error' ? retryLabel : quoteLabel}
+              onPress={quoteStatus === 'error' ? onRetryQuote : onGenerate}
+              disabled={quoteStatus === 'error' ? false : generateDisabled}
+            />
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function GenerationWorkspace({
+  visible,
+  tool,
+  status,
+  isGenerating,
+  outputUrl,
+  generationId,
+  settingsSummary,
+  error,
+  pollingInterrupted,
+  onResumePolling,
+  showNotificationPrompt,
+  onEnableNotifications,
+  onDismissNotifications,
+  onMinimize,
+  onOpenAlerts,
+  onRetry,
+  onBack,
+  onPost,
+  onCreateAnother,
+}: {
+  visible: boolean;
+  tool: CreatorToolId;
+  status: GenerationStatusResponse | null;
+  isGenerating: boolean;
+  outputUrl: string | null;
+  generationId: string | null;
+  settingsSummary: string;
+  error: string | null | undefined;
+  pollingInterrupted: boolean;
+  onResumePolling: () => void;
+  showNotificationPrompt: boolean;
+  onEnableNotifications: () => void;
+  onDismissNotifications: () => void;
+  onMinimize: () => void;
+  onOpenAlerts: () => void;
+  onRetry: () => void;
+  onBack: () => void;
+  onPost: () => void;
+  onCreateAnother: () => void;
+}) {
+  const reducedMotion = useReducedMotion();
+  const safeAreaInsets = useSafeAreaInsets();
+  const succeeded = Boolean(outputUrl);
+  const failed = status?.status === 'failed' || (!isGenerating && !succeeded && Boolean(error) && !pollingInterrupted);
+  const medium = tool === 'image' ? 'image' : tool === 'video' ? 'video' : 'motion video';
+  const previewKind = tool === 'image' ? 'image' : 'video';
+  return (
+    <Modal visible={visible} animationType={reducedMotion ? 'none' : 'slide'} presentationStyle="fullScreen" onRequestClose={onMinimize}>
+      <View testID="generation-workspace" accessibilityViewIsModal style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+        <View style={{ minHeight: safeAreaInsets.top + 60, paddingTop: safeAreaInsets.top, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={{ color: appTheme.colors.text, fontSize: 20, fontWeight: '800' }}>
+              {succeeded ? `Your ${medium}` : pollingInterrupted ? 'Generation is still running' : failed ? 'Generation failed' : `Creating ${medium}`}
+            </Text>
+            <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11 }}>{settingsSummary}</Text>
+          </View>
+          <Pressable accessibilityRole="button" accessibilityLabel={succeeded || failed ? 'Back to creator' : 'Minimize generation'} onPress={onMinimize} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
+            <X size={20} color={appTheme.colors.text} />
+          </Pressable>
+        </View>
+
+        <ScrollView contentContainerStyle={{ flexGrow: 1, padding: 18, paddingBottom: safeAreaInsets.bottom + 18, gap: 18 }}>
+          {succeeded && outputUrl ? (
+            <>
+              <MediaPreview url={outputUrl} kind={previewKind} height={480} radius={26} nativeControls={previewKind === 'video'} />
+              <View style={{ gap: 10 }}>
+                {showNotificationPrompt ? (
+                  <View style={{ borderRadius: 18, borderWidth: 1, borderColor: 'rgba(255,122,89,0.28)', backgroundColor: appTheme.colors.surfaceStrong, padding: 13, gap: 10 }}>
+                    <View style={{ gap: 3 }}>
+                      <Text style={{ color: appTheme.colors.text, fontSize: 14, fontWeight: '800' }}>Know when longer creations finish</Text>
+                      <Text style={{ color: appTheme.colors.muted, fontSize: 11, lineHeight: 16 }}>Notifications are only requested after you choose Enable.</Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <View style={{ flex: 1 }}><SecondaryButton label="Not now" onPress={onDismissNotifications} /></View>
+                      <View style={{ flex: 1 }}><PrimaryButton label="Enable" onPress={onEnableNotifications} /></View>
+                    </View>
+                  </View>
+                ) : null}
+                {generationId ? <PrimaryButton label="Post to feed" onPress={onPost} /> : null}
+                <SecondaryButton label="Create another" onPress={onCreateAnother} />
+                <SecondaryButton label="Open Alerts" onPress={onOpenAlerts} />
+              </View>
+            </>
+          ) : pollingInterrupted ? (
+            <View style={{ flex: 1, minHeight: 560, justifyContent: 'center', gap: 18 }}>
+              <View style={{ height: 310, borderRadius: 28, borderWidth: 1, borderColor: 'rgba(251,191,36,0.24)', backgroundColor: appTheme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 }}>
+                <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(251,191,36,0.12)', alignItems: 'center', justifyContent: 'center' }}>
+                  <Sparkles size={28} color={appTheme.colors.amber} />
+                </View>
+                <Text style={{ color: appTheme.colors.text, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>Progress check interrupted</Text>
+                <Text accessibilityRole="alert" selectable style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 19, textAlign: 'center' }}>
+                  {error || 'The generation may still be running. Check its existing job instead of starting another one.'}
+                </Text>
+              </View>
+              <PrimaryButton label="Retry status check" onPress={onResumePolling} />
+              <SecondaryButton label="Back to creator" onPress={onMinimize} />
+            </View>
+          ) : failed ? (
+            <View style={{ flex: 1, minHeight: 560, justifyContent: 'center', gap: 18 }}>
+              <View style={{ height: 310, borderRadius: 28, borderWidth: 1, borderColor: 'rgba(251,113,133,0.24)', backgroundColor: appTheme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 }}>
+                <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(251,113,133,0.12)', alignItems: 'center', justifyContent: 'center' }}>
+                  <X size={28} color={appTheme.colors.danger} />
+                </View>
+                <Text style={{ color: appTheme.colors.text, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>We couldn’t create this {medium}</Text>
+                <Text accessibilityRole="alert" selectable style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 19, textAlign: 'center' }}>{error || 'Your inputs are preserved. Try again when you’re ready.'}</Text>
+              </View>
+              <PrimaryButton label="Retry" onPress={onRetry} />
+              <SecondaryButton label="Back to creator" onPress={onBack} />
+            </View>
+          ) : (
+            <View style={{ flex: 1, minHeight: 620, gap: 18 }}>
+              <View accessibilityRole="progressbar" accessibilityLabel={`${TOOL_META[tool].title} generation in progress`} accessibilityValue={{ text: status?.status ?? 'starting' }} style={{ flex: 1, minHeight: 430, borderRadius: 28, borderWidth: 1, borderColor: appTheme.colors.borderStrong, backgroundColor: appTheme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 18 }}>
+                <View style={{ width: 82, height: 82, borderRadius: 28, backgroundColor: 'rgba(255,122,89,0.12)', alignItems: 'center', justifyContent: 'center' }}>
+                  <Sparkles size={38} color={appTheme.colors.primary} />
+                </View>
+                <Text style={{ color: appTheme.colors.text, fontSize: 21, fontWeight: '800' }}>{status?.status === 'processing' ? 'Generating' : `Preparing your ${medium}`}</Text>
+                <ActivityIndicator color={appTheme.colors.primary} size="large" />
+                <Text style={{ color: appTheme.colors.muted, fontSize: 12, textAlign: 'center', paddingHorizontal: 40 }}>You can minimize this view. Generation will continue in the background.</Text>
+              </View>
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <View style={{ flex: 1 }}><SecondaryButton label="Minimize" onPress={onMinimize} /></View>
+                <View style={{ flex: 1 }}><SecondaryButton label="Open Alerts" onPress={onOpenAlerts} /></View>
+              </View>
+            </View>
+          )}
+        </ScrollView>
+      </View>
+    </Modal>
   );
 }
 
@@ -1184,19 +3493,34 @@ function CreateHeader({
   meta,
   activeTool,
   onChange,
+  onClose,
 }: {
   meta: { title: string; accent: ToolAccent; subtitle: string };
   activeTool: CreatorToolId;
   onChange: (tool: CreatorToolId) => void;
+  onClose?: () => void;
 }) {
   return (
     <View style={{ gap: 12 }}>
-      <View style={{ gap: 4 }}>
-        <AppText variant="label" color={accentColor(meta.accent)} style={{ letterSpacing: 1.2, textTransform: 'uppercase' }}>
-          Magicbooklet
-        </AppText>
-        <AppText variant="pageTitle">Create</AppText>
-        <AppText variant="bodySm" color="muted">{meta.title} generation · {meta.subtitle}</AppText>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+        {onClose ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close creator"
+            accessibilityHint="Returns to the previous tab. Your draft is saved."
+            onPress={onClose}
+            style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+          >
+            <X size={20} color={appTheme.colors.textSecondary} />
+          </Pressable>
+        ) : null}
+        <View style={{ flex: 1, gap: 4 }}>
+          <AppText variant="label" color={accentColor(meta.accent)} style={{ letterSpacing: 1.2, textTransform: 'uppercase' }}>
+            Magicbooklet
+          </AppText>
+          <AppText variant="pageTitle">Create</AppText>
+          <AppText variant="bodySm" color="muted">{meta.title} generation · {meta.subtitle}</AppText>
+        </View>
       </View>
       <ToolSwitcher value={activeTool} onChange={onChange} />
     </View>
@@ -1285,19 +3609,58 @@ function FloatingGenerateReviewBar({
 
 function ToolSwitcher({ value, onChange }: { value: CreatorToolId; onChange: (tool: CreatorToolId) => void }) {
   return (
-    <View style={{ flexDirection: 'row', backgroundColor: appTheme.colors.surfaceInset, borderRadius: appTheme.radii.pill, padding: 4, gap: 4 }}>
+    <View
+      style={{
+        minHeight: 48,
+        flexDirection: 'row',
+        borderBottomWidth: 1,
+        borderBottomColor: appTheme.colors.border,
+      }}
+    >
       {(['image', 'video', 'motion'] as const).map((tool) => {
         const active = value === tool;
         const meta = TOOL_META[tool];
+        const color = accentColor(meta.accent);
         return (
-          <ChoiceChip
+          <Pressable
             key={tool}
-            label={meta.title}
-            active={active}
+            accessibilityRole="button"
+            accessibilityLabel={meta.title}
+            accessibilityState={{ selected: active }}
             onPress={() => onChange(tool)}
-            accent={meta.accent}
-            grow
-          />
+            style={({ pressed }) => ({
+              minHeight: 48,
+              flex: 1,
+              alignItems: 'center',
+              justifyContent: 'center',
+              position: 'relative',
+              opacity: pressed ? appTheme.opacity.pressed : 1,
+            })}
+          >
+            <Text
+              style={{
+                color: active ? appTheme.colors.text : appTheme.colors.muted,
+                fontSize: 14,
+                fontWeight: active ? '900' : '700',
+              }}
+            >
+              {meta.title}
+            </Text>
+            {active ? (
+              <View
+                pointerEvents="none"
+                style={{
+                  position: 'absolute',
+                  left: 18,
+                  right: 18,
+                  bottom: -1,
+                  height: 2,
+                  borderRadius: 1,
+                  backgroundColor: color,
+                }}
+              />
+            ) : null}
+          </Pressable>
         );
       })}
     </View>
@@ -1481,12 +3844,16 @@ function CatalogEssentialControls({
   model,
   draft,
   onChange,
+  hiddenControlKeys = [],
 }: {
   model: ReturnType<typeof getCatalogModels>[number];
   draft: CreationDraft;
   onChange: (draft: CreationDraft) => void;
+  hiddenControlKeys?: readonly string[];
 }) {
-  const controls = model.controls.filter((control) => ['aspectRatio', 'resolution', 'duration'].includes(control.key));
+  const controls = model.controls.filter((control) => (
+    ['aspectRatio', 'resolution', 'duration'].includes(control.key) && !hiddenControlKeys.includes(control.key)
+  ));
   return (
     <>
       {controls.map((control) => {
@@ -1494,16 +3861,29 @@ function CatalogEssentialControls({
         const draftKey = draft.tool === 'motion' && control.key === 'resolution' ? 'mode' : control.key;
         if (control.type === 'choice') {
           const current = String(draftRecord[draftKey] ?? control.defaultValue);
+          const options = control.key === 'aspectRatio' ? orderAspectRatioOptions(control.options) : control.options;
           return (
             <OptionRow key={control.key} title={control.label}>
-              {control.options.map((option) => (
-                <Chip
-                  key={option.value}
-                  label={control.key === 'duration' ? `${option.label}s` : option.label}
-                  active={current === option.value}
-                  onPress={() => onChange({ ...draft, [draftKey]: control.key === 'duration' ? Number(option.value) : option.value } as CreationDraft)}
+              {control.key === 'aspectRatio' ? (
+                <AspectRatioOptions
+                  options={options}
+                  value={current}
+                  accent={draft.tool}
+                  onChange={(value) => onChange({ ...draft, [draftKey]: value } as CreationDraft)}
                 />
-              ))}
+              ) : (
+                <ParameterChoiceOptions
+                  controlKey={control.key}
+                  controlLabel={control.label}
+                  options={options.map((option) => ({
+                    ...option,
+                    label: control.key === 'duration' ? `${option.label}s` : option.label,
+                  }))}
+                  value={current}
+                  accent={draft.tool}
+                  onChange={(value) => onChange({ ...draft, [draftKey]: control.key === 'duration' ? Number(value) : value } as CreationDraft)}
+                />
+              )}
             </OptionRow>
           );
         }
@@ -1511,9 +3891,16 @@ function CatalogEssentialControls({
           const current = typeof draftRecord[draftKey] === 'number' ? draftRecord[draftKey] as number : control.defaultValue;
           return (
             <OptionRow key={control.key} title={control.label}>
-              <Chip label="-" active={false} onPress={() => onChange({ ...draft, [draftKey]: Math.max(control.min, current - control.step) } as CreationDraft)} />
-              <Chip label={`${current}${control.unit === 'seconds' ? 's' : ''}`} active onPress={() => undefined} />
-              <Chip label="+" active={false} onPress={() => onChange({ ...draft, [draftKey]: Math.min(control.max, current + control.step) } as CreationDraft)} />
+              <ParameterStepper
+                controlKey={control.key}
+                controlLabel={control.label}
+                value={`${current}${control.unit === 'seconds' ? 's' : ''}`}
+                accent={draft.tool}
+                decrementDisabled={current <= control.min}
+                incrementDisabled={current >= control.max}
+                onDecrement={() => onChange({ ...draft, [draftKey]: Math.max(control.min, current - control.step) } as CreationDraft)}
+                onIncrement={() => onChange({ ...draft, [draftKey]: Math.min(control.max, current + control.step) } as CreationDraft)}
+              />
             </OptionRow>
           );
         }
@@ -1741,7 +4128,7 @@ function CreationAdvanced({
           title="Prepared voice IDs"
           accessibilityLabel="Gemini Omni voice ID"
           placeholder="Paste prepared voice ID"
-          items={draft.preparedAudioIds}
+          items={Array.isArray(draft.preparedAudioIds) ? draft.preparedAudioIds : []}
           max={model.inputs.preparedAudioReferences.max}
           onChange={(items) => onVideoChange((current) => ({ ...current, preparedAudioIds: items }))}
         />
@@ -1751,7 +4138,7 @@ function CreationAdvanced({
           title="Prepared character IDs"
           accessibilityLabel="Gemini Omni character ID"
           placeholder="Paste prepared character ID"
-          items={draft.characterIds}
+          items={Array.isArray(draft.characterIds) ? draft.characterIds : []}
           max={model.inputs.characterReferences.max}
           onChange={(items) => onVideoChange((current) => ({ ...current, characterIds: items }))}
         />
@@ -1843,12 +4230,15 @@ function PreparedReferenceIds({
   );
 }
 
-function CatalogAdvancedControls({ model, draft, onChange }: {
+function CatalogAdvancedControls({ model, draft, onChange, hiddenControlKeys = [] }: {
   model: ReturnType<typeof getCatalogModels>[number];
   draft: CreationDraft;
   onChange: (draft: CreationDraft) => void;
+  hiddenControlKeys?: readonly string[];
 }) {
-  const controls = model.controls.filter((control) => !['aspectRatio', 'resolution', 'duration'].includes(control.key));
+  const controls = model.controls.filter((control) => (
+    !['aspectRatio', 'resolution', 'duration'].includes(control.key) && !hiddenControlKeys.includes(control.key)
+  ));
   const draftRecord = draft as unknown as Record<string, unknown>;
   return (
     <>
@@ -1859,11 +4249,24 @@ function CatalogAdvancedControls({ model, draft, onChange }: {
         }
         if (control.type === 'choice') {
           const current = String(draftRecord[key] ?? control.defaultValue);
+          if (control.key === 'outputFormat' && control.options.length <= 1) {
+            const selectedOption = control.options.find((option) => option.value === current) ?? control.options[0];
+            return (
+              <OptionRow key={control.key} title={control.label}>
+                <ReadOnlyParameterValue value={(selectedOption?.label ?? current).toUpperCase()} />
+              </OptionRow>
+            );
+          }
           return (
             <OptionRow key={control.key} title={control.label}>
-              {control.options.map((option) => (
-                <Chip key={option.value} label={option.label} active={current === option.value} onPress={() => onChange({ ...draft, [key]: option.value } as CreationDraft)} />
-              ))}
+              <ParameterChoiceOptions
+                controlKey={control.key}
+                controlLabel={control.label}
+                options={control.options}
+                value={current}
+                accent={draft.tool}
+                onChange={(value) => onChange({ ...draft, [key]: value } as CreationDraft)}
+              />
             </OptionRow>
           );
         }
@@ -2214,13 +4617,226 @@ function OptionRow({ title, children }: { title: string; children: React.ReactNo
   );
 }
 
-function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+function aspectRatioPreviewSize(value: string) {
+  const [widthValue, heightValue] = value.split(':').map(Number);
+  if (!Number.isFinite(widthValue) || !Number.isFinite(heightValue) || widthValue <= 0 || heightValue <= 0) return null;
+  const maximum = 20;
+  const minimum = 6;
+  if (widthValue >= heightValue) {
+    return { width: maximum, height: Math.max(minimum, maximum * (heightValue / widthValue)) };
+  }
+  return { width: Math.max(minimum, maximum * (widthValue / heightValue)), height: maximum };
+}
+
+function parameterChoiceWidth(options: Array<{ label: string }>) {
+  if (options.length <= 1) return '100%';
+  if (options.length === 2 || options.some((option) => option.label.length > 8)) return '48.5%';
+  if (options.length === 3) return '31%';
+  return '23%';
+}
+
+function ParameterChoiceOptions({
+  controlKey,
+  controlLabel,
+  options,
+  value,
+  accent,
+  onChange,
+}: {
+  controlKey: string;
+  controlLabel: string;
+  options: Array<{ value: string; label: string }>;
+  value: string;
+  accent: ToolAccent;
+  onChange: (value: string) => void;
+}) {
+  const color = accentColor(accent);
+  const width = parameterChoiceWidth(options);
+  return (
+    <View testID={`parameter-choice-options-${controlKey}`} style={{ width: '100%', flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <Pressable
+            key={option.value}
+            testID={`parameter-choice-${controlKey}-${option.value}`}
+            accessibilityRole="button"
+            accessibilityLabel={option.label}
+            accessibilityHint={`Selects ${option.label} for ${controlLabel.toLowerCase()}`}
+            accessibilityState={{ selected: active }}
+            onPress={() => onChange(option.value)}
+            style={({ pressed }) => ({
+              width,
+              minWidth: options.length <= 2 ? 120 : 68,
+              minHeight: 48,
+              borderRadius: 14,
+              borderWidth: 1,
+              borderColor: active ? `${color}8a` : appTheme.colors.border,
+              backgroundColor: active ? `${color}20` : pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong,
+              paddingHorizontal: 10,
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: pressed ? appTheme.opacity.pressed : 1,
+            })}
+          >
+            <Text numberOfLines={2} style={{ color: active ? appTheme.colors.text : appTheme.colors.muted, fontSize: 12, lineHeight: 16, fontWeight: active ? '800' : '700', textAlign: 'center' }}>
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function ParameterStepper({
+  controlKey,
+  controlLabel,
+  value,
+  accent,
+  decrementDisabled,
+  incrementDisabled,
+  onDecrement,
+  onIncrement,
+}: {
+  controlKey: string;
+  controlLabel: string;
+  value: string;
+  accent: ToolAccent;
+  decrementDisabled: boolean;
+  incrementDisabled: boolean;
+  onDecrement: () => void;
+  onIncrement: () => void;
+}) {
+  const color = accentColor(accent);
+  const buttonStyle = (disabled: boolean, pressed: boolean) => ({
+    width: '31%' as const,
+    minWidth: 68,
+    minHeight: 48,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: appTheme.colors.border,
+    backgroundColor: pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+  });
+  return (
+    <View testID={`parameter-stepper-${controlKey}`} style={{ width: '100%', flexDirection: 'row', gap: 8 }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Decrease ${controlLabel.toLowerCase()}`}
+        disabled={decrementDisabled}
+        onPress={onDecrement}
+        style={({ pressed }) => buttonStyle(decrementDisabled, pressed)}
+      >
+        <Text style={{ color: appTheme.colors.muted, fontSize: 18, fontWeight: '700' }}>−</Text>
+      </Pressable>
+      <View
+        accessibilityRole="text"
+        accessibilityLabel={`${controlLabel}, ${value}`}
+        style={{ width: '31%', minWidth: 68, minHeight: 48, borderRadius: 14, borderWidth: 1, borderColor: `${color}8a`, backgroundColor: `${color}20`, alignItems: 'center', justifyContent: 'center' }}
+      >
+        <Text style={{ color: appTheme.colors.text, fontSize: 12, fontWeight: '800' }}>{value}</Text>
+      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Increase ${controlLabel.toLowerCase()}`}
+        disabled={incrementDisabled}
+        onPress={onIncrement}
+        style={({ pressed }) => buttonStyle(incrementDisabled, pressed)}
+      >
+        <Text style={{ color: appTheme.colors.muted, fontSize: 18, fontWeight: '700' }}>+</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function AspectRatioOptions({
+  options,
+  value,
+  accent,
+  onChange,
+}: {
+  options: Array<{ value: string; label: string }>;
+  value: string;
+  accent: ToolAccent;
+  onChange: (value: string) => void;
+}) {
+  const color = accentColor(accent);
+  return (
+    <View testID="aspect-ratio-options" style={{ width: '100%', flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+      {options.map((option) => {
+        const active = option.value === value;
+        const previewSize = option.value.toLowerCase() === 'auto' ? null : aspectRatioPreviewSize(option.value);
+        return (
+          <Pressable
+            key={option.value}
+            accessibilityRole="button"
+            accessibilityLabel={option.label}
+            accessibilityHint={previewSize ? `Uses a ${option.label} aspect ratio` : 'Lets the model choose the aspect ratio'}
+            accessibilityState={{ selected: active }}
+            onPress={() => onChange(option.value)}
+            style={({ pressed }) => ({
+              width: '23%',
+              minWidth: 68,
+              minHeight: 48,
+              borderRadius: 14,
+              borderWidth: 1,
+              borderColor: active ? `${color}8a` : appTheme.colors.border,
+              backgroundColor: active ? `${color}20` : pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong,
+              paddingHorizontal: 6,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              opacity: pressed ? appTheme.opacity.pressed : 1,
+            })}
+          >
+            {previewSize ? (
+              <View
+                testID={`aspect-ratio-preview-${option.value}`}
+                accessible={false}
+                style={{
+                  width: previewSize.width,
+                  height: previewSize.height,
+                  borderRadius: 2,
+                  borderWidth: 1.5,
+                  borderColor: active ? color : appTheme.colors.textSecondary,
+                }}
+              />
+            ) : null}
+            <Text numberOfLines={1} style={{ color: active ? appTheme.colors.text : appTheme.colors.muted, fontSize: 11, fontWeight: active ? '800' : '700' }}>
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function ReadOnlyParameterValue({ value }: { value: string }) {
+  return (
+    <View
+      accessibilityRole="text"
+      accessibilityLabel={`${value}. Fixed for this model`}
+      testID="read-only-parameter-value"
+      style={{ width: '100%', minHeight: 48, borderRadius: 16, backgroundColor: appTheme.colors.surfaceInset, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
+    >
+      <Text style={{ color: appTheme.colors.text, fontSize: 13, fontWeight: '800' }}>{value}</Text>
+      <Text style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700' }}>Fixed for this model</Text>
+    </View>
+  );
+}
+
+function Chip({ label, active, onPress, accent = 'motion' }: { label: string; active: boolean; onPress: () => void; accent?: ToolAccent }) {
   return (
     <ChoiceChip
       label={label}
       active={active}
       onPress={onPress}
-      accent="motion"
+      accent={accent}
       compact
     />
   );
@@ -2230,13 +4846,33 @@ function ToggleRow({ title, value, onValueChange }: { title: string; value: bool
   return (
     <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
       <Text style={{ color: '#ffffff', fontSize: 15, fontWeight: '800' }}>{title}</Text>
-      <Switch
+      <Pressable
+        testID="compact-toggle-control"
+        accessibilityRole="switch"
         accessibilityLabel={title}
-        value={value}
-        onValueChange={onValueChange}
-        thumbColor={value ? '#1A0D08' : '#CAC6BD'}
-        trackColor={{ false: '#343838', true: '#FF7A59' }}
-      />
+        accessibilityHint={`Turns ${title.toLowerCase()} ${value ? 'off' : 'on'}`}
+        accessibilityState={{ checked: value }}
+        onPress={() => onValueChange(!value)}
+        style={({ pressed }) => ({
+          width: 56,
+          minHeight: 48,
+          alignItems: 'flex-end',
+          justifyContent: 'center',
+          opacity: pressed ? appTheme.opacity.pressed : 1,
+        })}
+      >
+        <Switch
+          testID="compact-toggle-visual"
+          accessible={false}
+          accessibilityElementsHidden
+          importantForAccessibility="no"
+          pointerEvents="none"
+          value={value}
+          style={{ transform: [{ scale: 0.76 }] }}
+          thumbColor={value ? '#1A0D08' : '#CAC6BD'}
+          trackColor={{ false: '#343838', true: '#FF7A59' }}
+        />
+      </Pressable>
     </View>
   );
 }
@@ -2495,13 +5131,15 @@ function ReferencePreviewModal({ media, onClose }: { media: MediaDraft | null; o
   );
 }
 
-function ReferenceMediaPreview({ media }: { media: MediaDraft }) {
+function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: number }) {
+  const width = size ?? 58;
+  const height = size ?? 72;
   if (media.kind === 'audio') {
     return (
       <View
         style={{
-          width: 58,
-          height: 72,
+          width,
+          height,
           borderRadius: 16,
           borderCurve: 'continuous',
           borderWidth: 1,
@@ -2523,21 +5161,31 @@ function ReferenceMediaPreview({ media }: { media: MediaDraft }) {
   return (
     <View
       style={{
-        width: 58,
-        height: 72,
+        width,
+        height,
         borderRadius: 16,
         borderCurve: 'continuous',
         overflow: 'hidden',
-        backgroundColor: '#050506',
+        backgroundColor: appTheme.colors.surfaceStrong,
       }}
     >
-      <MediaPreview
-        url={media.url}
-        kind={kind}
-        height={72}
-        radius={16}
-        nativeControls={false}
-      />
+      {kind === 'image' ? (
+        <StableMediaImage
+          url={media.url}
+          cacheKey={`reference-thumbnail:${media.id}:${media.url}`}
+          contentFit="cover"
+          transition={80}
+          style={{ width: '100%', height: '100%' }}
+        />
+      ) : (
+        <MediaPreview
+          url={media.url}
+          kind={kind}
+          height={height}
+          radius={16}
+          nativeControls={false}
+        />
+      )}
       {kind === 'video' ? (
         <View
           pointerEvents="none"

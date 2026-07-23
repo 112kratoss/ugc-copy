@@ -10,6 +10,38 @@ type AppleFullName = {
   familyName?: string | null;
 };
 
+async function requestNativeAppleCredential() {
+  const isAvailable = await AppleAuthentication.isAvailableAsync();
+  if (!isAvailable) {
+    throw new Error('Apple sign-in is not available on this device.');
+  }
+
+  const rawNonce = `${Crypto.randomUUID()}${Crypto.randomUUID()}`.replace(/-/g, '');
+  const hashedNonce = await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    rawNonce,
+  );
+
+  const credential = await AppleAuthentication.signInAsync({
+    requestedScopes: [
+      AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+      AppleAuthentication.AppleAuthenticationScope.EMAIL,
+    ],
+    nonce: hashedNonce,
+  });
+
+  const identityToken = credential.identityToken;
+  if (!identityToken) {
+    throw new Error('Apple did not return an identity token.');
+  }
+  const authorizationCode = credential.authorizationCode;
+  if (!authorizationCode) {
+    throw new Error('Apple did not return an authorization code.');
+  }
+
+  return { authorizationCode, credential, identityToken, rawNonce };
+}
+
 function cleanNamePart(value: string | null | undefined) {
   return value?.trim() || null;
 }
@@ -45,32 +77,11 @@ export function isAppleAuthCanceled(error: unknown) {
 }
 
 export async function signInWithNativeApple(supabase: { auth: AppleAuthClient }) {
-  const isAvailable = await AppleAuthentication.isAvailableAsync();
-  if (!isAvailable) {
-    throw new Error('Apple sign-in is not available on this device.');
-  }
-
-  const rawNonce = `${Crypto.randomUUID()}${Crypto.randomUUID()}`.replace(/-/g, '');
-  const hashedNonce = await Crypto.digestStringAsync(
-    Crypto.CryptoDigestAlgorithm.SHA256,
-    rawNonce,
-  );
-
-  const credential = await AppleAuthentication.signInAsync({
-    requestedScopes: [
-      AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
-      AppleAuthentication.AppleAuthenticationScope.EMAIL,
-    ],
-    nonce: hashedNonce,
-  });
-
-  if (!credential.identityToken) {
-    throw new Error('Apple did not return an identity token.');
-  }
+  const { authorizationCode, credential, identityToken, rawNonce } = await requestNativeAppleCredential();
 
   const { error } = await supabase.auth.signInWithIdToken({
     provider: 'apple',
-    token: credential.identityToken,
+    token: identityToken,
     nonce: rawNonce,
   });
 
@@ -85,4 +96,22 @@ export async function signInWithNativeApple(supabase: { auth: AppleAuthClient })
       console.warn('Failed to save Apple profile name', updateError);
     }
   }
+
+  return {
+    authorizationCode,
+    appleUser: credential.user,
+  };
+}
+
+export async function authorizeNativeAppleAccountDeletion() {
+  const { authorizationCode, credential } = await requestNativeAppleCredential();
+
+  // The backend exchanges this one-time code directly with Apple, validates
+  // that Apple's subject belongs to the signed-in Supabase user, and revokes
+  // the resulting Apple token before deleting the account. Keeping that proof
+  // server-side avoids a redundant Supabase sign-in during account deletion.
+  return {
+    authorizationCode,
+    appleUser: credential.user,
+  };
 }

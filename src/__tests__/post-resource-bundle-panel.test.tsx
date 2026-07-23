@@ -196,6 +196,75 @@ const sectionedPreview: PostResourceBundleLockedPreview = {
   updatedAt: '2026-04-25T10:00:00.000Z',
 };
 
+const explicitCardPreview: PostResourceBundleLockedPreview = {
+  resourceKinds: ['files', 'remix'],
+  attachmentPreviews: [],
+  itemCounts: {
+    reference_video: 2,
+    remix_link: 1,
+  },
+  sectionCount: 1,
+  sectionPreviews: [{
+    id: 'hook-video',
+    title: 'Private creator organization title',
+    kind: 'scene',
+    description: 'Private creator organization description',
+  }],
+  cardPreviews: [{
+    sectionId: 'hook-video',
+    publicTitle: 'Hook video references',
+    resourceType: 'reference_video',
+    scope: { kind: 'media', mediaKeys: ['media-1', 'media-2'] },
+    itemCount: 2,
+    hasRemix: true,
+  }],
+  itemPreviews: [{
+    type: 'reference_video',
+    title: 'private-client-filename.mov',
+    role: 'style_reference',
+    sectionId: 'hook-video',
+    remixUse: 'reference_only',
+  }],
+  hasPrompt: false,
+  hasNotes: false,
+  hasWorkflow: false,
+  hasRemix: true,
+  updatedAt: '2026-04-25T10:00:00.000Z',
+};
+
+const multiTypeSectionedResources = {
+  sections: normalizePostResourceSections([
+    {
+      id: 'hero-output',
+      title: 'Hero output',
+      kind: 'scene',
+      description: 'Resources for the hero output',
+    },
+  ]),
+  items: normalizePostResourceItems([
+    {
+      type: 'reference_video',
+      title: 'Motion reference',
+      externalUrl: 'https://example.com/motion-reference.mp4',
+      sectionId: 'hero-output',
+      scope: { kind: 'media', mediaKeys: ['media-1'] },
+    },
+    {
+      type: 'remix_link',
+      title: 'Open remix template',
+      externalUrl: 'https://example.com/remix',
+      sectionId: 'hero-output',
+      scope: { kind: 'media', mediaKeys: ['media-1', 'media-2'] },
+    },
+    {
+      type: 'reference_audio',
+      title: 'Shared voice reference',
+      externalUrl: 'https://example.com/voice-reference.mp3',
+      scope: { kind: 'all' },
+    },
+  ]),
+};
+
 const publicRecipeItems = normalizePostResourceItems([
   {
     type: 'prompt',
@@ -286,7 +355,7 @@ describe('PostResourceBundlePanel', () => {
     expect(screen.getByText('Public recipe prompt')).toBeInTheDocument();
     expect(screen.getByText('Public recipe notes')).toBeInTheDocument();
     expect(screen.getByText('Image input')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /get free recipe/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /get resources — free/i })).toBeNull();
     expect(screen.queryByText(/buyer trust/i)).toBeNull();
     expect(screen.queryByText(/digital recipes are final sale/i)).toBeNull();
   });
@@ -294,7 +363,7 @@ describe('PostResourceBundlePanel', () => {
   it('offers one-click access for a gated free recipe without checkout choices', () => {
     renderPanel();
 
-    expect(screen.getByRole('button', { name: /get free recipe/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /get resources — free/i })).toBeInTheDocument();
     expect(screen.getByText(/get the full recipe free with one click/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /pay .* with razorpay/i })).toBeNull();
   });
@@ -315,7 +384,7 @@ describe('PostResourceBundlePanel', () => {
     expect(screen.getByText(/owner preview\. people add this recipe before seeing it/i)).toBeInTheDocument();
   });
 
-  it('shows buyer trust terms without exposing locked content', () => {
+  it('keeps locked content private without introducing license terms yet', () => {
     renderPanel({
       isFree: false,
       priceLabel: '₹189',
@@ -326,8 +395,8 @@ describe('PostResourceBundlePanel', () => {
     expect(screen.getByRole('button', { name: /pay ₹189 with razorpay/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeInTheDocument();
     expect(screen.getByText(/credit cost: 900 credits/i)).toBeInTheDocument();
-    expect(screen.getByText(/digital recipes are final sale/i)).toBeInTheDocument();
-    expect(screen.getByText(/do not resell, redistribute, or claim the raw bundle as your own/i)).toBeInTheDocument();
+    expect(screen.queryByText(/digital recipes are final sale/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/do not resell, redistribute, or claim the raw bundle as your own/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/secret prompt/i)).not.toBeInTheDocument();
   });
 
@@ -374,6 +443,90 @@ describe('PostResourceBundlePanel', () => {
     expect(screen.getByText('Hook')).toBeInTheDocument();
     expect(screen.getByText('Hook prompt')).toBeInTheDocument();
     expect(screen.getByText('Global style reference')).toBeInTheDocument();
+  });
+
+  it('renders only explicit public resource cards while a bundle is locked', () => {
+    renderPanel({
+      resourceKinds: ['files', 'remix'],
+      lockedPreview: explicitCardPreview,
+    });
+
+    expect(screen.getByText('Hook video references')).toBeInTheDocument();
+    expect(screen.getByText('reference videos')).toBeInTheDocument();
+    expect(screen.getByText('Applies to 2 selected outputs')).toBeInTheDocument();
+    expect(screen.getByText('2 items')).toBeInTheDocument();
+    expect(screen.getByText('Remix included')).toBeInTheDocument();
+    expect(screen.queryByText('Private creator organization title')).not.toBeInTheDocument();
+    expect(screen.queryByText('Private creator organization description')).not.toBeInTheDocument();
+    expect(screen.queryByText('private-client-filename.mov')).not.toBeInTheDocument();
+  });
+
+  it('shows an explicit public card even for an otherwise prompt-only bundle', () => {
+    renderPanel({
+      lockedPreview: {
+        ...promptOnlyPreview,
+        cardPreviews: [{
+          sectionId: 'prompt-card',
+          publicTitle: 'Product photo prompt',
+          resourceType: 'prompt',
+          scope: { kind: 'all' },
+          itemCount: 1,
+          hasRemix: false,
+        }],
+        itemPreviews: [{
+          ...promptOnlyPreview.itemPreviews[0],
+          title: 'Private working prompt title',
+        }],
+      },
+    });
+
+    expect(screen.getByText('Product photo prompt')).toBeInTheDocument();
+    expect(screen.getByText('Applies to all outputs')).toBeInTheDocument();
+    expect(screen.queryByText('Private working prompt title')).not.toBeInTheDocument();
+  });
+
+  it('renders every supported grouped resource type with understandable output scopes', () => {
+    renderPanel({
+      resourceKinds: ['files', 'remix'],
+      lockedPreview: explicitCardPreview,
+      initialResources: {
+        promptText: null,
+        notesMarkdown: null,
+        workflowShareUrl: null,
+        attachments: [],
+        allowRemix: true,
+        sections: multiTypeSectionedResources.sections,
+        items: multiTypeSectionedResources.items,
+      },
+      viewerCanAccess: true,
+    });
+
+    expect(screen.getByText('Hero output')).toBeInTheDocument();
+    expect(screen.getByText('Full post resources')).toBeInTheDocument();
+    expect(screen.getByText('Reference video')).toBeInTheDocument();
+    expect(screen.getByText('Reference audio')).toBeInTheDocument();
+    expect(screen.getByText('Remix link')).toBeInTheDocument();
+    expect(screen.getByText('Motion reference')).toBeInTheDocument();
+    expect(screen.getByText('Shared voice reference')).toBeInTheDocument();
+    expect(screen.getByText('Open remix template')).toBeInTheDocument();
+    expect(screen.getByText('Applies to 1 selected output')).toBeInTheDocument();
+    expect(screen.getByText('Applies to 2 selected outputs')).toBeInTheDocument();
+    expect(screen.getByText('Applies to all outputs')).toBeInTheDocument();
+  });
+
+  it('keeps paid packages below 100 tokens credit-only on web', () => {
+    renderPanel({
+      isFree: false,
+      priceLabel: '$0.50',
+      priceUsdCents: 50,
+      priceNote: 'Cash conversion note',
+    });
+
+    expect(screen.queryByRole('button', { name: /pay .* with razorpay/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /use 50 credits/i })).toBeInTheDocument();
+    expect(screen.getByText('Credit-only purchase')).toBeInTheDocument();
+    expect(screen.getByText(/unlock the full recipe for 50 credits/i)).toBeInTheDocument();
+    expect(screen.queryByText('Cash conversion note')).not.toBeInTheDocument();
   });
 
   it('unlocks paid post resources with credits and refreshes the revealed bundle', async () => {

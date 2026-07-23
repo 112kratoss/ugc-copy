@@ -24,6 +24,10 @@ vi.mock('@/lib/mobile-notifications', () => ({
     notifyPostSocialActivityMock(client, payload),
 }));
 
+vi.mock('@/lib/moderation-service', () => ({
+  isUserRelationshipBlocked: vi.fn(async () => false),
+}));
+
 vi.mock('@/lib/server-helpers', () => ({
   createUserClient: (request: Request) => createUserClientMock(request),
   createServiceClient: () => createServiceClientMock(),

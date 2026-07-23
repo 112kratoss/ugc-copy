@@ -533,8 +533,8 @@ describe('creator profile data loader', () => {
     expect(secondPage?.stats).toMatchObject({ publicCreations: 5, totalSaves: 15 });
   });
 
-  it('hides posts that moderation has marked hidden', async () => {
-    postsState[0].review_status = 'hidden';
+  it.each(['flagged', 'hidden'] as const)('hides posts that moderation has marked %s', async (reviewStatus) => {
+    postsState[0].review_status = reviewStatus;
 
     const { getCreatorProfilePageData } = await import('@/lib/creator-profile');
     const data = await getCreatorProfilePageData('Creator-Name');

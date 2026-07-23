@@ -469,6 +469,13 @@ export async function createMobilePurchaseIntent({
   entitlementType: Exclude<MobilePurchaseEntitlementType, 'credits'>;
   resourceId: string;
 }) {
+  if (entitlementType === 'post_resource_unlock') {
+    throw new MobileCommerceError(
+      'Post resources are credit-only on mobile. Use the credit unlock option.',
+      400,
+    );
+  }
+
   const { data, error } = await adminSupabase.rpc('create_mobile_purchase_intent', {
     p_user_id: userId,
     p_entitlement_type: entitlementType,

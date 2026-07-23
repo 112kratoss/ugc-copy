@@ -49,6 +49,10 @@ export default function CreateToolScreen() {
       initialPrompt={initialPrompt}
       remixSource={remixSource}
       guided={guided}
+      onClose={() => {
+        if (router.canGoBack()) router.back();
+        else router.replace('/(tabs)' as never);
+      }}
     />
   );
 }

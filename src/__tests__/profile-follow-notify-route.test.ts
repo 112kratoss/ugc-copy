@@ -51,6 +51,10 @@ vi.mock('@/lib/mobile-notifications', () => ({
   notifyCreatorFollowed: (...args: unknown[]) => notifyCreatorFollowedMock(...args),
 }));
 
+vi.mock('@/lib/moderation-service', () => ({
+  isUserRelationshipBlocked: vi.fn(async () => false),
+}));
+
 function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
   expect(response.headers.get('Cache-Control')).toBe('private, no-store');
   expect(response.headers.get('x-request-id')).toBe(requestId);

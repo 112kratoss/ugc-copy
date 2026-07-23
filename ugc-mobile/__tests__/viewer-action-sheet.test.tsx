@@ -41,6 +41,10 @@ const authState = vi.hoisted(() => ({
     restoreGeneration: vi.fn(),
     saveShowcasePost: vi.fn(),
     updatePost: vi.fn(),
+    reportPost: vi.fn(),
+    reportUser: vi.fn(),
+    reportGeneration: vi.fn(),
+    blockUser: vi.fn(),
   },
 }));
 
@@ -140,6 +144,10 @@ describe('ViewerActionSheet permanent delete', () => {
     queryClientState.setQueryData.mockClear();
     queryClientState.setQueriesData.mockClear();
     authState.api.deletePost.mockReset();
+    authState.api.reportPost.mockReset();
+    authState.api.reportUser.mockReset();
+    authState.api.reportGeneration.mockReset();
+    authState.api.blockUser.mockReset();
   });
 
   it('confirms and permanently deletes a manual owner post', async () => {
@@ -307,5 +315,81 @@ describe('ViewerActionSheet permanent delete', () => {
 
     renderer.act(() => findPressableByAccessibilityLabel(tree!.root, 'Hide this creator').props.onPress());
     expect(onHideCreator).toHaveBeenCalledOnce();
+  });
+
+  it('exposes content, user, and block safety actions for another creator post', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(
+        <ViewerActionSheet
+          item={manualOwnerPostItem({
+            sourceType: 'showcase',
+            showcasePostId: 'post-123',
+            creatorId: 'creator-2',
+            creatorLabel: '@unsafe',
+            availableActions: ['share'],
+          })}
+          onClose={vi.fn()}
+          onDetails={vi.fn()}
+          onRecreate={vi.fn()}
+          onShare={vi.fn()}
+          onSourceRefresh={vi.fn()}
+          visible
+        />
+      );
+    });
+
+    renderer.act(() => findPressableByAccessibilityLabel(tree!.root, 'Report content').props.onPress());
+    expect(alertState.alert).toHaveBeenLastCalledWith(
+      'Report content?',
+      expect.stringContaining('moderation team'),
+      expect.any(Array)
+    );
+    renderer.act(() => findPressableByAccessibilityLabel(tree!.root, 'Report user').props.onPress());
+    expect(alertState.alert).toHaveBeenLastCalledWith(
+      'Report user?',
+      expect.stringContaining('@unsafe'),
+      expect.any(Array)
+    );
+    renderer.act(() => findPressableByAccessibilityLabel(tree!.root, 'Block user').props.onPress());
+    expect(alertState.alert).toHaveBeenLastCalledWith(
+      'Block @unsafe?',
+      expect.stringContaining('follow'),
+      expect.any(Array)
+    );
+  });
+
+  it('submits offensive AI output from the generated-media viewer', async () => {
+    authState.api.reportGeneration.mockResolvedValue({ success: true });
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(
+        <ViewerActionSheet
+          item={manualOwnerPostItem({
+            sourceType: 'generation',
+            generationId: 'generation-1',
+            showcasePostId: null,
+            availableActions: ['share'],
+          })}
+          onClose={vi.fn()}
+          onDetails={vi.fn()}
+          onRecreate={vi.fn()}
+          onShare={vi.fn()}
+          onSourceRefresh={vi.fn()}
+          visible
+        />
+      );
+    });
+
+    renderer.act(() => findPressableByAccessibilityLabel(tree!.root, 'Report offensive AI output').props.onPress());
+    await renderer.act(async () => {
+      await getAlertAction('Report AI output').onPress?.();
+    });
+
+    expect(authState.api.reportGeneration).toHaveBeenCalledWith('generation-1', {
+      reason: 'offensive_ai_output',
+      sourceSurface: 'generation-viewer',
+      details: 'Reported from the mobile generated-media viewer.',
+    });
   });
 });

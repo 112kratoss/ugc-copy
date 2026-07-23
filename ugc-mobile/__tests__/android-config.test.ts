@@ -8,9 +8,9 @@ import {
   setManifestCleartextPlaceholder,
 } from '../plugins/withAndroidLocalCleartextDebug';
 import {
-  setReleaseOptimizationProperties,
-  setReleaseProguardOptimization,
-} from '../plugins/withAndroidReleaseOptimization';
+  setReleaseSafetyProperties,
+  setReleaseProguardSafety,
+} from '../plugins/withAndroidReleaseSafety';
 import {
   DEVELOPMENT_ONLY_NATIVE_MODULES,
   setAndroidBuildProfileAutolinking,
@@ -27,31 +27,32 @@ describe('Android native network config', () => {
     expect(appJson.expo.plugins).toContain('./plugins/withAndroidLocalCleartextDebug');
   });
 
-  it('enables R8 code and resource shrinking for regenerated release builds', () => {
+  it('disables unsafe R8 optimization for regenerated release builds', () => {
     const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
-    const properties = setReleaseOptimizationProperties([
-      { type: 'property', key: 'android.enableMinifyInReleaseBuilds', value: 'false' },
+    const properties = setReleaseSafetyProperties([
+      { type: 'property', key: 'android.enableMinifyInReleaseBuilds', value: 'true' },
     ]);
 
-    expect(appJson.expo.plugins).toContain('./plugins/withAndroidReleaseOptimization');
+    expect(appJson.expo.plugins).toContain('./plugins/withAndroidReleaseSafety');
+    expect(appJson.expo.plugins).not.toContain('./plugins/withAndroidReleaseOptimization');
     expect(properties).toContainEqual({
       type: 'property',
       key: 'android.enableMinifyInReleaseBuilds',
-      value: 'true',
+      value: 'false',
     });
     expect(properties).toContainEqual({
       type: 'property',
       key: 'android.enableShrinkResourcesInReleaseBuilds',
-      value: 'true',
+      value: 'false',
     });
 
-    const generatedBuildGradle = `release {
-      proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+    const optimizedBuildGradle = `release {
+      proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
     }`;
-    const optimizedBuildGradle = setReleaseProguardOptimization(generatedBuildGradle);
-    expect(optimizedBuildGradle).toContain('getDefaultProguardFile("proguard-android-optimize.txt")');
-    expect(optimizedBuildGradle).not.toContain('getDefaultProguardFile("proguard-android.txt")');
-    expect(setReleaseProguardOptimization(optimizedBuildGradle)).toBe(optimizedBuildGradle);
+    const safeBuildGradle = setReleaseProguardSafety(optimizedBuildGradle);
+    expect(safeBuildGradle).toContain('getDefaultProguardFile("proguard-android.txt")');
+    expect(safeBuildGradle).not.toContain('getDefaultProguardFile("proguard-android-optimize.txt")');
+    expect(setReleaseProguardSafety(safeBuildGradle)).toBe(safeBuildGradle);
   });
 
   it('excludes RevenueCat Amazon billing code from the Google Play-only binary', () => {

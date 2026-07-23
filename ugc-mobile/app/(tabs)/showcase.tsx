@@ -368,6 +368,112 @@ export default function ShowcaseScreen() {
       });
   };
 
+  const requireModerationSignIn = () => {
+    if (user) return true;
+    setFeedbackItem(null);
+    router.push({
+      pathname: '/auth',
+      params: { returnTo: '/(tabs)/showcase' },
+    } as never);
+    return false;
+  };
+
+  const reportFeedbackContent = () => {
+    const item = feedbackItem;
+    if (!item || !requireModerationSignIn()) return;
+    setFeedbackItem(null);
+    Alert.alert(
+      'Report content?',
+      'Magicbooklet will send this post to the moderation team for a safety review.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Report content',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.reportPost(item.id, {
+                reason: 'unsafe_content',
+                details: 'Reported from the mobile Showcase.',
+              });
+              queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
+                { queryKey: viewerFeedQueryKey },
+                (current) => removeShowcaseFeedItemsFromInfiniteData(current, { postId: item.id })
+              );
+              void AccessibilityInfo.announceForAccessibility('Content reported and removed from your Showcase.');
+            } catch (error) {
+              Alert.alert('Could not report content', error instanceof Error ? error.message : 'Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const reportFeedbackUser = () => {
+    const item = feedbackItem;
+    if (!item?.creator.id || item.creator.id === user?.id || !requireModerationSignIn()) return;
+    setFeedbackItem(null);
+    Alert.alert(
+      'Report user?',
+      `Magicbooklet will review ${formatCreatorLabel(item.creator.username || item.creator.name)} for unsafe or abusive behavior.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Report user',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.reportUser(item.creator.id!, {
+                reason: 'unsafe_content',
+                sourceSurface: 'showcase',
+                details: `Reported from post ${item.id}.`,
+              });
+              void AccessibilityInfo.announceForAccessibility('User reported to the moderation team.');
+            } catch (error) {
+              Alert.alert('Could not report user', error instanceof Error ? error.message : 'Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const blockFeedbackUser = () => {
+    const item = feedbackItem;
+    if (!item?.creator.id || item.creator.id === user?.id || !requireModerationSignIn()) return;
+    setFeedbackItem(null);
+    const creatorId = item.creator.id;
+    const creatorLabel = formatCreatorLabel(item.creator.username || item.creator.name);
+    Alert.alert(
+      `Block ${creatorLabel}?`,
+      'Their posts will be hidden, and neither of you will be able to follow the other.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Block user',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.blockUser(creatorId);
+              queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
+                { queryKey: viewerFeedQueryKey },
+                (current) => removeShowcaseFeedItemsFromInfiniteData(current, { creatorId })
+              );
+              await Promise.all([
+                queryClient.invalidateQueries({ queryKey: ['creator-profile'] }),
+                queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] }),
+              ]);
+              void AccessibilityInfo.announceForAccessibility(`${creatorLabel} blocked.`);
+            } catch (error) {
+              Alert.alert('Could not block user', error instanceof Error ? error.message : 'Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const openCreator = (item: ShowcaseFeedItem) => {
     const username = item.creator.username?.trim();
     if (!username) return;
@@ -505,6 +611,9 @@ export default function ShowcaseScreen() {
           onClose={() => setFeedbackItem(null)}
           onHideCreator={() => applyFeedFeedback('hide_creator')}
           onNotInterested={() => applyFeedFeedback('not_interested')}
+          onBlockUser={feedbackItem?.creator.id ? blockFeedbackUser : undefined}
+          onReportContent={reportFeedbackContent}
+          onReportUser={feedbackItem?.creator.id ? reportFeedbackUser : undefined}
           postTitle={feedbackItem?.title || feedbackItem?.prompt || 'This post'}
           sessionOnly={!user}
           visible={Boolean(feedbackItem)}

@@ -34,6 +34,14 @@ function currentControlValue(draft: CreationDraft, control: CatalogControl): Cat
   return typeof value === 'number' ? value : undefined;
 }
 
+function preparedAudioIds(draft: VideoCreationDraft): string[] {
+  return Array.isArray(draft.preparedAudioIds) ? draft.preparedAudioIds : [];
+}
+
+function characterIds(draft: VideoCreationDraft): string[] {
+  return Array.isArray(draft.characterIds) ? draft.characterIds : [];
+}
+
 function normalizedControlValue(draft: CreationDraft, control: CatalogControl): CatalogPrimitive {
   const current = currentControlValue(draft, control);
   if (control.type === 'choice') {
@@ -57,6 +65,31 @@ function writeControlValues(draft: CreationDraft, model: GenerationModelDescript
   return values;
 }
 
+function hasReusableVideoInputs(model: GenerationModelDescriptor) {
+  const reusableInputs = [
+    model.inputs.imageReferences,
+    model.inputs.videoReferences,
+    model.inputs.audioReferences,
+    model.inputs.preparedAudioReferences,
+    model.inputs.characterReferences,
+  ];
+  return reusableInputs.some((input) => Boolean(input && input.max > 0));
+}
+
+function normalizedVideoReferenceMode(
+  draft: VideoCreationDraft,
+  model: GenerationModelDescriptor,
+  isMultiShot: boolean
+): VideoCreationDraft['referenceMode'] {
+  if (isMultiShot) return 'frames';
+
+  const supportsFrames = model.inputs.startFrame || model.inputs.endFrame;
+  const supportsReusableReferences = hasReusableVideoInputs(model);
+  if (draft.referenceMode === 'elements' && supportsReusableReferences) return 'elements';
+  if (draft.referenceMode === 'frames' && supportsFrames) return 'frames';
+  return supportsReusableReferences ? 'elements' : 'frames';
+}
+
 export function applyCatalogModelDefaults(draft: CreationDraft, model: GenerationModelDescriptor): CreationDraft {
   const values = writeControlValues(draft, model);
   if (draft.tool === 'image') {
@@ -70,12 +103,12 @@ export function applyCatalogModelDefaults(draft: CreationDraft, model: Generatio
     } as ImageCreationDraft;
   }
   if (draft.tool === 'video') {
-    const usesReusableReferences = draft.referenceMode === 'elements';
+    const isMultiShot = model.capabilities.multiShot ? Boolean(values.isMultiShot ?? draft.isMultiShot) : false;
     return {
       ...draft,
       ...values,
       model: model.id as VideoCreationDraft['model'],
-      isMultiShot: model.capabilities.multiShot ? Boolean(values.isMultiShot ?? draft.isMultiShot) : false,
+      isMultiShot,
       sound: model.capabilities.sound ? Boolean(values.sound ?? draft.sound) : false,
       fixedLens: model.capabilities.fixedLens ? Boolean(values.fixedLens ?? draft.fixedLens) : false,
       references: model.inputs.imageReferences
@@ -88,14 +121,14 @@ export function applyCatalogModelDefaults(draft: CreationDraft, model: Generatio
         ? draft.referenceAudios.slice(0, model.inputs.audioReferences.max)
         : [],
       preparedAudioIds: model.inputs.preparedAudioReferences
-        ? draft.preparedAudioIds.slice(0, model.inputs.preparedAudioReferences.max)
+        ? preparedAudioIds(draft).slice(0, model.inputs.preparedAudioReferences.max)
         : [],
       characterIds: model.inputs.characterReferences
-        ? draft.characterIds.slice(0, model.inputs.characterReferences.max)
+        ? characterIds(draft).slice(0, model.inputs.characterReferences.max)
         : [],
       startFrame: model.inputs.startFrame ? draft.startFrame : null,
-      endFrame: model.inputs.endFrame ? draft.endFrame : null,
-      referenceMode: !model.inputs.startFrame && model.inputs.imageReferences ? 'elements' : draft.referenceMode,
+      endFrame: model.inputs.endFrame && !isMultiShot ? draft.endFrame : null,
+      referenceMode: normalizedVideoReferenceMode(draft, model, isMultiShot),
     } as VideoCreationDraft;
   }
   return {
@@ -108,7 +141,7 @@ export function applyCatalogModelDefaults(draft: CreationDraft, model: Generatio
 function referenceSummary(draft: CreationDraft) {
   if (draft.tool === 'image') return draft.references.length === 0 ? 'No references' : `${draft.references.length} image reference${draft.references.length === 1 ? '' : 's'}`;
   if (draft.tool === 'video') {
-    const count = draft.references.length + draft.referenceVideos.length + draft.referenceAudios.length + draft.preparedAudioIds.length + draft.characterIds.length + (draft.startFrame ? 1 : 0) + (draft.endFrame ? 1 : 0);
+    const count = draft.references.length + draft.referenceVideos.length + draft.referenceAudios.length + preparedAudioIds(draft).length + characterIds(draft).length + (draft.startFrame ? 1 : 0) + (draft.endFrame ? 1 : 0);
     return count === 0 ? 'No references' : `${count} reference asset${count === 1 ? '' : 's'}`;
   }
   return `${draft.characterImage ? 'Character ready' : 'Character missing'} · ${draft.referenceVideo ? 'motion ready' : 'motion missing'}`;
@@ -220,14 +253,14 @@ export function validateCatalogCreationDraft(
       errors
     );
     validateCatalogInputLimit(
-      draft.preparedAudioIds.length,
+      preparedAudioIds(draft).length,
       model.inputs.preparedAudioReferences ?? null,
       `${model.displayName} does not support prepared voice references.`,
       (max) => `${model.displayName} supports up to ${max} prepared voice references.`,
       errors
     );
     validateCatalogInputLimit(
-      draft.characterIds.length,
+      characterIds(draft).length,
       model.inputs.characterReferences ?? null,
       `${model.displayName} does not support prepared character references.`,
       (max) => `${model.displayName} supports up to ${max} prepared character references.`,
@@ -235,7 +268,14 @@ export function validateCatalogCreationDraft(
     );
   }
 
-  const references = draft.tool === 'image' ? draft.references : draft.tool === 'video' ? draft.references : [];
+  const references = draft.tool === 'image'
+    ? draft.references
+    : draft.tool === 'video'
+      ? [
+          ...draft.references,
+          ...(model.id === 'kling-3.0-video' && draft.referenceMode === 'elements' ? draft.referenceVideos : []),
+        ]
+      : [];
   const knownHandles = references.map((reference) => reference.handle).filter((handle): handle is string => Boolean(handle));
   const unknownHandles = extractHandles(draft.prompt).filter((handle) => !knownHandles.includes(handle));
   if (unknownHandles.length > 0) errors.push(`Unknown element mention${unknownHandles.length === 1 ? '' : 's'}: ${unknownHandles.join(', ')}`);
@@ -267,11 +307,11 @@ export function buildCatalogQuoteRequest(
       inputCounts: {
         images: usesReusableReferences
           ? draft.references.length
-          : (draft.startFrame ? 1 : 0) + (draft.endFrame ? 1 : 0),
+          : (draft.startFrame ? 1 : 0) + (!draft.isMultiShot && draft.endFrame ? 1 : 0),
         videos: usesReusableReferences ? draft.referenceVideos.length : 0,
         audios: usesReusableReferences ? draft.referenceAudios.length : 0,
-        preparedAudios: usesReusableReferences ? draft.preparedAudioIds.length : 0,
-        characters: usesReusableReferences ? draft.characterIds.length : 0,
+        preparedAudios: usesReusableReferences ? preparedAudioIds(draft).length : 0,
+        characters: usesReusableReferences ? characterIds(draft).length : 0,
       },
       catalogRevision,
     };
@@ -334,6 +374,7 @@ export function buildCatalogGenerationPayload(
   }
   if (draft.tool === 'video') {
     const usesReusableReferences = draft.referenceMode === 'elements';
+    const usesKlingVideoElements = usesReusableReferences && model.id === 'kling-3.0-video';
     const activeReferences = usesReusableReferences ? draft.references : [];
     const imageUrls = activeReferences.map((reference) => reference.url);
     return {
@@ -348,14 +389,22 @@ export function buildCatalogGenerationPayload(
       elements: usesReusableReferences ? elementDescriptors(draft) : [],
       elementImageUrls: imageUrls,
       imageUrls,
-      referenceVideoUrls: usesReusableReferences ? draft.referenceVideos.map((media) => media.url) : [],
+      referenceVideoUrls: usesReusableReferences && !usesKlingVideoElements ? draft.referenceVideos.map((media) => media.url) : [],
+      klingVideoElements: usesKlingVideoElements ? draft.referenceVideos.map((media) => ({
+        id: media.id,
+        url: media.url,
+        handle: media.handle ?? null,
+        displayName: media.displayName,
+        storagePath: media.storagePath ?? null,
+        sourceGenerationId: media.sourceGenerationId ?? null,
+      })) : [],
       referenceAudioUrls: usesReusableReferences ? draft.referenceAudios.map((media) => media.url) : [],
-      preparedAudioIds: usesReusableReferences ? draft.preparedAudioIds : [],
-      characterIds: usesReusableReferences ? draft.characterIds : [],
+      preparedAudioIds: usesReusableReferences ? preparedAudioIds(draft) : [],
+      characterIds: usesReusableReferences ? characterIds(draft) : [],
       startImageUrl: usesReusableReferences && !model.inputs.combineFramesWithReferences ? null : draft.startFrame?.url ?? null,
-      endImageUrl: usesReusableReferences ? null : draft.endFrame?.url ?? null,
+      endImageUrl: usesReusableReferences || draft.isMultiShot ? null : draft.endFrame?.url ?? null,
       startFrame: usesReusableReferences && !model.inputs.combineFramesWithReferences ? null : mediaDescriptor(draft.startFrame),
-      endFrame: usesReusableReferences ? null : mediaDescriptor(draft.endFrame),
+      endFrame: usesReusableReferences || draft.isMultiShot ? null : mediaDescriptor(draft.endFrame),
       mode: draft.mode,
       aspectRatio: draft.aspectRatio,
       sound: model.capabilities.sound ? draft.sound : false,

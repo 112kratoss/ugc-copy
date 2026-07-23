@@ -9,6 +9,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { notifyCreatorFollowed } from '@/lib/mobile-notifications';
+import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 
 export type ProfileFollowServiceClient =
   Parameters<typeof enforceBackendRateLimit>[0]
@@ -69,6 +70,27 @@ function createRateLimitResult(error: BackendRateLimitError): ProfileFollowRoute
 
 function missingCreatorProfile(): ProfileFollowRouteResult {
   return { ok: false, status: 400, body: { error: 'Missing creator profile.' } };
+}
+
+async function isFollowRelationshipUnavailable({
+  adminSupabase,
+  followerId,
+  followingId,
+}: {
+  adminSupabase: ProfileFollowServiceClient;
+  followerId: string;
+  followingId: string;
+}) {
+  try {
+    return await isUserRelationshipBlocked({
+      adminSupabase,
+      firstUserId: followerId,
+      secondUserId: followingId,
+    });
+  } catch (error) {
+    console.error('Failed to verify creator block state:', error);
+    return true;
+  }
 }
 
 async function loadFollowRecord(
@@ -149,6 +171,14 @@ export async function updateCreatorFollowForRoute({
     return { ok: false, status: 500, body: { error: 'Failed to check follow limits.' } };
   }
 
+  if (following && await isFollowRelationshipUnavailable({
+    adminSupabase: resolvedClient,
+    followerId,
+    followingId,
+  })) {
+    return { ok: false, status: 404, body: { error: 'Creator not found.' } };
+  }
+
   const { data: existingFollow, error: lookupError } = await loadFollowRecord(resolvedClient, followerId, followingId);
   if (lookupError) {
     return { ok: false, status: 500, body: { error: 'Failed to verify follow state.' } };
@@ -215,6 +245,14 @@ export async function notifyCreatorFollowForRoute({
 
     console.error('Creator follow notification rate limit check failed:', error);
     return { ok: false, status: 500, body: { error: 'Failed to check follow notification limits.' } };
+  }
+
+  if (await isFollowRelationshipUnavailable({
+    adminSupabase: resolvedClient,
+    followerId,
+    followingId,
+  })) {
+    return { ok: false, status: 404, body: { error: 'Follow not found.' } };
   }
 
   const { data: followRecord, error: followError } = await loadFollowRecord(resolvedClient, followerId, followingId);

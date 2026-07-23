@@ -49,6 +49,7 @@ describe('preparePostCreationSubmission', () => {
       expect(result.submission.submittedMediaItems).toEqual([
         {
           source: 'uploaded',
+          mediaKey: 'media-1',
           filePath: 'user-1/tmp-proof.mp4',
           temporaryStoragePath: 'user-1/tmp-proof.mp4',
           originalName: 'proof.mp4',
@@ -81,6 +82,54 @@ describe('preparePostCreationSubmission', () => {
       body: {
         error: 'Uploaded media must belong to the authenticated user.',
       },
+    });
+  });
+
+  it('preserves submitted media keys and validates resource scopes against them', async () => {
+    const buildFormData = (scopeKey: string) => {
+      const formData = new FormData();
+      formData.set('postFormat', 'media');
+      formData.set('category', 'image');
+      formData.set('mediaItems', JSON.stringify([{
+        mediaKey: 'proof-a',
+        storagePath: 'uploads/user-1/proof.png',
+        originalName: 'proof.png',
+        contentType: 'image/png',
+      }]));
+      formData.set('resourceBundle', JSON.stringify({
+        accessMode: 'free',
+        resources: {
+          items: [{
+            id: 'prompt-a',
+            scope: { kind: 'media', mediaKeys: [scopeKey] },
+            type: 'prompt',
+            title: 'Proof prompt',
+            textContent: 'Describe this proof output.',
+          }],
+        },
+      }));
+      return formData;
+    };
+
+    const accepted = await preparePostCreationSubmission({
+      formData: buildFormData('proof-a'),
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+    expect(accepted).toMatchObject({
+      ok: true,
+      submission: { submittedMediaItems: [{ mediaKey: 'proof-a' }] },
+    });
+
+    const rejected = await preparePostCreationSubmission({
+      formData: buildFormData('proof-b'),
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+    expect(rejected).toMatchObject({
+      ok: false,
+      status: 400,
+      body: { error: expect.stringMatching(/not part of this post/i) },
     });
   });
 });

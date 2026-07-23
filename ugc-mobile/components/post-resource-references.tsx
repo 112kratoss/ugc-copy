@@ -98,6 +98,11 @@ export function PostResourceReferences({
           const storagePath = item.storagePath;
           const signedUrl = storagePath ? fileUrls[storagePath] : null;
           const isImage = Boolean(item.contentType?.startsWith('image/'));
+          const mediaLabel = item.contentType?.startsWith('video/')
+            ? 'Open video'
+            : item.contentType?.startsWith('audio/')
+              ? 'Open audio'
+              : 'Open media';
           const isLoading = Boolean(storagePath && loadingPaths[storagePath]);
           const previewFailed = Boolean(storagePath && failedPreviewPaths[storagePath]);
           const isOpenable = Boolean(item.externalUrl || storagePath);
@@ -107,7 +112,7 @@ export function PostResourceReferences({
               accessibilityLabel={`Open reference ${item.title}`}
               accessibilityRole={isOpenable ? 'button' : undefined}
               disabled={!isOpenable}
-              key={`${item.type}:${item.title}:${storagePath ?? item.externalUrl ?? index}`}
+              key={item.id ?? `${item.type}:${item.title}:${storagePath ?? item.externalUrl ?? index}`}
               onPress={() => void openItem(item)}
               style={({ pressed }) => ({
                 width: 142,
@@ -153,7 +158,7 @@ export function PostResourceReferences({
                 {!isImage && isOpenable ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                     <ExternalLink size={12} color={appTheme.colors.primary} strokeWidth={2.4} />
-                    <Text style={{ color: appTheme.colors.primary, fontSize: 11, fontWeight: '700' }}>Open media</Text>
+                    <Text style={{ color: appTheme.colors.primary, fontSize: 11, fontWeight: '700' }}>{mediaLabel}</Text>
                   </View>
                 ) : null}
               </View>
@@ -169,6 +174,8 @@ export function getReferenceResourceItems(items: PostResourceItem[] | undefined)
   return (items ?? [])
     .filter((item) => (
       item.type === 'reference_image'
+      || item.type === 'reference_video'
+      || item.type === 'reference_audio'
       || (
         item.type === 'source_file'
         && Boolean(item.contentType?.match(/^(image|video|audio)\//))

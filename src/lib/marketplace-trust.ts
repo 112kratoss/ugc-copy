@@ -2,6 +2,8 @@ import {
   getPostResourceKinds,
   normalizePostResourceAttachments,
   normalizePostResourceItems,
+  POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS,
+  POST_RESOURCE_PRICE_INCREMENT_USD_CENTS,
   type MarketplacePriceQuote,
   type PersistedPostResourceBundleAccessMode,
   type PostResourceBundleAccessMode,
@@ -131,15 +133,27 @@ export function assessMarketplaceListingQuality(input: MarketplaceQualityInput):
     });
   }
 
-  if (input.accessMode === 'paid' && Math.round(input.priceUsdCents ?? 0) < 100) {
+  const normalizedPrice = Math.round(input.priceUsdCents ?? 0);
+  if (
+    input.accessMode === 'paid'
+    && (
+      normalizedPrice < POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS
+      || normalizedPrice % POST_RESOURCE_PRICE_INCREMENT_USD_CENTS !== 0
+    )
+  ) {
     issues.push({
       code: 'invalid_price',
       field: 'price',
-      message: 'Paid recipes must be priced at $1.00 or above.',
+      message: 'Paid recipes must cost at least 10 tokens and use 10-token increments.',
     });
   }
 
-  if (!post || post.visibility !== 'public' || post.archivedAt || post.reviewStatus === 'hidden') {
+  if (
+    !post ||
+    post.visibility !== 'public' ||
+    post.archivedAt ||
+    (post.reviewStatus != null && post.reviewStatus !== 'visible')
+  ) {
     issues.push({
       code: 'post_not_public',
       field: 'post',

@@ -245,6 +245,37 @@ describe('createPostResourceBundleOrderForRoute', () => {
     ]);
   });
 
+  it('keeps sub-dollar packages credit-only before quoting or provider work', async () => {
+    const admin = createAdminSupabaseMock();
+    const getPostResourceBundlePriceQuote = vi.fn();
+    const createRazorpayOrder = vi.fn();
+
+    const result = await createPostResourceBundleOrderForRoute({
+      adminSupabase: admin.client,
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      countryHeader: 'IN',
+      readBody: vi.fn(async () => ({ locale: 'en-IN' })),
+      getBundleForOrderByPostId: vi.fn(async () => createBundle({ price_usd_cents: 90 })),
+      getPostResourceBundlePriceQuote,
+      createRazorpayOrder,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: {
+        error: 'Recipes below 100 tokens can only be unlocked with credits.',
+        code: 'CREDITS_ONLY_PRICE',
+        creditCost: 90,
+        cashMinimumTokens: 100,
+      },
+    });
+    expect(getPostResourceBundlePriceQuote).not.toHaveBeenCalled();
+    expect(createRazorpayOrder).not.toHaveBeenCalled();
+    expect(admin.inserts).toEqual([]);
+  });
+
   it('maps payment provider timeouts without recording an order', async () => {
     const admin = createAdminSupabaseMock();
     const createRazorpayOrder = vi.fn(async () => {

@@ -7,19 +7,23 @@ import {
   buildPublishGenerationPayload,
   buildPublishGenerationPostPayload,
   buildUpdatePostPayload,
+  createPostComposerResourceCard,
   getPostComposerPublishActions,
   applyCreationPromptResource,
   getDefaultPostComposerDraft,
   getExplicitPublishGeneration,
   getPostComposerPackageStatus,
+  getPostComposerPriceTokens,
   getPostComposerPreviewStatusLabel,
   getPostComposerReadiness,
   getPostComposerSectionSummary,
   getPostComposerSubmitLabel,
   getPublishableGenerations,
+  hydratePostComposerResourceCards,
   isTemplateGeneration,
   getPublishGenerationMediaKind,
   getPublishGenerationSubtitle,
+  POST_COMPOSER_RESOURCE_CARD_OPTIONS,
   POST_COMPOSER_SOURCE_OPTIONS,
   validatePostComposerDraft,
 } from '../lib/post-new-view-model';
@@ -43,6 +47,20 @@ function generation(overrides: Partial<GenerationListItem>): GenerationListItem 
 }
 
 describe('post new view model', () => {
+  it('offers every agreed resource card type, including protected remix links', () => {
+    expect(POST_COMPOSER_RESOURCE_CARD_OPTIONS.map((option) => option.id)).toEqual([
+      'prompt',
+      'reference_media',
+      'settings',
+      'workflow',
+      'source_assets',
+      'guide',
+      'external_link',
+      'remix_link',
+      'other',
+    ]);
+  });
+
   it('ships a useful taxonomized source-tool catalog for offline post attribution', () => {
     const expectedSlugs = [
       'magicbooklet',
@@ -203,7 +221,10 @@ describe('post new view model', () => {
     };
 
     expect(validatePostComposerDraft(draft)).toEqual({ valid: true });
-    expect(validatePostComposerDraft({ ...draft, title: ' ' })).toEqual({ valid: true });
+    expect(validatePostComposerDraft({ ...draft, title: ' ' })).toMatchObject({
+      valid: false,
+      message: 'Add a title before continuing.',
+    });
     expect(validatePostComposerDraft({ ...draft, contentText: '', caption: '' })).toMatchObject({
       valid: false,
       message: 'Write the text post or add a caption.',
@@ -276,11 +297,13 @@ describe('post new view model', () => {
 
     expect(buildPostComposerMediaItemsPayload(draft)).toEqual([
       {
+        mediaKey: 'media-1',
         storagePath: 'uploads/user-1/cover.jpg',
         contentType: 'image/jpeg',
         originalName: 'cover.jpg',
       },
       {
+        mediaKey: 'media-2',
         storagePath: 'uploads/user-1/clip.mp4',
         contentType: 'video/mp4',
         originalName: 'clip.mp4',
@@ -290,11 +313,13 @@ describe('post new view model', () => {
     const formData = buildCreatePostFormData(draft);
     expect(formData.get('mediaItems')).toBe(JSON.stringify([
       {
+        mediaKey: 'media-1',
         storagePath: 'uploads/user-1/cover.jpg',
         contentType: 'image/jpeg',
         originalName: 'cover.jpg',
       },
       {
+        mediaKey: 'media-2',
         storagePath: 'uploads/user-1/clip.mp4',
         contentType: 'video/mp4',
         originalName: 'clip.mp4',
@@ -334,6 +359,174 @@ describe('post new view model', () => {
         allowRemix: true,
       },
     });
+  });
+
+  it('serializes grouped resource cards with public labels and stable output scopes', () => {
+    const bundle = buildPostResourceBundleInput({
+      ...getDefaultPostComposerDraft().resource,
+      accessMode: 'free',
+      cards: [
+        createPostComposerResourceCard('prompt', {
+          id: 'prompt-card',
+          title: 'Editorial prompt',
+          preview: 'The exact prompt and structure.',
+          textContent: 'Photograph a coral bottle in morning light.',
+        }),
+        createPostComposerResourceCard('reference_media', {
+          id: 'reference-card',
+          title: 'Motion reference',
+          attachments: [{
+            id: 'reference-video',
+            kind: 'file',
+            label: 'Camera move.mp4',
+            storagePath: 'user-1/camera-move.mp4',
+            contentType: 'video/mp4',
+          }],
+          appliesToAll: false,
+          mediaKeys: ['media-2'],
+        }),
+      ],
+    });
+
+    expect(bundle).toMatchObject({
+      accessMode: 'free',
+      resources: {
+        allowRemix: false,
+        sections: [
+          {
+            id: 'prompt-card',
+            publicTitle: 'Editorial prompt',
+            resourceType: 'prompt',
+            scope: { kind: 'all' },
+          },
+          {
+            id: 'reference-card',
+            publicTitle: 'Motion reference',
+            resourceType: 'reference_video',
+            scope: { kind: 'media', mediaKeys: ['media-2'] },
+          },
+        ],
+        items: [
+          expect.objectContaining({
+            id: 'prompt-card-item-1',
+            sectionId: 'prompt-card',
+            type: 'prompt',
+            scope: { kind: 'all' },
+          }),
+          expect.objectContaining({
+            id: 'reference-card-file-1',
+            sectionId: 'reference-card',
+            type: 'reference_video',
+            scope: { kind: 'media', mediaKeys: ['media-2'] },
+          }),
+        ],
+      },
+    });
+  });
+
+  it('keeps remix links protected without enabling native remix access', () => {
+    const bundle = buildPostResourceBundleInput({
+      ...getDefaultPostComposerDraft().resource,
+      accessMode: 'paid',
+      priceTokens: '120',
+      cards: [createPostComposerResourceCard('remix_link', {
+        id: 'remix-card',
+        title: 'Open in editor',
+        preview: 'Editable remix project included.',
+        externalUrl: 'https://editor.example.com/remix/private',
+      })],
+    });
+
+    expect(bundle).toMatchObject({
+      accessMode: 'paid',
+      priceUsdCents: 120,
+      resources: {
+        allowRemix: false,
+        items: [expect.objectContaining({
+          type: 'remix_link',
+          externalUrl: 'https://editor.example.com/remix/private',
+          remixUse: 'none',
+        })],
+      },
+    });
+    expect(hydratePostComposerResourceCards(bundle)).toEqual([
+      expect.objectContaining({
+        id: 'remix-card',
+        type: 'remix_link',
+        externalUrl: 'https://editor.example.com/remix/private',
+        attachments: [],
+      }),
+    ]);
+  });
+
+  it('round-trips a workflow link once and preserves its media scope', () => {
+    const original = buildPostResourceBundleInput({
+      ...getDefaultPostComposerDraft().resource,
+      accessMode: 'free',
+      cards: [createPostComposerResourceCard('workflow', {
+        id: 'workflow-card',
+        title: 'ComfyUI workflow',
+        externalUrl: 'https://workflow.example.com/share/123',
+        appliesToAll: false,
+        mediaKeys: ['media-1', 'media-3'],
+      })],
+    });
+    const cards = hydratePostComposerResourceCards(original);
+    const rebuilt = buildPostResourceBundleInput({
+      ...getDefaultPostComposerDraft().resource,
+      accessMode: 'free',
+      cards,
+    });
+
+    expect(cards[0]).toMatchObject({
+      externalUrl: 'https://workflow.example.com/share/123',
+      attachments: [],
+      appliesToAll: false,
+      mediaKeys: ['media-1', 'media-3'],
+    });
+    expect(rebuilt?.resources?.items).toHaveLength(1);
+    expect(rebuilt?.resources?.items?.[0]).toMatchObject({
+      type: 'workflow',
+      externalUrl: 'https://workflow.example.com/share/123',
+      scope: { kind: 'media', mediaKeys: ['media-1', 'media-3'] },
+    });
+  });
+
+  it('enforces token pricing in ten-token increments from a ten-token minimum', () => {
+    const baseDraft = {
+      ...getDefaultPostComposerDraft(),
+      mode: 'upload' as const,
+      title: 'External creation',
+      upload: { uri: 'file:///tmp/image.jpg', name: 'image.jpg', type: 'image/jpeg' },
+      resource: {
+        ...getDefaultPostComposerDraft().resource,
+        accessMode: 'paid' as const,
+        previewText: 'Includes the exact prompt.',
+        cards: [createPostComposerResourceCard('prompt', { textContent: 'Exact prompt' })],
+      },
+    };
+
+    expect(getPostComposerPriceTokens({ ...baseDraft.resource, priceTokens: '10' })).toBe(10);
+    expect(validatePostComposerDraft({
+      ...baseDraft,
+      resource: { ...baseDraft.resource, priceTokens: '5' },
+    })).toMatchObject({ valid: false, message: 'Paid resources must cost at least 10 tokens.' });
+    expect(validatePostComposerDraft({
+      ...baseDraft,
+      resource: { ...baseDraft.resource, priceTokens: '15' },
+    })).toMatchObject({ valid: false, message: 'Resource prices must use increments of 10 tokens.' });
+    expect(getPostComposerPackageStatus({
+      ...baseDraft,
+      resource: { ...baseDraft.resource, priceTokens: '15' },
+    })).toMatchObject({
+      label: 'Set a valid price',
+      body: 'Resource prices must use increments of 10 tokens.',
+      state: 'warning',
+    });
+    expect(validatePostComposerDraft({
+      ...baseDraft,
+      resource: { ...baseDraft.resource, priceTokens: '20' },
+    })).toEqual({ valid: true });
   });
 
   it('builds web-style resource bundles with selected types, files, remix, and sections', () => {
@@ -573,15 +766,20 @@ describe('post new view model', () => {
     expect(draft.resource.previewText).toBe('Includes the exact reusable prompt.');
     expect(buildPublishGenerationPostPayload(item, draft).resourceBundle).toMatchObject({
       accessMode: 'free',
-      summary: 'Prompt',
+      summary: 'Exact generation prompt',
       previewText: 'Includes the exact reusable prompt.',
       priceUsdCents: 0,
       resources: {
-        promptText: 'Exact cinematic product prompt',
+        promptText: null,
         notesMarkdown: null,
         workflowShareUrl: null,
         attachments: [],
         allowRemix: false,
+        items: [expect.objectContaining({
+          type: 'prompt',
+          textContent: 'Exact cinematic product prompt',
+          scope: { kind: 'all' },
+        })],
       },
     });
   });

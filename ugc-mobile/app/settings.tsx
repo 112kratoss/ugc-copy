@@ -63,6 +63,13 @@ export default function SettingsScreen() {
         onPress={() => void Linking.openURL(`${env.siteUrl}/terms`)}
       />
 
+      <SettingsCard
+        icon={<ShieldCheck size={22} color="#fbbf24" />}
+        title="Child safety standards"
+        body="Review our zero-tolerance policy and report child-safety concerns."
+        onPress={() => void Linking.openURL(`${env.siteUrl}/child-safety`)}
+      />
+
       {user ? (
         <SettingsCard
           icon={<Trash2 size={22} color={appTheme.colors.danger} />}

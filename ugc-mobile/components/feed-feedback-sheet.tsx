@@ -1,4 +1,4 @@
-import { Modal, Pressable, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { useReducedMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
@@ -9,6 +9,9 @@ export function FeedFeedbackSheet({
   onClose,
   onHideCreator,
   onNotInterested,
+  onBlockUser,
+  onReportContent,
+  onReportUser,
   postTitle,
   sessionOnly = false,
   visible,
@@ -18,6 +21,9 @@ export function FeedFeedbackSheet({
   onClose: () => void;
   onHideCreator: () => void;
   onNotInterested: () => void;
+  onBlockUser?: () => void;
+  onReportContent?: () => void;
+  onReportUser?: () => void;
   postTitle: string;
   sessionOnly?: boolean;
   visible: boolean;
@@ -41,6 +47,7 @@ export function FeedFeedbackSheet({
         />
         <View
           style={{
+            maxHeight: '84%',
             borderTopLeftRadius: appTheme.radii.xl,
             borderTopRightRadius: appTheme.radii.xl,
             borderCurve: 'continuous',
@@ -62,31 +69,75 @@ export function FeedFeedbackSheet({
               marginBottom: appTheme.spacing.panel,
             }}
           />
-          <View style={{ gap: 5, paddingHorizontal: appTheme.spacing.panel, paddingBottom: appTheme.spacing.gap }}>
-            <Text accessibilityRole="header" numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>
-              Shape your Showcase
-            </Text>
-            <Text numberOfLines={2} style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
-              Choose what you want to see less often. “{postTitle}” will leave your Showcase now.
-            </Text>
-          </View>
-          <FeedbackAction
-            body={sessionOnly
-              ? 'Remove this post from your Showcase for this visit.'
-              : 'Remove this post and show fewer recommendations like it.'}
-            label="Not interested"
-            onPress={onNotInterested}
-          />
-          <FeedbackAction
-            body={hideCreatorDisabled
-              ? 'You cannot hide your own creator profile.'
-              : sessionOnly
-                ? `Remove posts from ${creatorLabel} for this visit.`
-                : `Remove posts from ${creatorLabel} from your recommendations.`}
-            disabled={hideCreatorDisabled}
-            label={`Hide ${creatorLabel}`}
-            onPress={onHideCreator}
-          />
+          <ScrollView showsVerticalScrollIndicator={false}>
+            <View style={{ gap: 5, paddingHorizontal: appTheme.spacing.panel, paddingBottom: appTheme.spacing.gap }}>
+              <Text accessibilityRole="header" numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>
+                Shape your Showcase
+              </Text>
+              <Text numberOfLines={2} style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
+                Choose how you want to manage “{postTitle}” or its creator.
+              </Text>
+            </View>
+            <FeedbackAction
+              body={sessionOnly
+                ? 'Remove this post from your Showcase for this visit.'
+                : 'Remove this post and show fewer recommendations like it.'}
+              label="Not interested"
+              onPress={onNotInterested}
+            />
+            <FeedbackAction
+              body={hideCreatorDisabled
+                ? 'You cannot hide your own creator profile.'
+                : sessionOnly
+                  ? `Remove posts from ${creatorLabel} for this visit.`
+                  : `Remove posts from ${creatorLabel} from your recommendations.`}
+              disabled={hideCreatorDisabled}
+              label={`Hide ${creatorLabel}`}
+              onPress={onHideCreator}
+            />
+            {onReportContent || onReportUser || onBlockUser ? (
+              <Text
+                accessibilityRole="header"
+                style={{
+                  color: appTheme.colors.faint,
+                  ...appTheme.type.caption,
+                  fontWeight: '800',
+                  letterSpacing: 0.8,
+                  paddingHorizontal: appTheme.spacing.panel,
+                  paddingTop: appTheme.spacing.gap,
+                  textTransform: 'uppercase',
+                }}
+              >
+                Safety
+              </Text>
+            ) : null}
+            {onReportContent ? (
+              <FeedbackAction
+                body="Send this post to the moderation team for review."
+                label="Report content"
+                onPress={onReportContent}
+                tone="danger"
+              />
+            ) : null}
+            {onReportUser ? (
+              <FeedbackAction
+                body={`Report ${creatorLabel} for unsafe or abusive behavior.`}
+                disabled={hideCreatorDisabled}
+                label="Report user"
+                onPress={onReportUser}
+                tone="danger"
+              />
+            ) : null}
+            {onBlockUser ? (
+              <FeedbackAction
+                body={`Hide ${creatorLabel}'s content and prevent future follows between you.`}
+                disabled={hideCreatorDisabled}
+                label="Block user"
+                onPress={onBlockUser}
+                tone="danger"
+              />
+            ) : null}
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -98,11 +149,13 @@ function FeedbackAction({
   disabled = false,
   label,
   onPress,
+  tone = 'default',
 }: {
   body: string;
   disabled?: boolean;
   label: string;
   onPress: () => void;
+  tone?: 'default' | 'danger';
 }) {
   return (
     <Pressable
@@ -122,7 +175,7 @@ function FeedbackAction({
         opacity: disabled ? appTheme.opacity.disabled : 1,
       })}
     >
-      <Text style={{ color: appTheme.colors.text, ...appTheme.type.body, fontWeight: '800' }}>
+      <Text style={{ color: tone === 'danger' ? appTheme.colors.danger : appTheme.colors.text, ...appTheme.type.body, fontWeight: '800' }}>
         {label}
       </Text>
       <Text style={{ color: appTheme.colors.faint, ...appTheme.type.caption }}>

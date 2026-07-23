@@ -21,6 +21,7 @@ export function ViewerActionSheet({
   onRecreate,
   onShare,
   onDeleted,
+  onBlocked,
   onUnlockRemix,
   onSourceRefresh,
   visible,
@@ -33,6 +34,7 @@ export function ViewerActionSheet({
   onRecreate: () => void;
   onShare: () => void;
   onDeleted?: (postId: string) => void;
+  onBlocked?: (userId: string) => void;
   onUnlockRemix?: () => void;
   onSourceRefresh: () => void;
   visible: boolean;
@@ -40,10 +42,16 @@ export function ViewerActionSheet({
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
   const reducedMotion = useReducedMotion();
+  const canModerateCreator = item.sourceType === 'showcase'
+    && Boolean(item.creatorId)
+    && item.creatorId !== user?.id;
   const actions = [
     ...item.availableActions,
     ...(onNotInterested ? ['not-interested'] : []),
     ...(onHideCreator ? ['hide-creator'] : []),
+    ...(item.sourceType === 'showcase' ? ['report-content'] : []),
+    ...(canModerateCreator ? ['report-user', 'block-user'] : []),
+    ...(item.sourceType === 'generation' && item.generationId ? ['report-ai-output'] : []),
   ];
 
   const refreshMedia = async () => {
@@ -140,6 +148,12 @@ export function ViewerActionSheet({
 
   const handleAction = (action: string) => {
     onClose();
+
+    const requireSignedIn = () => {
+      if (user) return true;
+      router.push('/auth');
+      return false;
+    };
 
     if (action === 'save' || action === 'unsave') {
       const shouldSave = action === 'save';
@@ -270,6 +284,111 @@ export function ViewerActionSheet({
       onHideCreator?.();
       return;
     }
+    if (action === 'report-content' && item.showcasePostId) {
+      if (!requireSignedIn()) return;
+      Alert.alert(
+        'Report content?',
+        'Magicbooklet will send this post to the moderation team for a safety review.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Report content',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await api.reportPost(item.showcasePostId!, {
+                  reason: 'unsafe_content',
+                  details: 'Reported from the mobile Showcase viewer.',
+                });
+                Alert.alert('Report received', 'Thank you. Our moderation team will review this content.');
+              } catch (error) {
+                Alert.alert('Could not report content', error instanceof Error ? error.message : 'Please try again.');
+              }
+            },
+          },
+        ]
+      );
+      return;
+    }
+    if (action === 'report-user' && item.creatorId) {
+      if (!requireSignedIn()) return;
+      Alert.alert(
+        'Report user?',
+        `Magicbooklet will review ${item.creatorLabel} for unsafe or abusive behavior.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Report user',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await api.reportUser(item.creatorId!, {
+                  reason: 'unsafe_content',
+                  sourceSurface: 'showcase-reel',
+                  details: item.showcasePostId ? `Reported from post ${item.showcasePostId}.` : undefined,
+                });
+                Alert.alert('Report received', 'Thank you. Our moderation team will review this user.');
+              } catch (error) {
+                Alert.alert('Could not report user', error instanceof Error ? error.message : 'Please try again.');
+              }
+            },
+          },
+        ]
+      );
+      return;
+    }
+    if (action === 'block-user' && item.creatorId) {
+      if (!requireSignedIn()) return;
+      const creatorId = item.creatorId;
+      Alert.alert(
+        `Block ${item.creatorLabel}?`,
+        'Their posts will be hidden, and neither of you will be able to follow the other.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Block user',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await api.blockUser(creatorId);
+                await refreshMedia();
+                onBlocked?.(creatorId);
+              } catch (error) {
+                Alert.alert('Could not block user', error instanceof Error ? error.message : 'Please try again.');
+              }
+            },
+          },
+        ]
+      );
+      return;
+    }
+    if (action === 'report-ai-output' && item.generationId) {
+      if (!requireSignedIn()) return;
+      Alert.alert(
+        'Report offensive AI output?',
+        'Send this generated result to the safety team so the model and provider output can be reviewed.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Report AI output',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await api.reportGeneration(item.generationId!, {
+                  reason: 'offensive_ai_output',
+                  sourceSurface: 'generation-viewer',
+                  details: 'Reported from the mobile generated-media viewer.',
+                });
+                Alert.alert('Report received', 'Thank you. The generated output was sent to the safety team.');
+              } catch (error) {
+                Alert.alert('Could not report AI output', error instanceof Error ? error.message : 'Please try again.');
+              }
+            },
+          },
+        ]
+      );
+      return;
+    }
     if (action === 'view-details') {
       onDetails();
     }
@@ -309,7 +428,7 @@ export function ViewerActionSheet({
             }}
           />
           <ScrollView showsVerticalScrollIndicator={false}>
-            {groupViewerActions(actions).map((group) => (
+            {groupViewerActions(Array.from(new Set(actions))).map((group) => (
               <View key={group.label} style={{ paddingBottom: appTheme.spacing.compact }}>
                 <AppText
                   selectable={false}

@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { loadBlockedCreatorIds as defaultLoadBlockedCreatorIds } from '@/lib/moderation-service';
 import { isMissingPostsSchemaError } from '@/lib/posts-server';
 import { resolvePostRowsToFeedItems as defaultResolvePostRowsToFeedItems } from '@/lib/showcase-feed';
 import type {
@@ -34,6 +35,7 @@ export type SavedMediaRouteResult =
 type GetSavedMediaFeedParams = {
   createAdminSupabase: () => SupabaseClient;
   limit: number;
+  loadBlockedCreatorIds?: typeof defaultLoadBlockedCreatorIds;
   offset: number;
   resolvePostRowsToFeedItems?: typeof defaultResolvePostRowsToFeedItems;
   userId: string;
@@ -55,6 +57,7 @@ function emptySavedMediaPage(limit: number, offset: number): ShowcaseFeedPage {
 export async function getSavedMediaFeedForRoute({
   createAdminSupabase,
   limit,
+  loadBlockedCreatorIds = defaultLoadBlockedCreatorIds,
   offset,
   resolvePostRowsToFeedItems = defaultResolvePostRowsToFeedItems,
   userId,
@@ -155,9 +158,25 @@ export async function getSavedMediaFeedForRoute({
     (postRows ?? []) as Parameters<typeof resolvePostRowsToFeedItems>[0],
     adminSupabase
   );
+  let viewerSafeItems = hydratedItems;
+  try {
+    const blockedCreatorIds = await loadBlockedCreatorIds({
+      adminSupabase,
+      creatorIds: hydratedItems
+        .map((item) => item.creator?.id)
+        .filter((id): id is string => Boolean(id)),
+      viewerUserId: userId,
+    });
+    viewerSafeItems = hydratedItems.filter((item) => (
+      !item.creator?.id || !blockedCreatorIds.has(item.creator.id)
+    ));
+  } catch (error) {
+    console.error('Error filtering blocked creators from saved media:', error);
+    viewerSafeItems = [];
+  }
 
   const hydratedMap = new Map<string, ShowcaseFeedItem>();
-  for (const item of hydratedItems) {
+  for (const item of viewerSafeItems) {
     hydratedMap.set(saveSource === 'post' ? item.id : (item.generationId ?? item.id), item);
   }
 

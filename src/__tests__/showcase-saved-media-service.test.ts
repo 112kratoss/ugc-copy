@@ -135,6 +135,7 @@ describe('getSavedMediaFeedForRoute', () => {
     });
     const adminSupabase = { service: 'admin' } as unknown as SupabaseClient;
     const createAdminSupabase = vi.fn(() => adminSupabase);
+    const loadBlockedCreatorIds = vi.fn(async () => new Set<string>());
     const resolvePostRowsToFeedItems = vi.fn(async (rows: Array<{ id: string; title?: string | null }>) =>
       rows.map((row) => ({
         id: row.id,
@@ -146,6 +147,7 @@ describe('getSavedMediaFeedForRoute', () => {
     const result = await getSavedMediaFeedForRoute({
       createAdminSupabase,
       limit: 2,
+      loadBlockedCreatorIds,
       offset: 0,
       resolvePostRowsToFeedItems,
       userId: 'user-1',
@@ -165,6 +167,11 @@ describe('getSavedMediaFeedForRoute', () => {
       offset: 0,
     });
     expect(createAdminSupabase).toHaveBeenCalledTimes(1);
+    expect(loadBlockedCreatorIds).toHaveBeenCalledWith({
+      adminSupabase,
+      creatorIds: [],
+      viewerUserId: 'user-1',
+    });
     expect(resolvePostRowsToFeedItems).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ id: 'post-1' }),
@@ -172,5 +179,42 @@ describe('getSavedMediaFeedForRoute', () => {
       ]),
       adminSupabase
     );
+  });
+
+  it('removes saved posts when either user has blocked the other', async () => {
+    const userSupabase = createUserSupabaseMock({
+      postSaves: [
+        { post_id: 'post-blocked', created_at: '2026-06-10T12:00:00Z' },
+        { post_id: 'post-visible', created_at: '2026-06-10T10:00:00Z' },
+      ],
+      posts: [
+        { id: 'post-blocked', generation_id: null, title: 'Blocked post' },
+        { id: 'post-visible', generation_id: null, title: 'Visible post' },
+      ],
+    });
+    const adminSupabase = { service: 'admin' } as unknown as SupabaseClient;
+    const loadBlockedCreatorIds = vi.fn(async () => new Set(['creator-blocked']));
+    const resolvePostRowsToFeedItems = vi.fn(async () => [
+      { id: 'post-blocked', generationId: null, creator: { id: 'creator-blocked' } },
+      { id: 'post-visible', generationId: null, creator: { id: 'creator-visible' } },
+    ]);
+
+    const result = await getSavedMediaFeedForRoute({
+      createAdminSupabase: () => adminSupabase,
+      limit: 24,
+      loadBlockedCreatorIds,
+      offset: 0,
+      resolvePostRowsToFeedItems,
+      userId: 'viewer-1',
+      userSupabase: userSupabase.client,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.body.items.map((item: { id: string }) => item.id)).toEqual(['post-visible']);
+    expect(loadBlockedCreatorIds).toHaveBeenCalledWith({
+      adminSupabase,
+      creatorIds: ['creator-blocked', 'creator-visible'],
+      viewerUserId: 'viewer-1',
+    });
   });
 });

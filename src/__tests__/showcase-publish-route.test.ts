@@ -895,7 +895,7 @@ describe('/api/showcase/publish route', () => {
       expect.objectContaining({ type: 'remix_access' }),
     ]));
     expect(items).toContainEqual(expect.objectContaining({
-      type: 'source_file',
+      type: 'reference_video',
       role: 'supporting_workflow',
       title: 'Timing reference',
       contentType: 'video/mp4',

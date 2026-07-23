@@ -141,6 +141,10 @@ describe('media creation view model', () => {
       displayName: 'Dance Loop',
       handle: undefined,
     });
+    expect(renameMediaDraft(imageReference(), '')).toMatchObject({
+      displayName: '',
+      handle: undefined,
+    });
   });
 
   it('orders required creation work by tool shape', () => {

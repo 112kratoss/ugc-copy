@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import * as Clipboard from 'expo-clipboard';
 import { router, useLocalSearchParams } from 'expo-router';
+import { useMemo, useState } from 'react';
 import { Linking, View } from 'react-native';
 
 import { MediaPreview } from '@/components/media-preview';
+import { PostResourceBundleContent } from '@/components/post-resource-bundle-content';
 import { AppText, Card, Pill, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
-import { env } from '@/lib/env';
 import { appTheme, type ToolAccent } from '@/lib/theme';
 import type { MarketplaceResource, PostResourceKind } from '@/lib/types';
 
@@ -19,7 +21,7 @@ function marketplaceAccent(accessMode?: MarketplaceResource['accessMode']): Tool
 }
 
 function marketplacePriceLabel(detail: MarketplaceResource) {
-  return detail.accessMode === 'free' ? 'Free unlock' : detail.priceQuote?.formatted ?? 'Paid unlock';
+  return detail.accessMode === 'free' ? 'Free unlock' : `${detail.priceUsdCents ?? 0} credits`;
 }
 
 export default function MarketplaceAssetScreen() {
@@ -28,7 +30,8 @@ export default function MarketplaceAssetScreen() {
   const fallbackPostId = Array.isArray(postId) ? postId[0] : postId;
   const { user, api, credits, updateCredits } = useAuth();
   const queryClient = useQueryClient();
-  const webUrl = `${env.siteUrl}/marketplace/${resourceId}`;
+  const [fileLoadingPath, setFileLoadingPath] = useState<string | null>(null);
+  const [resourceError, setResourceError] = useState<string | null>(null);
 
   const detailQuery = useQuery({
     queryKey: ['marketplace-resource', resourceId, fallbackPostId, user?.id],
@@ -56,6 +59,50 @@ export default function MarketplaceAssetScreen() {
 
   const detail = detailQuery.data;
   const resources = detail?.resources;
+  const resourceMediaItems = useMemo(() => {
+    if (!detail?.post) return [];
+    if (detail.post.mediaItems?.length) return detail.post.mediaItems;
+    if (!detail.post.mediaUrl || !detail.post.mediaKind) return [];
+    return [{
+      id: `${detail.post.id}:cover`,
+      mediaKey: `${detail.post.id}:cover`,
+      url: detail.post.mediaUrl,
+      mediaKind: detail.post.mediaKind,
+      contentType: null,
+      originalName: null,
+      width: null,
+      height: null,
+      durationSeconds: null,
+      sortOrder: 0,
+    }];
+  }, [detail?.post]);
+
+  const resolveResourceFileUrl = async (storagePath: string) => {
+    if (!detail?.postId) throw new Error('Missing post for this resource.');
+    const response = await api.getPostResourceFileUrl(detail.postId, storagePath);
+    return response.signedUrl;
+  };
+
+  const openResourceFile = async ({ storagePath }: { storagePath: string; title: string; contentType: string | null }) => {
+    try {
+      setResourceError(null);
+      setFileLoadingPath(storagePath);
+      await Linking.openURL(await resolveResourceFileUrl(storagePath));
+    } catch (error) {
+      setResourceError(error instanceof Error ? error.message : 'Could not open this resource.');
+    } finally {
+      setFileLoadingPath(null);
+    }
+  };
+
+  const openResourceUrl = async (url: string) => {
+    try {
+      setResourceError(null);
+      await Linking.openURL(url);
+    } catch (error) {
+      setResourceError(error instanceof Error ? error.message : 'Could not open this link.');
+    }
+  };
 
   return (
     <Screen>
@@ -99,41 +146,26 @@ export default function MarketplaceAssetScreen() {
             </View>
           </Card>
 
-          {detail.viewerCanAccess && resources ? (
-            <Card accent="workflow">
-              <View style={{ gap: 4 }}>
-                <AppText variant="cardTitle">Unlocked resources</AppText>
-                <AppText variant="caption" color="faint">{resourceLabel(detail.resourceKinds)}</AppText>
-              </View>
-              {resources.promptText ? (
-                <AppText variant="bodySm" color="text">
-                  {resources.promptText}
-                </AppText>
-              ) : null}
-              {resources.notesMarkdown ? (
-                <AppText variant="bodySm" color="muted">
-                  {resources.notesMarkdown}
-                </AppText>
-              ) : null}
-              {resources.attachments.length > 0 ? (
-                <View style={{ gap: 8 }}>
-                  {resources.attachments.map((attachment) => (
-                    <AppText key={`${attachment.label}-${attachment.url ?? attachment.storagePath ?? ''}`} variant="bodySm" color="muted">
-                      {attachment.kind ?? 'file'} · {attachment.label}
-                    </AppText>
-                  ))}
-                </View>
-              ) : null}
-              {resources.workflowShareUrl || resources.workflowSnapshot ? (
-                <View style={{ gap: 4 }}>
-                  <AppText variant="label">Workflow is web-first</AppText>
-                  <AppText variant="bodySm" color="muted">
-                    Workflow snapshots can be viewed from mobile, but importing and editing stays on the web canvas in v1.
-                  </AppText>
-                </View>
-              ) : null}
-            </Card>
-          ) : null}
+          <Card accent={detail.viewerCanAccess ? 'workflow' : marketplaceAccent(detail.accessMode)}>
+            <View style={{ gap: 4 }}>
+              <AppText variant="cardTitle">{detail.viewerCanAccess ? 'Unlocked resources' : "What's included"}</AppText>
+              <AppText variant="caption" color="faint">{resourceLabel(detail.resourceKinds)}</AppText>
+            </View>
+            <PostResourceBundleContent
+              fileLoadingPath={fileLoadingPath}
+              lockedPreview={detail.lockedPreview}
+              mediaItems={resourceMediaItems}
+              onCopy={async (text) => {
+                await Clipboard.setStringAsync(text);
+              }}
+              onError={setResourceError}
+              onOpenFile={openResourceFile}
+              onOpenUrl={openResourceUrl}
+              resolveFileUrl={resolveResourceFileUrl}
+              resources={detail.viewerCanAccess ? resources ?? null : null}
+            />
+            {resourceError ? <StatusBlock tone="danger" title="Resource unavailable" body={resourceError} /> : null}
+          </Card>
 
           <Card>
             {!user ? (
@@ -149,7 +181,7 @@ export default function MarketplaceAssetScreen() {
               </View>
             ) : detail.accessMode === 'free' ? (
               <PrimaryButton
-                label={unlockMutation.isPending ? 'Unlocking...' : 'Unlock free resources'}
+                label={unlockMutation.isPending ? 'Getting resources...' : 'Get resources — Free'}
                 loading={unlockMutation.isPending}
                 onPress={() => {
                   if (!user) {
@@ -185,7 +217,6 @@ export default function MarketplaceAssetScreen() {
                 />
               </View>
             )}
-            <SecondaryButton label="Open listing on web" onPress={() => void Linking.openURL(webUrl)} />
           </Card>
         </>
       ) : !detailQuery.isLoading ? (

@@ -43,6 +43,7 @@ import { slugifySourceTool } from '@/lib/source-tools';
 import { getPersonalizedShowcaseFeedPage } from '@/lib/showcase-feed-personalization';
 import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
+import { loadBlockedCreatorIds } from '@/lib/moderation-service';
 import {
   shouldCacheIdentitylessForYouBootstrap,
   shouldCacheViewerNeutralShowcaseBasePage,
@@ -932,6 +933,7 @@ async function getLegacyShowcaseFeedPageBase(
           mediaKind: getPostMediaKind(resolvedCategory, 'media'),
           mediaItems: [{
             id: `${generation.id}:cover`,
+            mediaKey: 'media-1',
             url: mediaUrl,
             previewUrl,
             mediaKind: getPostMediaKind(resolvedCategory, 'media') ?? 'image',
@@ -1200,9 +1202,32 @@ async function attachViewerStateToFeed(
     return feed;
   }
 
+  let viewerSafeItems = feed.items;
+  try {
+    const blockedCreatorIds = await loadBlockedCreatorIds({
+      adminSupabase,
+      creatorIds: feed.items
+        .map((item) => item.creator.id)
+        .filter((id): id is string => Boolean(id)),
+      viewerUserId,
+    });
+    viewerSafeItems = feed.items.filter((item) => (
+      !item.creator.id || !blockedCreatorIds.has(item.creator.id)
+    ));
+  } catch (error) {
+    // Blocking is a user-safety boundary. Fail closed for authenticated feeds
+    // rather than returning content from a relationship we could not verify.
+    console.error('Error filtering blocked creators from Showcase feed:', error);
+    viewerSafeItems = [];
+  }
+
+  if (viewerSafeItems.length === 0) {
+    return { ...feed, items: [] };
+  }
+
   const remixEligibleBundleIds = Array.from(
     new Set(
-      feed.items
+      viewerSafeItems
         .filter((item) => item.asset?.allowRemix)
         .map((item) => item.asset?.id)
         .filter((bundleId): bundleId is string => Boolean(bundleId) && !isGenerationRecipeAssetId(bundleId))
@@ -1214,14 +1239,14 @@ async function attachViewerStateToFeed(
       .from('post_saves')
       .select('post_id')
       .eq('user_id', viewerUserId)
-      .in('post_id', feed.items.map((item) => item.id));
+      .in('post_id', viewerSafeItems.map((item) => item.id));
 
     if (error && isMissingPostsSchemaError(error)) {
       const legacySavedResult = await adminSupabase
         .from('showcase_saves')
         .select('generation_id')
         .eq('user_id', viewerUserId)
-        .in('generation_id', feed.items.map((item) => item.generationId ?? item.id));
+        .in('generation_id', viewerSafeItems.map((item) => item.generationId ?? item.id));
 
       if (legacySavedResult.error) {
         console.error('Error fetching legacy showcase saved state for feed page:', legacySavedResult.error);
@@ -1269,7 +1294,7 @@ async function attachViewerStateToFeed(
 
   return {
     ...feed,
-    items: feed.items.map((item) => {
+    items: viewerSafeItems.map((item) => {
       const viewerCanAccessBundle = Boolean(
         item.asset && (
           isGenerationRecipeAssetId(item.asset.id)

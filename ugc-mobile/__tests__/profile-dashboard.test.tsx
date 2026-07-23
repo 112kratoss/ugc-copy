@@ -388,7 +388,7 @@ describe('ProfileDashboard media tiles routing', () => {
 
     // Find the Creations tile.
     const tile = tree!.root.findByProps({
-      accessibilityLabel: 'Creation, Cre',
+      accessibilityLabel: 'Creation, Cre, Linked post',
     });
 
     renderer.act(() => {
@@ -632,11 +632,11 @@ describe('ProfileDashboard media tiles routing', () => {
       tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
     });
 
-    expect(tree!.root.findByProps({ accessibilityLabel: 'Creation, Ready image' })).toBeTruthy();
-    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Creation, Processing video' })).toHaveLength(0);
-    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Creation, Failed image' })).toHaveLength(0);
-    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Creation, Archived image' })).toHaveLength(0);
-    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Creation, Missing media' })).toHaveLength(0);
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Creation, Ready image, Not posted' })).toBeTruthy();
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Creation, Processing video, Not posted' })).toHaveLength(0);
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Creation, Failed image, Not posted' })).toHaveLength(0);
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Creation, Archived image, Not posted' })).toHaveLength(0);
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Creation, Missing media, Not posted' })).toHaveLength(0);
   });
 
   it('hides creation videos until a poster is ready', () => {
@@ -682,7 +682,7 @@ describe('ProfileDashboard media tiles routing', () => {
       tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
     });
 
-    expect(tree!.root.findByProps({ accessibilityLabel: 'Creation, Caption set' })).toBeTruthy();
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Creation, Caption set, Not posted' })).toBeTruthy();
     expect(tree!.root.findByProps({ children: 'Write three captions for a product launch.' })).toBeTruthy();
   });
 

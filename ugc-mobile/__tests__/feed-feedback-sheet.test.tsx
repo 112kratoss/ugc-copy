@@ -21,6 +21,7 @@ vi.mock('react-native', () => ({
     ...props,
     style: resolvePressableStyle(style),
   }, children),
+  ScrollView: ({ children, ...props }: MockProps) => React.createElement('scrollview', props, children),
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
 }));
@@ -39,6 +40,9 @@ describe('feed feedback sheet', () => {
   it('exposes accessible post and creator feedback actions', () => {
     const onNotInterested = vi.fn();
     const onHideCreator = vi.fn();
+    const onBlockUser = vi.fn();
+    const onReportContent = vi.fn();
+    const onReportUser = vi.fn();
     let tree: renderer.ReactTestRenderer | undefined;
 
     renderer.act(() => {
@@ -46,8 +50,11 @@ describe('feed feedback sheet', () => {
         <FeedFeedbackSheet
           creatorLabel="@luna"
           onClose={vi.fn()}
+          onBlockUser={onBlockUser}
           onHideCreator={onHideCreator}
           onNotInterested={onNotInterested}
+          onReportContent={onReportContent}
+          onReportUser={onReportUser}
           postTitle="Serum reveal"
           visible
         />
@@ -56,9 +63,15 @@ describe('feed feedback sheet', () => {
 
     renderer.act(() => pressable(tree!.root, 'Not interested').props.onPress());
     renderer.act(() => pressable(tree!.root, 'Hide @luna').props.onPress());
+    renderer.act(() => pressable(tree!.root, 'Report content').props.onPress());
+    renderer.act(() => pressable(tree!.root, 'Report user').props.onPress());
+    renderer.act(() => pressable(tree!.root, 'Block user').props.onPress());
 
     expect(onNotInterested).toHaveBeenCalledOnce();
     expect(onHideCreator).toHaveBeenCalledOnce();
+    expect(onReportContent).toHaveBeenCalledOnce();
+    expect(onReportUser).toHaveBeenCalledOnce();
+    expect(onBlockUser).toHaveBeenCalledOnce();
     expect(pressable(tree!.root, 'Not interested').props.accessibilityHint).toContain('Remove this post');
   });
 
@@ -69,9 +82,11 @@ describe('feed feedback sheet', () => {
         <FeedFeedbackSheet
           creatorLabel="@me"
           hideCreatorDisabled
+          onBlockUser={vi.fn()}
           onClose={vi.fn()}
           onHideCreator={vi.fn()}
           onNotInterested={vi.fn()}
+          onReportUser={vi.fn()}
           postTitle="My post"
           visible
         />
@@ -81,6 +96,8 @@ describe('feed feedback sheet', () => {
     const hide = pressable(tree!.root, 'Hide @me');
     expect(hide.props.disabled).toBe(true);
     expect(hide.props.accessibilityState).toEqual({ disabled: true });
+    expect(pressable(tree!.root, 'Report user').props.disabled).toBe(true);
+    expect(pressable(tree!.root, 'Block user').props.disabled).toBe(true);
   });
 
   it('labels anonymous feedback as limited to this visit', () => {

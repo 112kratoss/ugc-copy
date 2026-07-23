@@ -5,7 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer } from 'expo-video';
-import { ArrowLeft, Copy, Download, ExternalLink, FileText, Heart, ImageOff, Images, Lock, MoreVertical, Play, Repeat2, Share2, Volume2, VolumeX, X } from 'lucide-react-native';
+import { ArrowLeft, Copy, FileText, Heart, ImageOff, Images, Lock, MoreVertical, Play, Repeat2, Share2, Volume2, VolumeX, X } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Alert, Animated, Easing, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
-import { PostResourceReferences } from '@/components/post-resource-references';
+import { PostResourceBundleContent } from '@/components/post-resource-bundle-content';
 import { Pill, SecondaryButton, StatusBlock } from '@/components/ui';
 import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
@@ -67,7 +67,7 @@ import {
   type ShowcaseFeedEventDetails,
 } from '@/lib/showcase-feed-events';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
-import type { MarketplaceResourceDetail, PostResourceAttachment, PostResourceKind, ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
+import type { PostResourceKind, ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
 import { getNativeRemixCreateHref, getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, type SaveHeartTapAnimationSpec } from '@/lib/viewer-actions';
 
 type ViewerParams = {
@@ -597,6 +597,7 @@ export default function ImmersivePreviewViewerScreen() {
               params: { tab: 'posts' },
             } as never);
           }}
+          onBlocked={() => leaveViewer()}
           onSourceRefresh={() => void sourceQuery.refetch()}
           visible={actionsOpenItemId === activeItem.id}
         />
@@ -1190,13 +1191,13 @@ function PostDetailsPage({
     },
   });
 
-  const resolveReferenceFileUrl = useCallback(async (storagePath: string) => {
+  const resolveResourceFileUrl = useCallback(async (storagePath: string) => {
     const postId = item.showcasePostId ?? item.ownerPostId ?? item.id;
     const response = await api.getPostResourceFileUrl(postId, storagePath);
     return response.signedUrl;
   }, [api, item.id, item.ownerPostId, item.showcasePostId]);
 
-  const openReferenceUrl = useCallback(async (url: string) => {
+  const openResourceUrl = useCallback(async (url: string) => {
     setResourceError(null);
     await Linking.openURL(url);
   }, []);
@@ -1215,21 +1216,12 @@ function PostDetailsPage({
     await Haptics.selectionAsync();
   };
 
-  const openAttachment = async (attachment: PostResourceAttachment) => {
+  const openResourceFile = async ({ storagePath }: { storagePath: string; title: string; contentType: string | null }) => {
     try {
       setResourceError(null);
-      if (attachment.url) {
-        await Linking.openURL(attachment.url);
-        return;
-      }
-      if (attachment.storagePath) {
-        setFileLoadingPath(attachment.storagePath);
-        const postId = item.showcasePostId ?? item.ownerPostId ?? item.id;
-        const response = await api.getPostResourceFileUrl(postId, attachment.storagePath);
-        await Linking.openURL(response.signedUrl);
-        return;
-      }
-      Alert.alert('Attachment unavailable', 'This attachment does not have an openable link.');
+      setFileLoadingPath(storagePath);
+      const signedUrl = await resolveResourceFileUrl(storagePath);
+      await Linking.openURL(signedUrl);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to open this resource.';
       setResourceError(message);
@@ -1341,35 +1333,21 @@ function PostDetailsPage({
               {resourceQuery.error instanceof Error ? (
                 <Text selectable style={{ color: '#ff8a9a', fontSize: 13, fontWeight: '700' }}>{resourceQuery.error.message}</Text>
               ) : null}
-              {resources ? (
-                <UnlockedResources
-                  fileLoadingPath={fileLoadingPath}
-                  onCopy={copyText}
-                  onOpenReferenceUrl={openReferenceUrl}
-                  onOpenAttachment={openAttachment}
-                  onReferenceError={setResourceError}
-                  resolveReferenceFileUrl={resolveReferenceFileUrl}
-                  resources={resources}
-                />
-              ) : (
+              <PostResourceBundleContent
+                fileLoadingPath={fileLoadingPath}
+                lockedPreview={bundle?.lockedPreview}
+                mediaItems={item.mediaItems}
+                onCopy={copyText}
+                onError={setResourceError}
+                onOpenFile={openResourceFile}
+                onOpenUrl={openResourceUrl}
+                resolveFileUrl={resolveResourceFileUrl}
+                resources={resources}
+              />
+              {!resources ? (
                 <View style={{ gap: 10 }}>
-                  {bundle?.lockedPreview?.promptPreview ? (
-                    <LockedPreviewText label="Prompt preview" value={bundle.lockedPreview.promptPreview} />
-                  ) : null}
-                  {bundle?.lockedPreview?.notesPreview ? (
-                    <LockedPreviewText label="Notes preview" value={bundle.lockedPreview.notesPreview} />
-                  ) : null}
-                  {bundle?.lockedPreview?.attachmentPreviews?.length ? (
-                    <View style={{ gap: 8 }}>
-                      {bundle.lockedPreview.attachmentPreviews.map((attachment) => (
-                        <Text key={`${attachment.kind}-${attachment.label}`} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 13 }}>
-                          {attachment.kind === 'file' ? 'File' : 'Link'} · {attachment.label}
-                        </Text>
-                      ))}
-                    </View>
-                  ) : null}
                   <DetailActionButton
-                    label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Unlock free' : 'Unlock with credits'}
+                    label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Get resources — Free' : 'Unlock with credits'}
                     icon={<Lock size={18} color="#050505" strokeWidth={2.8} />}
                     loading={unlockMutation.isPending}
                     primary
@@ -1383,21 +1361,12 @@ function PostDetailsPage({
                   />
                   {unlockError ? <Text selectable style={{ color: '#ff8a9a', fontSize: 13, fontWeight: '700' }}>{unlockError}</Text> : null}
                 </View>
-              )}
+              ) : null}
               {resourceError ? <Text selectable style={{ color: '#ff8a9a', fontSize: 13, fontWeight: '700' }}>{resourceError}</Text> : null}
             </>
           ) : null}
         </View>
       </ScrollView>
-    </View>
-  );
-}
-
-function LockedPreviewText({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={{ borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: appTheme.colors.surface, padding: appTheme.spacing.gap, gap: 5 }}>
-      <Text style={{ color: appTheme.colors.faint, ...appTheme.type.caption, textTransform: 'uppercase' }}>{label}</Text>
-      <Text selectable numberOfLines={4} style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>{value}</Text>
     </View>
   );
 }
@@ -1486,76 +1455,6 @@ function ResourceKindRow({ kinds }: { kinds: PostResourceKind[] }) {
           <Text style={{ color: appTheme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>{resourceKindLabel(kind)}</Text>
         </View>
       ))}
-    </View>
-  );
-}
-
-function UnlockedResources({
-  fileLoadingPath,
-  onCopy,
-  onOpenAttachment,
-  onOpenReferenceUrl,
-  onReferenceError,
-  resolveReferenceFileUrl,
-  resources,
-}: {
-  fileLoadingPath: string | null;
-  onCopy: (text: string) => Promise<void>;
-  onOpenAttachment: (attachment: PostResourceAttachment) => Promise<void>;
-  onOpenReferenceUrl: (url: string) => Promise<void>;
-  onReferenceError: (message: string) => void;
-  resolveReferenceFileUrl: (storagePath: string) => Promise<string>;
-  resources: NonNullable<MarketplaceResourceDetail['resources']>;
-}) {
-  return (
-    <View style={{ gap: 12 }}>
-      {resources.promptText ? (
-        <DetailSection title="Unlocked prompt" emptyLabel="">
-          <CopyableText text={resources.promptText} onCopy={onCopy} />
-        </DetailSection>
-      ) : null}
-      <PostResourceReferences
-        items={resources.items}
-        onError={onReferenceError}
-        onOpenUrl={onOpenReferenceUrl}
-        resolveFileUrl={resolveReferenceFileUrl}
-      />
-      {resources.notesMarkdown ? (
-        <DetailSection title="Creator notes" emptyLabel="">
-          <CopyableText text={resources.notesMarkdown} onCopy={onCopy} />
-        </DetailSection>
-      ) : null}
-      {resources.workflowShareUrl ? (
-        <DetailActionButton
-          label="Open workflow"
-          icon={<ExternalLink size={18} color="#fff" strokeWidth={2.5} />}
-          onPress={() => void Linking.openURL(resources.workflowShareUrl as string)}
-        />
-      ) : null}
-      {resources.attachments.length ? (
-        <View style={{ gap: 8 }}>
-          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>Files and links</Text>
-          {resources.attachments.map((attachment) => {
-            const loading = Boolean(attachment.storagePath && attachment.storagePath === fileLoadingPath);
-            return (
-              <DetailActionButton
-                key={`${attachment.label}-${attachment.url ?? attachment.storagePath ?? 'attachment'}`}
-                label={attachment.label}
-                icon={attachment.kind === 'file'
-                  ? <Download size={18} color="#fff" strokeWidth={2.5} />
-                  : <ExternalLink size={18} color="#fff" strokeWidth={2.5} />}
-                loading={loading}
-                onPress={() => void onOpenAttachment(attachment)}
-              />
-            );
-          })}
-        </View>
-      ) : null}
-      {resources.allowRemix ? (
-        <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 14, lineHeight: 20 }}>
-          Remix access is included with this unlock.
-        </Text>
-      ) : null}
     </View>
   );
 }

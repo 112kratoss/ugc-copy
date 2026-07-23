@@ -1,4 +1,4 @@
-import { useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 
 import { MediaCreationScreen } from '@/components/media-creation-screen';
 import type { CreatorToolId } from '@/lib/types';
@@ -26,6 +26,10 @@ export default function CreateTabScreen() {
       initialTool={initialTool}
       insideTab
       guided={guided}
+      onClose={() => {
+        if (router.canGoBack()) router.back();
+        else router.replace('/(tabs)' as never);
+      }}
     />
   );
 }

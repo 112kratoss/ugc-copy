@@ -10,15 +10,14 @@ function readProjectFile(path: string) {
 }
 
 describe('mobile startup performance contracts', () => {
-  it('reports first render and interactivity through EAS Observe', () => {
+  it('reports first render without invoking the unsafe Android interactivity bridge', () => {
     const layoutSource = readProjectFile('app/_layout.tsx');
     const packageJson = JSON.parse(readProjectFile('package.json'));
 
     expect(packageJson.dependencies['expo-observe']).toBe('^0.2.4');
     expect(layoutSource).toContain('AppMetricsRoot.wrap(RootLayout)');
-    expect(layoutSource).toContain('if (!startupInteractiveReady || hasMarkedInteractive.current) return;');
     expect(layoutSource).toContain('STARTUP_VERSION_CHECK_FALLBACK_MS');
-    expect(layoutSource).toContain('AppMetrics.markInteractive()');
+    expect(layoutSource).not.toContain('AppMetrics.markInteractive');
   });
 
   it('does not initialize RevenueCat from the global auth provider', () => {

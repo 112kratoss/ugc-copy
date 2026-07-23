@@ -7,6 +7,7 @@ import {
   type PostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
 import { getMediaKindFromContentType, MAX_POST_MEDIA_ITEMS } from '@/lib/post-media';
+import { defaultPostMediaKey, normalizePostMediaKey } from '@/lib/post-media-key';
 import {
   normalizeSourceToolInputWithCatalog,
   normalizeSourceToolSelectionsWithCatalog,
@@ -29,12 +30,14 @@ const BODY_MAX_LENGTH = 2000;
 export type SubmittedPostMediaItem =
   | {
       source: 'file';
+      mediaKey: string;
       file: File;
       originalName: string;
       contentType: string;
     }
   | {
       source: 'uploaded';
+      mediaKey: string;
       filePath: string;
       temporaryStoragePath: string;
       originalName: string;
@@ -182,12 +185,18 @@ function parseMediaItemsPayload(params: {
   }
 
   const items: SubmittedPostMediaItem[] = [];
-  for (const value of parsed) {
+  for (const [index, value] of parsed.entries()) {
     if (!value || typeof value !== 'object') {
       return { items: null, error: 'Post media metadata is invalid.' };
     }
 
     const descriptor = value as Record<string, unknown>;
+    const mediaKey = descriptor.mediaKey == null
+      ? defaultPostMediaKey(index)
+      : normalizePostMediaKey(descriptor.mediaKey);
+    if (!mediaKey) {
+      return { items: null, error: 'Post media keys may only use letters, numbers, hyphens, and underscores.' };
+    }
     const { location, error } = parseUploadedMediaLocation({
       storagePath: typeof descriptor.storagePath === 'string' ? descriptor.storagePath : null,
       userId: params.userId,
@@ -205,6 +214,7 @@ function parseMediaItemsPayload(params: {
 
     items.push({
       source: 'uploaded',
+      mediaKey,
       filePath: location.filePath,
       temporaryStoragePath: location.filePath,
       originalName: location.originalName,
@@ -220,7 +230,13 @@ function validateSubmittedMediaItems(items: SubmittedPostMediaItem[]): string | 
     return `Add up to ${MAX_POST_MEDIA_ITEMS} media items per post.`;
   }
 
+  const mediaKeys = new Set<string>();
   for (const item of items) {
+    if (mediaKeys.has(item.mediaKey)) {
+      return 'Post media keys must be unique.';
+    }
+    mediaKeys.add(item.mediaKey);
+
     if (item.contentType.startsWith('audio/')) {
       return 'Audio uploads are not supported in Showcase yet.';
     }
@@ -309,7 +325,8 @@ function resolveTitle(title: string | null, body: string | null, postFormat: Sho
 
 function parseResourceBundle(
   value: FormDataEntryValue | null,
-  ownerUserId: string
+  ownerUserId: string,
+  mediaKeys: Iterable<string>
 ): { bundle: PostResourceBundleInput | null; error: string | null } {
   if (typeof value !== 'string' || !value.trim()) {
     return {
@@ -328,7 +345,7 @@ function parseResourceBundle(
       };
     }
 
-    const validationError = validatePostResourceBundleInput(parsed, { ownerUserId });
+    const validationError = validatePostResourceBundleInput(parsed, { ownerUserId, mediaKeys });
     if (validationError) {
       return {
         bundle: null,
@@ -397,13 +414,15 @@ export async function preparePostCreationSubmission({
     legacyUploadedMedia
       ? [{
           source: 'uploaded' as const,
+          mediaKey: defaultPostMediaKey(0),
           filePath: legacyUploadedMedia.filePath,
           temporaryStoragePath: legacyUploadedMedia.filePath,
           originalName: legacyUploadedMedia.originalName,
           contentType: legacyUploadedMedia.contentType,
         }]
-      : rawMediaFiles.map((mediaFile) => ({
+      : rawMediaFiles.map((mediaFile, index) => ({
           source: 'file' as const,
+          mediaKey: defaultPostMediaKey(index),
           file: mediaFile,
           originalName: mediaFile.name,
           contentType: mediaFile.type,
@@ -486,7 +505,8 @@ export async function preparePostCreationSubmission({
   const sourceKind = postFormat === 'text' ? 'manual' : 'external';
   const { bundle: resourceBundle, error: resourceBundleError } = parseResourceBundle(
     formData.get('resourceBundle'),
-    userId
+    userId,
+    submittedMediaItems.map((item) => item.mediaKey)
   );
   if (resourceBundleError) {
     return badRequest(resourceBundleError);

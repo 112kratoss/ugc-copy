@@ -95,6 +95,65 @@ describe('post resource bundle validation', () => {
       'note',
       'remix_access',
     ]);
+    expect(items.map((item) => item.id)).toEqual([
+      'item-1',
+      'item-2',
+      'item-3',
+      'item-4',
+      'item-5',
+      'item-6',
+    ]);
+    expect(items.every((item) => item.scope.kind === 'all')).toBe(true);
+  });
+
+  it('preserves media scopes and validates their stable proof-media keys', () => {
+    const bundle = {
+      accessMode: 'free' as const,
+      resources: {
+        items: [{
+          id: 'hook-prompt',
+          scope: { kind: 'media' as const, mediaKeys: ['proof-a', 'proof-b'] },
+          type: 'prompt' as const,
+          title: 'Hook prompt',
+          textContent: 'Open on the product result.',
+        }],
+      },
+    };
+
+    expect(normalizePostResourceItems(bundle.resources.items)[0]).toMatchObject({
+      id: 'hook-prompt',
+      scope: { kind: 'media', mediaKeys: ['proof-a', 'proof-b'] },
+    });
+    expect(validatePostResourceBundleInput(bundle, { mediaKeys: ['proof-a', 'proof-b'] })).toBeNull();
+    expect(validatePostResourceBundleInput(bundle, { mediaKeys: ['proof-a'] })).toMatch(/not part of this post/i);
+  });
+
+  it('counts video, audio, and gated remix-link resources without enabling native remix', () => {
+    const items = normalizePostResourceItems([
+      { type: 'reference_video', title: 'Motion reference', storagePath: 'user-1/reference.mp4' },
+      { type: 'reference_audio', title: 'Voice reference', storagePath: 'user-1/reference.mp3' },
+      {
+        type: 'remix_link',
+        title: 'External remix',
+        externalUrl: 'https://example.com/remix',
+        remixUse: 'direct_remix',
+      },
+    ]);
+    const preview = buildPostResourceBundleLockedPreview({ items });
+    const sanitized = sanitizePostResourceBundleLockedPreview(preview);
+
+    expect(items.map((item) => item.remixUse)).toEqual(['reference_only', 'reference_only', 'none']);
+    expect(preview.itemCounts).toMatchObject({ reference_video: 1, reference_audio: 1, remix_link: 1 });
+    expect(preview.hasRemix).toBe(true);
+    expect(sanitized?.hasRemix).toBe(true);
+    expect(JSON.stringify(sanitized)).not.toContain('https://example.com/remix');
+    expect(resolvePostRemixCapability({
+      generationId: null,
+      postFormat: 'media',
+      category: 'image',
+      sourceKind: 'external',
+      resourceBundle: { viewerCanAccess: false, allowRemix: false, items: [items[2]!] },
+    })).toEqual({ capability: 'unsupported', target: null });
   });
 
   it('normalizes optional resource sections and keeps invalid item section ids global', () => {
@@ -188,6 +247,52 @@ describe('post resource bundle validation', () => {
     expect(serialized).not.toContain('Reveal the unreleased product');
     expect(serialized).not.toContain('Unreleased campaign prompt');
     expect(serialized).not.toContain('application/pdf');
+    expect(sanitized?.cardPreviews).toEqual([]);
+  });
+
+  it('publishes only explicitly authored public card metadata in locked previews', () => {
+    const preview = buildPostResourceBundleLockedPreview({
+      sections: [{
+        id: 'hook',
+        title: 'Private internal hook notes',
+        publicTitle: 'Hook prompt pack',
+        resourceType: 'prompt',
+        scope: { kind: 'media', mediaKeys: ['proof-a'] },
+        kind: 'scene',
+        description: 'Private section instructions',
+        sortOrder: 0,
+      }],
+      items: [{
+        id: 'hook-prompt',
+        scope: { kind: 'media', mediaKeys: ['proof-a'] },
+        type: 'prompt',
+        role: 'primary',
+        sectionId: 'hook',
+        title: 'Private prompt name',
+        description: null,
+        textContent: 'Private prompt content',
+        externalUrl: null,
+        storagePath: null,
+        contentType: null,
+        sizeBytes: null,
+        workflowSnapshot: null,
+        sortOrder: 0,
+        isPrimary: true,
+        remixUse: 'none',
+      }],
+    });
+
+    const sanitized = sanitizePostResourceBundleLockedPreview(preview);
+    expect(sanitized?.cardPreviews).toEqual([{
+      sectionId: 'hook',
+      publicTitle: 'Hook prompt pack',
+      resourceType: 'prompt',
+      scope: { kind: 'media', mediaKeys: ['proof-a'] },
+      itemCount: 1,
+      hasRemix: false,
+    }]);
+    expect(JSON.stringify(sanitized)).not.toContain('Private internal hook notes');
+    expect(JSON.stringify(sanitized)).not.toContain('Private prompt name');
   });
 
   it('accepts real unlock content for free and paid bundles', () => {
@@ -208,6 +313,19 @@ describe('post resource bundle validation', () => {
         allowRemix: true,
       },
     })).toBeNull();
+  });
+
+  it('requires paid prices to start at 10 and use 10-token increments', () => {
+    const bundleForPrice = (priceUsdCents: number) => ({
+      accessMode: 'paid' as const,
+      priceUsdCents,
+      resources: { promptText: 'A complete reusable prompt.' },
+    });
+
+    expect(validatePostResourceBundleInput(bundleForPrice(10))).toBeNull();
+    expect(validatePostResourceBundleInput(bundleForPrice(20))).toBeNull();
+    expect(validatePostResourceBundleInput(bundleForPrice(9))).toMatch(/at least 10 tokens/i);
+    expect(validatePostResourceBundleInput(bundleForPrice(15))).toMatch(/10-token increments/i);
   });
 
   it('accepts bundles powered only by typed resource items', () => {

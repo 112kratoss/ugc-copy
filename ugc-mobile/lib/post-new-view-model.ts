@@ -40,6 +40,7 @@ export interface PostComposerUpload {
 
 export interface PostComposerMediaItem {
   id: string;
+  mediaKey?: string;
   uri: string;
   name: string;
   type: string;
@@ -50,6 +51,7 @@ export interface PostComposerMediaItem {
 }
 
 export interface PostComposerMediaItemPayload {
+  mediaKey?: string;
   storagePath?: string;
   existingId?: string;
   contentType?: string;
@@ -93,6 +95,29 @@ export interface PostComposerResourceSectionDraft {
   allowRemix: boolean;
 }
 
+export type PostComposerResourceCardType =
+  | 'prompt'
+  | 'reference_media'
+  | 'settings'
+  | 'workflow'
+  | 'source_assets'
+  | 'guide'
+  | 'external_link'
+  | 'remix_link'
+  | 'other';
+
+export interface PostComposerResourceCardDraft {
+  id: string;
+  type: PostComposerResourceCardType;
+  title: string;
+  preview: string;
+  textContent: string;
+  externalUrl: string;
+  attachments: PostComposerResourceAttachmentDraft[];
+  appliesToAll: boolean;
+  mediaKeys: string[];
+}
+
 export interface PostComposerResourceDraft {
   accessMode: PostResourceBundleAccessMode;
   selectedKinds: PostComposerResourceSelections;
@@ -104,10 +129,12 @@ export interface PostComposerResourceDraft {
   attachments: PostComposerResourceAttachmentDraft[];
   organizeSections: boolean;
   sections: PostComposerResourceSectionDraft[];
+  cards: PostComposerResourceCardDraft[];
   allowRemix: boolean;
   summary: string;
   previewText: string;
   priceUsd: string;
+  priceTokens: string;
 }
 
 export interface PostComposerCreationPackageDraft {
@@ -443,6 +470,22 @@ export const POST_COMPOSER_RESOURCE_KIND_OPTIONS: Array<{ id: PostResourceKind; 
   { id: 'remix', label: 'Remix access' },
 ];
 
+export const POST_COMPOSER_RESOURCE_CARD_OPTIONS: Array<{
+  id: PostComposerResourceCardType;
+  label: string;
+  body: string;
+}> = [
+  { id: 'prompt', label: 'Prompt or script', body: 'Reusable text, shot list, or narration.' },
+  { id: 'reference_media', label: 'Reference media', body: 'Images, video, or audio used to make it.' },
+  { id: 'settings', label: 'Model settings', body: 'Seed, parameters, or generation settings.' },
+  { id: 'workflow', label: 'Workflow or project', body: 'A workflow file, project, or setup link.' },
+  { id: 'source_assets', label: 'Source assets', body: 'Editable files, presets, and supporting assets.' },
+  { id: 'guide', label: 'Guide or notes', body: 'Steps, tips, and usage instructions.' },
+  { id: 'external_link', label: 'External link', body: 'A useful supporting destination.' },
+  { id: 'remix_link', label: 'Remix link', body: 'A protected link to remix this work.' },
+  { id: 'other', label: 'Other', body: 'Anything useful that does not fit above.' },
+];
+
 const DEFAULT_RESOURCE_SELECTIONS: PostComposerResourceSelections = {
   prompt: true,
   workflow: false,
@@ -451,7 +494,9 @@ const DEFAULT_RESOURCE_SELECTIONS: PostComposerResourceSelections = {
   remix: false,
 };
 
-const BODY_MAX_LENGTH = 2000;
+const TITLE_MAX_LENGTH = 100;
+const BODY_MAX_LENGTH = 1000;
+const MIN_RESOURCE_PRICE_TOKENS = 10;
 const MAX_MEDIA_ITEMS = 5;
 const MAX_MADE_WITH_ROWS = 5;
 
@@ -467,11 +512,106 @@ export function getDefaultResourceDraft(): PostComposerResourceDraft {
     attachments: [],
     organizeSections: false,
     sections: [],
+    cards: [],
     allowRemix: false,
     summary: '',
     previewText: '',
-    priceUsd: '9',
+    priceUsd: '1',
+    priceTokens: '100',
   };
+}
+
+export function createPostComposerResourceCard(
+  type: PostComposerResourceCardType,
+  partial: Partial<PostComposerResourceCardDraft> = {}
+): PostComposerResourceCardDraft {
+  const option = POST_COMPOSER_RESOURCE_CARD_OPTIONS.find((candidate) => candidate.id === type);
+
+  return {
+    id: partial.id ?? `resource-${Math.random().toString(36).slice(2, 10)}`,
+    type,
+    title: partial.title ?? option?.label ?? 'Resource',
+    preview: partial.preview ?? '',
+    textContent: partial.textContent ?? '',
+    externalUrl: partial.externalUrl ?? '',
+    attachments: partial.attachments ?? [],
+    appliesToAll: partial.appliesToAll ?? true,
+    mediaKeys: partial.mediaKeys ?? [],
+  };
+}
+
+export function hydratePostComposerResourceCards(
+  bundle: PostResourceBundleInput | null | undefined
+): PostComposerResourceCardDraft[] {
+  const resources = bundle?.resources;
+  const items = resources?.items ?? [];
+  if (items.length === 0) {
+    return [];
+  }
+
+  const sections = new Map((resources?.sections ?? []).map((section) => [section.id, section]));
+  const groups = new Map<string, PostResourceItem[]>();
+  items.forEach((item, index) => {
+    const groupKey = item.sectionId || `item-${item.id ?? index}`;
+    groups.set(groupKey, [...(groups.get(groupKey) ?? []), item]);
+  });
+
+  return [...groups.entries()].map(([groupKey, groupItems]) => {
+    const first = groupItems[0]!;
+    const section = first.sectionId ? sections.get(first.sectionId) : undefined;
+    const type = inferResourceCardType(groupItems);
+    const mediaKeys = [...new Set(groupItems.flatMap((item) => item.scope?.kind === 'media'
+      ? item.scope.mediaKeys
+      : section?.scope?.kind === 'media'
+        ? section.scope.mediaKeys
+        : []))];
+    const appliesToAll = groupItems.some((item) => !item.scope || item.scope.kind === 'all')
+      && section?.scope?.kind !== 'media'
+      || mediaKeys.length === 0;
+    const contentItem = groupItems.find((item) => item.textContent);
+    const urlItem = type === 'external_link' || type === 'remix_link' || type === 'workflow'
+      ? groupItems.find((item) => item.externalUrl)
+      : undefined;
+    const attachments = groupItems
+      .filter((item) => item.storagePath || (item.externalUrl && item !== urlItem))
+      .map((item, index): PostComposerResourceAttachmentDraft => ({
+        id: item.id ?? `${groupKey}-attachment-${index + 1}`,
+        kind: item.storagePath ? 'file' : 'link',
+        label: item.title,
+        url: item.externalUrl ?? '',
+        storagePath: item.storagePath ?? '',
+        contentType: item.contentType,
+        sizeBytes: item.sizeBytes,
+        resourceType: item.type,
+        role: item.role,
+        remixUse: item.remixUse,
+      }));
+
+    return createPostComposerResourceCard(type, {
+      id: section?.id ?? first.sectionId ?? first.id ?? groupKey,
+      title: section?.publicTitle ?? section?.title ?? first.title,
+      preview: section?.description ?? '',
+      textContent: contentItem?.textContent ?? '',
+      externalUrl: urlItem?.externalUrl ?? '',
+      attachments,
+      appliesToAll,
+      mediaKeys,
+    });
+  });
+}
+
+function inferResourceCardType(items: PostResourceItem[]): PostComposerResourceCardType {
+  const types = new Set(items.map((item) => item.type));
+  if (types.has('remix_link')) return 'remix_link';
+  if (types.has('remix_access')) return 'other';
+  if (types.has('prompt')) return 'prompt';
+  if (types.has('settings') || types.has('preset')) return 'settings';
+  if (types.has('reference_image') || types.has('reference_video') || types.has('reference_audio')) return 'reference_media';
+  if (types.has('workflow')) return 'workflow';
+  if (types.has('source_file')) return 'source_assets';
+  if (types.has('external_link')) return 'external_link';
+  if (types.has('note')) return 'guide';
+  return 'other';
 }
 
 export function getDefaultCreationPackageDraft(): PostComposerCreationPackageDraft {
@@ -598,6 +738,44 @@ export function buildUpdatePostPayload(isGenerationBacked: boolean, draft: PostC
 }
 
 export function validatePostComposerDraft(draft: PostComposerDraft): PostComposerValidationResult {
+  const detailsValidation = validatePostComposerDetails(draft);
+  if (!detailsValidation.valid) {
+    return detailsValidation;
+  }
+
+  if (draft.resource.accessMode !== 'none') {
+    const resourceBundle = buildPostResourceBundleInput(draft.resource);
+    if (!resourceBundle) {
+      return { valid: false, message: 'Add at least one unlockable resource.' };
+    }
+
+    if (!resourceBundle.previewText?.trim()) {
+      return { valid: false, message: 'Add a buyer preview for the unlock.' };
+    }
+
+    if (draft.resource.accessMode === 'paid') {
+      const priceTokens = getPriceTokens(draft.resource);
+      if (priceTokens < MIN_RESOURCE_PRICE_TOKENS) {
+        return { valid: false, message: `Paid resources must cost at least ${MIN_RESOURCE_PRICE_TOKENS} tokens.` };
+      }
+      if (priceTokens % 10 !== 0) {
+        return { valid: false, message: 'Resource prices must use increments of 10 tokens.' };
+      }
+    }
+  }
+
+  return { valid: true };
+}
+
+export function validatePostComposerDetails(draft: PostComposerDraft): PostComposerValidationResult {
+  if (!draft.title.trim()) {
+    return { valid: false, message: 'Add a title before continuing.' };
+  }
+
+  if (draft.title.trim().length > TITLE_MAX_LENGTH) {
+    return { valid: false, message: `Titles are limited to ${TITLE_MAX_LENGTH} characters.` };
+  }
+
   if (isTextProof(draft) && !draft.contentText.trim() && !draft.caption.trim()) {
     return { valid: false, message: 'Write the text post or add a caption.' };
   }
@@ -613,21 +791,6 @@ export function validatePostComposerDraft(draft: PostComposerDraft): PostCompose
   const body = getCreatePostBody(draft);
   if (body.length > BODY_MAX_LENGTH) {
     return { valid: false, message: `Posts are limited to ${BODY_MAX_LENGTH} characters.` };
-  }
-
-  if (draft.resource.accessMode !== 'none') {
-    const resourceBundle = buildPostResourceBundleInput(draft.resource);
-    if (!resourceBundle) {
-      return { valid: false, message: 'Add at least one unlockable resource.' };
-    }
-
-    if (!draft.resource.previewText.trim()) {
-      return { valid: false, message: 'Add a buyer preview for the unlock.' };
-    }
-
-    if (draft.resource.accessMode === 'paid' && getPriceUsdCents(draft.resource.priceUsd) < 100) {
-      return { valid: false, message: 'Paid unlocks must be at least $1.00.' };
-    }
   }
 
   return { valid: true };
@@ -676,7 +839,7 @@ export function buildPostComposerMediaItemsPayload(draft: PostComposerDraft): Po
     .slice(0, MAX_MEDIA_ITEMS)
     .map((item): PostComposerMediaItemPayload | null => {
       if (item.existingId) {
-        return { existingId: item.existingId };
+        return { existingId: item.existingId, mediaKey: item.mediaKey ?? item.id };
       }
 
       if (!item.storagePath) {
@@ -684,6 +847,7 @@ export function buildPostComposerMediaItemsPayload(draft: PostComposerDraft): Po
       }
 
       return {
+        mediaKey: item.mediaKey ?? item.id,
         storagePath: item.storagePath,
         contentType: item.type,
         originalName: item.name,
@@ -760,6 +924,7 @@ function buildOptimisticProfileMediaItems(draft: PostComposerDraft): NonNullable
     : draft.upload
       ? [{
           id: 'optimistic-upload',
+          mediaKey: 'optimistic-upload',
           uri: draft.upload.uri,
           previewUrl: draft.upload.uri,
           name: draft.upload.name,
@@ -775,6 +940,7 @@ function buildOptimisticProfileMediaItems(draft: PostComposerDraft): NonNullable
 
     return {
       id: item.existingId ?? item.id,
+      mediaKey: item.mediaKey ?? item.id,
       url,
       previewUrl: item.mediaKind === 'image' ? url : null,
       mediaKind: item.mediaKind,
@@ -806,6 +972,34 @@ function inferMediaKindFromDraft(draft: PostComposerDraft): 'image' | 'video' | 
 export function buildPostResourceBundleInput(resource: PostComposerResourceDraft): PostResourceBundleInput | null {
   if (resource.accessMode === 'none') {
     return null;
+  }
+
+  const resourceCards = (resource.cards ?? []).filter(resourceCardHasContent);
+  if (resourceCards.length > 0) {
+    const sections = serializeResourceCardSections(resourceCards);
+    const items = buildResourceCardItems(resourceCards);
+    if (items.length === 0) {
+      return null;
+    }
+
+    const resources = {
+      promptText: null,
+      notesMarkdown: null,
+      workflowShareUrl: null,
+      attachments: [],
+      allowRemix: false,
+      sections,
+      items,
+    };
+    const kinds = getSelectedResourceKinds(resources);
+
+    return {
+      accessMode: resource.accessMode,
+      summary: trimOrUndefined(resource.summary) ?? getResourceCardSummary(resourceCards),
+      previewText: trimOrUndefined(resource.previewText) ?? getResourceCardPreview(resourceCards),
+      priceUsdCents: resource.accessMode === 'paid' ? getPriceTokens(resource) : 0,
+      resources,
+    };
   }
 
   const selectedKinds = getResourceSelections(resource);
@@ -840,7 +1034,7 @@ export function buildPostResourceBundleInput(resource: PostComposerResourceDraft
     accessMode: resource.accessMode,
     summary: trimOrUndefined(resource.summary) ?? getDefaultResourceSummary(kinds),
     previewText: trimOrUndefined(resource.previewText) ?? getDefaultResourcePreview(kinds),
-    priceUsdCents: resource.accessMode === 'paid' ? getPriceUsdCents(resource.priceUsd) : 0,
+    priceUsdCents: resource.accessMode === 'paid' ? getPriceTokens(resource) : 0,
     resources,
   };
 }
@@ -922,6 +1116,10 @@ export function applyCreationPromptResource(
         ...creationPackage,
         attachPromptResource: false,
       },
+      resource: {
+        ...draft.resource,
+        cards: (draft.resource.cards ?? []).filter((card) => card.id !== 'creation-prompt'),
+      },
     };
   }
 
@@ -938,6 +1136,15 @@ export function applyCreationPromptResource(
       accessMode: draft.resource.accessMode === 'none' ? 'free' : draft.resource.accessMode,
       promptText: draft.resource.promptText.trim() ? draft.resource.promptText : prompt,
       previewText: draft.resource.previewText.trim() ? draft.resource.previewText : 'Includes the exact reusable prompt.',
+      cards: [
+        ...(draft.resource.cards ?? []).filter((card) => card.id !== 'creation-prompt'),
+        createPostComposerResourceCard('prompt', {
+          id: 'creation-prompt',
+          title: 'Exact generation prompt',
+          preview: 'The reusable prompt used for this creation.',
+          textContent: prompt,
+        }),
+      ],
     },
   };
 }
@@ -964,6 +1171,25 @@ export function getPostComposerPackageStatus(
   if (resourceActive) {
     const ready = Boolean(resourceBundle && draft.resource.previewText.trim());
     const promptResource = getCreationPackageDraft(draft).attachPromptResource && draft.resource.promptText.trim();
+    const priceTokens = getPriceTokens(draft.resource);
+    const priceNeedsMinimum = draft.resource.accessMode === 'paid' && priceTokens < MIN_RESOURCE_PRICE_TOKENS;
+    const priceNeedsIncrement = draft.resource.accessMode === 'paid' && priceTokens >= MIN_RESOURCE_PRICE_TOKENS && priceTokens % 10 !== 0;
+    if (ready && priceNeedsMinimum) {
+      return {
+        id: 'unlock',
+        label: 'Set a valid price',
+        body: `Paid resources must cost at least ${MIN_RESOURCE_PRICE_TOKENS} tokens.`,
+        state: 'warning',
+      };
+    }
+    if (ready && priceNeedsIncrement) {
+      return {
+        id: 'unlock',
+        label: 'Set a valid price',
+        body: 'Resource prices must use increments of 10 tokens.',
+        state: 'warning',
+      };
+    }
     return {
       id: 'unlock',
       label: ready
@@ -1287,6 +1513,216 @@ function getPriceUsdCents(value: string) {
   return Math.max(0, Math.round(parsed * 100));
 }
 
+export function getPostComposerPriceTokens(resource: PostComposerResourceDraft) {
+  return getPriceTokens(resource);
+}
+
+function getPriceTokens(resource: PostComposerResourceDraft) {
+  const tokenValue = Number.parseInt(resource.priceTokens?.trim() || '', 10);
+  const legacyUsdValue = getPriceUsdCents(resource.priceUsd);
+  if (Number.isFinite(tokenValue)) {
+    if (tokenValue === 100 && legacyUsdValue !== 100 && resource.priceUsd?.trim()) {
+      return legacyUsdValue;
+    }
+    return Math.max(0, tokenValue);
+  }
+
+  return legacyUsdValue;
+}
+
+function resourceCardHasContent(card: PostComposerResourceCardDraft) {
+  const hasText = Boolean(card.textContent.trim());
+  const hasUrl = Boolean(card.externalUrl.trim());
+  const hasAttachments = card.attachments.some((attachment) => (
+    attachment.kind === 'file'
+      ? Boolean(attachment.storagePath?.trim())
+      : Boolean(attachment.url?.trim())
+  ));
+
+  if (card.type === 'prompt' || card.type === 'settings' || card.type === 'guide') {
+    return hasText;
+  }
+  if (card.type === 'external_link' || card.type === 'remix_link') {
+    return hasUrl;
+  }
+  if (card.type === 'reference_media' || card.type === 'source_assets') {
+    return hasAttachments;
+  }
+  return hasText || hasUrl || hasAttachments;
+}
+
+function serializeResourceCardSections(cards: PostComposerResourceCardDraft[]): PostResourceSection[] {
+  return cards.map((card, index) => {
+    const title = card.title.trim() || POST_COMPOSER_RESOURCE_CARD_OPTIONS.find((option) => option.id === card.type)?.label || `Resource ${index + 1}`;
+    const referenceContentType = card.attachments.find((attachment) => attachment.contentType)?.contentType;
+    const resourceType: PostResourceItemType = card.type === 'prompt'
+      ? 'prompt'
+      : card.type === 'reference_media'
+        ? referenceContentType?.startsWith('video/')
+          ? 'reference_video'
+          : referenceContentType?.startsWith('audio/')
+            ? 'reference_audio'
+            : 'reference_image'
+        : card.type === 'settings'
+          ? 'settings'
+          : card.type === 'workflow'
+            ? 'workflow'
+            : card.type === 'source_assets'
+              ? 'source_file'
+              : card.type === 'external_link'
+                ? 'external_link'
+                : card.type === 'remix_link'
+                  ? 'remix_link'
+                  : 'note';
+    const scope = card.appliesToAll || card.mediaKeys.length === 0
+      ? { kind: 'all' as const }
+      : { kind: 'media' as const, mediaKeys: [...new Set(card.mediaKeys)] };
+
+    return {
+      id: card.id,
+      title,
+      publicTitle: title,
+      resourceType,
+      scope,
+      kind: card.type === 'workflow'
+        ? 'workflow_step'
+        : card.type === 'reference_media' || card.type === 'source_assets'
+          ? 'asset_group'
+          : 'global',
+      description: trimOrNull(card.preview),
+      sortOrder: index,
+    };
+  });
+}
+
+function buildResourceCardItems(cards: PostComposerResourceCardDraft[]): PostResourceItem[] {
+  const items: PostResourceItem[] = [];
+
+  const pushCardItem = (
+    card: PostComposerResourceCardDraft,
+    item: Omit<PostResourceItem, 'sortOrder' | 'isPrimary' | 'sectionId'>,
+  ) => {
+    const scope = card.appliesToAll || card.mediaKeys.length === 0
+      ? { kind: 'all' as const }
+      : { kind: 'media' as const, mediaKeys: [...new Set(card.mediaKeys)] };
+    items.push({
+      ...item,
+      id: item.id ?? `${card.id}-item-${items.length + 1}`,
+      scope,
+      sectionId: card.id,
+      sortOrder: items.length,
+      isPrimary: items.length === 0,
+    });
+  };
+
+  cards.forEach((card) => {
+    const title = card.title.trim() || 'Resource';
+    const baseItem = {
+      id: undefined,
+      role: 'primary' as const,
+      title,
+      description: null,
+      textContent: null,
+      externalUrl: null,
+      storagePath: null,
+      contentType: null,
+      sizeBytes: null,
+      workflowSnapshot: null,
+      remixUse: 'none' as const,
+    };
+
+    if (card.type === 'prompt' || card.type === 'settings' || card.type === 'guide') {
+      pushCardItem(card, {
+        ...baseItem,
+        type: card.type === 'prompt' ? 'prompt' : card.type === 'settings' ? 'settings' : 'note',
+        textContent: card.textContent.trim(),
+        remixUse: card.type === 'prompt' ? 'text_template' : 'none',
+      });
+      return;
+    }
+
+    if (card.type === 'external_link' || card.type === 'remix_link') {
+      pushCardItem(card, {
+        ...baseItem,
+        type: card.type === 'remix_link' ? 'remix_link' : 'external_link',
+        externalUrl: card.externalUrl.trim(),
+        remixUse: 'none',
+      });
+      return;
+    }
+
+    if (card.externalUrl.trim()) {
+      pushCardItem(card, {
+        ...baseItem,
+        type: card.type === 'workflow' ? 'workflow' : 'external_link',
+        externalUrl: card.externalUrl.trim(),
+        remixUse: card.type === 'workflow' ? 'import_source' : 'none',
+      });
+    }
+
+    card.attachments.forEach((attachment, attachmentIndex) => {
+      const isFile = attachment.kind === 'file';
+      const contentType = attachment.contentType ?? null;
+      const referenceType = contentType?.startsWith('video/')
+        ? 'reference_video'
+        : contentType?.startsWith('audio/')
+          ? 'reference_audio'
+          : 'reference_image';
+      const type: PostResourceItemType = card.type === 'reference_media'
+        ? referenceType
+        : card.type === 'workflow'
+          ? 'workflow'
+          : card.type === 'source_assets'
+            ? 'source_file'
+            : attachment.resourceType ?? (isFile ? 'source_file' : 'external_link');
+
+      pushCardItem(card, {
+        ...baseItem,
+        id: `${card.id}-file-${attachmentIndex + 1}`,
+        type,
+        role: card.type === 'reference_media' ? 'style_reference' : 'primary',
+        title: attachment.label.trim() || `${title} ${attachmentIndex + 1}`,
+        externalUrl: isFile ? null : attachment.url?.trim() || null,
+        storagePath: isFile ? attachment.storagePath?.trim() || null : null,
+        contentType,
+        sizeBytes: attachment.sizeBytes ?? null,
+        remixUse: card.type === 'reference_media'
+          ? 'reference_only'
+          : card.type === 'workflow'
+            ? 'import_source'
+            : 'none',
+      });
+    });
+
+    if (card.textContent.trim()) {
+      pushCardItem(card, {
+        ...baseItem,
+        type: card.type === 'workflow' ? 'workflow' : 'note',
+        textContent: card.textContent.trim(),
+        remixUse: card.type === 'workflow' ? 'import_source' : 'none',
+      });
+    }
+  });
+
+  return items;
+}
+
+function getResourceCardSummary(cards: PostComposerResourceCardDraft[]) {
+  if (cards.length === 1) {
+    return cards[0]?.title.trim() || 'Resource package';
+  }
+  return `${cards.length} reusable resources`;
+}
+
+function getResourceCardPreview(cards: PostComposerResourceCardDraft[]) {
+  const labels = cards.slice(0, 3).map((card) => card.title.trim()).filter(Boolean);
+  const visibleLabels = labels.join(', ').replace(/, ([^,]*)$/, ', and $1');
+  const extraCount = Math.max(0, cards.length - labels.length);
+  return visibleLabels
+    ? `Includes ${visibleLabels}${extraCount > 0 ? ` and ${extraCount} more` : ''}.`
+    : 'Includes reusable resources from this creation.';
+}
+
 function buildResourceAttachments(resource: PostComposerResourceDraft): PostResourceAttachment[] {
   const rows = resource.attachments?.length
     ? resource.attachments
@@ -1345,7 +1781,7 @@ function getSelectedResourceKinds(resources: {
   if (resources.workflowShareUrl || items.some((item) => item.type === 'workflow')) kinds.push('workflow');
   if (resources.attachments.length > 0 || items.some((item) => item.storagePath || item.externalUrl)) kinds.push('files');
   if (resources.notesMarkdown || items.some((item) => item.type === 'note' || item.type === 'settings')) kinds.push('notes');
-  if (resources.allowRemix || items.some((item) => item.type === 'remix_access')) kinds.push('remix');
+  if (resources.allowRemix || items.some((item) => item.type === 'remix_access' || item.type === 'remix_link')) kinds.push('remix');
   return kinds;
 }
 

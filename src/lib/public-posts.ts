@@ -13,6 +13,7 @@ import {
 import { getPublicGenerationDetail } from '@/lib/public-generations';
 import {
   deriveTitleFromBody,
+  isMissingPostReviewStatusColumnError,
   isMissingPostTextColumnsError,
   isMissingPostsSchemaError,
   normalizeLegacyPostFormat,
@@ -107,16 +108,28 @@ async function fetchPublicPostRow(
     .eq('id', id)
     .is('archived_at', null)
     .in('visibility', ['public', 'unlisted'])
+    .eq('review_status', 'visible')
     .maybeSingle();
 
-  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.includes('review_status'))) {
+  if (isMissingPostReviewStatusColumnError(result.error)) {
+    console.error('Cannot enforce the public post moderation boundary:', result.error);
+    return null;
+  }
+
+  if (isMissingPostTextColumnsError(result.error)) {
     const legacyResult = await adminSupabase
       .from('posts')
-      .select('id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, category, save_count, remix_count, share_count, share_visit_count, source_kind, source_tool, created_at')
+      .select('id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, category, save_count, remix_count, share_count, share_visit_count, source_kind, source_tool, review_status, created_at')
       .eq('id', id)
       .is('archived_at', null)
       .in('visibility', ['public', 'unlisted'])
+      .eq('review_status', 'visible')
       .maybeSingle();
+
+    if (isMissingPostReviewStatusColumnError(legacyResult.error)) {
+      console.error('Cannot enforce the public post moderation boundary:', legacyResult.error);
+      return null;
+    }
 
     if (legacyResult.error) {
       console.error('Failed to fetch public post detail:', legacyResult.error);
@@ -141,7 +154,7 @@ async function fetchPublicPostRow(
   }
 
   const row = (result.data as PublicPostRow | null) ?? null;
-  return row?.review_status === 'hidden' ? null : row;
+  return row?.review_status === 'visible' ? row : null;
 }
 
 export async function getPostReferenceForShowcaseId(
@@ -151,11 +164,18 @@ export async function getPostReferenceForShowcaseId(
   try {
     const { data: directPost, error: directError } = await adminSupabase
       .from('posts')
-      .select('id, generation_id, visibility, category, prompt, source_kind')
+      .select('id, user_id, generation_id, visibility, category, prompt, source_kind, archived_at, review_status')
       .eq('id', id)
+      .is('archived_at', null)
+      .in('visibility', ['public', 'unlisted'])
+      .eq('review_status', 'visible')
       .maybeSingle();
 
     if (directError) {
+      if (isMissingPostReviewStatusColumnError(directError)) {
+        console.error('Cannot enforce the public post moderation boundary:', directError);
+        return null;
+      }
       console.error('Failed to resolve showcase post by id:', directError);
       throw directError;
     }
@@ -166,11 +186,18 @@ export async function getPostReferenceForShowcaseId(
 
     const { data: legacyPost, error: legacyError } = await adminSupabase
       .from('posts')
-      .select('id, user_id, generation_id, visibility, category, prompt, source_kind')
+      .select('id, user_id, generation_id, visibility, category, prompt, source_kind, archived_at, review_status')
       .eq('generation_id', id)
+      .is('archived_at', null)
+      .in('visibility', ['public', 'unlisted'])
+      .eq('review_status', 'visible')
       .maybeSingle();
 
     if (legacyError) {
+      if (isMissingPostReviewStatusColumnError(legacyError)) {
+        console.error('Cannot enforce the public post moderation boundary:', legacyError);
+        return null;
+      }
       console.error('Failed to resolve showcase post by generation id:', legacyError);
       throw legacyError;
     }
@@ -246,6 +273,7 @@ export async function getPublicPostDetail(
       mediaKind,
       mediaItems: [{
         id: `${generation.id}:cover`,
+        mediaKey: 'media-1',
         url: generation.url,
         previewUrl: generation.previewUrl,
         previewThumbhash: preview.thumbhash,

@@ -25,6 +25,7 @@ import {
   type PostResourceAttachment,
   type PostResourceBundleLockedPreview,
   type PostResourceItem,
+  type PostResourceItemScope,
   type PostResourceItemType,
   type PostResourceKind,
   type PostResourceSection,
@@ -85,11 +86,14 @@ const RESOURCE_ITEM_GROUP_ORDER: PostResourceItemType[] = [
   'prompt',
   'workflow',
   'reference_image',
+  'reference_video',
+  'reference_audio',
   'source_file',
   'preset',
   'settings',
   'note',
   'external_link',
+  'remix_link',
   'remix_access',
 ];
 
@@ -103,6 +107,7 @@ function groupResourceItems(items: PostResourceItem[]) {
 }
 
 function groupResourceItemsBySection(items: PostResourceItem[], sections: PostResourceSection[]) {
+  const sectionIds = new Set(sections.map((section) => section.id));
   const globalItems = items.filter((item) => !item.sectionId);
   const globalGroup = globalItems.length > 0
     ? [{
@@ -122,7 +127,17 @@ function groupResourceItemsBySection(items: PostResourceItem[], sections: PostRe
     }))
     .filter((group) => group.items.length > 0);
 
-  return [...globalGroup, ...sectionGroups];
+  const unassignedItems = items.filter((item) => item.sectionId && !sectionIds.has(item.sectionId));
+  const unassignedGroup = unassignedItems.length > 0
+    ? [{
+        id: '__unassigned_resources__',
+        title: 'Other resources',
+        description: null as string | null,
+        items: unassignedItems,
+      }]
+    : [];
+
+  return [...globalGroup, ...sectionGroups, ...unassignedGroup];
 }
 
 function getResourceItemGroupTitle(type: PostResourceItemType, count: number) {
@@ -132,6 +147,19 @@ function getResourceItemGroupTitle(type: PostResourceItemType, count: number) {
 
 function formatResourceItemRole(role: string) {
   return role.replace(/_/g, ' ');
+}
+
+function formatResourceScopeLabel(scope: PostResourceItemScope | null | undefined) {
+  if (!scope || scope.kind === 'all') {
+    return 'Applies to all outputs';
+  }
+
+  const selectedOutputCount = new Set(scope.mediaKeys).size;
+  if (selectedOutputCount === 0) {
+    return 'Applies to all outputs';
+  }
+
+  return `Applies to ${selectedOutputCount} selected ${selectedOutputCount === 1 ? 'output' : 'outputs'}`;
 }
 
 export default function PostResourceBundlePanel({
@@ -186,6 +214,7 @@ export default function PostResourceBundlePanel({
     !preview.hasWorkflow &&
     !preview.hasNotes &&
     !preview.hasRemix &&
+    (preview.cardPreviews?.length ?? 0) === 0 &&
     preview.attachmentPreviews.length === 0;
   const bundleCountSummary = useMemo(
     () => formatPostResourceBundleCountSummary(preview),
@@ -202,6 +231,11 @@ export default function PostResourceBundlePanel({
   const hasSectionedResourceItems = (resources?.sections?.length ?? 0) > 0 && groupedSectionResources.length > 0;
   const hasStructuredResourceItems = groupedResourceItems.length > 0;
   const isRecipeVisible = isPublic || hasAccess || viewerIsOwner;
+  const creditCost = Math.max(0, Math.round(priceUsdCents));
+  const formattedCreditCost = creditCost.toLocaleString();
+  const offersCashCheckout = !isFree && creditCost >= 100;
+  const accessPriceLabel = offersCashCheckout ? priceLabel : `${formattedCreditCost} credits`;
+  const publicCardPreviews = (preview.cardPreviews ?? []).filter((card) => card.publicTitle.trim().length > 0);
   const accessLabel = useMemo(() => {
     if (isPublic) {
       return 'This public recipe is available immediately.';
@@ -217,10 +251,8 @@ export default function PostResourceBundlePanel({
         : 'Recipe unlocked on this post.';
     }
 
-    return isFree ? 'Get the full recipe free with one click.' : `Unlock the full recipe for ${priceLabel}.`;
-  }, [hasAccess, isFree, isPublic, priceLabel, viewerIsOwner]);
-  const creditCost = Math.max(0, priceUsdCents);
-  const formattedCreditCost = creditCost.toLocaleString();
+    return isFree ? 'Get the full recipe free with one click.' : `Unlock the full recipe for ${accessPriceLabel}.`;
+  }, [accessPriceLabel, hasAccess, isFree, isPublic, viewerIsOwner]);
   const formattedCreditBalance = typeof credits === 'number' ? credits.toLocaleString() : null;
   const hasKnownInsufficientCredits = Boolean(session?.access_token && typeof credits === 'number' && credits < creditCost);
   const isAnyActionWorking = workingAction !== null;
@@ -623,7 +655,9 @@ export default function PostResourceBundlePanel({
       className="overflow-hidden rounded-[28px] border border-emerald-300/20 bg-[radial-gradient(circle_at_top_left,rgba(52,211,153,0.14),transparent_42%),linear-gradient(180deg,rgba(10,18,15,0.92),rgba(7,8,9,0.94))] shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl"
     >
       <span id="resources" aria-hidden className="sr-only" />
-      <Script id="post-resource-bundle-razorpay-checkout" src="https://checkout.razorpay.com/v1/checkout.js" />
+      {offersCashCheckout && !hasAccess && !viewerIsOwner ? (
+        <Script id="post-resource-bundle-razorpay-checkout" src="https://checkout.razorpay.com/v1/checkout.js" />
+      ) : null}
 
       <div className="border-b border-emerald-300/10 p-5 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -636,7 +670,7 @@ export default function PostResourceBundlePanel({
           </div>
 
           <div className="rounded-full border border-emerald-300/25 bg-emerald-300 px-3.5 py-1.5 text-sm font-bold text-slate-950">
-            {isPublic ? 'Public recipe' : isRecipeVisible ? (isFree ? 'Free recipe' : 'Unlocked') : isFree ? 'Free recipe' : priceLabel}
+            {isPublic ? 'Public recipe' : isRecipeVisible ? (isFree ? 'Free recipe' : 'Unlocked') : isFree ? 'Free recipe' : accessPriceLabel}
           </div>
         </div>
       </div>
@@ -666,7 +700,7 @@ export default function PostResourceBundlePanel({
 
         <div className="mt-4 flex flex-wrap gap-3 text-xs text-zinc-400">
           <span>{formatUnlockCountLabel(isFree ? 'free' : 'paid', salesCount)}</span>
-          {priceNote ? <span>{priceNote}</span> : null}
+          {priceNote && offersCashCheckout ? <span>{priceNote}</span> : null}
           <span>
             {hasAccess || viewerIsOwner
               ? 'Everything attached is available below.'
@@ -684,24 +718,26 @@ export default function PostResourceBundlePanel({
             className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {workingAction === 'free' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            {workingAction === 'free' ? 'Adding recipe…' : 'Get free recipe'}
+            {workingAction === 'free' ? 'Getting resources…' : 'Get resources — Free'}
           </button>
         ) : null}
 
         {!hasAccess && !viewerIsOwner && !isFree ? (
-          <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            <button
-              type="button"
-              onClick={() => void startCheckout()}
-              disabled={isAnyActionWorking}
-              className="inline-flex min-h-20 flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/30 bg-emerald-300 px-4 py-3 text-center text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              <span className="inline-flex items-center gap-2">
-                {workingAction === 'razorpay' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
-                Pay {priceLabel} with Razorpay
-              </span>
-              <span className="text-xs font-medium text-slate-800">Secure checkout</span>
-            </button>
+          <div className={`mt-5 grid gap-3 ${offersCashCheckout ? 'sm:grid-cols-2' : ''}`}>
+            {offersCashCheckout ? (
+              <button
+                type="button"
+                onClick={() => void startCheckout()}
+                disabled={isAnyActionWorking}
+                className="inline-flex min-h-20 flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/30 bg-emerald-300 px-4 py-3 text-center text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                <span className="inline-flex items-center gap-2">
+                  {workingAction === 'razorpay' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
+                  Pay {priceLabel} with Razorpay
+                </span>
+                <span className="text-xs font-medium text-slate-800">Secure checkout</span>
+              </button>
+            ) : null}
 
             <button
               type="button"
@@ -713,15 +749,11 @@ export default function PostResourceBundlePanel({
                 {workingAction === 'credits' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                 Use {formattedCreditCost} credits
               </span>
-              <span className="text-xs font-medium text-zinc-300">Credit cost: {formattedCreditCost} credits</span>
+              <span className="text-xs font-medium text-zinc-300">
+                {offersCashCheckout ? `Credit cost: ${formattedCreditCost} credits` : 'Credit-only purchase'}
+              </span>
             </button>
           </div>
-        ) : null}
-
-        {!isRecipeVisible ? (
-          <p className="mt-4 text-xs leading-5 text-zinc-500">
-            Digital recipes are final sale. Use the result in personal or commercial work; do not resell, redistribute, or claim the raw bundle as your own.
-          </p>
         ) : null}
 
         {!hasAccess && !viewerIsOwner && !isFree ? (
@@ -786,6 +818,39 @@ export default function PostResourceBundlePanel({
             {bundleCountSummary ? (
               <div className="mt-4 rounded-2xl border border-emerald-300/15 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-50">
                 {`Includes ${bundleCountSummary}`}
+              </div>
+            ) : null}
+            {!isRecipeVisible && publicCardPreviews.length > 0 ? (
+              <div className="mt-4 rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Resource cards</div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  {publicCardPreviews.map((card) => {
+                    const itemCount = Math.max(0, Math.round(card.itemCount));
+                    const typeLabel = getPostResourceItemTypeLabel(card.resourceType, itemCount || 1);
+
+                    return (
+                      <div key={card.sectionId} className="rounded-2xl border border-white/8 bg-black/25 p-4">
+                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-200/75">
+                          {typeLabel}
+                        </div>
+                        <div className="mt-2 text-sm font-semibold text-white">{card.publicTitle}</div>
+                        <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-300">
+                          <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1">
+                            {formatResourceScopeLabel(card.scope)}
+                          </span>
+                          <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1">
+                            {itemCount} {itemCount === 1 ? 'item' : 'items'}
+                          </span>
+                          {card.hasRemix ? (
+                            <span className="rounded-full border border-emerald-300/20 bg-emerald-500/10 px-2.5 py-1 text-emerald-50">
+                              Remix included
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             ) : null}
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -896,6 +961,7 @@ export default function PostResourceBundlePanel({
                                         <p className="mt-1 text-sm leading-6 text-zinc-400">{item.description}</p>
                                       ) : null}
                                       {meta ? <p className="mt-1 text-xs capitalize text-zinc-500">{meta}</p> : null}
+                                      <p className="mt-2 text-xs text-emerald-100/70">{formatResourceScopeLabel(item.scope)}</p>
                                     </div>
                                     {item.textContent ? (
                                       <button
@@ -983,6 +1049,7 @@ export default function PostResourceBundlePanel({
                                 <p className="mt-1 text-sm leading-6 text-zinc-400">{item.description}</p>
                               ) : null}
                               {meta ? <p className="mt-1 text-xs capitalize text-zinc-500">{meta}</p> : null}
+                              <p className="mt-2 text-xs text-emerald-100/70">{formatResourceScopeLabel(item.scope)}</p>
                             </div>
                             {item.textContent ? (
                               <button

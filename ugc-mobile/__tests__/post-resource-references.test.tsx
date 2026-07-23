@@ -132,7 +132,42 @@ describe('PostResourceReferences', () => {
 
     expect(tree!.root.findByProps({ children: 'Source clip' })).toBeTruthy();
     expect(tree!.root.findAll((node) => String(node.type) === 'feed-media-frame')).toHaveLength(0);
-    expect(tree!.root.findByProps({ children: 'Open media' })).toBeTruthy();
+    expect(tree!.root.findByProps({ children: 'Open video' })).toBeTruthy();
+  });
+
+  it('includes explicit video and audio reference item types', async () => {
+    const videoReference: PostResourceItem = {
+      ...referenceImage,
+      id: 'video-reference',
+      type: 'reference_video',
+      title: 'Camera movement',
+      storagePath: 'references/camera.mp4',
+      contentType: 'video/mp4',
+    };
+    const audioReference: PostResourceItem = {
+      ...referenceImage,
+      id: 'audio-reference',
+      type: 'reference_audio',
+      title: 'Timing track',
+      storagePath: 'references/timing.mp3',
+      contentType: 'audio/mpeg',
+    };
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    await renderer.act(async () => {
+      tree = renderer.create(
+        <PostResourceReferences
+          items={[videoReference, audioReference]}
+          onOpenUrl={vi.fn()}
+          resolveFileUrl={async (path) => `https://cdn.example.com/${path}`}
+        />
+      );
+    });
+
+    expect(tree!.root.findByProps({ children: 'Camera movement' })).toBeTruthy();
+    expect(tree!.root.findByProps({ children: 'Timing track' })).toBeTruthy();
+    expect(tree!.root.findByProps({ children: 'Open video' })).toBeTruthy();
+    expect(tree!.root.findByProps({ children: 'Open audio' })).toBeTruthy();
   });
 
   it('renders nothing when structured reference items are unavailable', () => {

@@ -17,7 +17,7 @@ export const CREATE_MENU_ACTIONS: CreateMenuAction[] = [
   {
     id: 'post',
     label: 'Post',
-    body: 'Publish a post or unlockable',
+    body: 'Share finished media',
     href: '/post/new',
   },
 ];

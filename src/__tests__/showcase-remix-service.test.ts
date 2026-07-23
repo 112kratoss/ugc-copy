@@ -64,6 +64,7 @@ function createDependencies(
 ) {
   return {
     findPublicPostReferenceByIdOrGenerationId: vi.fn(async () => post),
+    isUserRelationshipBlocked: vi.fn(async () => false),
     notifyPostSocialActivity: vi.fn(async () => undefined),
   } satisfies Partial<ShowcaseRemixServiceDependencies>;
 }
@@ -147,6 +148,30 @@ describe('remixShowcasePostForRoute', () => {
     const result = await remixShowcasePostForRoute({
       actorUserId: 'user-1',
       referenceId: 'missing-post',
+      userClient: userClient.client,
+      serviceClient: serviceClient.client,
+      dependencies,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 404,
+      body: { error: 'Creation is private or not found' },
+    });
+    expect(serviceClient.rpcMock).not.toHaveBeenCalled();
+    expect(userClient.fromMock).not.toHaveBeenCalled();
+    expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
+  });
+
+  it('rejects blocked creator interactions before remix counters, media reads, or notifications', async () => {
+    const userClient = createUserClientMock();
+    const serviceClient = createServiceClientMock();
+    const dependencies = createDependencies();
+    dependencies.isUserRelationshipBlocked.mockResolvedValue(true);
+
+    const result = await remixShowcasePostForRoute({
+      actorUserId: 'user-1',
+      referenceId: 'post-1',
       userClient: userClient.client,
       serviceClient: serviceClient.client,
       dependencies,

@@ -138,6 +138,10 @@ vi.mock('@/lib/showcase-feed', () => ({
   ),
 }));
 
+vi.mock('@/lib/moderation-service', () => ({
+  loadBlockedCreatorIds: vi.fn(async () => new Set<string>()),
+}));
+
 describe('/api/showcase/saved-media route', () => {
   beforeEach(() => {
     vi.resetModules();

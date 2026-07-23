@@ -26,6 +26,10 @@ import { createPostMediaPreview } from '@/lib/post-media-preview';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
 import {
+  getPublicUgcSafetyViolation,
+  PUBLIC_UGC_SAFETY_ERROR,
+} from '@/lib/public-ugc-safety';
+import {
   isCreatorProfileCheckError,
   isCreatorProfileReadinessError,
 } from '@/lib/marketplace-trust';
@@ -120,6 +124,25 @@ export async function publishPreparedPost({
   dependencies?: PostPublishDependencies;
 }): Promise<PostPublishResult> {
   const resolvedDependencies = resolveDependencies(dependencies);
+  const safetyViolation = submission.visibility !== 'private'
+    ? getPublicUgcSafetyViolation({
+        title: submission.title,
+        description: submission.description,
+        body: submission.body,
+      })
+    : null;
+
+  if (safetyViolation) {
+    return {
+      ok: false,
+      status: 400,
+      body: {
+        error: PUBLIC_UGC_SAFETY_ERROR,
+        field: safetyViolation.field,
+      },
+    };
+  }
+
   const marketplaceQualityError = submission.visibility === 'public'
     ? await resolvedDependencies.getMarketplaceQualityErrorForPostBundle({
         supabase: adminSupabase,
@@ -244,6 +267,7 @@ export async function publishPreparedPost({
       }
 
       persistedMediaItems.push({
+        mediaKey: mediaItem.mediaKey,
         storagePath,
         previewStoragePath: preview?.previewStoragePath ?? null,
         previewThumbhash: preview?.previewThumbhash ?? null,

@@ -144,16 +144,34 @@ export function getViewerActionLabel(action: string) {
       return 'Not interested';
     case 'hide-creator':
       return 'Hide this creator';
+    case 'report-content':
+      return 'Report content';
+    case 'report-user':
+      return 'Report user';
+    case 'block-user':
+      return 'Block user';
+    case 'report-ai-output':
+      return 'Report offensive AI output';
     default:
       return action.charAt(0).toUpperCase() + action.slice(1).replaceAll('-', ' ');
   }
 }
 
 export function isDestructiveViewerAction(action: string) {
-  return action === 'unsave' || action === 'archive' || action === 'delete-post' || action === 'hide-creator';
+  return action === 'unsave'
+    || action === 'archive'
+    || action === 'delete-post'
+    || action === 'hide-creator'
+    || action === 'report-content'
+    || action === 'report-user'
+    || action === 'block-user'
+    || action === 'report-ai-output';
 }
 
 export function getViewerActionGroupLabel(action: string) {
+  if (action === 'report-content' || action === 'report-user' || action === 'block-user' || action === 'report-ai-output') {
+    return 'Safety';
+  }
   if (action === 'not-interested' || action === 'hide-creator') {
     return 'Showcase preferences';
   }

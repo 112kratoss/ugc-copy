@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { notifyPostSocialActivity } from '@/lib/mobile-notifications';
 import { recordPostShareEvent } from '@/lib/post-share-events';
 import { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
@@ -25,6 +26,7 @@ export type ShowcaseSharePayload = {
 
 export type ShowcaseShareServiceDependencies = {
   findPublicPostReferenceByIdOrGenerationId: typeof findPublicPostReferenceByIdOrGenerationId;
+  isUserRelationshipBlocked: typeof isUserRelationshipBlocked;
   notifyPostSocialActivity: typeof notifyPostSocialActivity;
   recordPostShareEvent: typeof recordPostShareEvent;
 };
@@ -63,9 +65,35 @@ function resolveDependencies(
   return {
     findPublicPostReferenceByIdOrGenerationId:
       dependencies?.findPublicPostReferenceByIdOrGenerationId ?? findPublicPostReferenceByIdOrGenerationId,
+    isUserRelationshipBlocked: dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked,
     notifyPostSocialActivity: dependencies?.notifyPostSocialActivity ?? notifyPostSocialActivity,
     recordPostShareEvent: dependencies?.recordPostShareEvent ?? recordPostShareEvent,
   };
+}
+
+async function isPostInteractionUnavailable({
+  actorUserId,
+  creatorUserId,
+  dependencies,
+  serviceClient,
+}: {
+  actorUserId: string | null;
+  creatorUserId: string | null | undefined;
+  dependencies: ShowcaseShareServiceDependencies;
+  serviceClient: SupabaseClient;
+}) {
+  if (!actorUserId || !creatorUserId || creatorUserId === actorUserId) return false;
+
+  try {
+    return await dependencies.isUserRelationshipBlocked({
+      adminSupabase: serviceClient,
+      firstUserId: actorUserId,
+      secondUserId: creatorUserId,
+    });
+  } catch (error) {
+    console.error('Failed to verify block state before sharing Showcase content:', error);
+    return true;
+  }
 }
 
 export function parseShowcaseSharePayloadForRoute(body: {
@@ -133,6 +161,18 @@ export async function shareShowcasePostForRoute({
   ) as PostReference | null;
 
   if (!post) {
+    return {
+      ok: false,
+      status: 404,
+      body: { error: 'Only public creations can be shared' },
+    };
+  }
+  if (await isPostInteractionUnavailable({
+    actorUserId,
+    creatorUserId: post.user_id,
+    dependencies: resolvedDependencies,
+    serviceClient,
+  })) {
     return {
       ok: false,
       status: 404,

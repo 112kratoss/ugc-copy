@@ -12,7 +12,50 @@ function jsonResponse(body: unknown) {
 }
 
 describe('mobile api client caching', () => {
-  it('sends an explicit confirmation when deleting an account', async () => {
+  it('sends authenticated moderation reports and user block mutations', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ success: true, blocked: true }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.reportPost('post/1', { reason: 'unsafe_content', details: 'Unsafe post' });
+    await api.reportUser('creator/1', {
+      reason: 'harassment',
+      sourceSurface: 'creator-profile',
+    });
+    await api.reportGeneration('generation/1', {
+      reason: 'offensive_ai_output',
+      sourceSurface: 'generation-viewer',
+    });
+    await api.blockUser('creator/1');
+
+    const requests = fetcher.mock.calls as unknown as Array<[string, RequestInit]>;
+    expect(requests.map(([url, init]) => [url, init.method])).toEqual([
+      ['https://magicbooklet.test/api/posts/post%2F1/report', 'POST'],
+      ['https://magicbooklet.test/api/moderation/reports', 'POST'],
+      ['https://magicbooklet.test/api/moderation/reports', 'POST'],
+      ['https://magicbooklet.test/api/moderation/blocks/creator%2F1', 'POST'],
+    ]);
+    expect(JSON.parse(String(requests[1][1].body))).toEqual({
+      targetType: 'user',
+      targetId: 'creator/1',
+      reason: 'harassment',
+      sourceSurface: 'creator-profile',
+    });
+    expect(JSON.parse(String(requests[2][1].body))).toEqual({
+      targetType: 'generation',
+      targetId: 'generation/1',
+      reason: 'offensive_ai_output',
+      sourceSurface: 'generation-viewer',
+    });
+    for (const [, init] of requests) {
+      expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+    }
+  });
+
+  it('sends an explicit confirmation and transient Apple authorization when deleting an account', async () => {
     const fetcher = vi.fn(async () => jsonResponse({ success: true, deleted: true }));
     const api = createApiClient({
       baseUrl: 'https://magicbooklet.test',
@@ -20,12 +63,15 @@ describe('mobile api client caching', () => {
       fetcher: fetcher as unknown as typeof fetch,
     });
 
-    await api.deleteAccount('DELETE');
+    await api.deleteAccount('DELETE', { appleAuthorizationCode: 'one-time-apple-code' });
 
     const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
     expect(String(url)).toBe('https://magicbooklet.test/api/account');
     expect(init.method).toBe('DELETE');
-    expect(JSON.parse(String(init.body))).toEqual({ confirmation: 'DELETE' });
+    expect(JSON.parse(String(init.body))).toEqual({
+      confirmation: 'DELETE',
+      appleAuthorizationCode: 'one-time-apple-code',
+    });
   });
 
   it('sends a request id with backend calls', async () => {
@@ -264,6 +310,31 @@ describe('mobile api client caching', () => {
     expect((feedInit.headers as Headers).get('x-magicbooklet-installation-id')).toBe(installationId);
     expect((profileInit.headers as Headers).has('x-magicbooklet-installation-id')).toBe(false);
     expect(getInstallationId).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps authentication on the legacy showcase-detail fallback so blocks cannot be bypassed', async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Post not found.' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        items: [{ id: 'post-1', title: 'Fallback post' }],
+        pageInfo: { hasMore: false },
+      }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await expect(api.getShowcasePost('post-1')).resolves.toMatchObject({
+      success: true,
+      item: { id: 'post-1' },
+    });
+    const [, fallbackInit] = fetcher.mock.calls[1] as unknown as [RequestInfo | URL, RequestInit];
+    expect((fallbackInit.headers as Headers).get('Authorization')).toBe('Bearer token-1');
   });
 
   it('loads authenticated remix source bundles with post context', async () => {

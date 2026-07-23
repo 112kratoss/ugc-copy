@@ -27,10 +27,15 @@ import {
   type PostMediaPersistInput,
 } from '@/lib/post-media';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
+import { defaultPostMediaKey, normalizePostMediaKey } from '@/lib/post-media-key';
 import { isCreatorProfileCheckError } from '@/lib/marketplace-trust';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
+import {
+  getPublicUgcSafetyViolation,
+  PUBLIC_UGC_SAFETY_ERROR,
+} from '@/lib/public-ugc-safety';
 import {
   normalizeSourceToolInputWithCatalog,
   normalizeSourceToolSelectionsWithCatalog,
@@ -52,6 +57,7 @@ type MutablePostRow = {
   visibility: ShowcaseVisibility;
   title: string | null;
   description: string | null;
+  prompt: string | null;
   body: string | null;
   category: string;
   post_format: 'text' | 'media' | 'mixed';
@@ -67,10 +73,13 @@ type MutablePostRow = {
 type BundleStatusRow = {
   access_mode: 'none' | 'free' | 'paid';
   status: 'draft' | 'published';
+  resource_items?: unknown;
+  resource_sections?: unknown;
 };
 
 type ExistingPostMediaRow = {
   id: string;
+  media_key?: string | null;
   storage_path: string | null;
   preview_storage_path?: string | null;
   preview_thumbhash?: string | null;
@@ -89,9 +98,10 @@ type ExistingPostMediaRow = {
 };
 
 type SubmittedEditMediaItem =
-  | { source: 'existing'; row: ExistingPostMediaRow }
+  | { source: 'existing'; row: ExistingPostMediaRow; mediaKey: string }
   | {
       source: 'uploaded';
+      mediaKey: string;
       filePath: string;
       temporaryStoragePath: string;
       originalName: string;
@@ -203,7 +213,59 @@ function normalizeVisibility(value: unknown): ShowcaseVisibility | null {
   return null;
 }
 
-function parseBundleInput(value: unknown, ownerUserId: string): { bundle: PostResourceBundleInput | null; error: string | null } {
+function resourceBundleUsesMediaScope(value: unknown): boolean {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const resources = (value as { resources?: unknown }).resources;
+  if (!resources || typeof resources !== 'object') {
+    return false;
+  }
+
+  const typedResources = resources as { items?: unknown; sections?: unknown };
+  return [typedResources.items, typedResources.sections].some((entries) => (
+    Array.isArray(entries)
+    && entries.some((entry) => (
+      Boolean(entry && typeof entry === 'object' && (entry as { scope?: { kind?: unknown } }).scope?.kind === 'media')
+    ))
+  ));
+}
+
+function collectScopedMediaKeys(...values: unknown[]): Set<string> {
+  const mediaKeys = new Set<string>();
+  for (const value of values) {
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    for (const entry of value) {
+      if (!entry || typeof entry !== 'object') {
+        continue;
+      }
+      const scope = (entry as { scope?: unknown }).scope;
+      if (!scope || typeof scope !== 'object' || (scope as { kind?: unknown }).kind !== 'media') {
+        continue;
+      }
+      const rawMediaKeys = (scope as { mediaKeys?: unknown }).mediaKeys;
+      if (!Array.isArray(rawMediaKeys)) {
+        continue;
+      }
+      for (const rawMediaKey of rawMediaKeys) {
+        const mediaKey = normalizePostMediaKey(rawMediaKey);
+        if (mediaKey) {
+          mediaKeys.add(mediaKey);
+        }
+      }
+    }
+  }
+  return mediaKeys;
+}
+
+function parseBundleInput(
+  value: unknown,
+  ownerUserId: string,
+  mediaKeys: Iterable<string>
+): { bundle: PostResourceBundleInput | null; error: string | null } {
   if (value == null) {
     return {
       bundle: null,
@@ -226,7 +288,7 @@ function parseBundleInput(value: unknown, ownerUserId: string): { bundle: PostRe
     };
   }
 
-  const validationError = validatePostResourceBundleInput(bundle, { ownerUserId });
+  const validationError = validatePostResourceBundleInput(bundle, { ownerUserId, mediaKeys });
   if (validationError) {
     return {
       bundle: null,
@@ -248,7 +310,7 @@ async function loadOwnedPost(
   const { data, error } = await adminSupabase
     .from('posts')
     .select(
-      'id, user_id, generation_id, visibility, title, description, body, category, post_format, source_tool, source_tool_slug, source_kind, archived_at, showcase_asset_path, output_url, review_status',
+      'id, user_id, generation_id, visibility, title, description, prompt, body, category, post_format, source_tool, source_tool_slug, source_kind, archived_at, showcase_asset_path, output_url, review_status',
     )
     .eq('id', postId)
     .eq('user_id', ownerUserId)
@@ -268,7 +330,7 @@ async function loadOwnedBundleStatus(
 ): Promise<BundleStatusRow | null> {
   const { data, error } = await adminSupabase
     .from('post_resource_bundles')
-    .select('access_mode, status')
+    .select('access_mode, status, resource_items, resource_sections')
     .eq('post_id', postId)
     .eq('owner_user_id', ownerUserId)
     .maybeSingle();
@@ -286,11 +348,25 @@ async function loadOwnedPostMedia(
 ): Promise<ExistingPostMediaRow[]> {
   const previewResult = await adminSupabase
     .from('post_media')
-    .select('id, storage_path, preview_storage_path, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
+    .select('id, media_key, storage_path, preview_storage_path, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
     .eq('post_id', postId)
     .order('sort_order', { ascending: true });
   let data = previewResult.data as ExistingPostMediaRow[] | null;
   let error = previewResult.error;
+
+  if (
+    error
+    && (error.code === '42703' || error.code === 'PGRST204')
+    && /media_key/.test(error.message)
+  ) {
+    const keylessPreviewResult = await adminSupabase
+      .from('post_media')
+      .select('id, storage_path, preview_storage_path, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
+      .eq('post_id', postId)
+      .order('sort_order', { ascending: true });
+    data = keylessPreviewResult.data as ExistingPostMediaRow[] | null;
+    error = keylessPreviewResult.error;
+  }
 
   if (
     error
@@ -338,6 +414,7 @@ async function parseSubmittedEditMediaItems(params: {
   const existingRows = await loadOwnedPostMedia(params.adminSupabase, params.postId);
   const existingRowsMap = new Map(existingRows.map((row) => [row.id, row]));
   const submitted: SubmittedEditMediaItem[] = [];
+  const submittedMediaKeys = new Set<string>();
 
   for (const value of params.value) {
     if (!value || typeof value !== 'object') {
@@ -350,9 +427,27 @@ async function parseSubmittedEditMediaItems(params: {
       if (!existingRow) {
         return { items: null, error: 'An existing media item no longer belongs to this post.' };
       }
-      submitted.push({ source: 'existing', row: existingRow });
+      const mediaKey = normalizePostMediaKey(existingRow.media_key) ?? defaultPostMediaKey(existingRow.sort_order);
+      const requestedMediaKey = descriptor.mediaKey == null ? mediaKey : normalizePostMediaKey(descriptor.mediaKey);
+      if (!requestedMediaKey || requestedMediaKey !== mediaKey) {
+        return { items: null, error: 'Existing post media keys cannot be changed.' };
+      }
+      if (submittedMediaKeys.has(mediaKey)) {
+        return { items: null, error: 'Post media keys must be unique.' };
+      }
+      submittedMediaKeys.add(mediaKey);
+      submitted.push({ source: 'existing', row: existingRow, mediaKey });
       continue;
     }
+
+    const mediaKey = descriptor.mediaKey == null ? randomUUID() : normalizePostMediaKey(descriptor.mediaKey);
+    if (!mediaKey) {
+      return { items: null, error: 'Post media keys may only use letters, numbers, hyphens, and underscores.' };
+    }
+    if (submittedMediaKeys.has(mediaKey)) {
+      return { items: null, error: 'Post media keys must be unique.' };
+    }
+    submittedMediaKeys.add(mediaKey);
 
     const storagePath = typeof descriptor.storagePath === 'string'
       ? descriptor.storagePath.trim().replace(/^\/+/, '')
@@ -374,6 +469,7 @@ async function parseSubmittedEditMediaItems(params: {
     const filePath = storagePath.slice(`${UPLOADS_BUCKET}/`.length);
     submitted.push({
       source: 'uploaded',
+      mediaKey,
       filePath,
       temporaryStoragePath: filePath,
       originalName,
@@ -417,6 +513,7 @@ async function replaceEditedPostMedia(params: {
     for (const [index, item] of params.submittedMediaItems.entries()) {
       if (item.source === 'existing') {
         persistedMediaItems.push({
+          mediaKey: item.mediaKey,
           storagePath: item.row.storage_path,
           previewStoragePath: item.row.preview_storage_path ?? null,
           previewThumbhash: item.row.preview_thumbhash ?? null,
@@ -474,6 +571,7 @@ async function replaceEditedPostMedia(params: {
       }
 
       persistedMediaItems.push({
+        mediaKey: item.mediaKey,
         storagePath,
         previewStoragePath: preview?.previewStoragePath ?? null,
         previewThumbhash: preview?.previewThumbhash ?? null,
@@ -575,11 +673,6 @@ export async function updateOwnerPostForRoute({
     const existingBundle = await loadOwnedBundleStatus(adminSupabase, postId, ownerUserId);
 
     const hasResourceBundlePayload = Object.prototype.hasOwnProperty.call(body, 'resourceBundle');
-    const { bundle: resourceBundle, error: resourceBundleError } = parseBundleInput(body.resourceBundle, ownerUserId);
-    if (resourceBundleError) {
-      return { ok: false, status: 400, body: { error: resourceBundleError } };
-    }
-
     const touchesGenerationLockedFields = ['title', 'description', 'body', 'category', 'sourceTool', 'sourceToolSlug', 'sourceTools', 'mediaItems'].some((key) =>
       Object.prototype.hasOwnProperty.call(body, key)
     );
@@ -600,6 +693,45 @@ export async function updateOwnerPostForRoute({
     });
     if (submittedMediaItemsError) {
       return { ok: false, status: 400, body: { error: submittedMediaItemsError } };
+    }
+
+    const availableMediaKeys = submittedMediaItems
+      ? submittedMediaItems.map((item) => item.mediaKey)
+      : hasResourceBundlePayload && resourceBundleUsesMediaScope(body.resourceBundle)
+        ? (await loadOwnedPostMedia(adminSupabase, postId)).map((row) => (
+            normalizePostMediaKey(row.media_key) ?? defaultPostMediaKey(row.sort_order)
+          ))
+        : [];
+    if (
+      availableMediaKeys.length === 0
+      && post.post_format !== 'text'
+      && (post.showcase_asset_path || post.output_url)
+    ) {
+      availableMediaKeys.push(defaultPostMediaKey(0));
+    }
+
+    if (submittedMediaItems && !hasResourceBundlePayload && existingBundle) {
+      const nextMediaKeySet = new Set(availableMediaKeys);
+      const existingScopedMediaKeys = collectScopedMediaKeys(
+        existingBundle.resource_items,
+        existingBundle.resource_sections
+      );
+      if (Array.from(existingScopedMediaKeys).some((mediaKey) => !nextMediaKeySet.has(mediaKey))) {
+        return {
+          ok: false,
+          status: 400,
+          body: { error: 'Update the recipe media selections before removing proof media it references.' },
+        };
+      }
+    }
+
+    const { bundle: resourceBundle, error: resourceBundleError } = parseBundleInput(
+      body.resourceBundle,
+      ownerUserId,
+      availableMediaKeys
+    );
+    if (resourceBundleError) {
+      return { ok: false, status: 400, body: { error: resourceBundleError } };
     }
 
     const nextBody = Object.prototype.hasOwnProperty.call(body, 'body') ? normalizeBody(body.body) : post.body;
@@ -634,6 +766,27 @@ export async function updateOwnerPostForRoute({
           ? body.category
           : post.category;
     const nextTitle = Object.prototype.hasOwnProperty.call(body, 'title') ? normalizeText(body.title) : post.title;
+    const nextDescription = Object.prototype.hasOwnProperty.call(body, 'description')
+      ? normalizeText(body.description)
+      : post.description;
+    const safetyViolation = nextVisibility !== 'private'
+      ? getPublicUgcSafetyViolation({
+          title: nextTitle,
+          description: nextDescription,
+          body: nextBody,
+          prompt: post.prompt,
+        })
+      : null;
+    if (safetyViolation) {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: PUBLIC_UGC_SAFETY_ERROR,
+          field: safetyViolation.field,
+        },
+      };
+    }
     const sourceToolCatalog = await resolvedDependencies.listSourceToolsCatalog();
 
     const updatePayload: Record<string, unknown> = {
@@ -645,7 +798,7 @@ export async function updateOwnerPostForRoute({
       updatePayload.title = nextTitle;
     }
     if (Object.prototype.hasOwnProperty.call(body, 'description')) {
-      updatePayload.description = normalizeText(body.description);
+      updatePayload.description = nextDescription;
     }
     if (Object.prototype.hasOwnProperty.call(body, 'body')) {
       updatePayload.body = nextBody;

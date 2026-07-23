@@ -193,6 +193,20 @@ const extendedOperationCases: Array<{
     }),
   },
   { key: 'getCreatorProfile', call: (api) => api.getCreatorProfile('creator-one') },
+  { key: 'reportPost', call: (api) => api.reportPost('post-1', { reason: 'unsafe_content' }) },
+  {
+    key: 'reportUser',
+    call: (api) => api.reportUser('creator-1', { reason: 'harassment', sourceSurface: 'creator-profile' }),
+  },
+  {
+    key: 'reportGeneration',
+    call: (api) => api.reportGeneration('generation-1', {
+      reason: 'offensive_ai_output',
+      sourceSurface: 'generation-viewer',
+    }),
+  },
+  { key: 'blockUser', call: (api) => api.blockUser('creator-1') },
+  { key: 'unblockUser', call: (api) => api.unblockUser('creator-1') },
   { key: 'getCreatorFollowState', call: (api) => api.getCreatorFollowState('creator-1') },
   { key: 'setCreatorFollowing', call: (api) => api.setCreatorFollowing('creator-1', true) },
   { key: 'getRemixSourceBundle', call: (api) => api.getRemixSourceBundle('generation-1') },

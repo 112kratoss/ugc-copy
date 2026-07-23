@@ -112,6 +112,11 @@ type PostResourceBundlePurchaseRow = {
   buyer_user_id: string;
 };
 
+type UserBlockRow = {
+  blocker_user_id: string;
+  blocked_user_id: string;
+};
+
 type PostMediaRow = {
   id: string;
   post_id: string;
@@ -134,6 +139,7 @@ let generationInputMediaState: GenerationInputMediaRow[] = [];
 let resourceBundlesState: ResourceBundleRow[] = [];
 let postSavesState: PostSaveRow[] = [];
 let postResourceBundlePurchasesState: PostResourceBundlePurchaseRow[] = [];
+let userBlocksState: UserBlockRow[] = [];
 let postsSchemaMissingState = false;
 let lastPurchaseBundleIds: unknown[] | null = null;
 let tableAccesses: string[] = [];
@@ -525,6 +531,34 @@ function createServiceClientMock() {
         return query;
       }
 
+      if (table === 'user_blocks') {
+        const filters: Record<string, unknown> = {};
+        const inFilters: Record<string, unknown[]> = {};
+        const query = {
+          select() {
+            return query;
+          },
+          eq(column: string, value: unknown) {
+            filters[column] = value;
+            return query;
+          },
+          in(column: string, values: unknown[]) {
+            inFilters[column] = values;
+            return query;
+          },
+          then(resolve: (value: { data: UserBlockRow[]; error: null }) => void) {
+            resolve({
+              data: userBlocksState.filter((row) => (
+                Object.entries(filters).every(([column, value]) => row[column as keyof UserBlockRow] === value)
+                && Object.entries(inFilters).every(([column, values]) => values.includes(row[column as keyof UserBlockRow]))
+              )),
+              error: null,
+            });
+          },
+        };
+        return query;
+      }
+
       throw new Error(`Unexpected table access: ${table}`);
     },
   };
@@ -588,6 +622,7 @@ describe('showcase feed', () => {
     ];
     postSavesState = [];
     postResourceBundlePurchasesState = [];
+    userBlocksState = [];
     postsSchemaMissingState = false;
     lastPurchaseBundleIds = null;
     tableAccesses = [];
@@ -1220,6 +1255,26 @@ describe('showcase feed', () => {
 
     expect(page.items).toHaveLength(1);
     expect(page.items[0].canRemix).toBe(false);
+  });
+
+  it('filters creator posts when either side has blocked the other', async () => {
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+
+    for (const block of [
+      { blocker_user_id: 'viewer-1', blocked_user_id: 'user-1' },
+      { blocker_user_id: 'user-1', blocked_user_id: 'viewer-1' },
+    ]) {
+      userBlocksState = [block];
+      const page = await getShowcaseFeedPage({
+        category: 'all',
+        sort: 'recent',
+        offset: 0,
+        limit: 12,
+        viewerUserId: 'viewer-1',
+        bypassCache: true,
+      });
+      expect(page.items).toEqual([]);
+    }
   });
 
   it('returns mixed posts when filtering by text', async () => {

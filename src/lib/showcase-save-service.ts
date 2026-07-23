@@ -6,6 +6,7 @@ import {
   findPublicPostReferenceByIdOrGenerationId,
   isMissingPostsSchemaError,
 } from '@/lib/posts-server';
+import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { notifyPostSocialActivity } from '@/lib/mobile-notifications';
 
 type SetPostSaveStateRow = {
@@ -37,6 +38,7 @@ type PostReference = {
 export type ShowcaseSaveServiceDependencies = {
   findPublicPostReferenceByIdOrGenerationId: typeof findPublicPostReferenceByIdOrGenerationId;
   isMissingPostsSchemaError: typeof isMissingPostsSchemaError;
+  isUserRelationshipBlocked: typeof isUserRelationshipBlocked;
   notifyPostSocialActivity: typeof notifyPostSocialActivity;
 };
 
@@ -68,8 +70,34 @@ function resolveDependencies(
     findPublicPostReferenceByIdOrGenerationId:
       dependencies?.findPublicPostReferenceByIdOrGenerationId ?? findPublicPostReferenceByIdOrGenerationId,
     isMissingPostsSchemaError: dependencies?.isMissingPostsSchemaError ?? isMissingPostsSchemaError,
+    isUserRelationshipBlocked: dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked,
     notifyPostSocialActivity: dependencies?.notifyPostSocialActivity ?? notifyPostSocialActivity,
   };
+}
+
+async function isPostInteractionUnavailable({
+  actorUserId,
+  creatorUserId,
+  dependencies,
+  serviceClient,
+}: {
+  actorUserId: string;
+  creatorUserId: string | null | undefined;
+  dependencies: ShowcaseSaveServiceDependencies;
+  serviceClient: SupabaseClient;
+}) {
+  if (!creatorUserId || creatorUserId === actorUserId) return false;
+
+  try {
+    return await dependencies.isUserRelationshipBlocked({
+      adminSupabase: serviceClient,
+      firstUserId: actorUserId,
+      secondUserId: creatorUserId,
+    });
+  } catch (error) {
+    console.error('Failed to verify block state before saving Showcase content:', error);
+    return true;
+  }
 }
 
 function normalizeSaveSourceSurface(value: unknown) {
@@ -241,6 +269,14 @@ export async function saveShowcasePostForRoute({
   const resolvedDependencies = resolveDependencies(dependencies);
   const post = await resolvedDependencies.findPublicPostReferenceByIdOrGenerationId(referenceId) as PostReference | null;
   if (!post) {
+    return { ok: false, status: 404, body: { error: 'Post not found' } };
+  }
+  if (await isPostInteractionUnavailable({
+    actorUserId,
+    creatorUserId: post.user_id,
+    dependencies: resolvedDependencies,
+    serviceClient,
+  })) {
     return { ok: false, status: 404, body: { error: 'Post not found' } };
   }
 

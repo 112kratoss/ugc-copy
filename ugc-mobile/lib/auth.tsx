@@ -8,7 +8,14 @@ import { AppState, Platform } from 'react-native';
 import { env, getMissingMobileEnvKeys } from './env';
 import { signInWithNativeApple } from './apple-auth';
 import { signInWithGoogleOAuth } from './google-auth';
-import { createApiClient, type MagicbookletApiClient } from './api-client';
+import {
+  AccountReauthenticationAccountMismatchError,
+  getAccountReauthenticationMethods,
+  reauthenticateAccountForDeletion,
+  type AccountDeletionReauthentication,
+  type AccountReauthenticationMethod,
+} from './account-reauthentication';
+import { ApiError, createApiClient, type MagicbookletApiClient } from './api-client';
 import { getFeedInstallationId } from './feed-installation-id';
 import { GENERATION_MODEL_CATALOG_SCHEMA_VERSION } from './generation-model-catalog';
 import { claimPendingReferral } from './referral-attribution';
@@ -30,6 +37,11 @@ import {
 } from './supabase-auth-recovery';
 
 export type AuthMode = 'login' | 'signup';
+export type {
+  AccountDeletionReauthentication,
+  AccountReauthenticationMethod,
+} from './account-reauthentication';
+export { getAccountReauthenticationMethods } from './account-reauthentication';
 
 interface AuthContextValue {
   session: Session | null;
@@ -40,17 +52,22 @@ interface AuthContextValue {
   missingEnvKeys: string[];
   api: MagicbookletApiClient;
   signInWithPassword: (email: string, password: string) => Promise<void>;
-  signUpWithPassword: (email: string, password: string) => Promise<void>;
   signInWithApple: (mode: AuthMode) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
-  deleteAccount: () => Promise<void>;
+  accountReauthenticationMethods: AccountReauthenticationMethod[];
+  deleteAccount: (reauthentication?: AccountDeletionReauthentication) => Promise<void>;
   refreshProfile: () => Promise<void>;
   updateCredits: (credits: number | null) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 const CACHED_ACCESS_TOKEN_MIN_TTL_MS = 30 * 1000;
+
+export function isAccountReauthenticationRequired(error: unknown) {
+  return error instanceof ApiError
+    && (error.code === 'RECENT_AUTH_REQUIRED' || error.code === 'APPLE_REAUTH_REQUIRED');
+}
 
 function getUsableCachedAccessToken(session: Session | null, now = Date.now()): string | null {
   if (!session?.access_token) return null;
@@ -132,6 +149,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       },
     }),
     [getAccessToken]
+  );
+  const accountReauthenticationMethods = useMemo(
+    () => getAccountReauthenticationMethods(session?.user ?? null),
+    [session?.user],
   );
 
   const refreshProfileForUser = useCallback((userId: string) => {
@@ -312,22 +333,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await refreshProfile();
   };
 
-  const signUpWithPassword = async (email: string, password: string) => {
-    if (!isSupabaseConfigured) {
-      throw new Error(`Configure mobile auth first: ${missingEnvKeys.join(', ')}`);
-    }
-
-    try {
-      await initializeSupabaseAuth();
-      const { error } = await supabase.auth.signUp({ email, password });
-      if (error) throw error;
-    } catch (error) {
-      throw normalizeSupabaseAuthError(error);
-    }
-
-    await refreshProfile();
-  };
-
   const signInWithApple = async (mode: AuthMode) => {
     if (!isSupabaseConfigured) {
       throw new Error(`Configure mobile auth first: ${missingEnvKeys.join(', ')}`);
@@ -376,15 +381,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     router.replace('/auth');
   };
 
-  const deleteAccount = async () => {
+  const deleteAccount = async (reauthentication?: AccountDeletionReauthentication) => {
     if (!session?.user) {
       throw new Error('Sign in before deleting your account.');
+    }
+
+    let appleAuthorizationCode: string | undefined;
+    if (reauthentication) {
+      try {
+        // Apple account deletion is verified server-side by exchanging the
+        // one-time authorization code with Apple. It does not need another
+        // client-to-Supabase sign-in, which can fail on an otherwise healthy
+        // device connection and strand the user on this destructive flow.
+        if (reauthentication.method !== 'apple') {
+          await initializeSupabaseAuth();
+        }
+        const result = await reauthenticateAccountForDeletion({
+          currentUser: session.user,
+          method: reauthentication,
+          supabase,
+        });
+        appleAuthorizationCode = result.appleAuthorizationCode;
+        if (result.session) {
+          applySessionState(result.session);
+        }
+      } catch (error) {
+        if (error instanceof AccountReauthenticationAccountMismatchError) {
+          await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
+          await clearPersistedSupabaseAuthSession();
+          resetAuthState();
+          router.replace('/auth');
+        }
+        throw normalizeSupabaseAuthError(error);
+      }
     }
 
     await unregisterMobilePushNotifications(api).catch((error) => {
       console.warn('Could not unregister push notifications before account deletion', error);
     });
-    await api.deleteAccount('DELETE');
+    await api.deleteAccount('DELETE', appleAuthorizationCode ? { appleAuthorizationCode } : {});
     await clearPersistedSupabaseAuthSession();
     resetAuthState();
     router.replace('/auth');
@@ -401,10 +436,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         missingEnvKeys,
         api,
         signInWithPassword,
-        signUpWithPassword,
         signInWithApple,
         signInWithGoogle,
         signOut,
+        accountReauthenticationMethods,
         deleteAccount,
         refreshProfile,
         updateCredits: setCredits,

@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { notifyPostSocialActivity } from '@/lib/mobile-notifications';
 import { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
 
@@ -20,6 +21,7 @@ type GenerationRow = {
 
 export type ShowcaseRemixServiceDependencies = {
   findPublicPostReferenceByIdOrGenerationId: typeof findPublicPostReferenceByIdOrGenerationId;
+  isUserRelationshipBlocked: typeof isUserRelationshipBlocked;
   notifyPostSocialActivity: typeof notifyPostSocialActivity;
 };
 
@@ -51,8 +53,34 @@ function resolveDependencies(
   return {
     findPublicPostReferenceByIdOrGenerationId:
       dependencies?.findPublicPostReferenceByIdOrGenerationId ?? findPublicPostReferenceByIdOrGenerationId,
+    isUserRelationshipBlocked: dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked,
     notifyPostSocialActivity: dependencies?.notifyPostSocialActivity ?? notifyPostSocialActivity,
   };
+}
+
+async function isPostInteractionUnavailable({
+  actorUserId,
+  creatorUserId,
+  dependencies,
+  serviceClient,
+}: {
+  actorUserId: string;
+  creatorUserId: string | null | undefined;
+  dependencies: ShowcaseRemixServiceDependencies;
+  serviceClient: SupabaseClient;
+}) {
+  if (!creatorUserId || creatorUserId === actorUserId) return false;
+
+  try {
+    return await dependencies.isUserRelationshipBlocked({
+      adminSupabase: serviceClient,
+      firstUserId: actorUserId,
+      secondUserId: creatorUserId,
+    });
+  } catch (error) {
+    console.error('Failed to verify block state before remixing Showcase content:', error);
+    return true;
+  }
 }
 
 function getRedirectPathForCategory(category: string | null | undefined): string {
@@ -89,6 +117,18 @@ export async function remixShowcasePostForRoute({
   ) as PostReference | null;
 
   if (!post) {
+    return {
+      ok: false,
+      status: 404,
+      body: { error: 'Creation is private or not found' },
+    };
+  }
+  if (await isPostInteractionUnavailable({
+    actorUserId,
+    creatorUserId: post.user_id,
+    dependencies: resolvedDependencies,
+    serviceClient,
+  })) {
     return {
       ok: false,
       status: 404,

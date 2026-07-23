@@ -115,7 +115,7 @@ function cardUnlock(item: ShowcaseFeedItem): ShowcaseMasonryUnlock | null {
     return {
       label: free ? 'Free unlock' : item.asset.priceQuote?.formatted ?? 'Paid unlock',
       summary: resourceSummary(item.asset.resourceKinds, item.asset.allowRemix),
-      ctaLabel: free ? 'Unlock free' : 'View unlock',
+      ctaLabel: free ? 'Get resources — Free' : 'View unlock',
       accent: free ? 'workflow' : 'commerce',
     };
   }

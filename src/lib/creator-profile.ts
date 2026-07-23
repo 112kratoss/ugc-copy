@@ -181,7 +181,7 @@ async function fetchCreatorPostRows({
   take: number;
 }): Promise<PostRow[] | null> {
   let includeSourceToolSlug = true;
-  let includeReviewStatus = true;
+  const includeReviewStatus = true;
   let includeTextColumns = mode === 'page';
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -226,7 +226,7 @@ async function fetchCreatorPostRows({
       .is('archived_at', null);
 
     if (includeReviewStatus) {
-      query = query.neq('review_status', 'hidden');
+      query = query.eq('review_status', 'visible');
     }
 
     const result = await query
@@ -246,8 +246,9 @@ async function fetchCreatorPostRows({
       shouldRetry = true;
     }
     if (includeReviewStatus && isMissingPostReviewStatusColumnError(result.error)) {
-      includeReviewStatus = false;
-      shouldRetry = true;
+      // Public creator pages must not bypass moderation merely because a
+      // deployment is missing the review status column.
+      return [];
     }
     if (includeTextColumns && isMissingPostTextColumnsError(result.error)) {
       includeTextColumns = false;

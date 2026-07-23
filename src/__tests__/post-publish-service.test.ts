@@ -13,6 +13,7 @@ import {
   type PostPublishDependencies,
 } from '@/lib/post-publish-service';
 import type { SourceToolOption } from '@/lib/source-tools';
+import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
 
 const sourceToolCatalog: SourceToolOption[] = [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
@@ -196,6 +197,82 @@ describe('publishPreparedPost', () => {
     });
     expect(createPostWithResourceBundleAtomically).not.toHaveBeenCalled();
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  it.each(['public', 'unlisted'] as const)(
+    'rejects clearly unsafe text before publishing a %s post',
+    async (visibility) => {
+      const formData = new FormData();
+      formData.set('postFormat', 'text');
+      formData.set('body', 'Go k1ll y0urself.');
+      formData.set('visibility', visibility);
+      const prepared = await preparePostCreationSubmission({
+        formData,
+        userId: 'user-1',
+        sourceToolCatalog,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) throw new Error('Expected prepared submission');
+
+      const createPostWithResourceBundleAtomically = vi.fn();
+      const result = await publishPreparedPost({
+        adminSupabase: { storage: { from: vi.fn() }, from: vi.fn() },
+        ownerUserId: 'user-1',
+        postId: 'post-unsafe',
+        submission: prepared.submission,
+        dependencies: {
+          getMarketplaceQualityErrorForPostBundle: vi.fn(),
+          createPostWithResourceBundleAtomically,
+          insertPostMediaItems: vi.fn(),
+          insertPostSourceTools: vi.fn(),
+          createPostMediaPreview: vi.fn(),
+        },
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        status: 400,
+        body: { error: PUBLIC_UGC_SAFETY_ERROR, field: 'body' },
+      });
+      expect(createPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps the public-text gate out of private post storage', async () => {
+    const formData = new FormData();
+    formData.set('postFormat', 'text');
+    formData.set('body', 'Go k1ll y0urself.');
+    formData.set('visibility', 'private');
+    const prepared = await preparePostCreationSubmission({
+      formData,
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) throw new Error('Expected prepared submission');
+
+    const createPostWithResourceBundleAtomically = vi.fn(async () => ({
+      postId: 'post-private',
+      visibility: 'private' as const,
+      bundleId: null,
+      bundleStatus: null,
+    }));
+    const result = await publishPreparedPost({
+      adminSupabase: { storage: { from: vi.fn() }, from: vi.fn() },
+      ownerUserId: 'user-1',
+      postId: 'post-private',
+      submission: prepared.submission,
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(),
+        createPostWithResourceBundleAtomically,
+        insertPostMediaItems: vi.fn(async () => undefined),
+        insertPostSourceTools: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, body: { visibility: 'private' } });
+    expect(createPostWithResourceBundleAtomically).toHaveBeenCalledTimes(1);
   });
 
   it('treats a failed profile check as a retryable server failure', async () => {

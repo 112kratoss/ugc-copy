@@ -18,6 +18,10 @@ import {
   type RazorpayOrderResponse,
 } from '@/lib/razorpay-orders';
 import { isExternalServiceTimeoutError } from '@/lib/provider-fetch';
+import {
+  POST_RESOURCE_WEB_CASH_MIN_TOKENS,
+  isPostResourceWebCashEligible,
+} from '@/lib/post-resource-commerce';
 
 type BundleForOrder = {
   id: string;
@@ -164,6 +168,19 @@ export async function createPostResourceBundleOrderForRoute({
 
   if (bundle.access_mode === 'free' || bundle.price_usd_cents === 0) {
     return { ok: false, status: 400, body: { error: 'Use the free recipe access endpoint for this bundle.' } };
+  }
+
+  if (!isPostResourceWebCashEligible(bundle.price_usd_cents)) {
+    return {
+      ok: false,
+      status: 400,
+      body: {
+        error: `Recipes below ${POST_RESOURCE_WEB_CASH_MIN_TOKENS} tokens can only be unlocked with credits.`,
+        code: 'CREDITS_ONLY_PRICE',
+        creditCost: bundle.price_usd_cents,
+        cashMinimumTokens: POST_RESOURCE_WEB_CASH_MIN_TOKENS,
+      },
+    };
   }
 
   const clientLocale = typeof body.locale === 'string' ? body.locale : null;

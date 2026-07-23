@@ -83,6 +83,24 @@ function createProfileQuery() {
   return query;
 }
 
+function createUserBlocksQuery() {
+  const query = {
+    select() {
+      return query;
+    },
+    eq() {
+      return query;
+    },
+    in() {
+      return query;
+    },
+    then(resolve: (value: { data: never[]; error: null }) => void) {
+      resolve({ data: [], error: null });
+    },
+  };
+  return query;
+}
+
 vi.mock('@/lib/server-helpers', () => ({
   createUserClient: (request: Request) => createUserClientMock(request),
   createServiceClient: () => createServiceClientFactory(),
@@ -119,6 +137,7 @@ describe('/api/profile/follow route', () => {
     fromMock.mockImplementation((table: string) => {
       if (table === 'follows') return createFollowQuery();
       if (table === 'profiles') return createProfileQuery();
+      if (table === 'user_blocks') return createUserBlocksQuery();
       throw new Error(`Unexpected table: ${table}`);
     });
     notifyCreatorFollowedMock.mockClear();

@@ -120,6 +120,14 @@ export interface SaveShowcasePostResponse {
   message?: string;
 }
 
+export type UserReportReason = 'spam' | 'harassment' | 'impersonation' | 'unsafe_content' | 'other';
+export type GenerationReportReason = 'offensive_ai_output' | 'unsafe_content' | 'other';
+export type ModerationReportSourceSurface =
+  | 'showcase'
+  | 'showcase-reel'
+  | 'creator-profile'
+  | 'generation-viewer';
+
 const CONTENT_CACHE_TTL_MS = 5 * 60 * 1000;
 const REQUEST_ID_HEADER = 'x-request-id';
 const FEED_INSTALLATION_ID_HEADER = 'x-magicbooklet-installation-id';
@@ -419,10 +427,13 @@ export function createApiClient({
         body: JSON.stringify({ ...body, installationId }),
       });
     },
-    deleteAccount: (confirmation: 'DELETE') =>
+    deleteAccount: (
+      confirmation: 'DELETE',
+      options: { appleAuthorizationCode?: string } = {},
+    ) =>
       request<{ success: boolean; deleted: boolean }>('/api/account', {
         method: 'DELETE',
-        body: JSON.stringify({ confirmation }),
+        body: JSON.stringify({ confirmation, ...options }),
       }),
     getReferralOverview: () =>
       request<ReferralOverviewResponse>('/api/referrals/me'),
@@ -496,9 +507,7 @@ export function createApiClient({
         }
 
         const feed = await request<ShowcaseFeedResponse>(
-          `/api/showcase/feed${buildQuery({ limit: 48, sort: 'recent' })}`,
-          {},
-          { auth: false, cacheTtlMs: CONTENT_CACHE_TTL_MS }
+          `/api/showcase/feed${buildQuery({ limit: 48, sort: 'recent' })}`
         );
         const item = feed.items.find((candidate) => candidate.id === postId);
         if (!item) {
@@ -510,6 +519,43 @@ export function createApiClient({
     },
     getCreatorProfile: (username: string, params?: Record<string, QueryValue>) =>
       request<CreatorProfileResponse>(`/api/creators/${encodeURIComponent(username)}${buildQuery(params)}`),
+    reportPost: (
+      postId: string,
+      body: { reason: 'spam' | 'stolen_content' | 'misleading_unlock' | 'unsafe_content' | 'payment_issue' | 'other'; details?: string }
+    ) => request<{ success: true }>(`/api/posts/${encodeURIComponent(postId)}/report`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+    reportUser: (
+      userId: string,
+      body: { reason: UserReportReason; sourceSurface: ModerationReportSourceSurface; details?: string }
+    ) => request<{ success: true }>('/api/moderation/reports', {
+      method: 'POST',
+      body: JSON.stringify({
+        targetType: 'user',
+        targetId: userId,
+        ...body,
+      }),
+    }),
+    reportGeneration: (
+      generationId: string,
+      body: { reason: GenerationReportReason; sourceSurface: ModerationReportSourceSurface; details?: string }
+    ) => request<{ success: true }>('/api/moderation/reports', {
+      method: 'POST',
+      body: JSON.stringify({
+        targetType: 'generation',
+        targetId: generationId,
+        ...body,
+      }),
+    }),
+    blockUser: (userId: string) =>
+      request<{ success: true; blocked: boolean }>(`/api/moderation/blocks/${encodeURIComponent(userId)}`, {
+        method: 'POST',
+      }),
+    unblockUser: (userId: string) =>
+      request<{ success: true; blocked: boolean }>(`/api/moderation/blocks/${encodeURIComponent(userId)}`, {
+        method: 'DELETE',
+      }),
     getCreatorFollowState: (followingId: string) =>
       request<{ following: boolean }>(`/api/profile/follow${buildQuery({ followingId })}`),
     setCreatorFollowing: (followingId: string, following: boolean) =>

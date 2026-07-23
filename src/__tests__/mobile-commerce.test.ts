@@ -352,6 +352,21 @@ describe('mobile commerce helpers', () => {
     });
   });
 
+  it('keeps post resource packages credit-only on mobile', async () => {
+    const rpc = vi.fn();
+
+    await expect(createMobilePurchaseIntent({
+      adminSupabase: { rpc } as unknown as SupabaseClient,
+      userId,
+      entitlementType: 'post_resource_unlock',
+      resourceId: 'post-1',
+    })).rejects.toMatchObject({
+      status: 400,
+      message: 'Post resources are credit-only on mobile. Use the credit unlock option.',
+    });
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
   it('returns only the server-selected product and immutable intent quote', async () => {
     const rpc = vi.fn(async () => ({
       data: {

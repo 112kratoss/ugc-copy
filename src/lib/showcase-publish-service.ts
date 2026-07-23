@@ -40,6 +40,10 @@ import {
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
+import {
+  getPublicUgcSafetyViolation,
+  PUBLIC_UGC_SAFETY_ERROR,
+} from '@/lib/public-ugc-safety';
 
 type ShowcaseCategory = Exclude<ShowcaseItemCategory, 'text'>;
 
@@ -478,7 +482,10 @@ export async function publishGenerationToShowcaseForRoute({
   }
 
   const resourceBundleValidationError = effectiveHasResourceBundlePayload
-    ? resolvedDependencies.validatePostResourceBundleInput(effectiveResourceBundle ?? null, { ownerUserId: userId })
+    ? resolvedDependencies.validatePostResourceBundleInput(effectiveResourceBundle ?? null, {
+        ownerUserId: userId,
+        mediaKeys: ['media-1'],
+      })
     : null;
   if (resourceBundleValidationError) {
     return { ok: false, status: 400, body: { error: resourceBundleValidationError } };
@@ -513,6 +520,27 @@ export async function publishGenerationToShowcaseForRoute({
     ?? generation.title?.trim()
     ?? resolvedDependencies.deriveTitleFromBody(sanitizedPublicContent.body || null)
     ?? null;
+
+  const safetyViolation = shouldExposePost
+    ? getPublicUgcSafetyViolation({
+        title: resolvedTitle,
+        description: descriptionCandidate,
+        body: normalizedBody,
+        // Inspect the originating prompt even when a recipe or privacy choice
+        // keeps it out of the public post payload.
+        prompt: normalizeTextValue(prompt) ?? generation.prompt?.trim() ?? null,
+      })
+    : null;
+  if (safetyViolation) {
+    return {
+      ok: false,
+      status: 400,
+      body: {
+        error: PUBLIC_UGC_SAFETY_ERROR,
+        field: safetyViolation.field,
+      },
+    };
+  }
 
   const marketplaceQualityError = effectiveVisibility === 'public'
     ? await resolvedDependencies.getMarketplaceQualityErrorForPostBundle({

@@ -513,6 +513,15 @@ export interface VideoMultiPromptInput {
   duration: number;
 }
 
+export interface KlingVideoElementInput {
+  id?: string | null;
+  url: string;
+  handle?: string | null;
+  displayName?: string | null;
+  storagePath?: string | null;
+  sourceGenerationId?: string | null;
+}
+
 export interface VideoGenerationRequest {
   model: string;
   isMultiShot?: boolean;
@@ -522,6 +531,7 @@ export interface VideoGenerationRequest {
   elementImageUrls?: string[];
   imageUrls?: string[];
   referenceVideoUrls?: string[];
+  klingVideoElements?: KlingVideoElementInput[];
   referenceAudioUrls?: string[];
   preparedAudioIds?: string[];
   characterIds?: string[];
@@ -616,6 +626,7 @@ export interface ShowcaseAssetSummary {
 
 export interface ShowcaseMediaItem {
   id: string;
+  mediaKey?: string;
   url: string;
   previewUrl?: string | null;
   previewThumbhash?: string | null;
@@ -775,11 +786,14 @@ export type PostResourceItemType =
   | 'prompt'
   | 'workflow'
   | 'reference_image'
+  | 'reference_video'
+  | 'reference_audio'
   | 'source_file'
   | 'preset'
   | 'settings'
   | 'note'
   | 'external_link'
+  | 'remix_link'
   | 'remix_access';
 export type PostResourceItemRole =
   | 'primary'
@@ -800,7 +814,13 @@ export type PostResourceRemixUse =
   | 'direct_remix'
   | 'text_template';
 
+export type PostResourceItemScope =
+  | { kind: 'all' }
+  | { kind: 'media'; mediaKeys: string[] };
+
 export interface PostResourceItem {
+  id?: string;
+  scope?: PostResourceItemScope;
   type: PostResourceItemType;
   role: PostResourceItemRole;
   sectionId: string | null;
@@ -820,9 +840,21 @@ export interface PostResourceItem {
 export interface PostResourceSection {
   id: string;
   title: string;
+  publicTitle?: string | null;
+  resourceType?: PostResourceItemType | null;
+  scope?: PostResourceItemScope;
   kind: PostResourceSectionKind;
   description: string | null;
   sortOrder: number;
+}
+
+export interface PostResourceCardPreview {
+  sectionId: string;
+  publicTitle: string;
+  resourceType: PostResourceItemType;
+  scope: PostResourceItemScope;
+  itemCount: number;
+  hasRemix: boolean;
 }
 
 export interface PostResourceAttachment {
@@ -896,6 +928,25 @@ export interface SourceToolSelection {
 }
 
 export interface PostResourceBundleLockedPreview {
+  cardPreviews?: PostResourceCardPreview[];
+  itemCounts?: Partial<Record<PostResourceItemType, number>>;
+  itemPreviews?: Array<{
+    id?: string;
+    scope?: PostResourceItemScope;
+    type: PostResourceItemType;
+    title: string;
+    role: PostResourceItemRole;
+    sectionId?: string | null;
+    contentType?: string | null;
+    sizeBytes?: number | null;
+    remixUse: PostResourceRemixUse;
+  }>;
+  sectionCount?: number;
+  hasPrompt?: boolean;
+  hasNotes?: boolean;
+  hasWorkflow?: boolean;
+  hasRemix?: boolean;
+  updatedAt?: string | null;
   promptPreview?: string | null;
   notesPreview?: string | null;
   attachmentPreviews?: Array<{ kind: 'link' | 'file' | string; label: string }>;
@@ -924,6 +975,7 @@ export interface MarketplaceResource {
     body: string;
     mediaUrl: string | null;
     mediaKind: 'image' | 'video' | null;
+    mediaItems?: ShowcaseMediaItem[];
     saveCount?: number;
     remixCount?: number;
   } | null;

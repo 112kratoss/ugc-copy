@@ -23,7 +23,18 @@ export async function loadPersistedCreationDrafts(): Promise<PersistedCreationDr
     if (parsed.image?.tool !== 'image' || parsed.video?.tool !== 'video' || parsed.motion?.tool !== 'motion') {
       return null;
     }
-    return parsed as PersistedCreationDrafts;
+    return {
+      ...parsed,
+      video: {
+        ...parsed.video,
+        preparedAudioIds: Array.isArray(parsed.video.preparedAudioIds)
+          ? parsed.video.preparedAudioIds.filter((value): value is string => typeof value === 'string')
+          : [],
+        characterIds: Array.isArray(parsed.video.characterIds)
+          ? parsed.video.characterIds.filter((value): value is string => typeof value === 'string')
+          : [],
+      },
+    } as PersistedCreationDrafts;
   } catch {
     return null;
   }

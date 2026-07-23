@@ -52,6 +52,7 @@ describe('saveShowcasePostForRoute', () => {
         user_id: 'creator-1',
       })),
       isMissingPostsSchemaError: vi.fn(() => false),
+      isUserRelationshipBlocked: vi.fn(async () => false),
       notifyPostSocialActivity,
     } satisfies Partial<ShowcaseSaveServiceDependencies>;
 
@@ -93,5 +94,38 @@ describe('saveShowcasePostForRoute', () => {
       actorUserId: 'user-1',
       postId: 'post-1',
     });
+  });
+
+  it.each([
+    ['a block', vi.fn(async () => true)],
+    ['an unavailable block lookup', vi.fn(async () => { throw new Error('block lookup failed'); })],
+  ])('fails closed before saving or notifying when there is %s', async (_label, isUserRelationshipBlocked) => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const serviceClient = createServiceClientMock();
+    const notifyPostSocialActivity = vi.fn(async () => undefined);
+
+    const result = await saveShowcasePostForRoute({
+      actorUserId: 'user-1',
+      referenceId: 'post-1',
+      requestedSaveState: true,
+      serviceClient: serviceClient.client,
+      sourceSurface: 'showcase',
+      dependencies: {
+        findPublicPostReferenceByIdOrGenerationId: vi.fn(async () => ({
+          id: 'post-1',
+          generation_id: 'gen-1',
+          user_id: 'creator-1',
+        })),
+        isMissingPostsSchemaError: vi.fn(() => false),
+        isUserRelationshipBlocked,
+        notifyPostSocialActivity,
+      },
+    });
+
+    expect(result).toEqual({ ok: false, status: 404, body: { error: 'Post not found' } });
+    expect(serviceClient.rpcMock).not.toHaveBeenCalled();
+    expect(serviceClient.eventInsertMock).not.toHaveBeenCalled();
+    expect(notifyPostSocialActivity).not.toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 });

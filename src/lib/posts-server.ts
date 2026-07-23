@@ -34,6 +34,8 @@ export interface PostReferenceRow {
   prompt: string | null;
   title?: string | null;
   source_kind: RawShowcaseSourceKind;
+  archived_at?: string | null;
+  review_status?: 'visible' | 'flagged' | 'hidden' | null;
 }
 
 export interface PostMediaRow {
@@ -263,16 +265,27 @@ async function findPostReferenceByColumn(
 ): Promise<PostReferenceRow | null> {
   let result = await adminSupabase
     .from('posts')
-    .select('id, user_id, generation_id, visibility, category, prompt, title, source_kind')
+    .select('id, user_id, generation_id, visibility, category, prompt, title, source_kind, archived_at, review_status')
     .eq(column, value)
+    .eq('visibility', 'public')
+    .is('archived_at', null)
+    .eq('review_status', 'visible')
     .maybeSingle();
 
   if (isMissingPostTextColumnsError(result.error)) {
     result = await adminSupabase
       .from('posts')
-      .select('id, user_id, generation_id, visibility, category, prompt, source_kind')
+      .select('id, user_id, generation_id, visibility, category, prompt, source_kind, archived_at, review_status')
       .eq(column, value)
+      .eq('visibility', 'public')
+      .is('archived_at', null)
+      .eq('review_status', 'visible')
       .maybeSingle();
+  }
+
+  if (isMissingPostReviewStatusColumnError(result.error)) {
+    console.error('Cannot enforce the public post moderation boundary:', result.error);
+    return null;
   }
 
   if (result.error) {
@@ -308,7 +321,12 @@ export async function findPublicPostReferenceByIdOrGenerationId(
   adminSupabase = createServiceClient()
 ): Promise<PostReferenceRow | null> {
   const post = await findPostReferenceByIdOrGenerationId(id, adminSupabase);
-  if (!post || post.visibility !== 'public') {
+  if (
+    !post ||
+    post.visibility !== 'public' ||
+    post.archived_at ||
+    post.review_status !== 'visible'
+  ) {
     return null;
   }
 

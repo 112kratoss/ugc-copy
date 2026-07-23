@@ -84,7 +84,7 @@ describe('uploadPostResourceFileForRoute', () => {
       ok: false,
       status: 400,
       body: {
-        error: 'Upload a safe workflow or resource file: JSON, text, markdown, CSV, YAML, PDF, ZIP, or workflow export.',
+        error: 'Upload a safe image, video, audio, workflow, document, or archive resource file.',
       },
     });
     expect(client.rpc).toHaveBeenCalledOnce();
@@ -160,6 +160,26 @@ describe('uploadPostResourceFileForRoute', () => {
           sizeBytes: 5,
         },
       },
+    });
+  });
+
+  it.each([
+    ['reference.jpg', 'image/jpeg'],
+    ['reference.mp4', 'video/mp4'],
+    ['reference.mp3', 'audio/mpeg'],
+  ])('uploads private media resource %s', async (fileName, contentType) => {
+    const client = createClient();
+
+    const result = await uploadPostResourceFileForRoute({
+      client: client.client,
+      userId: 'user-1',
+      readFormData: vi.fn(async () => formDataWithFile(new File(['media'], fileName, { type: contentType }))),
+      createUploadId: () => 'upload-id',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      body: { attachment: { contentType, storagePath: `user-1/upload-id-${fileName}` } },
     });
   });
 

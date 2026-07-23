@@ -86,7 +86,7 @@ describe('showcase feed view model', () => {
       remixLabel: '92',
       unlock: {
         accent: 'workflow',
-        ctaLabel: 'Unlock free',
+        ctaLabel: 'Get resources — Free',
         label: 'Free unlock',
         summary: 'Prompt + Files + Remix',
       },

@@ -102,6 +102,24 @@ describe('marketplace trust helpers', () => {
     expect(assessment.issues.some((issue) => issue.code === 'missing_creator_identity')).toBe(true);
   });
 
+  it.each(['flagged', 'hidden'] as const)(
+    'keeps a %s post out of marketplace eligibility',
+    (reviewStatus) => {
+      const assessment = assessMarketplaceListingQuality({
+        ...promptListingInput(),
+        resources: {
+          promptText: 'Write a direct product hook with one visual proof point and a short CTA.',
+          attachments: [],
+          allowRemix: false,
+        },
+        post: { ...basePost, reviewStatus },
+      });
+
+      expect(assessment.eligible).toBe(false);
+      expect(assessment.issues).toContainEqual(expect.objectContaining({ code: 'post_not_public' }));
+    },
+  );
+
   it('uses one readiness rule for public posts and a stronger seller rule for unlocks', () => {
     expect(getCreatorPublishReadinessError({
       username: 'creator-a1b2c3d4',

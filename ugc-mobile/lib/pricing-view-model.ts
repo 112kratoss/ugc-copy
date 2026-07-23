@@ -10,11 +10,11 @@ export function resolveSelectedPricingPlan(planId: PricingPlanId): MobilePricing
 }
 
 export function formatPricingDisplayPrice(
-  plan: MobilePricingPlan,
+  _plan: MobilePricingPlan,
   nativePrice?: string | null
 ) {
   const trimmedNativePrice = nativePrice?.trim();
-  return trimmedNativePrice || `Web estimate Rs ${plan.webPriceInr.toLocaleString('en-IN')}`;
+  return trimmedNativePrice || 'Store price unavailable';
 }
 
 export function getPurchaseButtonLabel({

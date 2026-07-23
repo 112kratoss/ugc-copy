@@ -11,6 +11,7 @@ import {
 import { getCreatorProfilePageData } from '@/lib/creator-profile';
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
 import { getCreatorFollowStateForRoute } from '@/lib/profile-follow-service';
+import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import { parsePositiveInt } from '@/lib/showcase';
 
@@ -22,6 +23,7 @@ type CreatorProfileRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   getCreatorFollowStateForRoute?: typeof getCreatorFollowStateForRoute;
+  isUserRelationshipBlocked?: typeof isUserRelationshipBlocked;
   getCreatorProfilePageData?: typeof getCreatorProfilePageData;
   logError?: typeof console.error;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
@@ -32,6 +34,7 @@ function resolveDependencies(dependencies: CreatorProfileRouteDependencies | und
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     getCreatorFollowStateForRoute: dependencies?.getCreatorFollowStateForRoute ?? getCreatorFollowStateForRoute,
+    isUserRelationshipBlocked: dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked,
     getCreatorProfilePageData: dependencies?.getCreatorProfilePageData ?? getCreatorProfilePageData,
     logError: dependencies?.logError ?? console.error,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
@@ -112,6 +115,20 @@ async function handleCreatorProfileGET(
         { error: 'Creator not found.' },
         { status: 404, headers: cacheHeaders },
       );
+    }
+
+    if (viewerUserId && viewerUserId !== data.profile.id) {
+      const relationshipBlocked = await dependencies.isUserRelationshipBlocked({
+        adminSupabase: dependencies.createServiceClient(),
+        firstUserId: viewerUserId,
+        secondUserId: data.profile.id,
+      });
+      if (relationshipBlocked) {
+        return NextResponse.json(
+          { error: 'Creator not found.' },
+          { status: 404, headers: cacheHeaders },
+        );
+      }
     }
 
     const viewer = await getViewerState({

@@ -13,6 +13,7 @@ import {
   type PostUpdateDependencies,
 } from '@/lib/post-update-service';
 import type { SourceToolOption } from '@/lib/source-tools';
+import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
 
 const sourceToolCatalog: SourceToolOption[] = [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
@@ -26,6 +27,7 @@ function createSupabaseMock({
     visibility: 'private',
     title: 'Draft post',
     description: null,
+    prompt: null,
     body: 'A draft post with an unlock package.',
     category: 'text',
     post_format: 'text',
@@ -41,9 +43,11 @@ function createSupabaseMock({
     access_mode: 'paid',
     status: 'draft',
   },
+  postMedia = [] as Array<Record<string, unknown>>,
 }: {
   post?: Record<string, unknown> | null;
   bundle?: Record<string, unknown> | null;
+  postMedia?: Array<Record<string, unknown>>;
 } = {}) {
   const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
   const client = {
@@ -54,6 +58,9 @@ function createSupabaseMock({
         },
         eq() {
           return query;
+        },
+        order() {
+          return Promise.resolve({ data: table === 'post_media' ? postMedia : [], error: null });
         },
         maybeSingle() {
           if (table === 'posts') {
@@ -213,6 +220,38 @@ describe('updateOwnerPostForRoute', () => {
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
+  it('rejects clearly unsafe text before a public post update is persisted', async () => {
+    const { client } = createSupabaseMock({ bundle: null });
+    const updatePostWithResourceBundleAtomically = vi.fn();
+    const listSourceToolsCatalog = vi.fn(async () => sourceToolCatalog);
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        body: 'Step-by-step guide to make a bomb at home.',
+        visibility: 'public',
+      },
+      dependencies: {
+        listSourceToolsCatalog,
+        getMarketplaceQualityErrorForPostBundle: vi.fn(),
+        updatePostWithResourceBundleAtomically,
+        replacePostSourceTools: vi.fn(),
+        replacePostMediaItems: vi.fn(),
+        createPostMediaPreview: vi.fn(),
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: PUBLIC_UGC_SAFETY_ERROR, field: 'body' },
+    });
+    expect(listSourceToolsCatalog).not.toHaveBeenCalled();
+    expect(updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
   it('invalidates the feed when follow-up metadata fails after the atomic post update commits', async () => {
     const { client } = createSupabaseMock({ bundle: null });
     const updatePostWithResourceBundleAtomically = vi.fn(async () => ({
@@ -290,5 +329,107 @@ describe('updateOwnerPostForRoute', () => {
       body: { error: 'Could not verify your creator profile right now. Try again.' },
     });
     expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  it('preserves stable media keys when existing proof media is reordered', async () => {
+    const postMedia = [
+      {
+        id: 'media-a',
+        media_key: 'proof-a',
+        storage_path: 'posts/post-1/a.jpg',
+        preview_storage_path: null,
+        external_url: null,
+        media_kind: 'image',
+        content_type: 'image/jpeg',
+        original_name: 'a.jpg',
+        width: null,
+        height: null,
+        duration_seconds: null,
+        sort_order: 0,
+      },
+      {
+        id: 'media-b',
+        media_key: 'proof-b',
+        storage_path: 'posts/post-1/b.jpg',
+        preview_storage_path: null,
+        external_url: null,
+        media_kind: 'image',
+        content_type: 'image/jpeg',
+        original_name: 'b.jpg',
+        width: null,
+        height: null,
+        duration_seconds: null,
+        sort_order: 1,
+      },
+    ];
+    const { client } = createSupabaseMock({
+      bundle: null,
+      postMedia,
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'private',
+        title: 'Proof post',
+        description: null,
+        prompt: null,
+        body: null,
+        category: 'image',
+        post_format: 'media',
+        source_tool: null,
+        source_tool_slug: null,
+        source_kind: 'external',
+        archived_at: null,
+        showcase_asset_path: 'posts/post-1/a.jpg',
+        output_url: null,
+        review_status: 'visible',
+      },
+    });
+    const replacePostMediaItems = vi.fn(async () => undefined);
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        mediaItems: [
+          { existingId: 'media-b', mediaKey: 'proof-b' },
+          { existingId: 'media-a', mediaKey: 'proof-a' },
+        ],
+        resourceBundle: {
+          accessMode: 'free',
+          resources: {
+            items: [{
+              id: 'prompt-a',
+              scope: { kind: 'media', mediaKeys: ['proof-a'] },
+              type: 'prompt',
+              title: 'Proof A prompt',
+              textContent: 'Use the prompt for proof A.',
+            }],
+          },
+        },
+      },
+      dependencies: {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'private',
+          bundleId: 'bundle-1',
+          bundleStatus: 'draft',
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems,
+        createPostMediaPreview: vi.fn(async () => null),
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(replacePostMediaItems).toHaveBeenCalledWith(expect.objectContaining({
+      mediaItems: [
+        expect.objectContaining({ mediaKey: 'proof-b', sortOrder: 0 }),
+        expect.objectContaining({ mediaKey: 'proof-a', sortOrder: 1 }),
+      ],
+    }));
   });
 });
