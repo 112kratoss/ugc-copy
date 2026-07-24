@@ -6,6 +6,8 @@ import {
   getActiveRegistryModels,
   loadWebGenerationModelCatalog,
   parseClientGenerationModelCatalog,
+  reconcileWebCatalogGenerationDraft,
+  requestWebGenerationStart,
   requestWebGenerationQuote,
   resolveCatalogModelId,
   resolveWebGenerationQuoteUi,
@@ -72,6 +74,39 @@ describe('web generation model catalog client', () => {
     expect(resolveCatalogModelId(catalog, 'image', 'bundled-active-image', { preferDefault: true })).toBe('fixture-image');
   });
 
+  it('reconciles a retired model to the remote default while preserving compatible draft content', () => {
+    const catalog = parseClientGenerationModelCatalog(contractFixture);
+    const draft = reconcileWebCatalogGenerationDraft(catalog, {
+      kind: 'image',
+      modelId: 'retired-image',
+      catalogRevision: 'old-revision',
+      settings: {
+        aspectRatio: '9:16',
+        resolution: 'unsupported',
+        removedControl: true,
+      },
+      prompt: 'Keep this prompt',
+      inputs: [
+        { slot: 'imageReferences', kind: 'image', url: 'uploads/user/reference.png' },
+        { slot: 'removedSlot', kind: 'video', url: 'uploads/user/reference.mp4' },
+      ],
+    });
+
+    expect(draft).toMatchObject({
+      modelId: 'fixture-image',
+      catalogRevision: '0123456789abcdef',
+      prompt: 'Keep this prompt',
+      settings: {
+        aspectRatio: '9:16',
+      },
+      inputs: [
+        { slot: 'imageReferences', kind: 'image' },
+      ],
+    });
+    expect(draft?.settings).not.toHaveProperty('removedControl');
+    expect(draft?.inputs).toHaveLength(1);
+  });
+
   it('uses the last valid local catalog when the network request fails', async () => {
     const storage = {
       getItem: vi.fn(() => JSON.stringify(contractFixture)),
@@ -99,9 +134,46 @@ describe('web generation model catalog client', () => {
     });
 
     expect(fetcher).toHaveBeenCalledWith(
-      '/api/generation-models?platform=web&schemaVersion=1&refresh=1',
+      '/api/generation-models?platform=web&schemaVersion=2&refresh=1',
       { cache: 'no-store', headers: expect.any(Headers) }
     );
+  });
+
+  it('starts generation through the unified catalog-backed endpoint', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      predictionId: 'task-1',
+      generationId: 'generation-1',
+      status: 'processing',
+      remainingCredits: 100,
+      cost: 42,
+      catalogRevision: '0123456789abcdef',
+      modelId: 'remote-video',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await expect(requestWebGenerationStart({
+      kind: 'video',
+      modelId: 'remote-video',
+      catalogRevision: '0123456789abcdef',
+      settings: { duration: 5 },
+      prompt: 'A remote model',
+      inputs: [],
+    }, {
+      accessToken: 'token-1',
+      idempotencyKey: 'request-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    })).resolves.toMatchObject({
+      modelId: 'remote-video',
+      cost: 42,
+    });
+
+    expect(fetcher).toHaveBeenCalledWith('/api/generations', expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({
+        Authorization: 'Bearer token-1',
+        'Idempotency-Key': 'request-1',
+      }),
+    }));
   });
 
   it('requests an authoritative quote with the current catalog revision', async () => {

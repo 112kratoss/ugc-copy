@@ -199,6 +199,7 @@ describe('collectBackendHealth', () => {
       missing: [],
     });
     expect(health.catalog.activeModels).toBeGreaterThan(0);
+    expect(health.catalog.schemaVersion).toBe(2);
     expect(health.scheduler).toMatchObject({
       status: 'ok',
       route: '/api/cron/backend-jobs',

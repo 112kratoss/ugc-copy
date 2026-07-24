@@ -122,6 +122,7 @@ export async function startImageGenerationForRoute({
       googleSearch: Boolean(normalizedSettings.googleSearch),
       persistInputMedia,
       quotedCostCredits: quote.costCredits,
+      catalogRevision: quote.catalogRevision,
       sourceGenerationId,
     }),
   });

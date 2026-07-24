@@ -24,6 +24,8 @@ const VIDEO_EXTENSIONS = new Map([
   ['.mov', 'video/quicktime'],
 ]);
 
+type SharpMetadata = Awaited<ReturnType<ReturnType<typeof sharp>['metadata']>>;
+
 export const MAX_TEMPLATE_IMAGE_INPUT_BYTES = 30 * 1024 * 1024;
 export const MAX_TEMPLATE_VIDEO_INPUT_BYTES = 100 * 1024 * 1024;
 export const MIN_TEMPLATE_IMAGE_DIMENSION = 256;
@@ -80,7 +82,7 @@ export async function validateTemplateInputBlob(input: {
 
   if (input.slot.kind !== 'image') return;
 
-  let metadata: sharp.Metadata;
+  let metadata: SharpMetadata;
   try {
     metadata = await sharp(Buffer.from(await input.blob.arrayBuffer()), {
       failOn: 'warning',

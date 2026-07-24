@@ -1,0 +1,492 @@
+{
+  "manifestVersion": 1,
+  "mode": "clone-active",
+  "release": {
+    "schemaVersion": 2,
+    "revision": "seedance2-hd-v2-20260724",
+    "basedOnRevision": "e271b74557d1e248",
+    "changeNote": "Add Seedance 2 1080p and 4K output, v2 slot metadata, validation, and reference-aware per-second pricing.",
+    "createdBy": "catalog-operations"
+  },
+  "upgrade": {
+    "legacyDescriptorsToV2": true
+  },
+  "expectedModelIds": [
+    "flux-2-pro",
+    "gemini-omni-video",
+    "gpt-image-2",
+    "grok-imagine-image",
+    "grok-imagine-video",
+    "hailuo-2.3",
+    "happyhorse-1.1",
+    "ideogram-v3",
+    "imagen-4",
+    "imagen-4-fast",
+    "imagen-4-ultra",
+    "kling-2.6",
+    "kling-3.0",
+    "kling-3.0-turbo",
+    "kling-3.0-video",
+    "nano-banana-2",
+    "nano-banana-2-lite",
+    "nano-banana-pro",
+    "seedance-1.5-pro",
+    "seedance-2",
+    "seedance-2-fast",
+    "seedance-2-mini",
+    "seedream-5-lite",
+    "seedream-5-pro",
+    "veo-3.1",
+    "wan-2.7",
+    "wan-2.7-image",
+    "wan-2.7-image-pro",
+    "z-image"
+  ],
+  "defaults": {
+    "web": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    },
+    "mobile": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    }
+  },
+  "entries": [
+    {
+      "modelId": "seedance-2",
+      "kind": "video",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "seedance-2",
+        "kind": "video",
+        "displayName": "Seedance 2",
+        "description": "ByteDance video model with image, video, audio, and audio generation controls",
+        "badge": null,
+        "recommended": false,
+        "sortOrder": 30,
+        "minClientSchemaVersion": 1,
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "16:9",
+            "options": [
+              { "value": "16:9", "label": "16:9" },
+              { "value": "4:3", "label": "4:3" },
+              { "value": "1:1", "label": "1:1" },
+              { "value": "3:4", "label": "3:4" },
+              { "value": "9:16", "label": "9:16" },
+              { "value": "21:9", "label": "21:9" }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "720p",
+            "options": [
+              { "value": "480p", "label": "480p" },
+              { "value": "720p", "label": "720p" },
+              { "value": "1080p", "label": "1080p" },
+              { "value": "4k", "label": "4K" }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "integer",
+            "presentation": "stepper",
+            "defaultValue": 15,
+            "min": 4,
+            "max": 15,
+            "step": 1,
+            "unit": "seconds"
+          },
+          {
+            "key": "sound",
+            "label": "Sound",
+            "type": "boolean",
+            "presentation": "toggle",
+            "defaultValue": false
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": true,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 5,
+            "supportsNaming": true
+          },
+          "videoReferences": {
+            "max": 3
+          },
+          "audioReferences": {
+            "max": 3
+          },
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": true,
+          "endFrame": true,
+          "combineFramesWithReferences": false
+        },
+        "inputModes": [
+          {
+            "key": "frames",
+            "label": "Frames to video",
+            "default": true,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ],
+            "slots": [
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 0,
+                "max": 1
+              },
+              {
+                "key": "endFrame",
+                "kind": "image",
+                "role": "endFrame",
+                "label": "End frame",
+                "min": 0,
+                "max": 1
+              }
+            ]
+          },
+          {
+            "key": "references",
+            "label": "Reference to video",
+            "default": false,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 5,
+                "supportsNaming": true
+              },
+              {
+                "key": "videoReferences",
+                "kind": "video",
+                "role": "reference",
+                "label": "Reference videos",
+                "min": 0,
+                "max": 3,
+                "durationMetadata": "required",
+                "maxDurationSeconds": 15
+              },
+              {
+                "key": "audioReferences",
+                "kind": "audio",
+                "role": "reference",
+                "label": "Reference audio",
+                "min": 0,
+                "max": 3,
+                "durationMetadata": "optional",
+                "maxDurationSeconds": 15
+              }
+            ]
+          }
+        ],
+        "inputConstraints": [
+          {
+            "type": "combined-duration",
+            "slotKeys": ["videoReferences"],
+            "max": 15,
+            "message": "Reference videos may be at most 15 seconds in total."
+          }
+        ]
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "kie-task-v1",
+      "adapterConfig": {
+        "promptField": "prompt",
+        "settings": {
+          "aspectRatio": "aspect_ratio",
+          "resolution": "resolution",
+          "duration": {
+            "field": "duration",
+            "transform": "integer"
+          },
+          "sound": {
+            "field": "generate_audio",
+            "transform": "boolean"
+          }
+        },
+        "slots": {
+          "startFrame": {
+            "field": "first_frame_url",
+            "cardinality": "one",
+            "source": "url"
+          },
+          "endFrame": {
+            "field": "last_frame_url",
+            "cardinality": "one",
+            "source": "url"
+          },
+          "imageReferences": {
+            "field": "reference_image_urls",
+            "cardinality": "many",
+            "source": "url"
+          },
+          "videoReferences": {
+            "field": "reference_video_urls",
+            "cardinality": "many",
+            "source": "url"
+          },
+          "audioReferences": {
+            "field": "reference_audio_urls",
+            "cardinality": "many",
+            "source": "url"
+          }
+        },
+        "constants": {
+          "web_search": false,
+          "return_last_frame": false
+        },
+        "variantSelector": {
+          "type": "static",
+          "variant": "default"
+        }
+      },
+      "providerModelMap": {
+        "default": "bytedance/seedance-2"
+      },
+      "pricingStrategy": "reference-adjustment",
+      "pricingConfig": {
+        "unit": "second",
+        "settingKey": "resolution",
+        "durationSettingKey": "duration",
+        "referenceDurationSlots": ["videoReferences"],
+        "rounding": "ceil",
+        "rates": {
+          "noReference": {
+            "480p": 19,
+            "720p": 41,
+            "1080p": 102,
+            "4k": 208
+          },
+          "withReference": {
+            "480p": 11.5,
+            "720p": 25,
+            "1080p": 62,
+            "4k": 128
+          }
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "passthroughSettingKeys": ["referenceMode"],
+        "normalizedDefaults": {
+          "referenceMode": "frames"
+        },
+        "rules": [
+          {
+            "type": "control-options",
+            "key": "resolution",
+            "options": ["480p", "720p", "1080p", "4k"]
+          },
+          {
+            "type": "control-range",
+            "key": "duration",
+            "min": 4,
+            "max": 15
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "imageReferences",
+            "max": 5
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "videoReferences",
+            "max": 3
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "audioReferences",
+            "max": 3
+          },
+          {
+            "type": "combined-duration",
+            "slotKeys": ["videoReferences"],
+            "max": 15
+          },
+          {
+            "type": "forbidden-combination",
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "startFrame",
+                "operator": "greaterThan",
+                "value": 0
+              },
+              {
+                "source": "inputCount",
+                "key": "imageReferences",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "inputs",
+            "message": "Frame-to-video and multimodal references are mutually exclusive."
+          },
+          {
+            "type": "forbidden-combination",
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "startFrame",
+                "operator": "greaterThan",
+                "value": 0
+              },
+              {
+                "source": "inputCount",
+                "key": "videoReferences",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "inputs",
+            "message": "Frame-to-video and multimodal references are mutually exclusive."
+          },
+          {
+            "type": "forbidden-combination",
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "startFrame",
+                "operator": "greaterThan",
+                "value": 0
+              },
+              {
+                "source": "inputCount",
+                "key": "audioReferences",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "inputs",
+            "message": "Frame-to-video and multimodal references are mutually exclusive."
+          },
+          {
+            "type": "forbidden-combination",
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "endFrame",
+                "operator": "greaterThan",
+                "value": 0
+              },
+              {
+                "source": "inputCount",
+                "key": "imageReferences",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "inputs",
+            "message": "Frame-to-video and multimodal references are mutually exclusive."
+          },
+          {
+            "type": "forbidden-combination",
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "endFrame",
+                "operator": "greaterThan",
+                "value": 0
+              },
+              {
+                "source": "inputCount",
+                "key": "videoReferences",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "inputs",
+            "message": "Frame-to-video and multimodal references are mutually exclusive."
+          },
+          {
+            "type": "forbidden-combination",
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "endFrame",
+                "operator": "greaterThan",
+                "value": 0
+              },
+              {
+                "source": "inputCount",
+                "key": "audioReferences",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "inputs",
+            "message": "Frame-to-video and multimodal references are mutually exclusive."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie",
+        "documentation": "https://docs.kie.ai/32356532e0"
+      }
+    }
+  ],
+  "acceptanceQuotes": [
+    {
+      "modelId": "seedance-2",
+      "settings": {
+        "resolution": "1080p",
+        "duration": 7
+      },
+      "inputs": [],
+      "expectedCredits": 714
+    },
+    {
+      "modelId": "seedance-2",
+      "settings": {
+        "resolution": "4k",
+        "duration": 7
+      },
+      "inputs": [],
+      "expectedCredits": 1456
+    }
+  ]
+}

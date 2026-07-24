@@ -53,7 +53,9 @@ import type {
   VideoGenerationRequest,
 } from './types';
 import {
+  GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
   parseGenerationModelCatalog,
+  type CatalogGenerationRequest,
   type GenerationModelCatalog,
   type GenerationModelQuote,
   type GenerationModelQuoteRequest,
@@ -292,6 +294,9 @@ export function createApiClient({
   fetcher = fetch,
 }: ApiClientOptions) {
   const root = normalizeBaseUrl(baseUrl);
+  const catalogSchemaVersion = clientInfo?.catalogSchemaVersion === GENERATION_MODEL_CATALOG_SCHEMA_VERSION
+    ? GENERATION_MODEL_CATALOG_SCHEMA_VERSION
+    : 1;
   const responseCache = new Map<string, {
     expiresAt: number;
     promise?: Promise<unknown>;
@@ -592,11 +597,14 @@ export function createApiClient({
       request<{ tools: SourceToolOption[] }>('/api/source-tools'),
     listGenerationModels: async (): Promise<GenerationModelCatalog> => {
       const response = await request<unknown>(
-        '/api/generation-models?platform=mobile&schemaVersion=1',
+        `/api/generation-models?platform=mobile&schemaVersion=${catalogSchemaVersion}`,
         {},
         { auth: false, cacheTtlMs: CONTENT_CACHE_TTL_MS }
       );
-      return parseGenerationModelCatalog(response);
+      return parseGenerationModelCatalog(
+        response,
+        catalogSchemaVersion,
+      );
     },
     fetchGenerationModels: async ({
       etag = null,
@@ -605,7 +613,7 @@ export function createApiClient({
       etag?: string | null;
       forceRefresh?: boolean;
     } = {}): Promise<GenerationModelCatalogFetchResult> => {
-      const path = `/api/generation-models?platform=mobile&schemaVersion=1${forceRefresh ? '&refresh=1' : ''}`;
+      const path = `/api/generation-models?platform=mobile&schemaVersion=${catalogSchemaVersion}${forceRefresh ? '&refresh=1' : ''}`;
       const headers = new Headers();
       headers.set(REQUEST_ID_HEADER, createMobileRequestId());
       headers.set('x-magicbooklet-client', 'mobile');
@@ -640,7 +648,10 @@ export function createApiClient({
         throw new ApiError(message, response.status, body, response.headers.get(REQUEST_ID_HEADER) ?? undefined);
       }
       return {
-        catalog: parseGenerationModelCatalog(body),
+        catalog: parseGenerationModelCatalog(
+          body,
+          catalogSchemaVersion,
+        ),
         etag: responseEtag,
         notModified: false,
       };
@@ -651,6 +662,15 @@ export function createApiClient({
         body: JSON.stringify(body),
         signal,
       }),
+    ...(catalogSchemaVersion === GENERATION_MODEL_CATALOG_SCHEMA_VERSION
+      ? {
+          startGeneration: (body: CatalogGenerationRequest, idempotencyKey?: string) =>
+            request<GenerationStartResponse>(
+              '/api/generations',
+              generationStartInit(body, body.kind, idempotencyKey),
+            ),
+        }
+      : {}),
     uploadPostResourceFile: (body: FormData) =>
       request<{ success: boolean; attachment: PostResourceAttachment }>('/api/posts/resource-files', {
         method: 'POST',

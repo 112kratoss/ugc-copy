@@ -32,6 +32,7 @@ describe('generation model catalog', () => {
   it('describes settings as schema-driven controls', () => {
     const catalog = buildGenerationModelCatalog({ platform: 'mobile', schemaVersion: 1 });
     const grok = catalog.models.find((model) => model.id === 'grok-imagine-image');
+    const seedance2 = catalog.models.find((model) => model.id === 'seedance-2');
 
     expect(grok).toMatchObject({
       kind: 'image',
@@ -42,6 +43,18 @@ describe('generation model catalog', () => {
       expect.objectContaining({ key: 'aspectRatio', type: 'choice', defaultValue: '3:2' }),
       expect.objectContaining({ key: 'resolution', type: 'choice', defaultValue: '1K' }),
       expect.objectContaining({ key: 'qualityMode', type: 'choice', defaultValue: 'standard' }),
+    ]));
+    expect(seedance2?.controls).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: 'resolution',
+        defaultValue: '480p',
+        options: [
+          { value: '480p', label: '480p' },
+          { value: '720p', label: '720p' },
+          { value: '1080p', label: '1080p' },
+          { value: '4k', label: '4k' },
+        ],
+      }),
     ]));
   });
 
@@ -133,8 +146,8 @@ describe('generation model quotes', () => {
     for (const model of catalog.models) {
       const settings = Object.fromEntries(model.controls.map((control) => [control.key, control.defaultValue]));
       const inputCounts = {
-        images: model.id === 'hailuo-2.3' ? 1 : 0,
-        videos: 0,
+        images: model.id === 'hailuo-2.3' || model.kind === 'motion' ? 1 : 0,
+        videos: model.kind === 'motion' ? 1 : 0,
         audios: 0,
       };
       const input = { kind: model.kind, modelId: model.id, settings, inputCounts };
@@ -202,7 +215,21 @@ describe('generation model quotes', () => {
         modelId: 'seedance-2-fast',
         settings: { aspectRatio: '16:9', resolution: '480p', duration: 12, sound: true },
         inputCounts: { images: 1, videos: 1, audios: 1 },
-        expectedCost: 108,
+        expectedCost: 135,
+      },
+      {
+        kind: 'video' as const,
+        modelId: 'seedance-2',
+        settings: { aspectRatio: '9:16', resolution: '1080p', duration: 7, sound: true },
+        inputCounts: { images: 0, videos: 0, audios: 0 },
+        expectedCost: 714,
+      },
+      {
+        kind: 'video' as const,
+        modelId: 'seedance-2',
+        settings: { aspectRatio: '9:16', resolution: '4k', duration: 7, sound: true },
+        inputCounts: { images: 0, videos: 0, audios: 0 },
+        expectedCost: 1456,
       },
     ];
 
@@ -212,6 +239,16 @@ describe('generation model quotes', () => {
         modelId: testCase.modelId,
         settings: testCase.settings,
         inputCounts: testCase.inputCounts,
+        ...(testCase.modelId === 'seedance-2-fast'
+          ? {
+              inputMetadata: {
+                slots: {
+                  videoReferences: { count: 1, durationsSeconds: [3] },
+                },
+                referenceVideoDurationsSeconds: [3],
+              },
+            }
+          : {}),
       }).costCredits).toBe(testCase.expectedCost);
     }
   });

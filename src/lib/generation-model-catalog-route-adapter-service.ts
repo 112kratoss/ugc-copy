@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { createHash } from 'node:crypto';
+
 import { NextResponse } from 'next/server';
 
 import { API_CACHE_CONTROL, createApiResponseHeaders } from '@/lib/api-cache';
@@ -40,6 +42,17 @@ function readCatalogSchemaVersion(searchParams: URLSearchParams): number {
     : GENERATION_MODEL_CATALOG_SCHEMA_VERSION;
 }
 
+export function buildGenerationModelCatalogEtag(
+  catalog: unknown,
+  platform: CatalogPlatform,
+): string {
+  const digest = createHash('sha256')
+    .update(JSON.stringify({ platform, catalog }))
+    .digest('hex')
+    .slice(0, 24);
+  return `"generation-model-catalog-${digest}"`;
+}
+
 export async function getGenerationModelCatalogRouteResponse({
   dependencies,
   request,
@@ -59,7 +72,7 @@ export async function getGenerationModelCatalogRouteResponse({
         schemaVersion,
         forceRefresh,
       })).catalog;
-  const etag = `"${catalog.revision}"`;
+  const etag = buildGenerationModelCatalogEtag(catalog, platform);
   const headers = createApiResponseHeaders(
     request,
     forceRefresh ? API_CACHE_CONTROL.noStore : API_CACHE_CONTROL.publicCatalog,

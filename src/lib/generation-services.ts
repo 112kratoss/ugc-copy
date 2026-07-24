@@ -73,7 +73,17 @@ import {
 import type { RemoteMediaKind } from '@/lib/remote-media-security';
 import { stageAllowlistedRemoteMedia } from '@/lib/staged-remote-media';
 import { loadGenerationModelOperationalConfig } from '@/lib/generation-model-catalog-store';
-import { resolveProviderModelId } from '@/lib/generation-model-runtime';
+import {
+  resolveProviderModelId,
+  type GenerationModelOperationalConfig,
+} from '@/lib/generation-model-runtime';
+import type { CatalogPrimitive } from '@/lib/generation-model-catalog';
+import {
+  buildGenerationProviderRequest,
+  type CatalogGenerationInputAsset,
+  type CatalogGenerationShot,
+  type GenericGenerationAdapterOperation,
+} from '@/lib/generation-model-adapters';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 const PROVIDER_TASK_ATTACH_ATTEMPTS = 3;
@@ -209,11 +219,14 @@ function requireKieGenerationConfiguration(): void {
   if (!KIE_API_KEY) {
     failKieGenerationConfiguration('provider_api_key');
   }
+  if (!process.env.KIE_WEBHOOK_HMAC_KEY?.trim()) {
+    failKieGenerationConfiguration('callback_auth');
+  }
 
   try {
     buildKieWebhookCallbackUrl();
   } catch (error) {
-    const component = error instanceof Error && error.message.includes('NEXT_PUBLIC_SITE_URL')
+    const component = error instanceof Error && error.message.includes('callback URL')
       ? 'callback_base_url'
       : 'callback_auth';
     failKieGenerationConfiguration(component);
@@ -1572,6 +1585,8 @@ export async function startImageGeneration(params: {
   privateRecipe?: boolean;
   templateContext?: TemplateGenerationContext;
   quotedCostCredits?: number;
+  operationalConfig?: GenerationModelOperationalConfig;
+  catalogRevision?: string;
   sourceGenerationId?: string | null;
 }): Promise<GenerationStartResult> {
   requireKieGenerationConfiguration();
@@ -1594,6 +1609,8 @@ export async function startImageGeneration(params: {
     privateRecipe = false,
     templateContext,
     quotedCostCredits,
+    operationalConfig,
+    catalogRevision,
     sourceGenerationId = null,
   } = params;
 
@@ -1691,7 +1708,10 @@ export async function startImageGeneration(params: {
     referenceCount: resolvedImageUrls.length,
   });
   const cost = resolveQuotedGenerationCost(computedCost, quotedCostCredits);
-  const runtimeConfig = await loadGenerationModelOperationalConfig(model);
+  const runtimeConfig = operationalConfig
+    ?? await loadGenerationModelOperationalConfig(model, catalogRevision
+      ? { catalogRevision, schemaVersion: 1 }
+      : undefined);
   const providerModel = resolveProviderModelId(
     runtimeConfig,
     resolvedImageUrls.length > 0 ? 'reference' : 'text',
@@ -1825,7 +1845,7 @@ export async function startImageGeneration(params: {
       source_generation_id: sourceGenerationId,
       workflow_settings: privateRecipe ? {} : {
         model,
-        providerModel,
+        ...(catalogRevision ? { catalogRevision } : {}),
         aspectRatio,
         resolution,
         ...(model === 'grok-imagine-image' || model === 'ideogram-v3' ? { qualityMode } : {}),
@@ -1929,6 +1949,8 @@ export async function startVideoGeneration(params: {
   endFrame?: RemixMediaAssetDescriptor | null;
   seedanceAssets?: SeedanceAssetCollections | null;
   quotedCostCredits?: number;
+  operationalConfig?: GenerationModelOperationalConfig;
+  catalogRevision?: string;
   sourceGenerationId?: string | null;
   persistInputMedia?: boolean;
   privateRecipe?: boolean;
@@ -1966,6 +1988,8 @@ export async function startVideoGeneration(params: {
     endFrame = null,
     seedanceAssets = null,
     quotedCostCredits,
+    operationalConfig,
+    catalogRevision,
     sourceGenerationId = null,
     persistInputMedia = true,
     privateRecipe = false,
@@ -1980,7 +2004,10 @@ export async function startVideoGeneration(params: {
   if (!selectedModel) {
     throw new GenerationServiceError(`Unsupported video model: ${model}`, 400);
   }
-  const runtimeConfig = await loadGenerationModelOperationalConfig(model);
+  const runtimeConfig = operationalConfig
+    ?? await loadGenerationModelOperationalConfig(model, catalogRevision
+      ? { catalogRevision, schemaVersion: 1 }
+      : undefined);
 
   const rawPrompt = typeof prompt === 'string' ? prompt : '';
   const trimmedPrompt = rawPrompt.trim();
@@ -2287,9 +2314,7 @@ export async function startVideoGeneration(params: {
       ? referenceImageUrls
       : resolvedElementImageUrls;
     const requestedMode = mode;
-    const providerMode = model === 'grok-imagine-video' && grokVideoImageUrls.length > 0 && mode === 'spicy'
-      ? 'normal'
-      : mode;
+    const providerMode = mode;
 
     if (model === 'kling-3.0-turbo') {
       const firstFrameUrl = frameImageUrls[0] || null;
@@ -2515,7 +2540,7 @@ export async function startVideoGeneration(params: {
 
     const reservation = await startGenerationRecord(creditSupabase, {
       user_id: userId,
-      model: providerModelId,
+      model,
       cost,
       duration: totalDuration,
       client_request_key_hash: clientRequestKeyHash,
@@ -2524,10 +2549,10 @@ export async function startVideoGeneration(params: {
       source_generation_id: sourceGenerationId,
       workflow_settings: privateRecipe ? {} : {
         model,
+        ...(catalogRevision ? { catalogRevision } : {}),
         mode,
         ...(model === 'grok-imagine-video'
           ? {
-              providerModel: providerModelId,
               requestedMode,
               providerMode,
             }
@@ -2728,6 +2753,8 @@ export async function startMotionGeneration(params: {
   characterImage?: RemixMediaAssetDescriptor | null;
   referenceVideo?: RemixMediaAssetDescriptor | null;
   quotedCostCredits?: number;
+  operationalConfig?: GenerationModelOperationalConfig;
+  catalogRevision?: string;
 }): Promise<GenerationStartResult> {
   requireKieGenerationConfiguration();
   const {
@@ -2745,6 +2772,8 @@ export async function startMotionGeneration(params: {
     characterImage = null,
     referenceVideo = null,
     quotedCostCredits,
+    operationalConfig,
+    catalogRevision,
   } = params;
 
   if (!referenceVideoUrl || !characterImageUrl) {
@@ -2755,7 +2784,10 @@ export async function startMotionGeneration(params: {
   if (!selectedModel) {
     throw new Error(`Unsupported motion model: ${model}`);
   }
-  const runtimeConfig = await loadGenerationModelOperationalConfig(model);
+  const runtimeConfig = operationalConfig
+    ?? await loadGenerationModelOperationalConfig(model, catalogRevision
+      ? { catalogRevision, schemaVersion: 1 }
+      : undefined);
   const providerModelId = resolveProviderModelId(runtimeConfig, 'default', selectedModel.apiModelId);
 
   const computedCost = getMotionCost(model, mode, duration);
@@ -2765,7 +2797,7 @@ export async function startMotionGeneration(params: {
   try {
     const reservation = await startGenerationRecord(creditSupabase, {
       user_id: userId,
-      model: providerModelId,
+      model,
       duration,
       cost,
       client_request_key_hash: clientRequestKeyHash,
@@ -2776,6 +2808,7 @@ export async function startMotionGeneration(params: {
       workflow_settings: {
         creationMode: 'motion',
         model,
+        ...(catalogRevision ? { catalogRevision } : {}),
         characterOrientation,
         mode,
         duration,
@@ -2846,6 +2879,181 @@ export async function startMotionGeneration(params: {
         generationId,
         userId,
         cost,
+      });
+    }
+    throw error;
+  }
+}
+
+export async function startCatalogGeneration(params: {
+  supabase: SupabaseClient;
+  creditSupabase: SupabaseClient;
+  userId: string;
+  clientRequestKeyHash?: string | null;
+  operation: GenericGenerationAdapterOperation;
+  catalogRevision: string;
+  prompt: string;
+  settings: Record<string, CatalogPrimitive>;
+  inputs?: CatalogGenerationInputAsset[];
+  shots?: CatalogGenerationShot[];
+  quotedCostCredits: number;
+  sourceGenerationId?: string | null;
+  persistInputMedia?: boolean;
+}): Promise<GenerationStartResult> {
+  requireKieGenerationConfiguration();
+  const {
+    supabase,
+    creditSupabase,
+    userId,
+    clientRequestKeyHash = null,
+    operation,
+    catalogRevision,
+    prompt,
+    settings,
+    inputs = [],
+    shots = [],
+    quotedCostCredits,
+    sourceGenerationId = null,
+    persistInputMedia = true,
+  } = params;
+
+  if (!Number.isInteger(quotedCostCredits) || quotedCostCredits < 0) {
+    throw new GenerationServiceError('Invalid quoted generation cost.', 500);
+  }
+
+  const resolvedInputs = await Promise.all(inputs.map(async (asset) => ({
+    ...asset,
+    url: typeof asset.url === 'string' && asset.url.trim()
+      ? await resolveStoredMediaUrl(supabase, asset.url)
+      : null,
+  })));
+  const providerRequest = buildGenerationProviderRequest({
+    operation,
+    prompt: typeof prompt === 'string' ? prompt.trim() : '',
+    settings,
+    inputs: resolvedInputs,
+    shots,
+  });
+  const durationSetting = settings.duration;
+  const duration = typeof durationSetting === 'number' && Number.isFinite(durationSetting)
+    ? durationSetting
+    : shots.reduce((total, shot) => (
+        total + (typeof shot.duration === 'number' && Number.isFinite(shot.duration)
+          ? shot.duration
+          : 0)
+      ), 0) || null;
+
+  let generationId: string | null = null;
+  let predictionId: string | null = null;
+  try {
+    const reservation = await startGenerationRecord(creditSupabase, {
+      user_id: userId,
+      model: operation.modelId,
+      duration,
+      cost: quotedCostCredits,
+      client_request_key_hash: clientRequestKeyHash,
+      prompt: typeof prompt === 'string' ? prompt.trim() : '',
+      category: operation.kind === 'image' ? 'image' : 'video',
+      creation_mode: operation.kind === 'motion' ? 'motion' : null,
+      source_generation_id: sourceGenerationId,
+      workflow_settings: {
+        model: operation.modelId,
+        catalogRevision,
+        settings,
+        ...(shots.length > 0 ? { shots } : {}),
+        inputs: inputs.map((asset) => ({
+          slot: asset.slot,
+          kind: asset.kind,
+          ...(asset.assetId ? { assetId: asset.assetId } : {}),
+          ...(typeof asset.durationSeconds === 'number'
+            ? { durationSeconds: asset.durationSeconds }
+            : {}),
+          ...(asset.label ? { label: asset.label } : {}),
+          ...(asset.handle ? { handle: asset.handle } : {}),
+          ...(asset.storagePath ? { storagePath: asset.storagePath } : {}),
+          ...(asset.sourceGenerationId
+            ? { sourceGenerationId: asset.sourceGenerationId }
+            : {}),
+        })),
+      },
+    });
+    generationId = reservation.generationId;
+    if (reservation.predictionId) {
+      return {
+        predictionId: reservation.predictionId,
+        remainingCredits: reservation.remainingCredits,
+        cost: reservation.cost,
+        generationId,
+        idempotentReplay: reservation.idempotentReplay,
+      };
+    }
+
+    predictionId = await createKieTask(
+      providerRequest.body,
+      providerRequest.endpoint,
+      { generationId },
+    );
+    await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
+
+    if (persistInputMedia) {
+      const candidates: PersistGenerationInputCandidate[] = resolvedInputs.flatMap((asset, index) => {
+        if (!asset.url) return [];
+        const mediaType = asset.kind === 'video'
+          ? 'video'
+          : asset.kind === 'audio'
+            ? 'audio'
+            : 'image';
+        const role = mediaType === 'video'
+          ? 'reference_video'
+          : mediaType === 'audio'
+            ? 'reference_audio'
+            : asset.slot === 'startFrame'
+              ? 'start_frame'
+              : asset.slot === 'endFrame'
+                ? 'end_frame'
+                : asset.kind === 'character'
+                  ? 'character_image'
+                  : 'reference_image';
+        return [{
+          mediaType,
+          role,
+          label: asset.label ?? asset.slot,
+          sourceUrl: asset.url,
+          sourceStoragePath: asset.storagePath ?? null,
+          sourceGenerationId: asset.sourceGenerationId ?? null,
+          sortOrder: index,
+          metadata: {
+            slot: asset.slot,
+            ...(typeof asset.durationSeconds === 'number'
+              ? { durationSeconds: asset.durationSeconds }
+              : {}),
+          },
+        } satisfies PersistGenerationInputCandidate];
+      });
+      if (candidates.length > 0) {
+        await persistGenerationInputMedia({
+          supabase: creditSupabase,
+          generationId,
+          userId,
+          candidates,
+        });
+      }
+    }
+
+    return {
+      predictionId,
+      remainingCredits: reservation.remainingCredits,
+      cost: reservation.cost,
+      generationId,
+    };
+  } catch (error) {
+    if (!predictionId && generationId) {
+      await settleGenerationStartFailureQuietly({
+        creditSupabase,
+        error,
+        generationId,
+        userId,
+        cost: quotedCostCredits,
       });
     }
     throw error;

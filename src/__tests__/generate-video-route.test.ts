@@ -292,9 +292,10 @@ describe('/api/generate-video route', () => {
   beforeEach(() => {
     vi.resetModules();
     process.env.KIE_AI_API_KEY = 'test-key';
-    process.env.WEBHOOK_SECRET = 'test-webhook-secret';
+    process.env.KIE_PROVIDER_WEBHOOK_SECRET = 'test-webhook-secret';
+    process.env.KIE_WEBHOOK_HMAC_KEY = 'hmac-key';
     process.env.NEXT_PUBLIC_SITE_URL = 'https://magicbooklet.com';
-    delete process.env.KIE_WEBHOOK_HMAC_KEY;
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co';
     currentSupabaseMock = createSupabaseMock();
     rawCreateClientMock.mockReset();
     rawCreateClientMock.mockImplementation(() => currentSupabaseMock.client);

@@ -91,7 +91,7 @@ describe('mobile API CORS proxy', () => {
     expect(response.headers.get('x-magicbooklet-api-version')).toBe('1');
     expect(response.headers.get('x-magicbooklet-min-api-version')).toBe('1');
     expect(response.headers.get('x-magicbooklet-min-app-version')).toBe('0.0.1');
-    expect(response.headers.get('x-magicbooklet-catalog-schema-version')).toBe('1');
+    expect(response.headers.get('x-magicbooklet-catalog-schema-version')).toBe('2');
   });
 
   it('keeps unversioned released clients on the legacy v1 contract', () => {
@@ -132,10 +132,24 @@ describe('mobile API CORS proxy', () => {
         currentApiVersion: 1,
         minimumApiVersion: 1,
         minimumAppVersion: '0.0.1',
-        supportedCatalogSchemaVersions: [1],
+        supportedCatalogSchemaVersions: [1, 2],
       },
     });
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  });
+
+  it('allows the transition mobile client to request catalog schema v2', () => {
+    const response = proxy(new NextRequest('http://localhost/api/profile', {
+      headers: {
+        'x-magicbooklet-client': 'mobile',
+        'x-magicbooklet-api-version': '1',
+        'x-magicbooklet-app-version': '0.0.1',
+        'x-magicbooklet-catalog-schema-version': '2',
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-magicbooklet-catalog-schema-version')).toBe('2');
   });
 
   it('asks a future mobile client to retry after the backend catches up', async () => {

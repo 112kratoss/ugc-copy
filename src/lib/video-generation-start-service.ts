@@ -92,7 +92,8 @@ export async function startVideoGenerationForRoute({
   const preparedAudioIds = readArray<string>(body.preparedAudioIds);
   const characterIds = readArray<string>(body.characterIds);
   const klingVideoElements = readArray<KlingVideoElementInput>(body.klingVideoElements);
-  const usesReusableReferences = body.referenceMode === 'elements';
+  const requestedReferenceMode = requestedSettings.referenceMode ?? body.referenceMode;
+  const usesReusableReferences = requestedReferenceMode === 'elements';
   const startImageUrl = readOptionalString(body.startImageUrl);
   const endImageUrl = readOptionalString(body.endImageUrl);
   const quote = await quotePublishedGenerationModel({
@@ -132,6 +133,14 @@ export async function startVideoGenerationForRoute({
   });
 
   const normalizedSettings = quote.normalizedSettings;
+  const normalizedResolution = (
+    typeof normalizedSettings.resolution === 'string'
+    && normalizedSettings.resolution.trim()
+  )
+    ? normalizedSettings.resolution
+    : normalizedSettings.mode === 'pro'
+      ? '1080p'
+      : '720p';
   const result = await withGenerationStartIdempotency({
     client: adminSupabase,
     userId,
@@ -163,14 +172,15 @@ export async function startVideoGenerationForRoute({
       aspectRatio: String(normalizedSettings.aspectRatio),
       sound: Boolean(normalizedSettings.sound),
       duration: Number(normalizedSettings.duration),
-      resolution: String(normalizedSettings.resolution),
+      resolution: normalizedResolution,
       fixedLens: Boolean(normalizedSettings.fixedLens),
-      referenceMode: body.referenceMode === 'elements' ? 'elements' : 'frames',
+      referenceMode: normalizedSettings.referenceMode === 'elements' ? 'elements' : 'frames',
       startFrame: readObject<RemixMediaAssetDescriptor>(body.startFrame),
       endFrame: readObject<RemixMediaAssetDescriptor>(body.endFrame),
       seedanceAssets: readObject<SeedanceAssetCollections>(body.seedanceAssets),
       persistInputMedia,
       quotedCostCredits: quote.costCredits,
+      catalogRevision: quote.catalogRevision,
       sourceGenerationId,
     }),
   });

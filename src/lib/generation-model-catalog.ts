@@ -4,49 +4,54 @@ import {
   IMAGE_MODELS,
   MOTION_MODELS,
   VIDEO_MODELS,
-  getDefaultVideoDuration,
-  getImageCost,
   getImageQualityModes,
-  getImageResolutionOptions,
-  getMotionCost,
-  getVideoCost,
   getVideoDurationRange,
-  getVideoElementSupport,
-  isValidVideoDuration,
-  type ImageModelId,
-  type ImageOutputFormat,
-  type ImageQualityMode,
-  type ImageResolution,
-  type MotionModelId,
   type VideoModelId,
 } from '@/lib/models';
 import {
   buildCodeGenerationModelOperations,
   calculateGenerationModelRuntimeCost,
+  generationModelConditionMatches,
   type GenerationModelOperationalConfig,
+  type GenerationModelRuntimeInputs,
+  type GenerationModelValidationRuleType,
 } from '@/lib/generation-model-runtime';
 
-export const GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 1;
+export const GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 2;
+export const GENERATION_MODEL_CATALOG_V1_SCHEMA_VERSION = 1;
 
 export type GenerationModelKind = 'image' | 'video' | 'motion';
 export type CatalogPlatform = 'web' | 'mobile';
 export type CatalogPrimitive = string | number | boolean;
+
+export interface CatalogCondition {
+  source: 'setting' | 'inputCount';
+  key: string;
+  operator: 'equals' | 'notEquals' | 'in' | 'notIn' | 'greaterThan' | 'greaterThanOrEqual';
+  value: CatalogPrimitive | CatalogPrimitive[];
+}
+
+interface CatalogControlCompatibility {
+  minClientSchemaVersion?: number;
+  conditions?: CatalogCondition[];
+}
 
 export interface CatalogChoiceOption {
   value: string;
   label: string;
 }
 
-export interface CatalogChoiceControl {
+export interface CatalogChoiceControl extends CatalogControlCompatibility {
   key: string;
   label: string;
   type: 'choice';
   presentation: 'chips' | 'select';
   defaultValue: string;
   options: CatalogChoiceOption[];
+  normalizedValueType?: 'string' | 'number';
 }
 
-export interface CatalogBooleanControl {
+export interface CatalogBooleanControl extends CatalogControlCompatibility {
   key: string;
   label: string;
   type: 'boolean';
@@ -54,7 +59,7 @@ export interface CatalogBooleanControl {
   defaultValue: boolean;
 }
 
-export interface CatalogIntegerControl {
+export interface CatalogIntegerControl extends CatalogControlCompatibility {
   key: string;
   label: string;
   type: 'integer';
@@ -67,6 +72,36 @@ export interface CatalogIntegerControl {
 }
 
 export type CatalogControl = CatalogChoiceControl | CatalogBooleanControl | CatalogIntegerControl;
+
+export type CatalogInputSlot = {
+  key: string;
+  kind: 'image' | 'video' | 'audio' | 'character' | 'preparedVoice';
+  role: 'reference' | 'startFrame' | 'endFrame';
+  label: string;
+  min: number;
+  max: number;
+  supportsNaming?: boolean;
+  durationMetadata?: 'optional' | 'required';
+  maxDurationSeconds?: number;
+  conditions?: CatalogCondition[];
+};
+
+export type CatalogInputMode = {
+  key: string;
+  label: string;
+  default: boolean;
+  conditions?: CatalogCondition[];
+  slots: CatalogInputSlot[];
+};
+
+export type CatalogInputConstraint = {
+  type: 'total-count' | 'weighted-count' | 'combined-duration';
+  slotKeys: string[];
+  max: number;
+  weights?: Record<string, number>;
+  conditions?: CatalogCondition[];
+  message: string;
+};
 
 export interface GenerationModelDescriptor {
   id: string;
@@ -85,6 +120,7 @@ export interface GenerationModelDescriptor {
     googleSearch: boolean;
     outputFormat: boolean;
   };
+  // Kept for the schema-v1 projection and installed clients.
   inputs: {
     imageReferences: { max: number; supportsNaming: boolean } | null;
     videoReferences: { max: number } | null;
@@ -95,6 +131,10 @@ export interface GenerationModelDescriptor {
     endFrame: boolean;
     combineFramesWithReferences?: boolean;
   };
+  // Schema-v2-only public fields. Provider routing and pricing never appear here.
+  availability?: Record<CatalogPlatform, boolean>;
+  inputModes?: CatalogInputMode[];
+  inputConstraints?: CatalogInputConstraint[];
 }
 
 export interface GenerationModelCatalog {
@@ -104,9 +144,20 @@ export interface GenerationModelCatalog {
   models: GenerationModelDescriptor[];
 }
 
+export type GenerationModelInputSlotMetadata = {
+  count?: number;
+  durationsSeconds?: number[];
+};
+
+export type GenerationModelQuoteInputMetadata = {
+  slots?: Record<string, GenerationModelInputSlotMetadata>;
+  referenceVideoDurationsSeconds?: number[];
+};
+
 export interface GenerationModelQuoteInput {
   kind: GenerationModelKind;
   modelId: string;
+  schemaVersion?: number;
   settings?: Record<string, unknown>;
   inputCounts?: {
     images?: number;
@@ -115,6 +166,7 @@ export interface GenerationModelQuoteInput {
     preparedAudios?: number;
     characters?: number;
   };
+  inputMetadata?: GenerationModelQuoteInputMetadata;
   catalogRevision?: string | null;
 }
 
@@ -144,7 +196,7 @@ export class CatalogError extends Error {
     message: string,
     public readonly code: 'INVALID_MODEL_SETTINGS' | 'MODEL_UNAVAILABLE' | 'CATALOG_CHANGED',
     public readonly status: 409 | 422,
-    public readonly fieldErrors: Record<string, string> = {}
+    public readonly fieldErrors: Record<string, string> = {},
   ) {
     super(message);
     this.name = 'CatalogError';
@@ -152,7 +204,7 @@ export class CatalogError extends Error {
 }
 
 function labelForValue(value: string | number): string {
-  return typeof value === 'number' ? String(value) : value;
+  return String(value);
 }
 
 function choiceControl(
@@ -160,7 +212,8 @@ function choiceControl(
   label: string,
   values: readonly (string | number)[],
   defaultValue: string | number = values[0],
-  presentation: CatalogChoiceControl['presentation'] = values.length > 8 ? 'select' : 'chips'
+  presentation: CatalogChoiceControl['presentation'] = values.length > 8 ? 'select' : 'chips',
+  options: Pick<CatalogChoiceControl, 'normalizedValueType' | 'minClientSchemaVersion'> = {},
 ): CatalogChoiceControl {
   return {
     key,
@@ -169,11 +222,37 @@ function choiceControl(
     presentation,
     defaultValue: String(defaultValue),
     options: values.map((value) => ({ value: String(value), label: labelForValue(value) })),
+    ...options,
   };
 }
 
 function booleanControl(key: string, label: string, defaultValue = false): CatalogBooleanControl {
   return { key, label, type: 'boolean', presentation: 'toggle', defaultValue };
+}
+
+function imageInputModes(maxImages: number): CatalogInputMode[] {
+  if (maxImages <= 0) {
+    return [{
+      key: 'prompt-only',
+      label: 'Prompt only',
+      default: true,
+      slots: [],
+    }];
+  }
+  return [{
+    key: 'references',
+    label: 'Reference images',
+    default: true,
+    slots: [{
+      key: 'imageReferences',
+      kind: 'image',
+      role: 'reference',
+      label: 'Reference images',
+      min: 0,
+      max: maxImages,
+      supportsNaming: true,
+    }],
+  }];
 }
 
 function imageDescriptors(): GenerationModelDescriptor[] {
@@ -182,18 +261,14 @@ function imageDescriptors(): GenerationModelDescriptor[] {
       choiceControl('aspectRatio', 'Aspect ratio', model.aspectRatios),
       choiceControl('resolution', 'Resolution', model.resolutions),
     ];
-
     if (model.supportsOutputFormat) {
       controls.push(choiceControl('outputFormat', 'Output format', model.outputFormats));
     }
-    if (model.supportsGoogleSearch) {
-      controls.push(booleanControl('googleSearch', 'Google Search'));
-    }
+    if (model.supportsGoogleSearch) controls.push(booleanControl('googleSearch', 'Google Search'));
     const qualityModes = getImageQualityModes(model.id);
     if (qualityModes.length > 0) {
       controls.push(choiceControl('qualityMode', model.id === 'ideogram-v3' ? 'Speed' : 'Quality', qualityModes));
     }
-
     return {
       id: model.id,
       kind: 'image',
@@ -223,6 +298,9 @@ function imageDescriptors(): GenerationModelDescriptor[] {
         endFrame: false,
         combineFramesWithReferences: false,
       },
+      availability: { web: true, mobile: true },
+      inputModes: imageInputModes(model.maxImages),
+      inputConstraints: [],
     };
   });
 }
@@ -231,31 +309,171 @@ function getVideoInputLimits(modelId: VideoModelId) {
   if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini') {
     return { images: 5, videos: 3, audios: 3, startFrame: true, endFrame: true };
   }
-  if (modelId === 'seedance-1.5-pro') {
-    return { images: 2, videos: 0, audios: 0, startFrame: true, endFrame: true };
+  if (modelId === 'seedance-1.5-pro') return { images: 2, videos: 0, audios: 0, startFrame: true, endFrame: true };
+  if (modelId === 'grok-imagine-video') return { images: 1, videos: 0, audios: 0, startFrame: true, endFrame: false };
+  if (modelId === 'kling-3.0-video') return { images: 0, videos: 3, audios: 0, startFrame: true, endFrame: true };
+  if (modelId === 'kling-3.0-turbo') return { images: 0, videos: 0, audios: 0, startFrame: true, endFrame: false };
+  if (modelId === 'wan-2.7') return { images: 5, videos: 5, audios: 1, startFrame: true, endFrame: true };
+  if (modelId === 'happyhorse-1.1') return { images: 9, videos: 0, audios: 0, startFrame: true, endFrame: false };
+  if (modelId === 'gemini-omni-video') return { images: 7, videos: 1, audios: 0, startFrame: false, endFrame: false };
+  if (modelId === 'hailuo-2.3') return { images: 0, videos: 0, audios: 0, startFrame: true, endFrame: false };
+  return { images: 3, videos: 0, audios: 0, startFrame: true, endFrame: true };
+}
+
+function videoInputModes(
+  modelId: VideoModelId,
+  limits: ReturnType<typeof getVideoInputLimits>,
+): CatalogInputMode[] {
+  const modes: CatalogInputMode[] = [];
+  const frameSlots: CatalogInputSlot[] = [];
+  if (limits.startFrame) {
+    frameSlots.push({
+      key: 'startFrame',
+      kind: 'image',
+      role: 'startFrame',
+      label: 'Start frame',
+      min: modelId === 'hailuo-2.3' ? 1 : 0,
+      max: 1,
+    });
   }
-  if (modelId === 'grok-imagine-video') {
-    return { images: 1, videos: 0, audios: 0, startFrame: true, endFrame: false };
+  if (limits.endFrame) {
+    frameSlots.push({
+      key: 'endFrame',
+      kind: 'image',
+      role: 'endFrame',
+      label: 'End frame',
+      min: 0,
+      max: 1,
+    });
   }
-  if (modelId === 'kling-3.0-video') {
-    return { images: 0, videos: 3, audios: 0, startFrame: true, endFrame: true };
+  if (frameSlots.length > 0) {
+    modes.push({
+      key: 'frames',
+      label: 'Frames',
+      default: true,
+      conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'frames' }],
+      slots: frameSlots,
+    });
   }
-  if (modelId === 'kling-3.0-turbo') {
-    return { images: 0, videos: 0, audios: 0, startFrame: true, endFrame: false };
+  const referenceSlots: CatalogInputSlot[] = [];
+  if (limits.images > 0) {
+    referenceSlots.push({
+      key: 'imageReferences',
+      kind: 'image',
+      role: 'reference',
+      label: 'Reference images',
+      min: 0,
+      max: limits.images,
+      supportsNaming: true,
+    });
+  }
+  if (limits.videos > 0) {
+    const videoSlotKey = modelId === 'kling-3.0-video'
+      ? 'videoElements'
+      : 'videoReferences';
+    referenceSlots.push({
+      key: videoSlotKey,
+      kind: 'video',
+      role: 'reference',
+      label: modelId === 'kling-3.0-video' ? 'Video elements' : 'Reference videos',
+      min: 0,
+      max: limits.videos,
+      ...(modelId === 'kling-3.0-video' ? { supportsNaming: true } : {}),
+      durationMetadata: modelId.startsWith('seedance-2') ? 'required' : 'optional',
+      ...(modelId.startsWith('seedance-2') ? { maxDurationSeconds: 15 } : {}),
+    });
+  }
+  if (limits.audios > 0) {
+    referenceSlots.push({
+      key: 'audioReferences',
+      kind: 'audio',
+      role: 'reference',
+      label: 'Reference audio',
+      min: 0,
+      max: limits.audios,
+      durationMetadata: 'optional',
+      ...(modelId.startsWith('seedance-2') ? { maxDurationSeconds: 15 } : {}),
+    });
   }
   if (modelId === 'wan-2.7') {
-    return { images: 5, videos: 5, audios: 1, startFrame: true, endFrame: true };
+    referenceSlots.push({
+      key: 'startFrame',
+      kind: 'image',
+      role: 'startFrame',
+      label: 'Start frame',
+      min: 0,
+      max: 1,
+    });
   }
-  if (modelId === 'happyhorse-1.1') {
-    return { images: 9, videos: 0, audios: 0, startFrame: true, endFrame: false };
+  if (referenceSlots.length > 0) {
+    modes.push({
+      key: 'references',
+      label: 'Reusable references',
+      default: frameSlots.length === 0,
+      conditions: frameSlots.length > 0
+        ? [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' }]
+        : undefined,
+      slots: referenceSlots,
+    });
   }
   if (modelId === 'gemini-omni-video') {
-    return { images: 7, videos: 1, audios: 0, startFrame: false, endFrame: false };
+    modes.push({
+      key: 'prepared-assets',
+      label: 'Prepared assets',
+      default: false,
+      slots: [
+        {
+          key: 'preparedVoices',
+          kind: 'preparedVoice',
+          role: 'reference',
+          label: 'Prepared voices',
+          min: 0,
+          max: 3,
+        },
+        {
+          key: 'characters',
+          kind: 'character',
+          role: 'reference',
+          label: 'Characters',
+          min: 0,
+          max: 3,
+        },
+      ],
+    });
   }
-  if (modelId === 'hailuo-2.3') {
-    return { images: 0, videos: 0, audios: 0, startFrame: true, endFrame: false };
+  return modes;
+}
+
+function videoInputConstraints(modelId: VideoModelId): CatalogInputConstraint[] {
+  if (modelId === 'wan-2.7') {
+    return [{
+      type: 'total-count',
+      slotKeys: ['imageReferences', 'videoReferences', 'audioReferences'],
+      max: 5,
+      conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' }],
+      message: 'Wan 2.7 supports up to 5 reusable references in total.',
+    }];
   }
-  return { images: 3, videos: 0, audios: 0, startFrame: true, endFrame: true };
+  if (modelId === 'gemini-omni-video') {
+    return [{
+      type: 'weighted-count',
+      slotKeys: ['imageReferences', 'videoReferences', 'characters'],
+      weights: { imageReferences: 1, videoReferences: 2, characters: 1 },
+      max: 7,
+      message: 'Gemini Omni supports seven reference slots; videos use two and characters use one.',
+    }];
+  }
+  if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini') {
+    return [
+      {
+        type: 'combined-duration',
+        slotKeys: ['videoReferences'],
+        max: 15,
+        message: 'Reference videos may be at most 15 seconds in total.',
+      },
+    ];
+  }
+  return [];
 }
 
 function videoDescriptors(): GenerationModelDescriptor[] {
@@ -268,9 +486,7 @@ function videoDescriptors(): GenerationModelDescriptor[] {
         options: model.modeOptions.map((option) => ({ value: option.value, label: option.label })),
       });
     }
-    if (model.resolutions.length > 0) {
-      controls.push(choiceControl('resolution', 'Resolution', model.resolutions));
-    }
+    if (model.resolutions.length > 0) controls.push(choiceControl('resolution', 'Resolution', model.resolutions));
     if (durationRange) {
       controls.push({
         key: 'duration',
@@ -284,13 +500,35 @@ function videoDescriptors(): GenerationModelDescriptor[] {
         unit: 'seconds',
       });
     } else {
-      controls.push(choiceControl('duration', 'Duration', model.durations, model.durations[0]));
+      controls.push(choiceControl(
+        'duration',
+        'Duration',
+        model.durations,
+        model.durations[0],
+        'chips',
+        { normalizedValueType: 'number' },
+      ));
     }
     if (model.supportsSound) controls.push(booleanControl('sound', 'Sound'));
     if (model.supportsFixedLens) controls.push(booleanControl('fixedLens', 'Fixed lens'));
     if (model.supportsMultiShot) controls.push(booleanControl('isMultiShot', 'Multi-shot'));
-
     const limits = getVideoInputLimits(model.id);
+    if (limits.images > 0 && (limits.startFrame || limits.endFrame)) {
+      controls.push({
+        ...choiceControl(
+          'referenceMode',
+          'Input mode',
+          ['frames', 'elements'],
+          'frames',
+          'chips',
+          { minClientSchemaVersion: 2 },
+        ),
+        options: [
+          { value: 'frames', label: 'Frames' },
+          { value: 'elements', label: 'References' },
+        ],
+      });
+    }
     return {
       id: model.id,
       kind: 'video',
@@ -318,6 +556,9 @@ function videoDescriptors(): GenerationModelDescriptor[] {
         endFrame: limits.endFrame,
         combineFramesWithReferences: model.id === 'wan-2.7',
       },
+      availability: { web: true, mobile: true },
+      inputModes: videoInputModes(model.id, limits),
+      inputConstraints: videoInputConstraints(model.id),
     };
   });
 }
@@ -364,10 +605,37 @@ function motionDescriptors(): GenerationModelDescriptor[] {
       endFrame: false,
       combineFramesWithReferences: false,
     },
+    availability: { web: true, mobile: true },
+    inputModes: [{
+      key: 'motion-inputs',
+      label: 'Motion inputs',
+      default: true,
+      slots: [
+        {
+          key: 'characterImage',
+          kind: 'image',
+          role: 'reference',
+          label: 'Character image',
+          min: 1,
+          max: 1,
+        },
+        {
+          key: 'referenceVideo',
+          kind: 'video',
+          role: 'reference',
+          label: 'Reference video',
+          min: 1,
+          max: 1,
+          durationMetadata: 'optional',
+          maxDurationSeconds: model.maxDuration,
+        },
+      ],
+    }],
+    inputConstraints: [],
   }));
 }
 
-const ALL_PUBLIC_MODELS = [
+const ALL_PUBLIC_MODELS: GenerationModelDescriptor[] = [
   ...imageDescriptors(),
   ...videoDescriptors(),
   ...motionDescriptors(),
@@ -391,19 +659,49 @@ function buildRevision(models: GenerationModelDescriptor[]): string {
     .slice(0, 16);
 }
 
+function projectControl(control: CatalogControl, schemaVersion: number): CatalogControl | null {
+  if ((control.minClientSchemaVersion ?? 1) > schemaVersion) return null;
+  if (schemaVersion >= 2) return control;
+  const projected = { ...control };
+  delete projected.minClientSchemaVersion;
+  delete projected.conditions;
+  return projected;
+}
+
+export function projectGenerationModelDescriptor(
+  descriptor: GenerationModelDescriptor,
+  schemaVersion: number,
+): GenerationModelDescriptor {
+  const controls = descriptor.controls
+    .map((control) => projectControl(control, schemaVersion))
+    .filter((control): control is CatalogControl => Boolean(control));
+  if (schemaVersion >= 2) return { ...descriptor, controls };
+  const v1 = { ...descriptor };
+  delete v1.availability;
+  delete v1.inputModes;
+  delete v1.inputConstraints;
+  return { ...v1, controls };
+}
+
 export function buildGenerationModelCatalog({
+  platform,
   schemaVersion,
 }: {
   platform: CatalogPlatform;
   schemaVersion: number;
 }): GenerationModelCatalog {
+  const projectedSchemaVersion = schemaVersion >= 2 ? 2 : 1;
   const models = ALL_PUBLIC_MODELS
-    .filter((model) => MODEL_STATUS[model.id] === 'active' && model.minClientSchemaVersion <= schemaVersion)
+    .filter((model) => (
+      MODEL_STATUS[model.id] === 'active'
+      && model.minClientSchemaVersion <= schemaVersion
+      && (model.availability?.[platform] ?? true)
+    ))
+    .map((model) => projectGenerationModelDescriptor(model, projectedSchemaVersion))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.displayName.localeCompare(b.displayName));
   const modelIds = new Set(models.map((model) => model.id));
-
   return {
-    schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
+    schemaVersion: projectedSchemaVersion,
     revision: buildRevision(ALL_PUBLIC_MODELS),
     defaults: {
       image: modelIds.has(DEFAULT_MODEL_IDS.image) ? DEFAULT_MODEL_IDS.image : models.find((model) => model.kind === 'image')?.id ?? null,
@@ -414,172 +712,468 @@ export function buildGenerationModelCatalog({
   };
 }
 
-function stringSetting(settings: Record<string, unknown>, key: string, fallback: string): string {
-  const value = settings[key];
-  return typeof value === 'string' && value ? value : fallback;
+function normalizedCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : 0;
 }
 
-function booleanSetting(settings: Record<string, unknown>, key: string, fallback = false): boolean {
-  return typeof settings[key] === 'boolean' ? settings[key] as boolean : fallback;
+function normalizedDurations(value: unknown): number[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is number => typeof item === 'number' && Number.isFinite(item) && item >= 0)
+    : [];
 }
 
-function numberSetting(settings: Record<string, unknown>, key: string, fallback: number): number {
-  return typeof settings[key] === 'number' && Number.isFinite(settings[key]) ? settings[key] as number : fallback;
+export function normalizeGenerationModelInputFacts(
+  input: Pick<GenerationModelQuoteInput, 'inputCounts' | 'inputMetadata'>,
+): GenerationModelRuntimeInputs {
+  const counts = {
+    images: normalizedCount(input.inputCounts?.images),
+    videos: normalizedCount(input.inputCounts?.videos),
+    audios: normalizedCount(input.inputCounts?.audios),
+    preparedAudios: normalizedCount(input.inputCounts?.preparedAudios),
+    characters: normalizedCount(input.inputCounts?.characters),
+  };
+  const slotCounts: Record<string, number> = {
+    imageReferences: counts.images,
+    videoReferences: counts.videos,
+    audioReferences: counts.audios,
+    preparedVoices: counts.preparedAudios,
+    characters: counts.characters,
+  };
+  const slotDurationsSeconds: Record<string, number[]> = {};
+  for (const [slotKey, metadata] of Object.entries(input.inputMetadata?.slots ?? {})) {
+    if (metadata && typeof metadata === 'object') {
+      if (metadata.count !== undefined) slotCounts[slotKey] = normalizedCount(metadata.count);
+      if (metadata.durationsSeconds !== undefined) {
+        slotDurationsSeconds[slotKey] = normalizedDurations(metadata.durationsSeconds);
+      }
+    }
+  }
+  const explicitReferenceDurations = normalizedDurations(
+    input.inputMetadata?.referenceVideoDurationsSeconds,
+  );
+  const referenceVideoDurationsSeconds = explicitReferenceDurations.length > 0
+    ? explicitReferenceDurations
+    : slotDurationsSeconds.videoReferences ?? [];
+  return {
+    counts,
+    slotCounts,
+    slotDurationsSeconds,
+    referenceVideoDurationsSeconds,
+  };
 }
 
-function validateChoice(
-  fieldErrors: Record<string, string>,
+function conditionsMatch(
+  conditions: CatalogCondition[] | undefined,
+  settings: Record<string, CatalogPrimitive>,
+  inputs: GenerationModelRuntimeInputs,
+): boolean {
+  return !conditions || conditions.every((condition) => (
+    generationModelConditionMatches(condition, settings, inputs)
+  ));
+}
+
+function normalizeControlCandidate(
+  control: CatalogControl,
+  rawSettings: Record<string, unknown>,
+): CatalogPrimitive {
+  const rawValue = rawSettings[control.key];
+  if (control.type === 'boolean') {
+    return typeof rawValue === 'boolean' ? rawValue : control.defaultValue;
+  }
+  if (control.type === 'integer') {
+    return typeof rawValue === 'number' && Number.isFinite(rawValue)
+      ? rawValue
+      : control.defaultValue;
+  }
+  const value = rawValue === undefined ? control.defaultValue : rawValue;
+  const stringValue = typeof value === 'string' || typeof value === 'number'
+    ? String(value)
+    : control.defaultValue;
+  return control.normalizedValueType === 'number'
+    ? Number(stringValue)
+    : stringValue;
+}
+
+function normalizeDescriptorSettings(
+  descriptor: GenerationModelDescriptor,
+  rawSettings: Record<string, unknown>,
+  runtimeConfig: GenerationModelOperationalConfig,
+  inputs: GenerationModelRuntimeInputs,
+): {
+  normalizedSettings: Record<string, CatalogPrimitive>;
+  fieldErrors: Record<string, string>;
+} {
+  const normalizedSettings: Record<string, CatalogPrimitive> = {};
+  const fieldErrors: Record<string, string> = {};
+  const conditionSettings = Object.fromEntries(
+    descriptor.controls.map((control) => [
+      control.key,
+      normalizeControlCandidate(control, rawSettings),
+    ]),
+  );
+  for (const control of descriptor.controls) {
+    if (!conditionsMatch(control.conditions, conditionSettings, inputs)) continue;
+    const rawValue = rawSettings[control.key];
+    if (control.type === 'boolean') {
+      if (rawValue !== undefined && typeof rawValue !== 'boolean') {
+        fieldErrors[control.key] = `${control.label} must be on or off.`;
+      }
+      normalizedSettings[control.key] = typeof rawValue === 'boolean' ? rawValue : control.defaultValue;
+      continue;
+    }
+    if (control.type === 'integer') {
+      const value = rawValue === undefined ? control.defaultValue : rawValue;
+      if (typeof value !== 'number'
+        || !Number.isFinite(value)
+        || value < control.min
+        || value > control.max
+        || Math.abs((value - control.min) / control.step - Math.round((value - control.min) / control.step)) > 1e-9) {
+        fieldErrors[control.key] = `${control.label} must be between ${control.min} and ${control.max}.`;
+      } else {
+        normalizedSettings[control.key] = value;
+      }
+      continue;
+    }
+    const value = rawValue === undefined ? control.defaultValue : rawValue;
+    const stringValue = typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+    if (!control.options.some((option) => option.value === stringValue)) {
+      fieldErrors[control.key] = `${descriptor.displayName} does not support ${control.key} ${String(value)}.`;
+    } else {
+      normalizedSettings[control.key] = control.normalizedValueType === 'number'
+        ? Number(stringValue)
+        : stringValue;
+    }
+  }
+  const validationConfig = runtimeConfig.validationConfig;
+  const hasReusableReferenceInputs = (
+    inputs.counts.videos > 0
+    || inputs.counts.audios > 0
+    || inputs.counts.preparedAudios > 0
+    || inputs.counts.characters > 0
+    || Object.entries(inputs.slotCounts).some(([slotKey, count]) => (
+      count > 0
+      && !['startFrame', 'endFrame', 'characterImage', 'referenceVideo'].includes(slotKey)
+    ))
+  );
+  if (
+    rawSettings.referenceMode === undefined
+    && hasReusableReferenceInputs
+    && (descriptor.inputModes ?? []).some((mode) => (
+      mode.conditions?.some((condition) => (
+        condition.source === 'setting'
+        && condition.key === 'referenceMode'
+        && condition.operator === 'equals'
+        && condition.value === 'elements'
+      ))
+    ))
+  ) {
+    // V1 clients predate the generic input-mode control. Preserve their
+    // reference uploads by selecting the reusable-reference mode from the
+    // supplied input facts instead of silently treating them as frame inputs.
+    normalizedSettings.referenceMode = 'elements';
+  }
+  const defaults = validationConfig.normalizedDefaults;
+  if (defaults && typeof defaults === 'object' && !Array.isArray(defaults)) {
+    for (const [key, value] of Object.entries(defaults)) {
+      if (!(key in normalizedSettings)
+        && (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')) {
+        normalizedSettings[key] = value;
+      }
+    }
+  }
+  const passthrough = Array.isArray(validationConfig.passthroughSettingKeys)
+    ? validationConfig.passthroughSettingKeys
+    : [];
+  const descriptorControlKeys = new Set(descriptor.controls.map((control) => control.key));
+  for (const key of passthrough) {
+    if (typeof key !== 'string' || descriptorControlKeys.has(key)) continue;
+    const value = rawSettings[key];
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      normalizedSettings[key] = value;
+    } else if (!(key in normalizedSettings) && key === 'referenceMode') {
+      normalizedSettings[key] = 'frames';
+    }
+  }
+  return { normalizedSettings, fieldErrors };
+}
+
+function slotCount(inputs: GenerationModelRuntimeInputs, key: string): number {
+  if (key in inputs.slotCounts) return inputs.slotCounts[key] ?? 0;
+  return inputs.counts[key as keyof GenerationModelRuntimeInputs['counts']] ?? 0;
+}
+
+function descriptorSlotCount(
+  inputs: GenerationModelRuntimeInputs,
   key: string,
-  value: string,
-  values: readonly string[],
-  displayName: string
-) {
-  if (!values.includes(value)) {
-    fieldErrors[key] = `${displayName} does not support ${key} ${value}.`;
+  settings: Record<string, CatalogPrimitive>,
+): number {
+  if (key in inputs.slotCounts) return inputs.slotCounts[key] ?? 0;
+  if (key === 'startFrame' && settings.referenceMode !== 'elements') {
+    return Math.min(1, inputs.counts.images);
+  }
+  if (key === 'endFrame' && settings.referenceMode !== 'elements') {
+    return Math.min(1, Math.max(0, inputs.counts.images - 1));
+  }
+  if (key === 'characterImage') return inputs.counts.images;
+  if (key === 'referenceVideo') return inputs.counts.videos;
+  return slotCount(inputs, key);
+}
+
+function validateInputMetadata(
+  input: GenerationModelQuoteInput,
+  fieldErrors: Record<string, string>,
+): void {
+  for (const [slotKey, metadata] of Object.entries(input.inputMetadata?.slots ?? {})) {
+    if (metadata.count !== undefined
+      && (typeof metadata.count !== 'number' || !Number.isInteger(metadata.count) || metadata.count < 0)) {
+      fieldErrors[slotKey] = `${slotKey} count must be a non-negative integer.`;
+    }
+    if (metadata.durationsSeconds !== undefined
+      && (!Array.isArray(metadata.durationsSeconds)
+        || metadata.durationsSeconds.some((duration) => (
+          typeof duration !== 'number' || !Number.isFinite(duration) || duration < 0
+        )))) {
+      fieldErrors[slotKey] = `${slotKey} durations must be non-negative seconds.`;
+    }
+  }
+  const referenceDurations = input.inputMetadata?.referenceVideoDurationsSeconds;
+  if (referenceDurations !== undefined
+    && (!Array.isArray(referenceDurations)
+      || referenceDurations.some((duration) => (
+        typeof duration !== 'number' || !Number.isFinite(duration) || duration < 0
+      )))) {
+    fieldErrors.videos = 'Reference video durations must be non-negative seconds.';
   }
 }
 
-function assertValid(fieldErrors: Record<string, string>) {
+function validateDescriptorInputs(
+  descriptor: GenerationModelDescriptor,
+  settings: Record<string, CatalogPrimitive>,
+  inputs: GenerationModelRuntimeInputs,
+  input: GenerationModelQuoteInput,
+  fieldErrors: Record<string, string>,
+): void {
+  if (descriptor.kind === 'image') {
+    const maxImages = descriptor.inputs.imageReferences?.max ?? 0;
+    if (inputs.counts.images > maxImages) {
+      fieldErrors.references = maxImages > 0
+        ? `${descriptor.displayName} supports up to ${maxImages} image references.`
+        : `${descriptor.displayName} does not support image references.`;
+    }
+  }
+  const maxVideos = descriptor.inputs.videoReferences?.max ?? 0;
+  if (inputs.counts.videos > maxVideos) {
+    fieldErrors.videos = maxVideos > 0
+      ? `${descriptor.displayName} supports up to ${maxVideos} video references.`
+      : `${descriptor.displayName} does not support video references.`;
+  }
+  const maxAudios = descriptor.inputs.audioReferences?.max ?? 0;
+  if (inputs.counts.audios > maxAudios) {
+    fieldErrors.audios = maxAudios > 0
+      ? `${descriptor.displayName} supports up to ${maxAudios} audio references.`
+      : `${descriptor.displayName} does not support audio references.`;
+  }
+  const maxPreparedAudios = descriptor.inputs.preparedAudioReferences?.max ?? 0;
+  if (inputs.counts.preparedAudios > maxPreparedAudios) {
+    fieldErrors.preparedAudios = maxPreparedAudios > 0
+      ? `${descriptor.displayName} supports up to ${maxPreparedAudios} prepared voice references.`
+      : `${descriptor.displayName} does not support prepared voice references.`;
+  }
+  const maxCharacters = descriptor.inputs.characterReferences?.max ?? 0;
+  if (inputs.counts.characters > maxCharacters) {
+    fieldErrors.characters = maxCharacters > 0
+      ? `${descriptor.displayName} supports up to ${maxCharacters} character references.`
+      : `${descriptor.displayName} does not support character references.`;
+  }
+
+  const declaredSlots = new Map<string, CatalogInputSlot>();
+  const activeSlotKeys = new Set<string>();
+  for (const mode of descriptor.inputModes ?? []) {
+    for (const slot of mode.slots) declaredSlots.set(slot.key, slot);
+    if (!conditionsMatch(mode.conditions, settings, inputs)) continue;
+    for (const slot of mode.slots) {
+      if (!conditionsMatch(slot.conditions, settings, inputs)) continue;
+      activeSlotKeys.add(slot.key);
+      const count = descriptorSlotCount(inputs, slot.key, settings);
+      if (count < slot.min) fieldErrors[slot.key] = `${slot.label} requires at least ${slot.min}.`;
+      if (count > slot.max) fieldErrors[slot.key] = `${slot.label} supports up to ${slot.max}.`;
+      const durations = inputs.slotDurationsSeconds[slot.key]
+        ?? (slot.key === 'videoReferences' ? inputs.referenceVideoDurationsSeconds : []);
+      if (slot.durationMetadata === 'required' && count > 0 && durations.length !== count) {
+        fieldErrors[slot.key] = `${slot.label} requires duration metadata for every asset.`;
+      }
+      if (slot.maxDurationSeconds !== undefined
+        && durations.some((duration) => duration > slot.maxDurationSeconds!)) {
+        fieldErrors[slot.key] = `${slot.label} assets must be at most ${slot.maxDurationSeconds} seconds each.`;
+      }
+    }
+  }
+
+  for (const [slotKey, metadata] of Object.entries(input.inputMetadata?.slots ?? {})) {
+    const suppliedCount = Math.max(
+      normalizedCount(metadata.count),
+      normalizedDurations(metadata.durationsSeconds).length,
+    );
+    if (suppliedCount === 0) continue;
+    const declaredSlot = declaredSlots.get(slotKey);
+    if (!declaredSlot) {
+      fieldErrors[slotKey] = `${descriptor.displayName} does not support the ${slotKey} input.`;
+    } else if (!activeSlotKeys.has(slotKey)) {
+      fieldErrors[slotKey] = `${declaredSlot.label} is unavailable with the selected settings.`;
+    }
+  }
+
+  for (const constraint of descriptor.inputConstraints ?? []) {
+    if (!conditionsMatch(constraint.conditions, settings, inputs)) continue;
+    const field = constraint.slotKeys[0] ?? 'inputs';
+    if (constraint.type === 'combined-duration') {
+      let totalDuration = 0;
+      let missingDurationMetadata = false;
+      for (const slotKey of constraint.slotKeys) {
+        const count = descriptorSlotCount(inputs, slotKey, settings);
+        const durations = inputs.slotDurationsSeconds[slotKey]
+          ?? (slotKey === 'videoReferences' ? inputs.referenceVideoDurationsSeconds : []);
+        if (count > durations.length) missingDurationMetadata = true;
+        totalDuration += durations.reduce((sum, duration) => sum + duration, 0);
+      }
+      if (missingDurationMetadata) {
+        fieldErrors[field] = `${declaredSlots.get(field)?.label ?? field} requires duration metadata for every asset.`;
+      } else if (totalDuration > constraint.max) {
+        fieldErrors[field] = constraint.message;
+      }
+      continue;
+    }
+    const total = constraint.type === 'weighted-count'
+      ? constraint.slotKeys.reduce((sum, slotKey) => (
+          sum + descriptorSlotCount(inputs, slotKey, settings) * (constraint.weights?.[slotKey] ?? 0)
+        ), 0)
+      : constraint.slotKeys.reduce((sum, slotKey) => (
+          sum + descriptorSlotCount(inputs, slotKey, settings)
+        ), 0);
+    if (total > constraint.max) fieldErrors[field] = constraint.message;
+  }
+}
+
+function ruleConditions(value: unknown): CatalogCondition[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('Invalid validation rule conditions.');
+  return value as CatalogCondition[];
+}
+
+function validationMessage(
+  rule: Record<string, unknown>,
+  fallback: string,
+): string {
+  return typeof rule.message === 'string' && rule.message ? rule.message : fallback;
+}
+
+function applyValidationRule(
+  rule: Record<string, unknown>,
+  descriptor: GenerationModelDescriptor,
+  settings: Record<string, CatalogPrimitive>,
+  inputs: GenerationModelRuntimeInputs,
+  fieldErrors: Record<string, string>,
+): void {
+  if (typeof rule.type !== 'string') throw new Error(`Invalid validation rule for ${descriptor.id}.`);
+  const allowed: GenerationModelValidationRuleType[] = [
+    'control-options',
+    'control-range',
+    'max-slot-count',
+    'min-slot-count',
+    'combined-duration',
+    'mutually-exclusive-slots',
+    'weighted-slot-count',
+    'forbidden-combination',
+  ];
+  if (!allowed.includes(rule.type as GenerationModelValidationRuleType)) {
+    throw new Error(`Unsupported validation rule ${rule.type} for ${descriptor.id}.`);
+  }
+  const conditions = ruleConditions(rule.conditions);
+  if (!conditionsMatch(conditions, settings, inputs)) return;
+  const field = typeof rule.field === 'string' ? rule.field : null;
+  if (rule.type === 'forbidden-combination') {
+    fieldErrors[field ?? 'settings'] = validationMessage(rule, 'This combination of settings is unavailable.');
+    return;
+  }
+  if (rule.type === 'control-options') {
+    if (typeof rule.key !== 'string' || !Array.isArray(rule.options)) throw new Error('Invalid control-options rule.');
+    if (!rule.options.includes(settings[rule.key])) {
+      fieldErrors[field ?? rule.key] = validationMessage(rule, `${rule.key} is unavailable.`);
+    }
+    return;
+  }
+  if (rule.type === 'control-range') {
+    if (typeof rule.key !== 'string' || typeof rule.min !== 'number' || typeof rule.max !== 'number') {
+      throw new Error('Invalid control-range rule.');
+    }
+    const value = settings[rule.key];
+    if (typeof value !== 'number' || value < rule.min || value > rule.max) {
+      fieldErrors[field ?? rule.key] = validationMessage(rule, `${rule.key} is outside the supported range.`);
+    }
+    return;
+  }
+  if (rule.type === 'max-slot-count' || rule.type === 'min-slot-count') {
+    if (typeof rule.slotKey !== 'string') throw new Error(`Invalid ${rule.type} rule.`);
+    const limitKey = rule.type === 'max-slot-count' ? 'max' : 'min';
+    const limit = rule[limitKey];
+    if (typeof limit !== 'number') throw new Error(`Invalid ${rule.type} rule.`);
+    const count = slotCount(inputs, rule.slotKey);
+    const invalid = rule.type === 'max-slot-count' ? count > limit : count < limit;
+    if (invalid) {
+      fieldErrors[field ?? rule.slotKey] = validationMessage(
+        rule,
+        `${descriptor.displayName} requires ${rule.type === 'max-slot-count' ? 'at most' : 'at least'} ${limit} ${rule.slotKey}.`,
+      );
+    }
+    return;
+  }
+  if (rule.type === 'combined-duration') {
+    if (!Array.isArray(rule.slotKeys) || typeof rule.max !== 'number') throw new Error('Invalid combined-duration rule.');
+    const slotKeys = rule.slotKeys.filter((key): key is string => typeof key === 'string');
+    const total = slotKeys.reduce((sum, key) => (
+      sum + (inputs.slotDurationsSeconds[key]
+        ?? (key === 'videoReferences' ? inputs.referenceVideoDurationsSeconds : []))
+        .reduce((slotSum, duration) => slotSum + duration, 0)
+    ), 0);
+    if (total > rule.max) {
+      fieldErrors[field ?? slotKeys[0] ?? 'inputs'] = validationMessage(rule, `Combined duration may be at most ${rule.max} seconds.`);
+    }
+    return;
+  }
+  if (rule.type === 'mutually-exclusive-slots') {
+    if (!Array.isArray(rule.slotKeys)) throw new Error('Invalid mutually-exclusive-slots rule.');
+    const used = rule.slotKeys.filter((key) => typeof key === 'string' && slotCount(inputs, key) > 0);
+    if (used.length > 1) {
+      fieldErrors[field ?? 'inputs'] = validationMessage(rule, 'These inputs cannot be combined.');
+    }
+    return;
+  }
+  if (rule.type === 'weighted-slot-count') {
+    if (!isRecord(rule.weights) || typeof rule.max !== 'number') throw new Error('Invalid weighted-slot-count rule.');
+    const total = Object.entries(rule.weights).reduce((sum, [key, weight]) => (
+      sum + (typeof weight === 'number' ? slotCount(inputs, key) * weight : 0)
+    ), 0);
+    if (total > rule.max) {
+      fieldErrors[field ?? 'references'] = validationMessage(rule, `Combined inputs may use at most ${rule.max} slots.`);
+    }
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function assertValid(fieldErrors: Record<string, string>): void {
   if (Object.keys(fieldErrors).length > 0) {
-    throw new CatalogError('Some model settings are no longer available.', 'INVALID_MODEL_SETTINGS', 422, fieldErrors);
+    throw new CatalogError(
+      'Some model settings are no longer available.',
+      'INVALID_MODEL_SETTINGS',
+      422,
+      fieldErrors,
+    );
   }
-}
-
-function quoteImage(
-  modelId: ImageModelId,
-  settings: Record<string, unknown>,
-  imageCount: number,
-  catalogRevision: string,
-): GenerationModelQuote {
-  const model = IMAGE_MODELS[modelId];
-  const fieldErrors: Record<string, string> = {};
-  const aspectRatio = stringSetting(settings, 'aspectRatio', model.aspectRatios[0]);
-  validateChoice(fieldErrors, 'aspectRatio', aspectRatio, model.aspectRatios as readonly string[], model.displayName);
-  const resolutionOptions = getImageResolutionOptions(modelId, aspectRatio);
-  const resolution = stringSetting(settings, 'resolution', resolutionOptions[0]) as ImageResolution;
-  validateChoice(fieldErrors, 'resolution', resolution, resolutionOptions as readonly string[], model.displayName);
-  const outputFormat = stringSetting(settings, 'outputFormat', model.outputFormats[0]) as ImageOutputFormat;
-  validateChoice(fieldErrors, 'outputFormat', outputFormat, model.outputFormats as readonly string[], model.displayName);
-  if (imageCount > model.maxImages) {
-    fieldErrors.references = `${model.displayName} supports up to ${model.maxImages} image references.`;
-  }
-  if (modelId === 'wan-2.7-image-pro' && resolution === '4K' && imageCount > 0) {
-    fieldErrors.resolution = 'Wan 2.7 Image Pro supports 4K for text-to-image only.';
-  }
-  const qualityModes = getImageQualityModes(modelId);
-  const normalizedQualityMode = stringSetting(settings, 'qualityMode', qualityModes[0] ?? 'standard') as ImageQualityMode;
-  if (qualityModes.length > 0) {
-    validateChoice(fieldErrors, 'qualityMode', normalizedQualityMode, qualityModes, model.displayName);
-  }
-  assertValid(fieldErrors);
-
-  const normalizedSettings: Record<string, CatalogPrimitive> = {
-    aspectRatio,
-    resolution,
-    ...(qualityModes.length > 0 ? { qualityMode: normalizedQualityMode } : {}),
-    outputFormat: model.supportsOutputFormat ? outputFormat : 'jpg',
-    googleSearch: model.supportsGoogleSearch ? booleanSetting(settings, 'googleSearch') : false,
-  };
-  return {
-    modelId,
-    catalogRevision,
-    normalizedSettings,
-    costCredits: getImageCost(modelId, resolution, { qualityMode: normalizedQualityMode, referenceCount: imageCount }),
-  };
-}
-
-function quoteVideo(
-  modelId: VideoModelId,
-  settings: Record<string, unknown>,
-  inputCounts: Required<NonNullable<GenerationModelQuoteInput['inputCounts']>>,
-  catalogRevision: string,
-): GenerationModelQuote {
-  const model = VIDEO_MODELS[modelId];
-  const fieldErrors: Record<string, string> = {};
-  const aspectRatio = stringSetting(settings, 'aspectRatio', model.aspectRatios[0]);
-  validateChoice(fieldErrors, 'aspectRatio', aspectRatio, model.aspectRatios as readonly string[], model.displayName);
-  const duration = numberSetting(settings, 'duration', getDefaultVideoDuration(modelId));
-  if (!isValidVideoDuration(modelId, duration)) fieldErrors.duration = `Unsupported duration for ${model.displayName}.`;
-  const mode = stringSetting(settings, 'mode', model.modeOptions[0]?.value ?? '');
-  if (model.modeOptions.length > 0) validateChoice(fieldErrors, 'mode', mode, model.modeOptions.map((option) => option.value), model.displayName);
-  const resolution = stringSetting(settings, 'resolution', model.resolutions[0] ?? '');
-  if (model.resolutions.length > 0) validateChoice(fieldErrors, 'resolution', resolution, model.resolutions as readonly string[], model.displayName);
-  if (modelId === 'hailuo-2.3' && resolution === '1080P' && duration === 10) {
-    fieldErrors.duration = 'Hailuo 2.3 supports 1080P output at 6 seconds only.';
-  }
-  const limits = getVideoInputLimits(modelId);
-  const referenceMode = stringSetting(settings, 'referenceMode', 'frames') === 'elements' ? 'elements' : 'frames';
-  const elementSupport = getVideoElementSupport(modelId, { mode });
-  const maxImages = referenceMode === 'elements'
-    ? elementSupport.maxElements
-    : Number(limits.startFrame) + Number(limits.endFrame);
-  if (referenceMode === 'elements' && inputCounts.images > 0 && !elementSupport.enabled) {
-    fieldErrors.images = elementSupport.reason || `${model.displayName} does not support reusable references in this mode.`;
-  } else if (inputCounts.images > maxImages) {
-    fieldErrors.images = `${model.displayName} supports up to ${maxImages} image ${referenceMode === 'elements' ? 'references' : 'frames'}.`;
-  }
-  if (inputCounts.videos > limits.videos) fieldErrors.videos = `${model.displayName} supports up to ${limits.videos} video references.`;
-  if (inputCounts.audios > limits.audios) fieldErrors.audios = `${model.displayName} supports up to ${limits.audios} audio references.`;
-  if (modelId === 'wan-2.7' && referenceMode === 'elements' && inputCounts.images + inputCounts.videos + inputCounts.audios > 5) {
-    fieldErrors.references = 'Wan 2.7 supports up to 5 reusable references in total.';
-  }
-  if (modelId === 'gemini-omni-video' && inputCounts.images + (inputCounts.videos * 2) > 7) {
-    fieldErrors.references = 'Gemini Omni supports seven reference slots; a video uses two slots.';
-  }
-  if (modelId === 'gemini-omni-video' && inputCounts.characters > 3) {
-    fieldErrors.characters = 'Gemini Omni supports up to 3 prepared character references.';
-  }
-  if (modelId === 'gemini-omni-video' && inputCounts.preparedAudios > 3) {
-    fieldErrors.preparedAudios = 'Gemini Omni supports up to 3 prepared voice references.';
-  }
-  if (modelId === 'gemini-omni-video' && inputCounts.images + (inputCounts.videos * 2) + inputCounts.characters > 7) {
-    fieldErrors.references = 'Gemini Omni supports seven reference slots; videos use two and characters use one.';
-  }
-  if (modelId === 'hailuo-2.3' && referenceMode === 'frames' && inputCounts.images === 0) {
-    fieldErrors.images = 'Hailuo 2.3 requires a start image.';
-  }
-  assertValid(fieldErrors);
-
-  const sound = model.supportsSound ? booleanSetting(settings, 'sound') : false;
-  const fixedLens = model.supportsFixedLens ? booleanSetting(settings, 'fixedLens') : false;
-  const normalizedSettings: Record<string, CatalogPrimitive> = { aspectRatio, duration, mode, resolution, sound, fixedLens, referenceMode };
-  return {
-    modelId,
-    catalogRevision,
-    normalizedSettings,
-    costCredits: getVideoCost(modelId, {
-      mode,
-      sound,
-      durationSeconds: duration,
-      resolution,
-      hasReferenceVideo: inputCounts.videos > 0,
-      hasReferenceImage: inputCounts.images > 0,
-    }),
-  };
-}
-
-function quoteMotion(
-  modelId: MotionModelId,
-  settings: Record<string, unknown>,
-  catalogRevision: string,
-): GenerationModelQuote {
-  const model = MOTION_MODELS[modelId];
-  const fieldErrors: Record<string, string> = {};
-  const resolution = stringSetting(settings, 'resolution', model.resolutions[0]) as '720p' | '1080p';
-  validateChoice(fieldErrors, 'resolution', resolution, model.resolutions as readonly string[], model.displayName);
-  const characterOrientation = stringSetting(settings, 'characterOrientation', model.characterOrientations[0]);
-  validateChoice(fieldErrors, 'characterOrientation', characterOrientation, model.characterOrientations as readonly string[], model.displayName);
-  const duration = numberSetting(settings, 'duration', 10);
-  if (!Number.isInteger(duration) || duration < 1 || duration > model.maxDuration) {
-    fieldErrors.duration = `Duration must be between 1 and ${model.maxDuration} seconds.`;
-  }
-  assertValid(fieldErrors);
-  return {
-    modelId,
-    catalogRevision,
-    normalizedSettings: { resolution, characterOrientation, duration },
-    costCredits: getMotionCost(modelId, resolution, duration),
-  };
 }
 
 export function quoteGenerationModel(
@@ -589,36 +1183,52 @@ export function quoteGenerationModel(
     operations?: Map<string, GenerationModelOperationalConfig>;
   } = {},
 ): GenerationModelQuote {
-  const catalog = options.catalog ?? buildGenerationModelCatalog({ platform: 'web', schemaVersion: 1 });
+  // The quote engine is an internal server boundary and should validate
+  // against the richest descriptor the backend understands. Public v1
+  // projection remains a response concern handled by the catalog store.
+  const catalog = options.catalog ?? buildGenerationModelCatalog({
+    platform: 'web',
+    schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
+  });
   if (input.catalogRevision && input.catalogRevision !== catalog.revision) {
-    throw new CatalogError('The model catalog has changed. Refresh settings before generating.', 'CATALOG_CHANGED', 409);
+    throw new CatalogError(
+      'The model catalog has changed. Refresh settings before generating.',
+      'CATALOG_CHANGED',
+      409,
+    );
   }
-
   const descriptor = catalog.models.find((model) => model.id === input.modelId && model.kind === input.kind);
   if (!descriptor) {
     throw new CatalogError('This model is no longer available.', 'MODEL_UNAVAILABLE', 409);
   }
-
-  const settings = input.settings ?? {};
-  const inputCounts = {
-    images: Math.max(0, Math.floor(input.inputCounts?.images ?? 0)),
-    videos: Math.max(0, Math.floor(input.inputCounts?.videos ?? 0)),
-    audios: Math.max(0, Math.floor(input.inputCounts?.audios ?? 0)),
-    preparedAudios: Math.max(0, Math.floor(input.inputCounts?.preparedAudios ?? 0)),
-    characters: Math.max(0, Math.floor(input.inputCounts?.characters ?? 0)),
+  const operations = options.operations
+    ?? new Map(buildCodeGenerationModelOperations().map((entry) => [entry.modelId, entry]));
+  const runtimeConfig = operations.get(input.modelId);
+  if (!runtimeConfig || runtimeConfig.kind !== input.kind) {
+    throw new Error(`The published operational configuration for ${input.modelId} is unavailable.`);
+  }
+  const inputs = normalizeGenerationModelInputFacts(input);
+  const {
+    normalizedSettings,
+    fieldErrors,
+  } = normalizeDescriptorSettings(descriptor, input.settings ?? {}, runtimeConfig, inputs);
+  validateInputMetadata(input, fieldErrors);
+  validateDescriptorInputs(descriptor, normalizedSettings, inputs, input, fieldErrors);
+  const rules = runtimeConfig.validationConfig.rules;
+  if (rules !== undefined && !Array.isArray(rules)) {
+    throw new Error(`Invalid validation rules for ${input.modelId}.`);
+  }
+  for (const rule of rules ?? []) {
+    if (!isRecord(rule)) throw new Error(`Invalid validation rule for ${input.modelId}.`);
+    applyValidationRule(rule, descriptor, normalizedSettings, inputs, fieldErrors);
+  }
+  assertValid(fieldErrors);
+  return {
+    modelId: input.modelId,
+    catalogRevision: catalog.revision,
+    normalizedSettings,
+    costCredits: calculateGenerationModelRuntimeCost(runtimeConfig, normalizedSettings, inputs),
   };
-  const quote = input.kind === 'image'
-    ? quoteImage(input.modelId as ImageModelId, settings, inputCounts.images, catalog.revision)
-    : input.kind === 'video'
-      ? quoteVideo(input.modelId as VideoModelId, settings, inputCounts, catalog.revision)
-      : quoteMotion(input.modelId as MotionModelId, settings, catalog.revision);
-  const runtimeConfig = options.operations?.get(input.modelId);
-  return runtimeConfig
-    ? {
-        ...quote,
-        costCredits: calculateGenerationModelRuntimeCost(runtimeConfig, quote.normalizedSettings, inputCounts),
-      }
-    : quote;
 }
 
 export function getGenerationModelDisplayName(modelId: string): string | null {
@@ -630,12 +1240,11 @@ export function getGenerationModelDisplayName(modelId: string): string | null {
 export function getGenerationModelChoiceOptionLabel(
   modelId: string,
   controlKey: string,
-  value: string
+  value: string,
 ): string | null {
   const model = ALL_PUBLIC_MODELS.find((candidate) => candidate.id === modelId);
   const control = model?.controls.find((candidate): candidate is CatalogChoiceControl => (
     candidate.type === 'choice' && candidate.key === controlKey
   ));
-
   return control?.options.find((option) => option.value === value)?.label ?? null;
 }

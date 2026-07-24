@@ -164,6 +164,17 @@ const extendedOperationCases: Array<{
   key: RegisteredOperationKey;
   call: (api: MagicbookletApiClient) => Promise<unknown>;
 }> = [
+  {
+    key: 'startGeneration',
+    call: (api) => api.startGeneration?.({
+      kind: 'video',
+      modelId: 'seedance-2',
+      catalogRevision: 'catalog-v2-revision',
+      settings: { resolution: '1080p', duration: 7 },
+      prompt: 'Create a cinematic reveal.',
+      inputs: [],
+    }) ?? Promise.reject(new Error('Catalog v2 start operation is unavailable.')),
+  },
   { key: 'validateProfile', call: (api) => api.validateProfile({ displayName: 'Creator One' }) },
   { key: 'getOnboardingState', call: (api) => api.getOnboardingState() },
   { key: 'updateOnboardingState', call: (api) => api.updateOnboardingState({ status: 'in_progress' }) },
@@ -250,6 +261,11 @@ describe('mobile shared API v1 contract fixture', () => {
     const api = createApiClient({
       baseUrl: 'https://magicbooklet.test',
       getAccessToken: async () => 'token-1',
+      clientInfo: {
+        appVersion: '1.0.0',
+        apiVersion: 1,
+        catalogSchemaVersion: 2,
+      },
       fetcher: vi.fn() as unknown as typeof fetch,
     });
     const clientOperations = Object.keys(api).filter((key) => key !== 'request').sort();
@@ -274,6 +290,11 @@ describe('mobile shared API v1 contract fixture', () => {
       baseUrl: 'https://magicbooklet.test',
       getAccessToken: async () => 'token-1',
       getInstallationId: async () => 'installation-1',
+      clientInfo: {
+        appVersion: '1.0.0',
+        apiVersion: 1,
+        catalogSchemaVersion: 2,
+      },
       fetcher: fetcher as unknown as typeof fetch,
     });
 

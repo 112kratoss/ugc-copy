@@ -257,7 +257,7 @@ export const VIDEO_MODELS = {
   'seedance-2': {
     id: 'seedance-2' as const,
     displayName: 'Seedance 2',
-    description: 'ByteDance video model with image, video, audio, and audio generation controls',
+    description: 'ByteDance video model with multimodal references, generated audio, and output up to 4K',
     supportsMultiShot: false,
     supportsSound: true,
     supportsFixedLens: false,
@@ -265,7 +265,7 @@ export const VIDEO_MODELS = {
     durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
     singleShotDurationRange: { min: 4, max: 15, default: 15 } as const,
     modeOptions: [] as const,
-    resolutions: ['480p', '720p'] as const,
+    resolutions: ['480p', '720p', '1080p', '4k'] as const,
   },
   'seedance-2-fast': {
     id: 'seedance-2-fast' as const,
@@ -356,7 +356,7 @@ export const VIDEO_MODELS = {
   'grok-imagine-video': {
     id: 'grok-imagine-video' as const,
     displayName: 'Grok Imagine Video',
-    description: 'xAI video generation with playful, normal, and spicy modes',
+    description: 'xAI video generation with normal and fun modes',
     supportsMultiShot: false,
     supportsSound: false,
     supportsFixedLens: false,
@@ -367,7 +367,6 @@ export const VIDEO_MODELS = {
     modeOptions: [
       { value: 'normal', label: 'Normal' },
       { value: 'fun', label: 'Fun' },
-      { value: 'spicy', label: 'Spicy' },
     ] as const,
   },
 } as const;

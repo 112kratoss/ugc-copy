@@ -16,6 +16,7 @@
     "recordReferralVisit": { "method": "POST", "path": "/api/referrals/visit", "auth": "none" },
     "claimReferral": { "method": "POST", "path": "/api/referrals/claim", "auth": "required" },
     "listGenerations": { "method": "GET", "path": "/api/generations", "auth": "required" },
+    "startGeneration": { "method": "POST", "path": "/api/generations", "auth": "required" },
     "archiveGeneration": { "method": "POST", "path": "/api/generations/:generationId/archive", "auth": "required" },
     "restoreGeneration": { "method": "POST", "path": "/api/generations/:generationId/restore", "auth": "required" },
     "startImageGeneration": { "method": "POST", "path": "/api/generate-image", "auth": "required" },

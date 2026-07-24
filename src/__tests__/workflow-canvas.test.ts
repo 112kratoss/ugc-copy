@@ -1298,7 +1298,7 @@ describe('workflow canvas helpers', () => {
 
     expect(seedance2.aspectRatio).toBe('9:16');
     expect(seedance2.duration).toBe(4);
-    expect(seedance2.resolution).toBe('480p');
+    expect(seedance2.resolution).toBe('1080p');
     expect(seedance2.sound).toBe(true);
     expect(seedance2.fixedLens).toBe(false);
 

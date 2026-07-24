@@ -93,8 +93,10 @@ export async function createGenerationModelQuote({
       quote: await quotePublishedGenerationModel({
         kind: body.kind,
         modelId: body.modelId,
+        schemaVersion: body.schemaVersion,
         settings: body.settings,
         inputCounts: body.inputCounts,
+        inputMetadata: body.inputMetadata,
         catalogRevision: body.catalogRevision,
       }, { platform }),
     };
@@ -109,6 +111,13 @@ export async function createGenerationModelQuote({
       };
     }
 
-    throw error;
+    console.error('Authoritative generation model catalog quote failed:', error);
+    return {
+      ok: false,
+      status: 503,
+      code: 'CATALOG_UNAVAILABLE',
+      error: 'Generation pricing is temporarily unavailable. Refresh the model catalog and try again.',
+      fieldErrors: {},
+    };
   }
 }

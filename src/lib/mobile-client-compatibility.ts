@@ -11,7 +11,7 @@ export const MOBILE_CLIENT_COMPATIBILITY_POLICY = {
   currentApiVersion: 1,
   minimumApiVersion: 1,
   minimumAppVersion: '0.0.1',
-  supportedCatalogSchemaVersions: [1],
+  supportedCatalogSchemaVersions: [1, 2],
   unversionedClientsUseApiVersion: 1,
 } as const;
 
@@ -85,7 +85,7 @@ export function evaluateMobileClientCompatibility(
 
   if (
     requestedApiVersion > policy.currentApiVersion
-    || !policy.supportedCatalogSchemaVersions.includes(requestedCatalogSchemaVersion as 1)
+    || !policy.supportedCatalogSchemaVersions.includes(requestedCatalogSchemaVersion as 1 | 2)
   ) {
     return {
       allowed: false,
@@ -103,10 +103,13 @@ export function evaluateMobileClientCompatibility(
 
 export function createMobileCompatibilityResponseHeaders(): Record<string, string> {
   const policy = MOBILE_CLIENT_COMPATIBILITY_POLICY;
+  const currentCatalogSchemaVersion = policy.supportedCatalogSchemaVersions[
+    policy.supportedCatalogSchemaVersions.length - 1
+  ];
   return {
     [MOBILE_CLIENT_HEADERS.apiVersion]: String(policy.currentApiVersion),
     [MOBILE_CLIENT_HEADERS.minimumApiVersion]: String(policy.minimumApiVersion),
     [MOBILE_CLIENT_HEADERS.minimumAppVersion]: policy.minimumAppVersion,
-    [MOBILE_CLIENT_HEADERS.catalogSchemaVersion]: String(policy.supportedCatalogSchemaVersions[0]),
+    [MOBILE_CLIENT_HEADERS.catalogSchemaVersion]: String(currentCatalogSchemaVersion),
   };
 }

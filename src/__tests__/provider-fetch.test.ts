@@ -54,7 +54,6 @@ function findProviderFetchCallsMissingServiceName() {
 
 describe('provider fetch', () => {
   afterEach(() => {
-    vi.doUnmock('@/lib/provider-dependency-telemetry');
     vi.resetModules();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -170,13 +169,14 @@ describe('provider fetch', () => {
   });
 
   it('records durable provider telemetry for failed HTTP responses', async () => {
-    // A full-suite worker may have evaluated provider-fetch for another test
-    // file before this per-test mock is installed.
+    // Load and spy on the dependency before provider-fetch captures its export.
+    // Per-test doMock/doUnmock state was intermittently bypassed across module
+    // cache resets, making this assertion flaky in the full suite.
     vi.resetModules();
-    const recordProviderDependencyEvent = vi.fn(async () => undefined);
-    vi.doMock('@/lib/provider-dependency-telemetry', () => ({
-      recordProviderDependencyEvent,
-    }));
+    const telemetry = await import('@/lib/provider-dependency-telemetry');
+    const recordProviderDependencyEvent = vi
+      .spyOn(telemetry, 'recordProviderDependencyEvent')
+      .mockResolvedValue(undefined);
     const { fetchWithProviderTimeout } = await import('@/lib/provider-fetch');
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const fetcher = vi.fn(async () => new Response(JSON.stringify({ error: 'bad gateway' }), {

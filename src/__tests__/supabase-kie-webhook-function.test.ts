@@ -17,7 +17,11 @@ describe('Supabase KIE webhook forwarding function', () => {
     expect(functionSource).toContain('KIE_WEBHOOK_HMAC_KEY');
     expect(functionSource).toContain('KIE_PROVIDER_WEBHOOK_SECRET');
     expect(functionSource).toContain("searchParams.set('generationId', generationId)");
-    expect(functionSource).toContain('WEBHOOK_SECRET');
+    expect(functionSource).not.toContain("configuredValue('WEBHOOK_SECRET')");
+    expect(functionSource).toContain('Webhook forwarding key is not configured');
+    expect(functionSource).toContain("'x-webhook-payload-signature'");
+    expect(functionSource).not.toContain("'x-webhook-signature'");
+    expect(functionSource).toContain("'kie-webhook-v2'");
     expect(functionSource).toContain('fetch(forwardUrl');
     expect(functionSource).not.toContain('@ts-nocheck');
     expect(functionSource).not.toContain('recordInfo');

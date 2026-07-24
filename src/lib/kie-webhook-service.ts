@@ -128,16 +128,16 @@ export async function handleKieWebhookForRoute(input: KieWebhookRouteInput): Pro
   }
 
   const url = new URL(request.url);
+  const callbackGenerationId = url.searchParams.get('generationId')?.trim() || null;
   const env = input.env ?? process.env;
   const authorized = verifyKieWebhookAuthorization({
+    generationId: callbackGenerationId,
     taskId: predictionId,
+    rawBody: body.text,
     timestamp: request.headers.get('x-webhook-timestamp'),
-    signature: request.headers.get('x-webhook-signature'),
+    signature: request.headers.get('x-webhook-payload-signature'),
     hmacKey: configuredValue(env, 'KIE_WEBHOOK_HMAC_KEY'),
     previousHmacKey: configuredValue(env, 'KIE_WEBHOOK_HMAC_KEY_PREVIOUS'),
-    legacySecret: configuredValue(env, 'WEBHOOK_SECRET'),
-    previousLegacySecret: configuredValue(env, 'WEBHOOK_SECRET_PREVIOUS'),
-    requestSecret: url.searchParams.get('secret'),
     nowSeconds: resolveNowSeconds(input),
   });
 
@@ -149,7 +149,6 @@ export async function handleKieWebhookForRoute(input: KieWebhookRouteInput): Pro
   }
 
   const serviceClient = input.createServiceClient() as SupabaseClient;
-  const callbackGenerationId = url.searchParams.get('generationId');
   const attachStatus = await attachCallbackGenerationId(serviceClient, {
     generationId: callbackGenerationId,
     predictionId,

@@ -5,9 +5,15 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
   buildGenerationModelCatalog,
+  projectGenerationModelDescriptor,
   quoteGenerationModel,
+  type CatalogCondition,
   type CatalogControl,
+  type CatalogInputConstraint,
+  type CatalogInputMode,
+  type CatalogInputSlot,
   type CatalogPlatform,
+  type CatalogPrimitive,
   type GenerationModelCatalog,
   type GenerationModelDescriptor,
   type GenerationModelKind,
@@ -25,17 +31,31 @@ import { createServiceClient } from '@/lib/server-helpers';
 
 export type GenerationModelCatalogSource = 'code' | 'shadow' | 'database';
 
+export class GenerationModelCatalogSchemaUnavailableError extends Error {
+  readonly requestedSchemaVersion: number;
+  readonly releaseSchemaVersion: number;
+
+  constructor(requestedSchemaVersion: number, releaseSchemaVersion: number) {
+    super(`A schema-v${requestedSchemaVersion} generation model catalog has not been published yet.`);
+    this.name = 'GenerationModelCatalogSchemaUnavailableError';
+    this.requestedSchemaVersion = requestedSchemaVersion;
+    this.releaseSchemaVersion = releaseSchemaVersion;
+  }
+}
+
 export type PublishedGenerationModelCatalogSnapshot = {
   catalog: GenerationModelCatalog;
   operations: Map<string, GenerationModelOperationalConfig>;
   source: GenerationModelCatalogSource;
   releaseId: string | null;
+  releaseSchemaVersion?: number;
 };
 
 type ReleaseRow = {
   id: string;
   schema_version: number;
   revision: string;
+  status?: string;
   defaults: unknown;
 };
 
@@ -45,6 +65,7 @@ type EntryRow = {
   web_enabled: boolean;
   mobile_enabled: boolean;
   adapter_key: string;
+  adapter_config?: unknown;
   provider_model_map: unknown;
   pricing_strategy: string;
   pricing_config: unknown;
@@ -59,8 +80,10 @@ type DatabaseReleaseSnapshot = {
 };
 
 const DATABASE_CACHE_TTL_MS = 60 * 1000;
+const MAX_REVISION_CACHE_ENTRIES = 10;
 let cachedDatabaseRelease: { expiresAt: number; snapshot: DatabaseReleaseSnapshot } | null = null;
 let pendingDatabaseRelease: Promise<DatabaseReleaseSnapshot> | null = null;
+const cachedDatabaseRevisions = new Map<string, DatabaseReleaseSnapshot>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -74,11 +97,64 @@ function isGenerationModelKind(value: unknown): value is GenerationModelKind {
   return value === 'image' || value === 'video' || value === 'motion';
 }
 
+function isCatalogPrimitive(value: unknown): value is CatalogPrimitive {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+}
+
+function parseCondition(value: unknown): CatalogCondition | null {
+  if (!isRecord(value)
+    || (value.source !== 'setting' && value.source !== 'inputCount')
+    || !isString(value.key)
+    || !['equals', 'notEquals', 'in', 'notIn', 'greaterThan', 'greaterThanOrEqual'].includes(String(value.operator))) {
+    return null;
+  }
+  const expected = value.value;
+  if (!isCatalogPrimitive(expected)
+    && !(Array.isArray(expected) && expected.every(isCatalogPrimitive))) {
+    return null;
+  }
+  return {
+    source: value.source,
+    key: value.key,
+    operator: value.operator as CatalogCondition['operator'],
+    value: expected,
+  };
+}
+
+function parseConditions(value: unknown): CatalogCondition[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return undefined;
+  const conditions = value.map(parseCondition);
+  return conditions.some((condition) => !condition)
+    ? undefined
+    : conditions as CatalogCondition[];
+}
+
 function parseCatalogControl(value: unknown): CatalogControl | null {
   if (!isRecord(value) || !isString(value.key) || !isString(value.label)) return null;
+  const compatibility = {
+    ...(value.minClientSchemaVersion === undefined
+      ? {}
+      : Number.isInteger(value.minClientSchemaVersion) && Number(value.minClientSchemaVersion) > 0
+        ? { minClientSchemaVersion: Number(value.minClientSchemaVersion) }
+        : { invalid: true }),
+    ...(value.conditions === undefined
+      ? {}
+      : parseConditions(value.conditions)
+        ? { conditions: parseConditions(value.conditions) }
+        : { invalid: true }),
+  };
+  if ('invalid' in compatibility) return null;
   if (value.type === 'boolean') {
     return value.presentation === 'toggle' && typeof value.defaultValue === 'boolean'
-      ? { key: value.key, label: value.label, type: 'boolean', presentation: 'toggle', defaultValue: value.defaultValue }
+      ? {
+          key: value.key,
+          label: value.label,
+          type: 'boolean',
+          presentation: 'toggle',
+          defaultValue: value.defaultValue,
+          ...compatibility,
+        }
       : null;
   }
   if (value.type === 'choice') {
@@ -91,6 +167,9 @@ function parseCatalogControl(value: unknown): CatalogControl | null {
       )))) return null;
     const options = value.options as Array<{ value: string; label: string }>;
     if (!options.some((option) => option.value === value.defaultValue)) return null;
+    if (value.normalizedValueType !== undefined
+      && value.normalizedValueType !== 'string'
+      && value.normalizedValueType !== 'number') return null;
     return {
       key: value.key,
       label: value.label,
@@ -98,6 +177,8 @@ function parseCatalogControl(value: unknown): CatalogControl | null {
       presentation: value.presentation,
       defaultValue: value.defaultValue,
       options: options.map((option) => ({ value: option.value, label: option.label })),
+      ...(value.normalizedValueType ? { normalizedValueType: value.normalizedValueType } : {}),
+      ...compatibility,
     };
   }
   if (!(value.type === 'integer'
@@ -119,6 +200,7 @@ function parseCatalogControl(value: unknown): CatalogControl | null {
     max: Number(value.max),
     step: Number(value.step),
     ...(typeof value.unit === 'string' ? { unit: value.unit } : {}),
+    ...compatibility,
   };
 }
 
@@ -133,12 +215,93 @@ function parseReferenceLimit(value: unknown, supportsNaming: boolean) {
     : { max: Number(value.max) };
 }
 
-function parseDescriptor(value: unknown, modelId: string): GenerationModelDescriptor {
+function parseInputSlot(value: unknown): CatalogInputSlot | null {
+  if (!isRecord(value)
+    || !isString(value.key)
+    || !isString(value.label)
+    || !['image', 'video', 'audio', 'character', 'preparedVoice'].includes(String(value.kind))
+    || !['reference', 'startFrame', 'endFrame'].includes(String(value.role))
+    || !Number.isInteger(value.min)
+    || !Number.isInteger(value.max)
+    || Number(value.min) < 0
+    || Number(value.max) < Number(value.min)) {
+    return null;
+  }
+  if (value.supportsNaming !== undefined && typeof value.supportsNaming !== 'boolean') return null;
+  if (value.durationMetadata !== undefined
+    && value.durationMetadata !== 'optional'
+    && value.durationMetadata !== 'required') return null;
+  if (value.maxDurationSeconds !== undefined
+    && (!Number.isFinite(value.maxDurationSeconds) || Number(value.maxDurationSeconds) <= 0)) return null;
+  const conditions = parseConditions(value.conditions);
+  if (value.conditions !== undefined && !conditions) return null;
+  return {
+    key: value.key,
+    label: value.label,
+    kind: value.kind as CatalogInputSlot['kind'],
+    role: value.role as CatalogInputSlot['role'],
+    min: Number(value.min),
+    max: Number(value.max),
+    ...(typeof value.supportsNaming === 'boolean' ? { supportsNaming: value.supportsNaming } : {}),
+    ...(value.durationMetadata ? { durationMetadata: value.durationMetadata } : {}),
+    ...(value.maxDurationSeconds === undefined ? {} : { maxDurationSeconds: Number(value.maxDurationSeconds) }),
+    ...(conditions ? { conditions } : {}),
+  };
+}
+
+function parseInputMode(value: unknown): CatalogInputMode | null {
+  if (!isRecord(value)
+    || !isString(value.key)
+    || !isString(value.label)
+    || typeof value.default !== 'boolean'
+    || !Array.isArray(value.slots)) return null;
+  const slots = value.slots.map(parseInputSlot);
+  const conditions = parseConditions(value.conditions);
+  if (slots.some((slot) => !slot) || (value.conditions !== undefined && !conditions)) return null;
+  return {
+    key: value.key,
+    label: value.label,
+    default: value.default,
+    slots: slots as CatalogInputSlot[],
+    ...(conditions ? { conditions } : {}),
+  };
+}
+
+function parseInputConstraint(value: unknown): CatalogInputConstraint | null {
+  if (!isRecord(value)
+    || !['total-count', 'weighted-count', 'combined-duration'].includes(String(value.type))
+    || !Array.isArray(value.slotKeys)
+    || !value.slotKeys.every(isString)
+    || !Number.isFinite(value.max)
+    || Number(value.max) < 0
+    || !isString(value.message)) return null;
+  if (value.weights !== undefined
+    && (!isRecord(value.weights)
+      || Object.values(value.weights).some((weight) => typeof weight !== 'number' || !Number.isFinite(weight) || weight < 0))) {
+    return null;
+  }
+  const conditions = parseConditions(value.conditions);
+  if (value.conditions !== undefined && !conditions) return null;
+  return {
+    type: value.type as CatalogInputConstraint['type'],
+    slotKeys: value.slotKeys as string[],
+    max: Number(value.max),
+    message: value.message,
+    ...(value.weights ? { weights: value.weights as Record<string, number> } : {}),
+    ...(conditions ? { conditions } : {}),
+  };
+}
+
+function parseDescriptor(
+  value: unknown,
+  modelId: string,
+  releaseSchemaVersion: number,
+  availability: Record<CatalogPlatform, boolean>,
+): GenerationModelDescriptor {
   if (!isRecord(value) || value.id !== modelId || !isGenerationModelKind(value.kind)) {
     throw new Error(`Invalid public descriptor for ${modelId}.`);
   }
-  if (
-    !isString(value.displayName)
+  if (!isString(value.displayName)
     || typeof value.description !== 'string'
     || (value.badge !== null && typeof value.badge !== 'string')
     || typeof value.recommended !== 'boolean'
@@ -146,8 +309,7 @@ function parseDescriptor(value: unknown, modelId: string): GenerationModelDescri
     || !Number.isInteger(value.minClientSchemaVersion)
     || !Array.isArray(value.controls)
     || !isRecord(value.capabilities)
-    || !isRecord(value.inputs)
-  ) {
+    || !isRecord(value.inputs)) {
     throw new Error(`Invalid public descriptor for ${modelId}.`);
   }
   const controls = value.controls.map(parseCatalogControl);
@@ -169,15 +331,28 @@ function parseDescriptor(value: unknown, modelId: string): GenerationModelDescri
   const characterReferences = value.inputs.characterReferences === undefined
     ? null
     : parseReferenceLimit(value.inputs.characterReferences, false);
-  if (
-    imageReferences === undefined
+  if (imageReferences === undefined
     || videoReferences === undefined
     || audioReferences === undefined
     || preparedAudioReferences === undefined
     || characterReferences === undefined
-    || (value.inputs.combineFramesWithReferences !== undefined && typeof value.inputs.combineFramesWithReferences !== 'boolean')
-  ) {
+    || (value.inputs.combineFramesWithReferences !== undefined
+      && typeof value.inputs.combineFramesWithReferences !== 'boolean')) {
     throw new Error(`Invalid input configuration for ${modelId}.`);
+  }
+  let inputModes: CatalogInputMode[] | undefined;
+  let inputConstraints: CatalogInputConstraint[] | undefined;
+  if (releaseSchemaVersion >= 2) {
+    if (!Array.isArray(value.inputModes) || !Array.isArray(value.inputConstraints)) {
+      throw new Error(`Schema-v2 inputs are missing for ${modelId}.`);
+    }
+    const parsedModes = value.inputModes.map(parseInputMode);
+    const parsedConstraints = value.inputConstraints.map(parseInputConstraint);
+    if (parsedModes.some((mode) => !mode) || parsedConstraints.some((constraint) => !constraint)) {
+      throw new Error(`Invalid schema-v2 inputs for ${modelId}.`);
+    }
+    inputModes = parsedModes as CatalogInputMode[];
+    inputConstraints = parsedConstraints as CatalogInputConstraint[];
   }
   return {
     id: modelId,
@@ -208,6 +383,13 @@ function parseDescriptor(value: unknown, modelId: string): GenerationModelDescri
         ? { combineFramesWithReferences: value.inputs.combineFramesWithReferences }
         : {}),
     },
+    ...(releaseSchemaVersion >= 2
+      ? {
+          availability,
+          inputModes,
+          inputConstraints,
+        }
+      : {}),
   };
 }
 
@@ -237,6 +419,9 @@ function parseOperation(row: EntryRow, descriptor: GenerationModelDescriptor): G
     modelId: row.model_id,
     kind: descriptor.kind,
     adapterKey: row.adapter_key as GenerationModelOperationalConfig['adapterKey'],
+    adapterConfig: row.adapter_config === undefined
+      ? {}
+      : parseObject(row.adapter_config, 'adapter configuration', row.model_id),
     providerModelMap: parseStringRecord(row.provider_model_map, 'provider model map', row.model_id),
     pricingStrategy: row.pricing_strategy as GenerationModelOperationalConfig['pricingStrategy'],
     pricingConfig: parseObject(row.pricing_config, 'pricing configuration', row.model_id),
@@ -248,7 +433,8 @@ function parseOperation(row: EntryRow, descriptor: GenerationModelDescriptor): G
 
 function getConfiguredCatalogSource(): GenerationModelCatalogSource {
   const configured = process.env.GENERATION_MODEL_CATALOG_SOURCE?.trim().toLowerCase();
-  return configured === 'database' || configured === 'shadow' ? configured : 'code';
+  if (configured === 'code' || configured === 'shadow' || configured === 'database') return configured;
+  return process.env.NODE_ENV === 'production' ? 'database' : 'code';
 }
 
 function hasServiceConfiguration(): boolean {
@@ -258,30 +444,67 @@ function hasServiceConfiguration(): boolean {
   );
 }
 
-function isMissingCatalogSchemaError(error: unknown): boolean {
+function isMissingAdapterConfigColumn(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const code = 'code' in error && typeof error.code === 'string' ? error.code : '';
   const message = 'message' in error && typeof error.message === 'string' ? error.message : '';
-  return code === '42P01' || code === 'PGRST205' || /generation_model_catalog/i.test(message);
+  return code === '42703' || code === 'PGRST204' || /adapter_config/i.test(message);
+}
+
+async function queryReleaseEntries(
+  client: SupabaseClient,
+  releaseId: string,
+): Promise<EntryRow[]> {
+  const baseColumns = 'model_id, public_descriptor, web_enabled, mobile_enabled, adapter_key, provider_model_map, pricing_strategy, pricing_config, validation_strategy, validation_config, verification_config';
+  const withAdapter = await client
+    .from('generation_model_catalog_entries')
+    .select(`${baseColumns}, adapter_config`)
+    .eq('release_id', releaseId)
+    .order('model_id', { ascending: true });
+  if (!withAdapter.error) {
+    if (!withAdapter.data?.length) throw new Error('The generation model catalog release has no entries.');
+    return withAdapter.data as EntryRow[];
+  }
+  if (!isMissingAdapterConfigColumn(withAdapter.error)) throw withAdapter.error;
+  const legacy = await client
+    .from('generation_model_catalog_entries')
+    .select(baseColumns)
+    .eq('release_id', releaseId)
+    .order('model_id', { ascending: true });
+  if (legacy.error) throw legacy.error;
+  if (!legacy.data?.length) throw new Error('The generation model catalog release has no entries.');
+  return legacy.data as EntryRow[];
 }
 
 async function queryDatabaseRelease(client: SupabaseClient): Promise<DatabaseReleaseSnapshot> {
   const { data: releaseData, error: releaseError } = await client
     .from('generation_model_catalog_releases')
-    .select('id, schema_version, revision, defaults')
+    .select('id, schema_version, revision, status, defaults')
     .eq('status', 'active')
+    .order('schema_version', { ascending: false })
+    .order('activated_at', { ascending: false })
+    .limit(1)
     .maybeSingle();
   if (releaseError) throw releaseError;
   if (!releaseData) throw new Error('No active generation model catalog release is published.');
   const release = releaseData as ReleaseRow;
-  const { data: entryData, error: entryError } = await client
-    .from('generation_model_catalog_entries')
-    .select('model_id, public_descriptor, web_enabled, mobile_enabled, adapter_key, provider_model_map, pricing_strategy, pricing_config, validation_strategy, validation_config, verification_config')
-    .eq('release_id', release.id)
-    .order('model_id', { ascending: true });
-  if (entryError) throw entryError;
-  if (!entryData?.length) throw new Error('The active generation model catalog has no entries.');
-  return { release, entries: entryData as EntryRow[] };
+  return { release, entries: await queryReleaseEntries(client, release.id) };
+}
+
+async function queryDatabaseReleaseByRevision(
+  client: SupabaseClient,
+  revision: string,
+): Promise<DatabaseReleaseSnapshot> {
+  const { data: releaseData, error: releaseError } = await client
+    .from('generation_model_catalog_releases')
+    .select('id, schema_version, revision, status, defaults')
+    .eq('revision', revision)
+    .in('status', ['active', 'retired', 'shadow'])
+    .maybeSingle();
+  if (releaseError) throw releaseError;
+  if (!releaseData) throw new Error(`Generation model catalog revision ${revision} is unavailable.`);
+  const release = releaseData as ReleaseRow;
+  return { release, entries: await queryReleaseEntries(client, release.id) };
 }
 
 async function loadDatabaseRelease(forceRefresh = false): Promise<DatabaseReleaseSnapshot> {
@@ -293,6 +516,7 @@ async function loadDatabaseRelease(forceRefresh = false): Promise<DatabaseReleas
   const request = queryDatabaseRelease(createServiceClient())
     .then((snapshot) => {
       cachedDatabaseRelease = { expiresAt: Date.now() + DATABASE_CACHE_TTL_MS, snapshot };
+      cachedDatabaseRevisions.set(snapshot.release.revision, snapshot);
       return snapshot;
     })
     .finally(() => {
@@ -302,12 +526,31 @@ async function loadDatabaseRelease(forceRefresh = false): Promise<DatabaseReleas
   return request;
 }
 
+async function loadDatabaseReleaseByRevision(
+  revision: string,
+  forceRefresh = false,
+): Promise<DatabaseReleaseSnapshot> {
+  if (!forceRefresh) {
+    const cached = cachedDatabaseRevisions.get(revision);
+    if (cached) return cached;
+  }
+  const snapshot = await queryDatabaseReleaseByRevision(createServiceClient(), revision);
+  if (cachedDatabaseRevisions.size >= MAX_REVISION_CACHE_ENTRIES) {
+    const oldest = cachedDatabaseRevisions.keys().next().value;
+    if (oldest) cachedDatabaseRevisions.delete(oldest);
+  }
+  cachedDatabaseRevisions.set(revision, snapshot);
+  return snapshot;
+}
+
 function platformDefaults(value: unknown, platform: CatalogPlatform): Record<GenerationModelKind, string | null> {
   const defaults = isRecord(value) && isRecord(value[platform]) ? value[platform] : null;
   if (!defaults) throw new Error(`Catalog defaults are missing for ${platform}.`);
   const result = { image: defaults.image, video: defaults.video, motion: defaults.motion };
-  for (const value of Object.values(result)) {
-    if (value !== null && typeof value !== 'string') throw new Error(`Catalog defaults are invalid for ${platform}.`);
+  for (const defaultValue of Object.values(result)) {
+    if (defaultValue !== null && typeof defaultValue !== 'string') {
+      throw new Error(`Catalog defaults are invalid for ${platform}.`);
+    }
   }
   return result as Record<GenerationModelKind, string | null>;
 }
@@ -315,32 +558,55 @@ function platformDefaults(value: unknown, platform: CatalogPlatform): Record<Gen
 function projectDatabaseRelease(
   snapshot: DatabaseReleaseSnapshot,
   platform: CatalogPlatform,
-  schemaVersion: number,
+  requestedSchemaVersion: number,
 ): PublishedGenerationModelCatalogSnapshot {
-  if (snapshot.release.schema_version !== GENERATION_MODEL_CATALOG_SCHEMA_VERSION) {
+  if (snapshot.release.schema_version > GENERATION_MODEL_CATALOG_SCHEMA_VERSION) {
     throw new Error(`Unsupported published catalog schema ${snapshot.release.schema_version}.`);
   }
+  if (requestedSchemaVersion >= 2 && snapshot.release.schema_version < 2) {
+    throw new GenerationModelCatalogSchemaUnavailableError(
+      requestedSchemaVersion,
+      snapshot.release.schema_version,
+    );
+  }
+  const projectedSchemaVersion = requestedSchemaVersion >= 2 ? 2 : 1;
   const operations = new Map<string, GenerationModelOperationalConfig>();
-  const models = snapshot.entries
+  const allPlatformDescriptors = snapshot.entries
     .filter((row) => platform === 'mobile' ? row.mobile_enabled : row.web_enabled)
     .map((row) => {
-      const descriptor = parseDescriptor(row.public_descriptor, row.model_id);
+      const descriptor = parseDescriptor(
+        row.public_descriptor,
+        row.model_id,
+        snapshot.release.schema_version,
+        { web: row.web_enabled, mobile: row.mobile_enabled },
+      );
       operations.set(row.model_id, parseOperation(row, descriptor));
       return descriptor;
-    })
-    .filter((descriptor) => descriptor.minClientSchemaVersion <= schemaVersion)
+    });
+  const models = allPlatformDescriptors
+    .filter((descriptor) => descriptor.minClientSchemaVersion <= requestedSchemaVersion)
+    .map((descriptor) => projectGenerationModelDescriptor(descriptor, projectedSchemaVersion))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.displayName.localeCompare(b.displayName));
   const modelIds = new Set(models.map((model) => model.id));
-  const defaults = platformDefaults(snapshot.release.defaults, platform);
+  const publishedDefaults = platformDefaults(snapshot.release.defaults, platform);
+  const defaults = { ...publishedDefaults };
   for (const kind of ['image', 'video', 'motion'] as const) {
     const defaultId = defaults[kind];
-    if (defaultId && (!modelIds.has(defaultId) || !models.some((model) => model.id === defaultId && model.kind === kind))) {
-      throw new Error(`Published ${platform} default ${defaultId} is unavailable.`);
+    const valid = defaultId
+      && modelIds.has(defaultId)
+      && models.some((model) => model.id === defaultId && model.kind === kind);
+    if (!valid) {
+      const publishedDefaultExists = defaultId
+        && allPlatformDescriptors.some((model) => model.id === defaultId && model.kind === kind);
+      if (!publishedDefaultExists) {
+        throw new Error(`Published ${platform} default ${String(defaultId)} is unavailable.`);
+      }
+      defaults[kind] = models.find((model) => model.kind === kind)?.id ?? null;
     }
   }
   return {
     catalog: {
-      schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
+      schemaVersion: projectedSchemaVersion,
       revision: snapshot.release.revision,
       defaults,
       models,
@@ -348,6 +614,7 @@ function projectDatabaseRelease(
     operations,
     source: 'database',
     releaseId: snapshot.release.id,
+    releaseSchemaVersion: snapshot.release.schema_version,
   };
 }
 
@@ -357,13 +624,14 @@ function codeSnapshot(platform: CatalogPlatform, schemaVersion: number): Publish
     operations: new Map(buildCodeGenerationModelOperations().map((entry) => [entry.modelId, entry])),
     source: 'code',
     releaseId: null,
+    releaseSchemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
   };
 }
 
 function compareShadowCatalog(
   code: PublishedGenerationModelCatalogSnapshot,
   database: PublishedGenerationModelCatalogSnapshot,
-) {
+): void {
   const codeProjection = JSON.stringify({ defaults: code.catalog.defaults, models: code.catalog.models });
   const databaseProjection = JSON.stringify({ defaults: database.catalog.defaults, models: database.catalog.models });
   if (codeProjection !== databaseProjection) {
@@ -373,6 +641,12 @@ function compareShadowCatalog(
       codeRevision: code.catalog.revision,
       databaseRevision: database.catalog.revision,
     }));
+  }
+}
+
+function assertDatabaseConfiguration(source: GenerationModelCatalogSource): void {
+  if (source === 'database' && !hasServiceConfiguration()) {
+    throw new Error('The authoritative generation model database catalog is not configured.');
   }
 }
 
@@ -387,52 +661,149 @@ export async function loadPublishedGenerationModelCatalog({
 }): Promise<PublishedGenerationModelCatalogSnapshot> {
   const source = getConfiguredCatalogSource();
   const fallback = codeSnapshot(platform, schemaVersion);
-  if (source === 'code' || !hasServiceConfiguration()) return fallback;
-
+  if (source === 'code') return fallback;
+  assertDatabaseConfiguration(source);
+  if (!hasServiceConfiguration()) return { ...fallback, source: 'shadow' };
   try {
-    const database = projectDatabaseRelease(await loadDatabaseRelease(forceRefresh), platform, schemaVersion);
+    const database = projectDatabaseRelease(
+      await loadDatabaseRelease(forceRefresh),
+      platform,
+      schemaVersion,
+    );
     if (source === 'shadow') {
       compareShadowCatalog(fallback, database);
       return { ...fallback, source: 'shadow' };
     }
     return database;
   } catch (error) {
-    if (source === 'shadow' || isMissingCatalogSchemaError(error)) {
-      console.warn('Generation model database catalog is not ready; serving the code catalog.', error);
-      return { ...fallback, source };
+    if (source === 'shadow') {
+      console.warn('Generation model database shadow catalog is unavailable.', error);
+      return { ...fallback, source: 'shadow' };
     }
     throw error;
   }
+}
+
+export async function loadPublishedGenerationModelCatalogByRevision({
+  revision,
+  platform,
+  schemaVersion = 1,
+  forceRefresh = false,
+}: {
+  revision: string;
+  platform: CatalogPlatform;
+  schemaVersion?: number;
+  forceRefresh?: boolean;
+}): Promise<PublishedGenerationModelCatalogSnapshot> {
+  const source = getConfiguredCatalogSource();
+  if (source === 'code' || source === 'shadow') {
+    const snapshot = codeSnapshot(platform, schemaVersion);
+    if (snapshot.catalog.revision !== revision) {
+      throw new Error(`Generation model catalog revision ${revision} is unavailable.`);
+    }
+    return { ...snapshot, source };
+  }
+  assertDatabaseConfiguration(source);
+  return projectDatabaseRelease(
+    await loadDatabaseReleaseByRevision(revision, forceRefresh),
+    platform,
+    schemaVersion,
+  );
 }
 
 export async function quotePublishedGenerationModel(
   input: GenerationModelQuoteInput,
   options: { platform: CatalogPlatform; forceRefresh?: boolean },
 ): Promise<GenerationModelQuote> {
+  const schemaVersion = input.schemaVersion && input.schemaVersion >= 2 ? 2 : 1;
   const snapshot = await loadPublishedGenerationModelCatalog({
     platform: options.platform,
-    schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
+    schemaVersion,
     forceRefresh: options.forceRefresh,
   });
+  let validationCatalog = snapshot.catalog;
+  if (schemaVersion === 1 && (snapshot.releaseSchemaVersion ?? 1) >= 2) {
+    const requestedDescriptor = snapshot.catalog.models.find((model) => (
+      model.id === input.modelId && model.kind === input.kind
+    ));
+    if (requestedDescriptor) {
+      const fullSnapshot = await loadPublishedGenerationModelCatalog({
+        platform: options.platform,
+        schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
+        forceRefresh: options.forceRefresh,
+      });
+      const fullDescriptor = fullSnapshot.catalog.models.find((model) => (
+        model.id === input.modelId && model.kind === input.kind
+      ));
+      if (fullDescriptor) {
+        validationCatalog = {
+          ...snapshot.catalog,
+          models: snapshot.catalog.models.map((model) => (
+            model.id === fullDescriptor.id ? fullDescriptor : model
+          )),
+        };
+      }
+    }
+  }
   return quoteGenerationModel(input, {
-    catalog: snapshot.catalog,
+    catalog: validationCatalog,
     operations: snapshot.operations,
   });
 }
 
 export async function loadGenerationModelOperationalConfig(
   modelId: string,
-  options: { forceRefresh?: boolean } = {},
+  options: {
+    catalogRevision?: string;
+    schemaVersion?: number;
+    forceRefresh?: boolean;
+  } = {},
 ): Promise<GenerationModelOperationalConfig | null> {
-  const snapshot = await loadPublishedGenerationModelCatalog({
-    platform: 'web',
-    schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
-    forceRefresh: options.forceRefresh,
-  });
+  const snapshot = options.catalogRevision
+    ? await loadPublishedGenerationModelCatalogByRevision({
+        revision: options.catalogRevision,
+        platform: 'web',
+        schemaVersion: options.schemaVersion ?? GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
+        forceRefresh: options.forceRefresh,
+      })
+    : await loadPublishedGenerationModelCatalog({
+        platform: 'web',
+        schemaVersion: options.schemaVersion ?? GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
+        forceRefresh: options.forceRefresh,
+      });
   return snapshot.operations.get(modelId) ?? null;
 }
 
-export function clearGenerationModelCatalogStoreCache() {
+export async function loadGenerationModelOperationByRevision({
+  modelId,
+  revision,
+  platform = 'web',
+  schemaVersion = GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
+}: {
+  modelId: string;
+  revision: string;
+  platform?: CatalogPlatform;
+  schemaVersion?: number;
+}): Promise<{
+  catalog: GenerationModelCatalog;
+  operation: GenerationModelOperationalConfig;
+  releaseId: string | null;
+}> {
+  const snapshot = await loadPublishedGenerationModelCatalogByRevision({
+    revision,
+    platform,
+    schemaVersion,
+  });
+  const descriptor = snapshot.catalog.models.find((model) => model.id === modelId);
+  const operation = snapshot.operations.get(modelId);
+  if (!descriptor || !operation) {
+    throw new Error(`Model ${modelId} is unavailable in catalog revision ${revision}.`);
+  }
+  return { catalog: snapshot.catalog, operation, releaseId: snapshot.releaseId };
+}
+
+export function clearGenerationModelCatalogStoreCache(): void {
   cachedDatabaseRelease = null;
   pendingDatabaseRelease = null;
+  cachedDatabaseRevisions.clear();
 }

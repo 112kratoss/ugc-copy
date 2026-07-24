@@ -980,7 +980,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) { router.push('/login?returnUrl=/create-image'); return; }
 
-            const response = await fetch('/api/generate-image', {
+            const response = await fetch('/api/generations', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -988,15 +988,25 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                     'Idempotency-Key': idempotencyKey
                 },
                 body: JSON.stringify({
-                    model: selectedModel,
+                    kind: 'image',
+                    modelId: selectedModel,
                     prompt: prompt.trim(),
-                    imageUrls,
-                    elements: requestElements,
-                    aspectRatio,
-                    resolution,
-                    qualityMode,
-                    googleSearch: model.supportsGoogleSearch ? googleSearch : false,
-                    outputFormat: 'jpg',
+                    settings: {
+                        aspectRatio,
+                        resolution,
+                        qualityMode,
+                        googleSearch: model.supportsGoogleSearch ? googleSearch : false,
+                        outputFormat: 'jpg',
+                    },
+                    inputs: imageUrls.map((url, index) => ({
+                        slot: 'imageReferences',
+                        kind: 'image',
+                        url,
+                        label: requestElements[index]?.displayName ?? `Reference ${index + 1}`,
+                        handle: requestElements[index]?.handle ?? null,
+                        storagePath: requestElements[index]?.storagePath ?? null,
+                        sourceGenerationId: requestElements[index]?.sourceGenerationId ?? null,
+                    })),
                     sourceGenerationId: remixId || undefined,
                     catalogRevision: modelCatalog.catalog?.revision,
                 })
