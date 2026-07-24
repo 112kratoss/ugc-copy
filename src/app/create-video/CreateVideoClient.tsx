@@ -727,8 +727,36 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             preparedAudios: isGeminiOmniVideoModel ? preparedAudioIds.length : 0,
             characters: isGeminiOmniVideoModel ? characterIds.length : 0,
         },
+        inputMetadata: {
+            slots: {
+                imageReferences: { count: activeReferenceMode === 'elements' ? elements.length : 0 },
+                videoReferences: {
+                    count: activeReferenceMode === 'elements' ? referenceVideos.length : 0,
+                    durationsSeconds: activeReferenceMode === 'elements'
+                        ? referenceVideos.flatMap((reference) => (
+                            typeof reference.durationSeconds === 'number'
+                                ? [reference.durationSeconds]
+                                : []
+                        ))
+                        : [],
+                },
+                audioReferences: { count: activeReferenceMode === 'elements' ? referenceAudios.length : 0 },
+                videoElements: { count: klingVideoElements.length },
+                startFrame: { count: Number(Boolean(startImageUrl || startImageFile)) },
+                endFrame: { count: activeSupportsEndFrame ? Number(Boolean(endImageUrl || endImageFile)) : 0 },
+                preparedVoices: { count: isGeminiOmniVideoModel ? preparedAudioIds.length : 0 },
+                characters: { count: isGeminiOmniVideoModel ? characterIds.length : 0 },
+            },
+            referenceVideoDurationsSeconds: activeReferenceMode === 'elements'
+                ? referenceVideos.flatMap((reference) => (
+                    typeof reference.durationSeconds === 'number'
+                        ? [reference.durationSeconds]
+                        : []
+                ))
+                : [],
+        },
         catalogRevision: modelCatalog.catalog.revision,
-    } : null, [activeReferenceMode, characterIds.length, currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, elements.length, frameReferenceCount, isGeminiOmniVideoModel, klingVideoElements.length, modelCatalog.catalog, preparedAudioIds.length, referenceAudios.length, referenceVideos.length, selectedModel, totalDuration]);
+    } : null, [activeReferenceMode, activeSupportsEndFrame, characterIds.length, currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, elements.length, endImageFile, endImageUrl, frameReferenceCount, isGeminiOmniVideoModel, klingVideoElements.length, modelCatalog.catalog, preparedAudioIds.length, referenceAudios.length, referenceVideos, selectedModel, startImageFile, startImageUrl, totalDuration]);
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED' && quoteState.error?.code !== 'MODEL_UNAVAILABLE') return;
@@ -2604,34 +2632,96 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             }
 
             const payload = {
-                model: selectedModel,
-                isMultiShot: currentIsMultiShot,
+                kind: 'video',
+                modelId: selectedModel,
                 prompt: prompt.trim(),
-                multiPrompts,
-                duration: totalDuration,
-                elements: requestElements,
-                elementImageUrls,
-                referenceVideoUrls: requestReferenceVideoUrls,
-                referenceAudioUrls: requestReferenceAudioUrls,
-                preparedAudioIds: isGeminiOmniVideoModel ? preparedAudioIds : [],
-                characterIds: isGeminiOmniVideoModel ? characterIds : [],
-                klingVideoElements: requestKlingVideoElements,
-                startImageUrl: startUrl,
-                endImageUrl: endUrl,
-                mode: currentMode,
-                aspectRatio: currentAspectRatio,
-                sound: currentSound,
-                resolution: currentResolution,
-                fixedLens: currentFixedLens,
-                referenceMode: activeReferenceMode,
-                startFrame: activeReferenceMode === 'frames' || combinesFrameWithReferences ? nextStartFrameDescriptor : undefined,
-                endFrame: activeReferenceMode === 'frames' ? nextEndFrameDescriptor : undefined,
-                seedanceAssets: isSeedance2Family ? nextSeedanceAssets : undefined,
+                shots: currentIsMultiShot
+                    ? multiPrompts.map((shot) => ({
+                        prompt: shot.prompt,
+                        duration: shot.duration,
+                    }))
+                    : [],
+                settings: {
+                    duration: totalDuration,
+                    mode: currentMode,
+                    aspectRatio: currentAspectRatio,
+                    sound: currentSound,
+                    resolution: currentResolution,
+                    fixedLens: currentFixedLens,
+                    isMultiShot: currentIsMultiShot,
+                    referenceMode: activeReferenceMode,
+                },
+                inputs: [
+                    ...requestElements.map((element, index) => ({
+                        slot: 'imageReferences',
+                        kind: 'image',
+                        url: elementImageUrls[index],
+                        assetId: nextSeedanceAssets.images?.[index]?.assetId ?? null,
+                        label: element.displayName,
+                        handle: element.handle,
+                        storagePath: element.storagePath ?? null,
+                        sourceGenerationId: element.sourceGenerationId ?? null,
+                    })),
+                    ...requestReferenceVideoUrls.map((url, index) => ({
+                        slot: 'videoReferences',
+                        kind: 'video',
+                        url,
+                        assetId: nextSeedanceAssets.videos?.[index]?.assetId ?? null,
+                        label: referenceVideos[index]?.displayName ?? `Video reference ${index + 1}`,
+                        durationSeconds: referenceVideos[index]?.durationSeconds ?? null,
+                        storagePath: referenceVideos[index]?.storagePath ?? null,
+                        sourceGenerationId: referenceVideos[index]?.sourceGenerationId ?? null,
+                    })),
+                    ...requestReferenceAudioUrls.map((url, index) => ({
+                        slot: 'audioReferences',
+                        kind: 'audio',
+                        url,
+                        assetId: nextSeedanceAssets.audios?.[index]?.assetId ?? null,
+                        label: referenceAudios[index]?.displayName ?? `Audio reference ${index + 1}`,
+                        storagePath: referenceAudios[index]?.storagePath ?? null,
+                        sourceGenerationId: referenceAudios[index]?.sourceGenerationId ?? null,
+                    })),
+                    ...requestKlingVideoElements.map((element) => ({
+                        slot: 'videoElements',
+                        kind: 'video',
+                        url: element.url,
+                        label: element.displayName,
+                        handle: element.handle,
+                        storagePath: element.storagePath,
+                        sourceGenerationId: element.sourceGenerationId,
+                    })),
+                    ...(startUrl ? [{
+                        slot: 'startFrame',
+                        kind: 'image',
+                        url: startUrl,
+                        label: nextStartFrameDescriptor?.label ?? 'Start frame',
+                        storagePath: nextStartFrameDescriptor?.storagePath ?? null,
+                        sourceGenerationId: nextStartFrameDescriptor?.sourceGenerationId ?? null,
+                    }] : []),
+                    ...(endUrl ? [{
+                        slot: 'endFrame',
+                        kind: 'image',
+                        url: endUrl,
+                        label: nextEndFrameDescriptor?.label ?? 'End frame',
+                        storagePath: nextEndFrameDescriptor?.storagePath ?? null,
+                        sourceGenerationId: nextEndFrameDescriptor?.sourceGenerationId ?? null,
+                    }] : []),
+                    ...(isGeminiOmniVideoModel ? preparedAudioIds.map((assetId) => ({
+                        slot: 'preparedVoices',
+                        kind: 'preparedVoice',
+                        assetId,
+                    })) : []),
+                    ...(isGeminiOmniVideoModel ? characterIds.map((assetId) => ({
+                        slot: 'characters',
+                        kind: 'character',
+                        assetId,
+                    })) : []),
+                ],
                 sourceGenerationId: remixId || undefined,
                 catalogRevision: modelCatalog.catalog?.revision,
             };
 
-            const response = await fetch('/api/generate-video', {
+            const response = await fetch('/api/generations', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -3444,7 +3534,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 </div>
                                 {isGrokVideoModel ? (
                                     <div className="rounded-[22px] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm leading-6 text-amber-100">
-                                        Grok image-to-video accepts one image reference. If Spicy is selected with an uploaded image, we submit Normal to match the provider&apos;s external-image rules.
+                                        Grok image-to-video accepts one image reference per run.
                                     </div>
                                 ) : null}
                                 {combinesFrameWithReferences ? (

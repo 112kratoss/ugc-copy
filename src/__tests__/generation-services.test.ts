@@ -347,7 +347,8 @@ describe('generation services', () => {
   beforeEach(() => {
     vi.resetModules();
     process.env.KIE_AI_API_KEY = 'test-key';
-    process.env.WEBHOOK_SECRET = 'test-webhook-secret';
+    process.env.KIE_PROVIDER_WEBHOOK_SECRET = 'test-webhook-secret';
+    process.env.KIE_WEBHOOK_HMAC_KEY = 'hmac-key';
     process.env.NEXT_PUBLIC_SITE_URL = 'https://magicbooklet.com';
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co';
     vi.stubGlobal('fetch', vi.fn());
@@ -359,9 +360,8 @@ describe('generation services', () => {
   });
 
   it('rejects missing callback authentication before a template credit reservation or provider request', async () => {
-    const previousWebhookSecret = process.env.WEBHOOK_SECRET;
+    const previousWebhookSecret = process.env.KIE_PROVIDER_WEBHOOK_SECRET;
     const previousHmacKey = process.env.KIE_WEBHOOK_HMAC_KEY;
-    delete process.env.WEBHOOK_SECRET;
     delete process.env.KIE_WEBHOOK_HMAC_KEY;
     vi.resetModules();
 
@@ -399,10 +399,45 @@ describe('generation services', () => {
       expect(logs).not.toContain('reference.png');
       expect(logs).not.toContain('private template prompt');
     } finally {
-      if (previousWebhookSecret === undefined) delete process.env.WEBHOOK_SECRET;
-      else process.env.WEBHOOK_SECRET = previousWebhookSecret;
+      if (previousWebhookSecret === undefined) delete process.env.KIE_PROVIDER_WEBHOOK_SECRET;
+      else process.env.KIE_PROVIDER_WEBHOOK_SECRET = previousWebhookSecret;
       if (previousHmacKey === undefined) delete process.env.KIE_WEBHOOK_HMAC_KEY;
       else process.env.KIE_WEBHOOK_HMAC_KEY = previousHmacKey;
+    }
+  });
+
+  it('classifies a missing provider callback URL before reserving credits', async () => {
+    const previousSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const previousProviderCallbackUrl = process.env.KIE_PROVIDER_CALLBACK_URL;
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    delete process.env.KIE_PROVIDER_CALLBACK_URL;
+    vi.resetModules();
+
+    try {
+      const { GenerationServiceError, startImageGeneration } = await import('@/lib/generation-services');
+      const logError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { supabase, generations, rpcCalls } = createSupabaseMock();
+
+      await expect(startImageGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: 'callback base verification',
+        model: 'nano-banana-2',
+      })).rejects.toMatchObject({
+        name: GenerationServiceError.name,
+        status: 503,
+        failureCode: 'service_misconfigured',
+      });
+      expect(generations).toHaveLength(0);
+      expect(rpcCalls).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(logError.mock.calls.flat().map(String).join('\n')).toContain('callback_base_url');
+    } finally {
+      if (previousSupabaseUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+      else process.env.NEXT_PUBLIC_SUPABASE_URL = previousSupabaseUrl;
+      if (previousProviderCallbackUrl === undefined) delete process.env.KIE_PROVIDER_CALLBACK_URL;
+      else process.env.KIE_PROVIDER_CALLBACK_URL = previousProviderCallbackUrl;
     }
   });
 
@@ -1001,8 +1036,8 @@ describe('generation services', () => {
     });
     expect(generations[0].workflow_settings).toMatchObject({
       model: 'gpt-image-2',
-      providerModel: 'gpt-image-2-text-to-image',
     });
+    expect(generations[0].workflow_settings).not.toHaveProperty('providerModel');
   });
 
   it('reserves image credits and the pending generation row with one atomic backend RPC', async () => {
@@ -1437,13 +1472,13 @@ describe('generation services', () => {
     expect(providerInput).not.toHaveProperty('image_input');
     expect(providerInput).not.toHaveProperty('output_format');
     expect(generations[0].workflow_settings).toMatchObject({
-      providerModel: 'gpt-image-2-image-to-image',
       elements: [
         expect.objectContaining({
           handle: '@hero',
         }),
       ],
     });
+    expect(generations[0].workflow_settings).not.toHaveProperty('providerModel');
   });
 
   it('uses Nano Banana 2 Lite with its image_urls reference contract', async () => {
@@ -1726,9 +1761,9 @@ describe('generation services', () => {
       cost: 5,
     });
     expect(generations[0].workflow_settings).toMatchObject({
-      providerModel: 'grok-imagine/text-to-image',
       qualityMode: 'quality',
     });
+    expect(generations[0].workflow_settings).not.toHaveProperty('providerModel');
   });
 
   it('uses a provided catalog quote cost for image charging and persistence', async () => {
@@ -1803,9 +1838,7 @@ describe('generation services', () => {
       fn: 'start_generation',
       args: { p_cost: 4 },
     });
-    expect(generations[0].workflow_settings).toMatchObject({
-      providerModel: 'grok-imagine/image-to-image',
-    });
+    expect(generations[0].workflow_settings).not.toHaveProperty('providerModel');
   });
 
   it('rejects Grok image runs with more than one reference before deducting credits', async () => {
@@ -2027,15 +2060,15 @@ describe('generation services', () => {
       args: { p_cost: 10 },
     });
     expect(generations[0]).toMatchObject({
-      model: 'grok-imagine/text-to-video',
+      model: 'grok-imagine-video',
       cost: 10,
       duration: 6,
     });
     expect(generations[0].workflow_settings).toMatchObject({
       model: 'grok-imagine-video',
-      providerModel: 'grok-imagine/text-to-video',
       providerMode: 'fun',
     });
+    expect(generations[0].workflow_settings).not.toHaveProperty('providerModel');
   });
 
   it('uses a provided catalog quote cost for video charging and persistence', async () => {
@@ -2069,55 +2102,25 @@ describe('generation services', () => {
     });
   });
 
-  it('uses Grok image-to-video payload and coerces spicy external images to normal', async () => {
+  it('rejects unsupported Grok modes before deducting credits', async () => {
     const { startVideoGeneration } = await import('@/lib/generation-services');
-    let providerBody: Record<string, unknown> | null = null;
-    const fetchMock = vi.mocked(fetch);
-    fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if (!init?.body) {
-        return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
-          status: 200,
-          headers: { 'content-type': 'image/jpeg' },
-        });
-      }
-      providerBody = JSON.parse(String(init.body));
-      return {
-        ok: true,
-        json: async () => ({ code: 200, data: { taskId: 'task-grok-video-image-1' } }),
-      } as Response;
-    });
+    const { supabase, rpcCalls } = createSupabaseMock();
 
-    const { supabase, generations } = createSupabaseMock();
-    await startVideoGeneration({
+    await expect(startVideoGeneration({
       supabase,
       creditSupabase: supabase,
       userId: 'user-1',
-      prompt: 'Animate the still with a slow push-in.',
+      prompt: 'Animate the still.',
       model: 'grok-imagine-video',
       mode: 'spicy',
       aspectRatio: '9:16',
       duration: 10,
       resolution: '720p',
       startImageUrl: 'https://cdn.example.com/start.jpg',
-    });
+    })).rejects.toThrow('Unsupported mode for Grok Imagine Video');
 
-    expect(providerBody).toEqual({
-      callBackUrl: 'https://project.supabase.co/functions/v1/kie-webhook?generationId=gen-1&secret=test-webhook-secret',
-      model: 'grok-imagine/image-to-video',
-      input: {
-        prompt: 'Animate the still with a slow push-in.',
-        mode: 'normal',
-        duration: 10,
-        resolution: '720p',
-        nsfw_checker: true,
-        image_urls: ['https://cdn.example.com/start.jpg'],
-      },
-    });
-    expect(generations[0].workflow_settings).toMatchObject({
-      providerModel: 'grok-imagine/image-to-video',
-      requestedMode: 'spicy',
-      providerMode: 'normal',
-    });
+    expect(rpcCalls).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('rejects Grok image-to-video runs with more than one frame before deducting credits', async () => {
@@ -2141,8 +2144,8 @@ describe('generation services', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('rejects motion generation before charging when webhook secret is missing', async () => {
-    delete process.env.WEBHOOK_SECRET;
+  it('rejects motion generation before charging when the provider webhook secret is missing', async () => {
+    delete process.env.KIE_PROVIDER_WEBHOOK_SECRET;
     const { startMotionGeneration } = await import('@/lib/generation-services');
     const { supabase, rpcCalls } = createSupabaseMock();
 
@@ -2542,6 +2545,40 @@ describe('generation services', () => {
         images: [expect.objectContaining({ assetId: 'asset-image-1' })],
       },
     });
+  });
+
+  it('passes Seedance 2 4K output through to Kie with the matching quote', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-seedance-4k-1' } }),
+      } as Response;
+    });
+
+    const { supabase, generations } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'A polished vertical creator ad.',
+      model: 'seedance-2',
+      duration: 7,
+      aspectRatio: '9:16',
+      resolution: '4k',
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'bytedance/seedance-2',
+      input: {
+        resolution: '4k',
+        aspect_ratio: '9:16',
+        duration: 7,
+      },
+    });
+    expect(generations[0].cost).toBe(1456);
   });
 
   it('keeps Seedance frame guidance separate from reusable references', async () => {

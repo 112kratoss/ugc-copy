@@ -16,6 +16,7 @@ import {
   hydrateCreationDraftFromRemixSource,
   renameMediaDraft,
   validateCreationDraft,
+  VIDEO_MODELS,
   type MediaDraft,
 } from '../lib/media-creation-view-model';
 import type { RemixSourceBundle } from '../lib/types';
@@ -110,6 +111,10 @@ function remixSourceBundle(overrides: RemixSourceBundleOverrides = {}): RemixSou
 }
 
 describe('media creation view model', () => {
+  it('offers the current Seedance 2 resolution tiers in the mobile fallback catalog', () => {
+    expect(VIDEO_MODELS['seedance-2'].resolutions).toEqual(['480p', '720p', '1080p', '4k']);
+  });
+
   it('keeps authoritative generation pricing out of the mobile view model', () => {
     const source = readFileSync(join(repoRoot, 'lib/media-creation-view-model.ts'), 'utf8');
 

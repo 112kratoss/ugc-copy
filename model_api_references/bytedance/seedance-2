@@ -121,6 +121,8 @@ The `callBackUrl` parameter allows you to receive automatic notifications when y
 - **Options**:
   - `480p`: 480p
   - `720p`: 720p
+  - `1080p`: 1080p
+  - `4k`: 4K
 - **Default Value**: `"720p"`
 
 #### aspect_ratio
@@ -263,4 +265,4 @@ GET https://api.kie.ai/api/v1/jobs/recordInfo?taskId=281e5b0********************
 | 429 | Request rate limit exceeded |
 | 500 | Internal server error |
 
-Pricing: Pricing: 480P — 11.5 credits/s ($0.0575/s, with video input) / 19 credits/s ($0.095/s, no video input); 720P — 25 credits/s ($0.125/s, with video input) / 41 credits/s ($0.205/s, no video input) 
+Pricing: 480P — 11.5 credits/s ($0.0575/s, with video input) / 19 credits/s ($0.095/s, no video input); 720P — 25 credits/s ($0.125/s, with video input) / 41 credits/s ($0.205/s, no video input); 1080P — 62 credits/s ($0.31/s, with video input) / 102 credits/s ($0.51/s, no video input); 4K — 128 credits/s ($0.64/s, with video input) / 208 credits/s ($1.04/s, no video input).

@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { getGenerationModelCatalogRouteResponse } from '@/lib/generation-model-catalog-route-adapter-service';
+import {
+  buildGenerationModelCatalogEtag,
+  getGenerationModelCatalogRouteResponse,
+} from '@/lib/generation-model-catalog-route-adapter-service';
 import type { GenerationModelCatalog } from '@/lib/generation-model-catalog';
 
 function createCatalog(revision = 'catalog-revision-1'): GenerationModelCatalog {
@@ -35,7 +38,9 @@ describe('generation model catalog route adapter service', () => {
     expect(response.headers.get('Cache-Control')).toBe(
       'public, max-age=300, stale-while-revalidate=3600',
     );
-    expect(response.headers.get('ETag')).toBe('"catalog-mobile-1"');
+    expect(response.headers.get('ETag')).toBe(
+      buildGenerationModelCatalogEtag(createCatalog('catalog-mobile-1'), 'mobile'),
+    );
     expect(response.headers.get('x-request-id')).toBe('catalog-adapter-mobile-1');
     expect(buildGenerationModelCatalog).toHaveBeenCalledWith({
       platform: 'mobile',
@@ -45,20 +50,22 @@ describe('generation model catalog route adapter service', () => {
   });
 
   it('returns 304 when the request already has the current catalog revision', async () => {
+    const catalog = createCatalog('catalog-web-1');
+    const etag = buildGenerationModelCatalogEtag(catalog, 'web');
     const response = await getGenerationModelCatalogRouteResponse({
       request: new Request('http://localhost/api/generation-models?platform=web', {
         headers: {
-          'If-None-Match': '"catalog-web-1"',
+          'If-None-Match': etag,
           'x-vercel-id': 'iad1::catalog-adapter-304',
         },
       }),
       dependencies: {
-        buildGenerationModelCatalog: vi.fn(() => createCatalog('catalog-web-1')),
+        buildGenerationModelCatalog: vi.fn(() => catalog),
       },
     });
 
     expect(response.status).toBe(304);
-    expect(response.headers.get('ETag')).toBe('"catalog-web-1"');
+    expect(response.headers.get('ETag')).toBe(etag);
     expect(response.headers.get('x-request-id')).toBe('iad1::catalog-adapter-304');
     expect(await response.text()).toBe('');
   });

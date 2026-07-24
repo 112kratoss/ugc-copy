@@ -278,10 +278,10 @@ describe('/api/generate route', () => {
   beforeEach(() => {
     vi.resetModules();
     process.env.KIE_AI_API_KEY = 'test-key';
-    process.env.WEBHOOK_SECRET = 'test-webhook-secret';
+    process.env.KIE_PROVIDER_WEBHOOK_SECRET = 'test-webhook-secret';
+    process.env.KIE_WEBHOOK_HMAC_KEY = 'hmac-key';
     process.env.NEXT_PUBLIC_SITE_URL = 'https://magicbooklet.com';
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co';
-    delete process.env.KIE_WEBHOOK_HMAC_KEY;
     currentSupabaseMock = createSupabaseMock();
     rawCreateClientMock.mockReset();
     rawCreateClientMock.mockImplementation(() => currentSupabaseMock.client);
@@ -452,7 +452,7 @@ describe('/api/generate route', () => {
   });
 
   it('fails closed before deducting credits when the webhook secret is missing', async () => {
-    delete process.env.WEBHOOK_SECRET;
+    delete process.env.KIE_PROVIDER_WEBHOOK_SECRET;
     const providerFetch = vi.fn();
     vi.stubGlobal('fetch', providerFetch);
 

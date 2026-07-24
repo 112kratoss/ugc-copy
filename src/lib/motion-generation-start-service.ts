@@ -142,6 +142,7 @@ export async function startMotionGenerationForRoute({
       characterImage: normalizeRemixMediaAssetDescriptor(body.characterImage, 'image'),
       referenceVideo: normalizeRemixMediaAssetDescriptor(body.referenceVideo, 'video'),
       quotedCostCredits: quote.costCredits,
+      catalogRevision: quote.catalogRevision,
     }),
   });
 

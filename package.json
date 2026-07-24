@@ -9,6 +9,7 @@
     "next": {
       "postcss": "^8.5.10"
     },
+    "sharp": "$sharp",
     "tmp": "0.2.7",
     "uuid": "11.1.1"
   },
@@ -20,6 +21,8 @@
     "backfill:showcase-assets": "node scripts/backfill-showcase-assets.mjs",
     "db:migrations:check": "node scripts/check-supabase-migration-drift.mjs",
     "ops:external-gates": "node scripts/production-external-gates.mjs",
+    "ops:generation-model-catalog": "tsx --env-file-if-exists=.env.local scripts/generation-model-catalog.ts",
+    "ops:moderation": "tsx --env-file-if-exists=.env.local scripts/moderation-ops.ts",
     "dev": "next dev --webpack",
     "dev:turbo": "next dev",
     "build": "next build",
@@ -46,12 +49,12 @@
     "framer-motion": "^12.33.0",
     "localforage": "^1.10.0",
     "lucide-react": "^0.563.0",
-    "next": "^16.2.9",
+    "next": "^16.2.11",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "remark": "^15.0.1",
     "remark-html": "^16.0.1",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.3",
     "thumbhash": "^0.1.1"
   },
   "devDependencies": {

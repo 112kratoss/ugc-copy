@@ -23,6 +23,7 @@ const authState = vi.hoisted(() => ({
   updateCredits: vi.fn(),
   api: {
     enhancePrompt: vi.fn(),
+    startGeneration: undefined as ReturnType<typeof vi.fn> | undefined,
     startImageGeneration: vi.fn(),
     startVideoGeneration: vi.fn(),
     startMotionGeneration: vi.fn(),
@@ -37,6 +38,7 @@ const authState = vi.hoisted(() => ({
 const catalogState = vi.hoisted(() => ({
   catalog: null as unknown,
   isLoading: false,
+  isUnavailable: false,
   error: null as Error | null,
   refetch: vi.fn(),
 }));
@@ -137,6 +139,7 @@ vi.mock('@/lib/use-generation-model-catalog', () => ({
 import { MediaCreationScreen } from '../components/media-creation-screen';
 import { pickMedia, pickMediaList, uploadPickedMedia } from '../lib/media';
 import { createTestGenerationModelCatalog, remoteImageModel } from './fixtures/generation-model-catalog';
+import { catalogV2 } from './generation-model-catalog-v2-fixtures';
 
 const mountedTrees: renderer.ReactTestRenderer[] = [];
 const createRenderer = renderer.create.bind(renderer);
@@ -199,6 +202,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     routerState.push.mockClear();
     authState.updateCredits.mockClear();
     authState.credits = 999;
+    authState.api.startGeneration = undefined;
     authState.api.startImageGeneration.mockReset();
     authState.api.getImageGeneration.mockReset();
     authState.api.startVideoGeneration.mockReset();
@@ -215,6 +219,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
     catalogState.catalog = createTestGenerationModelCatalog();
     catalogState.isLoading = false;
+    catalogState.isUnavailable = false;
     catalogState.error = null;
     catalogState.refetch.mockReset();
     nativeAlertState.alert.mockReset();
@@ -731,6 +736,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
   it('does not show bundled pricing in readiness when the catalog is unavailable', () => {
     catalogState.catalog = null;
+    catalogState.isUnavailable = true;
     catalogState.error = new Error('Catalog unavailable');
 
     let tree: renderer.ReactTestRenderer | undefined;
@@ -829,6 +835,10 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       await tree!.root.findByProps({ accessibilityLabel: 'Add motion video' }).props.onPress();
     });
 
+    expect(uploadPickedMedia).toHaveBeenCalledWith(
+      'file:///motion.mp4',
+      expect.objectContaining({ durationSeconds: 7.2 }),
+    );
     const previews = tree!.root.findAll((node) => String(node.type) === 'media-preview');
     expect(previews).toContainEqual(expect.objectContaining({
       props: expect.objectContaining({
@@ -1285,6 +1295,76 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     )).props.accessibilityState).toEqual({ checked: true });
   });
 
+  it('renders remote toggle and stepper controls and quotes their generic settings', async () => {
+    vi.useFakeTimers();
+    const catalog = catalogV2();
+    const videoModel = catalog.models.find((model) => model.id === 'fallback-video-v2')!;
+    videoModel.controls.push(
+      {
+        key: 'cinematicLock',
+        label: 'Cinematic lock',
+        type: 'boolean',
+        presentation: 'toggle',
+        defaultValue: false,
+      },
+      {
+        key: 'motionIntensity',
+        label: 'Motion intensity',
+        type: 'integer',
+        presentation: 'stepper',
+        defaultValue: 2,
+        min: 1,
+        max: 5,
+        step: 1,
+      },
+    );
+    catalogState.catalog = catalog;
+    authState.api.quoteGenerationModel.mockResolvedValue({
+      modelId: videoModel.id,
+      catalogRevision: catalog.revision,
+      normalizedSettings: {
+        referenceMode: 'elements',
+        resolution: '720p',
+        duration: 7,
+        cinematicLock: true,
+        motionIntensity: 3,
+      },
+      costCredits: 29,
+    });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="video" />);
+    });
+    renderer.act(() => {
+      findPressableByLabelPrefix(tree!.root, 'Generation parameters.').props.onPress();
+    });
+
+    const cinematicLock = tree!.root.find((node) => (
+      String(node.type) === 'pressable'
+      && node.props.accessibilityLabel === 'Cinematic lock'
+    ));
+    renderer.act(() => {
+      cinematicLock.props.onPress();
+    });
+    renderer.act(() => {
+      tree!.root.findByProps({ accessibilityLabel: 'Increase motion intensity' }).props.onPress();
+    });
+    await renderer.act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+
+    expect(tree!.root.findByProps({ testID: 'parameter-stepper-motionIntensity' })).toBeTruthy();
+    const quoteBody = authState.api.quoteGenerationModel.mock.calls.at(-1)?.[0];
+    expect(quoteBody).toMatchObject({
+      modelId: videoModel.id,
+      settings: {
+        cinematicLock: true,
+        motionIntensity: 3,
+      },
+    });
+  });
+
   it('keeps video parameters in the sheet and multi-shot editing in the composer', () => {
     const catalog = createTestGenerationModelCatalog();
     const videoModel = catalog.models.find((model) => model.id === 'kling-3.0-video')!;
@@ -1419,6 +1499,65 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       params: { generationId: 'gen-1' },
     });
     vi.useRealTimers();
+  });
+
+  it('starts catalog-v2 models through the unified generation endpoint', async () => {
+    vi.useFakeTimers();
+    catalogState.catalog = catalogV2();
+    const startGeneration = vi.fn().mockResolvedValue({
+      success: true,
+      predictionId: 'unified-video-prediction',
+      generationId: 'unified-video-generation',
+      status: 'processing',
+      remainingCredits: 970,
+    });
+    authState.api.startGeneration = startGeneration;
+    authState.api.getVideoGeneration.mockResolvedValue({
+      status: 'succeeded',
+      output: 'https://cdn.example.com/unified-output.mp4',
+    });
+    authState.api.quoteGenerationModel.mockResolvedValue({
+      modelId: 'fallback-video-v2',
+      catalogRevision: 'catalog-v2-revision',
+      normalizedSettings: {
+        referenceMode: 'elements',
+        resolution: '720p',
+        duration: 7,
+      },
+      costCredits: 29,
+    });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="video" />);
+    });
+    renderer.act(() => {
+      tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText('Create a remote cinematic reveal.');
+    });
+    await renderer.act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Generate · 29 credits').props.onPress();
+    });
+
+    expect(startGeneration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'video',
+        modelId: 'fallback-video-v2',
+        catalogRevision: 'catalog-v2-revision',
+        prompt: 'Create a remote cinematic reveal.',
+        settings: expect.objectContaining({
+          referenceMode: 'elements',
+          resolution: '720p',
+          duration: 7,
+        }),
+        inputs: [],
+      }),
+      expect.stringMatching(/^video:/),
+    );
+    expect(authState.api.startVideoGeneration).not.toHaveBeenCalled();
+    expect(authState.api.getVideoGeneration).toHaveBeenCalledWith('unified-video-prediction');
   });
 
   it('opens the shared video result workspace and posts with the generation id', async () => {

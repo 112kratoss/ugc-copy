@@ -634,7 +634,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) { router.push('/login?returnUrl=/create-motion'); setIsGenerating(false); return; }
 
-            const response = await fetch('/api/generate', {
+            const response = await fetch('/api/generations', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -642,15 +642,32 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                     'Idempotency-Key': idempotencyKey,
                 },
                 body: JSON.stringify({
-                    model: selectedModel,
-                    characterImageUrl: imageUrl,
-                    referenceVideoUrl: videoUrl,
-                    duration: effectiveDuration,
-                    characterOrientation,
-                    mode,
+                    kind: 'motion',
+                    modelId: selectedModel,
+                    settings: {
+                        duration: effectiveDuration,
+                        characterOrientation,
+                        resolution: mode,
+                    },
                     prompt,
-                    characterImage: nextCharacterImageDescriptor,
-                    referenceVideo: nextReferenceVideoDescriptor,
+                    inputs: [
+                        {
+                            slot: 'characterImage',
+                            kind: 'image',
+                            url: imageUrl,
+                            label: nextCharacterImageDescriptor?.label ?? 'Character image',
+                            storagePath: nextCharacterImageDescriptor?.storagePath ?? null,
+                            sourceGenerationId: nextCharacterImageDescriptor?.sourceGenerationId ?? null,
+                        },
+                        {
+                            slot: 'referenceVideo',
+                            kind: 'video',
+                            url: videoUrl,
+                            label: nextReferenceVideoDescriptor?.label ?? 'Reference video',
+                            storagePath: nextReferenceVideoDescriptor?.storagePath ?? null,
+                            sourceGenerationId: nextReferenceVideoDescriptor?.sourceGenerationId ?? null,
+                        },
+                    ],
                     sourceGenerationId: remixId || undefined,
                     catalogRevision: modelCatalog.catalog?.revision,
                 })

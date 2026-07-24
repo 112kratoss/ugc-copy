@@ -367,21 +367,22 @@ describe('CreateVideoClient Kling video elements', () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/generate-video',
+        '/api/generations',
         expect.objectContaining({ method: 'POST' })
       );
     });
 
     const postCall = fetchMock.mock.calls.find(([input, init]) => (
-      String(input).includes('/api/generate-video') && init?.method === 'POST'
+      String(input).includes('/api/generations') && init?.method === 'POST'
     ));
     const body = JSON.parse(String(postCall?.[1]?.body));
-    expect(body.klingVideoElements).toHaveLength(1);
-    expect(body.klingVideoElements[0]).toMatchObject({
+    const videoElements = body.inputs.filter((input: { slot: string }) => input.slot === 'videoElements');
+    expect(videoElements).toHaveLength(1);
+    expect(videoElements[0]).toMatchObject({
       handle: '@video_element_1',
-      displayName: 'Video element 1',
+      label: 'Video element 1',
     });
-    expect(body.klingVideoElements[0].url).toMatch(/^uploads\/user-1\/.+\.mp4$/);
-    expect(body.klingVideoElements[0].storagePath).toBe(body.klingVideoElements[0].url);
+    expect(videoElements[0].url).toMatch(/^uploads\/user-1\/.+\.mp4$/);
+    expect(videoElements[0].storagePath).toBe(videoElements[0].url);
   });
 });

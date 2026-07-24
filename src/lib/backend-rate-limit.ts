@@ -66,6 +66,18 @@ export const POST_REPORT_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const MODERATION_REPORT_RATE_LIMIT = {
+  scope: 'moderation-report:submit',
+  limit: 10,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const USER_BLOCK_MUTATION_RATE_LIMIT = {
+  scope: 'user-block:mutate',
+  limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const CREATOR_FOLLOW_NOTIFICATION_RATE_LIMIT = {
   scope: 'creator-follow:notify',
   limit: 30,

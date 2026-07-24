@@ -22,8 +22,10 @@ function signedKieRequest(
   path = 'http://localhost/api/webhooks/kie',
   headers: Record<string, string> = {},
 ) {
+  const rawBody = JSON.stringify(payload);
+  const generationId = new URL(path).searchParams.get('generationId')?.trim() ?? '';
   const signature = createHmac('sha256', 'hmac-key')
-    .update(`task-1.${timestamp}`)
+    .update(JSON.stringify(['kie-webhook-v2', 'task-1', timestamp, generationId, rawBody]))
     .digest('base64');
 
   return new Request(path, {
@@ -31,10 +33,10 @@ function signedKieRequest(
     headers: {
       'Content-Type': 'application/json',
       'x-webhook-timestamp': timestamp,
-      'x-webhook-signature': signature,
+      'x-webhook-payload-signature': signature,
       ...headers,
     },
-    body: JSON.stringify(payload),
+    body: rawBody,
   });
 }
 

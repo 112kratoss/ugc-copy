@@ -7,29 +7,90 @@ import {
 } from '@/lib/models';
 
 import type {
+  CatalogCondition,
   CatalogPrimitive,
   GenerationModelKind,
-  GenerationModelQuoteInput,
 } from '@/lib/generation-model-catalog';
 
-export const GENERATION_MODEL_ADAPTER_KEYS = ['image-v1', 'video-v1', 'motion-v1'] as const;
-export const GENERATION_MODEL_PRICING_STRATEGIES = ['image-v1', 'video-v1', 'motion-v1'] as const;
-export const GENERATION_MODEL_VALIDATION_STRATEGIES = ['image-v1', 'video-v1', 'motion-v1'] as const;
+export const GENERATION_MODEL_ADAPTER_KEYS = [
+  'image-v1',
+  'video-v1',
+  'motion-v1',
+  'kie-task-v1',
+] as const;
+
+export const GENERATION_MODEL_PRICING_STRATEGIES = [
+  'flat',
+  'lookup',
+  'per-second',
+  'conditional',
+  'reference-adjustment',
+  // Accepted while schema-v1 releases are transitioned to declarative pricing.
+  'image-v1',
+  'video-v1',
+  'motion-v1',
+] as const;
+
+export const GENERATION_MODEL_VALIDATION_STRATEGIES = [
+  'descriptor-rules-v1',
+  // Accepted while schema-v1 releases are transitioned to descriptor rules.
+  'image-v1',
+  'video-v1',
+  'motion-v1',
+] as const;
+
+export const GENERATION_MODEL_VALIDATION_RULE_TYPES = [
+  'control-options',
+  'control-range',
+  'max-slot-count',
+  'min-slot-count',
+  'combined-duration',
+  'mutually-exclusive-slots',
+  'weighted-slot-count',
+  'forbidden-combination',
+] as const;
 
 export type GenerationModelAdapterKey = typeof GENERATION_MODEL_ADAPTER_KEYS[number];
 export type GenerationModelPricingStrategy = typeof GENERATION_MODEL_PRICING_STRATEGIES[number];
 export type GenerationModelValidationStrategy = typeof GENERATION_MODEL_VALIDATION_STRATEGIES[number];
+export type GenerationModelValidationRuleType = typeof GENERATION_MODEL_VALIDATION_RULE_TYPES[number];
 
 export type GenerationModelOperationalConfig = {
   modelId: string;
   kind: GenerationModelKind;
   adapterKey: GenerationModelAdapterKey;
+  adapterConfig: Record<string, unknown>;
   providerModelMap: Record<string, string>;
   pricingStrategy: GenerationModelPricingStrategy;
   pricingConfig: Record<string, unknown>;
   validationStrategy: GenerationModelValidationStrategy;
   validationConfig: Record<string, unknown>;
   verificationConfig: Record<string, unknown>;
+};
+
+export type GenerationModelRuntimeInputs = {
+  counts: {
+    images: number;
+    videos: number;
+    audios: number;
+    preparedAudios: number;
+    characters: number;
+  };
+  slotCounts: Record<string, number>;
+  slotDurationsSeconds: Record<string, number[]>;
+  referenceVideoDurationsSeconds: number[];
+};
+
+type PricingSelector = {
+  source: 'setting' | 'inputCount';
+  key: string;
+  defaultValue?: CatalogPrimitive;
+  presence?: boolean;
+};
+
+type PricingExpression = {
+  strategy: Exclude<GenerationModelPricingStrategy, 'image-v1' | 'video-v1' | 'motion-v1'>;
+  config: Record<string, unknown>;
 };
 
 const IMAGE_PROVIDER_MODELS: Record<ImageModelId, Record<string, string>> = {
@@ -114,38 +175,457 @@ function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+function selector(
+  source: PricingSelector['source'],
+  key: string,
+  options: Pick<PricingSelector, 'defaultValue' | 'presence'> = {},
+): PricingSelector {
+  return { source, key, ...options };
+}
+
+function lookup(
+  dimensions: PricingSelector[],
+  table: unknown,
+  fallbackCredits?: number,
+): PricingExpression {
+  return {
+    strategy: 'lookup',
+    config: {
+      dimensions,
+      table: cloneJson(table),
+      ...(fallbackCredits === undefined ? {} : { fallbackCredits }),
+    },
+  };
+}
+
+function perSecond(rate: PricingExpression | number, durationSettingKey = 'duration'): PricingExpression {
+  return {
+    strategy: 'per-second',
+    config: {
+      durationSettingKey,
+      rate,
+      rounding: 'ceil',
+    },
+  };
+}
+
+function conditional(
+  branches: Array<{ conditions: CatalogCondition[]; pricing: PricingExpression }>,
+  fallback: PricingExpression,
+): PricingExpression {
+  return {
+    strategy: 'conditional',
+    config: { branches, fallback },
+  };
+}
+
+function countTable(max: number, valueForCount: (count: number) => number): Record<string, number> {
+  return Object.fromEntries(
+    Array.from({ length: max + 1 }, (_, count) => [String(count), valueForCount(count)]),
+  );
+}
+
+function imagePricingExpression(model: (typeof IMAGE_MODELS)[ImageModelId]): PricingExpression {
+  if ('qualityPricing' in model && model.id === 'grok-imagine-image') {
+    return conditional(
+      [{
+        conditions: [{
+          source: 'inputCount',
+          key: 'images',
+          operator: 'greaterThan',
+          value: 0,
+        }],
+        pricing: { strategy: 'flat', config: { credits: model.qualityPricing.imageToImage } },
+      }],
+      lookup(
+        [selector('setting', 'qualityMode', { defaultValue: 'standard' })],
+        {
+          standard: model.qualityPricing.standard,
+          quality: model.qualityPricing.quality,
+        },
+      ),
+    );
+  }
+  if ('qualityPricing' in model && model.id === 'ideogram-v3') {
+    return lookup(
+      [selector('setting', 'qualityMode', { defaultValue: 'turbo' })],
+      model.qualityPricing,
+    );
+  }
+  if ('additionalReferenceCredit' in model) {
+    const byResolutionAndCount = Object.fromEntries(
+      Object.entries(model.pricing).map(([resolution, credits]) => [
+        resolution,
+        countTable(model.maxImages, (count) => (
+          Math.ceil(Number(credits) + Math.max(0, count - 1) * model.additionalReferenceCredit)
+        )),
+      ]),
+    );
+    return lookup(
+      [
+        selector('setting', 'resolution', { defaultValue: model.resolutions[0] }),
+        selector('inputCount', 'images', { defaultValue: 0 }),
+      ],
+      byResolutionAndCount,
+    );
+  }
+  return lookup(
+    [selector('setting', 'resolution', { defaultValue: model.resolutions[0] })],
+    model.pricing,
+  );
+}
+
+function seedanceReferencePricing(
+  model: (typeof VIDEO_MODELS)['seedance-2' | 'seedance-2-fast' | 'seedance-2-mini'],
+): PricingExpression {
+  return {
+    strategy: 'reference-adjustment',
+    config: {
+      unit: 'second',
+      settingKey: 'resolution',
+      durationSettingKey: 'duration',
+      referenceDurationSlots: ['videoReferences'],
+      rounding: 'ceil',
+      rates: {
+        noReference: Object.fromEntries(
+          Object.entries(model.pricing).map(([resolution, rates]) => [resolution, rates.noVideo]),
+        ),
+        withReference: Object.fromEntries(
+          Object.entries(model.pricing).map(([resolution, rates]) => [resolution, rates.withVideo]),
+        ),
+      },
+    },
+  };
+}
+
+function videoPricingExpression(model: (typeof VIDEO_MODELS)[VideoModelId]): PricingExpression {
+  switch (model.id) {
+    case 'kling-3.0-video':
+      return perSecond(lookup(
+        [
+          selector('setting', 'mode', { defaultValue: 'std' }),
+          selector('setting', 'sound', { defaultValue: false }),
+        ],
+        {
+          std: { false: model.pricing.std.noSound, true: model.pricing.std.withSound },
+          pro: { false: model.pricing.pro.noSound, true: model.pricing.pro.withSound },
+        },
+      ));
+    case 'seedance-1.5-pro':
+      return lookup(
+        [
+          selector('setting', 'resolution', { defaultValue: '480p' }),
+          selector('setting', 'sound', { defaultValue: false }),
+          selector('setting', 'duration', { defaultValue: 4 }),
+        ],
+        Object.fromEntries(Object.entries(model.pricing).map(([resolution, prices]) => [
+          resolution,
+          {
+            false: prices.noSound,
+            true: prices.withSound,
+          },
+        ])),
+      );
+    case 'seedance-2':
+    case 'seedance-2-fast':
+    case 'seedance-2-mini':
+      return seedanceReferencePricing(model);
+    case 'kling-3.0-turbo':
+    case 'wan-2.7':
+    case 'happyhorse-1.1':
+    case 'grok-imagine-video':
+      return perSecond(lookup(
+        [selector('setting', 'resolution', { defaultValue: model.resolutions[0] })],
+        model.pricing,
+      ));
+    case 'gemini-omni-video':
+      return conditional(
+        [{
+          conditions: [{
+            source: 'inputCount',
+            key: 'videos',
+            operator: 'greaterThan',
+            value: 0,
+          }],
+          pricing: lookup(
+            [selector('setting', 'resolution', { defaultValue: '720p' })],
+            {
+              '720p': model.pricing.withVideo.standard,
+              '1080p': model.pricing.withVideo.standard,
+              '4k': model.pricing.withVideo['4k'],
+            },
+          ),
+        }],
+        lookup(
+          [
+            selector('setting', 'resolution', { defaultValue: '720p' }),
+            selector('setting', 'duration', { defaultValue: 4 }),
+          ],
+          {
+            '720p': model.pricing['720p'],
+            '1080p': model.pricing['1080p'],
+            '4k': model.pricing['4k'],
+          },
+        ),
+      );
+    case 'hailuo-2.3':
+      return lookup(
+        [
+          selector('setting', 'mode', { defaultValue: 'standard' }),
+          selector('setting', 'resolution', { defaultValue: '768P' }),
+          selector('setting', 'duration', { defaultValue: 6 }),
+        ],
+        model.pricing,
+      );
+    case 'veo-3.1':
+      return conditional(
+        [{
+          conditions: [{
+            source: 'setting',
+            key: 'mode',
+            operator: 'equals',
+            value: 'veo3',
+          }],
+          pricing: lookup(
+            [
+              selector('inputCount', 'images', { presence: true }),
+              selector('setting', 'resolution', { defaultValue: '720p' }),
+            ],
+            {
+              false: model.pricing.veo3.text,
+              true: model.pricing.veo3.reference,
+            },
+          ),
+        }],
+        lookup(
+          [
+            selector('setting', 'mode', { defaultValue: 'veo3_fast' }),
+            selector('setting', 'resolution', { defaultValue: '720p' }),
+          ],
+          {
+            veo3_lite: model.pricing.veo3_lite,
+            veo3_fast: model.pricing.veo3_fast,
+          },
+        ),
+      );
+  }
+}
+
+function validationConfigForModel(
+  kind: GenerationModelKind,
+  modelId: string,
+): Record<string, unknown> {
+  const rules: Array<Record<string, unknown>> = [];
+  if (kind === 'image' && modelId === 'gpt-image-2') {
+    rules.push(
+      {
+        type: 'control-options',
+        key: 'resolution',
+        options: ['1K'],
+        conditions: [
+          { source: 'setting', key: 'aspectRatio', operator: 'equals', value: 'auto' },
+        ],
+        message: 'GPT Image 2 supports 1K output when aspect ratio is automatic.',
+      },
+      {
+        type: 'control-options',
+        key: 'resolution',
+        options: ['1K', '2K'],
+        conditions: [
+          { source: 'setting', key: 'aspectRatio', operator: 'equals', value: '1:1' },
+        ],
+        message: 'GPT Image 2 supports 1K or 2K output for square images.',
+      },
+    );
+  }
+  if (kind === 'image' && modelId === 'wan-2.7-image-pro') {
+    rules.push({
+      type: 'forbidden-combination',
+      conditions: [
+        { source: 'setting', key: 'resolution', operator: 'equals', value: '4K' },
+        { source: 'inputCount', key: 'images', operator: 'greaterThan', value: 0 },
+      ],
+      field: 'resolution',
+      message: 'Wan 2.7 Image Pro supports 4K for text-to-image only.',
+    });
+  }
+  if (kind === 'video') {
+    rules.push(
+      {
+        type: 'max-slot-count',
+        slotKey: 'images',
+        max: 2,
+        conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'frames' }],
+      },
+    );
+    if (['seedance-1.5-pro', 'seedance-2', 'seedance-2-fast', 'seedance-2-mini', 'wan-2.7', 'happyhorse-1.1', 'gemini-omni-video', 'veo-3.1', 'grok-imagine-video'].includes(modelId)) {
+      const max = modelId === 'seedance-1.5-pro'
+        ? 2
+        : modelId === 'happyhorse-1.1'
+          ? 9
+          : modelId === 'gemini-omni-video'
+            ? 7
+            : modelId === 'veo-3.1'
+              ? 3
+              : modelId === 'grok-imagine-video'
+                ? 1
+                : 5;
+      rules.push({
+        type: 'max-slot-count',
+        slotKey: 'images',
+        max,
+        conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' }],
+      });
+    } else {
+      rules.push({
+        type: 'max-slot-count',
+        slotKey: 'images',
+        max: 0,
+        conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' }],
+        message: modelId === 'kling-3.0-video'
+          ? 'Reusable image references are not available for Kling yet.'
+          : 'Reusable references are not available for this model yet.',
+      });
+    }
+    if (modelId === 'veo-3.1') {
+      rules.push({
+        type: 'max-slot-count',
+        slotKey: 'images',
+        max: 0,
+        conditions: [
+          { source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' },
+          { source: 'setting', key: 'mode', operator: 'notIn', value: ['veo3_lite', 'veo3_fast'] },
+        ],
+        message: 'Reusable references require Veo Lite or Fast.',
+      });
+    }
+    if (modelId === 'wan-2.7') {
+      rules.push({
+        type: 'weighted-slot-count',
+        weights: { images: 1, videos: 1, audios: 1 },
+        max: 5,
+        conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' }],
+        field: 'references',
+        message: 'Wan 2.7 supports up to 5 reusable references in total.',
+      });
+    }
+    if (modelId === 'gemini-omni-video') {
+      rules.push(
+        {
+          type: 'max-slot-count',
+          slotKey: 'characters',
+          max: 3,
+          message: 'Gemini Omni supports up to 3 prepared character references.',
+        },
+        {
+          type: 'max-slot-count',
+          slotKey: 'preparedAudios',
+          max: 3,
+          message: 'Gemini Omni supports up to 3 prepared voice references.',
+        },
+        {
+          type: 'weighted-slot-count',
+          weights: { images: 1, videos: 2, characters: 1 },
+          max: 7,
+          field: 'references',
+          message: 'Gemini Omni supports seven reference slots; videos use two and characters use one.',
+        },
+      );
+    }
+    if (modelId === 'hailuo-2.3') {
+      rules.push(
+        {
+          type: 'min-slot-count',
+          slotKey: 'images',
+          min: 1,
+          conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'frames' }],
+          message: 'Hailuo 2.3 requires a start image.',
+        },
+        {
+          type: 'forbidden-combination',
+          conditions: [
+            { source: 'setting', key: 'resolution', operator: 'equals', value: '1080P' },
+            { source: 'setting', key: 'duration', operator: 'equals', value: 10 },
+          ],
+          field: 'duration',
+          message: 'Hailuo 2.3 supports 1080P output at 6 seconds only.',
+        },
+      );
+    }
+    if (['seedance-2', 'seedance-2-fast', 'seedance-2-mini'].includes(modelId)) {
+      rules.push({
+        type: 'combined-duration',
+        slotKeys: ['videoReferences'],
+        max: 15,
+        field: 'videos',
+        message: 'Reference videos may be at most 15 seconds in total.',
+      });
+    }
+  }
+  const normalizedDefaults = kind === 'image'
+    ? { outputFormat: 'jpg', googleSearch: false }
+    : kind === 'video'
+      ? {
+          mode: '',
+          resolution: '',
+          sound: false,
+          fixedLens: false,
+          referenceMode: 'frames',
+        }
+      : {};
+  return {
+    passthroughSettingKeys: kind === 'video' ? ['referenceMode'] : [],
+    normalizedDefaults,
+    rules,
+  };
+}
+
 export function buildCodeGenerationModelOperations(): GenerationModelOperationalConfig[] {
-  const imageEntries = Object.values(IMAGE_MODELS).map((model) => ({
-    modelId: model.id,
-    kind: 'image' as const,
-    adapterKey: 'image-v1' as const,
-    providerModelMap: IMAGE_PROVIDER_MODELS[model.id],
-    pricingStrategy: 'image-v1' as const,
-    pricingConfig: cloneJson(model),
-    validationStrategy: 'image-v1' as const,
-    validationConfig: {},
-    verificationConfig: { mode: 'manual', provider: 'kie' },
-  }));
-  const videoEntries = Object.values(VIDEO_MODELS).map((model) => ({
-    modelId: model.id,
-    kind: 'video' as const,
-    adapterKey: 'video-v1' as const,
-    providerModelMap: VIDEO_PROVIDER_MODELS[model.id],
-    pricingStrategy: 'video-v1' as const,
-    pricingConfig: cloneJson(model),
-    validationStrategy: 'video-v1' as const,
-    validationConfig: {},
-    verificationConfig: { mode: 'manual', provider: 'kie' },
-  }));
+  const imageEntries = Object.values(IMAGE_MODELS).map((model) => {
+    const pricing = imagePricingExpression(model);
+    return {
+      modelId: model.id,
+      kind: 'image' as const,
+      adapterKey: 'image-v1' as const,
+      adapterConfig: {},
+      providerModelMap: IMAGE_PROVIDER_MODELS[model.id],
+      pricingStrategy: pricing.strategy,
+      pricingConfig: pricing.config,
+      validationStrategy: 'descriptor-rules-v1' as const,
+      validationConfig: validationConfigForModel('image', model.id),
+      verificationConfig: { mode: 'manual', provider: 'kie' },
+    };
+  });
+  const videoEntries = Object.values(VIDEO_MODELS).map((model) => {
+    const pricing = videoPricingExpression(model);
+    return {
+      modelId: model.id,
+      kind: 'video' as const,
+      adapterKey: 'video-v1' as const,
+      adapterConfig: {},
+      providerModelMap: VIDEO_PROVIDER_MODELS[model.id],
+      pricingStrategy: pricing.strategy,
+      pricingConfig: pricing.config,
+      validationStrategy: 'descriptor-rules-v1' as const,
+      validationConfig: validationConfigForModel('video', model.id),
+      verificationConfig: { mode: 'manual', provider: 'kie' },
+    };
+  });
   const motionEntries = Object.values(MOTION_MODELS).map((model) => ({
     modelId: model.id,
     kind: 'motion' as const,
     adapterKey: 'motion-v1' as const,
+    adapterConfig: {},
     providerModelMap: { default: model.apiModelId },
-    pricingStrategy: 'motion-v1' as const,
-    pricingConfig: cloneJson(model),
-    validationStrategy: 'motion-v1' as const,
-    validationConfig: {},
+    pricingStrategy: 'per-second' as const,
+    pricingConfig: perSecond(
+      lookup(
+        [selector('setting', 'resolution', { defaultValue: model.resolutions[0] })],
+        model.pricing,
+      ),
+    ).config,
+    validationStrategy: 'descriptor-rules-v1' as const,
+    validationConfig: validationConfigForModel('motion', model.id),
     verificationConfig: { mode: 'manual', provider: 'kie' },
   }));
 
@@ -157,138 +637,280 @@ export function resolveProviderModelId(
   variant: string,
   fallback: string,
 ): string {
+  if (!config) return fallback;
   const configured = config?.providerModelMap[variant] ?? config?.providerModelMap.default;
-  return typeof configured === 'string' && configured.trim() ? configured : fallback;
+  if (typeof configured === 'string' && configured.trim()) return configured;
+  throw new Error(
+    `The published provider model mapping for ${config.modelId} variant ${variant} is unavailable.`,
+  );
 }
 
-function recordValue(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function numberValue(value: unknown, fallback = 0): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+function finiteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  return null;
 }
 
-function nestedNumber(root: unknown, path: Array<string | number>, fallback = 0): number {
-  let value: unknown = root;
-  for (const segment of path) {
-    value = recordValue(value)[String(segment)];
-  }
-  return numberValue(value, fallback);
+function normalizedRuntimeInputs(
+  value: GenerationModelRuntimeInputs | GenerationModelRuntimeInputs['counts'],
+): GenerationModelRuntimeInputs {
+  if ('counts' in value) return value;
+  return {
+    counts: value,
+    slotCounts: {},
+    slotDurationsSeconds: {},
+    referenceVideoDurationsSeconds: [],
+  };
 }
 
-function settingString(settings: Record<string, CatalogPrimitive>, key: string, fallback: string): string {
-  return typeof settings[key] === 'string' ? settings[key] as string : fallback;
+function inputCount(inputs: GenerationModelRuntimeInputs, key: string): number {
+  if (key in inputs.slotCounts) return inputs.slotCounts[key] ?? 0;
+  return inputs.counts[key as keyof GenerationModelRuntimeInputs['counts']] ?? 0;
 }
 
-function settingNumber(settings: Record<string, CatalogPrimitive>, key: string, fallback: number): number {
-  return typeof settings[key] === 'number' ? settings[key] as number : fallback;
-}
-
-function settingBoolean(settings: Record<string, CatalogPrimitive>, key: string): boolean {
-  return settings[key] === true;
-}
-
-function imageRuntimeCost(
-  config: GenerationModelOperationalConfig,
+function conditionActualValue(
+  condition: CatalogCondition,
   settings: Record<string, CatalogPrimitive>,
-  inputCounts: Required<NonNullable<GenerationModelQuoteInput['inputCounts']>>,
-): number {
-  const model = config.pricingConfig;
-  const modelId = config.modelId;
-  const resolution = settingString(settings, 'resolution', '1K');
-  const qualityMode = settingString(settings, 'qualityMode', 'standard');
-  if (modelId === 'grok-imagine-image') {
-    if (inputCounts.images > 0) return nestedNumber(model, ['qualityPricing', 'imageToImage']);
-    return nestedNumber(model, ['qualityPricing', qualityMode === 'quality' ? 'quality' : 'standard']);
-  }
-  if (modelId === 'ideogram-v3') {
-    const key = qualityMode === 'quality' ? 'quality' : qualityMode === 'balanced' ? 'balanced' : 'turbo';
-    return nestedNumber(model, ['qualityPricing', key]);
-  }
-  const resolutions = Array.isArray(model.resolutions) ? model.resolutions : [];
-  const fallbackResolution = typeof resolutions[0] === 'string' ? resolutions[0] : '1K';
-  const baseCost = nestedNumber(model, ['pricing', resolution], nestedNumber(model, ['pricing', fallbackResolution]));
-  if (modelId === 'seedream-5-pro') {
-    const additionalReferences = Math.max(0, inputCounts.images - 1);
-    return Math.ceil(baseCost + additionalReferences * numberValue(model.additionalReferenceCredit));
-  }
-  return baseCost;
+  inputs: GenerationModelRuntimeInputs,
+): CatalogPrimitive {
+  return condition.source === 'setting'
+    ? settings[condition.key] ?? ''
+    : inputCount(inputs, condition.key);
 }
 
-function videoRuntimeCost(
-  config: GenerationModelOperationalConfig,
+export function generationModelConditionMatches(
+  condition: CatalogCondition,
   settings: Record<string, CatalogPrimitive>,
-  inputCounts: Required<NonNullable<GenerationModelQuoteInput['inputCounts']>>,
+  inputValue: GenerationModelRuntimeInputs | GenerationModelRuntimeInputs['counts'],
+): boolean {
+  const inputs = normalizedRuntimeInputs(inputValue);
+  const actual = conditionActualValue(condition, settings, inputs);
+  const expected = condition.value;
+  switch (condition.operator) {
+    case 'equals':
+      return actual === expected;
+    case 'notEquals':
+      return actual !== expected;
+    case 'in':
+      return Array.isArray(expected) && expected.includes(actual);
+    case 'notIn':
+      return Array.isArray(expected) && !expected.includes(actual);
+    case 'greaterThan':
+      return typeof actual === 'number' && typeof expected === 'number' && actual > expected;
+    case 'greaterThanOrEqual':
+      return typeof actual === 'number' && typeof expected === 'number' && actual >= expected;
+  }
+}
+
+function allConditionsMatch(
+  value: unknown,
+  settings: Record<string, CatalogPrimitive>,
+  inputs: GenerationModelRuntimeInputs,
+): boolean {
+  return Array.isArray(value)
+    && value.every((condition) => (
+      isRecord(condition)
+      && generationModelConditionMatches(condition as unknown as CatalogCondition, settings, inputs)
+    ));
+}
+
+function selectorValue(
+  rawSelector: unknown,
+  settings: Record<string, CatalogPrimitive>,
+  inputs: GenerationModelRuntimeInputs,
+): string {
+  if (!isRecord(rawSelector) || (rawSelector.source !== 'setting' && rawSelector.source !== 'inputCount') || typeof rawSelector.key !== 'string') {
+    throw new Error('Invalid pricing lookup selector.');
+  }
+  const actual = rawSelector.source === 'setting'
+    ? settings[rawSelector.key] ?? rawSelector.defaultValue
+    : inputCount(inputs, rawSelector.key);
+  if (rawSelector.presence === true) return String(Number(actual ?? 0) > 0);
+  if (typeof actual !== 'string' && typeof actual !== 'number' && typeof actual !== 'boolean') {
+    throw new Error(`Pricing selector ${rawSelector.key} is unavailable.`);
+  }
+  return String(actual);
+}
+
+function lookupCost(
+  config: Record<string, unknown>,
+  settings: Record<string, CatalogPrimitive>,
+  inputs: GenerationModelRuntimeInputs,
 ): number {
-  const model = config.pricingConfig;
-  const modelId = config.modelId;
-  const duration = settingNumber(settings, 'duration', 5);
-  const resolution = settingString(settings, 'resolution', '720p');
-  const mode = settingString(settings, 'mode', 'std');
-  const sound = settingBoolean(settings, 'sound');
-  if (modelId === 'kling-3.0-video') {
-    return Math.ceil(duration * nestedNumber(model, ['pricing', mode === 'pro' ? 'pro' : 'std', sound ? 'withSound' : 'noSound']));
+  if (!Array.isArray(config.dimensions) || !isRecord(config.table)) {
+    throw new Error('Invalid lookup pricing configuration.');
   }
-  if (modelId === 'seedance-1.5-pro') {
-    const selectedResolution = ['480p', '720p', '1080p'].includes(resolution) ? resolution : '720p';
-    const selectedDuration = [4, 8, 12].includes(Math.round(duration)) ? Math.round(duration) : 8;
-    return nestedNumber(model, ['pricing', selectedResolution, sound ? 'withSound' : 'noSound', selectedDuration]);
+  let value: unknown = config.table;
+  for (const dimension of config.dimensions) {
+    const key = selectorValue(dimension, settings, inputs);
+    value = isRecord(value) ? value[key] : undefined;
   }
-  if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini') {
-    const selectedResolution = resolution in recordValue(model.pricing) ? resolution : '720p';
-    const rate = nestedNumber(model, ['pricing', selectedResolution, inputCounts.videos > 0 ? 'withVideo' : 'noVideo']);
-    return Math.ceil(duration * rate);
+  const selected = finiteNumber(value);
+  if (selected !== null) return selected;
+  const fallback = finiteNumber(config.fallbackCredits);
+  if (fallback !== null) return fallback;
+  throw new Error('The selected settings have no configured price.');
+}
+
+function pricingExpression(value: unknown): PricingExpression {
+  if (!isRecord(value) || typeof value.strategy !== 'string' || !isRecord(value.config)) {
+    throw new Error('Invalid nested pricing expression.');
   }
-  if (modelId === 'kling-3.0-turbo' || modelId === 'wan-2.7' || modelId === 'happyhorse-1.1' || modelId === 'grok-imagine-video') {
-    const selectedResolution = resolution in recordValue(model.pricing) ? resolution : '720p';
-    return Math.ceil(duration * nestedNumber(model, ['pricing', selectedResolution]));
+  if (!GENERATION_MODEL_PRICING_STRATEGIES.includes(value.strategy as GenerationModelPricingStrategy)) {
+    throw new Error(`Unsupported pricing strategy ${value.strategy}.`);
   }
-  if (modelId === 'gemini-omni-video') {
-    const selectedResolution = resolution === '4k' ? '4k' : resolution === '1080p' ? '1080p' : '720p';
-    if (inputCounts.videos > 0) {
-      return nestedNumber(model, ['pricing', 'withVideo', selectedResolution === '4k' ? '4k' : 'standard']);
+  return value as unknown as PricingExpression;
+}
+
+function roundCost(value: number, rounding: unknown): number {
+  if (rounding === 'none') return value;
+  if (rounding === 'round') return Math.round(value);
+  if (rounding === 'floor') return Math.floor(value);
+  return Math.ceil(value);
+}
+
+function evaluateReferenceAdjustment(
+  config: Record<string, unknown>,
+  settings: Record<string, CatalogPrimitive>,
+  inputs: GenerationModelRuntimeInputs,
+): number {
+  if (config.unit !== 'second'
+    || typeof config.settingKey !== 'string'
+    || typeof config.durationSettingKey !== 'string'
+    || !Array.isArray(config.referenceDurationSlots)
+    || !isRecord(config.rates)
+    || !isRecord(config.rates.noReference)
+    || !isRecord(config.rates.withReference)) {
+    throw new Error('Invalid reference-adjustment pricing configuration.');
+  }
+  const resolution = settings[config.settingKey];
+  const outputDuration = finiteNumber(settings[config.durationSettingKey]);
+  if (typeof resolution !== 'string' || outputDuration === null || outputDuration < 0) {
+    throw new Error('Reference-adjustment pricing inputs are unavailable.');
+  }
+  const slotKeys = config.referenceDurationSlots.filter((slot): slot is string => typeof slot === 'string');
+  const durations = slotKeys.flatMap((slotKey) => (
+    inputs.slotDurationsSeconds[slotKey]
+      ?? (slotKey === 'videoReferences' ? inputs.referenceVideoDurationsSeconds : [])
+  ));
+  const referenceCount = slotKeys.reduce((total, slotKey) => total + inputCount(inputs, slotKey), 0);
+  const hasReferences = referenceCount > 0
+    || durations.length > 0
+    || (slotKeys.includes('videoReferences') && inputs.counts.videos > 0);
+  if (hasReferences && durations.length < referenceCount) {
+    throw new Error('Reference duration metadata is required for authoritative pricing.');
+  }
+  const rateTable = hasReferences ? config.rates.withReference : config.rates.noReference;
+  const rate = finiteNumber(rateTable[resolution]);
+  if (rate === null || rate < 0) {
+    throw new Error(`No reference-adjustment rate is configured for ${resolution}.`);
+  }
+  const referenceDuration = hasReferences
+    ? durations.reduce((total, duration) => total + duration, 0)
+    : 0;
+  return roundCost((outputDuration + referenceDuration) * rate, config.rounding);
+}
+
+function evaluatePricing(
+  strategy: GenerationModelPricingStrategy,
+  config: Record<string, unknown>,
+  settings: Record<string, CatalogPrimitive>,
+  inputs: GenerationModelRuntimeInputs,
+  depth = 0,
+): number {
+  if (depth > 4) throw new Error('Pricing configuration is nested too deeply.');
+  if (strategy === 'flat') {
+    const cost = finiteNumber(config.credits);
+    if (cost === null) throw new Error('Invalid flat pricing configuration.');
+    return cost;
+  }
+  if (strategy === 'lookup') return lookupCost(config, settings, inputs);
+  if (strategy === 'per-second') {
+    if (typeof config.durationSettingKey !== 'string') {
+      throw new Error('Invalid per-second pricing configuration.');
     }
-    const selectedDuration = [4, 6, 8, 10].includes(duration) ? duration : 4;
-    return nestedNumber(model, ['pricing', selectedResolution, selectedDuration]);
+    const duration = finiteNumber(settings[config.durationSettingKey]);
+    if (duration === null || duration < 0) throw new Error('Pricing duration is unavailable.');
+    const rate = finiteNumber(config.rate)
+      ?? (() => {
+        const nested = pricingExpression(config.rate);
+        return evaluatePricing(nested.strategy, nested.config, settings, inputs, depth + 1);
+      })();
+    return roundCost(duration * rate, config.rounding);
   }
-  if (modelId === 'hailuo-2.3') {
-    const selectedMode = mode === 'pro' ? 'pro' : 'standard';
-    const selectedResolution = resolution === '1080P' ? '1080P' : '768P';
-    const selectedDuration = duration === 10 ? 10 : 6;
-    return nestedNumber(
-      model,
-      ['pricing', selectedMode, selectedResolution, selectedDuration],
-      nestedNumber(model, ['pricing', selectedMode, selectedResolution, 6]),
-    );
+  if (strategy === 'conditional') {
+    if (!Array.isArray(config.branches)) throw new Error('Invalid conditional pricing configuration.');
+    for (const branch of config.branches) {
+      if (!isRecord(branch)) throw new Error('Invalid conditional pricing branch.');
+      if (allConditionsMatch(branch.conditions, settings, inputs)) {
+        const nested = pricingExpression(branch.pricing);
+        return evaluatePricing(nested.strategy, nested.config, settings, inputs, depth + 1);
+      }
+    }
+    const fallback = pricingExpression(config.fallback);
+    return evaluatePricing(fallback.strategy, fallback.config, settings, inputs, depth + 1);
   }
-  const selectedResolution = resolution === '1080p' || resolution === '4k' ? resolution : '720p';
-  if (mode === 'veo3') {
-    return nestedNumber(model, ['pricing', 'veo3', inputCounts.images > 0 ? 'reference' : 'text', selectedResolution]);
+  if (strategy === 'reference-adjustment') {
+    return evaluateReferenceAdjustment(config, settings, inputs);
   }
-  return nestedNumber(model, ['pricing', mode === 'veo3_lite' ? 'veo3_lite' : 'veo3_fast', selectedResolution]);
+  return evaluateLegacyPricing(strategy, config, settings, inputs);
+}
+
+function evaluateLegacyPricing(
+  strategy: 'image-v1' | 'video-v1' | 'motion-v1',
+  config: Record<string, unknown>,
+  settings: Record<string, CatalogPrimitive>,
+  inputs: GenerationModelRuntimeInputs,
+): number {
+  const modelId = typeof config.id === 'string' ? config.id : '';
+  const codeConfig = buildCodeGenerationModelOperations().find((entry) => (
+    entry.modelId === modelId && entry.pricingStrategy !== strategy
+  ));
+  if (!codeConfig) {
+    throw new Error(`Legacy pricing configuration for ${modelId || 'unknown model'} cannot be migrated.`);
+  }
+
+  // The compatibility release's database values remain authoritative. Rebuild
+  // the declarative expression with those values instead of using code prices.
+  let expression: PricingExpression;
+  if (strategy === 'image-v1' && modelId in IMAGE_MODELS) {
+    expression = imagePricingExpression(config as unknown as (typeof IMAGE_MODELS)[ImageModelId]);
+  } else if (strategy === 'video-v1' && modelId in VIDEO_MODELS) {
+    expression = videoPricingExpression(config as unknown as (typeof VIDEO_MODELS)[VideoModelId]);
+  } else if (strategy === 'motion-v1') {
+    const resolutions = Array.isArray(config.resolutions) ? config.resolutions : [];
+    const defaultResolution = typeof resolutions[0] === 'string' ? resolutions[0] : '720p';
+    expression = perSecond(lookup(
+      [selector('setting', 'resolution', { defaultValue: defaultResolution })],
+      config.pricing,
+    ));
+  } else {
+    throw new Error(`Legacy pricing strategy ${strategy} does not match ${modelId}.`);
+  }
+  return evaluatePricing(expression.strategy, expression.config, settings, inputs, 1);
 }
 
 export function calculateGenerationModelRuntimeCost(
   config: GenerationModelOperationalConfig,
   settings: Record<string, CatalogPrimitive>,
-  inputCounts: Required<NonNullable<GenerationModelQuoteInput['inputCounts']>>,
+  inputValue: GenerationModelRuntimeInputs | GenerationModelRuntimeInputs['counts'],
 ): number {
-  let cost: number;
-  if (config.pricingStrategy === 'image-v1') {
-    cost = imageRuntimeCost(config, settings, inputCounts);
-  } else if (config.pricingStrategy === 'video-v1') {
-    cost = videoRuntimeCost(config, settings, inputCounts);
-  } else {
-    const resolution = settingString(settings, 'resolution', '720p');
-    const duration = settingNumber(settings, 'duration', 1);
-    cost = Math.ceil(duration * nestedNumber(config.pricingConfig, ['pricing', resolution]));
-  }
-
+  const cost = evaluatePricing(
+    config.pricingStrategy,
+    config.pricingConfig,
+    settings,
+    normalizedRuntimeInputs(inputValue),
+  );
   if (!Number.isFinite(cost) || cost < 0) {
     throw new Error(`Invalid pricing configuration for ${config.modelId}.`);
   }
-  return cost;
+  const billableCredits = Math.ceil(cost);
+  if (!Number.isSafeInteger(billableCredits)) {
+    throw new Error(`Invalid pricing configuration for ${config.modelId}.`);
+  }
+  return billableCredits;
 }

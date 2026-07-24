@@ -33,7 +33,22 @@ function safeEqual(left: string | null, right: string | null): boolean {
   return result === 0;
 }
 
-async function buildSignature(taskId: string, timestamp: string, hmacKey: string): Promise<string> {
+function buildSigningMessage(
+  taskId: string,
+  timestamp: string,
+  generationId: string | null,
+  rawBody: string,
+) {
+  return JSON.stringify([
+    'kie-webhook-v2',
+    taskId,
+    timestamp,
+    generationId?.trim() ?? '',
+    rawBody,
+  ]);
+}
+
+async function buildSignature(message: string, hmacKey: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(hmacKey),
@@ -44,7 +59,7 @@ async function buildSignature(taskId: string, timestamp: string, hmacKey: string
   const signature = await crypto.subtle.sign(
     'HMAC',
     key,
-    new TextEncoder().encode(`${taskId}.${timestamp}`),
+    new TextEncoder().encode(message),
   );
 
   let binary = '';
@@ -96,8 +111,6 @@ serve(async (request: Request) => {
   const providerSecrets = [
     configuredValue('KIE_PROVIDER_WEBHOOK_SECRET'),
     configuredValue('KIE_PROVIDER_WEBHOOK_SECRET_PREVIOUS'),
-    configuredValue('WEBHOOK_SECRET'),
-    configuredValue('WEBHOOK_SECRET_PREVIOUS'),
   ].filter((secret): secret is string => Boolean(secret));
   if (providerSecrets.length === 0) {
     return jsonResponse({ error: 'Provider webhook secret is not configured' }, 500);
@@ -127,6 +140,9 @@ serve(async (request: Request) => {
 
   const siteUrl = configuredValue('NEXT_PUBLIC_SITE_URL') || 'https://magicbooklet.com';
   const hmacKey = configuredValue('KIE_WEBHOOK_HMAC_KEY');
+  if (!hmacKey) {
+    return jsonResponse({ error: 'Webhook forwarding key is not configured' }, 500);
+  }
   const headers = new Headers({
     'Content-Type': request.headers.get('content-type') || 'application/json',
   });
@@ -137,16 +153,14 @@ serve(async (request: Request) => {
     forwardUrl.searchParams.set('generationId', generationId);
   }
 
-  if (hmacKey) {
-    headers.set('x-webhook-timestamp', timestamp);
-    headers.set('x-webhook-signature', await buildSignature(taskId, timestamp, hmacKey));
-  } else {
-    const legacySecret = configuredValue('WEBHOOK_SECRET');
-    if (!legacySecret) {
-      return jsonResponse({ error: 'Webhook forwarding secret is not configured' }, 500);
-    }
-    forwardUrl.searchParams.set('secret', legacySecret);
-  }
+  headers.set('x-webhook-timestamp', timestamp);
+  headers.set(
+    'x-webhook-payload-signature',
+    await buildSignature(
+      buildSigningMessage(taskId, timestamp, generationId ?? null, body),
+      hmacKey,
+    ),
+  );
 
   const response = await fetch(forwardUrl.toString(), {
     method: 'POST',

@@ -22,7 +22,7 @@ describe('app version route adapter service', () => {
         currentApiVersion: 1,
         minimumApiVersion: 1,
         minimumAppVersion: '0.0.1',
-        supportedCatalogSchemaVersions: [1],
+        supportedCatalogSchemaVersions: [1, 2],
         unversionedClientsUseApiVersion: 1,
       },
     });

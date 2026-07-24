@@ -164,14 +164,14 @@ export const VIDEO_MODELS = {
   'seedance-2': {
     id: 'seedance-2',
     displayName: 'Seedance 2',
-    description: 'Image, video, audio references, and generated audio.',
+    description: 'Multimodal references, generated audio, and output up to 4K.',
     supportsMultiShot: false,
     supportsSound: true,
     supportsFixedLens: false,
     aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9'],
     durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
     singleShotDurationRange: { min: 4, max: 15, default: 15 },
-    resolutions: ['480p', '720p'],
+    resolutions: ['480p', '720p', '1080p', '4k'],
     modeOptions: [],
   },
   'seedance-2-fast': {
@@ -285,15 +285,41 @@ export const MOTION_MODELS = {
   },
 } as const;
 
-export type ImageModelId = keyof typeof IMAGE_MODELS;
-export type VideoModelId = keyof typeof VIDEO_MODELS;
-export type MotionModelId = keyof typeof MOTION_MODELS;
+/**
+ * Model ids are supplied by the published generation catalog. Keep the
+ * bundled registries below only as a compatibility fallback for creation
+ * surfaces that have not moved to catalog descriptors yet.
+ */
+export type ImageModelId = string;
+export type VideoModelId = string;
+export type MotionModelId = string;
 export type ImageResolution = '1K' | '2K' | '3K' | '4K';
 export type ImageOutputFormat = 'jpg' | 'png';
 export type ImageQualityMode = 'standard' | 'turbo' | 'balanced' | 'quality';
 export type MotionResolution = '720p' | '1080p';
 export type ReferenceMode = 'frames' | 'elements';
 export type MediaKind = 'image' | 'video' | 'audio';
+export type CatalogDraftPrimitive = string | number | boolean;
+
+export interface CatalogDraftInputAsset {
+  id: string;
+  kind: MediaKind | 'character' | 'prepared-voice';
+  url?: string | null;
+  storagePath?: string | null;
+  fileName?: string | null;
+  displayName?: string | null;
+  handle?: string | null;
+  durationSeconds?: number | null;
+  sourceGenerationId?: string | null;
+}
+
+export type CatalogDraftInputSlots = Record<string, CatalogDraftInputAsset[]>;
+
+export interface CatalogBackedDraftFields {
+  catalogRevision?: string | null;
+  catalogSettings?: Record<string, CatalogDraftPrimitive>;
+  catalogInputSlots?: CatalogDraftInputSlots;
+}
 
 export interface UploadedMediaInput {
   signedUrl: string;
@@ -319,7 +345,7 @@ export interface MediaDraft {
   sourceGenerationId?: string | null;
 }
 
-export interface ImageCreationDraft {
+export interface ImageCreationDraft extends CatalogBackedDraftFields {
   tool: 'image';
   model: ImageModelId;
   prompt: string;
@@ -338,7 +364,7 @@ export interface VideoShotDraft {
   duration: number;
 }
 
-export interface VideoCreationDraft {
+export interface VideoCreationDraft extends CatalogBackedDraftFields {
   tool: 'video';
   model: VideoModelId;
   prompt: string;
@@ -361,7 +387,7 @@ export interface VideoCreationDraft {
   sourceGenerationId?: string | null;
 }
 
-export interface MotionCreationDraft {
+export interface MotionCreationDraft extends CatalogBackedDraftFields {
   tool: 'motion';
   model: MotionModelId;
   prompt: string;
@@ -494,6 +520,22 @@ function isMotionModelId(value: string): value is MotionModelId {
   return value in MOTION_MODELS;
 }
 
+type BundledImageModel = (typeof IMAGE_MODELS)[keyof typeof IMAGE_MODELS];
+type BundledVideoModel = (typeof VIDEO_MODELS)[keyof typeof VIDEO_MODELS];
+type BundledMotionModel = (typeof MOTION_MODELS)[keyof typeof MOTION_MODELS];
+
+function bundledImageModel(model: string): BundledImageModel {
+  return IMAGE_MODELS[model as keyof typeof IMAGE_MODELS] ?? IMAGE_MODELS['nano-banana-2'];
+}
+
+function bundledVideoModel(model: string): BundledVideoModel {
+  return VIDEO_MODELS[model as keyof typeof VIDEO_MODELS] ?? VIDEO_MODELS['kling-3.0-video'];
+}
+
+function bundledMotionModel(model: string): BundledMotionModel {
+  return MOTION_MODELS[model as keyof typeof MOTION_MODELS] ?? MOTION_MODELS['kling-3.0'];
+}
+
 export function isSeedance2Family(model: VideoModelId) {
   return model === 'seedance-2' || model === 'seedance-2-fast' || model === 'seedance-2-mini';
 }
@@ -503,17 +545,17 @@ export function supportsMultimodalVideoReferences(model: VideoModelId) {
 }
 
 export function defaultVideoMode(model: VideoModelId) {
-  const modes = VIDEO_MODELS[model].modeOptions;
+  const modes = bundledVideoModel(model).modeOptions;
   return modes[0]?.value ?? (model === 'seedance-1.5-pro' ? 'standard' : 'std');
 }
 
 function getVideoDurationRange(model: VideoModelId) {
-  const config = VIDEO_MODELS[model];
+  const config = bundledVideoModel(model);
   return 'singleShotDurationRange' in config ? config.singleShotDurationRange : null;
 }
 
 export function getDefaultVideoDuration(model: VideoModelId) {
-  return getVideoDurationRange(model)?.default ?? VIDEO_MODELS[model].durations[0];
+  return getVideoDurationRange(model)?.default ?? bundledVideoModel(model).durations[0];
 }
 
 export function isValidVideoDuration(model: VideoModelId, duration: number) {
@@ -521,15 +563,15 @@ export function isValidVideoDuration(model: VideoModelId, duration: number) {
   if (range) {
     return duration >= range.min && duration <= range.max;
   }
-  return asNumberList(VIDEO_MODELS[model].durations).includes(duration);
+  return asNumberList(bundledVideoModel(model).durations).includes(duration);
 }
 
 export function getImageResolutionOptions(model: ImageModelId, aspectRatio: string): readonly ImageResolution[] {
   if (model === 'grok-imagine-image') return ['1K'];
-  if (model !== 'gpt-image-2') return IMAGE_MODELS[model].resolutions;
+  if (model !== 'gpt-image-2') return bundledImageModel(model).resolutions;
   if (aspectRatio === 'auto') return ['1K'];
   if (aspectRatio === '1:1') return ['1K', '2K'];
-  return IMAGE_MODELS[model].resolutions;
+  return bundledImageModel(model).resolutions;
 }
 
 function namedReferences(references: MediaDraft[]): MediaDraft[] {
@@ -812,6 +854,8 @@ export function createDefaultCreationDraft(tool: CreatorToolId): CreationDraft {
       googleSearch: false,
       references: [],
       sourceGenerationId: null,
+      catalogRevision: null,
+      catalogSettings: {},
     };
   }
 
@@ -840,6 +884,8 @@ export function createDefaultCreationDraft(tool: CreatorToolId): CreationDraft {
       fixedLens: false,
       referenceMode: 'frames',
       sourceGenerationId: null,
+      catalogRevision: null,
+      catalogSettings: {},
     };
   }
 
@@ -853,6 +899,8 @@ export function createDefaultCreationDraft(tool: CreatorToolId): CreationDraft {
     mode: '720p',
     duration: 10,
     sourceGenerationId: null,
+    catalogRevision: null,
+    catalogSettings: {},
   };
 }
 
@@ -872,7 +920,7 @@ function hydrateImageDraftFromRemixSource(
   const settings = bundle.workflowSettings ?? {};
   const modelSetting = stringSetting(settings, 'model');
   const model = modelSetting && isImageModelId(modelSetting) ? modelSetting : baseDraft.model;
-  const config = IMAGE_MODELS[model];
+  const config = bundledImageModel(model);
   const restoredReferences = hydrateRemixImageElements(bundle.inputs.image?.elements);
 
   let nextDraft: ImageCreationDraft = {
@@ -924,7 +972,7 @@ function hydrateVideoDraftFromRemixSource(
   const settings = bundle.workflowSettings ?? {};
   const modelSetting = stringSetting(settings, 'model');
   const model = modelSetting && isVideoModelId(modelSetting) ? modelSetting : baseDraft.model;
-  const config = VIDEO_MODELS[model];
+  const config = bundledVideoModel(model);
   const videoInputs = bundle.inputs.video;
   const restoredElements = hydrateRemixImageElements(videoInputs?.elements);
   const restoredStartFrame = hydrateOptionalRemixAsset(videoInputs?.startFrame, 'Start Frame');
@@ -1045,7 +1093,7 @@ function hydrateMotionDraftFromRemixSource(
   }
 
   const duration = numberSetting(settings, 'duration');
-  if (typeof duration === 'number' && duration > 0 && duration <= MOTION_MODELS[model].maxDuration) {
+  if (typeof duration === 'number' && duration > 0 && duration <= bundledMotionModel(model).maxDuration) {
     nextDraft = { ...nextDraft, duration: Math.ceil(duration) };
   }
 
@@ -1126,7 +1174,7 @@ function validateImageDraft(draft: ImageCreationDraft): CreationValidationResult
   if (!draft.prompt.trim()) errors.push('Prompt is required.');
   if (!isImageModelId(draft.model)) errors.push(`Unsupported image model: ${draft.model}`);
 
-  const model = IMAGE_MODELS[draft.model];
+  const model = bundledImageModel(draft.model);
   const aspectRatios = asStringList(model.aspectRatios);
   if (!aspectRatios.includes(draft.aspectRatio)) {
     errors.push(`${model.displayName} does not support aspect ratio ${draft.aspectRatio}.`);
@@ -1155,7 +1203,7 @@ function validateImageDraft(draft: ImageCreationDraft): CreationValidationResult
 
 function validateVideoDraft(draft: VideoCreationDraft): CreationValidationResult {
   const errors: string[] = [];
-  const model = VIDEO_MODELS[draft.model];
+  const model = bundledVideoModel(draft.model);
   const usesReusableReferences = draft.referenceMode === 'elements';
   const activeReferences = usesReusableReferences ? draft.references : [];
   const activeReferenceVideos = usesReusableReferences ? draft.referenceVideos : [];
@@ -1285,14 +1333,14 @@ function validateMotionDraft(draft: MotionCreationDraft): CreationValidationResu
   if (!draft.referenceVideo) errors.push('Reference video is required.');
 
   const duration = getMotionDuration(draft);
-  const maxDuration = MOTION_MODELS[draft.model].maxDuration;
+  const maxDuration = bundledMotionModel(draft.model).maxDuration;
   if (draft.referenceVideo && (duration < 1 || duration > maxDuration)) {
     errors.push(`Reference video must be between 1 and ${maxDuration} seconds.`);
   }
-  if (!asStringList(MOTION_MODELS[draft.model].resolutions).includes(draft.mode)) {
+  if (!asStringList(bundledMotionModel(draft.model).resolutions).includes(draft.mode)) {
     errors.push(`Unsupported motion resolution: ${draft.mode}.`);
   }
-  if (!asStringList(MOTION_MODELS[draft.model].characterOrientations).includes(draft.characterOrientation)) {
+  if (!asStringList(bundledMotionModel(draft.model).characterOrientations).includes(draft.characterOrientation)) {
     errors.push(`Unsupported character orientation: ${draft.characterOrientation}.`);
   }
 
@@ -1337,14 +1385,14 @@ export function getVisibleGenerationCheckMessages(
 export function getCreationSectionSummary(draft: CreationDraft): CreationSectionSummary {
   if (draft.tool === 'image') {
     return {
-      essentials: `${IMAGE_MODELS[draft.model].displayName} · ${draft.aspectRatio} · ${draft.resolution}`,
+      essentials: `${bundledImageModel(draft.model).displayName} · ${draft.aspectRatio} · ${draft.resolution}`,
       references: imageReferenceSummary(draft.references.length),
       advanced: `${draft.outputFormat.toUpperCase()} · Search ${draft.googleSearch ? 'on' : 'off'}`,
     };
   }
 
   if (draft.tool === 'video') {
-    const model = VIDEO_MODELS[draft.model];
+    const model = bundledVideoModel(draft.model);
     const duration = draft.isMultiShot
       ? draft.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration || 0)), 0)
       : draft.duration;
@@ -1357,7 +1405,7 @@ export function getCreationSectionSummary(draft: CreationDraft): CreationSection
   }
 
   return {
-    essentials: `${MOTION_MODELS[draft.model].displayName} · ${draft.mode} · ${getMotionDuration(draft)}s`,
+    essentials: `${bundledMotionModel(draft.model).displayName} · ${draft.mode} · ${getMotionDuration(draft)}s`,
     references: `${draft.characterImage ? 'Character ready' : 'Character missing'} · ${draft.referenceVideo ? 'motion ready' : 'motion missing'}`,
     advanced: `${draft.characterOrientation === 'video' ? 'Video' : 'Image'} orientation`,
   };
@@ -1433,12 +1481,13 @@ function videoReferenceSummary(draft: VideoCreationDraft) {
 }
 
 function videoAdvancedSummary(draft: VideoCreationDraft) {
-  const modeLabel = VIDEO_MODELS[draft.model].modeOptions.find((option) => option.value === draft.mode)?.label;
+  const model = bundledVideoModel(draft.model);
+  const modeLabel = model.modeOptions.find((option) => option.value === draft.mode)?.label;
   const parts = [
     modeLabel,
-    VIDEO_MODELS[draft.model].resolutions.length > 0 ? draft.resolution : null,
-    VIDEO_MODELS[draft.model].supportsSound ? `sound ${draft.sound ? 'on' : 'off'}` : null,
-    VIDEO_MODELS[draft.model].supportsFixedLens ? `fixed lens ${draft.fixedLens ? 'on' : 'off'}` : null,
+    model.resolutions.length > 0 ? draft.resolution : null,
+    model.supportsSound ? `sound ${draft.sound ? 'on' : 'off'}` : null,
+    model.supportsFixedLens ? `fixed lens ${draft.fixedLens ? 'on' : 'off'}` : null,
   ].filter((part): part is string => Boolean(part));
   return parts.join(' · ') || 'Default model settings';
 }
@@ -1499,7 +1548,7 @@ function mediaReadiness(draft: CreationDraft): CreationReadinessItem {
     };
   }
 
-  const imageModel = IMAGE_MODELS[draft.model];
+  const imageModel = bundledImageModel(draft.model);
   if (imageModel?.maxImages === 0) {
     return {
       id: 'media',
@@ -1541,7 +1590,7 @@ export function buildGenerationPayload(draft: VideoCreationDraft): VideoGenerati
 export function buildGenerationPayload(draft: MotionCreationDraft): MotionGenerationRequest;
 export function buildGenerationPayload(draft: CreationDraft): ImageGenerationRequest | VideoGenerationRequest | MotionGenerationRequest {
   if (draft.tool === 'image') {
-    const config = IMAGE_MODELS[draft.model];
+    const config = bundledImageModel(draft.model);
     const references = namedReferences(draft.references);
     return {
       model: draft.model,
@@ -1583,10 +1632,10 @@ export function buildGenerationPayload(draft: CreationDraft): ImageGenerationReq
       endFrame: usesReusableReferences ? null : mediaAssetDescriptor(draft.endFrame),
       mode: draft.mode,
       aspectRatio: draft.aspectRatio,
-      sound: VIDEO_MODELS[draft.model].supportsSound ? draft.sound : false,
+      sound: bundledVideoModel(draft.model).supportsSound ? draft.sound : false,
       duration: draft.duration,
       resolution: draft.resolution,
-      fixedLens: VIDEO_MODELS[draft.model].supportsFixedLens ? draft.fixedLens : false,
+      fixedLens: bundledVideoModel(draft.model).supportsFixedLens ? draft.fixedLens : false,
       referenceMode: draft.referenceMode,
       seedanceAssets: null,
       sourceGenerationId: draft.sourceGenerationId ?? null,
@@ -1662,7 +1711,7 @@ export function buildPromptEnhancementRequest(draft: CreationDraft): PromptEnhan
 
 export function applyModelDefaults(draft: CreationDraft): CreationDraft {
   if (draft.tool === 'image') {
-    const config = IMAGE_MODELS[draft.model];
+    const config = bundledImageModel(draft.model);
     const aspectRatio = asStringList(config.aspectRatios).includes(draft.aspectRatio) ? draft.aspectRatio : config.aspectRatios[0];
     const resolutions = getImageResolutionOptions(draft.model, aspectRatio);
     return {
@@ -1681,7 +1730,7 @@ export function applyModelDefaults(draft: CreationDraft): CreationDraft {
   }
 
   if (draft.tool === 'video') {
-    const config = VIDEO_MODELS[draft.model];
+    const config = bundledVideoModel(draft.model);
     const duration = isValidVideoDuration(draft.model, draft.duration) ? draft.duration : getDefaultVideoDuration(draft.model);
     return {
       ...draft,
@@ -1701,7 +1750,7 @@ export function applyModelDefaults(draft: CreationDraft): CreationDraft {
     };
   }
 
-  const config = MOTION_MODELS[draft.model];
+  const config = bundledMotionModel(draft.model);
   return {
     ...draft,
     mode: asStringList(config.resolutions).includes(draft.mode) ? draft.mode : '720p',

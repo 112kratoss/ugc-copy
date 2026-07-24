@@ -455,7 +455,7 @@ export const VIDEO_MODELS = {
     'seedance-2': {
         id: 'seedance-2' as const,
         displayName: 'Seedance 2',
-        description: 'ByteDance video model with image, video, audio, and audio generation controls',
+        description: 'ByteDance video model with multimodal references, generated audio, and output up to 4K',
         provider: 'seedance' as const,
         apiModelId: 'bytedance/seedance-2',
         enhancerModelId: 'seedance-2',
@@ -470,7 +470,7 @@ export const VIDEO_MODELS = {
             default: 15,
         } as const,
         modeOptions: [] as const,
-        resolutions: ['480p', '720p'] as const,
+        resolutions: ['480p', '720p', '1080p', '4k'] as const,
         pricing: {
             '480p': {
                 noVideo: 19,
@@ -479,6 +479,14 @@ export const VIDEO_MODELS = {
             '720p': {
                 noVideo: 41,
                 withVideo: 25,
+            },
+            '1080p': {
+                noVideo: 102,
+                withVideo: 62,
+            },
+            '4k': {
+                noVideo: 208,
+                withVideo: 128,
             },
         },
     },
@@ -662,7 +670,7 @@ export const VIDEO_MODELS = {
     'grok-imagine-video': {
         id: 'grok-imagine-video' as const,
         displayName: 'Grok Imagine Video',
-        description: 'xAI video generation with playful, normal, and spicy modes',
+        description: 'xAI video generation with normal and fun modes',
         provider: 'grok' as const,
         apiModelId: 'grok-imagine/text-to-video',
         enhancerModelId: 'grok-imagine-video',
@@ -680,7 +688,6 @@ export const VIDEO_MODELS = {
         modeOptions: [
             { value: 'normal', label: 'Normal' },
             { value: 'fun', label: 'Fun' },
-            { value: 'spicy', label: 'Spicy' },
         ] as const,
         pricing: {
             '480p': 1.6,

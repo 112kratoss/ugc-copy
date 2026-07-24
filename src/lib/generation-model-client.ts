@@ -4,6 +4,10 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import type {
+  CatalogGenerationInputAsset,
+  CatalogGenerationRequestPayload,
+} from '@/lib/generation-model-adapters';
+import type {
   CatalogControl,
   GenerationModelCatalog,
   GenerationModelDescriptor,
@@ -11,7 +15,8 @@ import type {
   GenerationModelQuoteInput,
 } from '@/lib/generation-model-catalog';
 
-const WEB_CATALOG_CACHE_KEY = 'generation-model-catalog:v1';
+const WEB_CATALOG_SCHEMA_VERSION = 2;
+const WEB_CATALOG_CACHE_KEY = `generation-model-catalog:v${WEB_CATALOG_SCHEMA_VERSION}`;
 
 type Registry = Record<string, Record<string, unknown>>;
 type CatalogRegistries = { image: Registry; video: Registry; motion: Registry };
@@ -116,7 +121,13 @@ function defaultMatchesCatalog(
 }
 
 export function parseClientGenerationModelCatalog(value: unknown): GenerationModelCatalog {
-  if (!isRecord(value) || value.schemaVersion !== 1 || typeof value.revision !== 'string' || !isRecord(value.defaults) || !Array.isArray(value.models)) {
+  if (
+    !isRecord(value)
+    || (value.schemaVersion !== 1 && value.schemaVersion !== 2)
+    || typeof value.revision !== 'string'
+    || !isRecord(value.defaults)
+    || !Array.isArray(value.models)
+  ) {
     throw new Error('Invalid generation model catalog.');
   }
   if (!value.models.every(isDescriptor)) throw new Error('Invalid generation model catalog.');
@@ -274,6 +285,90 @@ export function resolveCatalogModelId(
     : catalog.models.find((model) => model.kind === kind)?.id ?? null;
 }
 
+export type WebCatalogGenerationDraft = {
+  kind: GenerationModelDescriptor['kind'];
+  modelId: string;
+  catalogRevision: string | null;
+  settings: Record<string, string | number | boolean>;
+  prompt: string;
+  inputs: CatalogGenerationInputAsset[];
+};
+
+export function getCatalogDescriptorDefaultSettings(
+  descriptor: GenerationModelDescriptor,
+): Record<string, string | number | boolean> {
+  return Object.fromEntries(descriptor.controls.map((control) => [
+    control.key,
+    control.defaultValue,
+  ]));
+}
+
+function isCompatibleControlValue(
+  control: CatalogControl,
+  value: unknown,
+): value is string | number | boolean {
+  if (control.type === 'choice') {
+    return typeof value === 'string'
+      && control.options.some((option) => option.value === value);
+  }
+  if (control.type === 'boolean') return typeof value === 'boolean';
+  return typeof value === 'number'
+    && Number.isInteger(value)
+    && value >= control.min
+    && value <= control.max
+    && (value - control.min) % control.step === 0;
+}
+
+function descriptorSlotKeys(descriptor: GenerationModelDescriptor): Set<string> {
+  const descriptorV2 = descriptor as GenerationModelDescriptor & {
+    inputModes?: Array<{ slots?: Array<{ key?: unknown }> }>;
+  };
+  const keys = new Set<string>();
+  for (const mode of descriptorV2.inputModes ?? []) {
+    for (const slot of mode.slots ?? []) {
+      if (typeof slot.key === 'string' && slot.key) keys.add(slot.key);
+    }
+  }
+  if (keys.size > 0) return keys;
+
+  if (descriptor.inputs.startFrame) keys.add('startFrame');
+  if (descriptor.inputs.endFrame) keys.add('endFrame');
+  if (descriptor.inputs.imageReferences) keys.add('imageReferences');
+  if (descriptor.inputs.videoReferences) keys.add('videoReferences');
+  if (descriptor.inputs.audioReferences) keys.add('audioReferences');
+  if (descriptor.inputs.preparedAudioReferences) keys.add('preparedVoices');
+  if (descriptor.inputs.characterReferences) keys.add('characters');
+  return keys;
+}
+
+export function reconcileWebCatalogGenerationDraft(
+  catalog: GenerationModelCatalog,
+  draft: WebCatalogGenerationDraft,
+): WebCatalogGenerationDraft | null {
+  const modelId = resolveCatalogModelId(catalog, draft.kind, draft.modelId);
+  if (!modelId) return null;
+  const descriptor = catalog.models.find((model) => (
+    model.id === modelId && model.kind === draft.kind
+  ));
+  if (!descriptor) return null;
+
+  const settings = getCatalogDescriptorDefaultSettings(descriptor);
+  for (const control of descriptor.controls) {
+    const draftValue = draft.settings[control.key];
+    if (isCompatibleControlValue(control, draftValue)) {
+      settings[control.key] = draftValue;
+    }
+  }
+  const slotKeys = descriptorSlotKeys(descriptor);
+  return {
+    ...draft,
+    modelId,
+    catalogRevision: catalog.revision,
+    settings,
+    inputs: draft.inputs.filter((input) => slotKeys.has(input.slot)),
+  };
+}
+
 export async function loadWebGenerationModelCatalog({
   fetcher = fetch,
   storage = typeof window !== 'undefined' ? window.localStorage : undefined,
@@ -294,7 +389,7 @@ export async function loadWebGenerationModelCatalog({
     const headers = new Headers();
     if (!forceRefresh && cachedEnvelope?.etag) headers.set('If-None-Match', cachedEnvelope.etag);
     const response = await fetcher(
-      `/api/generation-models?platform=web&schemaVersion=1${forceRefresh ? '&refresh=1' : ''}`,
+      `/api/generation-models?platform=web&schemaVersion=${WEB_CATALOG_SCHEMA_VERSION}${forceRefresh ? '&refresh=1' : ''}`,
       forceRefresh
         ? { cache: 'no-store', headers }
         : (headers.has('If-None-Match') ? { headers } : undefined),
@@ -373,6 +468,92 @@ export class WebCatalogRequestError extends Error {
     super(message);
     this.name = 'WebCatalogRequestError';
   }
+}
+
+export type WebGenerationStartResponse = {
+  success: true;
+  predictionId: string;
+  generationId: string | null;
+  status: 'processing';
+  remainingCredits: number;
+  cost: number;
+  catalogRevision: string;
+  modelId: string;
+  idempotentReplay?: true;
+};
+
+export async function requestWebGenerationStart(
+  input: CatalogGenerationRequestPayload,
+  {
+    accessToken,
+    idempotencyKey,
+    signal,
+    fetcher = fetch,
+  }: {
+    accessToken?: string | null;
+    idempotencyKey: string;
+    signal?: AbortSignal;
+    fetcher?: typeof fetch;
+  },
+): Promise<WebGenerationStartResponse> {
+  if (!input.catalogRevision.trim()) {
+    throw new WebCatalogRequestError(
+      'Refresh the model catalog before generating.',
+      409,
+      'CATALOG_CHANGED',
+    );
+  }
+  if (!idempotencyKey.trim()) {
+    throw new WebCatalogRequestError(
+      'A generation request key is required.',
+      400,
+      'IDEMPOTENCY_KEY_REQUIRED',
+    );
+  }
+
+  const response = await fetcher('/api/generations', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Idempotency-Key': idempotencyKey,
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
+    body: JSON.stringify({
+      schemaVersion: WEB_CATALOG_SCHEMA_VERSION,
+      ...input,
+    }),
+    signal,
+  });
+  const body = await response.json() as Partial<WebGenerationStartResponse> & {
+    error?: string;
+    code?: string;
+    fieldErrors?: Record<string, string>;
+  };
+  if (!response.ok) {
+    const fieldErrors = body.fieldErrors ?? {};
+    const fieldMessage = Object.values(fieldErrors)
+      .find((message) => typeof message === 'string' && message.trim());
+    throw new WebCatalogRequestError(
+      fieldMessage ?? body.error ?? 'Could not start generation.',
+      response.status,
+      body.code,
+      fieldErrors,
+    );
+  }
+  if (
+    body.success !== true
+    || typeof body.predictionId !== 'string'
+    || typeof body.catalogRevision !== 'string'
+    || typeof body.modelId !== 'string'
+    || typeof body.cost !== 'number'
+    || typeof body.remainingCredits !== 'number'
+  ) {
+    throw new WebCatalogRequestError(
+      'The generation service returned an invalid response.',
+      502,
+    );
+  }
+  return body as WebGenerationStartResponse;
 }
 
 export type WebGenerationQuoteStatus = 'idle' | 'pending' | 'ready' | 'error';

@@ -90,7 +90,9 @@ describe('package security baseline', () => {
         postcss: '^8.5.10',
       },
     });
-    expect(versionAtLeast(packageLockPathVersion('node_modules/next/node_modules/postcss'), '8.5.10')).toBe(true);
+    const resolvedPostCss = packageLockPathVersion('node_modules/next/node_modules/postcss')
+      ?? packageLockVersion('postcss');
+    expect(versionAtLeast(resolvedPostCss, '8.5.10')).toBe(true);
   });
 
   it('keeps React runtime packages on the patched React 19.2 line', () => {

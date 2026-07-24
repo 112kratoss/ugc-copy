@@ -116,6 +116,12 @@ describe('Model Pricing', () => {
         it('seedance 2 720p 12s without reference video uses the base tier', () => {
             expect(getVideoCost('seedance-2', { resolution: '720p', durationSeconds: 12 })).toBe(492);
         });
+        it('seedance 2 quotes the current Kie 1080p and 4K tiers', () => {
+            expect(getVideoCost('seedance-2', { resolution: '1080p', durationSeconds: 7 })).toBe(714);
+            expect(getVideoCost('seedance-2', { resolution: '4k', durationSeconds: 7 })).toBe(1456);
+            expect(getVideoCost('seedance-2', { resolution: '1080p', durationSeconds: 7, hasReferenceVideo: true })).toBe(434);
+            expect(getVideoCost('seedance-2', { resolution: '4k', durationSeconds: 7, hasReferenceVideo: true })).toBe(896);
+        });
         it('seedance 2 fast 480p 12s with reference video uses the lower tier', () => {
             expect(getVideoCost('seedance-2-fast', { resolution: '480p', durationSeconds: 12, hasReferenceVideo: true })).toBe(108);
         });
