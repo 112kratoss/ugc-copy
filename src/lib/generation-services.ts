@@ -938,7 +938,15 @@ function getRemoteMediaKindForBucket(
   return 'video';
 }
 
-function getKieImageModelId(model: ImageModelId, referenceCount: number): string {
+/**
+ * Map an app image model id to the provider model id Kie expects.
+ *
+ * Exported for testing: this function decides which model the provider bills
+ * for, so a wrong mapping either fails the generation outright or spends
+ * credits on the wrong model. It is a pure function, so pinning it directly is
+ * far cheaper than asserting it through a full start path.
+ */
+export function getKieImageModelId(model: ImageModelId, referenceCount: number): string {
   if (model === 'grok-imagine-image') {
     return referenceCount > 0 ? 'grok-imagine/image-to-image' : 'grok-imagine/text-to-image';
   }
@@ -966,6 +974,19 @@ function getKieImageModelId(model: ImageModelId, referenceCount: number): string
     return referenceCount > 0 ? 'flux-2/pro-image-to-image' : 'flux-2/pro-text-to-image';
   }
 
+  // Wan publishes its image models under a slashed, dash-separated id
+  // (`wan/2-7-image`), not the dotted app id. Kie's OpenAPI spec declares that
+  // string as the *sole* allowed enum value for the model parameter, so the
+  // fallthrough below — which sends the app id verbatim — produces a request
+  // the provider rejects. Verified 2026-07-25 against
+  // https://docs.kie.ai/market/wan/2-7-image.md and .../2-7-image-pro.md.
+  if (model === 'wan-2.7-image') return 'wan/2-7-image';
+  if (model === 'wan-2.7-image-pro') return 'wan/2-7-image-pro';
+
+  // Everything else sends the app id unchanged, which is correct only because
+  // those ids are byte-identical to the provider's (nano-banana-2,
+  // nano-banana-2-lite, nano-banana-pro, z-image). Adding a model whose
+  // provider id differs requires an explicit case above.
   return model;
 }
 
