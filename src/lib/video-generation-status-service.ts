@@ -34,6 +34,7 @@ import {
   fetchWithProviderTimeout,
   PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
   PROVIDER_STATUS_POLL_TIMEOUT_MS,
+  withProviderModel,
 } from '@/lib/provider-fetch';
 import { resolveStoredMediaUrl } from '@/lib/server-helpers';
 
@@ -393,9 +394,9 @@ export async function getVideoGenerationStatusForRoute({
     }
 
     if (selectedModel === 'veo-3.1') {
-      const response = await resolvedDependencies.fetchWithProviderTimeout(`https://api.kie.ai/api/v1/veo/record-info?taskId=${predictionId}`, {
+      const response = await withProviderModel(localGeneration?.model, () => resolvedDependencies.fetchWithProviderTimeout(`https://api.kie.ai/api/v1/veo/record-info?taskId=${predictionId}`, {
         headers: { Authorization: `Bearer ${kieApiKey}` },
-      }, PROVIDER_STATUS_POLL_TIMEOUT_MS, fetch, 'KIE Veo status');
+      }, PROVIDER_STATUS_POLL_TIMEOUT_MS, fetch, 'KIE Veo status'));
 
       const data = await response.json();
 
@@ -448,9 +449,9 @@ export async function getVideoGenerationStatusForRoute({
         );
       }
     } else {
-      const response = await resolvedDependencies.fetchWithProviderTimeout(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
+      const response = await withProviderModel(localGeneration?.model, () => resolvedDependencies.fetchWithProviderTimeout(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
         headers: { Authorization: `Bearer ${kieApiKey}` },
-      }, PROVIDER_STATUS_POLL_TIMEOUT_MS, fetch, 'KIE video status');
+      }, PROVIDER_STATUS_POLL_TIMEOUT_MS, fetch, 'KIE video status'));
 
       const data = await response.json();
 

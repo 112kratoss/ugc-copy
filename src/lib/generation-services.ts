@@ -74,6 +74,7 @@ import {
   PROVIDER_STATUS_POLL_RETRY_POLICY,
   PROVIDER_STATUS_POLL_TIMEOUT_MS,
   PROVIDER_TASK_CREATE_TIMEOUT_MS,
+  withProviderModel,
 } from '@/lib/provider-fetch';
 import type { RemoteMediaKind } from '@/lib/remote-media-security';
 import { stageAllowlistedRemoteMedia } from '@/lib/staged-remote-media';
@@ -389,21 +390,25 @@ export async function attachGenerationProviderTask(
 async function createKieTask(
   body: Record<string, unknown>,
   endpoint = 'https://api.kie.ai/api/v1/jobs/createTask',
-  options: { generationId?: string | null } = {},
+  options: { generationId?: string | null; modelId?: string | null } = {},
 ) {
   requireKieGenerationConfiguration();
   const callbackUrl = typeof body.callBackUrl === 'string' && body.callBackUrl.trim()
     ? body.callBackUrl
     : buildKieWebhookCallbackUrl({ generationId: options.generationId });
 
-  const response = await fetchWithProviderTimeout(endpoint, {
+  // Attribute the call to the *app* model id, not `body.model`. The latter is
+  // the provider's api model id, and the status-poll paths attribute using
+  // `generation.model` — mixing the two id spaces in one telemetry column would
+  // split a single model's traffic across two keys and break its rates.
+  const response = await withProviderModel(options.modelId, () => fetchWithProviderTimeout(endpoint, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${KIE_API_KEY}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ ...body, callBackUrl: callbackUrl }),
-  }, PROVIDER_TASK_CREATE_TIMEOUT_MS, fetch, 'KIE task creation');
+  }, PROVIDER_TASK_CREATE_TIMEOUT_MS, fetch, 'KIE task creation'));
 
   const data = await response.json();
   if (!response.ok || data.code !== 200) {
@@ -1385,9 +1390,9 @@ async function syncSingleGenerationStatus(
     : Date.parse(generation.created_at);
 
   if (isVeoGeneration(generation)) {
-    const response = await fetchWithProviderRetry(`https://api.kie.ai/api/v1/veo/record-info?taskId=${generation.prediction_id}`, {
+    const response = await withProviderModel(generation.model, () => fetchWithProviderRetry(`https://api.kie.ai/api/v1/veo/record-info?taskId=${generation.prediction_id}`, {
       headers: { Authorization: `Bearer ${KIE_API_KEY}` },
-    }, PROVIDER_STATUS_POLL_TIMEOUT_MS, PROVIDER_STATUS_POLL_RETRY_POLICY, fetch, 'KIE Veo status');
+    }, PROVIDER_STATUS_POLL_TIMEOUT_MS, PROVIDER_STATUS_POLL_RETRY_POLICY, fetch, 'KIE Veo status'));
     const data = await response.json();
 
     if (!response.ok || data.code !== 200) {
@@ -1426,9 +1431,9 @@ async function syncSingleGenerationStatus(
     return nextStatus;
   }
 
-  const response = await fetchWithProviderRetry(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${generation.prediction_id}`, {
+  const response = await withProviderModel(generation.model, () => fetchWithProviderRetry(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${generation.prediction_id}`, {
     headers: { Authorization: `Bearer ${KIE_API_KEY}` },
-  }, PROVIDER_STATUS_POLL_TIMEOUT_MS, PROVIDER_STATUS_POLL_RETRY_POLICY, fetch, 'KIE task status');
+  }, PROVIDER_STATUS_POLL_TIMEOUT_MS, PROVIDER_STATUS_POLL_RETRY_POLICY, fetch, 'KIE task status'));
   const data = await response.json();
 
   if (!response.ok || data.code !== 200) {
@@ -1864,7 +1869,7 @@ export async function startImageGeneration(params: {
       };
     }
 
-    predictionId = await createKieTask({ model: providerModel, input }, undefined, { generationId });
+    predictionId = await createKieTask({ model: providerModel, input }, undefined, { generationId, modelId: model });
     await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
     if (persistInputMedia) {
@@ -2615,7 +2620,7 @@ export async function startVideoGeneration(params: {
       };
     }
 
-    predictionId = await createKieTask(body, endpoint, { generationId });
+    predictionId = await createKieTask(body, endpoint, { generationId, modelId: model });
     await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
     const videoInputCandidates: PersistGenerationInputCandidate[] = [];
@@ -2829,7 +2834,7 @@ export async function startMotionGeneration(params: {
         character_orientation: characterOrientation,
         mode,
       },
-    }, undefined, { generationId });
+    }, undefined, { generationId, modelId: model });
     await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
     await persistGenerationInputMedia({
@@ -2984,7 +2989,7 @@ export async function startCatalogGeneration(params: {
     predictionId = await createKieTask(
       providerRequest.body,
       providerRequest.endpoint,
-      { generationId },
+      { generationId, modelId: operation.modelId },
     );
     await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
@@ -3165,7 +3170,7 @@ export async function startVoiceoverGeneration(params: {
     predictionId = await createKieTask({
       model: selectedModel.apiModelId,
       input,
-    }, undefined, { generationId });
+    }, undefined, { generationId, modelId: model });
     await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
     return {
@@ -3257,7 +3262,7 @@ export async function startSoundEffectGeneration(params: {
         prompt_influence: promptInfluence,
         output_format: outputFormat,
       },
-    }, undefined, { generationId });
+    }, undefined, { generationId, modelId: model });
     await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
     return {

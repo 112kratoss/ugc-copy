@@ -16,6 +16,7 @@ export type ProviderFetchTelemetryEvent = {
   type: 'provider_fetch';
   serviceName: string;
   requestId?: string;
+  modelId?: string;
   outcome: ProviderFetchTelemetryOutcome;
   method: string;
   host: string | null;
@@ -41,7 +42,30 @@ export function withProviderFetchRequestId<T>(
   requestId: string,
   operation: () => T
 ): T {
-  return withRequestTrace({ requestId }, operation);
+  return withRequestTrace({ ...getActiveRequestTrace(), requestId }, operation);
+}
+
+/**
+ * Attribute every provider call made inside `operation` to a generation model.
+ *
+ * Merges into any active trace rather than replacing it, so wrapping a provider
+ * call in a model scope never drops the request id the surrounding API route
+ * established. A blank or missing model is a no-op: telemetry then records the
+ * call as unattributed, which is the honest result for provider traffic that
+ * genuinely has no model behind it.
+ */
+export function withProviderModel<T>(
+  modelId: string | null | undefined,
+  operation: () => T
+): T {
+  const trimmed = typeof modelId === 'string' ? modelId.trim() : '';
+  if (!trimmed) return operation();
+
+  const active = getActiveRequestTrace();
+  return withRequestTrace(
+    { requestId: active?.requestId ?? '', ...active, providerModelId: trimmed },
+    operation,
+  );
 }
 
 type ProviderFetchInit = RequestInit & {
@@ -137,11 +161,14 @@ function createProviderFetchTelemetryEvent({
 }): ProviderFetchTelemetryEvent {
   const url = parseProviderFetchUrl(input);
   const providerTaskId = getProviderTaskId(url);
-  const requestId = getActiveRequestTrace()?.requestId;
+  const trace = getActiveRequestTrace();
+  const requestId = trace?.requestId;
+  const modelId = trace?.providerModelId;
   return {
     type: 'provider_fetch',
     serviceName,
     ...(requestId ? { requestId } : {}),
+    ...(modelId ? { modelId } : {}),
     outcome,
     method: getProviderFetchMethod(input, init),
     host: url?.host ?? null,

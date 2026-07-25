@@ -60,6 +60,7 @@ type AiUsageEventRow = {
 
 type ProviderDependencyEventRow = {
   service_name: string | null;
+  model_id?: string | null;
   outcome: 'success' | 'http_error' | 'timeout' | 'network_error' | string | null;
   duration_ms: number | string | null;
   timeout_ms: number | string | null;
@@ -178,6 +179,13 @@ export type BackendProviderDependencyHealth = {
   countsByService: Record<string, number>;
   failedByService: Record<string, number>;
   slowByService: Record<string, number>;
+  /**
+   * Per-model breakdown, covering only model-attributed events. Calls with no
+   * model behind them (payments, FX, push receipts) are omitted rather than
+   * grouped under a placeholder key.
+   */
+  countsByModel: Record<string, number>;
+  failedByModel: Record<string, number>;
   oldestRecentEventAt: string | null;
 };
 
@@ -627,6 +635,8 @@ function buildProviderDependencyHealth(
   const countsByService: Record<string, number> = {};
   const failedByService: Record<string, number> = {};
   const slowByService: Record<string, number> = {};
+  const countsByModel: Record<string, number> = {};
+  const failedByModel: Record<string, number> = {};
   let totalDurationMs = 0;
   let maxDurationMs = 0;
   let failedEventCount = 0;
@@ -638,14 +648,22 @@ function buildProviderDependencyHealth(
     const outcome = row.outcome ?? 'unknown';
     const serviceName = row.service_name ?? 'unknown';
     const durationMs = getPositiveInteger(row.duration_ms);
+    // Unattributed rows are skipped for the per-model breakdown rather than
+    // bucketed as 'unknown', which would otherwise collect every payment, FX,
+    // and push call under a single synthetic model.
+    const modelId = typeof row.model_id === 'string' && row.model_id.trim()
+      ? row.model_id.trim()
+      : null;
     totalDurationMs += durationMs;
     maxDurationMs = Math.max(maxDurationMs, durationMs);
     incrementCount(countsByOutcome, outcome);
     incrementCount(countsByService, serviceName);
+    if (modelId) incrementCount(countsByModel, modelId);
 
     if (outcome !== 'success') {
       failedEventCount += 1;
       incrementCount(failedByService, serviceName);
+      if (modelId) incrementCount(failedByModel, modelId);
     }
     if (outcome === 'timeout') {
       timeoutCount += 1;
@@ -715,6 +733,8 @@ function buildProviderDependencyHealth(
       countsByService,
       failedByService,
       slowByService,
+      countsByModel,
+      failedByModel,
       oldestRecentEventAt: oldestRecentEvent?.created_at ?? null,
     },
     issues,
@@ -802,7 +822,7 @@ export async function collectBackendHealth(
       .limit(50),
     client
       .from('provider_dependency_events')
-      .select('service_name,outcome,duration_ms,timeout_ms,status,created_at')
+      .select('service_name,outcome,duration_ms,timeout_ms,status,created_at,model_id')
       .gte('created_at', recentProviderDependencySince)
       .order('created_at', { ascending: true })
       .limit(1000),

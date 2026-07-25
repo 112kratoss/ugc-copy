@@ -590,7 +590,7 @@ describe('collectBackendHealth', () => {
     ]));
     expect(db.from).toHaveBeenCalledWith('provider_dependency_events');
     expect(db.builders.provider_dependency_events[0].select).toHaveBeenCalledWith(
-      'service_name,outcome,duration_ms,timeout_ms,status,created_at',
+      'service_name,outcome,duration_ms,timeout_ms,status,created_at,model_id',
     );
     expect(db.builders.provider_dependency_events[0].gte).toHaveBeenCalledWith(
       'created_at',

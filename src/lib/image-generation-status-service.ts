@@ -31,6 +31,7 @@ import {
   fetchStatusPollWithRetry,
   fetchWithProviderTimeout,
   PROVIDER_STATUS_POLL_TIMEOUT_MS,
+  withProviderModel,
 } from '@/lib/provider-fetch';
 import { resolveStoredMediaUrl } from '@/lib/server-helpers';
 
@@ -225,9 +226,9 @@ export async function getImageGenerationStatusForRoute({
       );
     }
 
-    const response = await resolvedDependencies.fetchWithProviderTimeout(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
+    const response = await withProviderModel(localGeneration?.model, () => resolvedDependencies.fetchWithProviderTimeout(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${predictionId}`, {
       headers: { Authorization: `Bearer ${kieApiKey}` },
-    }, PROVIDER_STATUS_POLL_TIMEOUT_MS, fetch, 'KIE image status');
+    }, PROVIDER_STATUS_POLL_TIMEOUT_MS, fetch, 'KIE image status'));
 
     const data = await response.json();
 

@@ -1,5 +1,13 @@
 export type RequestTraceContext = {
   requestId: string;
+  /**
+   * Generation model the current provider call is being made for, when there is
+   * one. Ambient rather than a parameter because the provider fetch helpers are
+   * reached through several layers of injected dependencies whose signatures are
+   * mocked by tests; threading a model argument through them would widen those
+   * contracts everywhere for the benefit of telemetry alone.
+   */
+  providerModelId?: string;
 };
 
 type AsyncLocalStorageLike<T> = {

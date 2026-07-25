@@ -256,7 +256,7 @@ describe('collectBackendCostReport', () => {
     ]));
     expect(db.builders.generations[0].select).toHaveBeenCalledWith('status,model,cost,created_at,output_url');
     expect(db.builders.ai_usage_events[0].select).toHaveBeenCalledWith('feature,status,cost,created_at');
-    expect(db.builders.provider_dependency_events[0].select).toHaveBeenCalledWith('service_name,outcome,duration_ms,created_at');
+    expect(db.builders.provider_dependency_events[0].select).toHaveBeenCalledWith('service_name,outcome,duration_ms,created_at,model_id');
     expect(db.builders.backend_rate_limits[0].select).toHaveBeenCalledWith('scope,request_count,window_start,updated_at');
     expect(db.builders.backend_rate_limits[0].select).not.toHaveBeenCalledWith(expect.stringContaining('subject_key'));
     expect(db.builders['storage.objects'][0].select).toHaveBeenCalledWith('bucket_id,name,metadata,created_at');

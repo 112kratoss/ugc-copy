@@ -27,6 +27,7 @@ type ProviderDependencyCostRow = {
   outcome: string | null;
   duration_ms: number | string | null;
   created_at: string | null;
+  model_id?: string | null;
 };
 
 type RateLimitCostRow = {
@@ -100,6 +101,14 @@ export type BackendCostReport = {
     byService: Record<string, number>;
     failuresByService: Record<string, number>;
     timeoutsByService: Record<string, number>;
+    /**
+     * Per-model counts, restricted to model-attributed events. Calls with no
+     * model (payments, FX, push) are absent rather than grouped under a
+     * placeholder, so a model's denominator is only its own traffic.
+     */
+    byModel: Record<string, number>;
+    failuresByModel: Record<string, number>;
+    timeoutsByModel: Record<string, number>;
   };
   rateLimitPressure: {
     totalRequests: number;
@@ -324,35 +333,60 @@ function buildAiUsageSpend(rows: AiUsageCostRow[]) {
  * failure out of two calls would read as a 50% outage.
  */
 export const PROVIDER_RATE_MIN_SAMPLE = 20;
+/**
+ * Per-model floor, deliberately lower than the per-service one. A service name
+ * aggregates every model behind it, so per-model traffic is a fraction of
+ * per-service traffic and reusing 20 would keep most models permanently below
+ * the reporting floor — the exact blindness this dimension exists to remove.
+ * 10 is the smallest sample at which one failure (1/10 = 10%) still sits below
+ * the 20% warning band, so a single unlucky call can never raise an alert by
+ * itself.
+ */
+export const PROVIDER_MODEL_RATE_MIN_SAMPLE = 10;
 export const PROVIDER_ERROR_RATE_WARNING = 0.2;
 export const PROVIDER_ERROR_RATE_DEGRADED = 0.5;
 export const PROVIDER_TIMEOUT_RATE_WARNING = 0.1;
 export const PROVIDER_TIMEOUT_RATE_DEGRADED = 0.3;
 
-export function buildProviderRateIssues(
-  providerDependencies: BackendCostReport['providerDependencies'],
-): BackendCostReportIssue[] {
+function buildRateIssuesForDimension({
+  totals,
+  failuresBy,
+  timeoutsBy,
+  minSample,
+  describe,
+  errorCodes,
+  timeoutCodes,
+}: {
+  totals: Record<string, number>;
+  failuresBy: Record<string, number>;
+  timeoutsBy: Record<string, number>;
+  minSample: number;
+  describe: (key: string) => string;
+  errorCodes: { degraded: string; warning: string };
+  timeoutCodes: { degraded: string; warning: string };
+}): BackendCostReportIssue[] {
   const issues: BackendCostReportIssue[] = [];
 
-  for (const [serviceName, total] of Object.entries(providerDependencies.byService)) {
-    if (total < PROVIDER_RATE_MIN_SAMPLE) continue;
+  for (const [key, total] of Object.entries(totals)) {
+    if (total < minSample) continue;
 
-    const failures = providerDependencies.failuresByService[serviceName] ?? 0;
-    const timeouts = providerDependencies.timeoutsByService[serviceName] ?? 0;
+    const failures = failuresBy[key] ?? 0;
+    const timeouts = timeoutsBy[key] ?? 0;
     const errorRate = failures / total;
     const timeoutRate = timeouts / total;
+    const subject = describe(key);
 
     if (errorRate >= PROVIDER_ERROR_RATE_DEGRADED) {
       issues.push({
         severity: 'degraded',
-        code: 'PROVIDER_ERROR_RATE_DEGRADED',
-        message: `${serviceName} failed ${failures} of ${total} call(s) (${Math.round(errorRate * 100)}%) in the report window.`,
+        code: errorCodes.degraded,
+        message: `${subject} failed ${failures} of ${total} call(s) (${Math.round(errorRate * 100)}%) in the report window.`,
       });
     } else if (errorRate >= PROVIDER_ERROR_RATE_WARNING) {
       issues.push({
         severity: 'warning',
-        code: 'PROVIDER_ERROR_RATE_ELEVATED',
-        message: `${serviceName} failed ${failures} of ${total} call(s) (${Math.round(errorRate * 100)}%) in the report window.`,
+        code: errorCodes.warning,
+        message: `${subject} failed ${failures} of ${total} call(s) (${Math.round(errorRate * 100)}%) in the report window.`,
       });
     }
 
@@ -361,14 +395,14 @@ export function buildProviderRateIssues(
     if (timeoutRate >= PROVIDER_TIMEOUT_RATE_DEGRADED) {
       issues.push({
         severity: 'degraded',
-        code: 'PROVIDER_TIMEOUT_RATE_DEGRADED',
-        message: `${serviceName} timed out on ${timeouts} of ${total} call(s) (${Math.round(timeoutRate * 100)}%) in the report window.`,
+        code: timeoutCodes.degraded,
+        message: `${subject} timed out on ${timeouts} of ${total} call(s) (${Math.round(timeoutRate * 100)}%) in the report window.`,
       });
     } else if (timeoutRate >= PROVIDER_TIMEOUT_RATE_WARNING) {
       issues.push({
         severity: 'warning',
-        code: 'PROVIDER_TIMEOUT_RATE_ELEVATED',
-        message: `${serviceName} timed out on ${timeouts} of ${total} call(s) (${Math.round(timeoutRate * 100)}%) in the report window.`,
+        code: timeoutCodes.warning,
+        message: `${subject} timed out on ${timeouts} of ${total} call(s) (${Math.round(timeoutRate * 100)}%) in the report window.`,
       });
     }
   }
@@ -376,10 +410,52 @@ export function buildProviderRateIssues(
   return issues;
 }
 
+export function buildProviderRateIssues(
+  providerDependencies: BackendCostReport['providerDependencies'],
+): BackendCostReportIssue[] {
+  return [
+    ...buildRateIssuesForDimension({
+      totals: providerDependencies.byService,
+      failuresBy: providerDependencies.failuresByService,
+      timeoutsBy: providerDependencies.timeoutsByService,
+      minSample: PROVIDER_RATE_MIN_SAMPLE,
+      describe: (serviceName) => serviceName,
+      errorCodes: {
+        degraded: 'PROVIDER_ERROR_RATE_DEGRADED',
+        warning: 'PROVIDER_ERROR_RATE_ELEVATED',
+      },
+      timeoutCodes: {
+        degraded: 'PROVIDER_TIMEOUT_RATE_DEGRADED',
+        warning: 'PROVIDER_TIMEOUT_RATE_ELEVATED',
+      },
+    }),
+    // Reported under distinct codes so a single failing model does not read as
+    // a whole-provider outage in the alert stream.
+    ...buildRateIssuesForDimension({
+      totals: providerDependencies.byModel ?? {},
+      failuresBy: providerDependencies.failuresByModel ?? {},
+      timeoutsBy: providerDependencies.timeoutsByModel ?? {},
+      minSample: PROVIDER_MODEL_RATE_MIN_SAMPLE,
+      describe: (modelId) => `Model ${modelId}`,
+      errorCodes: {
+        degraded: 'PROVIDER_MODEL_ERROR_RATE_DEGRADED',
+        warning: 'PROVIDER_MODEL_ERROR_RATE_ELEVATED',
+      },
+      timeoutCodes: {
+        degraded: 'PROVIDER_MODEL_TIMEOUT_RATE_DEGRADED',
+        warning: 'PROVIDER_MODEL_TIMEOUT_RATE_ELEVATED',
+      },
+    }),
+  ];
+}
+
 function buildProviderDependencies(rows: ProviderDependencyCostRow[]) {
   const byService: Record<string, number> = {};
   const failuresByService: Record<string, number> = {};
   const timeoutsByService: Record<string, number> = {};
+  const byModel: Record<string, number> = {};
+  const failuresByModel: Record<string, number> = {};
+  const timeoutsByModel: Record<string, number> = {};
   let failedCount = 0;
   let slowCount = 0;
   let maxDurationMs = 0;
@@ -388,14 +464,23 @@ function buildProviderDependencies(rows: ProviderDependencyCostRow[]) {
     const serviceName = row.service_name ?? 'unknown';
     const outcome = row.outcome ?? 'unknown';
     const durationMs = Math.round(numericValue(row.duration_ms));
+    // Unattributed rows are skipped entirely for per-model counts rather than
+    // bucketed as 'unknown': a synthetic bucket would accumulate every
+    // payment, FX, and push call and then trip model alert thresholds.
+    const modelId = typeof row.model_id === 'string' && row.model_id.trim()
+      ? row.model_id.trim()
+      : null;
     incrementCount(byService, serviceName);
+    if (modelId) incrementCount(byModel, modelId);
     maxDurationMs = Math.max(maxDurationMs, durationMs);
     if (outcome !== 'success') {
       failedCount += 1;
       incrementCount(failuresByService, serviceName);
+      if (modelId) incrementCount(failuresByModel, modelId);
     }
     if (outcome === 'timeout') {
       incrementCount(timeoutsByService, serviceName);
+      if (modelId) incrementCount(timeoutsByModel, modelId);
     }
     if (durationMs >= SLOW_PROVIDER_DURATION_MS) {
       slowCount += 1;
@@ -410,6 +495,9 @@ function buildProviderDependencies(rows: ProviderDependencyCostRow[]) {
     byService,
     failuresByService,
     timeoutsByService,
+    byModel,
+    failuresByModel,
+    timeoutsByModel,
   };
 }
 
@@ -611,7 +699,7 @@ export async function collectBackendCostReport(
       .limit(QUERY_LIMIT),
     client
       .from('provider_dependency_events')
-      .select('service_name,outcome,duration_ms,created_at')
+      .select('service_name,outcome,duration_ms,created_at,model_id')
       .gte('created_at', since)
       .limit(QUERY_LIMIT),
     client

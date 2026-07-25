@@ -7,6 +7,7 @@ import { createServiceClient } from '@/lib/server-helpers';
 type ProviderDependencyInsert = {
   service_name: string;
   request_id?: string;
+  model_id?: string;
   outcome: ProviderFetchTelemetryEvent['outcome'];
   method: string;
   host: string | null;
@@ -29,6 +30,7 @@ function toProviderDependencyInsert(event: ProviderFetchTelemetryEvent): Provide
   return {
     service_name: event.serviceName,
     ...(event.requestId ? { request_id: event.requestId } : {}),
+    ...(event.modelId ? { model_id: event.modelId } : {}),
     outcome: event.outcome,
     method: event.method,
     host: event.host,
