@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Mock } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   completeMobilePurchase: vi.fn(),
@@ -55,7 +56,7 @@ function createUserSupabaseMock(options: { userId?: string | null; authError?: E
 describe('mobile commerce sync service', () => {
   let rateLimitRpc: ReturnType<typeof createRateLimitRpc>;
   let adminSupabase: { service: string; rpc: ReturnType<typeof createRateLimitRpc> };
-  let getAdminSupabase: ReturnType<typeof vi.fn>;
+  let getAdminSupabase: Mock<() => unknown>;
 
   beforeEach(() => {
     vi.resetModules();

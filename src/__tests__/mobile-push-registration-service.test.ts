@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Mock } from 'vitest';
 
 const ensureMobileNotificationPreferencesMock = vi.fn();
 
@@ -118,7 +119,7 @@ function createAdminSupabaseMock(rateLimitRpc: ReturnType<typeof createRateLimit
 
 describe('mobile push registration service', () => {
   let rateLimitRpc: ReturnType<typeof createRateLimitRpc>;
-  let getAdminSupabase: ReturnType<typeof vi.fn>;
+  let getAdminSupabase: Mock<() => unknown>;
 
   beforeEach(() => {
     vi.resetModules();

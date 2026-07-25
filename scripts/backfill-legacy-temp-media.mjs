@@ -65,6 +65,14 @@ function safePathSegment(value) {
         && /^[A-Za-z0-9_-]{1,200}$/.test(value);
 }
 
+/**
+ * `responseContentType` is typed explicitly for the same reason as
+ * `runBackfill` below: its `null` default would otherwise be inferred as the
+ * type `null`, rejecting every real content type callers pass.
+ *
+ * @param {{ output_url: string, category?: string | null, user_id?: string | null, prediction_id?: string | null }} generation
+ * @param {string | null} [responseContentType]
+ */
 export function inferMediaTarget(generation, responseContentType = null) {
     const pathname = (() => {
         try {
@@ -128,6 +136,10 @@ function buildStorageTargetFromMedia(generation, media) {
     };
 }
 
+/**
+ * @param {{ output_url: string, category?: string | null, user_id?: string | null, prediction_id?: string | null }} generation
+ * @param {string | null} [responseContentType]
+ */
 export function buildStorageTarget(generation, responseContentType = null) {
     return buildStorageTargetFromMedia(
         generation,
@@ -659,6 +671,28 @@ async function fetchLegacyGenerations(supabase, generationId) {
     return allRows;
 }
 
+/**
+ * Migrate legacy temp-host media onto durable storage.
+ *
+ * The parameter types are declared explicitly because this is a `.mjs` module
+ * consumed by a TypeScript test suite: without them TypeScript infers each
+ * option's type from its *default value*, so `fetcher = null` would be inferred
+ * as `null` and `logger = console` as the full `Console` interface. Both are
+ * injection seams, and those inferred types reject every test double.
+ *
+ * `logger` is deliberately the narrow `{log, error}` shape actually used here
+ * rather than `Console`, so a test may pass a two-method spy.
+ *
+ * @param {object} options
+ * @param {import('@supabase/supabase-js').SupabaseClient} options.supabase
+ * @param {boolean} options.dryRun
+ * @param {string | null} [options.generationId]
+ * @param {((url: URL, init: RequestInit) => Promise<Response>) | null} [options.fetcher]
+ *   Injected HTTP client. When null the pinned-HTTPS path is used, which is what
+ *   real operator runs do; tests inject a controlled fetcher instead.
+ * @param {(hostname: string) => Promise<Array<{ address: string, family: number }>>} [options.lookup]
+ * @param {{ log: (message: string) => void, error: (message: string) => void }} [options.logger]
+ */
 export async function runBackfill({
     supabase,
     dryRun,

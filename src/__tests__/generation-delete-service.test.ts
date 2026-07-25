@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Mock } from 'vitest';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 
@@ -134,8 +135,8 @@ function createAdminSupabaseMock({
 }
 
 describe('generation delete service', () => {
-  let createAdminSupabase: ReturnType<typeof vi.fn>;
-  let createUserSupabase: ReturnType<typeof vi.fn>;
+  let createAdminSupabase: Mock<() => unknown>;
+  let createUserSupabase: Mock<() => unknown>;
 
   beforeEach(() => {
     createAdminSupabase = vi.fn(() => createAdminSupabaseMock().client);

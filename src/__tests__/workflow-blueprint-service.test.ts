@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Mock } from 'vitest';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 
@@ -111,8 +112,8 @@ function createProviderResponse(content: unknown) {
 }
 
 describe('workflow blueprint service', () => {
-  let createAdminSupabase: ReturnType<typeof vi.fn>;
-  let createUserSupabase: ReturnType<typeof vi.fn>;
+  let createAdminSupabase: Mock<() => unknown>;
+  let createUserSupabase: Mock<() => unknown>;
   let providerFetch: ReturnType<typeof vi.fn>;
   let adminClient: ReturnType<typeof createAdminClient>;
 
