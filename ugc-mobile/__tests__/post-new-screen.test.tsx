@@ -16,6 +16,9 @@ function resolvePressableStyle(style: unknown) {
 }
 
 const routerState = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn() }));
+const navigationState = vi.hoisted(() => ({ dispatch: vi.fn() }));
+const alertState = vi.hoisted(() => ({ alert: vi.fn() }));
+const storageState = vi.hoisted(() => ({ values: new Map<string, string>() }));
 const paramsState = vi.hoisted(() => ({ params: {} as { generationId?: string; postId?: string; focus?: string } }));
 const authState = vi.hoisted(() => ({
   user: { id: 'user-123', email: 'creator@example.com' },
@@ -38,6 +41,7 @@ const sourceToolsState = vi.hoisted(() => ({
     supportedMediaKinds: ['image', 'video'],
   }] as SourceToolOption[],
 }));
+const postEditState = vi.hoisted(() => ({ post: null as Record<string, unknown> | null }));
 const mutationState = vi.hoisted(() => ({
   mutate: vi.fn(),
   isPending: false,
@@ -75,6 +79,23 @@ vi.mock('expo-router', () => ({
   useLocalSearchParams: () => paramsState.params,
 }));
 
+vi.mock('@react-navigation/native', () => ({
+  useNavigation: () => navigationState,
+  usePreventRemove: vi.fn(),
+}));
+
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: {
+    getItem: vi.fn(async (key: string) => storageState.values.get(key) ?? null),
+    setItem: vi.fn(async (key: string, value: string) => {
+      storageState.values.set(key, value);
+    }),
+    removeItem: vi.fn(async (key: string) => {
+      storageState.values.delete(key);
+    }),
+  },
+}));
+
 vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => queryClientState,
   useMutation: (options: typeof mutationState.options) => {
@@ -87,7 +108,9 @@ vi.mock('@tanstack/react-query', () => ({
       return { data: { generations: [generationItem] }, error: null, isLoading: false, isSuccess: true };
     }
     if (options.queryKey[0] === 'post-edit') {
-      return { data: null, error: null, isLoading: false, isSuccess: false };
+      return postEditState.post
+        ? { data: { post: postEditState.post }, error: null, isLoading: false, isSuccess: true }
+        : { data: null, error: null, isLoading: false, isSuccess: false };
     }
     if (options.queryKey[0] === 'post-source-tools') {
       return { data: { tools: sourceToolsState.tools }, error: null, isLoading: false, isSuccess: true };
@@ -97,15 +120,26 @@ vi.mock('@tanstack/react-query', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  AccessibilityInfo: { setAccessibilityFocus: vi.fn() },
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
+  Alert: alertState,
+  findNodeHandle: vi.fn(() => 1),
+  Keyboard: { dismiss: vi.fn() },
+  KeyboardAvoidingView: ({ children, ...props }: MockProps) => React.createElement('keyboard-avoiding-view', props, children),
   Modal: ({ children, visible, ...props }: MockProps) => visible ? React.createElement('modal', props, children) : null,
   Platform: { OS: 'ios', select: (obj: Record<string, unknown>) => obj.ios || obj.default },
-  Pressable: ({ children, style, ...props }: MockProps) => React.createElement('pressable', { ...props, style: resolvePressableStyle(style) }, children),
+  Pressable: React.forwardRef((_props: MockProps, ref) => {
+    const { children, style, ...props } = _props;
+    return React.createElement('pressable', { ...props, ref, style: resolvePressableStyle(style) }, children);
+  }),
   PanResponder: { create: (handlers: Record<string, unknown>) => ({ panHandlers: handlers }) },
   ScrollView: ({ children, ...props }: MockProps) => React.createElement('scrollview', props, children),
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
-  TextInput: (props: MockProps) => React.createElement('textinput', props),
-  View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
+  TextInput: React.forwardRef((props: MockProps, ref) => React.createElement('textinput', { ...props, ref })),
+  View: React.forwardRef((_props: MockProps, ref) => {
+    const { children, ...props } = _props;
+    return React.createElement('view', { ...props, ref }, children);
+  }),
   useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
 }));
 
@@ -176,11 +210,19 @@ function findTextInputByPlaceholder(root: renderer.ReactTestInstance, placeholde
   return input;
 }
 
+function findTextInputByAccessibilityLabel(root: renderer.ReactTestInstance, label: string) {
+  const input = root.findAll((node) => String(node.type) === 'textinput' && node.props.accessibilityLabel === label)[0];
+  if (!input) throw new Error(`No text input with accessibility label "${label}" was found`);
+  return input;
+}
+
 async function renderScreen() {
   let tree: renderer.ReactTestRenderer | undefined;
   await renderer.act(async () => {
     tree = renderer.create(<NewPostScreen />);
     await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
   return tree!;
 }
@@ -230,6 +272,10 @@ describe('mobile external post composer', () => {
     mutationState.options = null;
     mutationState.isPending = false;
     queryOptionsState.options = [];
+    navigationState.dispatch.mockClear();
+    alertState.alert.mockClear();
+    storageState.values.clear();
+    postEditState.post = null;
     vi.mocked(pickMediaList).mockReset();
     vi.mocked(pickMediaList).mockResolvedValue([]);
     vi.mocked(uploadPickedMedia).mockReset();
@@ -247,28 +293,29 @@ describe('mobile external post composer', () => {
     expect(text).toContain('Title');
     expect(findPressableByAccessibilityLabel(tree.root, 'Made with')).toBeTruthy();
     expect(text).toContain('Story');
-    expect(text).toContain('Next: resources');
-    expect(text).not.toContain('How should people use this?');
+    expect(text).toContain('Review & publish');
+    expect(text).not.toContain('Optional resources');
     expect(text).not.toContain('Publish');
   });
 
   it('moves to the optional resource step without losing generation details', async () => {
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Next: resources').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
     const text = collectText(tree.root);
-    expect(text).toContain('Add resources');
-    expect(text).toContain('Step 2 of 2 · optional');
+    expect(text).toContain('Review & publish');
+    expect(text).toContain('Step 2 of 2 · resources optional');
+    expect(text).toContain('Ready to publish');
     expect(text).toContain('Share free');
     expect(text).toContain('Sell resources');
     expect(text).toContain('Post without resources');
-    expect(text).toContain('Publish');
+    expect(text).toContain('Publish public');
     expect(text).not.toContain('What is this creation about?');
   });
 
   it('uses header back to return to details and preserve state', async () => {
     const tree = await renderScreen();
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'Share the idea, process, or story behind it...').props.onChangeText('A concise story'));
-    renderer.act(() => findPressableByText(tree.root, 'Next: resources').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Back to post details').props.onPress());
     expect(findTextInputByPlaceholder(tree.root, 'Share the idea, process, or story behind it...').props.value).toBe('A concise story');
   });
@@ -276,7 +323,7 @@ describe('mobile external post composer', () => {
   it('opens directly on resources when focus=resources is requested', async () => {
     paramsState.params = { generationId: 'gen-1', focus: 'resources' };
     const tree = await renderScreen();
-    expect(collectText(tree.root)).toContain('Step 2 of 2 · optional');
+    expect(collectText(tree.root)).toContain('Step 2 of 2 · resources optional');
   });
 
   it('waits for the creator to request media instead of opening an unstable system picker during navigation', async () => {
@@ -291,11 +338,38 @@ describe('mobile external post composer', () => {
     await uploadManualMedia();
     const tree = await renderScreen();
     await choosePreparedMedia(tree);
-    renderer.act(() => findPressableByText(tree.root, 'Next: resources').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
     expect(collectText(tree.root)).toContain('Add a title before continuing.');
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Neon garden study'));
-    renderer.act(() => findPressableByText(tree.root, 'Next: resources').props.onPress());
-    expect(collectText(tree.root)).toContain('How should people use this?');
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    expect(collectText(tree.root)).toContain('Optional resources');
+  });
+
+  it('shows all required field errors inline in visual order', async () => {
+    paramsState.params = {};
+    const tree = await renderScreen();
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    const text = collectText(tree.root);
+    expect(text).toContain('Add at least one image or video to continue.');
+    expect(text).toContain('Add a title before continuing.');
+    expect(text).toContain('Step 1 of 2 · post details');
+  });
+
+  it('creates a text post without requesting media', async () => {
+    paramsState.params = {};
+    const tree = await renderScreen();
+    renderer.act(() => findPressableByText(tree.root, 'Text post').props.onPress());
+    const requiredTextInputs = tree.root
+      .findAll((node) => String(node.type) === 'textinput' && ['Title, required', 'Post text, required'].includes(node.props.accessibilityLabel))
+      .map((node) => node.props.accessibilityLabel);
+    expect(requiredTextInputs).toEqual(['Title, required', 'Post text, required']);
+    renderer.act(() => findTextInputByPlaceholder(tree.root, 'Share a prompt, idea, breakdown, or useful note...').props.onChangeText('A useful text breakdown'));
+    renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Prompt teardown'));
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    const text = collectText(tree.root);
+    expect(text).toContain('Step 2 of 2 · resources optional');
+    expect(text).toContain('Prompt teardown');
+    expect(text).not.toContain('Add at least one image or video to continue.');
   });
 
   it('opens optional Made with controls and retains searchable custom entries', async () => {
@@ -309,7 +383,7 @@ describe('mobile external post composer', () => {
 
   it('builds a free prompt resource in a focused editor sheet', async () => {
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Next: resources').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     expect(collectText(tree.root)).toContain('Prompt or script');
@@ -322,9 +396,43 @@ describe('mobile external post composer', () => {
     expect(findTextInputByPlaceholder(tree.root, 'Tell people what they will receive').props.value).toBe('Includes Prompt or script.');
   });
 
+  it('keeps resource edits isolated until Save and confirms dirty discard', async () => {
+    const tree = await renderScreen();
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Prompt or script').props.onPress());
+    renderer.act(() => findTextInputByPlaceholder(tree.root, 'This content is revealed only after unlock').props.onChangeText('Unsaved prompt'));
+
+    const keyboardContainer = tree.root.findAll((node) => String(node.type) === 'keyboard-avoiding-view')[0];
+    expect(keyboardContainer).toBeTruthy();
+    expect(keyboardContainer.props.behavior).toBe('padding');
+    const keyboardScroll = tree.root.findAll((node) => String(node.type) === 'scrollview' && node.props.automaticallyAdjustKeyboardInsets)[0];
+    expect(keyboardScroll).toBeTruthy();
+
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Close resource editor').props.onPress());
+    expect(alertState.alert).toHaveBeenCalledWith(
+      'Discard resource changes?',
+      'This resource has unsaved changes.',
+      expect.any(Array),
+    );
+    const buttons = alertState.alert.mock.calls.at(-1)?.[2] as Array<{ text: string; onPress?: () => void }>;
+    renderer.act(() => buttons.find((button) => button.text === 'Discard')?.onPress?.());
+    expect(collectText(tree.root)).not.toContain('1 resource card');
+  });
+
+  it('uses semantic accessibility names instead of placeholders', async () => {
+    paramsState.params = {};
+    const tree = await renderScreen();
+    expect(findTextInputByAccessibilityLabel(tree.root, 'Title, required')).toBeTruthy();
+    expect(findTextInputByAccessibilityLabel(tree.root, 'Story, optional')).toBeTruthy();
+    renderer.act(() => findPressableByText(tree.root, 'Text post').props.onPress());
+    expect(findTextInputByAccessibilityLabel(tree.root, 'Post text, required')).toBeTruthy();
+  });
+
   it('supports a paid token price and shows estimated creator earnings', async () => {
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Next: resources').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Sell resources').props.onPress());
     const price = findTextInputByPlaceholder(tree.root, '100');
     renderer.act(() => price.props.onChangeText('50'));
@@ -342,7 +450,7 @@ describe('mobile external post composer', () => {
     const tree = await renderScreen();
     await choosePreparedMedia(tree);
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Two studies'));
-    renderer.act(() => findPressableByText(tree.root, 'Next: resources').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Prompt or script').props.onPress());
@@ -354,23 +462,64 @@ describe('mobile external post composer', () => {
 
   it('publishes without forcing a resource package', async () => {
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Next: resources').props.onPress());
-    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Publish post').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Publish public').props.onPress());
     expect(mutationState.mutate).toHaveBeenCalledWith('public');
   });
 
   it('changes visibility from a compact sheet', async () => {
     const tree = await renderScreen();
-    renderer.act(() => findPressableByText(tree.root, 'Next: resources').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Visibility: Public').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Private').props.onPress());
     expect(findPressableByAccessibilityLabel(tree.root, 'Visibility: Private')).toBeTruthy();
+  });
+
+  it('locks a paid resource package after buyers have unlocked it', async () => {
+    paramsState.params = { postId: 'post-sold' };
+    postEditState.post = {
+      id: 'post-sold',
+      title: 'Sold prompt',
+      description: 'Existing description',
+      body: 'Existing story',
+      postFormat: 'media',
+      generationId: null,
+      category: 'image',
+      visibility: 'public',
+      sourceTool: 'Manual',
+      sourceToolSlug: 'manual',
+      mediaUrl: 'https://cdn.example.com/sold.png',
+      mediaKind: 'image',
+      mediaItems: [],
+      resourceBundleInput: {
+        accessMode: 'paid',
+        previewText: 'Includes the exact prompt.',
+        priceUsdCents: 100,
+        resources: {
+          items: [{
+            id: 'item-1',
+            type: 'prompt',
+            title: 'Exact prompt',
+            textContent: 'Protected prompt',
+            sortOrder: 0,
+          }],
+        },
+      },
+      hasPaidOrders: true,
+    };
+    const tree = await renderScreen();
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    const text = collectText(tree.root);
+    expect(text).toContain('Purchased resources are protected');
+    expect(text).toContain('Existing package preserved');
+    expect(text).not.toContain('Post without resources');
   });
 
   it('routes a successful post back to the profile Posts tab', async () => {
     paramsState.params = {};
     await renderScreen();
     renderer.act(() => mutationState.options?.onSuccess?.({ postId: 'post-123' }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(routerState.replace).toHaveBeenCalledWith({ pathname: '/(tabs)/profile', params: { tab: 'posts', postId: 'post-123' } });
   });
 });
