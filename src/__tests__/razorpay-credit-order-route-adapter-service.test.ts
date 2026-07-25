@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+
+import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
@@ -26,7 +28,7 @@ describe('razorpay credit order route adapter service', () => {
     const createServiceClient = vi.fn();
     const createUserClientDependency = vi.fn();
     const createCreditRazorpayOrderForRoute = vi.fn();
-    const withProviderFetchRequestId = vi.fn((_requestId: string, operation: () => Promise<Response>) => operation());
+    const withProviderFetchRequestId = mockRequestIdPassthrough();
 
     const response = await postRazorpayCreditOrderRouteResponse({
       request,

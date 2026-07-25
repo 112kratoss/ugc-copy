@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
+
 import { getMarketplaceResourceDetailRouteResponse } from '@/lib/marketplace-resource-detail-route-adapter-service';
 
 function createContext(resourceId = 'bundle-1') {
@@ -32,7 +34,7 @@ describe('marketplace resource detail route adapter service', () => {
       id: 'bundle-1',
       postId: 'post-1',
     }));
-    const withProviderFetchRequestId = vi.fn((_: string, operation: () => Promise<Response>) => operation());
+    const withProviderFetchRequestId = mockRequestIdPassthrough();
 
     const response = await getMarketplaceResourceDetailRouteResponse({
       request: createRequest({

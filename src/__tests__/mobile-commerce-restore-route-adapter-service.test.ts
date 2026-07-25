@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
+import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
+
 import { BackendRateLimitError, MOBILE_COMMERCE_RESTORE_RATE_LIMIT } from '@/lib/backend-rate-limit';
 import { postMobileCommerceRestoreRouteResponse } from '@/lib/mobile-commerce-restore-route-adapter-service';
 
@@ -30,7 +32,7 @@ describe('mobile commerce restore route adapter service', () => {
     const createServiceClient = vi.fn();
     const enforceBackendRateLimit = vi.fn();
     const restoreMobileEntitlements = vi.fn();
-    const withProviderFetchRequestId = vi.fn((_: string, operation: () => Promise<Response>) => operation());
+    const withProviderFetchRequestId = mockRequestIdPassthrough();
 
     const response = await postMobileCommerceRestoreRouteResponse({
       request: createRequest('mobile-restore-auth-1'),
@@ -103,7 +105,7 @@ describe('mobile commerce restore route adapter service', () => {
       entitlements: [],
     };
     const restoreMobileEntitlements = vi.fn(async () => restoreResult);
-    const withProviderFetchRequestId = vi.fn((_: string, operation: () => Promise<Response>) => operation());
+    const withProviderFetchRequestId = mockRequestIdPassthrough();
 
     const response = await postMobileCommerceRestoreRouteResponse({
       request: createRequest('mobile-restore-success-1'),

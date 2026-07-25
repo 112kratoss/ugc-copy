@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
+
 import { getMarketplaceResourceListRouteResponse } from '@/lib/marketplace-resource-list-route-adapter-service';
 
 function createRequest(search = '', headers: Record<string, string> = {}) {
@@ -19,7 +21,7 @@ describe('marketplace resource list route adapter service', () => {
         offset: 0,
       },
     }));
-    const withProviderFetchRequestId = vi.fn((_: string, operation: () => Promise<Response>) => operation());
+    const withProviderFetchRequestId = mockRequestIdPassthrough();
 
     const response = await getMarketplaceResourceListRouteResponse({
       request: createRequest(

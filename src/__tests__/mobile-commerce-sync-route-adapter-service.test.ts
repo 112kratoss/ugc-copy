@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
+
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import { postMobileCommerceSyncRouteResponse } from '@/lib/mobile-commerce-sync-route-adapter-service';
 import type { MobileCommerceSyncRouteResult } from '@/lib/mobile-commerce-sync-service';
@@ -19,7 +21,7 @@ describe('mobile commerce sync route adapter service', () => {
         alreadyProcessed: false,
       },
     }));
-    const withProviderFetchRequestId = vi.fn((_requestId: string, operation: () => Promise<Response>) => operation());
+    const withProviderFetchRequestId = mockRequestIdPassthrough();
     const request = new Request('http://localhost/api/mobile/commerce/sync', {
       method: 'POST',
       headers: {

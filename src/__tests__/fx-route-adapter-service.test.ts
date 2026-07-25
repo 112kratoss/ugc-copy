@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
+
 import { getFxRouteResponse } from '@/lib/fx-route-adapter-service';
 
 describe('fx route adapter service', () => {
@@ -22,9 +24,7 @@ describe('fx route adapter service', () => {
         },
       },
     }));
-    const withProviderFetchRequestId = vi.fn(async (_requestId: string, operation: () => Promise<Response>) =>
-      operation()
-    );
+    const withProviderFetchRequestId = mockRequestIdPassthrough();
 
     const response = await getFxRouteResponse({
       request,
@@ -59,7 +59,7 @@ describe('fx route adapter service', () => {
           status: 503 as const,
           body: { error: 'fx_unavailable' as const },
         })),
-        withProviderFetchRequestId: vi.fn(async (_requestId, operation) => operation()),
+        withProviderFetchRequestId: mockRequestIdPassthrough(),
       },
     });
 

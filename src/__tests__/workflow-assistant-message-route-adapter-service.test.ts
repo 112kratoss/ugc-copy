@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { describe, expect, it, vi } from 'vitest';
+
+import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { postWorkflowAssistantMessageRouteResponse } from '@/lib/workflow-assistant-message-route-adapter-service';
@@ -19,7 +21,7 @@ describe('workflow assistant message route adapter service', () => {
     const authenticateRequest = vi.fn(async () => NextResponse.json({ error: 'Unauthorized' }, { status: 401 }));
     const createServiceClient = vi.fn();
     const createWorkflowAssistantMessageForRoute = vi.fn();
-    const withProviderFetchRequestId = vi.fn((_: string, operation: () => Promise<Response>) => operation());
+    const withProviderFetchRequestId = mockRequestIdPassthrough();
 
     const response = await postWorkflowAssistantMessageRouteResponse({
       request: new Request('http://localhost/api/workflow-canvases/canvas-1/assistant/messages', {
@@ -71,7 +73,7 @@ describe('workflow assistant message route adapter service', () => {
         authenticateRequest: vi.fn(async () => ({ supabase, userId: 'user-1' })),
         createServiceClient,
         createWorkflowAssistantMessageForRoute,
-        withProviderFetchRequestId: vi.fn((_: string, operation: () => Promise<Response>) => operation()),
+        withProviderFetchRequestId: mockRequestIdPassthrough(),
       },
     });
 
@@ -115,7 +117,7 @@ describe('workflow assistant message route adapter service', () => {
         authenticateRequest: vi.fn(async () => ({ supabase: createSupabase(), userId: 'user-1' })),
         createServiceClient: vi.fn(() => ({ kind: 'admin-supabase' }) as unknown as SupabaseClient),
         createWorkflowAssistantMessageForRoute,
-        withProviderFetchRequestId: vi.fn((_: string, operation: () => Promise<Response>) => operation()),
+        withProviderFetchRequestId: mockRequestIdPassthrough(),
       },
     });
 

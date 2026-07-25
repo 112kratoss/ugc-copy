@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+
+import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
@@ -20,7 +22,7 @@ describe('showcase publish route adapter service', () => {
     const createServiceClient = vi.fn();
     const enforceBackendRateLimit = vi.fn();
     const publishGenerationToShowcaseForRoute = vi.fn();
-    const withProviderFetchRequestId = vi.fn((_requestId: string, operation: () => Promise<Response>) => operation());
+    const withProviderFetchRequestId = mockRequestIdPassthrough();
     const request = new Request('http://localhost/api/showcase/publish', {
       method: 'POST',
       headers: { 'x-request-id': 'showcase-publish-auth-1' },

@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+
+import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
@@ -33,7 +35,7 @@ describe('showcase feed route adapter service', () => {
   it('wraps anonymous feed requests in provider request context and keeps them publicly cacheable', async () => {
     const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
     const createUserClientDependency = vi.fn();
-    const withProviderFetchRequestId = vi.fn((_requestId: string, operation: () => Promise<Response>) => operation());
+    const withProviderFetchRequestId = mockRequestIdPassthrough();
 
     const response = await getShowcaseFeedRouteResponse({
       request: new Request('http://localhost/api/showcase/feed?limit=99&tool=all&offset=12&sort=recent', {

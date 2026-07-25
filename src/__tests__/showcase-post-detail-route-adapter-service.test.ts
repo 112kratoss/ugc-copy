@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+
+import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { getShowcasePostDetailRouteResponse } from '@/lib/showcase-post-detail-route-adapter-service';
@@ -34,7 +36,7 @@ describe('showcase post detail route adapter service', () => {
       id: 'post-1',
       title: 'Hook frame',
     }));
-    const withProviderFetchRequestId = vi.fn((_: string, operation: () => Promise<Response>) => operation());
+    const withProviderFetchRequestId = mockRequestIdPassthrough();
 
     const response = await getShowcasePostDetailRouteResponse({
       request: createRequest({

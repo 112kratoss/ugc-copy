@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+
+import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
@@ -10,7 +12,7 @@ describe('workflow blueprint route adapter service', () => {
     const adminSupabase = { service: 'admin' } as unknown as SupabaseClient;
     const createServiceClient = vi.fn(() => adminSupabase);
     const createUserClient = vi.fn(() => userSupabase);
-    const withProviderFetchRequestId = vi.fn((_: string, operation: () => Promise<Response>) => operation());
+    const withProviderFetchRequestId = mockRequestIdPassthrough();
     const planWorkflowBlueprintForRoute = vi.fn(async (input) => {
       await expect(input.readRequestBody()).resolves.toEqual({ productName: 'Creator Kit' });
       expect(input.createAdminSupabase()).toBe(adminSupabase);
@@ -70,7 +72,7 @@ describe('workflow blueprint route adapter service', () => {
       retryAfterSeconds: 42,
       resetAt: '2026-06-23T03:00:00.000Z',
     });
-    const withProviderFetchRequestId = vi.fn((_: string, operation: () => Promise<Response>) => operation());
+    const withProviderFetchRequestId = mockRequestIdPassthrough();
 
     const response = await postWorkflowBlueprintRouteResponse({
       request: new Request('https://app.example/api/workflow-blueprint', {
@@ -121,7 +123,7 @@ describe('workflow blueprint route adapter service', () => {
           body: { error: 'Product name, audience, and primary message are required.' },
           status: 400,
         })),
-        withProviderFetchRequestId: vi.fn((_: string, operation: () => Promise<Response>) => operation()),
+        withProviderFetchRequestId: mockRequestIdPassthrough(),
       },
     });
 
