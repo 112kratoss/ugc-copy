@@ -15,6 +15,8 @@ export function FeedVideoPreview({
   height,
   radius,
   accent,
+  videoBackdrop = 'blurred',
+  videoContentFit = 'contain',
 }: {
   url: string;
   previewUrl?: string | null;
@@ -24,6 +26,8 @@ export function FeedVideoPreview({
   height: number;
   radius: number;
   accent: string;
+  videoBackdrop?: 'blurred' | 'none';
+  videoContentFit?: 'cover' | 'contain';
 }) {
   const [failedPosterUrl, setFailedPosterUrl] = useState<string | null>(null);
   const usablePreviewUrl = previewUrl && previewUrl !== failedPosterUrl ? previewUrl : null;
@@ -90,6 +94,8 @@ export function FeedVideoPreview({
       height={height}
       radius={radius}
       accent={accent}
+      videoBackdrop={videoBackdrop}
+      videoContentFit={videoContentFit}
     />
   );
 }
@@ -102,6 +108,8 @@ function ActiveFeedVideoPreview({
   height,
   radius,
   accent,
+  videoBackdrop,
+  videoContentFit,
 }: {
   url: string;
   previewUrl?: string | null;
@@ -110,6 +118,8 @@ function ActiveFeedVideoPreview({
   height: number;
   radius: number;
   accent: string;
+  videoBackdrop: 'blurred' | 'none';
+  videoContentFit: 'cover' | 'contain';
 }) {
   const [frameUrl, setFrameUrl] = useState<string | null>(null);
   const [errorUrl, setErrorUrl] = useState<string | null>(null);
@@ -143,6 +153,8 @@ function ActiveFeedVideoPreview({
       backdropUrl={previewUrl}
       posterUrl={previewUrl}
       posterVisible={Boolean(previewUrl && (!hasFrame || hasError))}
+      videoBackdrop={videoBackdrop}
+      videoContentFit={videoContentFit}
       cacheKey={previewCacheKey}
       thumbhash={previewThumbhash}
       radius={radius}

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  canSaveViewerItemOnDoubleTap,
+  getDoubleTapSaveHeartAnimationSpec,
+  getDoubleTapSaveHeartPalette,
+  getDoubleTapSaveHeartPosition,
   getRailActionOpacity,
   getNativeRemixCreateHref,
   getSaveHeartIconProps,
@@ -41,8 +45,8 @@ describe('immersive viewer actions', () => {
 
   it('fills the save heart when the post is already saved', () => {
     expect(getSaveHeartIconProps({ isSaved: true })).toMatchObject({
-      color: '#fb7185',
-      fill: '#fb7185',
+      color: '#ff3b64',
+      fill: '#ff3b64',
     });
     expect(getSaveHeartIconProps({ isSaved: false })).toMatchObject({
       color: '#ffffff',
@@ -56,16 +60,93 @@ describe('immersive viewer actions', () => {
     expect(getRailActionOpacity({ disabled: false, pressed: true })).toBe(0.72);
   });
 
-  it('uses a restrained heart tap animation for save feedback', () => {
+  it('uses a crisp icon pop without a separate halo for save feedback', () => {
     const saveSpec = getSaveHeartTapAnimationSpec({ willSave: true });
-    expect(saveSpec.pressInScale).toBe(0.96);
-    expect(saveSpec.peakScale).toBe(1.04);
-    expect(saveSpec.haloPeakScale).toBe(1.14);
-    expect(saveSpec.haloPeakOpacity).toBeLessThanOrEqual(0.14);
+    expect(saveSpec.pressInScale).toBeLessThan(1);
+    expect(saveSpec.peakScale).toBeGreaterThan(1);
+    expect(saveSpec.haloPeakOpacity).toBe(0);
 
     const unsaveSpec = getSaveHeartTapAnimationSpec({ willSave: false });
     expect(unsaveSpec.peakScale).toBeLessThan(saveSpec.peakScale);
-    expect(unsaveSpec.haloPeakOpacity).toBeLessThan(saveSpec.haloPeakOpacity);
+    expect(unsaveSpec.haloPeakOpacity).toBe(0);
+  });
+
+  it('uses double tap only to save, never to unsave or duplicate a pending save', () => {
+    expect(canSaveViewerItemOnDoubleTap({
+      canSave: true,
+      isSaved: false,
+      saveLoading: false,
+    })).toBe(true);
+    expect(canSaveViewerItemOnDoubleTap({
+      canSave: true,
+      isSaved: true,
+      saveLoading: false,
+    })).toBe(false);
+    expect(canSaveViewerItemOnDoubleTap({
+      canSave: true,
+      isSaved: false,
+      saveLoading: true,
+    })).toBe(false);
+    expect(canSaveViewerItemOnDoubleTap({
+      canSave: false,
+      isSaved: false,
+      saveLoading: false,
+    })).toBe(false);
+  });
+
+  it('uses the longer Instagram-style pop, hold, and shrink timing', () => {
+    const standard = getDoubleTapSaveHeartAnimationSpec(false);
+    expect(standard.startScale).toBeLessThan(standard.peakScale);
+    expect(standard.settleScale).toBeLessThan(standard.restingScale);
+    expect(standard.peakScale).toBeGreaterThan(standard.restingScale);
+    expect(standard.exitScale).toBeLessThan(standard.startScale);
+    expect(
+      standard.entryDurationMs
+      + standard.settleDurationMs
+      + standard.reboundDurationMs
+      + standard.holdDurationMs
+      + standard.exitDurationMs
+    ).toBeLessThanOrEqual(1200);
+
+    const reduced = getDoubleTapSaveHeartAnimationSpec(true);
+    expect(reduced.startScale).toBe(1);
+    expect(reduced.peakScale).toBe(1);
+    expect(reduced.settleScale).toBe(1);
+    expect(reduced.restingScale).toBe(1);
+    expect(reduced.exitScale).toBe(1);
+    expect(reduced.entryDurationMs).toBe(0);
+  });
+
+  it('cycles through the pink and orange Instagram heart treatments', () => {
+    expect(getDoubleTapSaveHeartPalette(0)).toEqual({
+      startColor: '#ff2d8d',
+      endColor: '#ff2d8d',
+    });
+    expect(getDoubleTapSaveHeartPalette(1)).toEqual({
+      startColor: '#ff5a24',
+      endColor: '#ffb000',
+    });
+    expect(getDoubleTapSaveHeartPalette(2)).toEqual(
+      getDoubleTapSaveHeartPalette(0)
+    );
+  });
+
+  it('anchors the large heart at the finger while keeping it fully on screen', () => {
+    expect(getDoubleTapSaveHeartPosition({
+      x: 190,
+      y: 420,
+      width: 390,
+      height: 844,
+      heartSize: 90,
+    })).toEqual({ x: 190, y: 420 });
+
+    expect(getDoubleTapSaveHeartPosition({
+      x: 4,
+      y: 840,
+      width: 390,
+      height: 844,
+      heartSize: 90,
+    })).toEqual({ x: 45, y: 799 });
   });
 
   it('prefers server remix redirect metadata for native create navigation', () => {

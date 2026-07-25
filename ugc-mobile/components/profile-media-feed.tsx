@@ -4,7 +4,7 @@ import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer } from 'expo-video';
-import { ArrowLeft, Globe, ImageOff, Images, LockKeyhole, MoreVertical, Play, Repeat2, Share2, Volume2, VolumeX, Wand2 } from 'lucide-react-native';
+import { ArrowLeft, Globe, ImageOff, Images, LockKeyhole, MoreVertical, Play, Repeat2, Share2, Wand2 } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import { ActivityIndicator, Alert, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
@@ -798,13 +798,12 @@ function ActiveProfileFeedVideo({
   const reducedMotion = useReducedMotion();
   const player = useVideoPlayer({ uri: url, useCaching: true }, (instance) => {
     instance.loop = true;
-    instance.muted = true;
+    instance.muted = false;
     instance.volume = 1.0;
     instance.showNowPlayingNotification = false;
     instance.staysActiveInBackground = false;
   });
   const [isPlaying, setIsPlaying] = useState(player.playing);
-  const [isMuted, setIsMuted] = useState(player.muted);
 
   useEffect(() => {
     if (reducedMotion) {
@@ -820,8 +819,6 @@ function ActiveProfileFeedVideo({
   useEffect(() => {
     setHasFrame(false);
     setHasError(false);
-    player.muted = true;
-    setIsMuted(true);
   }, [player, url]);
 
   useEffect(() => {
@@ -850,12 +847,6 @@ function ActiveProfileFeedVideo({
     }
     player.play();
     setIsPlaying(true);
-  };
-
-  const toggleMuted = () => {
-    const nextMuted = !player.muted;
-    player.muted = nextMuted;
-    setIsMuted(nextMuted);
   };
 
   return (
@@ -888,30 +879,6 @@ function ActiveProfileFeedVideo({
           </View>
         ) : null}
         {!isPlaying && hasFrame ? <ProfileFeedPlayBadge /> : null}
-      </Pressable>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={isMuted ? 'Unmute video' : 'Mute video'}
-        onPress={toggleMuted}
-        style={({ pressed }) => ({
-          position: 'absolute',
-          right: 14,
-          bottom: 14,
-          width: 48,
-          height: 48,
-          borderRadius: 24,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: pressed ? 'rgba(9,15,17,0.9)' : 'rgba(9,15,17,0.72)',
-          borderWidth: 1,
-          borderColor: 'rgba(255,255,255,0.22)',
-        })}
-      >
-        {isMuted ? (
-          <VolumeX size={22} color="#ffffff" strokeWidth={2.2} />
-        ) : (
-          <Volume2 size={22} color="#ffffff" strokeWidth={2.2} />
-        )}
       </Pressable>
     </View>
   );

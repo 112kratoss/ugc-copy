@@ -178,8 +178,6 @@ vi.mock('lucide-react-native', () => ({
   Send: (props: Record<string, unknown>) => React.createElement('send-icon', props),
   Share2: (props: Record<string, unknown>) => React.createElement('share-icon', props),
   Wand2: (props: Record<string, unknown>) => React.createElement('wand-icon', props),
-  Volume2: (props: Record<string, unknown>) => React.createElement('volume-icon', props),
-  VolumeX: (props: Record<string, unknown>) => React.createElement('volume-x-icon', props),
 }));
 
 const authState = vi.hoisted(() => ({
@@ -467,7 +465,7 @@ describe('ProfileMediaFeedScreen', () => {
     );
   });
 
-  it('plays the active profile feed video muted with an accessible 48dp mute control', () => {
+  it('plays active full-screen profile videos with sound and no persistent mute control', () => {
     const tree = renderScreen();
 
     const videoFrames = tree.root.findAll((node) =>
@@ -480,21 +478,10 @@ describe('ProfileMediaFeedScreen', () => {
     expect(videoState.useVideoPlayer).toHaveBeenCalledTimes(1);
 
     const player = videoState.players[0];
-    expect(player.muted).toBe(true);
-    expect(player.play).toHaveBeenCalledTimes(1);
-
-    const unmuteButton = tree.root.find((node) => (
-      String(node.type) === 'pressable'
-      && node.props.accessibilityLabel === 'Unmute video'
-    ));
-    expect(unmuteButton.props.style).toMatchObject({ width: 48, height: 48 });
-
-    renderer.act(() => {
-      unmuteButton.props.onPress();
-    });
-
     expect(player.muted).toBe(false);
-    expect(tree.root.findByProps({ accessibilityLabel: 'Mute video' })).toBeTruthy();
+    expect(player.play).toHaveBeenCalledTimes(1);
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Unmute video' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Mute video' })).toHaveLength(0);
   });
 
   it('shows an honest retryable source error instead of the empty state', () => {

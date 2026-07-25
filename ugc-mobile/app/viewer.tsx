@@ -5,12 +5,14 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer } from 'expo-video';
-import { ArrowLeft, Copy, FileText, Heart, ImageOff, Images, Lock, MoreVertical, Play, Repeat2, Share2, Volume2, VolumeX, X } from 'lucide-react-native';
+import { ArrowLeft, Copy, FileText, Heart, ImageOff, Images, Lock, MoreVertical, Play, Repeat2, Share2, X } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Alert, Animated, Easing, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View } from 'react-native';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { AccessibilityInfo, ActivityIndicator, Alert, Animated, Easing, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
+import { DoubleTapPressable } from '@/components/double-tap-pressable';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { PostResourceBundleContent } from '@/components/post-resource-bundle-content';
@@ -68,7 +70,7 @@ import {
 } from '@/lib/showcase-feed-events';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { PostResourceKind, ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
-import { getNativeRemixCreateHref, getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, type SaveHeartTapAnimationSpec } from '@/lib/viewer-actions';
+import { canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, type SaveHeartTapAnimationSpec } from '@/lib/viewer-actions';
 
 type ViewerParams = {
   algorithmVersion?: string | string[];
@@ -84,7 +86,20 @@ type SaveMutationVariables = {
   previousSaveCount: number;
   shouldSave: boolean;
   sourceSurface: string;
+  trigger: 'double-tap' | 'rail';
 };
+
+type SaveItemHandler = (
+  item: ImmersivePreviewItem,
+  trigger?: SaveMutationVariables['trigger']
+) => void;
+
+type DoubleTapSavePosition = {
+  x: number;
+  y: number;
+};
+
+const DOUBLE_TAP_SAVE_HEART_SIZE = 90;
 
 export default function ImmersivePreviewViewerScreen() {
   const params = useLocalSearchParams<ViewerParams>();
@@ -300,6 +315,12 @@ export default function ImmersivePreviewViewerScreen() {
         isSaved: !variables.shouldSave,
         saveCount: variables.previousSaveCount,
       });
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
+      void AccessibilityInfo.announceForAccessibility(
+        variables.shouldSave
+          ? 'Could not save. Please try again.'
+          : 'Could not remove from saved. Please try again.'
+      );
     },
     onSuccess: (result, variables) => {
       reconcileShowcaseSave({
@@ -312,16 +333,21 @@ export default function ImmersivePreviewViewerScreen() {
       scheduleShowcaseSaveCompletionEffects({
         postId: variables.postId,
         userId: user?.id,
-        hapticFeedback: Haptics.selectionAsync,
+        hapticFeedback: variables.trigger === 'double-tap'
+          ? undefined
+          : Haptics.selectionAsync,
         invalidateQueries: (filters) => queryClient.invalidateQueries(filters),
       });
+      void AccessibilityInfo.announceForAccessibility(
+        result.isSaved ? 'Saved' : 'Removed from saved'
+      );
       if (source === 'showcase-feed') {
         recordViewerFeedEvent(variables.item, result.isSaved ? 'save' : 'unsave');
       }
     },
   });
 
-  const saveItem = (item: ImmersivePreviewItem) => {
+  const saveItem: SaveItemHandler = (item, trigger = 'rail') => {
     if (!item.canSave || !item.showcasePostId) return;
     if (!user) {
       router.push('/auth');
@@ -333,6 +359,7 @@ export default function ImmersivePreviewViewerScreen() {
       previousSaveCount: item.saveCount,
       shouldSave: !item.isSaved,
       sourceSurface: source === 'profile-saved' ? 'mobile-profile-saved' : 'mobile-viewer',
+      trigger,
     });
   };
 
@@ -669,7 +696,7 @@ function ImmersiveSlide({
   onCreatorOpen: (item: ImmersivePreviewItem) => void;
   onDetailsPageOpenChange: (open: boolean) => void;
   onRecreate: (item: ImmersivePreviewItem) => void;
-  onSave: (item: ImmersivePreviewItem) => void;
+  onSave: SaveItemHandler;
   onShare: (item: ImmersivePreviewItem) => void;
   onUnlockRemix: (item: ImmersivePreviewItem) => void;
   saveLoading: boolean;
@@ -679,7 +706,9 @@ function ImmersiveSlide({
 }) {
   const horizontalRef = useRef<FlatList<ImmersiveSlidePage>>(null);
   const [currentHorizontalIndex, setCurrentHorizontalIndex] = useState(0);
+  const [saveHeartPopTrigger, setSaveHeartPopTrigger] = useState(0);
   const prevActiveRef = useRef(active);
+  const doubleTapHeart = useDoubleTapSaveHeartAnimation({ height, width });
 
   const pages = useMemo(() => buildImmersiveSlidePages(item), [item]);
   const currentPageIsDetails = isImmersiveDetailsSlidePageIndex(pages, currentHorizontalIndex);
@@ -721,6 +750,17 @@ function ImmersiveSlide({
   const canRecreate = item.availableActions.includes('recreate');
   const canUnlockRemix = item.availableActions.includes('unlock-remix');
   const videoPlaybackActive = active && activeVideoId === item.id && !currentPageIsDetails;
+  const saveFromDoubleTap = useCallback((position: DoubleTapSavePosition) => {
+    doubleTapHeart.play(position);
+    setSaveHeartPopTrigger((current) => current + 1);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    if (!canSaveViewerItemOnDoubleTap({
+      canSave: item.canSave,
+      isSaved: item.isSaved,
+      saveLoading,
+    })) return;
+    onSave(item, 'double-tap');
+  }, [doubleTapHeart, item, onSave, saveLoading]);
 
   const renderOverlays = () => {
     if (currentPageIsDetails) {
@@ -820,6 +860,7 @@ function ImmersiveSlide({
             preserveIconWhileLoading
             showDisabledAsActive={item.isSaved && !item.canSave}
             tapAnimationSpec={getSaveHeartTapAnimationSpec({ willSave: !item.isSaved, enabled: item.canSave })}
+            externalPopTrigger={saveHeartPopTrigger}
           />
           <RailActionButton
             icon={<Share2 size={27} color="#ffffff" strokeWidth={2.4} />}
@@ -899,6 +940,7 @@ function ImmersiveSlide({
           item={item}
           onRecreate={onRecreate}
           onSave={onSave}
+          onDoubleTapSave={saveFromDoubleTap}
           onShare={onShare}
           onUnlockRemix={onUnlockRemix}
           page={pages[0] ?? { type: 'text' }}
@@ -907,6 +949,12 @@ function ImmersiveSlide({
           width={width}
         />
         {renderOverlays()}
+        <DoubleTapSaveHeart
+          opacity={doubleTapHeart.opacity}
+          palette={doubleTapHeart.palette}
+          position={doubleTapHeart.position}
+          scale={doubleTapHeart.scale}
+        />
       </View>
     );
   }
@@ -945,6 +993,7 @@ function ImmersiveSlide({
             item={item}
             onRecreate={onRecreate}
             onSave={onSave}
+            onDoubleTapSave={saveFromDoubleTap}
             onShare={onShare}
             onUnlockRemix={onUnlockRemix}
             page={page}
@@ -959,6 +1008,165 @@ function ImmersiveSlide({
         windowSize={IMMERSIVE_HORIZONTAL_LIST_TUNING.windowSize}
       />
       {renderOverlays()}
+      <DoubleTapSaveHeart
+        opacity={doubleTapHeart.opacity}
+        palette={doubleTapHeart.palette}
+        position={doubleTapHeart.position}
+        scale={doubleTapHeart.scale}
+      />
+    </View>
+  );
+}
+
+function useDoubleTapSaveHeartAnimation({
+  height,
+  width,
+}: {
+  height: number;
+  width: number;
+}) {
+  const reducedMotion = useReducedMotion();
+  const [playCount, setPlayCount] = useState(0);
+  const nextPlayCountRef = useRef(0);
+  const opacity = useRef(new Animated.Value(0)).current;
+  const position = useRef(new Animated.ValueXY({
+    x: width / 2,
+    y: height / 2,
+  })).current;
+  const scale = useRef(new Animated.Value(1)).current;
+  const animationRef = useRef<ReturnType<typeof Animated.sequence> | null>(null);
+
+  useEffect(() => () => {
+    animationRef.current?.stop();
+  }, []);
+
+  const play = useCallback((tapPosition: DoubleTapSavePosition) => {
+    const spec = getDoubleTapSaveHeartAnimationSpec(reducedMotion);
+    position.setValue(getDoubleTapSaveHeartPosition({
+      ...tapPosition,
+      width,
+      height,
+      heartSize: DOUBLE_TAP_SAVE_HEART_SIZE,
+    }));
+    const currentPlayCount = nextPlayCountRef.current;
+    setPlayCount(currentPlayCount);
+    nextPlayCountRef.current = currentPlayCount + 1;
+    animationRef.current?.stop();
+    opacity.setValue(0);
+    scale.setValue(spec.startScale);
+
+    const animation = Animated.sequence([
+      Animated.parallel([
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration: spec.entryDurationMs,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(scale, {
+          toValue: spec.peakScale,
+          duration: spec.entryDurationMs,
+          easing: reducedMotion ? Easing.linear : Easing.out(Easing.back(1.35)),
+          useNativeDriver: true,
+        }),
+      ]),
+      Animated.timing(scale, {
+        toValue: spec.settleScale,
+        duration: spec.settleDurationMs,
+        easing: reducedMotion ? Easing.linear : Easing.inOut(Easing.quad),
+        useNativeDriver: true,
+      }),
+      Animated.timing(scale, {
+        toValue: spec.restingScale,
+        duration: spec.reboundDurationMs,
+        easing: reducedMotion ? Easing.linear : Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+      Animated.delay(spec.holdDurationMs),
+      Animated.parallel([
+        Animated.timing(opacity, {
+          toValue: 0,
+          duration: spec.exitDurationMs,
+          easing: Easing.in(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(scale, {
+          toValue: spec.exitScale,
+          duration: spec.exitDurationMs,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ]),
+    ]);
+
+    animationRef.current = animation;
+    animation.start(() => {
+      if (animationRef.current === animation) {
+        animationRef.current = null;
+      }
+    });
+  }, [height, opacity, position, reducedMotion, scale, width]);
+
+  return useMemo(() => ({
+    opacity,
+    palette: getDoubleTapSaveHeartPalette(playCount),
+    play,
+    position,
+    scale,
+  }), [opacity, play, playCount, position, scale]);
+}
+
+function DoubleTapSaveHeart({
+  opacity,
+  palette,
+  position,
+  scale,
+}: {
+  opacity: Animated.Value;
+  palette: ReturnType<typeof getDoubleTapSaveHeartPalette>;
+  position: Animated.ValueXY;
+  scale: Animated.Value;
+}) {
+  const gradientId = useId().replace(/:/g, '');
+
+  return (
+    <View
+      pointerEvents="none"
+      style={{ position: 'absolute', inset: 0 }}
+    >
+      <Animated.View
+        style={{
+          position: 'absolute',
+          left: -DOUBLE_TAP_SAVE_HEART_SIZE / 2,
+          top: -DOUBLE_TAP_SAVE_HEART_SIZE / 2,
+          width: DOUBLE_TAP_SAVE_HEART_SIZE,
+          height: DOUBLE_TAP_SAVE_HEART_SIZE,
+          opacity,
+          transform: [
+            { translateX: position.x },
+            { translateY: position.y },
+            { scale },
+          ],
+          shadowColor: '#000000',
+          shadowOffset: { width: 0, height: 3 },
+          shadowOpacity: 0.22,
+          shadowRadius: 6,
+          elevation: 7,
+        }}
+      >
+        <Svg height={DOUBLE_TAP_SAVE_HEART_SIZE} viewBox="0 0 24 24" width={DOUBLE_TAP_SAVE_HEART_SIZE}>
+          <Defs>
+            <SvgLinearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
+              <Stop offset="0" stopColor={palette.startColor} />
+              <Stop offset="1" stopColor={palette.endColor} />
+            </SvgLinearGradient>
+          </Defs>
+          <Path
+            d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78a5.5 5.5 0 0 0 1.06-8.84Z"
+            fill={`url(#${gradientId})`}
+          />
+        </Svg>
+      </Animated.View>
     </View>
   );
 }
@@ -968,6 +1176,7 @@ function MediaSlidePage({
   bottomInset,
   height,
   item,
+  onDoubleTapSave,
   onRecreate,
   onSave,
   onShare,
@@ -981,6 +1190,7 @@ function MediaSlidePage({
   bottomInset: number;
   height: number;
   item: ImmersivePreviewItem;
+  onDoubleTapSave: (position: DoubleTapSavePosition) => void;
   onRecreate: (item: ImmersivePreviewItem) => void;
   onSave: (item: ImmersivePreviewItem) => void;
   onShare: (item: ImmersivePreviewItem) => void;
@@ -1013,6 +1223,7 @@ function MediaSlidePage({
         <ImmersiveMedia
           mediaItem={page.mediaItem}
           active={active}
+          onDoubleTapSave={onDoubleTapSave}
           width={width}
           height={height}
         />
@@ -1473,7 +1684,26 @@ function formatCount(value: number) {
   return String(value);
 }
 
-function ImmersiveMedia({ mediaItem, active, width, height }: { mediaItem: ShowcaseMediaItem; active: boolean; width: number; height: number }) {
+function ImmersiveMedia({
+  mediaItem,
+  active,
+  onDoubleTapSave,
+  width,
+  height,
+}: {
+  mediaItem: ShowcaseMediaItem;
+  active: boolean;
+  onDoubleTapSave: (position: DoubleTapSavePosition) => void;
+  width: number;
+  height: number;
+}) {
+  const handleDoublePress = useCallback((event: GestureResponderEvent) => {
+    onDoubleTapSave({
+      x: event.nativeEvent.locationX,
+      y: event.nativeEvent.locationY,
+    });
+  }, [onDoubleTapSave]);
+
   if (mediaItem.mediaKind === 'video') {
     if (active && mediaItem.url) {
       return <ActiveVideo
@@ -1481,6 +1711,7 @@ function ImmersiveMedia({ mediaItem, active, width, height }: { mediaItem: Showc
         previewUrl={mediaItem.previewUrl}
         previewCacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
         previewThumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
+        onDoublePress={handleDoublePress}
         width={width}
         height={height}
       />;
@@ -1488,7 +1719,11 @@ function ImmersiveMedia({ mediaItem, active, width, height }: { mediaItem: Showc
 
     if (mediaItem.previewUrl) {
       return (
-        <View style={{ width, height }}>
+        <DoubleTapPressable
+          accessible={false}
+          onDoublePress={handleDoublePress}
+          style={{ width, height }}
+        >
           <FeedMediaFrame
             kind="image"
             url={mediaItem.previewUrl}
@@ -1503,12 +1738,16 @@ function ImmersiveMedia({ mediaItem, active, width, height }: { mediaItem: Showc
               <Play size={34} color="#fff" fill="#fff" strokeWidth={2.4} />
             </View>
           </View>
-        </View>
+        </DoubleTapPressable>
       );
     }
 
     return mediaItem.url ? (
-      <View style={{ width, height, backgroundColor: '#020203' }}>
+      <DoubleTapPressable
+        accessible={false}
+        onDoublePress={handleDoublePress}
+        style={{ width, height, backgroundColor: '#020203' }}
+      >
         <FeedVideoPreview
           url={mediaItem.url}
           active={false}
@@ -1521,37 +1760,51 @@ function ImmersiveMedia({ mediaItem, active, width, height }: { mediaItem: Showc
             <Play size={34} color="#fff" fill="#fff" strokeWidth={2.4} />
           </View>
         </View>
-      </View>
+      </DoubleTapPressable>
     ) : (
-      <View style={{ width, height, alignItems: 'center', justifyContent: 'center', backgroundColor: '#020203' }}>
+      <DoubleTapPressable
+        accessible={false}
+        onDoublePress={handleDoublePress}
+        style={{ width, height, alignItems: 'center', justifyContent: 'center', backgroundColor: '#020203' }}
+      >
         <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.16)' }}>
           <Play size={34} color="#fff" fill="#fff" strokeWidth={2.4} />
         </View>
-      </View>
+      </DoubleTapPressable>
     );
   }
 
   if (mediaItem.url) {
     return (
-      <FeedMediaFrame
-        kind="image"
-        url={mediaItem.url}
-        backdropUrl={mediaItem.previewUrl}
-        cacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
-        thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
-        transition={120}
-        recyclingKey={`viewer:${mediaItem.id}`}
+      <DoubleTapPressable
+        accessible={false}
+        onDoublePress={handleDoublePress}
         style={{ width, height }}
-      />
+      >
+        <FeedMediaFrame
+          kind="image"
+          url={mediaItem.url}
+          backdropUrl={mediaItem.previewUrl}
+          cacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
+          thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
+          transition={120}
+          recyclingKey={`viewer:${mediaItem.id}`}
+          style={{ width, height }}
+        />
+      </DoubleTapPressable>
     );
   }
 
   return (
-    <View style={{ width, height, backgroundColor: '#07070c' }}>
+    <DoubleTapPressable
+      accessible={false}
+      onDoublePress={handleDoublePress}
+      style={{ width, height, backgroundColor: '#07070c' }}
+    >
       <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
         <ImageOff size={34} color="rgba(255,255,255,0.68)" />
       </View>
-    </View>
+    </DoubleTapPressable>
   );
 }
 
@@ -1560,6 +1813,7 @@ function ActiveVideo({
   previewUrl,
   previewCacheKey,
   previewThumbhash,
+  onDoublePress,
   width,
   height,
 }: {
@@ -1567,16 +1821,16 @@ function ActiveVideo({
   previewUrl?: string | null;
   previewCacheKey?: string;
   previewThumbhash?: string | null;
+  onDoublePress: (event: GestureResponderEvent) => void;
   width: number;
   height: number;
 }) {
   const [hasFrame, setHasFrame] = useState(false);
   const [hasError, setHasError] = useState(false);
-  const [isMuted, setIsMuted] = useState(true);
   const reducedMotion = useReducedMotion();
   const player = useVideoPlayer({ uri: url, useCaching: true }, (instance) => {
     instance.loop = true;
-    instance.muted = true;
+    instance.muted = false;
     instance.volume = 1.0;
     instance.showNowPlayingNotification = false;
     instance.staysActiveInBackground = false;
@@ -1594,10 +1848,6 @@ function ActiveVideo({
     setHasFrame(false);
     setHasError(false);
   }, [url]);
-
-  useEffect(() => {
-    player.muted = isMuted;
-  }, [isMuted, player]);
 
   useEffect(() => {
     const subscription = player.addListener('playingChange', (event) => {
@@ -1625,18 +1875,15 @@ function ActiveVideo({
     }
   };
 
-  const toggleMuted = () => {
-    setIsMuted((current) => !current);
-  };
-
   return (
     <View style={{ width, height, alignItems: 'center', justifyContent: 'center' }}>
-      <Pressable
+      <DoubleTapPressable
         accessibilityRole="button"
         accessibilityLabel={isPlaying ? 'Pause video' : 'Play video'}
         accessibilityHint={reducedMotion ? 'Playback is paused because reduced motion is enabled' : 'Toggles video playback'}
         accessibilityState={{ selected: isPlaying }}
-        onPress={togglePlayback}
+        onDoublePress={onDoublePress}
+        onSinglePress={togglePlayback}
         style={{ width, height, alignItems: 'center', justifyContent: 'center' }}
       >
         <FeedMediaFrame
@@ -1654,34 +1901,13 @@ function ActiveVideo({
           style={{ width, height }}
         />
         {!isPlaying && hasFrame && !hasError ? (
-          <View pointerEvents="none" style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.42)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)' }}>
-            <Play size={34} color="#fff" fill="#fff" strokeWidth={2.4} style={{ marginLeft: 4 }} />
+          <View pointerEvents="none" style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
+            <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.42)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)' }}>
+              <Play size={34} color="#fff" fill="#fff" strokeWidth={2.4} style={{ marginLeft: 4 }} />
+            </View>
           </View>
         ) : null}
-      </Pressable>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={isMuted ? 'Unmute video' : 'Mute video'}
-        accessibilityHint="Toggles video sound without changing playback"
-        accessibilityState={{ selected: !isMuted }}
-        onPress={toggleMuted}
-        style={({ pressed }) => ({
-          position: 'absolute',
-          top: 112,
-          left: 18,
-          width: 48,
-          height: 48,
-          borderRadius: 24,
-          borderWidth: 1,
-          borderColor: 'rgba(255,255,255,0.18)',
-          backgroundColor: pressed ? 'rgba(255,255,255,0.22)' : 'rgba(12,12,16,0.56)',
-          alignItems: 'center',
-          justifyContent: 'center',
-          opacity: pressed ? 0.82 : 1,
-        })}
-      >
-        {isMuted ? <VolumeX size={22} color="#ffffff" /> : <Volume2 size={22} color="#ffffff" />}
-      </Pressable>
+      </DoubleTapPressable>
     </View>
   );
 }
@@ -1750,6 +1976,7 @@ function ViewerCreatorAvatar({
 
 function RailActionButton({
   disabled,
+  externalPopTrigger,
   icon,
   label,
   loading,
@@ -1760,6 +1987,7 @@ function RailActionButton({
   tapAnimationSpec,
 }: {
   disabled?: boolean;
+  externalPopTrigger?: number;
   icon: React.ReactNode;
   label: string;
   loading?: boolean;
@@ -1770,9 +1998,17 @@ function RailActionButton({
   tapAnimationSpec?: SaveHeartTapAnimationSpec;
 }) {
   const tapProgress = useRef(new Animated.Value(0)).current;
+  const externalPopProgress = useRef(new Animated.Value(0)).current;
+  const previousExternalPopTriggerRef = useRef(externalPopTrigger);
   const reducedMotion = useReducedMotion();
   const [activeTapAnimationSpec, setActiveTapAnimationSpec] = useState(tapAnimationSpec);
   const animationSpec = activeTapAnimationSpec ?? tapAnimationSpec;
+  const displayLabel = label === '0' ? 'Save' : label;
+  const accessibilityLabel = tapAnimationSpec && label !== 'Saved'
+    ? label === '0'
+      ? 'Save'
+      : `Save, ${label} ${label === '1' ? 'save' : 'saves'}`
+    : displayLabel;
   const iconScale = tapProgress.interpolate({
     inputRange: [0, 0.32, 0.66, 1],
     outputRange: [
@@ -1789,6 +2025,10 @@ function RailActionButton({
   const haloScale = tapProgress.interpolate({
     inputRange: [0, 0.44, 1],
     outputRange: [0.92, animationSpec?.haloPeakScale ?? 1, (animationSpec?.haloPeakScale ?? 1) + 0.04],
+  });
+  const externalIconScale = externalPopProgress.interpolate({
+    inputRange: [0, 0.42, 1],
+    outputRange: [1, 1.13, 1],
   });
 
   const runTapAnimation = useCallback(() => {
@@ -1815,6 +2055,39 @@ function RailActionButton({
     ]).start();
   }, [reducedMotion, tapAnimationSpec, tapProgress]);
 
+  useEffect(() => {
+    if (
+      externalPopTrigger === undefined
+      || externalPopTrigger === previousExternalPopTriggerRef.current
+    ) {
+      return;
+    }
+
+    previousExternalPopTriggerRef.current = externalPopTrigger;
+    externalPopProgress.stopAnimation();
+    externalPopProgress.setValue(0);
+    if (reducedMotion) return;
+
+    Animated.sequence([
+      Animated.timing(externalPopProgress, {
+        toValue: 0.42,
+        duration: 80,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+      Animated.timing(externalPopProgress, {
+        toValue: 1,
+        duration: 150,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [externalPopProgress, externalPopTrigger, reducedMotion]);
+
+  useEffect(() => () => {
+    externalPopProgress.stopAnimation();
+  }, [externalPopProgress]);
+
   const handlePress = useCallback(() => {
     runTapAnimation();
     onPress();
@@ -1823,7 +2096,7 @@ function RailActionButton({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel}
       accessibilityState={{ disabled: Boolean(disabled || loading), busy: Boolean(loading) }}
       disabled={disabled || loading}
       onPress={handlePress}
@@ -1868,7 +2141,9 @@ function RailActionButton({
           <ActivityIndicator color={primary ? '#050505' : '#fff'} />
         ) : (
           <Animated.View style={{ transform: [{ scale: iconScale }] }}>
-            {icon}
+            <Animated.View style={{ transform: [{ scale: externalIconScale }] }}>
+              {icon}
+            </Animated.View>
           </Animated.View>
         )}
       </View>
@@ -1885,7 +2160,7 @@ function RailActionButton({
           fontVariant: ['tabular-nums'],
         }}
       >
-        {label === '0' ? 'Save' : label}
+        {displayLabel}
       </Text>
     </Pressable>
   );

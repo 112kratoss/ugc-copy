@@ -155,13 +155,35 @@ describe('showcase feed view model', () => {
     expect(card?.unlock).toBeNull();
   });
 
-  it('keeps mobile masonry columns visually separated', () => {
+  it('uses tight Pinterest-style masonry spacing without merging columns', () => {
     const layout = getShowcaseGridLayout(390);
 
-    expect(layout.columnGap).toBeGreaterThanOrEqual(12);
-    expect(layout.columnGap).toBeLessThanOrEqual(16);
-    expect(layout.pinGap).toBeGreaterThanOrEqual(18);
+    expect(layout.columnGap).toBeGreaterThanOrEqual(7);
+    expect(layout.columnGap).toBeLessThanOrEqual(10);
+    expect(layout.pinGap).toBeGreaterThanOrEqual(14);
+    expect(layout.pinGap).toBeLessThanOrEqual(18);
     expect(layout.mediaRadius).toBeGreaterThanOrEqual(16);
+  });
+
+  it('replaces generic feed titles with useful post content', () => {
+    const [mediaCard, textCard] = buildShowcaseMasonry([
+      item({
+        id: 'generic-media',
+        title: 'Untitled Creation',
+        prompt: 'Editorial portrait with a teal rim light',
+      }),
+      item({
+        id: 'generic-text',
+        category: 'text',
+        postFormat: 'text',
+        title: 'Untitled',
+        prompt: '',
+        body: 'Three hooks for a skincare launch.',
+      }),
+    ]);
+
+    expect(mediaCard?.title).toBe('Editorial portrait with a teal rim light');
+    expect(textCard?.title).toBe('Three hooks for a skincare launch.');
   });
 
   it('keeps the original feed item available for cache seeding', () => {
@@ -171,8 +193,8 @@ describe('showcase feed view model', () => {
     expect(cards[0]?.item).toBe(sourceItem);
   });
 
-  it('uses media dimensions for bounded masonry heights', () => {
-    const [portrait, landscape] = buildShowcaseMasonry([
+  it('uses each media ratio for bounded masonry heights', () => {
+    const [portrait, square, landscape, panorama] = buildShowcaseMasonry([
       item({
         id: 'portrait',
         mediaKind: 'image',
@@ -185,6 +207,22 @@ describe('showcase feed view model', () => {
           originalName: 'portrait.jpg',
           width: 900,
           height: 1600,
+          durationSeconds: null,
+          sortOrder: 0,
+        }],
+      }),
+      item({
+        id: 'square',
+        mediaKind: 'image',
+        mediaUrl: 'square.jpg',
+        mediaItems: [{
+          id: 'square-media',
+          url: 'square.jpg',
+          mediaKind: 'image',
+          contentType: 'image/jpeg',
+          originalName: 'square.jpg',
+          width: 1200,
+          height: 1200,
           durationSeconds: null,
           sortOrder: 0,
         }],
@@ -205,10 +243,41 @@ describe('showcase feed view model', () => {
           sortOrder: 0,
         }],
       }),
+      item({
+        id: 'panorama',
+        mediaKind: 'image',
+        mediaUrl: 'panorama.jpg',
+        mediaItems: [{
+          id: 'panorama-media',
+          url: 'panorama.jpg',
+          mediaKind: 'image',
+          contentType: 'image/jpeg',
+          originalName: 'panorama.jpg',
+          width: 3200,
+          height: 800,
+          durationSeconds: null,
+          sortOrder: 0,
+        }],
+      }),
     ]);
 
-    expect(getShowcaseMediaHeight(portrait, 170)).toBeGreaterThan(getShowcaseMediaHeight(landscape, 170));
-    expect(getShowcaseMediaHeight(portrait, 170)).toBeLessThanOrEqual(320);
-    expect(getShowcaseMediaHeight(landscape, 170)).toBeGreaterThanOrEqual(180);
+    expect(getShowcaseMediaHeight(portrait, 180)).toBe(320);
+    expect(getShowcaseMediaHeight(square, 180)).toBe(180);
+    expect(getShowcaseMediaHeight(landscape, 180)).toBe(104);
+    expect(getShowcaseMediaHeight(panorama, 180)).toBe(104);
+  });
+
+  it('uses a clean landscape fallback for videos and accepts a resolved poster ratio', () => {
+    const [video] = buildShowcaseMasonry([
+      item({
+        id: 'video-without-dimensions',
+        category: 'video',
+        mediaKind: 'video',
+      }),
+    ]);
+
+    expect(video?.aspectRatio).toBeNull();
+    expect(getShowcaseMediaHeight(video, 180)).toBe(104);
+    expect(getShowcaseMediaHeight(video, 180, 9 / 16)).toBe(320);
   });
 });

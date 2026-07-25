@@ -17,6 +17,8 @@ type ShowcaseMediaPreviewProps = {
   radius: number;
   recyclingKey: string;
   videoActivation?: VideoActivation;
+  videoBackdrop?: 'blurred' | 'none';
+  videoContentFit?: 'cover' | 'contain';
   width: number;
 };
 
@@ -31,6 +33,8 @@ export function ShowcaseMediaPreview({
   radius,
   recyclingKey,
   videoActivation = 'never',
+  videoBackdrop = 'blurred',
+  videoContentFit = 'contain',
   width,
 }: ShowcaseMediaPreviewProps) {
   const mediaItems = getShowcasePreviewMediaItems(item);
@@ -48,6 +52,8 @@ export function ShowcaseMediaPreview({
         radius={radius}
         recyclingKey={recyclingKey}
         videoActivation={resolvedVideoActivation}
+        videoBackdrop={videoBackdrop}
+        videoContentFit={videoContentFit}
         width={width}
       />
     );
@@ -63,6 +69,8 @@ export function ShowcaseMediaPreview({
       radius={radius}
       recyclingKey={recyclingKey}
       videoActivation={resolvedVideoActivation}
+      videoBackdrop={videoBackdrop}
+      videoContentFit={videoContentFit}
       width={width}
     />
   );
@@ -77,6 +85,8 @@ function ShowcaseMediaCarousel({
   radius,
   recyclingKey,
   videoActivation = 'never',
+  videoBackdrop = 'blurred',
+  videoContentFit = 'contain',
   width,
 }: Omit<ShowcaseMediaPreviewProps, 'item'> & { mediaItems: ShowcaseMediaItem[] }) {
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -102,6 +112,8 @@ function ShowcaseMediaCarousel({
               radius={radius}
               recyclingKey={`${recyclingKey}:${mediaItem.id}`}
               videoActivation={currentIndex === index ? videoActivation : 'never'}
+              videoBackdrop={videoBackdrop}
+              videoContentFit={videoContentFit}
               width={width}
             />
           );
@@ -186,6 +198,8 @@ function ShowcaseMediaSlide({
   radius,
   recyclingKey,
   videoActivation,
+  videoBackdrop,
+  videoContentFit,
   width,
 }: {
   accent: string;
@@ -194,6 +208,8 @@ function ShowcaseMediaSlide({
   radius: number;
   recyclingKey: string;
   videoActivation: VideoActivation;
+  videoBackdrop: 'blurred' | 'none';
+  videoContentFit: 'cover' | 'contain';
   width: number;
 }) {
   const previewUrl = getShowcaseMediaPreviewUrl(item);
@@ -218,6 +234,8 @@ function ShowcaseMediaSlide({
           height={height}
           radius={radius}
           accent={accent}
+          videoBackdrop={videoBackdrop}
+          videoContentFit={videoContentFit}
         />
       </View>
     );
