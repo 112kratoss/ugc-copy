@@ -166,6 +166,9 @@ export interface PostComposerValidationResult {
   message?: string;
 }
 
+export type PostComposerDetailField = 'media' | 'content' | 'title';
+export type PostComposerDetailErrors = Partial<Record<PostComposerDetailField, string>>;
+
 export type PostComposerReadinessState = 'ready' | 'warning' | 'neutral';
 
 export interface PostComposerReadinessItem {
@@ -710,11 +713,19 @@ export function buildPublishGenerationPostPayload(item: GenerationListItem, draf
   };
 }
 
-export function buildUpdatePostPayload(isGenerationBacked: boolean, draft: PostComposerDraft) {
+export function buildUpdatePostPayload(
+  isGenerationBacked: boolean,
+  draft: PostComposerDraft,
+  options: { preserveSoldResourceBundle?: boolean } = {},
+) {
+  const resourceBundlePatch = options.preserveSoldResourceBundle
+    ? {}
+    : { resourceBundle: buildPostResourceBundleInput(draft.resource) ?? { accessMode: 'none' as const } };
+
   if (isGenerationBacked) {
     return {
       visibility: draft.visibility,
-      resourceBundle: buildPostResourceBundleInput(draft.resource) ?? { accessMode: 'none' },
+      ...resourceBundlePatch,
     };
   } else {
     const body = draft.mode === 'text' ? draft.contentText.trim() : getCreatePostBody(draft);
@@ -732,7 +743,7 @@ export function buildUpdatePostPayload(isGenerationBacked: boolean, draft: PostC
       sourceToolSlug: (primarySourceTool?.toolSlug ?? draft.sourceToolSlug).trim(),
       ...(sourceTools.length > 0 ? { sourceTools } : {}),
       ...(mediaItems.length > 0 ? { mediaItems } : {}),
-      resourceBundle: buildPostResourceBundleInput(draft.resource) ?? { accessMode: 'none' },
+      ...resourceBundlePatch,
     };
   }
 }
@@ -768,32 +779,40 @@ export function validatePostComposerDraft(draft: PostComposerDraft): PostCompose
 }
 
 export function validatePostComposerDetails(draft: PostComposerDraft): PostComposerValidationResult {
-  if (!draft.title.trim()) {
-    return { valid: false, message: 'Add a title before continuing.' };
-  }
+  const errors = getPostComposerDetailErrors(draft);
+  const fieldOrder: readonly PostComposerDetailField[] = draft.mode === 'text'
+    ? ['title', 'content']
+    : ['media', 'title'];
+  const firstMessage = fieldOrder
+    .map((field) => errors[field])
+    .find((message): message is string => Boolean(message));
 
-  if (draft.title.trim().length > TITLE_MAX_LENGTH) {
-    return { valid: false, message: `Titles are limited to ${TITLE_MAX_LENGTH} characters.` };
+  return firstMessage ? { valid: false, message: firstMessage } : { valid: true };
+}
+
+export function getPostComposerDetailErrors(draft: PostComposerDraft): PostComposerDetailErrors {
+  const errors: PostComposerDetailErrors = {};
+  const body = getCreatePostBody(draft);
+
+  if (draft.mode === 'upload' && draft.mediaItems.length === 0 && !draft.upload) {
+    errors.media = 'Add at least one image or video to continue.';
+  } else if (draft.mode === 'creation' && !draft.selectedGenerationId) {
+    errors.media = 'Choose a finished creation to continue.';
   }
 
   if (isTextProof(draft) && !draft.contentText.trim() && !draft.caption.trim()) {
-    return { valid: false, message: 'Write the text post or add a caption.' };
+    errors.content = 'Write the text post before continuing.';
+  } else if (body.length > BODY_MAX_LENGTH) {
+    errors.content = `Posts are limited to ${BODY_MAX_LENGTH} characters.`;
   }
 
-  if (!isTextProof(draft) && draft.mode === 'upload' && draft.mediaItems.length === 0 && !draft.upload) {
-    return { valid: false, message: 'Upload an image or video before publishing.' };
+  if (!draft.title.trim()) {
+    errors.title = 'Add a title before continuing.';
+  } else if (draft.title.trim().length > TITLE_MAX_LENGTH) {
+    errors.title = `Titles are limited to ${TITLE_MAX_LENGTH} characters.`;
   }
 
-  if (draft.mode === 'creation' && !draft.selectedGenerationId) {
-    return { valid: false, message: 'Choose a finished creation before publishing.' };
-  }
-
-  const body = getCreatePostBody(draft);
-  if (body.length > BODY_MAX_LENGTH) {
-    return { valid: false, message: `Posts are limited to ${BODY_MAX_LENGTH} characters.` };
-  }
-
-  return { valid: true };
+  return errors;
 }
 
 export function buildCreatePostFormData(draft: PostComposerDraft) {
@@ -974,7 +993,7 @@ export function buildPostResourceBundleInput(resource: PostComposerResourceDraft
     return null;
   }
 
-  const resourceCards = (resource.cards ?? []).filter(resourceCardHasContent);
+  const resourceCards = (resource.cards ?? []).filter((card) => resourceCardHasContent(card));
   if (resourceCards.length > 0) {
     const sections = serializeResourceCardSections(resourceCards);
     const items = buildResourceCardItems(resourceCards);
@@ -1530,7 +1549,30 @@ function getPriceTokens(resource: PostComposerResourceDraft) {
   return legacyUsdValue;
 }
 
-function resourceCardHasContent(card: PostComposerResourceCardDraft) {
+export function getPostComposerResourceCardErrors(
+  card: PostComposerResourceCardDraft,
+): Partial<Record<'title' | 'content', string>> {
+  const errors: Partial<Record<'title' | 'content', string>> = {};
+  if (!card.title.trim()) {
+    errors.title = 'Add a resource title.';
+  }
+  if (!resourceCardHasContent(card, { ignoreTitle: true })) {
+    errors.content = 'Add the protected content, link, or file for this resource.';
+  }
+  return errors;
+}
+
+export function isPostComposerResourceCardReady(card: PostComposerResourceCardDraft) {
+  return Object.keys(getPostComposerResourceCardErrors(card)).length === 0;
+}
+
+function resourceCardHasContent(
+  card: PostComposerResourceCardDraft,
+  options: { ignoreTitle?: boolean } = {},
+) {
+  if (!options.ignoreTitle && !card.title.trim()) {
+    return false;
+  }
   const hasText = Boolean(card.textContent.trim());
   const hasUrl = Boolean(card.externalUrl.trim());
   const hasAttachments = card.attachments.some((attachment) => (

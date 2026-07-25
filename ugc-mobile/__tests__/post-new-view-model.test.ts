@@ -12,14 +12,17 @@ import {
   applyCreationPromptResource,
   getDefaultPostComposerDraft,
   getExplicitPublishGeneration,
+  getPostComposerDetailErrors,
   getPostComposerPackageStatus,
   getPostComposerPriceTokens,
   getPostComposerPreviewStatusLabel,
   getPostComposerReadiness,
+  getPostComposerResourceCardErrors,
   getPostComposerSectionSummary,
   getPostComposerSubmitLabel,
   getPublishableGenerations,
   hydratePostComposerResourceCards,
+  isPostComposerResourceCardReady,
   isTemplateGeneration,
   getPublishGenerationMediaKind,
   getPublishGenerationSubtitle,
@@ -227,8 +230,42 @@ describe('post new view model', () => {
     });
     expect(validatePostComposerDraft({ ...draft, contentText: '', caption: '' })).toMatchObject({
       valid: false,
-      message: 'Write the text post or add a caption.',
+      message: 'Write the text post before continuing.',
     });
+    expect(validatePostComposerDraft({ ...draft, title: '', contentText: '', caption: '' })).toMatchObject({
+      valid: false,
+      message: 'Add a title before continuing.',
+    });
+  });
+
+  it('returns every visible detail error for an empty media post', () => {
+    const draft = {
+      ...getDefaultPostComposerDraft(),
+      mode: 'upload' as const,
+      proofMode: 'media' as const,
+      category: 'image' as const,
+      title: '',
+      upload: null,
+      mediaItems: [],
+    };
+
+    expect(getPostComposerDetailErrors(draft)).toEqual({
+      media: 'Add at least one image or video to continue.',
+      title: 'Add a title before continuing.',
+    });
+  });
+
+  it('requires both a resource title and protected content before Save', () => {
+    const card = createPostComposerResourceCard('prompt', {
+      title: '',
+      textContent: '',
+    });
+    expect(getPostComposerResourceCardErrors(card)).toEqual({
+      title: 'Add a resource title.',
+      content: 'Add the protected content, link, or file for this resource.',
+    });
+    expect(isPostComposerResourceCardReady(card)).toBe(false);
+    expect(isPostComposerResourceCardReady({ ...card, title: 'Reusable prompt', textContent: 'Exact prompt' })).toBe(true);
   });
 
   it('builds FormData for text posts in the public post order', () => {
@@ -1025,6 +1062,22 @@ describe('post new view model', () => {
           },
         },
       });
+    });
+
+    it('omits the resource bundle when an existing sold package must be preserved', () => {
+      const draft = {
+        ...getDefaultPostComposerDraft(),
+        visibility: 'private' as const,
+        resource: {
+          ...getDefaultPostComposerDraft().resource,
+          accessMode: 'none' as const,
+        },
+      };
+
+      expect(buildUpdatePostPayload(true, draft, { preserveSoldResourceBundle: true })).toEqual({
+        visibility: 'private',
+      });
+      expect(buildUpdatePostPayload(false, draft, { preserveSoldResourceBundle: true })).not.toHaveProperty('resourceBundle');
     });
 
     it('submits text post edits without duplicating the caption into the body', () => {

@@ -111,6 +111,7 @@ export interface SaveShowcasePostOptions {
 }
 
 export interface GenerationListOptions {
+  id?: string;
   limit?: number;
 }
 
@@ -466,6 +467,7 @@ export function createApiClient({
       const response = await request<{ generations: GenerationListItem[] }>(`/api/generations${buildQuery({
         detail: 'summary',
         includeArchived,
+        id: options.id,
         limit: options.limit,
       })}`);
       return {
@@ -771,7 +773,13 @@ export function createApiClient({
     listOwnerPosts: (params?: Record<string, QueryValue>) =>
       request<OwnerPostsResponse>(`/api/posts${buildQuery({ ...params, scope: 'owner' })}`),
     getOwnerPost: (postId: string) =>
-      request<{ success: boolean; post: OwnerPostListItem & { resourceBundleInput?: PostResourceBundleInput | null } }>(`/api/posts/${postId}`),
+      request<{
+        success: boolean;
+        post: OwnerPostListItem & {
+          resourceBundleInput?: PostResourceBundleInput | null;
+          hasPaidOrders?: boolean;
+        };
+      }>(`/api/posts/${postId}`),
     updatePost: (postId: string, body: Record<string, unknown>) =>
       request<{ success: boolean; postId: string; visibility: string }>(`/api/posts/${postId}`, { method: 'PATCH', body: JSON.stringify(body) }),
     archivePost: (postId: string) =>

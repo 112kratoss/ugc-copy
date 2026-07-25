@@ -1,15 +1,41 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import type { ImagePickerAsset } from 'expo-image-picker';
 import { ArrowLeft, Check, ChevronDown, ChevronRight, FileText, Globe2, ImageIcon, Link2, Lock, Package, Play, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react-native';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Modal, PanResponder, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type TextInputProps } from 'react-native';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import {
+  AccessibilityInfo,
+  ActivityIndicator,
+  Alert,
+  findNodeHandle,
+  Keyboard,
+  KeyboardAvoidingView,
+  Modal,
+  PanResponder,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  useWindowDimensions,
+  View,
+  type TextInputProps,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppText, ChoiceChip, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
 import { StableMediaImage } from '@/components/media-preview';
 import { useAuth } from '@/lib/auth';
 import { pickMediaList, pickResourceDocument, uploadPickedMedia } from '@/lib/media';
+import {
+  clearPersistedPostComposerDraft,
+  getPostComposerDraftSignature,
+  getPostComposerDraftStorageId,
+  isPostComposerDraftMeaningful,
+  loadPersistedPostComposerDraft,
+  persistPostComposerDraft,
+} from '@/lib/post-composer-draft-resume';
 import {
   buildPostComposerMediaItemsPayload,
   buildCreatePostFormData,
@@ -20,30 +46,35 @@ import {
   createPostComposerResourceCard,
   createMadeWithRow,
   getDefaultPostComposerDraft,
+  getPostComposerDetailErrors,
   getPostComposerPublishActions,
   getPostComposerPackageStatus,
   getPostComposerPriceTokens,
+  getPostComposerResourceCardErrors,
   getPostComposerSubmitLabel,
   getExplicitPublishGeneration,
   getPublishGenerationMediaKind,
   getPublishGenerationTitle,
   hydratePostComposerResourceCards,
   isTemplateGeneration,
+  isPostComposerResourceCardReady,
   POST_COMPOSER_CATEGORY_OPTIONS,
   POST_COMPOSER_RESOURCE_KIND_OPTIONS,
   POST_COMPOSER_RESOURCE_CARD_OPTIONS,
   POST_COMPOSER_SOURCE_OPTIONS,
   POST_COMPOSER_UNLOCK_OPTIONS,
   validatePostComposerDraft,
-  validatePostComposerDetails,
   hasGenerationReferences,
   upsertOptimisticOwnerPostResponse,
   type PostComposerDraft,
+  type PostComposerDetailErrors,
+  type PostComposerDetailField,
   type PostComposerMadeWithRow,
   type PostComposerMediaItem,
   type PostComposerMode,
   type PostComposerResourceCardDraft,
   type PostComposerResourceCardType,
+  type PostComposerValidationResult,
 } from '@/lib/post-new-view-model';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme, type ToolAccent } from '@/lib/theme';
@@ -127,10 +158,10 @@ function PostComposerHeader({
         />
         <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
           <AppText heading variant="cardTitle" numberOfLines={1}>
-            {isEditMode ? 'Edit post' : isResources ? 'Add resources' : 'Create post'}
+            {isEditMode ? 'Edit post' : isResources ? 'Review & publish' : 'Create post'}
           </AppText>
           <AppText variant="caption" color="muted">
-            {isResources ? 'Step 2 of 2 · optional' : 'Step 1 of 2 · post details'}
+            {isResources ? 'Step 2 of 2 · resources optional' : 'Step 1 of 2 · post details'}
           </AppText>
         </View>
         {isResources ? <HeaderIconButton label="Close post composer" icon="close" onPress={onClose} /> : null}
@@ -170,10 +201,15 @@ function PostDetailsPage({
   draft,
   selectedGeneration,
   sourceTools,
+  detailErrors,
   isPickingMedia,
   isFieldsLocked,
   isMadeWithOpen,
+  mediaControlRef,
+  titleInputRef,
+  contentInputRef,
   onMadeWithOpenChange,
+  onModeChange,
   onChange,
   onPickMedia,
   onRemoveMedia,
@@ -185,10 +221,15 @@ function PostDetailsPage({
   draft: PostComposerDraft;
   selectedGeneration: GenerationListItem | null;
   sourceTools: SourceToolOption[];
+  detailErrors: PostComposerDetailErrors;
   isPickingMedia: boolean;
   isFieldsLocked: boolean;
   isMadeWithOpen: boolean;
+  mediaControlRef: RefObject<View | null>;
+  titleInputRef: RefObject<TextInput | null>;
+  contentInputRef: RefObject<TextInput | null>;
   onMadeWithOpenChange: (value: boolean) => void;
+  onModeChange: (mode: Exclude<PostComposerMode, 'creation'>) => void;
   onChange: (patch: Partial<PostComposerDraft>) => void;
   onPickMedia: () => void;
   onRemoveMedia: (id: string) => void;
@@ -201,10 +242,54 @@ function PostDetailsPage({
   const attribution = primaryAttribution
     ? `${primaryAttribution.toolLabel}${primaryAttribution.modelLabel ? ` · ${primaryAttribution.modelLabel}` : ''}`
     : 'Add tool and model';
+  const titleField = (
+    <ComposerFieldShell>
+      <CompactFieldLabel label="Title" required valueLength={draft.title.length} maxLength={100} />
+      <ComposerInput
+        inputRef={titleInputRef}
+        accessibilityLabel="Title, required"
+        accessibilityHint="Enter a short title for this post. Maximum 100 characters."
+        value={draft.title}
+        onChangeText={(title) => onChange({ title: title.slice(0, 100) })}
+        placeholder="What is this creation about?"
+        editable={!isFieldsLocked}
+      />
+      <FieldErrorText message={detailErrors.title} />
+    </ComposerFieldShell>
+  );
+  const textField = (
+    <ComposerFieldShell>
+      <CompactFieldLabel label="Post text" required valueLength={draft.contentText.length} maxLength={1000} />
+      <ComposerInput
+        inputRef={contentInputRef}
+        accessibilityLabel="Post text, required"
+        accessibilityHint="Write the main text people will read in this post."
+        value={draft.contentText}
+        onChangeText={(contentText) => onChange({ contentText: contentText.slice(0, 1000) })}
+        placeholder="Share a prompt, idea, breakdown, or useful note..."
+        multiline
+        minHeight={170}
+        editable={!isFieldsLocked}
+      />
+      <FieldErrorText message={detailErrors.content} />
+    </ComposerFieldShell>
+  );
 
   return (
     <View style={{ gap: 18 }}>
-      {selectedGeneration ? (
+      {isFieldsLocked ? (
+        <StatusBlock
+          tone="neutral"
+          title="Creation details are fixed"
+          body="This post stays connected to its generated media. You can still change visibility and manage eligible resources in Review & publish."
+        />
+      ) : null}
+
+      {!selectedGeneration && !isFieldsLocked ? (
+        <PostFormatSelector value={draft.mode === 'text' ? 'text' : 'upload'} onChange={onModeChange} />
+      ) : null}
+
+      {draft.mode === 'text' ? titleField : selectedGeneration ? (
         <View style={{ gap: 8 }}>
           <CompactFieldLabel label="Media" required />
           <GeneratedProofCard item={selectedGeneration} />
@@ -217,20 +302,14 @@ function PostDetailsPage({
           onRemoveMedia={onRemoveMedia}
           onReorderMedia={onReorderMedia}
           disabled={isFieldsLocked}
+          controlRef={mediaControlRef}
+          error={detailErrors.media}
         />
       )}
 
-      <ComposerFieldShell>
-        <CompactFieldLabel label="Title" required valueLength={draft.title.length} maxLength={100} />
-        <ComposerInput
-          value={draft.title}
-          onChangeText={(title) => onChange({ title: title.slice(0, 100) })}
-          placeholder="What is this creation about?"
-          editable={!isFieldsLocked}
-        />
-      </ComposerFieldShell>
+      {draft.mode === 'text' ? textField : titleField}
 
-      <View style={{ gap: 10 }}>
+      {draft.mode !== 'text' ? <View style={{ gap: 10 }}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Made with"
@@ -270,11 +349,13 @@ function PostDetailsPage({
             onRemove={onRemoveMadeWith}
           />
         ) : null}
-      </View>
+      </View> : null}
 
-      <ComposerFieldShell>
+      {draft.mode !== 'text' ? <ComposerFieldShell>
         <CompactFieldLabel label="Story" optional valueLength={draft.caption.length} maxLength={1000} />
         <ComposerInput
+          accessibilityLabel="Story, optional"
+          accessibilityHint="Share the idea, process, or story behind this post. Maximum 1000 characters."
           value={draft.caption}
           onChangeText={(caption) => onChange({ caption: caption.slice(0, 1000), description: caption.slice(0, 1000) })}
           placeholder="Share the idea, process, or story behind it..."
@@ -282,8 +363,63 @@ function PostDetailsPage({
           minHeight={150}
           editable={!isFieldsLocked}
         />
-      </ComposerFieldShell>
+      </ComposerFieldShell> : null}
     </View>
+  );
+}
+
+function PostFormatSelector({
+  value,
+  onChange,
+}: {
+  value: Exclude<PostComposerMode, 'creation'>;
+  onChange: (mode: Exclude<PostComposerMode, 'creation'>) => void;
+}) {
+  const options: Array<{ id: Exclude<PostComposerMode, 'creation'>; label: string; body: string }> = [
+    { id: 'upload', label: 'Media post', body: 'Share images or video' },
+    { id: 'text', label: 'Text post', body: 'Share an idea or breakdown' },
+  ];
+
+  return (
+    <View style={{ gap: 8 }}>
+      <CompactFieldLabel label="Post format" />
+      <View style={{ flexDirection: 'row', gap: 10 }}>
+        {options.map((option) => {
+          const selected = value === option.id;
+          return (
+            <Pressable
+              key={option.id}
+              accessibilityRole="button"
+              accessibilityLabel={`${option.label}, ${option.body}`}
+              accessibilityState={{ selected }}
+              onPress={() => onChange(option.id)}
+              style={({ pressed }) => ({
+                flex: 1,
+                minHeight: 68,
+                borderRadius: 17,
+                borderWidth: 1,
+                borderColor: selected ? `${appTheme.colors.primary}aa` : appTheme.colors.borderSubtle,
+                backgroundColor: selected ? `${appTheme.colors.primary}18` : pressed ? appTheme.colors.surfaceStrong : appTheme.colors.surface,
+                padding: 12,
+                gap: 3,
+              })}
+            >
+              <AppText variant="label">{option.label}</AppText>
+              <AppText variant="caption" color="muted">{option.body}</AppText>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function FieldErrorText({ message }: { message?: string }) {
+  if (!message) return null;
+  return (
+    <AppText accessibilityRole="alert" variant="caption" color="danger">
+      {message}
+    </AppText>
   );
 }
 
@@ -333,7 +469,9 @@ function PostResourcesPage({
   draft,
   selectedGeneration,
   isTemplateBacked,
+  resourceEditingLocked,
   packageStatus,
+  publishValidation,
   onResourceChange,
   onCreationPackageChange,
   onTogglePromptResource,
@@ -344,7 +482,9 @@ function PostResourcesPage({
   draft: PostComposerDraft;
   selectedGeneration: GenerationListItem | null;
   isTemplateBacked: boolean;
+  resourceEditingLocked: boolean;
   packageStatus: ReturnType<typeof getPostComposerPackageStatus>;
+  publishValidation: PostComposerValidationResult;
   onResourceChange: (patch: Partial<PostComposerDraft['resource']>) => void;
   onCreationPackageChange: (patch: Partial<PostComposerDraft['creationPackage']>) => void;
   onTogglePromptResource: (enabled: boolean) => void;
@@ -359,22 +499,39 @@ function PostResourcesPage({
   if (isTemplateBacked) {
     return (
       <View style={{ gap: 16 }}>
+        <PostPublishSummary draft={draft} selectedGeneration={selectedGeneration} validation={publishValidation} />
         <StatusBlock
           title="Ready to publish"
           body="This template result shares final media only. Its private recipe remains protected."
           tone="neutral"
         />
-        <PostPublishSummary draft={draft} />
+      </View>
+    );
+  }
+
+  if (resourceEditingLocked) {
+    const resourceCount = draft.resource.cards.length;
+    const packageDescription = `${draft.resource.accessMode === 'paid' ? `${getPostComposerPriceTokens(draft.resource)} token paid package` : 'Resource package'} · ${resourceCount} ${resourceCount === 1 ? 'resource' : 'resources'}`;
+    return (
+      <View style={{ gap: 16 }}>
+        <PostPublishSummary draft={draft} selectedGeneration={selectedGeneration} validation={publishValidation} />
+        <StatusBlock
+          title="Purchased resources are protected"
+          body="People have already unlocked this package, so its access mode, price, and contents cannot be changed. Visibility changes still apply to the post."
+          tone="neutral"
+        />
+        <ReadinessRow label="Existing package preserved" body={packageDescription} state="ready" />
       </View>
     );
   }
 
   return (
     <View style={{ gap: 18 }}>
+      <PostPublishSummary draft={draft} selectedGeneration={selectedGeneration} validation={publishValidation} />
       <View style={{ gap: 8 }}>
-        <AppText heading variant="sectionTitle">How should people use this?</AppText>
+        <AppText heading variant="sectionTitle">Optional resources</AppText>
         <AppText variant="bodySm" color="muted">
-          Resources are optional. Helpful packages can earn more visibility, reputation, and sales.
+          Share reusable prompts, files, links, or guidance for free or at a token price.
         </AppText>
       </View>
 
@@ -504,6 +661,8 @@ function PostResourcesPage({
           <ComposerFieldShell>
             <CompactFieldLabel label="Package preview" required valueLength={draft.resource.previewText.length} maxLength={180} />
             <ComposerInput
+              accessibilityLabel="Package preview, required"
+              accessibilityHint="Describe publicly what people receive. Maximum 180 characters."
               value={draft.resource.previewText}
               onChangeText={(previewText) => onResourceChange({ previewText: previewText.slice(0, 180) })}
               placeholder="Tell people what they will receive"
@@ -525,6 +684,8 @@ function PostResourcesPage({
             <ComposerFieldShell>
               <CompactFieldLabel label="Price in tokens" required />
               <ComposerInput
+                accessibilityLabel="Price in tokens, required"
+                accessibilityHint="Enter at least 10 tokens using increments of 10."
                 value={draft.resource.priceTokens}
                 onChangeText={(value) => {
                   const priceTokens = value.replace(/[^0-9]/g, '');
@@ -546,9 +707,7 @@ function PostResourcesPage({
 
           <ReadinessRow label={packageStatus.label} body={packageStatus.body} state={packageStatus.state} />
         </>
-      ) : (
-        <PostPublishSummary draft={draft} />
-      )}
+      ) : null}
     </View>
   );
 }
@@ -595,27 +754,74 @@ function ResourceAccessChoice({
   );
 }
 
-function PostPublishSummary({ draft }: { draft: PostComposerDraft }) {
+function PostPublishSummary({
+  draft,
+  selectedGeneration,
+  validation,
+}: {
+  draft: PostComposerDraft;
+  selectedGeneration: GenerationListItem | null;
+  validation: PostComposerValidationResult;
+}) {
   const title = draft.title.trim() || 'Your post';
+  const cover = draft.mediaItems[0]?.previewUrl
+    || draft.mediaItems[0]?.uri
+    || selectedGeneration?.previewUrl
+    || selectedGeneration?.preview_url
+    || selectedGeneration?.output_url
+    || null;
+  const visibilityLabel = draft.visibility === 'public' ? 'Public' : draft.visibility === 'unlisted' ? 'Unlisted' : 'Private';
+  const resourceLabel = draft.resource.accessMode === 'paid'
+    ? `${getPostComposerPriceTokens(draft.resource)} tokens`
+    : draft.resource.accessMode === 'free'
+      ? 'Free resources'
+      : 'No resources';
+  const ready = validation.valid;
   return (
     <View
       style={{
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
         borderRadius: 18,
         borderWidth: 1,
-        borderColor: appTheme.colors.borderSubtle,
+        borderColor: ready ? appTheme.semantic.success.border : appTheme.semantic.warning.border,
         backgroundColor: appTheme.colors.surface,
         padding: 14,
+        gap: 12,
       }}
     >
-      <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.surfaceStrong }}>
-        <Check size={20} color={appTheme.colors.success} />
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <View style={{ width: 58, height: 58, borderRadius: 15, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.surfaceStrong }}>
+          {cover && draft.mode !== 'text' ? (
+            <StableMediaImage
+              url={cover}
+              cacheKey={`post-review:${draft.selectedGenerationId ?? draft.mediaItems[0]?.id ?? 'cover'}`}
+              contentFit="cover"
+              style={{ width: 58, height: 58 }}
+            />
+          ) : (
+            <FileText size={22} color={appTheme.colors.textSecondary} />
+          )}
+        </View>
+        <View style={{ flex: 1, gap: 3 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            {ready ? <Check size={17} color={appTheme.colors.success} /> : null}
+            <AppText variant="label">{ready ? 'Ready to publish' : 'Needs attention'}</AppText>
+          </View>
+          <AppText variant="bodySm" numberOfLines={1}>{title}</AppText>
+          <AppText variant="caption" color="muted" numberOfLines={2}>
+            {ready
+              ? draft.mode === 'text'
+                ? draft.contentText.trim() || 'Text post'
+                : draft.caption.trim() || 'Media post'
+              : validation.message ?? 'Complete the required fields.'}
+          </AppText>
+        </View>
       </View>
-      <View style={{ flex: 1, gap: 2 }}>
-        <AppText variant="label">Post is ready</AppText>
-        <AppText variant="caption" color="muted">{`${title} · no resource package`}</AppText>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 7 }}>
+        {[visibilityLabel, resourceLabel].map((label) => (
+          <View key={label} style={{ minHeight: 28, justifyContent: 'center', borderRadius: 14, backgroundColor: appTheme.colors.surfaceStrong, paddingHorizontal: 10 }}>
+            <AppText variant="caption" color="textSecondary">{label}</AppText>
+          </View>
+        ))}
       </View>
     </View>
   );
@@ -653,7 +859,7 @@ function ResourceCardRow({
         gap: 12,
         borderRadius: 18,
         borderWidth: 1,
-        borderColor: resourceCardHasDraftContent(card) ? appTheme.colors.borderSubtle : appTheme.semantic.warning.border,
+        borderColor: isPostComposerResourceCardReady(card) ? appTheme.colors.borderSubtle : appTheme.semantic.warning.border,
         backgroundColor: appTheme.colors.surface,
         padding: 12,
       }}
@@ -713,6 +919,7 @@ function PostComposerFooter({
   onPublish: () => void;
 }) {
   const visibilityLabel = visibility === 'public' ? 'Public' : visibility === 'unlisted' ? 'Unlisted' : 'Private';
+  const submitLabel = getPostComposerSubmitLabel({ visibility, isEditMode, isPending: loading });
   return (
     <View
       style={{
@@ -728,7 +935,7 @@ function PostComposerFooter({
       {step === 'details' ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Next: resources"
+          accessibilityLabel="Review and publish"
           onPress={onNext}
           style={({ pressed }) => ({
             minHeight: 54,
@@ -740,7 +947,7 @@ function PostComposerFooter({
             backgroundColor: pressed ? appTheme.colors.primaryStrong : appTheme.colors.primary,
           })}
         >
-          <AppText variant="button" color="onPrimary">Next: resources</AppText>
+          <AppText variant="button" color="onPrimary">Review & publish</AppText>
           <ChevronRight size={19} color={appTheme.colors.onPrimary} strokeWidth={2.8} />
         </Pressable>
       ) : (
@@ -768,7 +975,7 @@ function PostComposerFooter({
           </Pressable>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={isEditMode ? 'Save changes' : 'Publish post'}
+            accessibilityLabel={submitLabel}
             accessibilityState={{ disabled: disabled || loading, busy: loading }}
             disabled={disabled || loading}
             onPress={onPublish}
@@ -785,7 +992,7 @@ function PostComposerFooter({
             })}
           >
             {loading ? <ActivityIndicator size="small" color={appTheme.colors.onPrimary} /> : null}
-            <AppText variant="button" color="onPrimary">{loading ? isEditMode ? 'Saving' : 'Publishing' : isEditMode ? 'Save changes' : 'Publish'}</AppText>
+            <AppText variant="button" color="onPrimary">{submitLabel}</AppText>
           </Pressable>
         </View>
       )}
@@ -874,7 +1081,8 @@ function ResourceComposerSheet({
   mediaItems,
   bottomInset,
   isUploading,
-  onClose,
+  onRequestClose,
+  onSave,
   onChooseType,
   onChange,
   onPickFile,
@@ -885,7 +1093,8 @@ function ResourceComposerSheet({
   mediaItems: PostComposerMediaItem[];
   bottomInset: number;
   isUploading: boolean;
-  onClose: () => void;
+  onRequestClose: () => void;
+  onSave: () => void;
   onChooseType: (type: PostComposerResourceCardType) => void;
   onChange: (patch: Partial<PostComposerResourceCardDraft>) => void;
   onPickFile: () => void;
@@ -897,12 +1106,17 @@ function ResourceComposerSheet({
   const textType = card?.type === 'prompt' || card?.type === 'settings' || card?.type === 'guide' || card?.type === 'other';
   const linkType = card?.type === 'external_link' || card?.type === 'remix_link' || card?.type === 'workflow';
   const fileType = card?.type === 'reference_media' || card?.type === 'source_assets' || card?.type === 'workflow' || card?.type === 'other';
-  const isReady = card ? resourceCardHasDraftContent(card) : false;
+  const cardErrors = card ? getPostComposerResourceCardErrors(card) : {};
+  const isReady = card ? isPostComposerResourceCardReady(card) : false;
 
   return (
-    <Modal visible={visible} transparent animationType="slide" presentationStyle="overFullScreen" onRequestClose={onClose}>
-      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-        <Pressable accessible={false} onPress={onClose} style={{ position: 'absolute', inset: 0, backgroundColor: appTheme.colors.overlayStrong }} />
+    <Modal visible={visible} transparent animationType="slide" presentationStyle="overFullScreen" onRequestClose={onRequestClose}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+        style={{ flex: 1, justifyContent: 'flex-end' }}
+      >
+        <Pressable accessible={false} onPress={onRequestClose} style={{ position: 'absolute', inset: 0, backgroundColor: appTheme.colors.overlayStrong }} />
         <View
           accessibilityViewIsModal
           style={{
@@ -923,7 +1137,7 @@ function ResourceComposerSheet({
                 <AppText heading variant="sectionTitle">{mode === 'type' ? 'Add a resource' : option?.label ?? 'Edit resource'}</AppText>
                 <AppText variant="caption" color="muted">{mode === 'type' ? 'Choose what people will receive.' : 'Contents stay protected until unlock.'}</AppText>
               </View>
-              <HeaderIconButton label="Close resource editor" icon="close" onPress={onClose} />
+              <HeaderIconButton label="Close resource editor" icon="close" onPress={onRequestClose} />
             </View>
           </View>
 
@@ -963,15 +1177,26 @@ function ResourceComposerSheet({
           ) : card ? (
             <>
               <ScrollView
+                automaticallyAdjustKeyboardInsets
                 keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="interactive"
                 showsVerticalScrollIndicator={false}
-                contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: 18, gap: 14 }}
+                contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: bottomInset + 24, gap: 14 }}
               >
                 <ComposerFieldShell>
                   <CompactFieldLabel label="Resource title" required valueLength={card.title.length} maxLength={80} />
-                  <ComposerInput value={card.title} onChangeText={(title) => onChange({ title: title.slice(0, 80) })} placeholder={option?.label ?? 'Resource title'} />
+                  <ComposerInput
+                    accessibilityLabel="Resource title, required"
+                    accessibilityHint="Enter a public title for this protected resource. Maximum 80 characters."
+                    value={card.title}
+                    onChangeText={(title) => onChange({ title: title.slice(0, 80) })}
+                    placeholder={option?.label ?? 'Resource title'}
+                  />
+                  <FieldErrorText message={cardErrors.title} />
                   <CompactFieldLabel label="Short preview" optional valueLength={card.preview.length} maxLength={120} />
                   <ComposerInput
+                    accessibilityLabel="Short preview, optional"
+                    accessibilityHint="Summarize the resource publicly without revealing its protected contents."
                     value={card.preview}
                     onChangeText={(preview) => onChange({ preview: preview.slice(0, 120) })}
                     placeholder="Public summary without revealing the contents"
@@ -987,12 +1212,15 @@ function ResourceComposerSheet({
                       required={!fileType || card.attachments.length === 0}
                     />
                     <ComposerInput
+                      accessibilityLabel={`${card.type === 'prompt' ? 'Prompt or script' : card.type === 'settings' ? 'Settings' : card.type === 'guide' ? 'Guide or notes' : 'Resource content'}, required`}
+                      accessibilityHint="This protected content is revealed only after the resource package is unlocked."
                       value={card.textContent}
                       onChangeText={(textContent) => onChange({ textContent })}
                       placeholder="This content is revealed only after unlock"
                       multiline
                       minHeight={150}
                     />
+                    <FieldErrorText message={cardErrors.content} />
                   </ComposerFieldShell>
                 ) : null}
 
@@ -1000,12 +1228,15 @@ function ResourceComposerSheet({
                   <ComposerFieldShell>
                     <CompactFieldLabel label={card.type === 'remix_link' ? 'Remix URL' : card.type === 'workflow' ? 'Workflow link' : 'URL'} required={card.type !== 'workflow' || card.attachments.length === 0} />
                     <ComposerInput
+                      accessibilityLabel={`${card.type === 'remix_link' ? 'Remix URL' : card.type === 'workflow' ? 'Workflow link' : 'URL'}, required`}
+                      accessibilityHint="Enter the protected destination URL."
                       value={card.externalUrl}
                       onChangeText={(externalUrl) => onChange({ externalUrl })}
                       placeholder="https://"
                       autoCapitalize="none"
                       keyboardType="url"
                     />
+                    <FieldErrorText message={cardErrors.content} />
                     {card.type === 'remix_link' ? <AppText variant="caption" color="muted">The URL remains hidden until the package is unlocked.</AppText> : null}
                   </ComposerFieldShell>
                 ) : null}
@@ -1043,6 +1274,7 @@ function ResourceComposerSheet({
                       {isUploading ? <ActivityIndicator size="small" color={appTheme.colors.primary} /> : <Upload size={17} color={appTheme.colors.textSecondary} />}
                       <AppText variant="label" color="textSecondary">{isUploading ? 'Uploading' : 'Add file'}</AppText>
                     </Pressable>
+                    {!linkType && !textType ? <FieldErrorText message={cardErrors.content} /> : null}
                   </ComposerFieldShell>
                 ) : null}
 
@@ -1056,7 +1288,10 @@ function ResourceComposerSheet({
                   accessibilityLabel="Save resource"
                   accessibilityState={{ disabled: !isReady }}
                   disabled={!isReady}
-                  onPress={onClose}
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    onSave();
+                  }}
                   style={({ pressed }) => ({
                     minHeight: 54,
                     alignItems: 'center',
@@ -1072,7 +1307,7 @@ function ResourceComposerSheet({
             </>
           ) : null}
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -1159,24 +1394,24 @@ function ResourceScopePicker({
   );
 }
 
-function resourceCardHasDraftContent(card: PostComposerResourceCardDraft) {
-  const hasText = Boolean(card.textContent.trim());
-  const hasUrl = Boolean(card.externalUrl.trim());
-  const hasFiles = card.attachments.some((attachment) => attachment.kind === 'file'
-    ? Boolean(attachment.storagePath?.trim())
-    : Boolean(attachment.url?.trim()));
-  if (card.type === 'prompt' || card.type === 'settings' || card.type === 'guide') return hasText;
-  if (card.type === 'external_link' || card.type === 'remix_link') return hasUrl;
-  if (card.type === 'reference_media' || card.type === 'source_assets') return hasFiles;
-  return hasText || hasUrl || hasFiles;
-}
-
 function buildResourcePreviewFromCards(cards: PostComposerResourceCardDraft[]) {
   const labels = cards.slice(0, 3).map((card) => card.title.trim()).filter(Boolean);
   if (labels.length === 0) return 'Includes reusable resources from this creation.';
   const joined = labels.join(', ').replace(/, ([^,]*)$/, ', and $1');
   const extra = Math.max(0, cards.length - labels.length);
   return `Includes ${joined}${extra > 0 ? ` and ${extra} more` : ''}.`;
+}
+
+function cloneResourceCard(card: PostComposerResourceCardDraft): PostComposerResourceCardDraft {
+  return {
+    ...card,
+    attachments: card.attachments.map((attachment) => ({ ...attachment })),
+    mediaKeys: [...card.mediaKeys],
+  };
+}
+
+function getResourceCardSignature(card: PostComposerResourceCardDraft) {
+  return JSON.stringify(card);
 }
 
 
@@ -1186,6 +1421,7 @@ function buildResourcePreviewFromCards(cards: PostComposerResourceCardDraft[]) {
 export default function NewPostScreen() {
   const { user, isLoading: authLoading, api } = useAuth();
   const queryClient = useQueryClient();
+  const navigation = useNavigation();
   const params = useLocalSearchParams<{ generationId?: string; postId?: string; focus?: string }>();
   const generationId = params.generationId;
   const postId = params.postId;
@@ -1202,21 +1438,35 @@ export default function NewPostScreen() {
     category: 'image',
     madeWithRows: [createMadeWithRow()],
   }));
-  const [message, setMessage] = useState<{ tone: 'danger' | 'success'; title: string; body?: string } | null>(null);
+  const [message, setMessage] = useState<{ tone: 'danger' | 'success' | 'neutral'; title: string; body?: string } | null>(null);
+  const [detailErrors, setDetailErrors] = useState<PostComposerDetailErrors>({});
   const [isPickingMedia, setIsPickingMedia] = useState(false);
   const [isPickingResourceFile, setIsPickingResourceFile] = useState(false);
   const [hasPrefilledEdit, setHasPrefilledEdit] = useState(false);
-  const [composerStep, setComposerStep] = useState<'details' | 'resources'>(focusTarget === 'resources' ? 'resources' : 'details');
+  const [hasHydratedPersistedDraft, setHasHydratedPersistedDraft] = useState(false);
+  const [composerStep, setComposerStep] = useState<'details' | 'resources'>('details');
   const [isMadeWithOpen, setIsMadeWithOpen] = useState(false);
   const [resourceSheetMode, setResourceSheetMode] = useState<'type' | 'editor' | null>(null);
   const [editingResourceId, setEditingResourceId] = useState<string | null>(null);
+  const [resourceEditorCard, setResourceEditorCard] = useState<PostComposerResourceCardDraft | null>(null);
+  const [resourceEditorOriginal, setResourceEditorOriginal] = useState<PostComposerResourceCardDraft | null>(null);
   const [isVisibilityOpen, setIsVisibilityOpen] = useState(false);
+  const [isNavigationAllowed, setIsNavigationAllowed] = useState(false);
   const [pendingPublishVisibility, setPendingPublishVisibility] = useState<PostComposerDraft['visibility'] | null>(null);
   const [mediaUploadProgress, setMediaUploadProgress] = useState<MediaUploadBatchProgress | null>(null);
   const [pendingRetryMedia, setPendingRetryMedia] = useState<ImagePickerAsset[]>([]);
   const scrollRef = useRef<ScrollView>(null);
+  const mediaControlRef = useRef<View>(null);
+  const titleInputRef = useRef<TextInput>(null);
+  const contentInputRef = useRef<TextInput>(null);
   const mediaUploadAbortRef = useRef<AbortController | null>(null);
   const mediaUploadIdRef = useRef(0);
+  const initialDraftSignatureRef = useRef<string | null>(null);
+  const draftStorageId = user ? getPostComposerDraftStorageId({
+    userId: user.id,
+    postId,
+    generationId,
+  }) : null;
 
   const postQuery = useQuery({
     queryKey: ['post-edit', postId],
@@ -1226,9 +1476,9 @@ export default function NewPostScreen() {
 
   const generationLookupId = generationId ?? postQuery.data?.post?.generationId ?? null;
   const generationsQuery = useQuery({
-    queryKey: ['post-new-generations', user?.id],
+    queryKey: ['post-new-generations', user?.id, generationLookupId],
     enabled: Boolean(user && generationLookupId),
-    queryFn: () => api.listGenerations(true, { limit: 100 }),
+    queryFn: () => api.listGenerations(true, { id: generationLookupId ?? undefined, limit: 1 }),
   });
 
   const sourceToolsQuery = useQuery({
@@ -1247,6 +1497,7 @@ export default function NewPostScreen() {
   const isGenerationBacked = Boolean(postQuery.data?.post?.generationId) || draft.mode === 'creation';
   const isEditMode = Boolean(postId);
   const isFieldsLocked = isEditMode && isGenerationBacked;
+  const hasPaidOrders = postQuery.data?.post?.hasPaidOrders === true;
   const canSubmit = !isPickingMedia
     && !isPickingResourceFile
     && (!isEditMode || (postQuery.isSuccess && hasPrefilledEdit));
@@ -1256,8 +1507,14 @@ export default function NewPostScreen() {
     [draft, selectedGeneration]
   );
   const publishValidation = useMemo(
-    () => validateCurrentDraft(draft, selectedGeneration, isEditMode && isGenerationBacked),
-    [draft, isEditMode, isGenerationBacked, selectedGeneration]
+    () => validateCurrentDraft(draft, selectedGeneration, isEditMode && isGenerationBacked, hasPaidOrders),
+    [draft, hasPaidOrders, isEditMode, isGenerationBacked, selectedGeneration]
+  );
+  const hasUnsavedChanges = hasHydratedPersistedDraft && (
+    isEditMode || Boolean(generationId)
+      ? initialDraftSignatureRef.current !== null
+        && getPostComposerDraftSignature(draft) !== initialDraftSignatureRef.current
+      : isPostComposerDraftMeaningful(draft)
   );
 
   // Prefill when generationId is provided and the creations list resolves.
@@ -1399,22 +1656,89 @@ export default function NewPostScreen() {
   }, []);
 
   useEffect(() => {
-    if (focusTarget === 'resources' && (!isEditMode || hasPrefilledEdit)) {
-      setComposerStep('resources');
-    }
-  }, [focusTarget, hasPrefilledEdit, isEditMode]);
+    const canHydrate = Boolean(
+      user
+      && draftStorageId
+      && (!isEditMode || hasPrefilledEdit)
+      && (!generationId || (explicitGeneration && draft.selectedGenerationId === generationId))
+    );
+    if (!canHydrate || hasHydratedPersistedDraft) return;
+
+    let active = true;
+    const baselineSignature = getPostComposerDraftSignature(draft);
+    initialDraftSignatureRef.current = baselineSignature;
+
+    void loadPersistedPostComposerDraft(draftStorageId!).then((persisted) => {
+      if (!active) return;
+      if (persisted) {
+        const details = getPostComposerDetailErrors(persisted.draft);
+        const canOpenReview = Object.keys(details).length === 0;
+        setDraft(persisted.draft);
+        setComposerStep(persisted.step === 'resources' && canOpenReview ? 'resources' : 'details');
+        setDetailErrors(canOpenReview ? {} : details);
+        setMessage({
+          tone: 'neutral',
+          title: 'Draft restored',
+          body: 'Your unfinished post was recovered on this device.',
+        });
+      } else if (focusTarget === 'resources') {
+        const details = getPostComposerDetailErrors(draft);
+        if (Object.keys(details).length === 0) {
+          setComposerStep('resources');
+        } else {
+          setComposerStep('details');
+          setDetailErrors(details);
+        }
+      }
+      setHasHydratedPersistedDraft(true);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [
+    draftStorageId,
+    draft.selectedGenerationId,
+    explicitGeneration,
+    focusTarget,
+    generationId,
+    hasHydratedPersistedDraft,
+    hasPrefilledEdit,
+    isEditMode,
+    user,
+  ]);
+
+  useEffect(() => {
+    if (!draftStorageId || !hasHydratedPersistedDraft) return;
+    const timer = setTimeout(() => {
+      if (isPostComposerDraftMeaningful(draft)) {
+        void persistPostComposerDraft(draftStorageId, { draft, step: composerStep });
+      } else {
+        void clearPersistedPostComposerDraft(draftStorageId);
+      }
+    }, 600);
+
+    return () => clearTimeout(timer);
+  }, [composerStep, draft, draftStorageId, hasHydratedPersistedDraft]);
 
   const publishMutation = useMutation({
     mutationFn: async (targetVisibility?: PostComposerDraft['visibility']) => {
       const effectiveDraft = targetVisibility ? { ...draft, visibility: targetVisibility } : draft;
-      const validation = validateCurrentDraft(effectiveDraft, selectedGeneration, isEditMode && isGenerationBacked);
+      const validation = validateCurrentDraft(
+        effectiveDraft,
+        selectedGeneration,
+        isEditMode && isGenerationBacked,
+        hasPaidOrders,
+      );
       if (!validation.valid) {
         throw new Error(validation.message);
       }
 
       if (postId) {
         const isGen = Boolean(postQuery.data?.post?.generationId);
-        const payload = buildUpdatePostPayload(isGen, effectiveDraft);
+        const payload = buildUpdatePostPayload(isGen, effectiveDraft, {
+          preserveSoldResourceBundle: hasPaidOrders,
+        });
         return api.updatePost(postId, payload);
       }
 
@@ -1448,13 +1772,20 @@ export default function NewPostScreen() {
       }
       void invalidatePostCaches(queryClient, user?.id);
       if (targetPostId) {
-        router.replace({
-          pathname: '/(tabs)/profile',
-          params: {
-            tab: 'posts',
-            postId: targetPostId,
-          },
-        } as never);
+        setIsNavigationAllowed(true);
+        setHasHydratedPersistedDraft(false);
+        if (draftStorageId) {
+          void clearPersistedPostComposerDraft(draftStorageId);
+        }
+        setTimeout(() => {
+          router.replace({
+            pathname: '/(tabs)/profile',
+            params: {
+              tab: 'posts',
+              postId: targetPostId,
+            },
+          } as never);
+        }, 0);
       }
     },
     onError: (error) => {
@@ -1463,10 +1794,46 @@ export default function NewPostScreen() {
         title: isEditMode ? 'Could not save' : 'Could not publish',
         body: error instanceof Error ? error.message : 'Try again.',
       });
+      scrollRef.current?.scrollTo({ y: 0, animated: true });
     },
     onSettled: () => {
       setPendingPublishVisibility(null);
     },
+  });
+
+  usePreventRemove(hasUnsavedChanges && !isNavigationAllowed, ({ data }) => {
+    Alert.alert(
+      'Leave this post?',
+      'Keep editing, save this draft on this device, or discard the changes.',
+      [
+        { text: 'Keep editing', style: 'cancel' },
+        {
+          text: 'Save draft',
+          onPress: () => {
+            const save = draftStorageId
+              ? persistPostComposerDraft(draftStorageId, { draft, step: composerStep })
+              : Promise.resolve();
+            void save.finally(() => {
+              setIsNavigationAllowed(true);
+              setTimeout(() => navigation.dispatch(data.action), 0);
+            });
+          },
+        },
+        {
+          text: 'Discard',
+          style: 'destructive',
+          onPress: () => {
+            const clear = draftStorageId
+              ? clearPersistedPostComposerDraft(draftStorageId)
+              : Promise.resolve();
+            void clear.finally(() => {
+              setIsNavigationAllowed(true);
+              setTimeout(() => navigation.dispatch(data.action), 0);
+            });
+          },
+        },
+      ],
+    );
   });
 
   if (authLoading) {
@@ -1522,30 +1889,44 @@ export default function NewPostScreen() {
   const setMode = (mode: Exclude<PostComposerMode, 'creation'>) => {
     if (isFieldsLocked) return;
     setMessage(null);
-    setDraft((current) => ({
-      ...current,
+    const next = {
+      ...draft,
       mode,
-      proofMode: mode === 'text' ? 'text' : 'media',
-      category: mode === 'text' ? 'text' : current.category === 'text' ? 'image' : current.category,
-      sourceTool: mode === 'text' ? 'Manual' : current.sourceTool === 'Manual' ? 'Other' : current.sourceTool,
-      sourceToolSlug: mode === 'text' ? 'manual' : current.sourceToolSlug === 'manual' ? 'other' : current.sourceToolSlug,
-      madeWithRows: current.madeWithRows.length > 0 ? current.madeWithRows : [createMadeWithRow()],
-    }));
+      proofMode: mode === 'text' ? 'text' as const : 'media' as const,
+      category: mode === 'text' ? 'text' as const : draft.category === 'text' ? 'image' as const : draft.category,
+      sourceTool: mode === 'text' ? 'Manual' : draft.sourceTool === 'Manual' ? 'Other' : draft.sourceTool,
+      sourceToolSlug: mode === 'text' ? 'manual' : draft.sourceToolSlug === 'manual' ? 'other' : draft.sourceToolSlug,
+      madeWithRows: draft.madeWithRows.length > 0 ? draft.madeWithRows : [createMadeWithRow()],
+    };
+    setDraft(next);
+    if (Object.keys(detailErrors).length > 0) {
+      setDetailErrors(getPostComposerDetailErrors(next));
+    }
   };
 
   const updateDraft = (patch: Partial<PostComposerDraft>) => {
-    setDraft((current) => ({ ...current, ...patch }));
+    const next = { ...draft, ...patch };
+    setDraft(next);
+    if (Object.keys(detailErrors).length > 0) {
+      setDetailErrors(getPostComposerDetailErrors(next));
+    }
+    if (message?.tone === 'danger') {
+      setMessage(null);
+    }
   };
 
   const updateResource = (patch: Partial<PostComposerDraft['resource']>) => {
+    if (hasPaidOrders) return;
     setDraft((current) => ({ ...current, resource: { ...current.resource, ...patch } }));
   };
 
   const updateCreationPackage = (patch: Partial<PostComposerDraft['creationPackage']>) => {
+    if (hasPaidOrders) return;
     setDraft((current) => ({ ...current, creationPackage: { ...current.creationPackage, ...patch } }));
   };
 
   const togglePromptResource = (enabled: boolean) => {
+    if (hasPaidOrders) return;
     setDraft((current) => applyCreationPromptResource(current, selectedGeneration, enabled));
   };
 
@@ -1568,6 +1949,11 @@ export default function NewPostScreen() {
           : current.upload,
         mediaItems,
       };
+    });
+    setDetailErrors((current) => {
+      const next = { ...current };
+      delete next.media;
+      return next;
     });
   };
 
@@ -1814,7 +2200,8 @@ export default function NewPostScreen() {
     });
   };
 
-  const chooseResourceFile = async (targetResourceId?: string) => {
+  const chooseResourceFile = async () => {
+    if (!resourceEditorCard || hasPaidOrders) return;
     setIsPickingResourceFile(true);
     setMessage(null);
     try {
@@ -1838,19 +2225,9 @@ export default function NewPostScreen() {
         role: response.attachment.role ?? 'primary',
         remixUse: response.attachment.remixUse ?? 'import_source',
       } satisfies PostComposerResourceCardDraft['attachments'][number];
-      if (targetResourceId) {
-        setDraft((current) => ({
-          ...current,
-          resource: {
-            ...current.resource,
-            cards: current.resource.cards.map((card) => card.id === targetResourceId
-              ? { ...card, attachments: [...card.attachments, attachment] }
-              : card),
-          },
-        }));
-      } else {
-        addResourceAttachment(attachment);
-      }
+      setResourceEditorCard((current) => current
+        ? { ...current, attachments: [...current.attachments, attachment] }
+        : current);
     } catch (error) {
       setMessage({ tone: 'danger', title: 'Could not add file', body: error instanceof Error ? error.message : 'Try again.' });
     } finally {
@@ -1858,17 +2235,13 @@ export default function NewPostScreen() {
     }
   };
 
-  const updateResourceCard = (id: string, patch: Partial<PostComposerResourceCardDraft>) => {
-    setDraft((current) => ({
-      ...current,
-      resource: {
-        ...current.resource,
-        cards: current.resource.cards.map((card) => card.id === id ? { ...card, ...patch } : card),
-      },
-    }));
+  const updateResourceEditorCard = (patch: Partial<PostComposerResourceCardDraft>) => {
+    if (hasPaidOrders) return;
+    setResourceEditorCard((current) => current ? { ...current, ...patch } : current);
   };
 
   const removeResourceCard = (id: string) => {
+    if (hasPaidOrders) return;
     setDraft((current) => ({
       ...current,
       resource: {
@@ -1878,48 +2251,75 @@ export default function NewPostScreen() {
     }));
     if (editingResourceId === id) {
       setEditingResourceId(null);
+      setResourceEditorCard(null);
+      setResourceEditorOriginal(null);
       setResourceSheetMode(null);
     }
   };
 
   const startResourceCard = (type: PostComposerResourceCardType) => {
+    if (hasPaidOrders) return;
     const card = createPostComposerResourceCard(type);
-    setDraft((current) => ({
-      ...current,
-      resource: {
-        ...current.resource,
-        cards: [...current.resource.cards, card],
-      },
-    }));
     setEditingResourceId(card.id);
+    setResourceEditorCard(cloneResourceCard(card));
+    setResourceEditorOriginal(cloneResourceCard(card));
     setResourceSheetMode('editor');
   };
 
   const openResourceCard = (id: string) => {
+    if (hasPaidOrders) return;
+    const card = draft.resource.cards.find((candidate) => candidate.id === id);
+    if (!card) return;
     setEditingResourceId(id);
+    setResourceEditorCard(cloneResourceCard(card));
+    setResourceEditorOriginal(cloneResourceCard(card));
     setResourceSheetMode('editor');
   };
 
-  const closeResourceSheet = () => {
-    if (editingResourceId) {
-      setDraft((current) => {
-        const card = current.resource.cards.find((candidate) => candidate.id === editingResourceId);
-        const cards = card && !resourceCardHasDraftContent(card)
-          ? current.resource.cards.filter((candidate) => candidate.id !== editingResourceId)
-          : current.resource.cards;
-        const previewText = current.resource.previewText.trim()
-          ? current.resource.previewText
-          : cards.length > 0
-            ? buildResourcePreviewFromCards(cards)
-            : '';
-        return {
-          ...current,
-          resource: { ...current.resource, cards, previewText },
-        };
-      });
-    }
+  const clearResourceEditor = () => {
     setEditingResourceId(null);
+    setResourceEditorCard(null);
+    setResourceEditorOriginal(null);
     setResourceSheetMode(null);
+  };
+
+  const requestCloseResourceSheet = () => {
+    if (resourceSheetMode !== 'editor' || !resourceEditorCard || !resourceEditorOriginal) {
+      clearResourceEditor();
+      return;
+    }
+    const isDirty = getResourceCardSignature(resourceEditorCard) !== getResourceCardSignature(resourceEditorOriginal);
+    if (!isDirty) {
+      clearResourceEditor();
+      return;
+    }
+    Alert.alert(
+      'Discard resource changes?',
+      'This resource has unsaved changes.',
+      [
+        { text: 'Keep editing', style: 'cancel' },
+        { text: 'Discard', style: 'destructive', onPress: clearResourceEditor },
+      ],
+    );
+  };
+
+  const saveResourceEditor = () => {
+    if (!resourceEditorCard || !isPostComposerResourceCardReady(resourceEditorCard) || hasPaidOrders) return;
+    const savedCard = cloneResourceCard(resourceEditorCard);
+    setDraft((current) => {
+      const exists = current.resource.cards.some((card) => card.id === savedCard.id);
+      const cards = exists
+        ? current.resource.cards.map((card) => card.id === savedCard.id ? savedCard : card)
+        : [...current.resource.cards, savedCard];
+      const previewText = current.resource.previewText.trim()
+        ? current.resource.previewText
+        : buildResourcePreviewFromCards(cards);
+      return {
+        ...current,
+        resource: { ...current.resource, cards, previewText },
+      };
+    });
+    clearResourceEditor();
   };
 
   const addResourceSection = () => {
@@ -1957,17 +2357,42 @@ export default function NewPostScreen() {
     });
   };
 
-  const editingResource = editingResourceId
-    ? draft.resource.cards.find((card) => card.id === editingResourceId) ?? null
-    : null;
+  const editingResource = resourceEditorCard;
+
+  const focusDetailField = (field: PostComposerDetailField) => {
+    setTimeout(() => {
+      if (field === 'media') {
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
+        const node = findNodeHandle(mediaControlRef.current);
+        if (node) {
+          AccessibilityInfo.setAccessibilityFocus(node);
+        }
+        return;
+      }
+      if (field === 'content') {
+        scrollRef.current?.scrollTo({ y: 220, animated: true });
+        contentInputRef.current?.focus();
+        return;
+      }
+      scrollRef.current?.scrollTo({ y: draft.mode === 'text' ? 80 : 220, animated: true });
+      titleInputRef.current?.focus();
+    }, 120);
+  };
 
   const goToResources = () => {
-    const validation = validatePostComposerDetails(draft);
-    if (!validation.valid) {
-      setMessage({ tone: 'danger', title: validation.message ?? 'Complete this step' });
-      scrollRef.current?.scrollTo({ y: 0, animated: true });
+    const errors = getPostComposerDetailErrors(draft);
+    const detailFieldOrder: readonly PostComposerDetailField[] = draft.mode === 'text'
+      ? ['title', 'content']
+      : ['media', 'title'];
+    const firstInvalidField = detailFieldOrder
+      .find((field) => Boolean(errors[field]));
+    if (firstInvalidField) {
+      setDetailErrors(errors);
+      setMessage(null);
+      focusDetailField(firstInvalidField);
       return;
     }
+    setDetailErrors({});
     setMessage(null);
     setComposerStep('resources');
     scrollRef.current?.scrollTo({ y: 0, animated: false });
@@ -1986,7 +2411,10 @@ export default function NewPostScreen() {
         isEditMode={isEditMode}
         topInset={insets.top}
         onClose={() => router.back()}
-        onBack={() => setComposerStep('details')}
+        onBack={() => {
+          setMessage(null);
+          setComposerStep('details');
+        }}
       />
       <ScrollView
         ref={scrollRef}
@@ -2027,10 +2455,15 @@ export default function NewPostScreen() {
             draft={draft}
             selectedGeneration={selectedGeneration}
             sourceTools={sourceTools}
+            detailErrors={detailErrors}
             isPickingMedia={isPickingMedia}
             isFieldsLocked={isFieldsLocked}
             isMadeWithOpen={isMadeWithOpen}
+            mediaControlRef={mediaControlRef}
+            titleInputRef={titleInputRef}
+            contentInputRef={contentInputRef}
             onMadeWithOpenChange={setIsMadeWithOpen}
+            onModeChange={setMode}
             onChange={updateDraft}
             onPickMedia={() => void chooseMedia('mixed')}
             onRemoveMedia={removeMediaItem}
@@ -2044,11 +2477,15 @@ export default function NewPostScreen() {
             draft={draft}
             selectedGeneration={selectedGeneration}
             isTemplateBacked={isTemplateBacked}
+            resourceEditingLocked={hasPaidOrders}
             packageStatus={packageStatus}
+            publishValidation={publishValidation}
             onResourceChange={updateResource}
             onCreationPackageChange={updateCreationPackage}
             onTogglePromptResource={togglePromptResource}
-            onAddResource={() => setResourceSheetMode('type')}
+            onAddResource={() => {
+              if (!hasPaidOrders) setResourceSheetMode('type');
+            }}
             onEditResource={openResourceCard}
             onRemoveResource={removeResourceCard}
           />
@@ -2073,13 +2510,14 @@ export default function NewPostScreen() {
         mediaItems={draft.mediaItems}
         bottomInset={bottomInset}
         isUploading={isPickingResourceFile}
-        onClose={closeResourceSheet}
+        onRequestClose={requestCloseResourceSheet}
+        onSave={saveResourceEditor}
         onChooseType={startResourceCard}
-        onChange={(patch) => editingResourceId && updateResourceCard(editingResourceId, patch)}
-        onPickFile={() => editingResourceId ? void chooseResourceFile(editingResourceId) : undefined}
+        onChange={updateResourceEditorCard}
+        onPickFile={() => void chooseResourceFile()}
         onRemoveAttachment={(attachmentId) => {
           if (!editingResource) return;
-          updateResourceCard(editingResource.id, {
+          updateResourceEditorCard({
             attachments: editingResource.attachments.filter((attachment) => attachment.id !== attachmentId),
           });
         }}
@@ -3298,25 +3736,31 @@ function getPublishActionBody(visibility: PostComposerDraft['visibility']) {
 }
 
 function ComposerInput({
+  inputRef,
   value,
   onChangeText,
   placeholder,
+  accessibilityLabel,
+  accessibilityHint,
   multiline,
   minHeight,
   editable = true,
   ...inputProps
 }: {
+  inputRef?: RefObject<TextInput | null>;
   value: string;
   onChangeText: (value: string) => void;
   placeholder: string;
   multiline?: boolean;
   minHeight?: number;
   editable?: boolean;
-} & Omit<TextInputProps, 'value' | 'onChangeText' | 'placeholder' | 'multiline' | 'editable' | 'style'>) {
+} & Omit<TextInputProps, 'ref' | 'value' | 'onChangeText' | 'placeholder' | 'multiline' | 'editable' | 'style'>) {
   return (
     <TextInput
       {...inputProps}
-      accessibilityLabel={placeholder}
+      ref={inputRef}
+      accessibilityLabel={accessibilityLabel ?? placeholder}
+      accessibilityHint={accessibilityHint}
       value={value}
       onChangeText={onChangeText}
       placeholder={placeholder}
@@ -3390,6 +3834,8 @@ const MEDIA_CARD_STEP = MEDIA_CARD_WIDTH + MEDIA_CARD_GAP;
 function UploadContent({
   draft,
   isPicking,
+  controlRef,
+  error,
   onPickMedia,
   onRemoveMedia,
   onReorderMedia,
@@ -3397,6 +3843,8 @@ function UploadContent({
 }: {
   draft: PostComposerDraft;
   isPicking: boolean;
+  controlRef?: RefObject<View | null>;
+  error?: string;
   onPickMedia: () => void;
   onRemoveMedia: (id: string) => void;
   onReorderMedia: (id: string, targetIndex: number) => void;
@@ -3405,7 +3853,9 @@ function UploadContent({
   return (
     <View style={{ gap: 10 }}>
       <View style={{ gap: 4 }}>
-        <AppText variant="label" color="text">Upload images or videos</AppText>
+        <AppText variant="label" color="text">
+          Upload images or videos <AppText variant="caption" color="primary">Required</AppText>
+        </AppText>
         <AppText variant="caption" color="muted">Cover first · max 5</AppText>
       </View>
       {draft.mediaItems.length > 0 ? (
@@ -3431,7 +3881,12 @@ function UploadContent({
         </ScrollView>
       ) : (
         <Pressable
+          ref={controlRef as never}
           accessibilityRole="button"
+          accessibilityLabel="Add media, required"
+          accessibilityHint={error
+            ? `${error} Choose up to five images or videos. The first item becomes the cover.`
+            : 'Choose up to five images or videos. The first item becomes the cover.'}
           disabled={disabled || isPicking}
           onPress={onPickMedia}
           style={({ pressed }) => ({
@@ -3452,6 +3907,7 @@ function UploadContent({
           <AppText variant="label" color="muted">{isPicking ? 'Preparing media...' : 'Add media'}</AppText>
         </Pressable>
       )}
+      <FieldErrorText message={error} />
     </View>
   );
 }
@@ -3818,8 +4274,18 @@ function UnlockFields({
   );
 }
 
-function validateCurrentDraft(draft: PostComposerDraft, selectedGeneration: GenerationListItem | null, skipGenerationSelection = false) {
-  const result = validatePostComposerDraft(draft);
+function validateCurrentDraft(
+  draft: PostComposerDraft,
+  selectedGeneration: GenerationListItem | null,
+  skipGenerationSelection = false,
+  preserveSoldResourceBundle = false,
+) {
+  const result = validatePostComposerDraft(preserveSoldResourceBundle
+    ? {
+        ...draft,
+        resource: { ...draft.resource, accessMode: 'none' },
+      }
+    : draft);
   if (!result.valid) return result;
   if (draft.mode === 'creation' && !selectedGeneration && !skipGenerationSelection) {
     return { valid: false, message: 'Choose a finished creation before publishing.' };
