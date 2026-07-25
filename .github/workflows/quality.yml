@@ -147,6 +147,18 @@ jobs:
       - name: Test database behavior
         run: supabase test db
 
+      # pgTAP runs each file inside a single transaction, so it structurally
+      # cannot hold two open at once and cannot express a true race. This step
+      # covers the concurrency property that pgTAP leaves untested, and runs
+      # here because this is the only job with a live database.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test credit unlock concurrency
+        run: npx vitest run src/__tests__/credit-unlock-concurrency.test.ts
+        env:
+          SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+
       - name: Stop isolated Supabase database
         if: always()
         continue-on-error: true
