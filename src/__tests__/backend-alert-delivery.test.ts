@@ -22,16 +22,26 @@ const quietCosts = {
   issues: [],
 } as unknown as BackendCostReport;
 
+/**
+ * `NodeJS.ProcessEnv` types NODE_ENV as required, so a bare `{}` or a
+ * single-key object is not a valid env. These fixtures only care about the
+ * alert-delivery URL, so this fills in the rest rather than asserting a
+ * partial env the type does not allow.
+ */
+function env(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
+  return { NODE_ENV: 'test', ...overrides };
+}
+
 describe('backend alert delivery', () => {
   it('treats alert delivery as unconfigured without a destination URL', () => {
-    expect(hasConfiguredBackendAlertDelivery({})).toBe(false);
-    expect(hasConfiguredBackendAlertDelivery({
+    expect(hasConfiguredBackendAlertDelivery(env())).toBe(false);
+    expect(hasConfiguredBackendAlertDelivery(env({
       BACKEND_ALERT_DELIVERY_URL: ' https://alerts.example.com/hooks/backend ',
-    })).toBe(true);
+    }))).toBe(true);
   });
 
   it('does not post ok summaries by default', async () => {
-    const fetcher = vi.fn();
+    const fetcher = vi.fn<typeof fetch>();
     const summary = buildBackendAlertSummary({
       health: healthyBackend,
       costs: quietCosts,
@@ -40,9 +50,9 @@ describe('backend alert delivery', () => {
 
     const result = await deliverBackendAlerts({ service: 'supabase' } as never, {
       collectAlerts: vi.fn(async () => summary),
-      environment: {
+      environment: env({
         BACKEND_ALERT_DELIVERY_URL: 'https://alerts.example.com/hooks/backend',
-      },
+      }),
       fetcher,
     });
 
@@ -57,7 +67,7 @@ describe('backend alert delivery', () => {
   });
 
   it('posts degraded summaries to the configured alert destination', async () => {
-    const fetcher = vi.fn(async () => new Response('{}', { status: 202 }));
+    const fetcher = vi.fn<typeof fetch>(async () => new Response('{}', { status: 202 }));
     const summary = buildBackendAlertSummary({
       health: {
         ...healthyBackend,
@@ -74,10 +84,10 @@ describe('backend alert delivery', () => {
 
     const result = await deliverBackendAlerts({ service: 'supabase' } as never, {
       collectAlerts: vi.fn(async () => summary),
-      environment: {
+      environment: env({
         BACKEND_ALERT_DELIVERY_URL: 'https://alerts.example.com/hooks/backend',
         BACKEND_ALERT_DELIVERY_AUTH_HEADER: 'Bearer alert-secret',
-      },
+      }),
       fetcher: fetcher as unknown as typeof fetch,
     });
 
@@ -97,7 +107,7 @@ describe('backend alert delivery', () => {
         body: expect.stringContaining('"backend_alerts"'),
       }),
     );
-    const request = fetcher.mock.calls[0]?.[1] as RequestInit;
+    const request = fetcher.mock.calls[0][1] as RequestInit;
     const headers = new Headers(request.headers);
     expect(headers.get('authorization')).toBe('Bearer alert-secret');
     expect(headers.get('content-type')).toBe('application/json');
@@ -123,9 +133,9 @@ describe('backend alert delivery', () => {
 
     await expect(deliverBackendAlerts({ service: 'supabase' } as never, {
       collectAlerts: vi.fn(async () => summary),
-      environment: {
+      environment: env({
         BACKEND_ALERT_DELIVERY_URL: 'https://alerts.example.com/hooks/backend',
-      },
+      }),
       fetcher: fetcher as unknown as typeof fetch,
     })).rejects.toThrow('Backend alert delivery failed with status 500.');
   });

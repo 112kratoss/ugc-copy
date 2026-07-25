@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { pruneOperationalBackendData } from '@/lib/operational-data-retention';
 
@@ -8,12 +9,15 @@ function createClient(result: { data?: unknown; error?: unknown }) {
   const calls: RpcCall[] = [];
   return {
     calls,
+    // `pruneOperationalBackendData` already narrows its parameter to
+    // Pick<SupabaseClient, 'rpc'>, but Supabase's real `rpc` carries generic
+    // overloads a hand-written stub cannot reproduce. Widen once here.
     client: {
       rpc: async (fn: string, args: Record<string, unknown>) => {
         calls.push({ fn, args });
         return { data: result.data ?? null, error: result.error ?? null };
       },
-    },
+    } as unknown as Pick<SupabaseClient, 'rpc'>,
   };
 }
 

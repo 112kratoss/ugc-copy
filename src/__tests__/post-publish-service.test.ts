@@ -1,9 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 const cacheMocks = vi.hoisted(() => ({
   SHOWCASE_FEED_CACHE_TAG: 'showcase-feed:v2',
   invalidateShowcaseFeedCache: vi.fn(),
 }));
+
+/**
+ * A deliberate partial double: the publish path only touches `storage.from`
+ * and `from`, against a SupabaseClient interface with dozens of members.
+ * Widening once here keeps the assertion in one place instead of repeating an
+ * inline cast at each of the six call sites.
+ */
+function adminSupabaseDouble(overrides: Record<string, unknown> = {}): SupabaseClient {
+  return {
+    storage: { from: vi.fn() },
+    from: vi.fn(),
+    ...overrides,
+  } as unknown as SupabaseClient;
+}
 
 vi.mock('@/lib/showcase-feed-cache', () => cacheMocks);
 
@@ -51,7 +66,7 @@ describe('publishPreparedPost', () => {
     } satisfies PostPublishDependencies;
 
     const result = await publishPreparedPost({
-      adminSupabase: { storage: { from: vi.fn() }, from: vi.fn() },
+      adminSupabase: adminSupabaseDouble(),
       ownerUserId: 'user-1',
       postId: 'post-1',
       submission: prepared.submission,
@@ -133,12 +148,11 @@ describe('publishPreparedPost', () => {
     } satisfies PostPublishDependencies;
 
     const result = await publishPreparedPost({
-      adminSupabase: {
-        storage: { from: vi.fn() },
+      adminSupabase: adminSupabaseDouble({
         from: vi.fn(() => ({
           delete: vi.fn(() => ({ eq: deleteEq })),
         })),
-      },
+      }),
       ownerUserId: 'user-1',
       postId: 'post-1',
       submission: prepared.submission,
@@ -170,7 +184,7 @@ describe('publishPreparedPost', () => {
 
     const createPostWithResourceBundleAtomically = vi.fn();
     const result = await publishPreparedPost({
-      adminSupabase: { storage: { from: vi.fn() }, from: vi.fn() },
+      adminSupabase: adminSupabaseDouble(),
       ownerUserId: 'user-1',
       postId: 'post-1',
       submission: prepared.submission,
@@ -216,7 +230,7 @@ describe('publishPreparedPost', () => {
 
       const createPostWithResourceBundleAtomically = vi.fn();
       const result = await publishPreparedPost({
-        adminSupabase: { storage: { from: vi.fn() }, from: vi.fn() },
+        adminSupabase: adminSupabaseDouble(),
         ownerUserId: 'user-1',
         postId: 'post-unsafe',
         submission: prepared.submission,
@@ -258,7 +272,7 @@ describe('publishPreparedPost', () => {
       bundleStatus: null,
     }));
     const result = await publishPreparedPost({
-      adminSupabase: { storage: { from: vi.fn() }, from: vi.fn() },
+      adminSupabase: adminSupabaseDouble(),
       ownerUserId: 'user-1',
       postId: 'post-private',
       submission: prepared.submission,
@@ -289,7 +303,7 @@ describe('publishPreparedPost', () => {
     if (!prepared.ok) throw new Error('Expected prepared submission');
 
     const result = await publishPreparedPost({
-      adminSupabase: { storage: { from: vi.fn() }, from: vi.fn() },
+      adminSupabase: adminSupabaseDouble(),
       ownerUserId: 'user-1',
       postId: 'post-1',
       submission: prepared.submission,
