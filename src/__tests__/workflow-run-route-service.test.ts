@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { startWorkflowRunForRoute } from '@/lib/workflow-run-route-service';
+import { expectFailure } from '@/__tests__/fixtures/route-result';
+
+import {
+  startWorkflowRunForRoute,
+  type WorkflowRunRouteSupabaseClient,
+} from '@/lib/workflow-run-route-service';
 import { createStarterGraph, normalizeWorkflowGraph } from '@/lib/workflow-canvas';
 
 const rateLimitAllowed = {
@@ -59,7 +64,11 @@ function createCanvasClient({
   });
 
   return {
-    client: { from },
+    // Deliberate partial double: the route only reads a single canvas row, so
+    // the stub implements one from().select().eq().eq().single() chain against
+    // a client interface with dozens of members. Widen once at the factory
+    // rather than at each call site.
+    client: { from } as unknown as WorkflowRunRouteSupabaseClient,
     from,
   };
 }
@@ -119,7 +128,7 @@ describe('startWorkflowRunForRoute', () => {
         retryAfterSeconds: 42,
       },
     });
-    expect(result.rateLimitError?.retryAfterSeconds).toBe(42);
+    expect(expectFailure(result).rateLimitError?.retryAfterSeconds).toBe(42);
     expect(admin.rpc).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'workflow-run:start',
       p_subject_key: 'user-1',

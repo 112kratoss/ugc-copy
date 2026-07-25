@@ -13,18 +13,32 @@ function createServiceClientMock() {
   };
 }
 
+/**
+ * Derived from the real dependency rather than restated as
+ * `Record<string, unknown>`, which does not satisfy the service's declared
+ * return type and would drift as the row shape changes.
+ */
+type SharePostReference = Awaited<
+  ReturnType<ShowcaseShareServiceDependencies['findPublicPostReferenceByIdOrGenerationId']>
+>;
+
 function createDependencies(
-  post: Record<string, unknown> | null = {
+  post: SharePostReference = {
     id: 'post-1',
     generation_id: 'gen-1',
     user_id: 'creator-1',
     visibility: 'public',
+    category: 'image',
+    prompt: 'a prompt',
+    source_kind: 'magicbooklet',
   },
 ) {
   return {
     findPublicPostReferenceByIdOrGenerationId: vi.fn(async () => post),
     isUserRelationshipBlocked: vi.fn(async () => false),
-    notifyPostSocialActivity: vi.fn(async () => undefined),
+    // `null`, not `undefined`: the real notifier returns null when it declines
+    // to send, and never returns undefined.
+    notifyPostSocialActivity: vi.fn(async () => null),
     recordPostShareEvent: vi.fn(async () => undefined),
   } satisfies Partial<ShowcaseShareServiceDependencies>;
 }
