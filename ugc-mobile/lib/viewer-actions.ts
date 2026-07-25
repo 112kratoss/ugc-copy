@@ -1,9 +1,20 @@
 import type { CreatorToolId } from './types';
 
-const SAVE_HEART_COLOR = '#fb7185';
+export const SAVE_HEART_COLOR = '#ff3b64';
 const ENABLED_HEART_COLOR = '#ffffff';
 const DISABLED_HEART_COLOR = 'rgba(255,255,255,0.5)';
-const SAVE_HEART_HALO_COLOR = 'rgba(251,113,133,0.22)';
+const SAVE_HEART_HALO_COLOR = 'rgba(255,59,100,0.18)';
+
+const DOUBLE_TAP_SAVE_HEART_PALETTES = [
+  {
+    startColor: '#ff2d8d',
+    endColor: '#ff2d8d',
+  },
+  {
+    startColor: '#ff5a24',
+    endColor: '#ffb000',
+  },
+] as const;
 
 const WEB_CREATE_PATH_TO_NATIVE_TOOL: Record<string, CreatorToolId> = {
   '/create-image': 'image',
@@ -66,23 +77,94 @@ export function getSaveHeartIconProps({
 
 export function getSaveHeartTapAnimationSpec({
   willSave,
-  enabled = true,
 }: {
   willSave: boolean;
   enabled?: boolean;
 }) {
   return {
-    pressInScale: 0.96,
-    peakScale: willSave ? 1.04 : 0.99,
-    haloPeakScale: willSave ? 1.14 : 1.06,
-    haloPeakOpacity: enabled ? (willSave ? 0.14 : 0.07) : 0,
-    pressInDurationMs: 70,
-    settleDurationMs: 220,
+    pressInScale: willSave ? 0.88 : 0.94,
+    peakScale: willSave ? 1.1 : 0.98,
+    haloPeakScale: 1,
+    haloPeakOpacity: 0,
+    pressInDurationMs: 65,
+    settleDurationMs: 230,
     haloColor: SAVE_HEART_HALO_COLOR,
   };
 }
 
 export type SaveHeartTapAnimationSpec = ReturnType<typeof getSaveHeartTapAnimationSpec>;
+
+export function canSaveViewerItemOnDoubleTap({
+  canSave,
+  isSaved,
+  saveLoading,
+}: {
+  canSave: boolean;
+  isSaved: boolean;
+  saveLoading: boolean;
+}) {
+  return canSave && !isSaved && !saveLoading;
+}
+
+export function getDoubleTapSaveHeartAnimationSpec(reducedMotion: boolean) {
+  return reducedMotion
+    ? {
+        startScale: 1,
+        peakScale: 1,
+        settleScale: 1,
+        restingScale: 1,
+        exitScale: 1,
+        entryDurationMs: 0,
+        settleDurationMs: 0,
+        reboundDurationMs: 0,
+        holdDurationMs: 320,
+        exitDurationMs: 180,
+      }
+    : {
+        startScale: 0.22,
+        peakScale: 1.08,
+        settleScale: 0.86,
+        restingScale: 0.92,
+        exitScale: 0.16,
+        entryDurationMs: 120,
+        settleDurationMs: 90,
+        reboundDurationMs: 60,
+        holdDurationMs: 650,
+        exitDurationMs: 170,
+      };
+}
+
+export function getDoubleTapSaveHeartPalette(playCount: number) {
+  const normalizedPlayCount = Number.isFinite(playCount)
+    ? Math.max(0, Math.floor(playCount))
+    : 0;
+  return DOUBLE_TAP_SAVE_HEART_PALETTES[
+    normalizedPlayCount % DOUBLE_TAP_SAVE_HEART_PALETTES.length
+  ];
+}
+
+export function getDoubleTapSaveHeartPosition({
+  x,
+  y,
+  width,
+  height,
+  heartSize,
+}: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  heartSize: number;
+}) {
+  const halfHeart = Math.max(0, heartSize / 2);
+  const maxX = Math.max(halfHeart, width - halfHeart);
+  const maxY = Math.max(halfHeart, height - halfHeart);
+
+  return {
+    x: Math.min(maxX, Math.max(halfHeart, x)),
+    y: Math.min(maxY, Math.max(halfHeart, y)),
+  };
+}
 
 export function getRailActionOpacity({
   disabled,

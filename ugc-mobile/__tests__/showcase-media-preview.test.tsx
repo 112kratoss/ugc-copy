@@ -157,6 +157,8 @@ describe('ShowcaseMediaPreview', () => {
         radius={12}
         recyclingKey="creator-profile:video-1"
         videoActivation="never"
+        videoBackdrop="none"
+        videoContentFit="cover"
         width={160}
       />
     );
@@ -165,6 +167,8 @@ describe('ShowcaseMediaPreview', () => {
     expect(video.props.url).toBe('https://cdn.example.com/original.mp4');
     expect(video.props.previewUrl).toBe('https://cdn.example.com/poster.webp');
     expect(video.props.active).toBe(false);
+    expect(video.props.videoBackdrop).toBe('none');
+    expect(video.props.videoContentFit).toBe('cover');
   });
 
   it('requests a first frame for a video when no poster exists', () => {

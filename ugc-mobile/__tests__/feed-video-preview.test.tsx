@@ -151,4 +151,30 @@ describe('FeedVideoPreview', () => {
     expect(videoViews).toHaveLength(0);
     expect(tree!.root.findAll((node) => String(node.type) === 'play-icon')).toHaveLength(1);
   });
+
+  it('supports the clean cover presentation used by the Showcase feed', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    renderer.act(() => {
+      tree = renderer.create(
+        <FeedVideoPreview
+          url="https://cdn.example.com/landscape-video.mp4"
+          previewUrl="https://cdn.example.com/landscape-poster.jpg"
+          active
+          height={104}
+          radius={8}
+          accent="#fb7185"
+          videoBackdrop="none"
+          videoContentFit="cover"
+        />
+      );
+    });
+
+    const [video] = tree!.root.findAll((node) => String(node.type) === 'video-view');
+    expect(video.props.contentFit).toBe('cover');
+    const images = tree!.root.findAll((node) => String(node.type) === 'image');
+    expect(images).toHaveLength(1);
+    expect(images[0].props.contentFit).toBe('cover');
+    expect(images[0].props.blurRadius).toBeUndefined();
+  });
 });

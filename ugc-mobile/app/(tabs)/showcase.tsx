@@ -1,9 +1,8 @@
 import { FlashList, type ListRenderItem, type ViewToken } from '@shopify/flash-list';
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { Image } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ChevronRight, FileText, Heart, ImageIcon, Lock, MoreVertical, Play, RefreshCw, Repeat2, X } from 'lucide-react-native';
+import { FileText, ImageIcon, MoreVertical, Play, RefreshCw, X } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -11,6 +10,7 @@ import {
   AccessibilityInfo,
   Alert,
   Pressable,
+  ScrollView,
   Text,
   useWindowDimensions,
   View,
@@ -70,50 +70,41 @@ type FeedFilterId = MobileShowcaseFeedFilterId;
 const FEED_FILTERS: Array<{
   id: FeedFilterId;
   label: string;
-  body: string;
   params: ShowcaseFeedFilters;
 }> = [
   {
     id: 'all',
     label: 'All',
-    body: 'Creator posts ranked around what helps you make next.',
     params: {},
   },
   {
     id: 'unlocks',
     label: 'Unlocks',
-    body: 'Posts with reusable prompts, files, notes, or remix access.',
     params: { unlock: 'with-unlock' },
   },
   {
     id: 'free',
     label: 'Free',
-    body: 'Free resources you can open from the viewer.',
     params: { unlock: 'free' },
   },
   {
     id: 'paid',
     label: 'Paid',
-    body: 'Premium creator resources available with credits.',
     params: { unlock: 'paid' },
   },
   {
     id: 'remixable',
     label: 'Remixable',
-    body: 'Posts built to recreate, remix, and learn from.',
     params: { resource: 'remix' },
   },
 ];
-
-const CREATOR_ROW_TAP_START_OFFSET = 0;
-const CREATOR_ROW_TAP_END_OFFSET = 68;
 
 const SKELETON_HEIGHTS = [
   [196, 230, 244],
   [230, 260, 196],
 ];
 const LOAD_MORE_COOLDOWN_MS = 800;
-const FEED_HORIZONTAL_PADDING = appTheme.spacing.screen;
+const FEED_HORIZONTAL_PADDING = 8;
 
 export default function ShowcaseScreen() {
   const { api, user } = useAuth();
@@ -145,12 +136,14 @@ export default function ShowcaseScreen() {
   );
   const activeToolLabel = useMemo(() => activeTool ? formatToolLabel(activeTool) : null, [activeTool]);
   const [activeVideoIds, setActiveVideoIds] = useState<string[]>([]);
+  const [resolvedAspectRatios, setResolvedAspectRatios] = useState<Record<string, number>>({});
   const visibleActiveVideoIds = isFocused ? activeVideoIds : [];
   const [isSwipingMedia, setIsSwipingMedia] = useState(false);
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
   const lastLoadMoreItemCountRef = useRef(0);
+  const aspectRatioRequestsRef = useRef(new Set<string>());
   const qualifiedImpressionsRef = useRef(new Set<string>());
   const feedEventRuntimeRef = useRef({
     api,
@@ -244,6 +237,39 @@ export default function ShowcaseScreen() {
   const hasItems = showcaseItems.length > 0;
   const isFirstLoad = showcaseQuery.isLoading && !hasItems;
   const isRefreshing = showcaseQuery.isRefetching && !showcaseQuery.isFetchingNextPage;
+
+  useEffect(() => {
+    if (typeof Image.loadAsync !== 'function') return;
+
+    for (const card of cards) {
+      if (
+        card.previewKind !== 'media'
+        || card.aspectRatio
+        || !card.previewUrl
+        || resolvedAspectRatios[card.id]
+      ) {
+        continue;
+      }
+      const requestKey = `${card.id}:${card.previewUrl}`;
+      if (aspectRatioRequestsRef.current.has(requestKey)) continue;
+      aspectRatioRequestsRef.current.add(requestKey);
+
+      void Image.loadAsync(card.previewUrl, { maxWidth: 96, maxHeight: 96 })
+        .then((image) => {
+          const aspectRatio = image.width / image.height;
+          if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) return;
+          setResolvedAspectRatios((current) => (
+            current[card.id] === aspectRatio
+              ? current
+              : { ...current, [card.id]: aspectRatio }
+          ));
+        })
+        .catch(() => null)
+        .finally(() => {
+          aspectRatioRequestsRef.current.delete(requestKey);
+        });
+    }
+  }, [cards, resolvedAspectRatios]);
 
   useEffect(() => {
     setActiveFilterId((current) => current === routeFilterId ? current : routeFilterId);
@@ -487,6 +513,7 @@ export default function ShowcaseScreen() {
           card={item}
           layout={gridLayout}
           activeVideoIds={target === 'Cell' ? visibleActiveVideoIds : []}
+          resolvedAspectRatio={resolvedAspectRatios[item.id]}
           onOpenCreator={openCreator}
           onFeedbackOpen={setFeedbackItem}
           onOpenPost={openPost}
@@ -503,7 +530,7 @@ export default function ShowcaseScreen() {
         contentInsetAdjustmentBehavior="never"
         data={isFirstLoad ? [] : cards}
         drawDistance={SHOWCASE_DRAW_DISTANCE}
-        extraData={visibleActiveVideoIds}
+        extraData={{ visibleActiveVideoIds, resolvedAspectRatios }}
         getItemType={(item) => item.previewKind === 'text' ? 'text' : item.mediaKind ?? item.item.category}
         keyExtractor={(item) => item.id}
         masonry
@@ -521,22 +548,17 @@ export default function ShowcaseScreen() {
           backgroundColor: appTheme.colors.background,
         }}
         contentContainerStyle={{
-          paddingTop: topInset + appTheme.spacing.screen,
+          paddingTop: topInset + 12,
           paddingHorizontal: FEED_HORIZONTAL_PADDING,
           paddingBottom: tabBarMetrics.contentBottomOverlapPadding + appTheme.spacing.section,
         }}
         ListHeaderComponent={
-          <View style={{ gap: appTheme.spacing.section, paddingBottom: appTheme.spacing.section }}>
-            <View style={{ gap: 16 }}>
+          <View style={{ gap: 14, paddingBottom: 16 }}>
+            <View style={{ gap: 10 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                <View style={{ gap: 4, flex: 1 }}>
-                  <Text accessibilityRole="header" selectable style={{ color: appTheme.colors.text, ...appTheme.type.pageTitle }}>
-                    Showcase
-                  </Text>
-                  <Text selectable style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
-                    {activeToolLabel ? `Creations made with ${activeToolLabel}.` : activeFilter.body}
-                  </Text>
-                </View>
+                <Text accessibilityRole="header" selectable style={{ color: appTheme.colors.text, ...appTheme.type.pageTitle }}>
+                  Showcase
+                </Text>
                 <IconButton
                   disabled={showcaseQuery.isFetching && !showcaseQuery.isFetchingNextPage}
                   label="Refresh Showcase"
@@ -546,9 +568,13 @@ export default function ShowcaseScreen() {
                 </IconButton>
               </View>
 
-              <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+              <ScrollView
+                horizontal
+                contentContainerStyle={{ alignItems: 'center', gap: 6, paddingRight: 10 }}
+                showsHorizontalScrollIndicator={false}
+              >
                 {FEED_FILTERS.map((filter) => (
-                  <FeedFilterChip
+                  <FeedFilterTab
                     key={filter.id}
                     active={activeFilterId === filter.id}
                     label={filter.label}
@@ -564,21 +590,19 @@ export default function ShowcaseScreen() {
                       minHeight: appTheme.touch.compact,
                       flexDirection: 'row',
                       alignItems: 'center',
-                      gap: 6,
+                      gap: 5,
                       borderRadius: appTheme.radii.pill,
-                      borderWidth: 1,
-                      borderColor: appTheme.colors.commerce,
                       backgroundColor: `${appTheme.colors.commerce}1f`,
                       opacity: pressed ? appTheme.opacity.pressed : 1,
-                      paddingLeft: appTheme.spacing.gap,
+                      paddingLeft: 11,
                       paddingRight: 9,
                     })}
                   >
                     <Text style={{ color: appTheme.colors.text, ...appTheme.type.label }}>{activeToolLabel}</Text>
-                    <X size={15} color={appTheme.colors.text} />
+                    <X size={14} color={appTheme.colors.text} />
                   </Pressable>
                 ) : null}
-              </View>
+              </ScrollView>
             </View>
             {showcaseQuery.error ? (
               <View style={{ gap: appTheme.spacing.gap }}>
@@ -684,9 +708,7 @@ function IconButton({
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: appTheme.radii.pill,
-        borderWidth: 1,
-        borderColor: appTheme.colors.border,
-        backgroundColor: appTheme.colors.panelSoft,
+        backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'transparent',
         opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
       })}
     >
@@ -695,7 +717,7 @@ function IconButton({
   );
 }
 
-function FeedFilterChip({
+function FeedFilterTab({
   active,
   label,
   onPress,
@@ -712,15 +734,17 @@ function FeedFilterChip({
       style={({ pressed }) => ({
         minHeight: appTheme.touch.compact,
         justifyContent: 'center',
-        borderRadius: appTheme.radii.pill,
-        borderWidth: 1,
-        borderColor: active ? appTheme.colors.primary : appTheme.colors.border,
-        backgroundColor: active ? appTheme.colors.selected : appTheme.colors.panelSoft,
         opacity: pressed ? appTheme.opacity.pressed : 1,
-        paddingHorizontal: appTheme.spacing.gap,
+        paddingHorizontal: 10,
+        borderBottomWidth: 2,
+        borderBottomColor: active ? appTheme.colors.primary : 'transparent',
       })}
     >
-      <Text style={{ color: active ? appTheme.colors.text : appTheme.colors.muted, ...appTheme.type.label }}>
+      <Text style={{
+        color: active ? appTheme.colors.text : appTheme.colors.muted,
+        ...appTheme.type.label,
+        fontWeight: active ? '800' : '700',
+      }}>
         {label}
       </Text>
     </Pressable>
@@ -768,12 +792,11 @@ function SkeletonPin({ height, layout }: { height: number; layout: ShowcaseGridL
           }}
         />
       </View>
-      <View style={{ gap: 8, paddingBottom: 8 }}>
-        <View style={{ width: '90%', height: 17, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.11)' }} />
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+      <View style={{ paddingHorizontal: 2, paddingBottom: 2 }}>
+        <View style={{ minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 7 }}>
           <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.10)' }} />
           <View style={{ flex: 1, height: 13, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.08)' }} />
-          <View style={{ width: 34, height: 13, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.08)' }} />
+          <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.08)' }} />
         </View>
       </View>
     </View>
@@ -792,6 +815,7 @@ function MasonryPin({
   card,
   layout,
   activeVideoIds,
+  resolvedAspectRatio,
   onFeedbackOpen,
   onOpenPost,
   onOpenCreator,
@@ -800,6 +824,7 @@ function MasonryPin({
   card: ShowcaseMasonryCard;
   layout: ShowcaseGridLayout;
   activeVideoIds: string[];
+  resolvedAspectRatio?: number;
   onFeedbackOpen: (item: ShowcaseFeedItem) => void;
   onOpenCreator: (item: ShowcaseFeedItem) => void;
   onOpenPost: (item: ShowcaseFeedItem) => void;
@@ -807,175 +832,109 @@ function MasonryPin({
 }) {
   const { width } = useWindowDimensions();
   const columnWidth = (width - FEED_HORIZONTAL_PADDING * 2 - layout.columnGap) / 2;
-  const mediaHeight = getShowcaseMediaHeight(card, columnWidth);
+  const mediaHeight = getShowcaseMediaHeight(card, columnWidth, resolvedAspectRatio);
   const accent = accentColor(card.accent);
   const isVideoCard = isShowcaseVideoPreviewCandidate(card.item);
   const showActiveVideo = isVideoCard && activeVideoIds.includes(card.id) && Boolean(card.mediaUrl);
   const creatorLabel = formatCreatorLabel(card.creatorLabel);
-  const routeCardPress = (locationY: number) => {
-    const inCreatorRow = locationY >= mediaHeight + CREATOR_ROW_TAP_START_OFFSET
-      && locationY <= mediaHeight + CREATOR_ROW_TAP_END_OFFSET;
-
-    if (inCreatorRow) {
-      if (card.item.creator.username?.trim()) {
-        onOpenCreator(card.item);
-      }
-      return;
-    }
-
-    onOpenPost(card.item);
-  };
+  const signal = card.unlock;
 
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`${card.title}. ${card.badge}${card.unlock ? `. ${card.unlock.summary}` : ''}. ${creatorLabel}`}
-      onPress={(event) => routeCardPress(event.nativeEvent.locationY)}
-      style={({ pressed }) => ({
-        borderRadius: appTheme.radii.xl,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: appTheme.colors.border,
-        backgroundColor: appTheme.colors.panel,
-        overflow: 'hidden',
-        opacity: pressed ? 0.94 : 1,
-      })}
-    >
-      <View
-        style={{
+    <View style={{ gap: 5 }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${card.title}. ${card.badge}${signal ? `. ${signal.summary}` : ''}. ${creatorLabel}`}
+        accessibilityHint="Opens this post in the full-screen viewer"
+        onPress={() => onOpenPost(card.item)}
+        style={({ pressed }) => ({
           height: mediaHeight,
+          borderRadius: layout.mediaRadius,
+          borderCurve: 'continuous',
           overflow: 'hidden',
           backgroundColor: card.previewKind === 'text' ? 'transparent' : '#050506',
-        }}
+          opacity: pressed ? 0.92 : 1,
+        })}
       >
-          {card.previewKind === 'text' ? (
-            <TextPinPreview
-              accent={accent}
-              badge={card.badge}
-              height={mediaHeight}
-              prompt={card.prompt}
-              title={card.title}
-            />
-          ) : hasShowcasePreviewMedia(card.item) ? (
-            <ShowcaseMediaPreview
-              item={card.item}
-              height={mediaHeight}
-              accent={accent}
-              width={columnWidth}
-              radius={layout.mediaRadius}
-              recyclingKey={`showcase:${card.id}`}
-              videoActivation={showActiveVideo ? 'visible' : 'never'}
-              onPress={() => onOpenPost(card.item)}
-              onScrollToggle={onScrollToggle}
-            />
+        {card.previewKind === 'text' ? (
+          <TextPinPreview
+            accent={accent}
+            badge={card.badge}
+            height={mediaHeight}
+            prompt={card.prompt}
+            radius={layout.mediaRadius}
+            title={card.title}
+          />
+        ) : hasShowcasePreviewMedia(card.item) ? (
+          <ShowcaseMediaPreview
+            item={card.item}
+            height={mediaHeight}
+            accent={accent}
+            width={columnWidth}
+            radius={layout.mediaRadius}
+            recyclingKey={`showcase:${card.id}`}
+            videoActivation={showActiveVideo ? 'visible' : 'never'}
+            videoBackdrop="none"
+            videoContentFit="cover"
+            onPress={() => onOpenPost(card.item)}
+            onScrollToggle={onScrollToggle}
+          />
+        ) : (
+          isVideoCard ? (
+            <VideoPinPreview accent={accent} height={mediaHeight} radius={layout.mediaRadius} />
           ) : (
-            isVideoCard ? (
-              <VideoPinPreview accent={accent} height={mediaHeight} radius={layout.mediaRadius} />
-            ) : (
-              <VisualFallbackPreview accent={accent} height={mediaHeight} radius={layout.mediaRadius} />
-            )
-          )}
-          {card.previewKind === 'media' ? (
-            <>
-              <PinBadge label={card.badge} accent={accent} />
-              <LinearGradient
-                pointerEvents="none"
-                colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.74)', 'rgba(0,0,0,0.92)']}
-                locations={[0, 0.58, 1]}
-                style={{
-                  position: 'absolute',
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  minHeight: 88,
-                  justifyContent: 'flex-end',
-                  paddingHorizontal: appTheme.spacing.gap,
-                  paddingBottom: appTheme.spacing.gap,
-                }}
-              >
-                <Text numberOfLines={2} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
-                  {card.title}
-                </Text>
-              </LinearGradient>
-              {isVideoCard ? <VideoCornerPlay /> : null}
-            </>
-          ) : null}
-      </View>
+            <VisualFallbackPreview accent={accent} height={mediaHeight} radius={layout.mediaRadius} />
+          )
+        )}
+        {card.previewKind === 'media' && signal ? (
+          <PinBadge label={signal.label} accent={accentColor(signal.accent)} />
+        ) : null}
+        {card.previewKind === 'media' && isVideoCard ? <VideoCornerPlay /> : null}
+      </Pressable>
 
-      <View style={{ gap: appTheme.spacing.compact, paddingHorizontal: 10, paddingTop: 9, paddingBottom: 10 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Open ${creatorLabel} profile`}
-            accessibilityHint="Opens this creator's profile"
-            disabled={!card.item.creator.username}
-            hitSlop={{ top: 4, right: 12, bottom: 4, left: 0 }}
-            onPress={(event) => {
-              event.stopPropagation();
-              onOpenCreator(card.item);
-            }}
-            style={({ pressed }) => ({
-              flex: 1,
-              minHeight: 48,
-              minWidth: 0,
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 7,
-              paddingRight: 2,
-              opacity: pressed ? 0.72 : 1,
-              zIndex: 2,
-              elevation: 2,
-            })}
-          >
-            <CreatorAvatar uri={card.creatorAvatar} name={creatorLabel} />
-            <Text numberOfLines={1} style={{ color: appTheme.colors.muted, flex: 1, ...appTheme.type.caption, fontWeight: '800' }}>
-              {creatorLabel}
-            </Text>
-            <ChevronRight size={15} color={appTheme.colors.faint} strokeWidth={2.5} />
-          </Pressable>
-          <PinStat icon={<Heart size={16} color={appTheme.colors.text} strokeWidth={2.4} />} label={card.saveLabel} />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Showcase controls for ${card.title}`}
-            accessibilityHint="Hide this post or this creator from recommendations"
-            hitSlop={4}
-            onPress={(event) => {
-              event.stopPropagation();
-              onFeedbackOpen(card.item);
-            }}
-            style={({ pressed }) => ({
-              width: 42,
-              height: 42,
-              marginRight: -7,
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: appTheme.radii.pill,
-              backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'transparent',
-              opacity: pressed ? appTheme.opacity.pressed : 1,
-            })}
-          >
-            <MoreVertical size={17} color={appTheme.colors.muted} strokeWidth={2.5} />
-          </Pressable>
-        </View>
-        <View
-          style={{
+      <View style={{ minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 2 }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Open ${creatorLabel} profile`}
+          accessibilityHint="Opens this creator's profile"
+          disabled={!card.item.creator.username}
+          hitSlop={{ top: 4, right: 8, bottom: 4, left: 0 }}
+          onPress={() => onOpenCreator(card.item)}
+          style={({ pressed }) => ({
+            flex: 1,
+            minHeight: 40,
+            minWidth: 0,
             flexDirection: 'row',
             alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: appTheme.spacing.compact,
-          }}
+            gap: 7,
+            opacity: pressed ? 0.68 : 1,
+          })}
         >
-          {card.unlock ? (
-            <UnlockSummary unlock={card.unlock} />
-          ) : (
-            <Text numberOfLines={1} style={{ color: appTheme.colors.faint, flex: 1, ...appTheme.type.caption }}>
-              Open post
-            </Text>
-          )}
-          <PinStat icon={<Repeat2 size={15} color={appTheme.colors.muted} strokeWidth={2.4} />} label={card.remixLabel} muted />
-        </View>
+          <CreatorAvatar uri={card.creatorAvatar} name={creatorLabel} />
+          <Text numberOfLines={1} style={{ color: appTheme.colors.muted, flex: 1, ...appTheme.type.caption, fontWeight: '700' }}>
+            {creatorLabel}
+          </Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Showcase controls for ${card.title}`}
+          accessibilityHint="Hide this post or this creator from recommendations"
+          hitSlop={4}
+          onPress={() => onFeedbackOpen(card.item)}
+          style={({ pressed }) => ({
+            width: 40,
+            height: 40,
+            marginRight: -7,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: appTheme.radii.pill,
+            backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'transparent',
+            opacity: pressed ? appTheme.opacity.pressed : 1,
+          })}
+        >
+          <MoreVertical size={18} color={appTheme.colors.muted} strokeWidth={2.4} />
+        </Pressable>
       </View>
-    </Pressable>
+    </View>
   );
 }
 
@@ -994,34 +953,13 @@ function PinBadge({ label, accent }: { label: string; accent: string }) {
         top: 10,
         maxWidth: '82%',
         borderRadius: appTheme.radii.pill,
-        borderWidth: 1,
-        borderColor: `${accent}66`,
-        backgroundColor: appTheme.colors.overlay,
+        backgroundColor: 'rgba(5,5,7,0.78)',
         paddingHorizontal: 9,
         paddingVertical: 5,
       }}
     >
-      <Text numberOfLines={1} style={{ color: '#ffffff', ...appTheme.type.caption, lineHeight: 12, fontWeight: '800' }}>
+      <Text numberOfLines={1} style={{ color: accent, ...appTheme.type.caption, lineHeight: 12, fontWeight: '800' }}>
         {label}
-      </Text>
-    </View>
-  );
-}
-
-function UnlockSummary({ unlock }: { unlock: ShowcaseMasonryCard['unlock'] }) {
-  if (!unlock) return null;
-  const accent = accentColor(unlock.accent);
-
-  return (
-    <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-        <Lock size={12} color={accent} strokeWidth={2.6} />
-        <Text numberOfLines={1} style={{ color: accent, flex: 1, ...appTheme.type.caption, fontWeight: '800' }}>
-          {unlock.ctaLabel}
-        </Text>
-      </View>
-      <Text numberOfLines={1} style={{ color: appTheme.colors.faint, ...appTheme.type.caption }}>
-        {unlock.summary}
       </Text>
     </View>
   );
@@ -1032,23 +970,24 @@ function TextPinPreview({
   badge,
   height,
   prompt,
+  radius,
   title,
 }: {
   accent: string;
   badge: string;
   height: number;
   prompt: string;
+  radius: number;
   title: string;
 }) {
   return (
     <View
       style={{
         height,
-        borderTopLeftRadius: 21,
-        borderTopRightRadius: 21,
+        borderRadius: radius,
         borderCurve: 'continuous',
-        borderBottomWidth: 1,
-        borderBottomColor: appTheme.colors.borderSubtle,
+        borderWidth: 1,
+        borderColor: appTheme.colors.borderSubtle,
         backgroundColor: appTheme.colors.panelSoft,
         overflow: 'hidden',
         padding: 13,
@@ -1185,17 +1124,6 @@ function VideoPinPreview({ accent, height, radius }: { accent: string; height: n
       >
         <Play size={21} color={accent} fill={accent} strokeWidth={2.4} />
       </View>
-    </View>
-  );
-}
-
-function PinStat({ icon, label, muted = false }: { icon: React.ReactNode; label: string; muted?: boolean }) {
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-      {icon}
-      <Text style={{ color: muted ? appTheme.colors.faint : appTheme.colors.muted, fontSize: muted ? 12 : 13, fontWeight: muted ? '800' : '700', fontVariant: ['tabular-nums'] }}>
-        {label}
-      </Text>
     </View>
   );
 }

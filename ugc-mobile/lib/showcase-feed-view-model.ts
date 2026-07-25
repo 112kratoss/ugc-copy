@@ -40,6 +40,10 @@ export interface ShowcaseGridLayout {
   mediaRadius: number;
 }
 
+const MIN_SHOWCASE_MEDIA_HEIGHT = 104;
+const MAX_SHOWCASE_MEDIA_HEIGHT = 320;
+const FALLBACK_VIDEO_ASPECT_RATIO = 16 / 9;
+
 export function buildShowcaseMasonry(items: ShowcaseFeedItem[]) {
   return items.filter(isShowcaseGridReady).map(showcaseToMasonryCard);
 }
@@ -54,9 +58,9 @@ export function getShowcaseGridLayout(windowWidth: number): ShowcaseGridLayout {
   const compactPhone = windowWidth < 380;
 
   return {
-    columnGap: compactPhone ? 12 : 14,
-    pinGap: compactPhone ? 22 : 24,
-    mediaRadius: 18,
+    columnGap: compactPhone ? 7 : 8,
+    pinGap: compactPhone ? 14 : 16,
+    mediaRadius: compactPhone ? 17 : 18,
   };
 }
 
@@ -70,7 +74,7 @@ export function showcaseToMasonryCard(item: ShowcaseFeedItem): ShowcaseMasonryCa
   return {
     id: item.id,
     item,
-    title: item.title || item.prompt || 'Community post',
+    title: cardTitle(item),
     prompt: item.body || item.prompt || 'A creator-ready idea from the Magicbooklet community.',
     previewKind: textOnly ? 'text' : 'media',
     creatorLabel: item.creator.username || item.creator.name,
@@ -92,11 +96,47 @@ export function showcaseToMasonryCard(item: ShowcaseFeedItem): ShowcaseMasonryCa
   };
 }
 
-export function getShowcaseMediaHeight(card: ShowcaseMasonryCard, columnWidth: number) {
-  if (card.previewKind === 'text' || !card.aspectRatio) {
+function cardTitle(item: ShowcaseFeedItem) {
+  const title = item.title?.trim();
+  if (title && !isPlaceholderTitle(title)) return title;
+
+  const textPost = item.category === 'text' || item.postFormat === 'text';
+  const contentCandidates = textPost
+    ? [item.body, item.prompt]
+    : [item.prompt, item.body];
+
+  for (const candidate of contentCandidates) {
+    const clean = candidate?.trim();
+    if (clean && !isPlaceholderTitle(clean)) return clean;
+  }
+
+  if (item.creationMode === 'motion') return 'Motion creation';
+  if (item.mediaKind === 'video' || item.category === 'video') return 'Video creation';
+  if (textPost) return 'Creator note';
+  return 'Image creation';
+}
+
+function isPlaceholderTitle(value: string) {
+  return /^(untitled(?: creation)?|community post)$/i.test(value.trim());
+}
+
+export function getShowcaseMediaHeight(
+  card: ShowcaseMasonryCard,
+  columnWidth: number,
+  resolvedAspectRatio?: number | null
+) {
+  if (card.previewKind === 'text') {
     return card.height;
   }
-  return Math.round(Math.max(180, Math.min(320, columnWidth / card.aspectRatio)));
+  const aspectRatio = normalizeAspectRatio(resolvedAspectRatio)
+    ?? card.aspectRatio
+    ?? (card.mediaKind === 'video' ? FALLBACK_VIDEO_ASPECT_RATIO : null);
+  if (!aspectRatio) return card.height;
+
+  return Math.round(Math.max(
+    MIN_SHOWCASE_MEDIA_HEIGHT,
+    Math.min(MAX_SHOWCASE_MEDIA_HEIGHT, columnWidth / aspectRatio)
+  ));
 }
 
 function cardBadge(item: ShowcaseFeedItem) {
@@ -166,10 +206,18 @@ function cardHeight(item: ShowcaseFeedItem) {
 
 function getCardAspectRatio(item: ShowcaseFeedItem) {
   const cover = item.mediaItems?.[0];
-  if (!cover?.width || !cover.height) {
-    return null;
-  }
-  return cover.width / cover.height;
+  return ratioFromDimensions(cover?.width, cover?.height)
+    ?? ratioFromDimensions(cover?.preview?.width, cover?.preview?.height);
+}
+
+function ratioFromDimensions(width: number | null | undefined, height: number | null | undefined) {
+  if (!width || !height) return null;
+  return normalizeAspectRatio(width / height);
+}
+
+function normalizeAspectRatio(value: number | null | undefined) {
+  if (!value || !Number.isFinite(value) || value <= 0) return null;
+  return value;
 }
 
 function categoryAccent(category: ShowcaseFeedItem['category']): ToolAccent {

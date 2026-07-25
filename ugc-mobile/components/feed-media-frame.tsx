@@ -35,6 +35,8 @@ type FeedVideoFrameProps = FeedMediaFrameBaseProps & {
   player: VideoPlayer;
   posterUrl?: string | null;
   posterVisible?: boolean;
+  videoBackdrop?: 'blurred' | 'none';
+  videoContentFit?: 'cover' | 'contain';
 };
 
 type FeedMediaFrameProps = FeedImageFrameProps | FeedVideoFrameProps;
@@ -107,7 +109,7 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
         </>
       ) : (
         <>
-          {props.backdropUrl ? (
+          {props.backdropUrl && (props.videoBackdrop ?? 'blurred') === 'blurred' ? (
             <Image
               source={{ uri: props.backdropUrl }}
               contentFit="cover"
@@ -119,11 +121,13 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
               style={[absoluteFill, { backgroundColor }]}
             />
           ) : null}
-          <View pointerEvents="none" style={[absoluteFill, { backgroundColor: 'rgba(0,0,0,0.44)' }]} />
+          {(props.videoBackdrop ?? 'blurred') === 'blurred' ? (
+            <View pointerEvents="none" style={[absoluteFill, { backgroundColor: 'rgba(0,0,0,0.44)' }]} />
+          ) : null}
           <VideoView
             {...videoViewProps}
             player={props.player}
-            contentFit="contain"
+            contentFit={props.videoContentFit ?? 'contain'}
             onFirstFrameRender={props.onFirstFrameRender}
             pointerEvents="none"
             style={[absoluteFill, { backgroundColor: 'transparent' }]}
@@ -133,7 +137,7 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
               url={props.posterUrl}
               cacheKey={props.cacheKey ?? (props.recyclingKey ? `${props.recyclingKey}:video-poster` : props.posterUrl)}
               thumbhash={props.thumbhash}
-              contentFit="contain"
+              contentFit={props.videoContentFit ?? 'contain'}
               style={[absoluteFill, { backgroundColor: 'transparent' }]}
             />
           ) : null}

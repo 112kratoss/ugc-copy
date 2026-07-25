@@ -156,4 +156,33 @@ describe('FeedMediaFrame', () => {
     expect(posters[1].props.blurRadius).toBeUndefined();
     expect(posters[1].props.recyclingKey).toBe('video-2:video-poster');
   });
+
+  it('can render a clean cover video without a blurred backdrop', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    renderer.act(() => {
+      tree = renderer.create(
+        <FeedMediaFrame
+          kind="video"
+          player={{ id: 'player-clean' } as never}
+          backdropUrl="https://cdn.example.com/video-poster.jpg"
+          posterUrl="https://cdn.example.com/video-poster.jpg"
+          posterVisible
+          recyclingKey="video-clean"
+          videoBackdrop="none"
+          videoContentFit="cover"
+          style={{ height: 104 }}
+        />
+      );
+    });
+
+    const [video] = tree!.root.findAll((node) => String(node.type) === 'video-view');
+    expect(video.props.contentFit).toBe('cover');
+
+    const posters = tree!.root.findAll((node) => node.type === 'image');
+    expect(posters).toHaveLength(1);
+    expect(posters[0].props.contentFit).toBe('cover');
+    expect(posters[0].props.blurRadius).toBeUndefined();
+    expect(posters[0].props.recyclingKey).toBe('video-clean:video-poster');
+  });
 });
