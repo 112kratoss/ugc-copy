@@ -1,6 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
+  collectGenerationCompletionSources,
+  type GenerationCompletionSourceBreakdown,
+} from '@/lib/generation-completion-source';
+
+import {
   collectOperationalTableGrowth,
   type OperationalTableGrowthReport,
 } from '@/lib/operational-table-growth';
@@ -130,6 +135,12 @@ export type BackendCostReport = {
    * example against a database that has not applied the migration yet.
    */
   operationalTableGrowth: OperationalTableGrowthReport | null;
+  /**
+   * Which runner is actually settling generation completions. This is the
+   * evidence the durable-queue decision rests on — see
+   * `generation-completion-source.ts`.
+   */
+  generationCompletionSources: GenerationCompletionSourceBreakdown;
   issues: BackendCostReportIssue[];
 };
 
@@ -770,6 +781,8 @@ export async function collectBackendCostReport(
     });
   }
 
+  const generationCompletionSources = await collectGenerationCompletionSources(client, now);
+
   return {
     status: maxStatus(['ok', ...issues.map((issue) => issue.severity)]),
     checkedAt: now.toISOString(),
@@ -784,6 +797,7 @@ export async function collectBackendCostReport(
     rateLimitPressure,
     storageGrowth,
     operationalTableGrowth,
+    generationCompletionSources,
     issues,
   };
 }
