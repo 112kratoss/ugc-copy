@@ -65,6 +65,7 @@ import {
 } from '@/lib/generation-public-failure';
 export { getPublicGenerationStartFailure };
 export type { GenerationStartFailureCode, PublicGenerationStartFailure };
+import { resolveGenerationAppModelId } from '@/lib/generation-model-attribution';
 import { logBackendError } from '@/lib/backend-logger';
 
 const TEMPLATE_START_FAILED_EVENT = 'template_generation_start_failed_after_reservation';
@@ -1411,7 +1412,7 @@ async function syncSingleGenerationStatus(
     : Date.parse(generation.created_at);
 
   if (isVeoGeneration(generation)) {
-    const response = await withProviderModel(generation.model, () => fetchWithProviderRetry(`https://api.kie.ai/api/v1/veo/record-info?taskId=${generation.prediction_id}`, {
+    const response = await withProviderModel(resolveGenerationAppModelId(generation), () => fetchWithProviderRetry(`https://api.kie.ai/api/v1/veo/record-info?taskId=${generation.prediction_id}`, {
       headers: { Authorization: `Bearer ${KIE_API_KEY}` },
     }, PROVIDER_STATUS_POLL_TIMEOUT_MS, PROVIDER_STATUS_POLL_RETRY_POLICY, fetch, 'KIE Veo status'));
     const data = await response.json();
@@ -1452,7 +1453,7 @@ async function syncSingleGenerationStatus(
     return nextStatus;
   }
 
-  const response = await withProviderModel(generation.model, () => fetchWithProviderRetry(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${generation.prediction_id}`, {
+  const response = await withProviderModel(resolveGenerationAppModelId(generation), () => fetchWithProviderRetry(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${generation.prediction_id}`, {
     headers: { Authorization: `Bearer ${KIE_API_KEY}` },
   }, PROVIDER_STATUS_POLL_TIMEOUT_MS, PROVIDER_STATUS_POLL_RETRY_POLICY, fetch, 'KIE task status'));
   const data = await response.json();
