@@ -19,7 +19,9 @@ describe('mobile push route adapter service', () => {
     const userSupabase = createUserClient();
     const createServiceClient = vi.fn(() => adminSupabase);
     const createUserClientDependency = vi.fn(() => userSupabase);
-    const registerMobilePushTokenForRoute = vi.fn(
+    // Typed with the real signature so `mock.calls` is a tuple of its actual
+    // arguments; a bare vi.fn() infers zero parameters and calls[0][0] cannot compile.
+    const registerMobilePushTokenForRoute = vi.fn<typeof import('@/lib/mobile-push-registration-service').registerMobilePushTokenForRoute>(
       async (): Promise<MobilePushRegistrationRouteResult> => ({
         ok: true,
         body: { success: true },

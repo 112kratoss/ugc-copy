@@ -13,7 +13,12 @@ describe('contact route adapter service', () => {
   it('delegates contact submissions with lazy body, rate-limit key, admin handoff, and private headers', async () => {
     const adminSupabase = createAdminClient();
     const createServiceClient = vi.fn(() => adminSupabase);
-    const submitContactMessageForRoute = vi.fn(
+    // Typed with the real signature so `mock.calls` is a tuple of its actual
+    // arguments. Written bare, vi.fn() infers a zero-argument mock, `calls`
+    // types as the empty tuple, and reading calls[0][0] below cannot compile.
+    const submitContactMessageForRoute = vi.fn<
+      typeof import('@/lib/contact-submission-service').submitContactMessageForRoute
+    >(
       async (): Promise<ContactSubmissionRouteResult> => ({
         ok: true,
         body: { success: true },

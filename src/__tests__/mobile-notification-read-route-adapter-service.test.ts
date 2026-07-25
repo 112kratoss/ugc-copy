@@ -18,7 +18,9 @@ describe('mobile notification read route adapter service', () => {
     const userSupabase = createUserClient();
     const createServiceClient = vi.fn(() => adminSupabase);
     const createUserClientDependency = vi.fn(() => userSupabase);
-    const markMobileNotificationsReadForRoute = vi.fn(
+    // Typed with the real signature so `mock.calls` is a tuple of its actual
+    // arguments; a bare vi.fn() infers zero parameters and calls[0][0] cannot compile.
+    const markMobileNotificationsReadForRoute = vi.fn<typeof import('@/lib/mobile-notification-inbox-service').markMobileNotificationsReadForRoute>(
       async (): Promise<MobileNotificationInboxRouteResult> => ({
         ok: true,
         body: { success: true },

@@ -151,7 +151,9 @@ describe('generation lifecycle route adapter service', () => {
     const userSupabase = createUserClient('user-1');
     const createServiceClient = vi.fn(() => adminSupabase);
     const createUserClientDependency = vi.fn(() => userSupabase);
-    const deleteOwnerGenerationForRoute = vi.fn(
+    // Typed with the real signature so `mock.calls` is a tuple of its actual
+    // arguments; a bare vi.fn() infers zero parameters and calls[0][0] cannot compile.
+    const deleteOwnerGenerationForRoute = vi.fn<typeof import('@/lib/generation-delete-service').deleteOwnerGenerationForRoute>(
       async (): Promise<GenerationDeleteRouteResult> => ({
         ok: true,
         body: { success: true, deleted: true },

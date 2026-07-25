@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
 
@@ -8,15 +9,20 @@ import type { MobileCommerceSyncRouteResult } from '@/lib/mobile-commerce-sync-s
 
 describe('mobile commerce sync route adapter service', () => {
   it('wraps provider request-id context and delegates sync inputs with private trace headers', async () => {
-    const adminSupabase = { kind: 'admin' };
-    const userSupabase = { kind: 'user' };
+    // Deliberate partial doubles — the adapter only passes these through, so
+    // widening once here beats casting at every dependency site.
+    const adminSupabase = { kind: 'admin' } as unknown as SupabaseClient;
+    const userSupabase = { kind: 'user' } as unknown as SupabaseClient;
     const createServiceClient = vi.fn(() => adminSupabase);
     const createUserClient = vi.fn(() => userSupabase);
-    const syncMobileCommerceForRoute = vi.fn(async (): Promise<MobileCommerceSyncRouteResult> => ({
+    // Typed with the real signature so `mock.calls` is a tuple of its actual
+    // arguments; a bare vi.fn() infers zero parameters and calls[0][0] cannot compile.
+    const syncMobileCommerceForRoute = vi.fn<typeof import('@/lib/mobile-commerce-sync-service').syncMobileCommerceForRoute>(
+      async (): Promise<MobileCommerceSyncRouteResult> => ({
       ok: true,
       body: {
-        ok: true,
-        type: 'credits',
+        success: true,
+        entitlement: 'credits',
         credits: 100,
         alreadyProcessed: false,
       },
@@ -49,8 +55,8 @@ describe('mobile commerce sync route adapter service', () => {
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(response.headers.get('x-request-id')).toBe('mobile-commerce-sync-adapter-1');
     await expect(response.json()).resolves.toMatchObject({
-      ok: true,
-      type: 'credits',
+      success: true,
+      entitlement: 'credits',
       credits: 100,
     });
 

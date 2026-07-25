@@ -10,7 +10,9 @@ describe('razorpay credit verify route adapter service', () => {
     const adminSupabase = { kind: 'admin' };
     const createUserClient = vi.fn(() => userSupabase);
     const createServiceClient = vi.fn(() => adminSupabase);
-    const verifyCreditRazorpayPaymentForRoute = vi.fn(async (): Promise<CreditRazorpayVerifyRouteResult> => ({
+    // Typed with the real signature so `mock.calls` is a tuple of its actual
+    // arguments; a bare vi.fn() infers zero parameters and calls[0][0] cannot compile.
+    const verifyCreditRazorpayPaymentForRoute = vi.fn<typeof import('@/lib/razorpay-credit-verify-service').verifyCreditRazorpayPaymentForRoute>(async (): Promise<CreditRazorpayVerifyRouteResult> => ({
       ok: true,
       body: { success: true },
     }));
