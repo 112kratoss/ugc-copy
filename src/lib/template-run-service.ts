@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -694,7 +695,7 @@ export async function finalizeTemplateRunInputs(params: {
   const removePaths = [...stagingPaths, ...replacedFinalPaths.filter(Boolean)];
   if (removePaths.length) {
     const { error } = await params.client.storage.from(TEMPLATE_INPUT_BUCKET).remove(removePaths);
-    if (error) console.error('Failed to remove replaced template input objects:', error);
+    if (error) logBackendError('failed_to_remove_replaced_template_input_objects', { error: error });
   }
   return toRunDto(params.client, await loadRunState(params.client, state.run.id, params.userId));
 }
@@ -996,7 +997,7 @@ async function cleanupTemplateRunInputs(client: SupabaseClient, state: RunState)
   if (paths.length) {
     const { error } = await client.storage.from(TEMPLATE_INPUT_BUCKET).remove(paths);
     if (error) {
-      console.error('Failed to clean up template inputs:', error);
+      logBackendError('failed_to_clean_up_template_inputs', { error: error });
       return state;
     }
   }
@@ -1066,7 +1067,7 @@ export async function syncTemplateRun(params: {
         generationIds: activeIds,
       });
     } catch (error) {
-      console.error('Failed to synchronize template generations:', error);
+      logBackendError('failed_to_synchronize_template_generations', { error: error });
     }
   }
   state = await loadRunState(params.adminClient, params.runId, params.userId);

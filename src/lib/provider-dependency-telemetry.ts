@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { logBackendWarning } from '@/lib/backend-logger';
 
 import type { ProviderFetchTelemetryEvent } from '@/lib/provider-fetch';
 import { createServiceClient } from '@/lib/server-helpers';
@@ -62,23 +63,19 @@ export async function recordProviderDependencyEvent(
       .insert(toProviderDependencyInsert(event));
 
     if (error) {
-      console.error(JSON.stringify({
-        level: 'warn',
-        msg: 'provider_dependency_telemetry_insert_failed',
-        serviceName: event.serviceName,
+      logBackendWarning('provider_dependency_telemetry_insert_failed', {
+    serviceName: event.serviceName,
         outcome: event.outcome,
         requestId: event.requestId,
         error: errorMessage(error),
-      }));
+  });
     }
   } catch (error) {
-    console.error(JSON.stringify({
-      level: 'warn',
-      msg: 'provider_dependency_telemetry_insert_failed',
-      serviceName: event.serviceName,
+    logBackendWarning('provider_dependency_telemetry_insert_failed', {
+    serviceName: event.serviceName,
       outcome: event.outcome,
       requestId: event.requestId,
       error: errorMessage(error),
-    }));
+  });
   }
 }

@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError, logBackendInfo } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -113,7 +114,7 @@ export async function processRazorpayWebhookForRoute({
 
     const typedTxn = (txn as CreditTransactionRow | null) ?? null;
     if (txnError) {
-      console.error('Webhook: Failed to load credit transaction for order', orderId, txnError);
+      logBackendError('razorpay_webhook_credit_transaction_load_failed', { orderId, error: txnError });
       return { handled: false, shouldRetry: false };
     }
 
@@ -122,7 +123,7 @@ export async function processRazorpayWebhookForRoute({
     }
 
     if (typedTxn.status === 'success') {
-      console.log('Webhook: Credit transaction already processed', orderId);
+      logBackendInfo('razorpay_webhook_credit_transaction_already_processed', { orderId });
       await settleCreditPurchaseReferralRewards({
         adminSupabase: getSupabaseAdmin(),
         purchaserUserId: typedTxn.user_id,
@@ -140,7 +141,7 @@ export async function processRazorpayWebhookForRoute({
     });
 
     if (rpcError) {
-      console.error('Webhook: add_credits RPC failed', rpcError);
+      logBackendError('razorpay_webhook_add_credits_failed', { orderId, error: rpcError });
       return { handled: true, shouldRetry: true };
     }
 
@@ -153,7 +154,7 @@ export async function processRazorpayWebhookForRoute({
       const refreshed = (refreshedTransaction as CreditTransactionRow | null) ?? null;
 
       if (refreshedError) {
-        console.error('Webhook: Failed to reload credit transaction after add_credits returned false', refreshedError);
+        logBackendError('razorpay_webhook_credit_transaction_reload_failed', { orderId, error: refreshedError });
         return { handled: true, shouldRetry: true };
       }
 
@@ -162,11 +163,11 @@ export async function processRazorpayWebhookForRoute({
         || refreshed.credit_effect_applied !== true
         || refreshed.razorpay_payment_id !== paymentId
       ) {
-        console.error('Webhook: Credit transaction remained unresolved after add_credits returned false', orderId);
+        logBackendError('razorpay_webhook_credit_transaction_unresolved', { orderId });
         return { handled: true, shouldRetry: true };
       }
 
-      console.log('Webhook: Credit transaction settled during concurrent verification', orderId);
+      logBackendInfo('razorpay_webhook_credit_transaction_settled_concurrently', { orderId });
     }
 
     await settleCreditPurchaseReferralRewards({
@@ -176,9 +177,11 @@ export async function processRazorpayWebhookForRoute({
       source: 'razorpay_webhook',
     });
 
-    console.log(
-      `Webhook: Credits assigned - user=${typedTxn.user_id}, credits=${typedTxn.credits}, order=${orderId}`
-    );
+    logBackendInfo('razorpay_webhook_credits_assigned', {
+      userId: typedTxn.user_id,
+      credits: typedTxn.credits,
+      orderId,
+    });
     return { handled: true, shouldRetry: false };
   }
 
@@ -231,7 +234,7 @@ export async function processRazorpayWebhookForRoute({
       await notifyReferralRewardSettlement(getSupabaseAdmin(), settlement);
       return { handled: true, shouldRetry: false };
     } catch (error) {
-      console.error('Webhook: credit purchase adjustment failed', providerEventId, error);
+      logBackendError('razorpay_webhook_credit_adjustment_failed', { providerEventId, error });
       return { handled: true, shouldRetry: true };
     }
   }
@@ -245,7 +248,7 @@ export async function processRazorpayWebhookForRoute({
     const cumulativeRefunded = nonNegativeInteger(payment?.amount_refunded);
 
     if (!refundId || !paymentId || cumulativeRefunded === null) {
-      console.error('Webhook: invalid refund.processed payload');
+      logBackendError('razorpay_webhook_invalid_refund_payload');
       return { handled: true, shouldRetry: false };
     }
 
@@ -253,12 +256,12 @@ export async function processRazorpayWebhookForRoute({
     try {
       transaction = await loadCreditTransactionForAdjustment(paymentId, orderId);
     } catch (error) {
-      console.error('Webhook: failed to load refunded credit transaction', error);
+      logBackendError('razorpay_webhook_refunded_transaction_load_failed', { error });
       return { handled: true, shouldRetry: true };
     }
     if (!transaction) return { handled: false, shouldRetry: false };
     if (!transaction.amount || cumulativeRefunded > transaction.amount) {
-      console.error('Webhook: invalid cumulative refund amount', refundId);
+      logBackendError('razorpay_webhook_invalid_refund_amount', { refundId });
       return { handled: true, shouldRetry: false };
     }
 
@@ -280,7 +283,7 @@ export async function processRazorpayWebhookForRoute({
     const disputeAmount = nonNegativeInteger(dispute?.amount);
     const paymentRefunded = nonNegativeInteger(payment?.amount_refunded) ?? 0;
     if (!disputeId || !paymentId || disputeAmount === null || disputeAmount <= 0) {
-      console.error('Webhook: invalid dispute payload', eventName);
+      logBackendError('razorpay_webhook_invalid_dispute_payload', { eventName });
       return { handled: true, shouldRetry: false };
     }
 
@@ -288,7 +291,7 @@ export async function processRazorpayWebhookForRoute({
     try {
       transaction = await loadCreditTransactionForAdjustment(paymentId, orderId);
     } catch (error) {
-      console.error('Webhook: failed to load disputed credit transaction', error);
+      logBackendError('razorpay_webhook_disputed_transaction_load_failed', { error });
       return { handled: true, shouldRetry: true };
     }
     if (!transaction) return { handled: false, shouldRetry: false };
@@ -333,7 +336,7 @@ export async function processRazorpayWebhookForRoute({
 
     const typedMarketplaceOrder = (marketplaceOrder as OrderRow | null) ?? null;
     if (marketplaceOrderError) {
-      console.error('Webhook: Failed to load marketplace order for order', orderId, marketplaceOrderError);
+      logBackendError('razorpay_webhook_marketplace_order_load_failed', { orderId, error: marketplaceOrderError });
       return { handled: false, shouldRetry: false };
     }
 
@@ -342,7 +345,7 @@ export async function processRazorpayWebhookForRoute({
     }
 
     if (isPaidStatus(typedMarketplaceOrder)) {
-      console.log('Webhook: Marketplace order already processed', orderId);
+      logBackendInfo('razorpay_webhook_marketplace_order_already_processed', { orderId });
       return { handled: true, shouldRetry: false };
     }
 
@@ -352,11 +355,11 @@ export async function processRazorpayWebhookForRoute({
     });
 
     if (rpcError) {
-      console.error('Webhook: complete_marketplace_purchase RPC failed', rpcError);
+      logBackendError('razorpay_webhook_marketplace_purchase_failed', { orderId, error: rpcError });
       return { handled: true, shouldRetry: true };
     }
 
-    console.log(`Webhook: Marketplace purchase completed - buyer=${typedMarketplaceOrder.buyer_user_id}, order=${orderId}`);
+    logBackendInfo('razorpay_webhook_marketplace_purchase_completed', { buyerUserId: typedMarketplaceOrder.buyer_user_id, orderId });
     return { handled: true, shouldRetry: false };
   }
 
@@ -369,7 +372,7 @@ export async function processRazorpayWebhookForRoute({
 
     const typedBundleOrder = (bundleOrder as OrderRow | null) ?? null;
     if (bundleOrderError) {
-      console.error('Webhook: Failed to load post resource bundle order for order', orderId, bundleOrderError);
+      logBackendError('razorpay_webhook_bundle_order_load_failed', { orderId, error: bundleOrderError });
       return { handled: true, shouldRetry: true };
     }
 
@@ -378,7 +381,7 @@ export async function processRazorpayWebhookForRoute({
     }
 
     if (isPaidStatus(typedBundleOrder)) {
-      console.log('Webhook: Post resource bundle order already processed', orderId);
+      logBackendInfo('razorpay_webhook_bundle_order_already_processed', { orderId });
       return { handled: true, shouldRetry: false };
     }
 
@@ -391,7 +394,7 @@ export async function processRazorpayWebhookForRoute({
     );
 
     if (rpcError) {
-      console.error('Webhook: complete_post_resource_bundle_purchase RPC failed', rpcError);
+      logBackendError('razorpay_webhook_bundle_purchase_failed', { orderId, error: rpcError });
       return { handled: true, shouldRetry: true };
     }
 
@@ -403,22 +406,22 @@ export async function processRazorpayWebhookForRoute({
         .maybeSingle();
 
       if (refreshedOrderError) {
-        console.error('Webhook: Failed to reload post resource bundle order after completion attempt', orderId, refreshedOrderError);
+        logBackendError('razorpay_webhook_bundle_order_reload_failed', { orderId, error: refreshedOrderError });
         return { handled: true, shouldRetry: true };
       }
 
       if (isPaidStatus((refreshedOrder as { status?: unknown } | null) ?? null)) {
-        console.log('Webhook: Post resource bundle order completed during concurrent verification', orderId);
+        logBackendInfo('razorpay_webhook_bundle_order_completed_concurrently', { orderId });
         return { handled: true, shouldRetry: false };
       }
 
-      console.error('Webhook: Post resource bundle order remained unresolved after completion attempt', orderId);
+      logBackendError('razorpay_webhook_bundle_order_unresolved', { orderId });
       return { handled: true, shouldRetry: true };
     }
 
     invalidateMarketplaceResourceListCache();
 
-    console.log(`Webhook: Post resource bundle purchase completed - buyer=${typedBundleOrder.buyer_user_id}, order=${orderId}`);
+    logBackendInfo('razorpay_webhook_bundle_purchase_completed', { buyerUserId: typedBundleOrder.buyer_user_id, orderId });
     return { handled: true, shouldRetry: false };
   }
 
@@ -442,7 +445,7 @@ export async function processRazorpayWebhookForRoute({
 
   const payment = event.payload?.payment?.entity;
   if (!payment) {
-    console.error('Webhook: Missing payment entity');
+    logBackendError('razorpay_webhook_missing_payment_entity');
     return { status: 200, body: 'OK' };
   }
 
@@ -450,7 +453,7 @@ export async function processRazorpayWebhookForRoute({
   const paymentId = typeof payment.id === 'string' ? payment.id : '';
 
   if (!orderId) {
-    console.error('Webhook: Missing order_id in payment');
+    logBackendError('razorpay_webhook_missing_order_id');
     return { status: 200, body: 'OK' };
   }
 
@@ -478,6 +481,6 @@ export async function processRazorpayWebhookForRoute({
     return { status: 200, body: 'OK' };
   }
 
-  console.log('Webhook: No matching transaction, marketplace order, or post resource bundle order for order', orderId);
+  logBackendInfo('razorpay_webhook_no_matching_order', { orderId });
   return { status: 200, body: 'OK' };
 }

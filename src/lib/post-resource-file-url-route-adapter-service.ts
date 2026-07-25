@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
@@ -19,7 +20,7 @@ type PostResourceFileUrlRouteDependencies = {
   createPostResourceFileReadUrlForRoute?: typeof createPostResourceFileReadUrlForRoute;
   createServiceClient?: () => PostResourceFileReadUrlClient;
   createUserClient?: typeof createUserClient;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
 };
 
 function resolveDependencies(dependencies: PostResourceFileUrlRouteDependencies | undefined) {
@@ -28,7 +29,7 @@ function resolveDependencies(dependencies: PostResourceFileUrlRouteDependencies 
       dependencies?.createPostResourceFileReadUrlForRoute ?? createPostResourceFileReadUrlForRoute,
     createServiceClient: dependencies?.createServiceClient ?? (createServiceClient as () => PostResourceFileReadUrlClient),
     createUserClient: dependencies?.createUserClient ?? createUserClient,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
   };
 }
 

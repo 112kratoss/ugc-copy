@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -22,7 +23,7 @@ type GenerationLifecycleRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   deleteOwnerGenerationForRoute?: typeof deleteOwnerGenerationForRoute;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   restoreOwnerGenerationForRoute?: typeof restoreOwnerGenerationForRoute;
 };
 
@@ -34,7 +35,7 @@ function resolveDependencies(dependencies: GenerationLifecycleRouteDependencies 
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     deleteOwnerGenerationForRoute:
       dependencies?.deleteOwnerGenerationForRoute ?? deleteOwnerGenerationForRoute,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     restoreOwnerGenerationForRoute:
       dependencies?.restoreOwnerGenerationForRoute ?? restoreOwnerGenerationForRoute,
   };

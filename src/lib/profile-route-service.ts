@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { logBackendError } from '@/lib/backend-logger';
 
 import {
   BackendRateLimitError,
@@ -111,7 +112,7 @@ export async function getProfileForRoute({
     .maybeSingle();
 
   if (error) {
-    console.error('Failed to fetch profile:', error);
+    logBackendError('failed_to_fetch_profile', { error: error });
     return {
       ok: false,
       status: 500,
@@ -154,7 +155,7 @@ export async function updateProfileForRoute({
       return mapRateLimitError(error);
     }
 
-    console.error('Profile update rate limit check failed:', error);
+    logBackendError('profile_update_rate_limit_check_failed', { error: error });
     return {
       ok: false,
       status: 500,
@@ -208,7 +209,7 @@ export async function updateProfileForRoute({
       };
     }
 
-    console.error('Failed to update profile:', updateError);
+    logBackendError('failed_to_update_profile', { error: updateError });
     return {
       ok: false,
       status: 500,

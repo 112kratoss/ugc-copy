@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -20,7 +21,7 @@ type RazorpayCreditOrderRouteDependencies = {
   createCreditRazorpayOrderForRoute?: typeof createCreditRazorpayOrderForRoute;
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
 
@@ -30,7 +31,7 @@ function resolveDependencies(dependencies: RazorpayCreditOrderRouteDependencies 
       dependencies?.createCreditRazorpayOrderForRoute ?? createCreditRazorpayOrderForRoute,
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
   };
 }

@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -80,7 +81,7 @@ export async function unlockFreePostResourceBundleForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Failed to enforce free unlock rate limit:', error);
+    logBackendError('failed_to_enforce_free_unlock_rate_limit', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to get the free recipe.' } };
   }
 
@@ -105,7 +106,7 @@ export async function unlockFreePostResourceBundleForRoute({
     .maybeSingle();
 
   if (existingPurchaseError) {
-    console.error('Failed to check post resource bundle purchase:', existingPurchaseError);
+    logBackendError('failed_to_check_post_resource_bundle_purchase', { error: existingPurchaseError });
     return { ok: false, status: 500, body: { error: 'Failed to check purchase history.' } };
   }
 
@@ -127,7 +128,7 @@ export async function unlockFreePostResourceBundleForRoute({
     });
 
   if (orderError) {
-    console.error('Failed to create free bundle order:', orderError);
+    logBackendError('failed_to_create_free_bundle_order', { error: orderError });
     return { ok: false, status: 500, body: { error: 'Failed to get the free recipe.' } };
   }
 
@@ -140,7 +141,7 @@ export async function unlockFreePostResourceBundleForRoute({
   );
 
   if (completionError) {
-    console.error('Failed to complete free bundle unlock:', completionError);
+    logBackendError('failed_to_complete_free_bundle_unlock', { error: completionError });
     return { ok: false, status: 500, body: { error: 'Failed to get the free recipe.' } };
   }
 

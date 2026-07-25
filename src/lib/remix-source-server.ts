@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { NextRequest } from 'next/server';
 
@@ -124,7 +125,7 @@ async function resolveUploadsStoragePathUrl(
   const { data, error } = await adminSupabase.storage.from('uploads').createSignedUrl(filePath, 3600);
 
   if (error || !data?.signedUrl) {
-    console.error('Failed to sign remix source upload asset:', error);
+    logBackendError('failed_to_sign_remix_source_upload_asset', { error: error });
     return null;
   }
 
@@ -143,7 +144,7 @@ async function fetchGenerationById(
     .maybeSingle();
 
   if (error) {
-    console.error('Failed to fetch remix referenced generation:', error);
+    logBackendError('failed_to_fetch_remix_referenced_generation', { error: error });
     return null;
   }
 
@@ -189,7 +190,7 @@ export async function loadRemixSourceBundle(
     .maybeSingle();
 
   if (error) {
-    console.error('Failed to fetch remix source generation:', error);
+    logBackendError('failed_to_fetch_remix_source_generation', { error: error });
     throw new RemixSourceError('Failed to load remix source', 500);
   }
 

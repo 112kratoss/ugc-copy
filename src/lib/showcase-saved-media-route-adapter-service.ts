@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
@@ -16,7 +17,7 @@ type ShowcaseSavedMediaRouteDependencies = {
   createServiceClient?: () => SupabaseClient;
   createUserClient?: typeof createUserClient;
   getSavedMediaFeedForRoute?: typeof getSavedMediaFeedForRoute;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
 };
 
 function resolveDependencies(dependencies: ShowcaseSavedMediaRouteDependencies | undefined) {
@@ -25,7 +26,7 @@ function resolveDependencies(dependencies: ShowcaseSavedMediaRouteDependencies |
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     getSavedMediaFeedForRoute:
       dependencies?.getSavedMediaFeedForRoute ?? getSavedMediaFeedForRoute,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
   };
 }
 

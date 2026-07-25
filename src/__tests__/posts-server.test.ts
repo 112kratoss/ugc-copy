@@ -210,10 +210,12 @@ describe('posts-server marketplace summaries', () => {
     expect(hydration.assetMap.size).toBe(0);
     expect(Array.from(hydration.knownBundlePostIds ?? []).sort()).toEqual(['post-1', 'post-2']);
     expect(tableAccessesState).toEqual([]);
-    expect(consoleError).toHaveBeenCalledWith(
-      'Failed to load public post resource bundle summaries:',
-      rpcErrorState,
-    );
+    // The failure is now reported through the structured logger, so assert the
+    // stable event name and the surfaced error rather than a message string.
+    const summaryLog = JSON.parse(consoleError.mock.calls[0][0] as string);
+    expect(summaryLog.msg).toBe('failed_to_load_public_post_resource_bundle_summaries');
+    expect(summaryLog.level).toBe('error');
+    expect(summaryLog.errorMessage).toBe(rpcErrorState.message);
   });
 
   it('fails closed when the missing-RPC presence fallback has a database error', async () => {
@@ -233,9 +235,9 @@ describe('posts-server marketplace summaries', () => {
     expect(Array.from(hydration.knownBundlePostIds ?? []).sort()).toEqual(['post-1', 'post-2']);
     expect(tableAccessesState).toEqual(['post_resource_bundles']);
     expect(selectedColumnsState).toEqual(['post_id, status']);
-    expect(consoleError).toHaveBeenCalledWith(
-      'Failed to load post resource bundle presence:',
-      tableQueryErrorState,
-    );
+    const presenceLog = JSON.parse(consoleError.mock.calls[0][0] as string);
+    expect(presenceLog.msg).toBe('failed_to_load_post_resource_bundle_presence');
+    expect(presenceLog.level).toBe('error');
+    expect(presenceLog.errorMessage).toBe(tableQueryErrorState.message);
   });
 });

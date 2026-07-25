@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import {
   BackendRateLimitError,
@@ -113,13 +114,13 @@ export async function cleanupProfileMedia({
       return createRateLimitResult(error);
     }
 
-    console.error('Profile media cleanup rate limit check failed:', error);
+    logBackendError('profile_media_cleanup_rate_limit_check_failed', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to check profile media cleanup limits.' } };
   }
 
   const { error } = await resolvedClient.storage.from(PROFILE_MEDIA_BUCKET).remove(paths);
   if (error) {
-    console.error('Failed to clean up profile media:', error);
+    logBackendError('failed_to_clean_up_profile_media', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to clean up profile media.' } };
   }
 

@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
@@ -126,7 +127,7 @@ export async function getProfileRouteResult({
 
     return createProfileRouteResult(request, result.response);
   } catch (error) {
-    console.error('Profile GET error:', error);
+    logBackendError('profile_get_error', { error: error });
     return createProfileRouteResult(request, { error: 'Internal server error' }, 500);
   }
 }
@@ -158,7 +159,7 @@ export async function patchProfileRouteResult({
 
     return createProfileRouteResult(request, result.response);
   } catch (error) {
-    console.error('Profile PATCH error:', error);
+    logBackendError('profile_patch_error', { error: error });
     return createProfileRouteResult(request, { error: 'Internal server error' }, 500);
   }
 }

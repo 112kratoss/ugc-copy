@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -49,7 +50,7 @@ function resolveDependencies(dependencies: OpsRouteDependencies | undefined) {
   return {
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     isAuthorizedOpsRequest: dependencies?.isAuthorizedOpsRequest ?? isAuthorizedOpsRequest,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
   };
 }
 

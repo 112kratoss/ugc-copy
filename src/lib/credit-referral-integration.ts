@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -64,13 +65,11 @@ export async function settleCreditPurchaseReferralRewards({
       rewarded: rewards.length > 0,
     };
   } catch (error) {
-    console.error(JSON.stringify({
-      level: 'error',
-      msg: 'credit_purchase_referral_settlement_deferred',
-      source,
+    logBackendError('credit_purchase_referral_settlement_deferred', {
+    source,
       transactionId,
       error: errorMessage(error),
-    }));
+  });
     return null;
   }
 }

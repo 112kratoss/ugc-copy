@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -52,6 +53,6 @@ export function templateApiErrorResponse(request: Request, error: unknown) {
       ...(error.fieldErrors ? { fieldErrors: error.fieldErrors } : {}),
     }, error.status);
   }
-  console.error('Media template API error:', error);
+  logBackendError('media_template_api_error', { error: error });
   return templateApiResponse(request, { error: 'Internal server error.', code: 'INTERNAL_ERROR' }, 500);
 }

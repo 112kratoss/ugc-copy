@@ -280,8 +280,10 @@ describe('/api/razorpay/order route', () => {
     expect(mocks.providerFetch).toHaveBeenCalledOnce();
     expect(mocks.from).not.toHaveBeenCalled();
     expect(mocks.insert).not.toHaveBeenCalled();
-    expect(errorSpy).toHaveBeenCalledWith('Razorpay Order Error:', expect.objectContaining({
-      name: 'ExternalServiceTimeoutError',
-    }));
+    // Now reported through the structured logger, which also carries the
+    // ambient request id.
+    const orderLog = JSON.parse(errorSpy.mock.calls[0][0] as string);
+    expect(orderLog.msg).toBe('razorpay_order_error');
+    expect(orderLog.errorName).toBe('ExternalServiceTimeoutError');
   });
 });

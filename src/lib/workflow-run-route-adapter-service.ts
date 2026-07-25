@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { after, NextResponse } from 'next/server';
 
@@ -176,7 +177,7 @@ async function handleWorkflowRunApprovalPOST(
     if (error instanceof WorkflowRunApprovalError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
     }
-    console.error('Workflow approval failed:', error);
+    logBackendError('workflow_approval_failed', { error: error });
     return NextResponse.json({ error: 'Failed to approve workflow checkpoint.' }, { status: 500 });
   }
 }

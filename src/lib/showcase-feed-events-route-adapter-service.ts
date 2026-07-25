@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -32,7 +33,7 @@ type ShowcaseFeedEventsRouteDependencies = {
   resolveFeedAnonymousIdentity?: typeof resolveFeedAnonymousIdentity;
   parseShowcaseFeedEventPayload?: typeof parseShowcaseFeedEventPayload;
   recordShowcaseFeedEvent?: typeof recordShowcaseFeedEvent;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
 };
 
 function resolveDependencies(dependencies: ShowcaseFeedEventsRouteDependencies | undefined) {
@@ -45,7 +46,7 @@ function resolveDependencies(dependencies: ShowcaseFeedEventsRouteDependencies |
     resolveFeedAnonymousIdentity: dependencies?.resolveFeedAnonymousIdentity ?? resolveFeedAnonymousIdentity,
     parseShowcaseFeedEventPayload: dependencies?.parseShowcaseFeedEventPayload ?? parseShowcaseFeedEventPayload,
     recordShowcaseFeedEvent: dependencies?.recordShowcaseFeedEvent ?? recordShowcaseFeedEvent,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
   };
 }
 

@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -167,7 +168,7 @@ export async function deleteWorkflowCanvasForRoute({
     .eq('user_id', userId);
 
   if (error) {
-    console.error('Failed to delete workflow canvas:', error);
+    logBackendError('failed_to_delete_workflow_canvas', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to delete workflow canvas.' } };
   }
 
@@ -286,7 +287,7 @@ export async function patchWorkflowCanvasForRoute({
     );
 
     if (latestCanvasError || !latestCanvas) {
-      console.error('Failed to reload workflow canvas after revision conflict:', latestCanvasError);
+      logBackendError('failed_to_reload_workflow_canvas_after_revision_conflict', { error: latestCanvasError });
       return { ok: false, status: 500, body: { error: 'Failed to update workflow canvas.' } };
     }
 
@@ -301,7 +302,7 @@ export async function patchWorkflowCanvasForRoute({
   }
 
   if (error || !data) {
-    console.error('Failed to update workflow canvas:', error);
+    logBackendError('failed_to_update_workflow_canvas', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to update workflow canvas.' } };
   }
 
@@ -320,11 +321,11 @@ export async function patchWorkflowCanvasForRoute({
       });
 
     if (historyError && !isMissingWorkflowCanvasHistorySchemaError(historyError)) {
-      console.error('Failed to save workflow canvas history snapshot:', historyError);
+      logBackendError('failed_to_save_workflow_canvas_history_snapshot', { error: historyError });
     }
   } catch (historyError) {
     if (!isMissingWorkflowCanvasHistorySchemaError(historyError)) {
-      console.error('Failed to save workflow canvas history snapshot:', historyError);
+      logBackendError('failed_to_save_workflow_canvas_history_snapshot', { error: historyError });
     }
   }
 

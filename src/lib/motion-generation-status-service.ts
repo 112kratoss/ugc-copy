@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -27,6 +28,7 @@ import {
 } from '@/lib/generation-services';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import {
+  fetchStatusPollWithRetry,
   fetchWithProviderTimeout,
   PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
   PROVIDER_STATUS_POLL_TIMEOUT_MS,
@@ -81,7 +83,7 @@ function resolveDependencies(
 ): MotionGenerationStatusDependencies {
   return {
     resolveStoredMediaUrl: dependencies?.resolveStoredMediaUrl ?? resolveStoredMediaUrl,
-    fetchWithProviderTimeout: dependencies?.fetchWithProviderTimeout ?? fetchWithProviderTimeout,
+    fetchWithProviderTimeout: dependencies?.fetchWithProviderTimeout ?? fetchStatusPollWithRetry,
     settleGenerationSucceeded: dependencies?.settleGenerationSucceeded ?? settleGenerationSucceeded,
     settleGenerationFailed: dependencies?.settleGenerationFailed ?? settleGenerationFailed,
     createGenerationOutputPreview: dependencies?.createGenerationOutputPreview ?? createGenerationOutputPreview,
@@ -171,7 +173,7 @@ async function persistMotionOutput({
       });
 
     if (uploadError) {
-      console.error('Upload to Supabase failed:', uploadError);
+      logBackendError('upload_to_supabase_failed', { error: uploadError });
       output = tempUrl;
     } else {
       const storagePath = `generated_videos/${fileName}`;
@@ -185,7 +187,7 @@ async function persistMotionOutput({
           supabase,
         });
       } catch (posterError) {
-        console.error('Failed to create motion generation preview poster:', posterError);
+        logBackendError('failed_to_create_motion_generation_preview_poster', { error: posterError });
         previewError = posterError instanceof Error
           ? posterError.message.slice(0, 500)
           : 'Preview generation failed.';
@@ -202,7 +204,7 @@ async function persistMotionOutput({
       settlementOutputUrl = storagePath;
     }
   } catch (error) {
-    console.error('Error persisting video to storage:', error);
+    logBackendError('error_persisting_video_to_storage', { error: error });
     output = tempUrl;
   }
 
@@ -402,7 +404,7 @@ export async function getMotionGenerationStatusForRoute({
           }
         }
       } catch (successError) {
-        console.error('Error handling success status:', successError);
+        logBackendError('error_handling_success_status', { error: successError });
       }
     } else if (status === 'failed') {
       error = data.data.failMsg || 'Unknown error';

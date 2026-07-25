@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { verifyRazorpaySignature } from '@/lib/razorpay-signature';
@@ -10,7 +11,7 @@ type RazorpayWebhookRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   getWebhookSecret?: () => string | undefined;
   isWebhookPayloadTooLarge?: typeof isWebhookPayloadTooLarge;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   processRazorpayWebhookForRoute?: typeof processRazorpayWebhookForRoute;
   verifyRazorpaySignature?: typeof verifyRazorpaySignature;
 };
@@ -20,7 +21,7 @@ function resolveDependencies(dependencies: RazorpayWebhookRouteDependencies | un
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     getWebhookSecret: dependencies?.getWebhookSecret ?? (() => process.env.RAZORPAY_WEBHOOK_SECRET),
     isWebhookPayloadTooLarge: dependencies?.isWebhookPayloadTooLarge ?? isWebhookPayloadTooLarge,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     processRazorpayWebhookForRoute:
       dependencies?.processRazorpayWebhookForRoute ?? processRazorpayWebhookForRoute,
     verifyRazorpaySignature: dependencies?.verifyRazorpaySignature ?? verifyRazorpaySignature,

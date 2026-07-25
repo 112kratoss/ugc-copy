@@ -4,7 +4,8 @@ import { createGenerationOutputPreview } from '@/lib/generation-output-preview';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
 import { getStoredMediaLocation } from '@/lib/server-helpers';
 import {
-  fetchWithProviderTimeout,
+  fetchWithProviderRetry,
+  PROVIDER_MEDIA_DOWNLOAD_RETRY_POLICY,
   PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
 } from '@/lib/provider-fetch';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
@@ -83,10 +84,11 @@ async function downloadMedia(supabase: SupabaseClient, source: string): Promise<
     return result.data;
   }
 
-  const response = await fetchWithProviderTimeout(
+  const response = await fetchWithProviderRetry(
     source,
     {},
     PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
+    PROVIDER_MEDIA_DOWNLOAD_RETRY_POLICY,
     fetch,
     'Media preview source download'
   );

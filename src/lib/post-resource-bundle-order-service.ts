@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -129,7 +130,7 @@ export async function createPostResourceBundleOrderForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Post resource order rate limit check failed:', error);
+    logBackendError('post_resource_order_rate_limit_check_failed', { error: error });
     return {
       ok: false,
       status: 500,
@@ -155,7 +156,7 @@ export async function createPostResourceBundleOrderForRoute({
     .maybeSingle();
 
   if (existingPurchaseError) {
-    console.error('Failed to check post resource bundle purchase:', existingPurchaseError);
+    logBackendError('failed_to_check_post_resource_bundle_purchase', { error: existingPurchaseError });
     return { ok: false, status: 500, body: { error: 'Failed to check purchase history.' } };
   }
 
@@ -231,7 +232,7 @@ export async function createPostResourceBundleOrderForRoute({
     });
 
   if (orderError) {
-    console.error('Failed to record bundle order:', orderError);
+    logBackendError('failed_to_record_bundle_order', { error: orderError });
     return { ok: false, status: 500, body: { error: 'Failed to record order.' } };
   }
 

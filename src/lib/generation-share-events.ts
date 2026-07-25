@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { createServiceClient } from '@/lib/server-helpers';
 import type {
@@ -35,6 +36,6 @@ export async function recordGenerationShareEvent({
       throw error;
     }
   } catch (error) {
-    console.error('Failed to record generation share event:', error);
+    logBackendError('failed_to_record_generation_share_event', { error: error });
   }
 }

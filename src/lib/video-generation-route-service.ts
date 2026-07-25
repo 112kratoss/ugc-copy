@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { logBackendError } from '@/lib/backend-logger';
 
 import {
   BackendRateLimitError,
@@ -90,7 +91,7 @@ function mapVideoStartError(error: unknown): VideoGenerationRouteResult {
     };
   }
 
-  console.error('Error starting video generation:', error);
+  logBackendError('error_starting_video_generation', { error: error });
   const message = error instanceof Error ? error.message : 'Failed to start video generation';
   const status = error instanceof GenerationServiceError ? error.status : 500;
   return {
@@ -114,7 +115,7 @@ export async function postVideoGenerationForRoute(
   }
 
   if (!input.kieApiKey) {
-    console.error('KIE_AI_API_KEY not found in environment variables');
+    logBackendError('kie_ai_api_key_not_found_in_environment_variables');
     return {
       ok: false,
       body: { error: 'Server configuration error: API key missing' },
@@ -178,7 +179,7 @@ export async function getVideoGenerationForRoute(
 
     return { ok: true, body: result.body };
   } catch (error) {
-    console.error('Error fetching video status:', error);
+    logBackendError('error_fetching_video_status', { error: error });
     return {
       ok: false,
       body: { error: 'Failed to fetch generation status' },

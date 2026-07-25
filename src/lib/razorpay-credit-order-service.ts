@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -81,7 +82,7 @@ export async function createCreditRazorpayOrderForRoute({
       };
     }
 
-    console.error('Credit order rate limit check failed:', error);
+    logBackendError('credit_order_rate_limit_check_failed', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to check credit order limits.' } };
   }
 
@@ -97,7 +98,7 @@ export async function createCreditRazorpayOrderForRoute({
       receipt: buildReceipt(userId, now),
     });
   } catch (error) {
-    console.error('Razorpay Order Error:', error);
+    logBackendError('razorpay_order_error', { error: error });
     if (isExternalServiceTimeoutError(error)) {
       return { ok: false, status: 504, body: { error: 'Payment provider timed out. Please try again.' } };
     }
@@ -130,7 +131,7 @@ export async function createCreditRazorpayOrderForRoute({
     .single();
 
   if (txnError || !txnData) {
-    console.error('Supabase transaction insert error:', txnError);
+    logBackendError('supabase_transaction_insert_error', { error: txnError });
     return { ok: false, status: 500, body: { error: 'Failed to record transaction' } };
   }
 

@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -188,7 +189,7 @@ export async function publishPreparedPost({
         .from(SHOWCASE_MEDIA_BUCKET)
         .remove(storagePathsToCleanup);
       if (cleanupShowcase.error) {
-        console.warn('Failed to remove uploaded showcase media after post failure:', cleanupShowcase.error);
+        logBackendWarning('failed_to_remove_uploaded_showcase_media_after_post_failure', { error: cleanupShowcase.error });
       }
     }
 
@@ -197,7 +198,7 @@ export async function publishPreparedPost({
         .from(UPLOADS_BUCKET)
         .remove(temporaryUploadPathsToCleanup);
       if (cleanupUpload.error) {
-        console.warn('Failed to remove temporary uploaded post media:', cleanupUpload.error);
+        logBackendWarning('failed_to_remove_temporary_uploaded_post_media', { error: cleanupUpload.error });
       }
     }
 
@@ -216,7 +217,7 @@ export async function publishPreparedPost({
         .from(POST_RESOURCE_FILES_BUCKET)
         .remove(resourceFilePathsToCleanup);
       if (cleanupFiles.error) {
-        console.warn('Failed to remove uploaded unlock files after post failure:', cleanupFiles.error);
+        logBackendWarning('failed_to_remove_uploaded_unlock_files_after_post_failure', { error: cleanupFiles.error });
       }
     }
   };
@@ -263,7 +264,7 @@ export async function publishPreparedPost({
           storagePathsToCleanup.push(preview.previewStoragePath);
         }
       } catch (previewError) {
-        console.warn('Failed to create post media preview:', previewError);
+        logBackendWarning('failed_to_create_post_media_preview', { error: previewError });
       }
 
       persistedMediaItems.push({
@@ -284,7 +285,7 @@ export async function publishPreparedPost({
       });
     }
   } catch (mediaUploadError) {
-    console.error('Failed to prepare uploaded post media:', mediaUploadError);
+    logBackendError('failed_to_prepare_uploaded_post_media', { error: mediaUploadError });
     await cleanupUploadedMedia();
     return { ok: false, status: 500, body: { error: 'Failed to prepare uploaded media.' } };
   }
@@ -317,7 +318,7 @@ export async function publishPreparedPost({
       bundle: submission.resourceBundle,
     });
   } catch (publishError) {
-    console.error('Failed to create external post:', publishError);
+    logBackendError('failed_to_create_external_post', { error: publishError });
     await cleanupUploadedMedia();
     if (isMissingPostsSchemaError(publishError)) {
       return { ok: false, status: 500, body: { error: MISSING_POSTS_SCHEMA_ERROR } };
@@ -338,7 +339,7 @@ export async function publishPreparedPost({
         mediaItems: persistedMediaItems,
       });
     } catch (mediaError) {
-      console.error('Failed to save post media:', mediaError);
+      logBackendError('failed_to_save_post_media', { error: mediaError });
       await cleanupUploadedMedia();
       await adminSupabase.from('posts').delete().eq('id', post.postId);
       if (isMissingPostMediaSchemaError(mediaError)) {
@@ -352,7 +353,7 @@ export async function publishPreparedPost({
         .from(UPLOADS_BUCKET)
         .remove(temporaryUploadPathsToCleanup);
       if (cleanupUpload.error) {
-        console.warn('Failed to remove temporary uploaded post media:', cleanupUpload.error);
+        logBackendWarning('failed_to_remove_temporary_uploaded_post_media', { error: cleanupUpload.error });
       }
     }
 
@@ -365,14 +366,14 @@ export async function publishPreparedPost({
         sourceTools: submission.sourceTools,
       });
     } catch (sourceToolsError) {
-      console.error('Failed to insert post_source_tools:', sourceToolsError);
+      logBackendError('failed_to_insert_post_source_tools', { error: sourceToolsError });
       await cleanupUploadedMedia();
       const cleanupPost = await adminSupabase
         .from('posts')
         .delete()
         .eq('id', post.postId);
       if (cleanupPost.error) {
-        console.warn('Failed to remove post after source tool metadata failure:', cleanupPost.error);
+        logBackendWarning('failed_to_remove_post_after_source_tool_metadata_failure', { error: cleanupPost.error });
       }
       const isValidationError = sourceToolsError instanceof PostSourceToolsWriteError
         && sourceToolsError.isValidationError;

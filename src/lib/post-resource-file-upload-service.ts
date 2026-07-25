@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -201,7 +202,7 @@ export async function uploadPostResourceFileForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Post resource file upload rate limit check failed:', error);
+    logBackendError('post_resource_file_upload_rate_limit_check_failed', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to check resource upload limits.' } };
   }
 
@@ -238,7 +239,7 @@ export async function uploadPostResourceFileForRoute({
     });
 
   if (uploadError) {
-    console.error('Failed to upload post resource file:', uploadError);
+    logBackendError('failed_to_upload_post_resource_file', { error: uploadError });
     return { ok: false, status: 500, body: { error: 'Failed to upload resource file.' } };
   }
 

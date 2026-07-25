@@ -1,3 +1,4 @@
+import { logBackendWarning } from '@/lib/backend-logger';
 import { getActiveRequestTrace } from '@/lib/request-trace';
 import { recordProviderDependencyEvent } from '@/lib/provider-dependency-telemetry';
 import { withRequestTrace } from '@/lib/request-trace';
@@ -105,6 +106,11 @@ function roundDurationMs(durationMs: number) {
 
 function emitProviderFetchTelemetry(event: ProviderFetchTelemetryEvent) {
   if (event.outcome !== 'success' || event.durationMs >= PROVIDER_SLOW_FETCH_WARNING_MS) {
+    // Intentionally not routed through the structured logger: this call site
+    // already emits a typed telemetry object whose exact shape is asserted by
+    // tests and consumed by `recordProviderDependencyEvent`. Changing it would
+    // alter a contract rather than improve queryability.
+    // eslint-disable-next-line no-console
     console.warn('[provider-fetch]', event);
     void recordProviderDependencyEvent(event);
   }
@@ -218,6 +224,193 @@ export function fetchWithProviderTimeout(
 
 export function isExternalServiceTimeoutError(error: unknown): error is ExternalServiceTimeoutError {
   return error instanceof ExternalServiceTimeoutError;
+}
+
+// ─── Bounded retry ────────────────────────────────────────────────────────────
+
+/**
+ * Retry is opt-in and defaults to idempotent methods only.
+ *
+ * Retrying a task-creation POST could bill a user twice for one generation, so
+ * a non-idempotent request is only retried when the caller has proven the
+ * request carries a provider-side idempotency key.
+ */
+export type ProviderRetryPolicy = {
+  maxAttempts: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+  /** Only set when the request is provably safe to duplicate. */
+  retryNonIdempotent?: boolean;
+};
+
+export const PROVIDER_STATUS_POLL_RETRY_POLICY: ProviderRetryPolicy = {
+  maxAttempts: 3,
+  baseDelayMs: 250,
+  maxDelayMs: 2_000,
+};
+
+export const PROVIDER_MEDIA_DOWNLOAD_RETRY_POLICY: ProviderRetryPolicy = {
+  maxAttempts: 3,
+  baseDelayMs: 500,
+  maxDelayMs: 4_000,
+};
+
+const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const MAX_RETRY_AFTER_MS = 10_000;
+
+export function isIdempotentProviderMethod(method: string): boolean {
+  return IDEMPOTENT_METHODS.has(method.toUpperCase());
+}
+
+/**
+ * A timeout is deliberately not retryable: the caller already waited its full
+ * budget, so a retry would stack another full timeout onto user-visible latency.
+ */
+export function isRetryableProviderResponse(status: number): boolean {
+  return RETRYABLE_STATUSES.has(status);
+}
+
+function parseRetryAfterMs(response: Response): number | null {
+  const header = response.headers?.get?.('retry-after');
+  if (!header) return null;
+
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(seconds * 1_000, MAX_RETRY_AFTER_MS);
+  }
+
+  const dateMs = Date.parse(header);
+  if (Number.isFinite(dateMs)) {
+    return Math.min(Math.max(0, dateMs - Date.now()), MAX_RETRY_AFTER_MS);
+  }
+
+  return null;
+}
+
+/**
+ * Full jitter: a uniform sample from `[0, cappedExponentialDelay]`. Prevents a
+ * provider blip from producing a synchronized retry stampede across instances.
+ */
+export function computeProviderRetryDelayMs(
+  attempt: number,
+  policy: ProviderRetryPolicy,
+  random: () => number = Math.random,
+): number {
+  const exponentialDelayMs = Math.min(
+    policy.maxDelayMs,
+    policy.baseDelayMs * 2 ** Math.max(0, attempt - 1),
+  );
+  return Math.round(random() * exponentialDelayMs);
+}
+
+function defaultSleep(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+/**
+ * Wraps `fetchWithProviderTimeout` with bounded, jittered retry.
+ *
+ * Retries only a network error raised before any response, or a retryable HTTP
+ * status, and only when the method is idempotent (or explicitly opted in).
+ * Timeouts and non-retryable statuses surface to the caller unchanged, so
+ * existing error handling and credit refunds keep working.
+ */
+export async function fetchWithProviderRetry(
+  input: RequestInfo | URL,
+  init: ProviderFetchInit,
+  timeoutMs: number,
+  policy: ProviderRetryPolicy,
+  fetcher: typeof fetch = fetch,
+  serviceName = 'External service',
+  options: { sleep?: (delayMs: number) => Promise<void>; random?: () => number } = {},
+): Promise<Response> {
+  const sleep = options.sleep ?? defaultSleep;
+  const method = getProviderFetchMethod(input, init);
+  const mayRetry = policy.retryNonIdempotent === true || isIdempotentProviderMethod(method);
+  const maxAttempts = mayRetry ? Math.max(1, policy.maxAttempts) : 1;
+  const host = parseProviderFetchUrl(input)?.host ?? null;
+
+  let attempt = 0;
+
+  for (;;) {
+    attempt += 1;
+
+    try {
+      const response = await fetchWithProviderTimeout(input, init, timeoutMs, fetcher, serviceName);
+
+      if (attempt >= maxAttempts || !isRetryableProviderResponse(response.status)) {
+        return response;
+      }
+
+      const retryAfterMs = parseRetryAfterMs(response);
+      const delayMs = retryAfterMs ?? computeProviderRetryDelayMs(attempt, policy, options.random);
+      emitProviderRetryTelemetry({ serviceName, host, method, attempt, maxAttempts, delayMs, status: response.status });
+      await sleep(delayMs);
+    } catch (error) {
+      // A timeout already consumed the full budget; never stack another.
+      if (attempt >= maxAttempts || isExternalServiceTimeoutError(error)) {
+        throw error;
+      }
+
+      const delayMs = computeProviderRetryDelayMs(attempt, policy, options.random);
+      emitProviderRetryTelemetry({
+        serviceName,
+        host,
+        method,
+        attempt,
+        maxAttempts,
+        delayMs,
+        errorName: getErrorName(error),
+      });
+      await sleep(delayMs);
+    }
+  }
+}
+
+/**
+ * A `fetchWithProviderTimeout`-shaped wrapper that retries idempotent status
+ * polls.
+ *
+ * Deliberately signature-compatible so services which take
+ * `fetchWithProviderTimeout` as an injected dependency can adopt retry by
+ * swapping their default, without widening the contract their tests mock.
+ */
+export const fetchStatusPollWithRetry: typeof fetchWithProviderTimeout = (
+  input,
+  init,
+  timeoutMs,
+  fetcher = fetch,
+  serviceName = 'External service',
+) => fetchWithProviderRetry(
+  input,
+  init,
+  timeoutMs,
+  PROVIDER_STATUS_POLL_RETRY_POLICY,
+  fetcher,
+  serviceName,
+);
+
+function emitProviderRetryTelemetry(event: {
+  serviceName: string;
+  host: string | null;
+  method: string;
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
+  status?: number;
+  errorName?: string;
+}): void {
+  logBackendWarning('provider_fetch_retry', {
+    serviceName: event.serviceName,
+    host: event.host,
+    method: event.method,
+    attempt: event.attempt,
+    maxAttempts: event.maxAttempts,
+    delayMs: event.delayMs,
+    ...(event.status !== undefined ? { status: event.status } : {}),
+    ...(event.errorName ? { errorName: event.errorName } : {}),
+  });
 }
 
 export function withExternalServiceTimeout<T>(

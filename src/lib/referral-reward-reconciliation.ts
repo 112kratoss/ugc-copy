@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { notifyReferralReward } from '@/lib/mobile-notifications';
 import {
@@ -129,12 +130,10 @@ export async function reconcileReferralPurchaseRewards(
         error: errorMessage(result.reason).slice(0, 500),
       };
       failures.push(failure);
-      console.error(JSON.stringify({
-        level: 'error',
-        msg: 'referral_reward_reconciliation_item_failed',
-        transactionId,
+      logBackendError('referral_reward_reconciliation_item_failed', {
+    transactionId,
         error: failure.error,
-      }));
+  });
     });
   }
 

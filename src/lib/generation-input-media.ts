@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
 import {
   getUploadsBucketPath,
@@ -237,7 +238,7 @@ async function loadCandidateMedia(
         }
       }
     } catch (error) {
-      console.warn('Failed to download generation input from storage, falling back to URL:', error);
+      logBackendWarning('failed_to_download_generation_input_from_storage_falling_back_to_url', { error: error });
     }
   }
 
@@ -341,7 +342,7 @@ export async function persistGenerationInputMedia(params: {
         throw insertError;
       }
     } catch (error) {
-      console.error('Failed to persist generation input media:', error);
+      logBackendError('failed_to_persist_generation_input_media', { error: error });
     }
   }
 }
@@ -381,7 +382,7 @@ function prepareGenerationInputMediaRow(
 
   if (!isStorageObjectOwnedByUser(location.filePath, row.user_id)) {
     if (reportOwnershipFailure) {
-      console.error(`Refused to sign generation input outside owner prefix: ${row.storage_path}`);
+      logBackendError('refused_to_sign_generation_input_outside_owner_prefix', { message: `Refused to sign generation input outside owner prefix: ${row.storage_path}` });
     }
     return { row, location, trustedStoragePath: null };
   }
@@ -415,24 +416,21 @@ async function signPreparedGenerationInputMedia(
         .createSignedUrls(paths, 3600);
 
       if (error || !data) {
-        console.error(`Failed to batch-sign generation inputs in ${bucket}:`, error);
+        logBackendError('failed_to_batch_sign_generation_inputs_in', { message: `Failed to batch-sign generation inputs in ${bucket}:`, error: error });
         return;
       }
 
       data.forEach((result, index) => {
         const filePath = result.path ?? paths[index];
         if (!filePath || result.error || !result.signedUrl) {
-          console.error(
-            `Failed to sign generation input ${bucket}/${filePath ?? 'unknown'}:`,
-            result.error,
-          );
+          logBackendError('failed_to_sign_generation_input', { message: `Failed to sign generation input ${bucket}/${filePath ?? 'unknown'}:`, error: result.error, });
           return;
         }
 
         signedUrls.set(getStorageObjectKey(bucket, filePath), result.signedUrl);
       });
     } catch (error) {
-      console.error(`Failed to batch-sign generation inputs in ${bucket}:`, error);
+      logBackendError('failed_to_batch_sign_generation_inputs_in', { message: `Failed to batch-sign generation inputs in ${bucket}:`, error: error });
     }
   }));
 
@@ -510,7 +508,7 @@ export async function loadGenerationInputMediaMap(params: {
       inputMap.set(row.generation_id, nextItems);
     }
   } catch (error) {
-    console.error('Failed to load generation input media:', error);
+    logBackendError('failed_to_load_generation_input_media', { error: error });
   }
 
   return inputMap;
@@ -526,7 +524,7 @@ async function resolveLegacyStorageUrl(
     return isAllowlistedRemoteMediaUrl(storagePath) ? storagePath : null;
   }
   if (!ownerUserId || !isStorageObjectOwnedByUser(location.filePath, ownerUserId)) {
-    console.error(`Refused to sign legacy generation input outside owner prefix: ${storagePath}`);
+    logBackendError('refused_to_sign_legacy_generation_input_outside_owner_prefix', { message: `Refused to sign legacy generation input outside owner prefix: ${storagePath}` });
     return null;
   }
 
@@ -535,7 +533,7 @@ async function resolveLegacyStorageUrl(
     .createSignedUrl(location.filePath, 3600);
 
   if (error || !data?.signedUrl) {
-    console.error(`Failed to sign legacy generation input ${storagePath}:`, error);
+    logBackendError('failed_to_sign_legacy_generation_input', { message: `Failed to sign legacy generation input ${storagePath}:`, error: error });
     return null;
   }
 
@@ -561,7 +559,7 @@ async function resolveLegacySourceGenerationUrl(params: {
           .maybeSingle();
 
           if (error) {
-            console.error('Failed to load legacy source generation input:', error);
+            logBackendError('failed_to_load_legacy_source_generation_input', { error: error });
             return null;
           }
 

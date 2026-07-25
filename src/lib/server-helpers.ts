@@ -5,6 +5,7 @@
  */
 
 import { NextResponse } from 'next/server';
+import { logBackendError } from '@/lib/backend-logger';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { buildMediaProxyUrl, getStoredMediaLocation } from '@/lib/media-urls';
 import { isStorageObjectOwnedByUser } from '@/lib/storage-ownership';
@@ -70,13 +71,13 @@ async function signStoredMediaUrl(
             .createSignedUrl(location.filePath, 3600);
 
         if (error || !data?.signedUrl) {
-            console.error(`Failed to sign media URL for ${location.bucket}/${location.filePath}:`, error);
+            logBackendError('failed_to_sign_media_url_for', { message: `Failed to sign media URL for ${location.bucket}/${location.filePath}:`, error: error });
             return outputUrl;
         }
 
         return data.signedUrl;
     } catch (err) {
-        console.error(`Error signing media URL for ${location.bucket}/${location.filePath}:`, err);
+        logBackendError('error_signing_media_url_for', { message: `Error signing media URL for ${location.bucket}/${location.filePath}:`, error: err });
         return outputUrl;
     }
 }
@@ -107,7 +108,7 @@ export async function resolveStoredMediaUrl(
                 .createSignedUrl(privateTemplateLocation.filePath, 3600);
             if (!error && data?.signedUrl) return data.signedUrl;
         } catch (error) {
-            console.error('resolveStoredMediaUrl: private template signing failed:', error);
+            logBackendError('resolvestoredmediaurl_private_template_signing_failed', { error: error });
         }
         return outputUrl;
     }
@@ -122,7 +123,7 @@ export async function resolveStoredMediaUrl(
             return signedUrl;
         }
     } catch (err) {
-        console.error('resolveStoredMediaUrl: signing failed, falling back to proxy:', err);
+        logBackendError('resolvestoredmediaurl_signing_failed_falling_back_to_proxy', { error: err });
     }
 
     return buildMediaProxyUrl(location.bucket, location.filePath);
@@ -140,7 +141,7 @@ export async function resolveOwnedStoredMediaUrl(
     const location = getStoredMediaLocation(outputUrl);
     if (location) {
         if (!isStorageObjectOwnedByUser(location.filePath, ownerUserId)) {
-            console.error(`Refused to sign media outside owner prefix: ${location.bucket}/${location.filePath}`);
+            logBackendError('refused_to_sign_media_outside_owner_prefix', { message: `Refused to sign media outside owner prefix: ${location.bucket}/${location.filePath}` });
             return null;
         }
         return resolveStoredMediaUrl(adminSupabase, outputUrl);
@@ -188,7 +189,7 @@ export async function authenticateRequest(
  */
 export function requireKieApiKey(): string | NextResponse {
     if (!KIE_API_KEY) {
-        console.error('KIE_AI_API_KEY not found in environment variables');
+        logBackendError('kie_ai_api_key_not_found_in_environment_variables');
         return NextResponse.json(
             { error: 'Server configuration error: API key missing' },
             { status: 500 }

@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -80,7 +81,7 @@ export async function verifyPostResourceBundlePaymentForRoute({
       };
     }
 
-    console.error('Failed to enforce post resource verification rate limit:', error);
+    logBackendError('failed_to_enforce_post_resource_verification_rate_limit', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to verify order.' } };
   }
 
@@ -95,7 +96,7 @@ export async function verifyPostResourceBundlePaymentForRoute({
 
   const secret = keySecret?.trim();
   if (!secret) {
-    console.error('RAZORPAY_KEY_SECRET not configured');
+    logBackendError('razorpay_key_secret_not_configured');
     return { ok: false, status: 503, body: { error: 'Payment verification is not configured.' } };
   }
 
@@ -115,7 +116,7 @@ export async function verifyPostResourceBundlePaymentForRoute({
     .maybeSingle();
 
   if (orderError) {
-    console.error('Failed to load bundle order for verification:', orderError);
+    logBackendError('failed_to_load_bundle_order_for_verification', { error: orderError });
     return { ok: false, status: 500, body: { error: 'Failed to verify order.' } };
   }
 
@@ -137,7 +138,7 @@ export async function verifyPostResourceBundlePaymentForRoute({
   );
 
   if (completionError) {
-    console.error('Failed to complete bundle purchase:', completionError);
+    logBackendError('failed_to_complete_bundle_purchase', { error: completionError });
     return { ok: false, status: 500, body: { error: 'Failed to complete purchase.' } };
   }
 

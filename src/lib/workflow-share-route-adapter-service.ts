@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -119,7 +120,7 @@ async function handleWorkflowSharePreviewGET(
 
   if (error || !data) {
     if (error) {
-      console.error('Failed to load workflow share snapshot:', error);
+      logBackendError('failed_to_load_workflow_share_snapshot', { error: error });
     }
     return NextResponse.json({ error: 'Workflow share not found.' }, { status: 404 });
   }

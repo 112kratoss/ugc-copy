@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -91,7 +92,7 @@ export async function createOwnerPostForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Failed to enforce post creation rate limit:', error);
+    logBackendError('failed_to_enforce_post_creation_rate_limit', { error: error });
     return {
       ok: false,
       status: 500,

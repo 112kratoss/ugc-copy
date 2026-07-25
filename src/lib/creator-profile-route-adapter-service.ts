@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -25,7 +26,7 @@ type CreatorProfileRouteDependencies = {
   getCreatorFollowStateForRoute?: typeof getCreatorFollowStateForRoute;
   isUserRelationshipBlocked?: typeof isUserRelationshipBlocked;
   getCreatorProfilePageData?: typeof getCreatorProfilePageData;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
 
@@ -36,7 +37,7 @@ function resolveDependencies(dependencies: CreatorProfileRouteDependencies | und
     getCreatorFollowStateForRoute: dependencies?.getCreatorFollowStateForRoute ?? getCreatorFollowStateForRoute,
     isUserRelationshipBlocked: dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked,
     getCreatorProfilePageData: dependencies?.getCreatorProfilePageData ?? getCreatorProfilePageData,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
   };
 }

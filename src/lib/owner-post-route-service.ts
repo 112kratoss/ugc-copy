@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -117,7 +118,7 @@ export async function getOwnerPostDetailForRoute({
       },
     };
   } catch (error) {
-    console.error('Failed to fetch owner post detail:', error);
+    logBackendError('failed_to_fetch_owner_post_detail', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to fetch post.' } };
   }
 }
@@ -145,7 +146,7 @@ export async function updateOwnerPostRoute({
       body,
     });
   } catch (error) {
-    console.error('Failed to update owner post:', error);
+    logBackendError('failed_to_update_owner_post', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to update post.' } };
   }
 }
@@ -176,7 +177,7 @@ export async function deleteOwnerPostRoute({
       forceDelete: Boolean(body.force),
     });
   } catch (error) {
-    console.error('Failed to delete owner post:', error);
+    logBackendError('failed_to_delete_owner_post', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to delete post.' } };
   }
 }

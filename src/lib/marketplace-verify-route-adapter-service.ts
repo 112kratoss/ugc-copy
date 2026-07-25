@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -13,7 +14,7 @@ import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 type MarketplaceVerifyRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   razorpayKeySecret?: string | null;
   verifyMarketplacePaymentForRoute?: typeof verifyMarketplacePaymentForRoute;
 };
@@ -22,7 +23,7 @@ function resolveDependencies(dependencies: MarketplaceVerifyRouteDependencies | 
   return {
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     razorpayKeySecret: dependencies && 'razorpayKeySecret' in dependencies
       ? dependencies.razorpayKeySecret
       : process.env.RAZORPAY_KEY_SECRET,

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { logBackendError } from '@/lib/backend-logger';
 
 import {
   EXTERNAL_API_REQUEST_TIMEOUT_MS,
@@ -1204,7 +1205,7 @@ export async function createMobileNotification({
         try {
           await sendMobilePushForNotification(adminSupabase, { ...notification, userId });
         } catch (error) {
-          console.error('Failed to send mobile push notification:', error);
+          logBackendError('failed_to_send_mobile_push_notification', { error: error });
         }
       }
     }
@@ -1241,7 +1242,7 @@ export async function createMobileNotification({
     try {
       await sendMobilePushForNotification(adminSupabase, { ...notification, userId });
     } catch (error) {
-      console.error('Failed to send mobile push notification:', error);
+      logBackendError('failed_to_send_mobile_push_notification', { error: error });
     }
   }
 
@@ -1252,7 +1253,7 @@ async function createMobileNotificationSafely(params: Parameters<typeof createMo
   try {
     return await createMobileNotification(params);
   } catch (error) {
-    console.error('Failed to create mobile notification:', error);
+    logBackendError('failed_to_create_mobile_notification', { error: error });
     return null;
   }
 }

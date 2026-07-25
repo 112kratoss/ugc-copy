@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -123,7 +124,7 @@ async function loadRecentAssistantMessages({
       recentMessages: normalizeAssistantMessages([...(messageHistoryResult.data ?? [])].reverse()),
     };
   } catch (error) {
-    console.error('Failed to preflight workflow assistant persistence:', error);
+    logBackendError('failed_to_preflight_workflow_assistant_persistence', { error: error });
     return { kind: 'failed' as const };
   }
 }
@@ -232,7 +233,7 @@ export async function createWorkflowAssistantMessageForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Workflow assistant rate limit failed:', error);
+    logBackendError('workflow_assistant_rate_limit_failed', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to check workflow assistant limits.' } };
   }
 
@@ -405,13 +406,13 @@ export async function createWorkflowAssistantMessageForRoute({
   } catch (error) {
     if (isMissingWorkflowCanvasAssistantSchemaError(error)) {
       await refundAiUsageLedger(adminSupabase, ledger, error);
-      console.error('Workflow assistant persistence is unavailable:', error);
+      logBackendError('workflow_assistant_persistence_is_unavailable', { error: error });
       return { ok: false, status: 503, body: createWorkflowAssistantSetupRequiredBody() };
     }
 
     await refundAiUsageLedger(adminSupabase, ledger, error);
 
-    console.error('Workflow assistant generation failed:', error);
+    logBackendError('workflow_assistant_generation_failed', { error: error });
     return { ok: false, status: 502, body: { error: 'Workflow assistant failed. Credits refunded.' } };
   }
 }

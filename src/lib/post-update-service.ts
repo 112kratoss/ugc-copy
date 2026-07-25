@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -567,7 +568,7 @@ async function replaceEditedPostMedia(params: {
           newStoragePaths.push(preview.previewStoragePath);
         }
       } catch (previewError) {
-        console.warn('Failed to create edited post media preview:', previewError);
+        logBackendWarning('failed_to_create_edited_post_media_preview', { error: previewError });
       }
 
       persistedMediaItems.push({
@@ -601,7 +602,7 @@ async function replaceEditedPostMedia(params: {
         .from(UPLOADS_BUCKET)
         .remove(temporaryStoragePaths);
       if (temporaryCleanup.error) {
-        console.warn('Failed to remove temporary post media after edit:', temporaryCleanup.error);
+        logBackendWarning('failed_to_remove_temporary_post_media_after_edit', { error: temporaryCleanup.error });
       }
     }
 
@@ -620,11 +621,11 @@ async function replaceEditedPostMedia(params: {
         .from(SHOWCASE_MEDIA_BUCKET)
         .remove(removedStoragePaths);
       if (removedMediaCleanup.error) {
-        console.warn('Failed to remove deleted post media:', removedMediaCleanup.error);
+        logBackendWarning('failed_to_remove_deleted_post_media', { error: removedMediaCleanup.error });
       }
     }
   } catch (mediaError) {
-    console.error('Failed to update post media:', mediaError);
+    logBackendError('failed_to_update_post_media', { error: mediaError });
     if (newStoragePaths.length > 0) {
       await params.adminSupabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove(newStoragePaths);
     }
@@ -659,7 +660,7 @@ export async function updateOwnerPostForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Failed to enforce post update rate limit:', error);
+    logBackendError('failed_to_enforce_post_update_rate_limit', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to update post.' } };
   }
 
@@ -928,7 +929,7 @@ export async function updateOwnerPostForRoute({
           sourceTools,
         });
       } catch (sourceToolsError) {
-        console.error('Failed to replace post_source_tools:', sourceToolsError);
+        logBackendError('failed_to_replace_post_source_tools', { error: sourceToolsError });
         const isValidationError = sourceToolsError instanceof PostSourceToolsWriteError
           && sourceToolsError.isValidationError;
         return {
@@ -958,7 +959,7 @@ export async function updateOwnerPostForRoute({
       },
     };
   } catch (error) {
-    console.error('Failed to update owner post:', error);
+    logBackendError('failed_to_update_owner_post', { error: error });
     if (isMissingPostResourceBundlesSchemaError(error)) {
       return {
         ok: false,

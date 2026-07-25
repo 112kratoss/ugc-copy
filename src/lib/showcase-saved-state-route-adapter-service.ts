@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -13,7 +14,7 @@ import { createUserClient } from '@/lib/server-helpers';
 type ShowcaseSavedStateRouteDependencies = {
   createUserClient?: typeof createUserClient;
   getShowcaseSavedStateForRoute?: typeof getShowcaseSavedStateForRoute;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   parseShowcaseSavedStateIds?: typeof parseShowcaseSavedStateIds;
 };
 
@@ -22,7 +23,7 @@ function resolveDependencies(dependencies: ShowcaseSavedStateRouteDependencies |
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     getShowcaseSavedStateForRoute:
       dependencies?.getShowcaseSavedStateForRoute ?? getShowcaseSavedStateForRoute,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     parseShowcaseSavedStateIds:
       dependencies?.parseShowcaseSavedStateIds ?? parseShowcaseSavedStateIds,
   };

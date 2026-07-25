@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
 
 import { getApiRequestId } from '@/lib/api-cache';
+import { logBackendEvent } from '@/lib/backend-logger';
 import {
   deliverBackendAlerts,
   getBackendAlertDeliveryNotConfiguredSummary,
@@ -17,6 +18,7 @@ import {
 } from '@/lib/backend-job-runs';
 import { BACKEND_JOBS_BY_NAME, type BackendJobDefinition } from '@/lib/backend-jobs';
 import { maintainFeedPersonalization } from '@/lib/feed-maintenance';
+import { pruneOperationalBackendData } from '@/lib/operational-data-retention';
 import {
   hasDueGenerationCompletionJobs,
   maybePruneGenerationCompletionJobs,
@@ -99,19 +101,11 @@ function logBackendJob(
   job: BackendJobDefinition,
   fields: Record<string, unknown>,
 ) {
-  const payload = JSON.stringify({
-    level,
-    msg,
+  logBackendEvent(level, msg, {
     route: job.route,
     job: job.name,
     ...fields,
   });
-
-  if (level === 'error') {
-    console.error(payload);
-  } else {
-    console.log(payload);
-  }
 }
 
 export function getBackendJobRequestId(request: Request): string {
@@ -385,6 +379,30 @@ export function runFeedMaintenanceBackendJob(options: {
     },
     hasWork: async () => true,
     run: (client, context) => maintainFeedPersonalization(client, {
+      now: new Date(context.startedAtMs),
+    }),
+  });
+}
+
+export function runOperationalDataRetentionBackendJob(options: {
+  requestId?: string;
+  startedAtMs?: number;
+  serviceClient?: SupabaseClient;
+  triggerRoute?: string;
+} = {}) {
+  const job = BACKEND_JOBS_BY_NAME['operational-data-retention'];
+  return runManagedBackendJob({
+    ...options,
+    job,
+    messages: {
+      started: 'operational_data_retention_started',
+      skippedNoWork: 'operational_data_retention_skipped_no_work',
+      skippedLocked: 'operational_data_retention_skipped',
+      completed: 'operational_data_retention_completed',
+      failed: 'operational_data_retention_failed',
+    },
+    hasWork: async () => true,
+    run: (client, context) => pruneOperationalBackendData(client, {
       now: new Date(context.startedAtMs),
     }),
   });

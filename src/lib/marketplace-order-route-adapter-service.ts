@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -20,7 +21,7 @@ type MarketplaceOrderRouteDependencies = {
   createMarketplaceOrderForRoute?: typeof createMarketplaceOrderForRoute;
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
 };
 
 function resolveDependencies(dependencies: MarketplaceOrderRouteDependencies | undefined) {
@@ -29,7 +30,7 @@ function resolveDependencies(dependencies: MarketplaceOrderRouteDependencies | u
       ?? createMarketplaceOrderForRoute,
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
   };
 }
 

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { logBackendError } from '@/lib/backend-logger';
 
 import {
   BackendRateLimitError,
@@ -109,7 +110,7 @@ export async function deleteOwnerGenerationForRoute({
         };
       }
 
-      console.error('Failed to enforce generation delete rate limit:', error);
+      logBackendError('failed_to_enforce_generation_delete_rate_limit', { error: error });
       return { ok: false, body: { error: 'Failed to delete creation.' }, status: 500 };
     }
 
@@ -124,7 +125,7 @@ export async function deleteOwnerGenerationForRoute({
     const generation = generationData as GenerationDeleteRow | null;
 
     if (generationError) {
-      console.error('Failed to load generation before delete:', generationError);
+      logBackendError('failed_to_load_generation_before_delete', { error: generationError });
       return { ok: false, body: { error: 'Failed to delete creation.' }, status: 500 };
     }
 
@@ -139,7 +140,7 @@ export async function deleteOwnerGenerationForRoute({
       .eq('user_id', userId);
 
     if (linkedPostsError) {
-      console.error('Failed to load linked posts before generation delete:', linkedPostsError);
+      logBackendError('failed_to_load_linked_posts_before_generation_delete', { error: linkedPostsError });
       return { ok: false, body: { error: 'Failed to delete creation.' }, status: 500 };
     }
 
@@ -153,7 +154,7 @@ export async function deleteOwnerGenerationForRoute({
       .eq('user_id', userId);
 
     if (inputMediaError) {
-      console.error('Failed to load generation input media before delete:', inputMediaError);
+      logBackendError('failed_to_load_generation_input_media_before_delete', { error: inputMediaError });
     } else {
       for (const row of (inputMediaRows ?? []) as Array<{ storage_path: string | null }>) {
         addStoredMediaPath(removablePaths, row.storage_path);
@@ -180,7 +181,7 @@ export async function deleteOwnerGenerationForRoute({
       .is('template_run_step_id', null);
 
     if (deleteError) {
-      console.error('Failed to delete generation:', deleteError);
+      logBackendError('failed_to_delete_generation', { error: deleteError });
       return { ok: false, body: { error: 'Failed to delete creation.' }, status: 500 };
     }
 
@@ -199,7 +200,7 @@ export async function deleteOwnerGenerationForRoute({
       },
     };
   } catch (error) {
-    console.error('Failed to delete owner generation:', error);
+    logBackendError('failed_to_delete_owner_generation', { error: error });
     return { ok: false, body: { error: 'Failed to delete creation.' }, status: 500 };
   }
 }

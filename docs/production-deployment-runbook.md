@@ -177,9 +177,56 @@ curl -sS \
 
 Expect a configured environment, a current build id, no stale scheduler, no settlement backlog, and no missing required capability. A degraded response blocks release promotion until understood.
 
+## Identity Policy: OAuth Only
+
+Decided 2026-07-25. Magicbooklet authenticates through Google and Apple only. No
+SMTP sender is provisioned, and none is planned.
+
+This is a deliberate choice rather than an outstanding task. Without an SMTP
+sender, Supabase Auth cannot send password-reset, address-confirmation, or
+email-change mail. An email/password account created in that state has no
+recovery path: a forgotten password becomes a permanently inaccessible account.
+Offering it would be worse than not offering it, so `hook_block_password_signups_until_smtp`
+rejects `provider = 'email'` sign-ups with a 403 and the message
+"Email sign-up is temporarily unavailable. Continue with Google or Apple."
+
+Keep `auth.email.enable_confirmations = false` while this policy holds; enabling
+confirmations without a sender would silently block every affected sign-in.
+
+### Legacy email/password accounts
+
+Accounts created with the `email` provider *before* the hook was installed still
+exist and are still able to sign in. As of 2026-07-25 there were six, of which
+two had never confirmed their address. **These accounts have no self-service
+password reset.**
+
+If one of them is locked out, recovery is a manual, staff-run process:
+
+1. Confirm the request is genuine out of band. There is no confirmed email
+   address to verify against for the unconfirmed accounts, so identity has to be
+   established some other way — a prior support thread, a purchase record, or
+   ownership of published content.
+2. Prefer migrating the account to Google or Apple over restoring password
+   access, so it stops depending on this manual path.
+3. Record the action and its rationale, as with any privileged account change.
+
+Do not restore self-service reset by enabling SMTP piecemeal for these accounts.
+Either the OAuth-only policy holds, or SMTP is provisioned properly and this
+whole section is retired along with the hook.
+
+### Reversing this decision
+
+If email/password sign-up is ever wanted:
+
+1. Provision an SMTP sender in Supabase Dashboard → Auth → SMTP Settings.
+2. Set `auth.email.enable_confirmations = true` in `supabase/config.toml`.
+3. Drop or disable `hook_block_password_signups_until_smtp`.
+4. Re-run the Supabase Auth advisors and confirm no warnings remain.
+5. Give the legacy accounts above a reset path before announcing the change.
+
 ## Durable Queue Graduation Decision
 
-Current decision: keep the Vercel cron orchestrator for `backend-alert-delivery`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `media-preview-repair`, `mobile-push-receipts`, and `referral-reward-reconciliation`.
+Current decision: keep the Vercel cron orchestrator for `backend-alert-delivery`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `media-preview-repair`, `mobile-push-receipts`, `operational-data-retention`, and `referral-reward-reconciliation`.
 
 This is the cost-efficient production baseline for the current workload because the jobs are idempotent, lock-protected in Supabase, bounded by 300-second function limits, and tolerant of the current ten-minute or hourly cadence. The single `/api/cron/backend-jobs` scheduler keeps Vercel cron invocations at 144 per day while logical jobs can still run at their own cadence.
 

@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { unstable_cache } from 'next/cache';
 import { cache } from 'react';
@@ -359,7 +360,7 @@ const getInrFxRates = cache(async (): Promise<Record<string, number> | null> => 
 
     return rates;
   } catch (error) {
-    console.error('Failed to load post resource FX rates:', error);
+    logBackendError('post_resource_fx_rates_load_failed', { error: error });
     return null;
   }
 });
@@ -546,7 +547,7 @@ export async function buildGenerationReferenceResourceItems(params: {
     .order('sort_order', { ascending: true });
 
   if (error) {
-    console.error('Failed to load generation references for unlock packaging:', error);
+    logBackendError('post_resource_generation_refs_load_failed', { error: error });
     return [];
   }
 
@@ -567,7 +568,7 @@ export async function buildGenerationReferenceResourceItems(params: {
         .download(sourceLocation.filePath);
 
       if (downloadError || !blob) {
-        console.error('Failed to download generation reference for unlock packaging:', downloadError);
+        logBackendError('post_resource_generation_ref_download_failed', { error: downloadError });
         continue;
       }
 
@@ -581,7 +582,7 @@ export async function buildGenerationReferenceResourceItems(params: {
         });
 
       if (uploadError) {
-        console.error('Failed to copy generation reference into resource files:', uploadError);
+        logBackendError('post_resource_generation_ref_copy_failed', { error: uploadError });
         continue;
       }
 
@@ -604,7 +605,7 @@ export async function buildGenerationReferenceResourceItems(params: {
         remixUse: mapGenerationInputRemixUse(row),
       });
     } catch (copyError) {
-      console.error('Failed to package generation reference:', copyError);
+      logBackendError('post_resource_generation_ref_package_failed', { error: copyError });
     }
   }
 
@@ -693,7 +694,7 @@ async function loadGenerationRecipePostRow(
 
   if (error) {
     if (!isMissingPostsSchemaError(error)) {
-      console.error('Failed to load generation recipe post:', error);
+      logBackendError('post_resource_recipe_post_load_failed', { error: error });
     }
     return null;
   }
@@ -712,7 +713,7 @@ async function loadGenerationRecipeRow(
     .maybeSingle();
 
   if (error) {
-    console.error('Failed to load generation recipe source:', error);
+    logBackendError('post_resource_recipe_source_load_failed', { error: error });
     return null;
   }
 
@@ -818,7 +819,7 @@ async function loadProfileMap(userIds: string[]) {
     .in('id', uniqueUserIds);
 
   if (error) {
-    console.error('Failed to load post resource profiles:', error);
+    logBackendError('post_resource_profiles_load_failed', { error: error });
     return new Map();
   }
 
@@ -868,7 +869,7 @@ async function loadLinkedPostMap(
 
   let result: LinkedPostQueryResult = await resultQuery;
   if (scope === 'public' && isMissingPostReviewStatusColumnError(result.error)) {
-    console.error('Cannot enforce the marketplace moderation boundary:', result.error);
+    logBackendError('marketplace_moderation_boundary_unenforceable', { error: result.error });
     return new Map();
   }
   if (isMissingSourceToolSlugColumn(result.error) || isMissingPostReviewStatusColumnError(result.error)) {
@@ -908,7 +909,7 @@ async function loadLinkedPostMap(
 
     result = await fallbackQuery;
     if (scope === 'public' && isMissingPostReviewStatusColumnError(result.error)) {
-      console.error('Cannot enforce the marketplace moderation boundary:', result.error);
+      logBackendError('marketplace_moderation_boundary_unenforceable', { error: result.error });
       return new Map();
     }
   }
@@ -927,7 +928,7 @@ async function loadLinkedPostMap(
 
     let legacyResult: LinkedPostQueryResult = await legacyQuery;
     if (scope === 'public' && isMissingPostReviewStatusColumnError(legacyResult.error)) {
-      console.error('Cannot enforce the marketplace moderation boundary:', legacyResult.error);
+      logBackendError('marketplace_moderation_boundary_unenforceable', { error: legacyResult.error });
       return new Map();
     }
     if (isMissingSourceToolSlugColumn(legacyResult.error) || isMissingPostReviewStatusColumnError(legacyResult.error)) {
@@ -965,14 +966,14 @@ async function loadLinkedPostMap(
 
       legacyResult = await fallbackLegacyQuery;
       if (scope === 'public' && isMissingPostReviewStatusColumnError(legacyResult.error)) {
-        console.error('Cannot enforce the marketplace moderation boundary:', legacyResult.error);
+        logBackendError('marketplace_moderation_boundary_unenforceable', { error: legacyResult.error });
         return new Map();
       }
     }
 
     if (legacyResult.error) {
       if (!isMissingPostsSchemaError(legacyResult.error)) {
-        console.error('Failed to load linked posts for resource bundles:', legacyResult.error);
+        logBackendError('post_resource_linked_posts_load_failed', { error: legacyResult.error });
       }
       return new Map();
     }
@@ -984,7 +985,7 @@ async function loadLinkedPostMap(
     }));
   } else if (result.error) {
     if (!isMissingPostsSchemaError(result.error)) {
-      console.error('Failed to load linked posts for resource bundles:', result.error);
+      logBackendError('post_resource_linked_posts_load_failed', { error: result.error });
     }
     return new Map();
   } else {
@@ -993,7 +994,7 @@ async function loadLinkedPostMap(
 
   const mediaItemsMap = includeMediaPreviews
     ? await loadPostMediaItemsMap(adminSupabase, rows.map((row) => row.id)).catch((error) => {
-        console.error('Failed to load marketplace media previews:', error);
+        logBackendError('marketplace_media_previews_load_failed', { error: error });
         return new Map();
       })
     : new Map();
@@ -1177,7 +1178,7 @@ export async function getMarketplaceQualityErrorForPostBundle(params: {
     .maybeSingle();
 
   if (error) {
-    console.error('Failed to load creator profile for marketplace quality gate:', error);
+    logBackendError('marketplace_quality_gate_profile_load_failed', { error: error });
     return CREATOR_PROFILE_CHECK_ERROR;
   }
 
@@ -1517,7 +1518,7 @@ async function getMarketplaceResourceListFallback(options: {
         };
       }
 
-      console.error('Failed to load marketplace resource list:', error);
+      logBackendError('marketplace_resource_list_load_failed', { error: error });
       throw error;
     }
 
@@ -1629,7 +1630,7 @@ async function getMarketplaceResourceListBase(
       });
     }
 
-    console.error('Failed to load marketplace resource list:', error);
+    logBackendError('marketplace_resource_list_load_failed', { error: error });
     throw error;
   }
 
@@ -1814,7 +1815,7 @@ export async function getPostResourceBundleDetailByPostId(
       return null;
     }
 
-    console.error('Failed to load post resource bundle:', error);
+    logBackendError('post_resource_bundle_load_failed', { error: error });
     throw error;
   }
 
@@ -1837,7 +1838,7 @@ export async function getPostResourceBundleDetailByPostId(
       .maybeSingle();
 
     if (purchaseError && !isMissingPostResourceBundlesSchemaError(purchaseError)) {
-      console.error('Failed to load resource bundle purchase state:', purchaseError);
+      logBackendError('post_resource_purchase_state_load_failed', { error: purchaseError });
     } else {
       viewerHasPurchased = Boolean(purchaseData);
     }
@@ -1905,7 +1906,7 @@ export async function getSellerPostResourceBundleDashboard(
       };
     }
 
-    console.error('Failed to load seller resource bundles:', error);
+    logBackendError('post_resource_seller_bundles_load_failed', { error: error });
     throw error;
   }
 
@@ -1938,7 +1939,7 @@ export async function getSellerPostResourceBundleDashboard(
       .order('created_at', { ascending: false });
 
     if (orderError) {
-      console.error('Failed to load seller bundle sales:', orderError);
+      logBackendError('post_resource_seller_sales_load_failed', { error: orderError });
       throw orderError;
     }
 
@@ -1974,7 +1975,7 @@ export async function getSellerPostResourceBundleDashboard(
     .order('deleted_at', { ascending: false });
 
   if (deletedAuditError) {
-    console.error('Failed to load deleted post resource snapshots:', deletedAuditError);
+    logBackendError('post_resource_deleted_snapshots_load_failed', { error: deletedAuditError });
     throw deletedAuditError;
   }
 
@@ -2039,7 +2040,7 @@ export async function resolvePostIdForResourceIdentifier(identifier: string): Pr
 
       if (legacyError) {
         if (!isMissingMarketplaceSchemaError(legacyError)) {
-          console.error('Failed to resolve legacy marketplace post id:', legacyError);
+          logBackendError('marketplace_legacy_post_id_resolve_failed', { error: legacyError });
         }
         return null;
       }
@@ -2047,7 +2048,7 @@ export async function resolvePostIdForResourceIdentifier(identifier: string): Pr
       return (legacyAsset?.post_id as string | null) ?? null;
     }
 
-    console.error('Failed to resolve bundle post id:', error);
+    logBackendError('post_resource_bundle_post_id_resolve_failed', { error: error });
     return null;
   }
 
@@ -2072,7 +2073,7 @@ export async function getBundleForOrderByPostId(postId: string): Promise<BundleR
       return null;
     }
 
-    console.error('Failed to load bundle by post id:', error);
+    logBackendError('post_resource_bundle_by_post_load_failed', { error: error });
     throw error;
   }
 

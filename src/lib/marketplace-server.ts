@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { cache } from 'react';
 
@@ -186,7 +187,7 @@ const getInrFxRates = cache(async (): Promise<Record<string, number> | null> => 
 
     return rates;
   } catch (error) {
-    console.error('Failed to load marketplace FX rates:', error);
+    logBackendError('marketplace_fx_rates_load_failed', { error });
     return null;
   }
 });
@@ -250,7 +251,7 @@ async function loadProfileMap(userIds: string[]) {
     .in('id', uniqueUserIds);
 
   if (error) {
-    console.error('Failed to load marketplace profiles:', error);
+    logBackendError('marketplace_profiles_load_failed', { error });
     return new Map();
   }
 
@@ -294,7 +295,7 @@ async function loadPostMap(
 
     if (legacyResult.error) {
       if (!isMissingPostsSchemaError(legacyResult.error)) {
-        console.error('Failed to load marketplace posts:', legacyResult.error);
+        logBackendError('marketplace_posts_load_failed', { variant: 'legacy', error: legacyResult.error });
       }
       return new Map();
     }
@@ -306,7 +307,7 @@ async function loadPostMap(
     }));
   } else if (result.error) {
     if (!isMissingPostsSchemaError(result.error)) {
-      console.error('Failed to load marketplace posts:', result.error);
+      logBackendError('marketplace_posts_load_failed', { error: result.error });
     }
     return new Map();
   } else {
@@ -425,7 +426,7 @@ export async function getMarketplaceAssetList(options?: {
       };
     }
 
-    console.error('Failed to load marketplace asset list:', error);
+    logBackendError('marketplace_asset_list_load_failed', { error });
     throw error;
   }
 
@@ -464,7 +465,7 @@ export async function getMarketplaceAssetDetail(
       return null;
     }
 
-    console.error('Failed to load marketplace asset detail:', error);
+    logBackendError('marketplace_asset_detail_load_failed', { error });
     throw error;
   }
 
@@ -488,7 +489,7 @@ export async function getMarketplaceAssetDetail(
       .maybeSingle();
 
     if (purchaseError) {
-      console.error('Failed to load marketplace purchase state:', purchaseError);
+      logBackendError('marketplace_purchase_state_load_failed', { error: purchaseError });
     } else {
       viewerHasPurchased = Boolean(purchase);
     }
@@ -505,7 +506,7 @@ export async function getMarketplaceAssetDetail(
       .maybeSingle();
 
     if (contentError) {
-      console.error('Failed to load marketplace asset content:', contentError);
+      logBackendError('marketplace_asset_content_load_failed', { error: contentError });
     } else if (contentRow) {
       const typedContent = contentRow as AssetContentRow;
       content = {

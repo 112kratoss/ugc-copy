@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -95,7 +96,7 @@ async function isPostInteractionUnavailable({
       secondUserId: creatorUserId,
     });
   } catch (error) {
-    console.error('Failed to verify block state before saving Showcase content:', error);
+    logBackendError('failed_to_verify_block_state_before_saving_showcase_content', { error: error });
     return true;
   }
 }
@@ -244,10 +245,10 @@ async function recordPostSaveEvent({
       });
 
     if (error) {
-      console.error('Failed to record post save event:', error);
+      logBackendError('failed_to_record_post_save_event', { error: error });
     }
   } catch (error) {
-    console.error('Failed to record post save event:', error);
+    logBackendError('failed_to_record_post_save_event', { error: error });
   }
 }
 
@@ -336,7 +337,7 @@ export async function saveShowcasePostForRoute({
   }
 
   if (rpcError) {
-    console.error('Error toggling save:', rpcError);
+    logBackendError('error_toggling_save', { error: rpcError });
     return { ok: false, status: 500, body: { error: 'Failed to update save status' } };
   }
 

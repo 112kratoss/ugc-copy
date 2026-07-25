@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -92,7 +93,7 @@ export async function validateProfileSubmission(
     .maybeSingle();
 
   if (existingError) {
-    console.error('Failed to load current profile:', existingError);
+    logBackendError('failed_to_load_current_profile', { error: existingError });
     return buildValidationFailure(500, 'Failed to load profile');
   }
 
@@ -105,7 +106,7 @@ export async function validateProfileSubmission(
       .maybeSingle();
 
     if (duplicateError) {
-      console.error('Failed to validate username:', duplicateError);
+      logBackendError('failed_to_validate_username', { error: duplicateError });
       return buildValidationFailure(500, 'Failed to validate username');
     }
 

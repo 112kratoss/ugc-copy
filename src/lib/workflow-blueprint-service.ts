@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { logBackendError } from '@/lib/backend-logger';
 
 import {
   AiUsageLedgerError,
@@ -182,7 +183,7 @@ export async function planWorkflowBlueprintForRoute(
         };
       }
 
-      console.error('[WorkflowBlueprint] Rate limit failed:', error);
+      logBackendError('workflowblueprint_rate_limit_failed', { error: error });
       return {
         ok: false,
         body: { error: 'Failed to check workflow planning limits.' },
@@ -236,7 +237,7 @@ export async function planWorkflowBlueprintForRoute(
       };
     }
   } catch (error) {
-    console.error('[WorkflowBlueprint]', error);
+    logBackendError('workflowblueprint', { error: error });
     return {
       ok: false,
       body: { error: 'Internal server error' },

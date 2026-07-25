@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -24,7 +25,7 @@ type ShowcasePublishRouteDependencies = {
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
   fetchWithProviderTimeout?: typeof fetchWithProviderTimeout;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   publishGenerationToShowcaseForRoute?: typeof publishGenerationToShowcaseForRoute;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
@@ -35,7 +36,7 @@ function resolveDependencies(dependencies: ShowcasePublishRouteDependencies | un
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
     fetchWithProviderTimeout: dependencies?.fetchWithProviderTimeout ?? fetchWithProviderTimeout,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     publishGenerationToShowcaseForRoute:
       dependencies?.publishGenerationToShowcaseForRoute ?? publishGenerationToShowcaseForRoute,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,

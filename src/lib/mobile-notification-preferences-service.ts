@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { logBackendError } from '@/lib/backend-logger';
 
 import {
   BackendRateLimitError,
@@ -90,7 +91,7 @@ export async function getMobileNotificationPreferencesForRoute(
       return mobileNotificationErrorResult(error);
     }
 
-    console.error('Mobile notification preferences load failed:', error);
+    logBackendError('mobile_notification_preferences_load_failed', { error: error });
     return {
       ok: false,
       body: { error: 'Internal server error' },
@@ -130,7 +131,7 @@ export async function updateMobileNotificationPreferencesForRoute(
         };
       }
 
-      console.error('Mobile notification preferences rate limit check failed:', error);
+      logBackendError('mobile_notification_preferences_rate_limit_check_failed', { error: error });
       return {
         ok: false,
         body: { error: 'Failed to check mobile notification preference limits.' },
@@ -166,7 +167,7 @@ export async function updateMobileNotificationPreferencesForRoute(
       return mobileNotificationErrorResult(error);
     }
 
-    console.error('Mobile notification preferences update failed:', error);
+    logBackendError('mobile_notification_preferences_update_failed', { error: error });
     return {
       ok: false,
       body: { error: 'Internal server error' },

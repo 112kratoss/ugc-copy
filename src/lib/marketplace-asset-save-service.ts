@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -124,7 +125,7 @@ export async function saveMarketplaceAssetForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Marketplace asset save rate limit check failed:', error);
+    logBackendError('marketplace_asset_save_rate_limit_check_failed', { error: error });
     return {
       ok: false,
       status: 500,
@@ -169,7 +170,7 @@ export async function saveMarketplaceAssetForRoute({
       .maybeSingle();
 
     if (sellerProfileError) {
-      console.error('Failed to verify marketplace seller profile:', sellerProfileError);
+      logBackendError('failed_to_verify_marketplace_seller_profile', { error: sellerProfileError });
       return { ok: false, status: 500, body: { error: 'Could not verify your creator profile right now. Try again.' } };
     }
 
@@ -223,7 +224,7 @@ export async function saveMarketplaceAssetForRoute({
       .maybeSingle();
 
     if (existingPostAssetError) {
-      console.error('Failed to check existing post asset:', existingPostAssetError);
+      logBackendError('failed_to_check_existing_post_asset', { error: existingPostAssetError });
       return { ok: false, status: 500, body: { error: 'Failed to validate linked post.' } };
     }
 
@@ -290,7 +291,7 @@ export async function saveMarketplaceAssetForRoute({
     .single();
 
   if (assetUpsertError || !asset) {
-    console.error('Failed to upsert marketplace asset:', assetUpsertError);
+    logBackendError('failed_to_upsert_marketplace_asset', { error: assetUpsertError });
     return { ok: false, status: 500, body: { error: 'Failed to save listing.' } };
   }
 
@@ -304,7 +305,7 @@ export async function saveMarketplaceAssetForRoute({
     });
 
   if (contentError) {
-    console.error('Failed to upsert marketplace asset content:', contentError);
+    logBackendError('failed_to_upsert_marketplace_asset_content', { error: contentError });
     return { ok: false, status: 500, body: { error: 'Failed to save listing content.' } };
   }
 

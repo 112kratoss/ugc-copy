@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { unstable_cache } from 'next/cache';
 
@@ -220,7 +221,7 @@ async function fetchPostRows(
 
     const legacyResult = await legacyQuery.range(offset, offset + limit - 1);
     if (legacyResult.error) {
-      console.error('Error fetching showcase feed:', legacyResult.error);
+      logBackendError('error_fetching_showcase_feed', { error: legacyResult.error });
       throw legacyResult.error;
     }
 
@@ -237,7 +238,7 @@ async function fetchPostRows(
       return null;
     }
 
-    console.error('Error fetching showcase feed:', result.error);
+    logBackendError('error_fetching_showcase_feed', { error: result.error });
     throw result.error;
   }
 
@@ -459,7 +460,7 @@ export async function resolvePostRowsToFeedItems(
       .in('id', userIds);
 
     if (profilesError) {
-      console.error('Error fetching showcase creator profiles:', profilesError);
+      logBackendError('error_fetching_showcase_creator_profiles', { error: profilesError });
     } else {
       for (const profile of profiles ?? []) {
         profilesMap[profile.id] = profile;
@@ -497,7 +498,7 @@ export async function resolvePostRowsToFeedItems(
     }
 
     if (modelsError) {
-      console.error('Error fetching showcase generation models:', modelsError);
+      logBackendError('error_fetching_showcase_generation_models', { error: modelsError });
     } else {
       const entries = await Promise.all((models ?? []).flatMap((generation) => {
         if (typeof generation.id !== 'string' || typeof generation.model !== 'string') return [];
@@ -875,7 +876,7 @@ async function fetchLegacyGenerationRows(
   }
 
   if (result.error) {
-    console.error('Error fetching legacy showcase feed:', result.error);
+    logBackendError('error_fetching_legacy_showcase_feed', { error: result.error });
     throw result.error;
   }
 
@@ -902,7 +903,7 @@ async function getLegacyShowcaseFeedPageBase(
       .in('id', userIds);
 
     if (profilesError) {
-      console.error('Error fetching legacy showcase creator profiles:', profilesError);
+      logBackendError('error_fetching_legacy_showcase_creator_profiles', { error: profilesError });
     } else {
       for (const profile of profiles ?? []) {
         profilesMap[profile.id] = profile;
@@ -1217,7 +1218,7 @@ async function attachViewerStateToFeed(
   } catch (error) {
     // Blocking is a user-safety boundary. Fail closed for authenticated feeds
     // rather than returning content from a relationship we could not verify.
-    console.error('Error filtering blocked creators from Showcase feed:', error);
+    logBackendError('error_filtering_blocked_creators_from_showcase_feed', { error: error });
     viewerSafeItems = [];
   }
 
@@ -1249,12 +1250,12 @@ async function attachViewerStateToFeed(
         .in('generation_id', viewerSafeItems.map((item) => item.generationId ?? item.id));
 
       if (legacySavedResult.error) {
-        console.error('Error fetching legacy showcase saved state for feed page:', legacySavedResult.error);
+        logBackendError('error_fetching_legacy_showcase_saved_state_for_feed_page', { error: legacySavedResult.error });
         return new Set<string>();
       }
       savedItems = legacySavedResult.data as Array<{ generation_id: string }> | null;
     } else if (error) {
-      console.error('Error fetching showcase saved state for feed page:', error);
+      logBackendError('error_fetching_showcase_saved_state_for_feed_page', { error: error });
       return new Set<string>();
     } else {
       savedItems = postSavedItems as Array<{ post_id: string }> | null;
@@ -1276,7 +1277,7 @@ async function attachViewerStateToFeed(
       .in('bundle_id', remixEligibleBundleIds);
 
     if (purchaseError) {
-      console.error('Error fetching post resource bundle purchase state for feed page:', purchaseError);
+      logBackendError('error_fetching_post_resource_bundle_purchase_state_for_feed_page', { error: purchaseError });
       return new Set<string>();
     }
 
@@ -1370,7 +1371,7 @@ export async function getShowcaseFeedItemById(options: {
       return null;
     }
 
-    console.error('Error fetching showcase post detail:', result.error);
+    logBackendError('error_fetching_showcase_post_detail', { error: result.error });
     throw result.error;
   }
 

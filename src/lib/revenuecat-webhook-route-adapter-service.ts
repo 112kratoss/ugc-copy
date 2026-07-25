@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -16,7 +17,7 @@ type RevenueCatRefundRpcClient = Parameters<typeof reconcileMobilePurchaseAdjust
 type RevenueCatWebhookRouteDependencies = {
   createServiceClient?: () => RevenueCatRefundRpcClient;
   getExpectedAuthorization?: () => string | undefined;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   parseRevenueCatRefundEvent?: typeof parseRevenueCatRefundEvent;
   readBoundedWebhookBody?: typeof readBoundedWebhookBody;
   webhookAuthorizationMatches?: typeof webhookAuthorizationMatches;
@@ -30,7 +31,7 @@ function resolveDependencies(dependencies: RevenueCatWebhookRouteDependencies | 
     getExpectedAuthorization:
       dependencies?.getExpectedAuthorization
       ?? (() => process.env.REVENUECAT_WEBHOOK_AUTH_TOKEN),
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     parseRevenueCatRefundEvent:
       dependencies?.parseRevenueCatRefundEvent ?? parseRevenueCatRefundEvent,
     readBoundedWebhookBody:

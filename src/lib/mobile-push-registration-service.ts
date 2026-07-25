@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { logBackendError } from '@/lib/backend-logger';
 
 import {
   BackendRateLimitError,
@@ -73,7 +74,7 @@ async function enforceRegistrationRateLimit(adminSupabase: AdminSupabaseClient, 
       } satisfies MobilePushRegistrationRouteResult;
     }
 
-    console.error('Mobile push token registration rate limit check failed:', error);
+    logBackendError('mobile_push_token_registration_rate_limit_check_failed', { error: error });
     return {
       ok: false,
       body: { error: 'Failed to check mobile push token limits.' },
@@ -164,7 +165,7 @@ export async function registerMobilePushTokenForRoute(
       return notificationErrorResult(error);
     }
 
-    console.error('Mobile push token registration failed:', error);
+    logBackendError('mobile_push_token_registration_failed', { error: error });
     return {
       ok: false,
       body: { error: 'Internal server error' },

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { logBackendError } from '@/lib/backend-logger';
 
 import {
   BackendRateLimitError,
@@ -85,7 +86,7 @@ export async function unregisterMobilePushTokenForRoute(
         };
       }
 
-      console.error('Mobile push token unregister rate limit check failed:', error);
+      logBackendError('mobile_push_token_unregister_rate_limit_check_failed', { error: error });
       return {
         ok: false,
         body: { error: 'Failed to check mobile push token limits.' },
@@ -115,7 +116,7 @@ export async function unregisterMobilePushTokenForRoute(
 
     return { ok: true, body: { success: true } };
   } catch (error) {
-    console.error('Mobile push token unregister failed:', error);
+    logBackendError('mobile_push_token_unregister_failed', { error: error });
     return { ok: false, body: { error: 'Internal server error' }, status: 500 };
   }
 }

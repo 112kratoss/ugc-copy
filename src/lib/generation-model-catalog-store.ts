@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -635,12 +636,10 @@ function compareShadowCatalog(
   const codeProjection = JSON.stringify({ defaults: code.catalog.defaults, models: code.catalog.models });
   const databaseProjection = JSON.stringify({ defaults: database.catalog.defaults, models: database.catalog.models });
   if (codeProjection !== databaseProjection) {
-    console.warn(JSON.stringify({
-      level: 'warning',
-      msg: 'generation_model_catalog_shadow_mismatch',
-      codeRevision: code.catalog.revision,
+    logBackendError('generation_model_catalog_shadow_mismatch', {
+    codeRevision: code.catalog.revision,
       databaseRevision: database.catalog.revision,
-    }));
+  });
   }
 }
 
@@ -677,7 +676,7 @@ export async function loadPublishedGenerationModelCatalog({
     return database;
   } catch (error) {
     if (source === 'shadow') {
-      console.warn('Generation model database shadow catalog is unavailable.', error);
+      logBackendWarning('generation_model_database_shadow_catalog_is_unavailable', { error: error });
       return { ...fallback, source: 'shadow' };
     }
     throw error;

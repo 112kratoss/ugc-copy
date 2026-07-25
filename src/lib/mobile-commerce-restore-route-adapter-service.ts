@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -17,7 +18,7 @@ type MobileCommerceRestoreRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   restoreMobileEntitlements?: typeof restoreMobileEntitlements;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
@@ -27,7 +28,7 @@ function resolveDependencies(dependencies: MobileCommerceRestoreRouteDependencie
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     restoreMobileEntitlements: dependencies?.restoreMobileEntitlements ?? restoreMobileEntitlements,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
   };

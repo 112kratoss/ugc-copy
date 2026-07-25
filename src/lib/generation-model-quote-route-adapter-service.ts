@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -13,14 +14,14 @@ import { createServiceClient } from '@/lib/server-helpers';
 type GenerationModelQuoteRouteDependencies = {
   createGenerationModelQuote?: typeof createGenerationModelQuote;
   createServiceClient?: typeof createServiceClient;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
 };
 
 function resolveDependencies(dependencies: GenerationModelQuoteRouteDependencies | undefined) {
   return {
     createGenerationModelQuote: dependencies?.createGenerationModelQuote ?? createGenerationModelQuote,
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
   };
 }
 

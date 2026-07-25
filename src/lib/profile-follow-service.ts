@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -88,7 +89,7 @@ async function isFollowRelationshipUnavailable({
       secondUserId: followingId,
     });
   } catch (error) {
-    console.error('Failed to verify creator block state:', error);
+    logBackendError('failed_to_verify_creator_block_state', { error: error });
     return true;
   }
 }
@@ -167,7 +168,7 @@ export async function updateCreatorFollowForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Creator follow rate limit check failed:', error);
+    logBackendError('creator_follow_rate_limit_check_failed', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to check follow limits.' } };
   }
 
@@ -243,7 +244,7 @@ export async function notifyCreatorFollowForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Creator follow notification rate limit check failed:', error);
+    logBackendError('creator_follow_notification_rate_limit_check_failed', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to check follow notification limits.' } };
   }
 

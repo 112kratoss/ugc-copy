@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -125,7 +126,7 @@ export async function putPostResourceBundleForRoute({
       };
     }
 
-    console.error('Failed to enforce resource bundle update rate limit:', error);
+    logBackendError('failed_to_enforce_resource_bundle_update_rate_limit', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to save resource bundle.' } };
   }
 

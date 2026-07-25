@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { logBackendError } from '@/lib/backend-logger';
 
 import {
   BackendRateLimitError,
@@ -119,10 +120,7 @@ async function enforceNotificationReadRateLimit({
       };
     }
 
-    console.error(
-      `Mobile notifications ${all ? 'read-all' : 'read'} rate limit check failed:`,
-      error,
-    );
+    logBackendError('mobile_notifications_rate_limit_check_failed', { message: `Mobile notifications ${all ? 'read-all' : 'read'} rate limit check failed:`, error: error, });
     return {
       ok: false,
       body: { error: 'Failed to check mobile notification read limits.' },
@@ -175,7 +173,7 @@ export async function getMobileNotificationInboxForRoute(
     };
   } catch (error) {
     if (error instanceof MobileNotificationError) return errorResult(error);
-    console.error('Mobile notifications list failed:', error);
+    logBackendError('mobile_notifications_list_failed', { error: error });
     return { ok: false, body: { error: 'Internal server error' }, status: 500 };
   }
 }
@@ -214,7 +212,7 @@ export async function markMobileNotificationsReadForRoute(
 
     return { ok: true, body: { success: true } };
   } catch (error) {
-    console.error('Mobile notifications read failed:', error);
+    logBackendError('mobile_notifications_read_failed', { error: error });
     return { ok: false, body: { error: 'Internal server error' }, status: 500 };
   }
 }
@@ -248,7 +246,7 @@ export async function markAllMobileNotificationsReadForRoute(
 
     return { ok: true, body: { success: true } };
   } catch (error) {
-    console.error('Mobile notifications read-all failed:', error);
+    logBackendError('mobile_notifications_read_all_failed', { error: error });
     return { ok: false, body: { error: 'Internal server error' }, status: 500 };
   }
 }

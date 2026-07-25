@@ -1,3 +1,5 @@
+import { logBackendError } from '@/lib/backend-logger';
+
 type SupabaseRpcResult = {
   data: unknown;
   error: { message?: string } | Error | null;
@@ -57,13 +59,11 @@ export async function withBackendJobLock<T>(
     });
 
     if (release.error) {
-      console.error(JSON.stringify({
-        level: 'error',
-        msg: 'backend_job_lock_release_failed',
-        job: options.name,
+      logBackendError('backend_job_lock_release_failed', {
+    job: options.name,
         owner: options.owner,
         error: errorMessage(release.error),
-      }));
+  });
     }
   }
 }

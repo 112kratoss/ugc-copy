@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -129,13 +130,13 @@ export async function applyWorkflowAssistantProposalForRoute({
     if (isMissingWorkflowCanvasAssistantSchemaError(applyResult.error)) {
       return setupRequiredResult();
     }
-    console.error('Failed to atomically apply workflow assistant proposal:', applyResult.error);
+    logBackendError('failed_to_atomically_apply_workflow_assistant_proposal', { error: applyResult.error });
     return internalErrorResult();
   }
 
   const atomicResult = applyResult.data as AtomicProposalApplyResponse | null;
   if (!atomicResult || typeof atomicResult !== 'object') {
-    console.error('Workflow assistant proposal RPC returned an invalid response.');
+    logBackendError('workflow_assistant_proposal_rpc_returned_an_invalid_response');
     return internalErrorResult();
   }
 
@@ -163,7 +164,7 @@ export async function applyWorkflowAssistantProposalForRoute({
   }
 
   if (atomicResult.outcome !== 'applied' || !resultCanvas || !resultProposal) {
-    console.error('Workflow assistant proposal RPC returned an incomplete response:', atomicResult.outcome);
+    logBackendError('workflow_assistant_proposal_rpc_returned_an_incomplete_response', { error: atomicResult.outcome });
     return internalErrorResult();
   }
 

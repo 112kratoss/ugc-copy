@@ -5,6 +5,7 @@ export type BackendJobName =
   | 'generation-model-verification'
   | 'media-preview-repair'
   | 'mobile-push-receipts'
+  | 'operational-data-retention'
   | 'referral-reward-reconciliation';
 
 export type BackendJobSchedulerDefinition = {
@@ -216,6 +217,17 @@ export const BACKEND_JOB_REGISTRY = [
     lockTtlSeconds: 14 * 60,
     noWorkSkipReason: 'no_pending_receipts',
     maxMissedRunsBeforeDegraded: 4,
+  }),
+  defineBackendJob({
+    // Daily is deliberate: retention is bounded per run and a backlog simply
+    // drains over subsequent days rather than needing frequent sweeps.
+    name: 'operational-data-retention',
+    route: '/api/cron/operational-data-retention',
+    schedule: '50 */24 * * *',
+    maxDurationSeconds: 300,
+    lockTtlSeconds: 14 * 60,
+    noWorkSkipReason: 'no_prunable_operational_data',
+    maxMissedRunsBeforeDegraded: 2,
   }),
   defineBackendJob({
     name: 'referral-reward-reconciliation',

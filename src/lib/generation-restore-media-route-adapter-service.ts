@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -20,7 +21,7 @@ type GenerationRestoreMediaRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   restoreGenerationMediaForRoute?: typeof restoreGenerationMediaForRoute;
 };
 
@@ -29,7 +30,7 @@ function resolveDependencies(dependencies: GenerationRestoreMediaRouteDependenci
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     restoreGenerationMediaForRoute:
       dependencies?.restoreGenerationMediaForRoute ?? restoreGenerationMediaForRoute,
   };

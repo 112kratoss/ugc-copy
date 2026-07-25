@@ -75,7 +75,9 @@ describe('owned media URL batching', () => {
     expect(result.get('generated_images/user-2/private.png')).toBeNull();
     expect(result.get('http://provider.example.com/insecure.jpg')).toBeNull();
     expect(result.get('https://user:password@provider.example.com/credentialed.jpg')).toBeNull();
-    expect(consoleError).toHaveBeenCalledWith(
+    const refusalLog = JSON.parse(consoleError.mock.calls[0][0] as string);
+    expect(refusalLog.msg).toBe('refused_to_sign_media_outside_owner_prefix');
+    expect(refusalLog.message).toBe(
       'Refused to sign media outside owner prefix: generated_images/user-2/private.png',
     );
   });

@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -176,7 +177,7 @@ export async function createProfileMediaUploadIntent({
       return createRateLimitResult(error);
     }
 
-    console.error('Profile media upload sign rate limit check failed:', error);
+    logBackendError('profile_media_upload_sign_rate_limit_check_failed', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to check profile media upload limits.' } };
   }
 
@@ -185,7 +186,7 @@ export async function createProfileMediaUploadIntent({
   const { data, error } = await profileStorage.createSignedUploadUrl(uploadPath);
 
   if (error || !data?.token) {
-    console.error('Failed to create profile media signed upload URL:', error);
+    logBackendError('failed_to_create_profile_media_signed_upload_url', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to prepare profile media upload.' } };
   }
 

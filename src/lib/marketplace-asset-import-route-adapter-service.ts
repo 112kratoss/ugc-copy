@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -18,7 +19,7 @@ type MarketplaceAssetImportRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   importMarketplaceWorkflowAssetForRoute?: typeof importMarketplaceWorkflowAssetForRoute;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
 };
 
 function resolveDependencies(dependencies: MarketplaceAssetImportRouteDependencies | undefined) {
@@ -27,7 +28,7 @@ function resolveDependencies(dependencies: MarketplaceAssetImportRouteDependenci
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     importMarketplaceWorkflowAssetForRoute:
       dependencies?.importMarketplaceWorkflowAssetForRoute ?? importMarketplaceWorkflowAssetForRoute,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
   };
 }
 

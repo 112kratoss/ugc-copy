@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -99,7 +100,7 @@ export async function importWorkflowShareForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Failed to enforce workflow canvas mutation rate limit:', error);
+    logBackendError('failed_to_enforce_workflow_canvas_mutation_rate_limit', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to import workflow share.' } };
   }
 
@@ -111,7 +112,7 @@ export async function importWorkflowShareForRoute({
 
   if (shareError || !share) {
     if (shareError) {
-      console.error('Failed to load workflow share before import:', shareError);
+      logBackendError('failed_to_load_workflow_share_before_import', { error: shareError });
     }
     return { ok: false, status: 404, body: { error: 'Workflow share not found.' } };
   }
@@ -142,7 +143,7 @@ export async function importWorkflowShareForRoute({
   }
 
   if (canvasError || !canvas) {
-    console.error('Failed to import shared workflow:', canvasError);
+    logBackendError('failed_to_import_shared_workflow', { error: canvasError });
     return { ok: false, status: 500, body: { error: 'Failed to import workflow share.' } };
   }
 
@@ -165,11 +166,11 @@ export async function importWorkflowShareForRoute({
       });
 
     if (historyError && !isMissingWorkflowCanvasHistorySchemaError(historyError)) {
-      console.error('Failed to write imported workflow history snapshot:', historyError);
+      logBackendError('failed_to_write_imported_workflow_history_snapshot', { error: historyError });
     }
   } catch (historyError) {
     if (!isMissingWorkflowCanvasHistorySchemaError(historyError)) {
-      console.error('Failed to write imported workflow history snapshot:', historyError);
+      logBackendError('failed_to_write_imported_workflow_history_snapshot', { error: historyError });
     }
   }
 
@@ -183,10 +184,10 @@ export async function importWorkflowShareForRoute({
       .eq('id', shareId);
 
     if (updateShareError) {
-      console.error('Failed to increment workflow share import count:', updateShareError);
+      logBackendError('failed_to_increment_workflow_share_import_count', { error: updateShareError });
     }
   } catch (updateShareError) {
-    console.error('Failed to increment workflow share import count:', updateShareError);
+    logBackendError('failed_to_increment_workflow_share_import_count', { error: updateShareError });
   }
 
   return {

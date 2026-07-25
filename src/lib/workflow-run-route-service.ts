@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import {
   BackendRateLimitError,
@@ -164,7 +165,7 @@ export async function startWorkflowRunForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Workflow run rate limit failed:', error);
+    logBackendError('workflow_run_rate_limit_failed', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to check workflow run limits.' } };
   }
 
@@ -192,7 +193,7 @@ export async function startWorkflowRunForRoute({
             runId: result.runId,
           });
         } catch (monitorError) {
-          console.error('Workflow run monitor failed:', monitorError);
+          logBackendError('workflow_run_monitor_failed', { error: monitorError });
         }
       });
     }
@@ -200,7 +201,7 @@ export async function startWorkflowRunForRoute({
     return { ok: true, body: result };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Workflow run failed.';
-    console.error('Workflow canvas run failed:', error);
+    logBackendError('workflow_canvas_run_failed', { error: error });
     return { ok: false, status: 500, body: { error: message } };
   }
 }

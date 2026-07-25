@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -15,7 +16,7 @@ import { slugifySourceTool } from '@/lib/source-tools';
 
 type MarketplaceResourceListRouteDependencies = {
   getMarketplaceResourceList?: typeof getMarketplaceResourceList;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
 
@@ -24,7 +25,7 @@ export const MAX_MARKETPLACE_RESOURCE_OFFSET = 960;
 function resolveDependencies(dependencies: MarketplaceResourceListRouteDependencies | undefined) {
   return {
     getMarketplaceResourceList: dependencies?.getMarketplaceResourceList ?? getMarketplaceResourceList,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
   };
 }

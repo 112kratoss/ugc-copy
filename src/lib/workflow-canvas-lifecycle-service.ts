@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -69,11 +70,11 @@ async function saveWorkflowLifecycleSnapshot({
     });
 
   if (error) {
-    console.error(
+    logBackendError(
       kind === 'published'
-        ? 'Failed to store published workflow snapshot:'
-        : 'Failed to save restored workflow snapshot:',
-      error,
+        ? 'workflow_published_snapshot_store_failed'
+        : 'workflow_restored_snapshot_save_failed',
+      { error },
     );
   }
 }
@@ -96,7 +97,7 @@ export async function listWorkflowCanvasHistoryForRoute({
     .limit(30);
 
   if (error) {
-    console.error('Failed to fetch workflow canvas history:', error);
+    logBackendError('failed_to_fetch_workflow_canvas_history', { error: error });
     return {
       ok: false,
       status: 500,
@@ -156,7 +157,7 @@ export async function publishWorkflowCanvasForRoute({
   const publishedCanvas = publishedData as WorkflowCanvasRow | null;
 
   if (error || !publishedCanvas) {
-    console.error('Failed to publish workflow canvas:', error);
+    logBackendError('failed_to_publish_workflow_canvas', { error: error });
     return {
       ok: false,
       status: 500,
@@ -238,7 +239,7 @@ export async function restoreWorkflowCanvasHistoryForRoute({
   const restoredCanvas = restoredData as WorkflowCanvasRow | null;
 
   if (error || !restoredCanvas) {
-    console.error('Failed to restore workflow canvas history:', error);
+    logBackendError('failed_to_restore_workflow_canvas_history', { error: error });
     return {
       ok: false,
       status: 500,

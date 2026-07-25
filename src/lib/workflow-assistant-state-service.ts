@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -30,7 +31,7 @@ const WORKFLOW_ASSISTANT_STATE_MESSAGE_LIMIT = 100;
 
 export async function getWorkflowAssistantStateForRoute({
   canvasId,
-  logError = console.error,
+  logError = logBackendRouteError,
   supabase,
   userId,
 }: {

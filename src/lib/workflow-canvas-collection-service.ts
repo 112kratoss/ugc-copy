@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -114,7 +115,7 @@ export async function listWorkflowCanvasesForRoute({
   }
 
   if (error) {
-    console.error('Failed to fetch workflow canvases:', error);
+    logBackendError('failed_to_fetch_workflow_canvases', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to fetch workflow canvases.' } };
   }
 
@@ -153,7 +154,7 @@ export async function createWorkflowCanvasForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Failed to enforce workflow canvas mutation rate limit:', error);
+    logBackendError('failed_to_enforce_workflow_canvas_mutation_rate_limit', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to create workflow canvas.' } };
   }
 
@@ -193,7 +194,7 @@ export async function createWorkflowCanvasForRoute({
   }
 
   if (error || !data) {
-    console.error('Failed to create workflow canvas:', error);
+    logBackendError('failed_to_create_workflow_canvas', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to create workflow canvas.' } };
   }
 
@@ -216,11 +217,11 @@ export async function createWorkflowCanvasForRoute({
       });
 
     if (historyError && !isMissingWorkflowCanvasHistorySchemaError(historyError)) {
-      console.error('Failed to create initial workflow canvas history snapshot:', historyError);
+      logBackendError('failed_to_create_initial_workflow_canvas_history_snapshot', { error: historyError });
     }
   } catch (historyError) {
     if (!isMissingWorkflowCanvasHistorySchemaError(historyError)) {
-      console.error('Failed to create initial workflow canvas history snapshot:', historyError);
+      logBackendError('failed_to_create_initial_workflow_canvas_history_snapshot', { error: historyError });
     }
   }
 

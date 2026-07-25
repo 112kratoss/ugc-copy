@@ -1,5 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import {
+  collectOperationalTableGrowth,
+  type OperationalTableGrowthReport,
+} from '@/lib/operational-table-growth';
+
 export type BackendCostReportStatus = 'ok' | 'warning' | 'degraded';
 
 type GenerationCostRow = {
@@ -94,6 +99,7 @@ export type BackendCostReport = {
     maxDurationMs: number;
     byService: Record<string, number>;
     failuresByService: Record<string, number>;
+    timeoutsByService: Record<string, number>;
   };
   rateLimitPressure: {
     totalRequests: number;
@@ -109,6 +115,12 @@ export type BackendCostReport = {
     bytesByBucket: Record<string, number>;
     objectsByBucket: Record<string, number>;
   };
+  /**
+   * Row counts and byte sizes for the churn-prone operational tables managed by
+   * the retention sweep. Null when the reporting function is unavailable, for
+   * example against a database that has not applied the migration yet.
+   */
+  operationalTableGrowth: OperationalTableGrowthReport | null;
   issues: BackendCostReportIssue[];
 };
 
@@ -306,9 +318,68 @@ function buildAiUsageSpend(rows: AiUsageCostRow[]) {
   };
 }
 
+
+/**
+ * Minimum events for a per-service rate to be meaningful. Below this, one
+ * failure out of two calls would read as a 50% outage.
+ */
+export const PROVIDER_RATE_MIN_SAMPLE = 20;
+export const PROVIDER_ERROR_RATE_WARNING = 0.2;
+export const PROVIDER_ERROR_RATE_DEGRADED = 0.5;
+export const PROVIDER_TIMEOUT_RATE_WARNING = 0.1;
+export const PROVIDER_TIMEOUT_RATE_DEGRADED = 0.3;
+
+export function buildProviderRateIssues(
+  providerDependencies: BackendCostReport['providerDependencies'],
+): BackendCostReportIssue[] {
+  const issues: BackendCostReportIssue[] = [];
+
+  for (const [serviceName, total] of Object.entries(providerDependencies.byService)) {
+    if (total < PROVIDER_RATE_MIN_SAMPLE) continue;
+
+    const failures = providerDependencies.failuresByService[serviceName] ?? 0;
+    const timeouts = providerDependencies.timeoutsByService[serviceName] ?? 0;
+    const errorRate = failures / total;
+    const timeoutRate = timeouts / total;
+
+    if (errorRate >= PROVIDER_ERROR_RATE_DEGRADED) {
+      issues.push({
+        severity: 'degraded',
+        code: 'PROVIDER_ERROR_RATE_DEGRADED',
+        message: `${serviceName} failed ${failures} of ${total} call(s) (${Math.round(errorRate * 100)}%) in the report window.`,
+      });
+    } else if (errorRate >= PROVIDER_ERROR_RATE_WARNING) {
+      issues.push({
+        severity: 'warning',
+        code: 'PROVIDER_ERROR_RATE_ELEVATED',
+        message: `${serviceName} failed ${failures} of ${total} call(s) (${Math.round(errorRate * 100)}%) in the report window.`,
+      });
+    }
+
+    // Timeouts are reported separately from general failures: they point at
+    // provider latency or a too-tight budget rather than a rejected request.
+    if (timeoutRate >= PROVIDER_TIMEOUT_RATE_DEGRADED) {
+      issues.push({
+        severity: 'degraded',
+        code: 'PROVIDER_TIMEOUT_RATE_DEGRADED',
+        message: `${serviceName} timed out on ${timeouts} of ${total} call(s) (${Math.round(timeoutRate * 100)}%) in the report window.`,
+      });
+    } else if (timeoutRate >= PROVIDER_TIMEOUT_RATE_WARNING) {
+      issues.push({
+        severity: 'warning',
+        code: 'PROVIDER_TIMEOUT_RATE_ELEVATED',
+        message: `${serviceName} timed out on ${timeouts} of ${total} call(s) (${Math.round(timeoutRate * 100)}%) in the report window.`,
+      });
+    }
+  }
+
+  return issues;
+}
+
 function buildProviderDependencies(rows: ProviderDependencyCostRow[]) {
   const byService: Record<string, number> = {};
   const failuresByService: Record<string, number> = {};
+  const timeoutsByService: Record<string, number> = {};
   let failedCount = 0;
   let slowCount = 0;
   let maxDurationMs = 0;
@@ -323,6 +394,9 @@ function buildProviderDependencies(rows: ProviderDependencyCostRow[]) {
       failedCount += 1;
       incrementCount(failuresByService, serviceName);
     }
+    if (outcome === 'timeout') {
+      incrementCount(timeoutsByService, serviceName);
+    }
     if (durationMs >= SLOW_PROVIDER_DURATION_MS) {
       slowCount += 1;
     }
@@ -335,6 +409,7 @@ function buildProviderDependencies(rows: ProviderDependencyCostRow[]) {
     maxDurationMs,
     byService,
     failuresByService,
+    timeoutsByService,
   };
 }
 
@@ -445,6 +520,11 @@ function buildCostIssues({
       message: `${providerDependencies.failedCount} provider dependency failure(s) were recorded in the report window.`,
     });
   }
+
+  // Per-service rates, not just the absolute count above: a provider degrading
+  // in isolation is invisible in a total, and a rate only means something once
+  // there is enough traffic to divide by.
+  issues.push(...buildProviderRateIssues(providerDependencies));
 
   if (aiUsageSpend.recentCreditCost >= budgetPolicy.aiUsageCreditCostDegraded) {
     issues.push({
@@ -582,6 +662,26 @@ export async function collectBackendCostReport(
     });
   }
 
+  // Fail soft: a database without the growth function still produces a report,
+  // it simply cannot show operational table growth.
+  let operationalTableGrowth: OperationalTableGrowthReport | null = null;
+  try {
+    operationalTableGrowth = await collectOperationalTableGrowth(client);
+    for (const issue of operationalTableGrowth.issues) {
+      issues.push({
+        severity: issue.severity,
+        code: issue.code,
+        message: issue.message,
+      });
+    }
+  } catch {
+    issues.push({
+      severity: 'warning',
+      code: 'OPERATIONAL_TABLE_GROWTH_UNAVAILABLE',
+      message: 'Operational table growth could not be measured because get_operational_table_growth is unavailable.',
+    });
+  }
+
   return {
     status: maxStatus(['ok', ...issues.map((issue) => issue.severity)]),
     checkedAt: now.toISOString(),
@@ -595,6 +695,7 @@ export async function collectBackendCostReport(
     providerDependencies,
     rateLimitPressure,
     storageGrowth,
+    operationalTableGrowth,
     issues,
   };
 }

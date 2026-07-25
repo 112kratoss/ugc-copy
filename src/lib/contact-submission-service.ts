@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -90,7 +91,7 @@ export async function submitContactMessageForRoute({
   try {
     body = normalizeBody(await readBody());
   } catch (error) {
-    console.error('Contact API error:', error);
+    logBackendError('contact_api_error', { error: error });
     return createInternalErrorResult();
   }
 
@@ -118,7 +119,7 @@ export async function submitContactMessageForRoute({
   try {
     adminSupabase = createAdminSupabase();
   } catch (error) {
-    console.error('Contact API error:', error);
+    logBackendError('contact_api_error', { error: error });
     return createInternalErrorResult();
   }
 
@@ -132,7 +133,7 @@ export async function submitContactMessageForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Contact rate limit check failed:', error);
+    logBackendError('contact_rate_limit_check_failed', { error: error });
     return {
       ok: false,
       status: 500,
@@ -150,7 +151,7 @@ export async function submitContactMessageForRoute({
     });
 
   if (error) {
-    console.error('Error saving contact message:', error);
+    logBackendError('error_saving_contact_message', { error: error });
     return {
       ok: false,
       status: 500,

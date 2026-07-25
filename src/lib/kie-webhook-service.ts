@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
+
 import {
   enqueueGenerationCompletionJob,
   processGenerationCompletionJobs,
@@ -39,14 +41,6 @@ function configuredValue(env: KieWebhookRouteEnvironment | undefined, name: stri
   return env?.[name]?.trim() || null;
 }
 
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (error && typeof error === 'object' && 'message' in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === 'string') return message;
-  }
-  return String(error);
-}
 
 async function attachCallbackGenerationId(
   serviceClient: SupabaseClient,
@@ -64,13 +58,11 @@ async function attachCallbackGenerationId(
     return status;
   }
 
-  console.error(JSON.stringify({
-    level: 'warn',
-    msg: 'kie_webhook_provider_task_attach_skipped',
+  logBackendWarning('kie_webhook_provider_task_attach_skipped', {
     generationId,
     predictionId: params.predictionId,
     status,
-  }));
+  });
   return 'skipped';
 }
 
@@ -177,12 +169,10 @@ export async function handleKieWebhookForRoute(input: KieWebhookRouteInput): Pro
         predictionId,
       });
     } catch (error) {
-      console.error(JSON.stringify({
-        level: 'error',
-        msg: 'kie_webhook_completion_processing_failed',
+      logBackendError('kie_webhook_completion_processing_failed', {
         predictionId,
-        error: errorMessage(error),
-      }));
+        error,
+      });
     }
   });
 

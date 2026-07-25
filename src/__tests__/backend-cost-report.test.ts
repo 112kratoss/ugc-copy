@@ -308,12 +308,20 @@ describe('collectBackendCostReport', () => {
       bytesByBucket: {},
       objectsByBucket: {},
     });
+    // This fixture client exposes neither the storage schema nor the
+    // operational-growth RPC, so both measurements degrade to a warning while
+    // the rest of the report still succeeds.
     expect(report.issues).toEqual([
       expect.objectContaining({
         severity: 'warning',
         code: 'STORAGE_GROWTH_UNAVAILABLE',
       }),
+      expect.objectContaining({
+        severity: 'warning',
+        code: 'OPERATIONAL_TABLE_GROWTH_UNAVAILABLE',
+      }),
     ]);
+    expect(report.operationalTableGrowth).toBeNull();
   });
 
   it('applies configurable budget thresholds for spend, quote pressure, media reads, failed paid generations, and storage growth', async () => {

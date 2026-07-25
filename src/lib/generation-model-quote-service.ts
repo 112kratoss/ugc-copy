@@ -11,6 +11,7 @@ import {
   type GenerationModelQuoteInput,
 } from '@/lib/generation-model-catalog';
 import { quotePublishedGenerationModel } from '@/lib/generation-model-catalog-store';
+import { logBackendError } from '@/lib/backend-logger';
 
 export type GenerationModelQuoteRateLimitClient = Parameters<typeof enforceBackendRateLimit>[0];
 
@@ -111,7 +112,7 @@ export async function createGenerationModelQuote({
       };
     }
 
-    console.error('Authoritative generation model catalog quote failed:', error);
+    logBackendError('authoritative_generation_model_catalog_quote_failed', { error: error });
     return {
       ok: false,
       status: 503,

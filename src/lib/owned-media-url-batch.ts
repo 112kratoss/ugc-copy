@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -44,7 +45,7 @@ export async function resolveOwnedStoredMediaUrlMap(params: {
     }
 
     if (!isStorageObjectOwnedByUser(location.filePath, params.ownerUserId)) {
-      console.error(`Refused to sign media outside owner prefix: ${location.bucket}/${location.filePath}`);
+      logBackendError('refused_to_sign_media_outside_owner_prefix', { message: `Refused to sign media outside owner prefix: ${location.bucket}/${location.filePath}` });
       resolvedUrls.set(outputUrl, null);
       continue;
     }
@@ -66,17 +67,14 @@ export async function resolveOwnedStoredMediaUrlMap(params: {
         .createSignedUrls(paths, params.expiresIn ?? 3600);
 
       if (error || !data) {
-        console.error(`Failed to batch-sign media URLs for ${bucket}:`, error);
+        logBackendError('failed_to_batch_sign_media_urls_for', { message: `Failed to batch-sign media URLs for ${bucket}:`, error: error });
         return;
       }
 
       data.forEach((result, index) => {
         const filePath = result.path ?? paths[index];
         if (!filePath || result.error || !result.signedUrl) {
-          console.error(
-            `Failed to sign media URL for ${bucket}/${filePath ?? 'unknown'}:`,
-            result.error,
-          );
+          logBackendError('failed_to_sign_media_url_for', { message: `Failed to sign media URL for ${bucket}/${filePath ?? 'unknown'}:`, error: result.error, });
           return;
         }
 
@@ -85,7 +83,7 @@ export async function resolveOwnedStoredMediaUrlMap(params: {
         }
       });
     } catch (error) {
-      console.error(`Failed to batch-sign media URLs for ${bucket}:`, error);
+      logBackendError('failed_to_batch_sign_media_urls_for', { message: `Failed to batch-sign media URLs for ${bucket}:`, error: error });
     }
   }));
 

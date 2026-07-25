@@ -232,9 +232,9 @@ describe('remixShowcasePostForRoute', () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(consoleError).toHaveBeenCalledWith('Error incrementing remix count:', {
-      message: 'rpc unavailable',
-    });
+    const remixLog = JSON.parse(consoleError.mock.calls[0][0] as string);
+    expect(remixLog.msg).toBe('error_incrementing_remix_count');
+    expect(remixLog.errorMessage).toBe('rpc unavailable');
 
     consoleError.mockRestore();
   });

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { logBackendError } from '@/lib/backend-logger';
 
 import {
   BackendRateLimitError,
@@ -76,7 +77,7 @@ async function enforceSyncRateLimit(adminSupabase: AdminSupabaseClient, userId: 
       } satisfies MobileCommerceSyncRouteResult;
     }
 
-    console.error('Mobile commerce sync rate limit check failed:', error);
+    logBackendError('mobile_commerce_sync_rate_limit_check_failed', { error: error });
     return {
       ok: false,
       body: { error: 'Failed to check commerce sync limits.' },
@@ -135,7 +136,7 @@ export async function syncMobileCommerceForRoute(
       return commerceErrorResult(error);
     }
 
-    console.error('Mobile commerce sync failed:', error);
+    logBackendError('mobile_commerce_sync_failed', { error: error });
     return {
       ok: false,
       body: { error: 'Internal server error' },

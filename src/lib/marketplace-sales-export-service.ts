@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -84,7 +85,7 @@ export async function exportMarketplaceSalesForRoute({
     .neq('status', 'deleted');
 
   if (assetsError) {
-    console.error('Failed to load seller assets for export:', assetsError);
+    logBackendError('failed_to_load_seller_assets_for_export', { error: assetsError });
     return { ok: false, status: 500, body: 'Failed to load listings' };
   }
 
@@ -104,7 +105,7 @@ export async function exportMarketplaceSalesForRoute({
     .order('created_at', { ascending: false });
 
   if (purchasesError) {
-    console.error('Failed to load seller purchases for export:', purchasesError);
+    logBackendError('failed_to_load_seller_purchases_for_export', { error: purchasesError });
     return { ok: false, status: 500, body: 'Failed to load sales' };
   }
 

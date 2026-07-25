@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { getCreatorDisplayName } from '@/lib/profile';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
@@ -155,7 +156,7 @@ async function fetchPublicGenerationRow(id: string): Promise<PublicGenerationRow
   }
 
   if (result.error) {
-    console.error('Failed to fetch public generation detail:', result.error);
+    logBackendError('failed_to_fetch_public_generation_detail', { error: result.error });
     throw result.error;
   }
 
@@ -190,7 +191,7 @@ export async function getPublicGenerationDetail(id: string): Promise<PublicGener
       .maybeSingle();
 
     if (profileError) {
-      console.error('Failed to fetch public generation creator profile:', profileError);
+      logBackendError('failed_to_fetch_public_generation_creator_profile', { error: profileError });
     } else if (profile) {
       creator = {
         id: (profile as ProfileSummary).id,

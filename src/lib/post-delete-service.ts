@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -128,7 +129,7 @@ async function loadPostBundleForDelete(
   }
 
   if (error && !isMissingPostResourceBundlesSchemaError(error)) {
-    console.error('Failed to load post bundle before delete:', error);
+    logBackendError('failed_to_load_post_bundle_before_delete', { error: error });
     throw error;
   }
 
@@ -188,7 +189,7 @@ export async function deleteOwnerPostForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Failed to enforce post delete rate limit:', error);
+    logBackendError('failed_to_enforce_post_delete_rate_limit', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to delete post.' } };
   }
 
@@ -234,7 +235,7 @@ export async function deleteOwnerPostForRoute({
   });
 
   if (auditError) {
-    console.error('Failed to snapshot post deletion audit:', auditError);
+    logBackendError('failed_to_snapshot_post_deletion_audit', { error: auditError });
     return { ok: false, status: 500, body: { error: 'Failed to delete post.' } };
   }
 
@@ -248,7 +249,7 @@ export async function deleteOwnerPostForRoute({
       .maybeSingle();
 
     if (generationError) {
-      console.error('Failed to load linked generation before post delete:', generationError);
+      logBackendError('failed_to_load_linked_generation_before_post_delete', { error: generationError });
     } else if (generation) {
       await adminSupabase
         .from('generations')
@@ -267,7 +268,7 @@ export async function deleteOwnerPostForRoute({
     .eq('user_id', ownerUserId);
 
   if (deleteError) {
-    console.error('Failed to delete post:', deleteError);
+    logBackendError('failed_to_delete_post', { error: deleteError });
     return { ok: false, status: 500, body: { error: 'Failed to delete post.' } };
   }
 

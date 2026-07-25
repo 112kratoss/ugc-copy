@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -72,7 +73,7 @@ export async function getShowcaseSavedStateForRoute({
       .in('generation_id', ids);
 
     if (legacyError) {
-      console.error('Error fetching legacy showcase saved state:', legacyError);
+      logBackendError('error_fetching_legacy_showcase_saved_state', { error: legacyError });
       return createSavedStateError();
     }
 
@@ -83,7 +84,7 @@ export async function getShowcaseSavedStateForRoute({
   }
 
   if (postSaveError) {
-    console.error('Error fetching post saved state:', postSaveError);
+    logBackendError('error_fetching_post_saved_state', { error: postSaveError });
     return createSavedStateError();
   }
 

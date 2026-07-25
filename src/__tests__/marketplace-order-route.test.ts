@@ -308,8 +308,11 @@ describe('/api/marketplace/order route', () => {
     });
     expect(providerFetchMock).toHaveBeenCalledOnce();
     expect(orderInsertMock).not.toHaveBeenCalled();
-    expect(errorSpy).toHaveBeenCalledWith('Marketplace order creation failed:', expect.objectContaining({
-      name: 'ExternalServiceTimeoutError',
-    }));
+    // Reported through the route adapter's injectable logError seam, which
+    // routes into the structured logger under a shared event name.
+    const orderLog = JSON.parse(errorSpy.mock.calls[0][0] as string);
+    expect(orderLog.msg).toBe('route_adapter_error');
+    expect(orderLog.message).toBe('Marketplace order creation failed:');
+    expect(orderLog.errorName).toBe('ExternalServiceTimeoutError');
   });
 });

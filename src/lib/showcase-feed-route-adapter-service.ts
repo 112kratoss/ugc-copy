@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -42,7 +43,7 @@ type ShowcaseFeedRouteDependencies = {
   getFeedNetworkKeyHash?: typeof getFeedNetworkKeyHash;
   resolveFeedAnonymousIdentity?: typeof resolveFeedAnonymousIdentity;
   getShowcaseFeedPage?: typeof getShowcaseFeedPage;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
 
@@ -54,7 +55,7 @@ function resolveDependencies(dependencies: ShowcaseFeedRouteDependencies | undef
     getFeedNetworkKeyHash: dependencies?.getFeedNetworkKeyHash ?? getFeedNetworkKeyHash,
     resolveFeedAnonymousIdentity: dependencies?.resolveFeedAnonymousIdentity ?? resolveFeedAnonymousIdentity,
     getShowcaseFeedPage: dependencies?.getShowcaseFeedPage ?? getShowcaseFeedPage,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
   };
 }

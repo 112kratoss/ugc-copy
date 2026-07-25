@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
@@ -30,7 +31,7 @@ type CreditUnlockRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   unlockMarketplaceAssetWithCredits?: typeof unlockMarketplaceAssetWithCredits;
   unlockPostResourceBundleWithCredits?: typeof unlockPostResourceBundleWithCredits;
 };
@@ -62,7 +63,7 @@ function resolveDependencies(dependencies: CreditUnlockRouteDependencies | undef
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
   };
 }
 

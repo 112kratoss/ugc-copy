@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import {
   EXTERNAL_API_REQUEST_TIMEOUT_MS,
@@ -91,7 +92,7 @@ export async function loadFxRatesForRoute({
 
     return normalizeFxPayload((await upstreamResponse.json()) as ExchangeRateApiResponse);
   } catch (error) {
-    console.error('FX route error:', error);
+    logBackendError('fx_route_error', { error: error });
     return {
       ok: false,
       status: 503,

@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -227,7 +228,7 @@ async function loadLinkedPostMap(params: {
 
   const postsResult = await postsQuery;
   if (postsResult.error) {
-    console.error('Failed to load linked posts for generations:', postsResult.error);
+    logBackendError('failed_to_load_linked_posts_for_generations', { error: postsResult.error });
     return linkedPostMap;
   }
 

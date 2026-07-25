@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -21,7 +22,7 @@ type MarketplaceResourceDetailRouteContext = {
 type MarketplaceResourceDetailRouteDependencies = {
   createUserClient?: typeof createUserClient;
   getPostResourceBundleDetailByPostId?: typeof getPostResourceBundleDetailByPostId;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   resolvePostIdForResourceIdentifier?: typeof resolvePostIdForResourceIdentifier;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
@@ -31,7 +32,7 @@ function resolveDependencies(dependencies: MarketplaceResourceDetailRouteDepende
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     getPostResourceBundleDetailByPostId:
       dependencies?.getPostResourceBundleDetailByPostId ?? getPostResourceBundleDetailByPostId,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     resolvePostIdForResourceIdentifier:
       dependencies?.resolvePostIdForResourceIdentifier ?? resolvePostIdForResourceIdentifier,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,

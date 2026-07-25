@@ -5,6 +5,7 @@ import {
   type GenerationShareSourceSurface,
 } from '@/lib/share';
 import { buildCreatorProfileUrl } from '@/lib/profile';
+import { logBackendError } from '@/lib/backend-logger';
 
 async function postShareClick({
   generationId,
@@ -35,7 +36,7 @@ async function postShareClick({
       }),
     });
   } catch (error) {
-    console.error('Failed to record share click:', error);
+    logBackendError('failed_to_record_share_click', { error: error });
   }
 }
 

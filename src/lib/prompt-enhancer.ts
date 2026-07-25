@@ -1,3 +1,5 @@
+import { logBackendError } from '@/lib/backend-logger';
+
 import {
   inspectPromptQuality,
   type PromptEnhancementWarning,
@@ -1762,7 +1764,7 @@ export async function callPromptEnhancer(
 
   if (!response.ok) {
     const errorBody = await response.text();
-    console.error('[PromptEnhancer] Kie API error:', response.status, errorBody);
+    logBackendError('promptenhancer_kie_api_error', { error: response.status, errorBody });
     throw new Error(`Kie API returned ${response.status}: ${errorBody}`);
   }
 
@@ -1770,7 +1772,7 @@ export async function callPromptEnhancer(
 
   const content = data?.choices?.[0]?.message?.content;
   if (!content || typeof content !== 'string') {
-    console.error('[PromptEnhancer] Unexpected response shape:', JSON.stringify(data));
+    logBackendError('promptenhancer_unexpected_response_shape', { error: JSON.stringify(data) });
     throw new Error('Invalid response from Kie API: no content in choices');
   }
 

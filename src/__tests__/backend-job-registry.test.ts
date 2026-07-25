@@ -56,6 +56,7 @@ describe('backend job registry', () => {
       'generation-model-verification',
       'media-preview-repair',
       'mobile-push-receipts',
+      'operational-data-retention',
       'referral-reward-reconciliation',
     ]);
   });
@@ -83,7 +84,8 @@ describe('backend job registry', () => {
 
     expect(getCronScheduleDailyInvocations('*/10 * * * *')).toBe(144);
     expect(getCronScheduleDailyInvocations('0 * * * *')).toBe(24);
-    expect(logicalDailyRuns).toBe(505);
+    // 505 from the seven original jobs, plus one daily retention sweep.
+    expect(logicalDailyRuns).toBe(506);
     expect(BACKEND_JOB_SCHEDULER.dailyInvocations).toBe(144);
     expect(BACKEND_JOB_SCHEDULER.dailyInvocations).toBeLessThanOrEqual(BACKEND_JOB_DAILY_INVOCATION_BUDGET);
     expect(

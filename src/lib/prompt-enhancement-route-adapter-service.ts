@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -111,7 +112,7 @@ export async function postPromptEnhancementRouteResponse({
 
     return createJsonResponse(request, result.response);
   } catch (error) {
-    console.error('[EnhancePrompt] Unexpected error:', error);
+    logBackendError('enhanceprompt_unexpected_error', { error: error });
     return createJsonResponse(request, { error: 'Internal server error' }, 500);
   }
 }

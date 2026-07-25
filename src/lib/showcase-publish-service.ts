@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -629,7 +630,7 @@ export async function publishGenerationToShowcaseForRoute({
           updatePayload.output_url = nextOutputUrl;
         }
       } catch (mediaError) {
-        console.error('Failed to secure private generation media:', mediaError);
+        logBackendError('failed_to_secure_private_generation_media', { error: mediaError });
         return {
           ok: false,
           status: 500,
@@ -688,7 +689,7 @@ export async function publishGenerationToShowcaseForRoute({
         .from(SHOWCASE_MEDIA_BUCKET)
         .remove([nextShowcaseAssetPath])
         .catch((storageError) => {
-          console.error('Failed to delete showcase derivative after publish failure:', storageError);
+          logBackendError('failed_to_delete_showcase_derivative_after_publish_failure', { error: storageError });
         });
     }
 
@@ -697,7 +698,7 @@ export async function publishGenerationToShowcaseForRoute({
         .from(createdPrivateMediaLocation.bucket)
         .remove([createdPrivateMediaLocation.filePath]);
       if (cleanupResult.error) {
-        console.error('Failed to delete private generation media after publish failure:', cleanupResult.error);
+        logBackendError('failed_to_delete_private_generation_media_after_publish_failure', { error: cleanupResult.error });
       }
     }
 
@@ -705,7 +706,7 @@ export async function publishGenerationToShowcaseForRoute({
       return { ok: false, status: 500, body: { error: 'Failed to sync showcase post' } };
     }
 
-    console.error('Failed to sync generation post:', postError);
+    logBackendError('failed_to_sync_generation_post', { error: postError });
     if (resolvedDependencies.isMissingPostResourceBundlesSchemaError(postError)) {
       return { ok: false, status: 500, body: { error: MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR } };
     }
@@ -719,7 +720,7 @@ export async function publishGenerationToShowcaseForRoute({
       .from(SHOWCASE_MEDIA_BUCKET)
       .remove([generation.showcase_asset_path]);
     if (removalResult.error) {
-      console.error('Failed to delete showcase derivative after unpublish:', removalResult.error);
+      logBackendError('failed_to_delete_showcase_derivative_after_unpublish', { error: removalResult.error });
     }
   }
 

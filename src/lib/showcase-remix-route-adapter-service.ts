@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -16,7 +17,7 @@ type ShowcaseRemixRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   remixShowcasePostForRoute?: typeof remixShowcasePostForRoute;
 };
 
@@ -25,7 +26,7 @@ function resolveDependencies(dependencies: ShowcaseRemixRouteDependencies | unde
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     remixShowcasePostForRoute: dependencies?.remixShowcasePostForRoute ?? remixShowcasePostForRoute,
   };
 }

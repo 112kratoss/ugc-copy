@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
@@ -46,7 +47,7 @@ export async function getRemixSourceRouteResponse({
       return remixSourceJsonResponse(request, { error: error.message }, error.status);
     }
 
-    console.error('Failed to load remix source bundle:', error);
+    logBackendError('failed_to_load_remix_source_bundle', { error: error });
     return remixSourceJsonResponse(request, { error: 'Failed to load remix source bundle' }, 500);
   }
 }

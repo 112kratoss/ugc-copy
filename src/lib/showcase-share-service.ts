@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -91,7 +92,7 @@ async function isPostInteractionUnavailable({
       secondUserId: creatorUserId,
     });
   } catch (error) {
-    console.error('Failed to verify block state before sharing Showcase content:', error);
+    logBackendError('failed_to_verify_block_state_before_sharing_showcase_content', { error: error });
     return true;
   }
 }

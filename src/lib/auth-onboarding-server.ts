@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendWarning } from '@/lib/backend-logger';
 
 import { createServerClient, type CookieOptionsWithName } from '@supabase/ssr';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -61,7 +62,7 @@ export async function resolveServerPostAuthPath(
     .maybeSingle();
 
   if (error) {
-    console.warn('Could not check profile readiness after authentication:', error.message);
+    logBackendWarning('could_not_check_profile_readiness_after_authentication', { error: error.message });
   }
 
   const profile = data as AuthProfileRow | null;

@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -110,7 +111,7 @@ export async function importMarketplaceWorkflowAssetForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Marketplace asset import rate limit check failed:', error);
+    logBackendError('marketplace_asset_import_rate_limit_check_failed', { error: error });
     return {
       ok: false,
       status: 500,
@@ -143,7 +144,7 @@ export async function importMarketplaceWorkflowAssetForRoute({
       .maybeSingle();
 
     if (purchaseError) {
-      console.error('Failed to validate workflow purchase before import:', purchaseError);
+      logBackendError('failed_to_validate_workflow_purchase_before_import', { error: purchaseError });
       return { ok: false, status: 500, body: { error: 'Failed to validate purchase.' } };
     }
 
@@ -188,7 +189,7 @@ export async function importMarketplaceWorkflowAssetForRoute({
   }
 
   if (canvasError || !canvas) {
-    console.error('Failed to import marketplace workflow asset:', canvasError);
+    logBackendError('failed_to_import_marketplace_workflow_asset', { error: canvasError });
     return { ok: false, status: 500, body: { error: 'Failed to import workflow.' } };
   }
 
@@ -207,11 +208,11 @@ export async function importMarketplaceWorkflowAssetForRoute({
       });
 
     if (historyError && !isMissingWorkflowCanvasHistorySchemaError(historyError)) {
-      console.error('Failed to write imported workflow history snapshot:', historyError);
+      logBackendError('failed_to_write_imported_workflow_history_snapshot', { error: historyError });
     }
   } catch (historyError) {
     if (!isMissingWorkflowCanvasHistorySchemaError(historyError)) {
-      console.error('Failed to write imported workflow history snapshot:', historyError);
+      logBackendError('failed_to_write_imported_workflow_history_snapshot', { error: historyError });
     }
   }
 

@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -78,7 +79,7 @@ async function isPostInteractionUnavailable({
       secondUserId: creatorUserId,
     });
   } catch (error) {
-    console.error('Failed to verify block state before remixing Showcase content:', error);
+    logBackendError('failed_to_verify_block_state_before_remixing_showcase_content', { error: error });
     return true;
   }
 }
@@ -151,7 +152,7 @@ export async function remixShowcasePostForRoute({
   });
 
   if (rpcError) {
-    console.error('Error incrementing remix count:', rpcError);
+    logBackendError('error_incrementing_remix_count', { error: rpcError });
   }
 
   const { data: generation, error: generationError } = await userClient

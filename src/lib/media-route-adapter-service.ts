@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
@@ -43,7 +44,7 @@ type MediaRouteAdapterDependencies = {
   createMediaReadSignedUrlForRoute?: typeof createMediaReadSignedUrlForRoute;
   createServiceClient?: typeof createServiceClient;
   parseMediaReadRoutePayload?: typeof parseMediaReadRoutePayload;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
 };
 
 function resolveDependencies(dependencies: MediaRouteAdapterDependencies | undefined) {
@@ -53,7 +54,7 @@ function resolveDependencies(dependencies: MediaRouteAdapterDependencies | undef
       ?? createMediaReadSignedUrlForRoute,
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     parseMediaReadRoutePayload: dependencies?.parseMediaReadRoutePayload ?? parseMediaReadRoutePayload,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
   };
 }
 

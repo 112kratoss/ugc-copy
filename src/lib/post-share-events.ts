@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -50,6 +51,6 @@ export async function recordPostShareEvent({
       return;
     }
 
-    console.error('Failed to record post share event:', error);
+    logBackendError('failed_to_record_post_share_event', { error: error });
   }
 }

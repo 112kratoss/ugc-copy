@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
 import path from 'node:path';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -83,7 +84,7 @@ function parseOwnerUploadPath(value: unknown, userId: string): string | null {
 async function cleanupTemporaryUpload(adminSupabase: SupabaseClient, uploadFilePath: string) {
   const result = await adminSupabase.storage.from(UPLOADS_BUCKET).remove([uploadFilePath]);
   if (result.error) {
-    console.warn('Failed to remove temporary generation restore upload:', result.error);
+    logBackendWarning('failed_to_remove_temporary_generation_restore_upload', { error: result.error });
   }
 }
 
@@ -97,7 +98,7 @@ async function cleanupCreatedMedia(
 
   const result = await adminSupabase.storage.from(location.bucket).remove([location.filePath]);
   if (result.error) {
-    console.warn('Failed to remove restored generation media after failure:', result.error);
+    logBackendWarning('failed_to_remove_restored_generation_media_after_failure', { error: result.error });
   }
 }
 
@@ -138,7 +139,7 @@ export async function restoreGenerationMediaForRoute({
     const ownedGeneration = generation as GenerationRestoreRow | null;
 
     if (generationError) {
-      console.error('Failed to load generation for media restore:', generationError);
+      logBackendError('failed_to_load_generation_for_media_restore', { error: generationError });
       await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
       return { ok: false, status: 500, body: { error: 'Failed to restore preview.' } };
     }
@@ -162,7 +163,7 @@ export async function restoreGenerationMediaForRoute({
     const linkedPost = linkedPostData as LinkedPostRow | null;
 
     if (linkedPostError) {
-      console.error('Failed to load linked post for media restore:', linkedPostError);
+      logBackendError('failed_to_load_linked_post_for_media_restore', { error: linkedPostError });
       await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
       return { ok: false, status: 500, body: { error: 'Failed to restore preview.' } };
     }
@@ -181,7 +182,7 @@ export async function restoreGenerationMediaForRoute({
       .download(uploadFilePath);
 
     if (downloadedUpload.error || !downloadedUpload.data) {
-      console.error('Failed to download generation restore upload:', downloadedUpload.error);
+      logBackendError('failed_to_download_generation_restore_upload', { error: downloadedUpload.error });
       await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
       return { ok: false, status: 500, body: { error: 'Failed to load replacement media.' } };
     }
@@ -236,7 +237,7 @@ export async function restoreGenerationMediaForRoute({
       .is('template_run_step_id', null);
 
     if (generationUpdateError) {
-      console.error('Failed to update restored generation preview:', generationUpdateError);
+      logBackendError('failed_to_update_restored_generation_preview', { error: generationUpdateError });
       await cleanupCreatedMedia(adminSupabase, persistedMedia.createdLocation);
       createdMediaLocation = null;
       await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
@@ -255,7 +256,7 @@ export async function restoreGenerationMediaForRoute({
         .eq('visibility', 'private');
 
       if (postUpdateError) {
-        console.error('Failed to update linked post restored preview:', postUpdateError);
+        logBackendError('failed_to_update_linked_post_restored_preview', { error: postUpdateError });
         const { error: rollbackError } = await adminSupabase
           .from('generations')
           .update({
@@ -268,7 +269,7 @@ export async function restoreGenerationMediaForRoute({
           .is('template_run_id', null)
           .is('template_run_step_id', null);
         if (rollbackError) {
-          console.error('Failed to roll back generation preview after linked post update failure:', rollbackError);
+          logBackendError('failed_to_roll_back_generation_preview_after_linked_post_update_failur', { error: rollbackError });
         } else {
           await cleanupCreatedMedia(adminSupabase, persistedMedia.createdLocation);
           createdMediaLocation = null;
@@ -288,7 +289,7 @@ export async function restoreGenerationMediaForRoute({
       },
     };
   } catch (error) {
-    console.error('Failed to restore generation media:', error);
+    logBackendError('failed_to_restore_generation_media', { error: error });
     await cleanupCreatedMedia(adminSupabase, createdMediaLocation);
     await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
     return { ok: false, status: 500, body: { error: 'Failed to restore preview.' } };

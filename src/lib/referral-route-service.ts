@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
@@ -151,14 +152,14 @@ export async function getReferralOverviewResponse(request: Request) {
     p_user_id: userId,
   });
   if (error) {
-    console.error('Referral dashboard failed:', error);
+    logBackendError('referral_dashboard_failed', { error: error });
     return referralErrorResponse(request, 'Could not load Invite & Earn.', 503);
   }
 
   try {
     return referralJsonResponse(request, normalizeDashboard(data));
   } catch (parseError) {
-    console.error('Referral dashboard response invalid:', parseError);
+    logBackendError('referral_dashboard_response_invalid', { error: parseError });
     return referralErrorResponse(request, 'Could not load Invite & Earn.', 503);
   }
 }
@@ -184,7 +185,7 @@ export async function createReferralLinkResponse(request: Request) {
   });
   const code = isRecord(data) ? normalizeReferralCode(data.code) : null;
   if (error || !code || data?.enabled !== true) {
-    console.error('Referral code creation failed:', error);
+    logBackendError('referral_code_creation_failed', { error: error });
     return referralErrorResponse(request, 'Your referral link is unavailable.', 503);
   }
 
@@ -230,7 +231,7 @@ export async function recordReferralVisitResponse(request: Request) {
   });
 
   if (error || !isRecord(data)) {
-    console.error('Referral visit creation failed:', error);
+    logBackendError('referral_visit_creation_failed', { error: error });
     return referralErrorResponse(request, 'Could not save this invite.', 503);
   }
 
@@ -316,7 +317,7 @@ export async function finalizePendingReferralForAuth(request: Request, userId: s
   } catch (error) {
     // Authentication and onboarding must remain available if referral
     // attribution is temporarily unavailable. The cookie remains for retry.
-    console.error('Post-auth referral finalization deferred:', error);
+    logBackendError('post_auth_referral_finalization_deferred', { error: error });
     return false;
   }
 }
@@ -354,7 +355,7 @@ export async function claimReferralResponse(request: Request) {
     }
     return response;
   } catch (error) {
-    console.error('Referral claim failed:', error);
+    logBackendError('referral_claim_failed', { error: error });
     return referralErrorResponse(request, 'Could not apply this invite yet.', 503);
   }
 }

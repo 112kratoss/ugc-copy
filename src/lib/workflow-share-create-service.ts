@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import {
   BackendRateLimitError,
@@ -132,7 +133,7 @@ export async function createWorkflowShareForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Failed to enforce workflow canvas mutation rate limit:', error);
+    logBackendError('failed_to_enforce_workflow_canvas_mutation_rate_limit', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to create workflow share link.' } };
   }
 
@@ -177,7 +178,7 @@ export async function createWorkflowShareForRoute({
     .single();
 
   if (shareError || !share) {
-    console.error('Failed to create workflow share snapshot:', shareError);
+    logBackendError('failed_to_create_workflow_share_snapshot', { error: shareError });
     return { ok: false, status: 500, body: { error: 'Failed to create workflow share link.' } };
   }
 

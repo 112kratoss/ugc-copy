@@ -23,6 +23,7 @@ import {
   type Medium,
 } from '@/lib/prompt-enhancer';
 import { inspectPromptQuality } from '@/lib/prompt-quality';
+import { logBackendError } from '@/lib/backend-logger';
 
 export type PromptEnhancementClient =
   Parameters<typeof enforceBackendRateLimit>[0]
@@ -245,7 +246,7 @@ export async function enhancePromptForUser({
       response: responsePayload,
     };
   } catch (error) {
-    console.error('[EnhancePrompt] Enhancement failed:', error);
+    logBackendError('enhanceprompt_enhancement_failed', { error: error });
 
     await refundAiUsageLedger(resolvedClient, ledger, error);
 

@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -225,7 +226,7 @@ export async function createSeedanceAssetForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Seedance asset rate limit failed:', error);
+    logBackendError('seedance_asset_rate_limit_failed', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to check Seedance asset limits.' } };
   }
 

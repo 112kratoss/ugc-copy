@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -110,7 +111,7 @@ export async function createMarketplaceOrderForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Marketplace order rate limit check failed:', error);
+    logBackendError('marketplace_order_rate_limit_check_failed', { error: error });
     return {
       ok: false,
       status: 500,
@@ -125,7 +126,7 @@ export async function createMarketplaceOrderForRoute({
     .maybeSingle();
 
   if (assetError) {
-    console.error('Failed to load marketplace asset for order:', assetError);
+    logBackendError('failed_to_load_marketplace_asset_for_order', { error: assetError });
     return { ok: false, status: 500, body: { error: 'Failed to load listing.' } };
   }
 
@@ -146,7 +147,7 @@ export async function createMarketplaceOrderForRoute({
     .maybeSingle();
 
   if (existingPurchaseError) {
-    console.error('Failed to check existing purchase:', existingPurchaseError);
+    logBackendError('failed_to_check_existing_purchase', { error: existingPurchaseError });
     return { ok: false, status: 500, body: { error: 'Failed to check purchase history.' } };
   }
 
@@ -172,7 +173,7 @@ export async function createMarketplaceOrderForRoute({
       });
 
     if (orderError) {
-      console.error('Failed to create free marketplace order:', orderError);
+      logBackendError('failed_to_create_free_marketplace_order', { error: orderError });
       return { ok: false, status: 500, body: { error: 'Failed to unlock free listing.' } };
     }
 
@@ -182,7 +183,7 @@ export async function createMarketplaceOrderForRoute({
     });
 
     if (completionError) {
-      console.error('Failed to complete free marketplace purchase:', completionError);
+      logBackendError('failed_to_complete_free_marketplace_purchase', { error: completionError });
       return { ok: false, status: 500, body: { error: 'Failed to unlock free listing.' } };
     }
 
@@ -225,7 +226,7 @@ export async function createMarketplaceOrderForRoute({
     });
 
   if (orderInsertError) {
-    console.error('Failed to record marketplace order:', orderInsertError);
+    logBackendError('failed_to_record_marketplace_order', { error: orderInsertError });
     return { ok: false, status: 500, body: { error: 'Failed to record order.' } };
   }
 

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import { CatalogError } from '@/lib/generation-model-catalog';
@@ -119,7 +120,7 @@ function mapUnifiedGenerationError(error: unknown): UnifiedGenerationRouteResult
     };
   }
 
-  console.error('Unified generation start failed:', error);
+  logBackendError('unified_generation_start_failed', { error: error });
   return {
     ok: false,
     body: { error: 'Failed to start generation.' },
@@ -144,7 +145,7 @@ export async function postUnifiedGenerationForRoute(
   }
 
   if (!input.kieApiKey) {
-    console.error('KIE_AI_API_KEY not found in environment variables');
+    logBackendError('kie_ai_api_key_not_found_in_environment_variables');
     return {
       ok: false,
       body: {

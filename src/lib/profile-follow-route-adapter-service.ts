@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -18,7 +19,7 @@ type ProfileFollowRouteDependencies = {
   getCreatorFollowStateForRoute?: typeof getCreatorFollowStateForRoute;
   notifyCreatorFollowForRoute?: typeof notifyCreatorFollowForRoute;
   updateCreatorFollowForRoute?: typeof updateCreatorFollowForRoute;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
 };
 
 function resolveDependencies(dependencies: ProfileFollowRouteDependencies | undefined) {
@@ -31,7 +32,7 @@ function resolveDependencies(dependencies: ProfileFollowRouteDependencies | unde
       ?? notifyCreatorFollowForRoute,
     updateCreatorFollowForRoute: dependencies?.updateCreatorFollowForRoute
       ?? updateCreatorFollowForRoute,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
   };
 }
 

@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -21,7 +22,7 @@ type ShowcaseShareRouteDependencies = {
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
   parseShowcaseSharePayloadForRoute?: typeof parseShowcaseSharePayloadForRoute;
   shareShowcasePostForRoute?: typeof shareShowcasePostForRoute;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
 };
 
 function resolveDependencies(dependencies: ShowcaseShareRouteDependencies | undefined) {
@@ -32,7 +33,7 @@ function resolveDependencies(dependencies: ShowcaseShareRouteDependencies | unde
     parseShowcaseSharePayloadForRoute: dependencies?.parseShowcaseSharePayloadForRoute
       ?? parseShowcaseSharePayloadForRoute,
     shareShowcasePostForRoute: dependencies?.shareShowcasePostForRoute ?? shareShowcasePostForRoute,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
   };
 }
 

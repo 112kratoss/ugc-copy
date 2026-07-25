@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -25,7 +26,7 @@ export async function enforceWorkflowCanvasMutationRateLimit(
       return createBackendRateLimitResponse(error);
     }
 
-    console.error('Failed to enforce workflow canvas mutation rate limit:', error);
+    logBackendError('failed_to_enforce_workflow_canvas_mutation_rate_limit', { error: error });
     return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }

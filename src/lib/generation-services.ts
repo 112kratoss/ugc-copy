@@ -65,8 +65,13 @@ import {
 } from '@/lib/generation-public-failure';
 export { getPublicGenerationStartFailure };
 export type { GenerationStartFailureCode, PublicGenerationStartFailure };
+import { logBackendError } from '@/lib/backend-logger';
+
+const TEMPLATE_START_FAILED_EVENT = 'template_generation_start_failed_after_reservation';
 import {
+  fetchWithProviderRetry,
   fetchWithProviderTimeout,
+  PROVIDER_STATUS_POLL_RETRY_POLICY,
   PROVIDER_STATUS_POLL_TIMEOUT_MS,
   PROVIDER_TASK_CREATE_TIMEOUT_MS,
 } from '@/lib/provider-fetch';
@@ -200,11 +205,7 @@ function requireApiKey(): string {
 }
 
 function failKieGenerationConfiguration(component: 'provider_api_key' | 'callback_base_url' | 'callback_auth'): never {
-  console.error(JSON.stringify({
-    level: 'error',
-    msg: 'generation_start_configuration_preflight_failed',
-    component,
-  }));
+  logBackendError('generation_start_configuration_preflight_failed', { component });
   throw new GenerationServiceError(
     'Generation setup is incomplete. No credits were charged for this attempt. Ask an administrator to finish the service setup before retrying.',
     503,
@@ -249,12 +250,12 @@ async function refundCreditsQuietly(creditSupabase: SupabaseClient, userId: stri
   try {
     const { error } = await creditSupabase.rpc('refund_credits', { p_user_id: userId, p_amount: amount });
     if (error) {
-      console.error('Failed to refund credits:', error);
+      logBackendError('generation_credit_refund_failed', { userId, amount, error });
       return false;
     }
     return true;
   } catch (error) {
-    console.error('Failed to refund credits:', error);
+    logBackendError('generation_credit_refund_failed', { userId, amount, error });
     return false;
   }
 }
@@ -553,15 +554,13 @@ async function markGenerationProviderStarted(
     }
   }
 
-  console.error(JSON.stringify({
-    level: 'error',
-    msg: 'generation_provider_task_attach_failed',
+  logBackendError('generation_provider_task_attach_failed', {
     generationId,
     predictionId,
     attempts: PROVIDER_TASK_ATTACH_ATTEMPTS,
     status: lastStatus,
     error: supabaseErrorMessage(lastError, 'Failed to attach provider task to generation.'),
-  }));
+  });
   throw new GenerationServiceError('Failed to attach provider task to generation.', 500);
 }
 
@@ -585,10 +584,10 @@ async function markGenerationStartFailedQuietly(
       .eq('id', generationId);
 
     if (error) {
-      console.error('Failed to mark generation start failed:', error);
+      logBackendError('generation_start_failure_mark_failed', { generationId, error });
     }
   } catch (error) {
-    console.error('Failed to mark generation start failed:', error);
+    logBackendError('generation_start_failure_mark_failed', { generationId, error });
   }
 }
 
@@ -603,8 +602,6 @@ async function settleTemplateGenerationStartFailureQuietly(params: {
 }) {
   const failure = getPublicGenerationStartFailure(params.error);
   const logEntry = {
-    level: 'error',
-    msg: 'template_generation_start_failed_after_reservation',
     generationId: params.generationId,
     templateRunId: params.templateContext.runId,
     templateRunStepId: params.templateContext.stepId,
@@ -623,7 +620,7 @@ async function settleTemplateGenerationStartFailureQuietly(params: {
       : null;
 
     if (!error && (status === 'failed' || status === 'already_failed')) {
-      console.error(JSON.stringify({ ...logEntry, settlement: status }));
+      logBackendError(TEMPLATE_START_FAILED_EVENT, { ...logEntry, settlement: status });
       return;
     }
 
@@ -632,11 +629,11 @@ async function settleTemplateGenerationStartFailureQuietly(params: {
       : '';
     const missingRpc = errorCode === 'PGRST202' || errorCode === '42883';
     if (!missingRpc) {
-      console.error(JSON.stringify({
+      logBackendError(TEMPLATE_START_FAILED_EVENT, {
         ...logEntry,
         settlement: 'failed',
         settlementError: supabaseErrorMessage(error, `Unexpected settlement status: ${String(status)}`),
-      }));
+      });
       return;
     }
 
@@ -648,13 +645,13 @@ async function settleTemplateGenerationStartFailureQuietly(params: {
       errorMessage: failure.message,
       refunded,
     });
-    console.error(JSON.stringify({ ...logEntry, settlement: refunded ? 'legacy_fallback' : 'legacy_fallback_failed' }));
+    logBackendError(TEMPLATE_START_FAILED_EVENT, { ...logEntry, settlement: refunded ? 'legacy_fallback' : 'legacy_fallback_failed' });
   } catch (settlementError) {
-    console.error(JSON.stringify({
+    logBackendError(TEMPLATE_START_FAILED_EVENT, {
       ...logEntry,
       settlement: 'failed',
       ...generationStartDiagnostic(settlementError),
-    }));
+    });
   }
 }
 
@@ -682,13 +679,11 @@ async function settleGenerationStartFailureQuietly(params: {
       : '';
     const missingRpc = errorCode === 'PGRST202' || errorCode === '42883';
     if (!missingRpc) {
-      console.error(JSON.stringify({
-        level: 'error',
-        msg: 'generation_start_failure_settlement_failed',
+      logBackendError('generation_start_failure_settlement_failed', {
         generationId: params.generationId,
         settlementStatus: status,
         error: supabaseErrorMessage(error, 'Unexpected generation start settlement status.'),
-      }));
+      });
       return;
     }
 
@@ -701,12 +696,10 @@ async function settleGenerationStartFailureQuietly(params: {
       refunded,
     });
   } catch (settlementError) {
-    console.error(JSON.stringify({
-      level: 'error',
-      msg: 'generation_start_failure_settlement_failed',
+    logBackendError('generation_start_failure_settlement_failed', {
       generationId: params.generationId,
       error: supabaseErrorMessage(settlementError, 'Failed to settle generation start failure.'),
-    }));
+    });
   }
 }
 
@@ -1022,7 +1015,7 @@ async function createGenerationPreviewQuietly({
       previewError: preview ? null : 'Unsupported or invalid visual media.',
     };
   } catch (error) {
-    console.error('Failed to create generation preview poster:', error);
+    logBackendError('generation_preview_poster_failed', { error });
     return {
       previewUrl: null,
       previewThumbhash: null,
@@ -1075,7 +1068,7 @@ async function persistGeneratedOutput(
         });
 
       if (uploadError) {
-        console.error('Upload to Supabase Storage failed:', uploadError);
+        logBackendError('generation_output_upload_failed', { predictionId: generation.prediction_id, error: uploadError });
         return settleGenerationSucceeded(settlementSupabase, {
           predictionId: generation.prediction_id!,
           outputUrl: tempUrl,
@@ -1109,11 +1102,11 @@ async function persistGeneratedOutput(
       });
     } finally {
       await stagedMedia.cleanup().catch((cleanupError) => {
-        console.error('Failed to clean up staged generated output:', cleanupError);
+        logBackendError('generation_staged_output_cleanup_failed', { predictionId: generation.prediction_id, error: cleanupError });
       });
     }
   } catch (error) {
-    console.error('Error persisting generated output:', error);
+    logBackendError('generation_output_persist_failed', { predictionId: generation.prediction_id, error });
     return settleGenerationSucceeded(settlementSupabase, {
       predictionId: generation.prediction_id!,
       outputUrl: null,
@@ -1184,11 +1177,11 @@ export async function persistGeneratedOutputList(
         }
       } finally {
         await stagedMedia.cleanup().catch((cleanupError) => {
-          console.error(`Failed to clean up staged generated output ${index}:`, cleanupError);
+          logBackendError('generation_staged_output_cleanup_failed', { predictionId: generation.prediction_id, outputIndex: index, error: cleanupError });
         });
       }
     } catch (error) {
-      console.error(`Error persisting generated output ${index}:`, error);
+      logBackendError('generation_output_persist_failed', { predictionId: generation.prediction_id, outputIndex: index, error });
       if (index === 0) {
         primaryPreview = {
           previewUrl: null,
@@ -1341,7 +1334,7 @@ async function syncSingleGenerationStatusFromProviderPayload(
         : taskData.resultJson;
       tempUrl = getFirstResultUrl(result);
     } catch (error) {
-      console.error('Error parsing generation result JSON:', error);
+      logBackendError('generation_result_parse_failed', { error });
     }
 
     if (tempUrl) {
@@ -1392,9 +1385,9 @@ async function syncSingleGenerationStatus(
     : Date.parse(generation.created_at);
 
   if (isVeoGeneration(generation)) {
-    const response = await fetchWithProviderTimeout(`https://api.kie.ai/api/v1/veo/record-info?taskId=${generation.prediction_id}`, {
+    const response = await fetchWithProviderRetry(`https://api.kie.ai/api/v1/veo/record-info?taskId=${generation.prediction_id}`, {
       headers: { Authorization: `Bearer ${KIE_API_KEY}` },
-    }, PROVIDER_STATUS_POLL_TIMEOUT_MS, fetch, 'KIE Veo status');
+    }, PROVIDER_STATUS_POLL_TIMEOUT_MS, PROVIDER_STATUS_POLL_RETRY_POLICY, fetch, 'KIE Veo status');
     const data = await response.json();
 
     if (!response.ok || data.code !== 200) {
@@ -1433,9 +1426,9 @@ async function syncSingleGenerationStatus(
     return nextStatus;
   }
 
-  const response = await fetchWithProviderTimeout(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${generation.prediction_id}`, {
+  const response = await fetchWithProviderRetry(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${generation.prediction_id}`, {
     headers: { Authorization: `Bearer ${KIE_API_KEY}` },
-  }, PROVIDER_STATUS_POLL_TIMEOUT_MS, fetch, 'KIE task status');
+  }, PROVIDER_STATUS_POLL_TIMEOUT_MS, PROVIDER_STATUS_POLL_RETRY_POLICY, fetch, 'KIE task status');
   const data = await response.json();
 
   if (!response.ok || data.code !== 200) {
@@ -1459,7 +1452,7 @@ async function syncSingleGenerationStatus(
         : data.data?.resultJson;
       tempUrl = getFirstResultUrl(result);
     } catch (error) {
-      console.error('Error parsing generation result JSON:', error);
+      logBackendError('generation_result_parse_failed', { error });
     }
 
     if (tempUrl) {
@@ -1561,7 +1554,7 @@ export async function syncGenerationStatuses(params: {
     try {
       await syncSingleGenerationStatus(params.supabase, params.creditSupabase, generation);
     } catch (error) {
-      console.error(`Failed to sync generation ${generation.id}:`, error);
+      logBackendError('generation_status_sync_failed', { generationId: generation.id, error });
     }
   }
 }

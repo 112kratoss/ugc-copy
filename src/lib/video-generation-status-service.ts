@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -29,6 +30,7 @@ import {
 import { createGenerationOutputPreview } from '@/lib/generation-output-preview';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import {
+  fetchStatusPollWithRetry,
   fetchWithProviderTimeout,
   PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
   PROVIDER_STATUS_POLL_TIMEOUT_MS,
@@ -83,7 +85,7 @@ function resolveDependencies(
 ): VideoGenerationStatusDependencies {
   return {
     resolveStoredMediaUrl: dependencies?.resolveStoredMediaUrl ?? resolveStoredMediaUrl,
-    fetchWithProviderTimeout: dependencies?.fetchWithProviderTimeout ?? fetchWithProviderTimeout,
+    fetchWithProviderTimeout: dependencies?.fetchWithProviderTimeout ?? fetchStatusPollWithRetry,
     settleGenerationSucceeded: dependencies?.settleGenerationSucceeded ?? settleGenerationSucceeded,
     settleGenerationFailed: dependencies?.settleGenerationFailed ?? settleGenerationFailed,
     createGenerationOutputPreview: dependencies?.createGenerationOutputPreview ?? createGenerationOutputPreview,
@@ -189,7 +191,7 @@ async function persistVideoOutput({
       });
 
     if (uploadError) {
-      console.error('Upload to Supabase Storage failed:', uploadError);
+      logBackendError('upload_to_supabase_storage_failed', { error: uploadError });
       const status = await dependencies.settleGenerationSucceeded(settlementSupabase, {
         predictionId,
         outputUrl: tempUrl,
@@ -213,7 +215,7 @@ async function persistVideoOutput({
         supabase,
       });
     } catch (posterError) {
-      console.error('Failed to create video generation preview poster:', posterError);
+      logBackendError('failed_to_create_video_generation_preview_poster', { error: posterError });
       previewError = posterError instanceof Error ? posterError.message.slice(0, 500) : 'Preview generation failed.';
     }
     const { data: signedData } = await supabase.storage
@@ -237,7 +239,7 @@ async function persistVideoOutput({
       output: status === 'succeeded' ? signedData?.signedUrl || tempUrl : null,
     };
   } catch (error) {
-    console.error('Error persisting video to storage:', error);
+    logBackendError('error_persisting_video_to_storage', { error: error });
     const status = await dependencies.settleGenerationSucceeded(settlementSupabase, {
       predictionId,
       outputUrl: tempUrl,
@@ -493,7 +495,7 @@ export async function getVideoGenerationStatusForRoute({
             }
           }
         } catch (parseError) {
-          console.error('Error handling success status:', parseError);
+          logBackendError('error_handling_success_status', { error: parseError });
         }
       } else if (status === 'failed') {
         error = data.data.failMsg || 'Unknown error';

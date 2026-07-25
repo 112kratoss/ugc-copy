@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
@@ -17,7 +18,7 @@ type ProfileValidateRouteAdapterDependencies = {
   createServiceClient?: () => SupabaseClient;
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   validateProfileSubmission?: typeof validateProfileSubmission;
 };
 
@@ -26,7 +27,7 @@ function resolveDependencies(dependencies: ProfileValidateRouteAdapterDependenci
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     validateProfileSubmission:
       dependencies?.validateProfileSubmission ?? validateProfileSubmission,
   };

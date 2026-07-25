@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -124,7 +125,7 @@ async function findLegacyGenerationReference(
     .maybeSingle();
 
   if (error) {
-    console.error('Failed to resolve legacy generation reference:', error);
+    logBackendError('failed_to_resolve_legacy_generation_reference', { error: error });
     throw error;
   }
 
@@ -284,12 +285,12 @@ async function findPostReferenceByColumn(
   }
 
   if (isMissingPostReviewStatusColumnError(result.error)) {
-    console.error('Cannot enforce the public post moderation boundary:', result.error);
+    logBackendError('cannot_enforce_the_public_post_moderation_boundary', { error: result.error });
     return null;
   }
 
   if (result.error) {
-    console.error(`Failed to resolve post by ${column}:`, result.error);
+    logBackendError('failed_to_resolve_post_by', { message: `Failed to resolve post by ${column}:`, error: result.error });
     throw result.error;
   }
 
@@ -438,7 +439,7 @@ function hydratePublicBundleSummaryRows(
   const knownBundlePostIds = new Set<string>();
   for (const row of rows) {
     if (typeof row.post_id !== 'string') {
-      console.error('Public bundle summary RPC returned a row without a post id.');
+      logBackendError('public_bundle_summary_rpc_returned_a_row_without_a_post_id');
       return failClosedMarketplaceAssetSummaryHydration(postIds);
     }
     knownBundlePostIds.add(row.post_id);
@@ -446,7 +447,7 @@ function hydratePublicBundleSummaryRows(
       row.status !== 'published' &&
       PRIVATE_BUNDLE_SUMMARY_FIELDS.some((field) => row[field] !== null && row[field] !== undefined)
     ) {
-      console.error('Public bundle summary RPC returned details for a non-published bundle.');
+      logBackendError('public_bundle_summary_rpc_returned_details_for_a_non_published_bundle');
       return failClosedMarketplaceAssetSummaryHydration(postIds);
     }
   }
@@ -468,7 +469,7 @@ async function getMarketplaceAssetSummaryHydrationFallback(
 
   if (presenceError) {
     if (isMissingPostResourceBundlesSchemaError(presenceError)) return null;
-    console.error('Failed to load post resource bundle presence:', presenceError);
+    logBackendError('failed_to_load_post_resource_bundle_presence', { error: presenceError });
     return failClosedMarketplaceAssetSummaryHydration(postIds);
   }
 
@@ -505,7 +506,7 @@ async function getMarketplaceAssetSummaryHydrationFallback(
 
   if (bundleResult.error) {
     if (isMissingPostResourceBundlesSchemaError(bundleResult.error)) return null;
-    console.error('Failed to load published post resource bundle summaries:', bundleResult.error);
+    logBackendError('failed_to_load_published_post_resource_bundle_summaries', { error: bundleResult.error });
     return { assetMap: new Map(), knownBundlePostIds };
   }
 
@@ -529,7 +530,7 @@ async function getLegacyMarketplaceAssetSummaryHydration(
 
   if (error) {
     if (!isMissingMarketplaceSchemaError(error)) {
-      console.error('Failed to load legacy marketplace asset summaries:', error);
+      logBackendError('failed_to_load_legacy_marketplace_asset_summaries', { error: error });
     }
     return {
       assetMap: new Map(),
@@ -588,7 +589,7 @@ export async function getMarketplaceAssetSummaryHydration(
     });
     if (!error) {
       if (!Array.isArray(data)) {
-        console.error('Public bundle summary RPC returned an invalid response.');
+        logBackendError('public_bundle_summary_rpc_returned_an_invalid_response');
         return failClosedMarketplaceAssetSummaryHydration(postIds);
       }
       return hydratePublicBundleSummaryRows(
@@ -597,7 +598,7 @@ export async function getMarketplaceAssetSummaryHydration(
       );
     }
     if (!isMissingPublicBundleSummaryRpcError(error)) {
-      console.error('Failed to load public post resource bundle summaries:', error);
+      logBackendError('failed_to_load_public_post_resource_bundle_summaries', { error: error });
       return failClosedMarketplaceAssetSummaryHydration(postIds);
     }
   }

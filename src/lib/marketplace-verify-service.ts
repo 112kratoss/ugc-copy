@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -77,7 +78,7 @@ export async function verifyMarketplacePaymentForRoute({
       };
     }
 
-    console.error('Marketplace verify rate limit check failed:', error);
+    logBackendError('marketplace_verify_rate_limit_check_failed', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to check payment verification limits.' } };
   }
 
@@ -92,7 +93,7 @@ export async function verifyMarketplacePaymentForRoute({
 
   const secret = keySecret?.trim();
   if (!secret) {
-    console.error('RAZORPAY_KEY_SECRET not configured');
+    logBackendError('razorpay_key_secret_not_configured');
     return { ok: false, status: 503, body: { error: 'Payment verification is not configured.' } };
   }
 
@@ -112,7 +113,7 @@ export async function verifyMarketplacePaymentForRoute({
     .maybeSingle();
 
   if (orderError) {
-    console.error('Failed to load marketplace order for verification:', orderError);
+    logBackendError('failed_to_load_marketplace_order_for_verification', { error: orderError });
     return { ok: false, status: 500, body: { error: 'Failed to verify order.' } };
   }
 
@@ -131,7 +132,7 @@ export async function verifyMarketplacePaymentForRoute({
   });
 
   if (completionError) {
-    console.error('Failed to complete marketplace purchase:', completionError);
+    logBackendError('failed_to_complete_marketplace_purchase', { error: completionError });
     return { ok: false, status: 500, body: { error: 'Failed to complete purchase.' } };
   }
 

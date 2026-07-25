@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -108,7 +109,7 @@ export async function submitPostReportForRoute({
       return createRateLimitResult(error);
     }
 
-    console.error('Post report rate limit check failed:', error);
+    logBackendError('post_report_rate_limit_check_failed', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to check report submission limits.' } };
   }
 
@@ -132,7 +133,7 @@ export async function submitPostReportForRoute({
       .maybeSingle();
 
     if (bundleError) {
-      console.error('Failed to validate reported unlock:', bundleError);
+      logBackendError('failed_to_validate_reported_unlock', { error: bundleError });
       return { ok: false, status: 500, body: { error: 'Failed to validate unlock report.' } };
     }
 
@@ -150,7 +151,7 @@ export async function submitPostReportForRoute({
   });
 
   if (error) {
-    console.error('Failed to create post report:', error);
+    logBackendError('failed_to_create_post_report', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to submit report.' } };
   }
 

@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { cache } from 'react';
 
@@ -102,7 +103,7 @@ const loadCreatorProfileRow = cache(async (username: string): Promise<CreatorPro
     .maybeSingle();
 
   if (error) {
-    console.error('Failed to fetch creator profile:', error);
+    logBackendError('failed_to_fetch_creator_profile', { error: error });
     throw error;
   }
 
@@ -257,7 +258,7 @@ async function fetchCreatorPostRows({
     if (shouldRetry) continue;
     if (isMissingPostsSchemaError(result.error)) return null;
 
-    console.error('Failed to fetch creator posts:', result.error);
+    logBackendError('failed_to_fetch_creator_posts', { error: result.error });
     throw result.error;
   }
 
@@ -333,7 +334,7 @@ async function fetchLegacyGenerationRows({
     result = await runQuery(legacySelect);
   }
   if (result.error) {
-    console.error('Failed to fetch legacy creator generations:', result.error);
+    logBackendError('failed_to_fetch_legacy_creator_generations', { error: result.error });
     throw result.error;
   }
 

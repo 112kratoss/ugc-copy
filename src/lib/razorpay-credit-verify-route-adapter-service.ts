@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -14,7 +15,7 @@ type RazorpayCreditVerifyRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   getRazorpayKeySecret?: () => string | undefined;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   verifyCreditRazorpayPaymentForRoute?: typeof verifyCreditRazorpayPaymentForRoute;
 };
 
@@ -23,7 +24,7 @@ function resolveDependencies(dependencies: RazorpayCreditVerifyRouteDependencies
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     getRazorpayKeySecret: dependencies?.getRazorpayKeySecret ?? (() => process.env.RAZORPAY_KEY_SECRET),
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     verifyCreditRazorpayPaymentForRoute:
       dependencies?.verifyCreditRazorpayPaymentForRoute ?? verifyCreditRazorpayPaymentForRoute,
   };

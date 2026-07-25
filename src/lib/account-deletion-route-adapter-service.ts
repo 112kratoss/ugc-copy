@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -43,7 +44,7 @@ type AccountDeletionDependencies = {
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
   invalidateShowcaseFeedCache?: typeof invalidateShowcaseFeedCache;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   now?: () => Date;
 };
 
@@ -226,7 +227,7 @@ export async function deleteAccountRouteResponse({
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
     invalidateShowcaseFeedCache: dependencies?.invalidateShowcaseFeedCache ?? invalidateShowcaseFeedCache,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     now: dependencies?.now ?? (() => new Date()),
   };
   const userClient = resolved.createUserClient(request);

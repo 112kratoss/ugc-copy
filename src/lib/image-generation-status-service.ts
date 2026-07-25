@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -27,6 +28,7 @@ import {
 } from '@/lib/generation-services';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import {
+  fetchStatusPollWithRetry,
   fetchWithProviderTimeout,
   PROVIDER_STATUS_POLL_TIMEOUT_MS,
 } from '@/lib/provider-fetch';
@@ -77,7 +79,7 @@ function resolveDependencies(
 ): ImageGenerationStatusDependencies {
   return {
     resolveStoredMediaUrl: dependencies?.resolveStoredMediaUrl ?? resolveStoredMediaUrl,
-    fetchWithProviderTimeout: dependencies?.fetchWithProviderTimeout ?? fetchWithProviderTimeout,
+    fetchWithProviderTimeout: dependencies?.fetchWithProviderTimeout ?? fetchStatusPollWithRetry,
     persistGeneratedOutputList: dependencies?.persistGeneratedOutputList ?? persistGeneratedOutputList,
     settleGenerationFailed: dependencies?.settleGenerationFailed ?? settleGenerationFailed,
     notifyGenerationStatus: dependencies?.notifyGenerationStatus ?? notifyGenerationStatus,
@@ -302,7 +304,7 @@ export async function getImageGenerationStatusForRoute({
           };
         }
       } catch (handledError) {
-        console.error('Error handling success status:', handledError);
+        logBackendError('error_handling_success_status', { error: handledError });
       }
     } else if (status === 'failed') {
       error = data.data.failMsg || 'Unknown error';

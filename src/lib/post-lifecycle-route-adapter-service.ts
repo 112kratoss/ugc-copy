@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -17,7 +18,7 @@ type PostLifecycleRouteDependencies = {
   archiveOwnerPostForRoute?: typeof archiveOwnerPostForRoute;
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   restoreOwnerPostForRoute?: typeof restoreOwnerPostForRoute;
 };
 
@@ -26,7 +27,7 @@ function resolveDependencies(dependencies: PostLifecycleRouteDependencies | unde
     archiveOwnerPostForRoute: dependencies?.archiveOwnerPostForRoute ?? archiveOwnerPostForRoute,
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     restoreOwnerPostForRoute: dependencies?.restoreOwnerPostForRoute ?? restoreOwnerPostForRoute,
   };
 }

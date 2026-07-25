@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -70,7 +71,7 @@ export async function verifyCreditRazorpayPaymentForRoute({
 
   const secret = keySecret?.trim();
   if (!secret) {
-    console.error('RAZORPAY_KEY_SECRET not configured');
+    logBackendError('razorpay_key_secret_not_configured');
     return { ok: false, status: 503, body: { error: 'Payment verification is not configured' } };
   }
 
@@ -115,7 +116,7 @@ export async function verifyCreditRazorpayPaymentForRoute({
       };
     }
 
-    console.error('Razorpay verify rate limit check failed:', error);
+    logBackendError('razorpay_verify_rate_limit_check_failed', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to check payment verification limits.' } };
   }
 
@@ -128,7 +129,7 @@ export async function verifyCreditRazorpayPaymentForRoute({
 
   const transaction = (transactionData as CreditTransactionRow | null) ?? null;
   if (transactionError || !transaction) {
-    console.error('Transaction fetch error:', transactionError);
+    logBackendError('transaction_fetch_error', { error: transactionError });
     return { ok: false, status: 404, body: { error: 'Transaction not found' } };
   }
 
@@ -159,7 +160,7 @@ export async function verifyCreditRazorpayPaymentForRoute({
   });
 
   if (rpcError) {
-    console.error('RPC add_credits error:', rpcError);
+    logBackendError('rpc_add_credits_error', { error: rpcError });
     return { ok: false, status: 500, body: { error: 'Failed to assign credits' } };
   }
 
@@ -173,7 +174,7 @@ export async function verifyCreditRazorpayPaymentForRoute({
     const refreshed = (refreshedData as CreditTransactionRow | null) ?? null;
 
     if (refreshedError || refreshed?.status !== 'success') {
-      console.error('RPC add_credits did not settle the transaction:', refreshedError);
+      logBackendError('rpc_add_credits_did_not_settle_the_transaction', { error: refreshedError });
       return { ok: false, status: 500, body: { error: 'Failed to assign credits' } };
     }
 

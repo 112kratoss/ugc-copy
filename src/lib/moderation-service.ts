@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -106,7 +107,7 @@ async function enforceModerationRateLimit(
     return null;
   } catch (error) {
     if (error instanceof BackendRateLimitError) return rateLimitResult(error);
-    console.error('Moderation rate limit check failed:', error);
+    logBackendError('moderation_rate_limit_check_failed', { error: error });
     return {
       ok: false,
       status: 500,
@@ -158,7 +159,7 @@ export async function submitModerationReportForRoute({
       .eq('id', targetId)
       .maybeSingle();
     if (error) {
-      console.error('Failed to validate reported user:', error);
+      logBackendError('failed_to_validate_reported_user', { error: error });
       return { ok: false, status: 500, body: { error: 'Failed to validate reported user.' } };
     }
     if (!data) return { ok: false, status: 404, body: { error: 'Creator not found.' } };
@@ -170,7 +171,7 @@ export async function submitModerationReportForRoute({
       .eq('user_id', reporterUserId)
       .maybeSingle();
     if (error) {
-      console.error('Failed to validate reported generation:', error);
+      logBackendError('failed_to_validate_reported_generation', { error: error });
       return { ok: false, status: 500, body: { error: 'Failed to validate reported generation.' } };
     }
     if (!data) return { ok: false, status: 404, body: { error: 'Generation not found.' } };
@@ -186,7 +187,7 @@ export async function submitModerationReportForRoute({
     source_surface: sourceSurface,
   });
   if (error) {
-    console.error('Failed to create moderation report:', error);
+    logBackendError('failed_to_create_moderation_report', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to submit report.' } };
   }
 
@@ -224,7 +225,7 @@ export async function setUserBlockForRoute({
     .eq('id', blockedUserId)
     .maybeSingle();
   if (targetError) {
-    console.error('Failed to validate blocked user:', targetError);
+    logBackendError('failed_to_validate_blocked_user', { error: targetError });
     return { ok: false, status: 500, body: { error: 'Failed to validate user block.' } };
   }
   if (!targetProfile) return { ok: false, status: 404, body: { error: 'Creator not found.' } };
@@ -235,7 +236,7 @@ export async function setUserBlockForRoute({
       blocked_user_id: blockedUserId,
     }, { onConflict: 'blocker_user_id,blocked_user_id' });
     if (error) {
-      console.error('Failed to block user:', error);
+      logBackendError('failed_to_block_user', { error: error });
       return { ok: false, status: 500, body: { error: 'Failed to block user.' } };
     }
 
@@ -252,7 +253,7 @@ export async function setUserBlockForRoute({
         .eq('following_id', actorUserId),
     ]);
     if (outgoingFollow.error || incomingFollow.error) {
-      console.error('User was blocked but follow cleanup failed:', outgoingFollow.error ?? incomingFollow.error);
+      logBackendError('user_was_blocked_but_follow_cleanup_failed', { error: outgoingFollow.error ?? incomingFollow.error });
     }
   } else {
     const { error } = await adminSupabase
@@ -261,7 +262,7 @@ export async function setUserBlockForRoute({
       .eq('blocker_user_id', actorUserId)
       .eq('blocked_user_id', blockedUserId);
     if (error) {
-      console.error('Failed to unblock user:', error);
+      logBackendError('failed_to_unblock_user', { error: error });
       return { ok: false, status: 500, body: { error: 'Failed to unblock user.' } };
     }
   }

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { logBackendEvent } from '@/lib/backend-logger';
 
 const DEFAULT_RETENTION_DAYS = 45;
 const DEFAULT_PRUNE_LIMIT = 500;
@@ -61,11 +62,7 @@ function errorMessage(error: unknown): string {
 }
 
 function logBackendJobRunError(msg: string, fields: Record<string, unknown>) {
-  console.error(JSON.stringify({
-    level: 'error',
-    msg,
-    ...fields,
-  }));
+  logBackendEvent('error', msg, fields);
 }
 
 export async function startBackendJobRun(

@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -18,7 +19,7 @@ type ShowcasePostDetailRouteContext = {
 type ShowcasePostDetailRouteDependencies = {
   createUserClient?: typeof createUserClient;
   getShowcaseFeedItemById?: typeof getShowcaseFeedItemById;
-  logError?: typeof console.error;
+  logError?: typeof logBackendRouteError;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
 
@@ -26,7 +27,7 @@ function resolveDependencies(dependencies: ShowcasePostDetailRouteDependencies |
   return {
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     getShowcaseFeedItemById: dependencies?.getShowcaseFeedItemById ?? getShowcaseFeedItemById,
-    logError: dependencies?.logError ?? console.error,
+    logError: dependencies?.logError ?? logBackendRouteError,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
   };
 }

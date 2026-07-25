@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import { getCreatorDisplayName } from '@/lib/profile';
 import {
@@ -112,7 +113,7 @@ async function fetchPublicPostRow(
     .maybeSingle();
 
   if (isMissingPostReviewStatusColumnError(result.error)) {
-    console.error('Cannot enforce the public post moderation boundary:', result.error);
+    logBackendError('cannot_enforce_the_public_post_moderation_boundary', { error: result.error });
     return null;
   }
 
@@ -127,12 +128,12 @@ async function fetchPublicPostRow(
       .maybeSingle();
 
     if (isMissingPostReviewStatusColumnError(legacyResult.error)) {
-      console.error('Cannot enforce the public post moderation boundary:', legacyResult.error);
+      logBackendError('cannot_enforce_the_public_post_moderation_boundary', { error: legacyResult.error });
       return null;
     }
 
     if (legacyResult.error) {
-      console.error('Failed to fetch public post detail:', legacyResult.error);
+      logBackendError('failed_to_fetch_public_post_detail', { error: legacyResult.error });
       throw legacyResult.error;
     }
 
@@ -149,7 +150,7 @@ async function fetchPublicPostRow(
   }
 
   if (result.error) {
-    console.error('Failed to fetch public post detail:', result.error);
+    logBackendError('failed_to_fetch_public_post_detail', { error: result.error });
     throw result.error;
   }
 
@@ -173,10 +174,10 @@ export async function getPostReferenceForShowcaseId(
 
     if (directError) {
       if (isMissingPostReviewStatusColumnError(directError)) {
-        console.error('Cannot enforce the public post moderation boundary:', directError);
+        logBackendError('cannot_enforce_the_public_post_moderation_boundary', { error: directError });
         return null;
       }
-      console.error('Failed to resolve showcase post by id:', directError);
+      logBackendError('failed_to_resolve_showcase_post_by_id', { error: directError });
       throw directError;
     }
 
@@ -195,10 +196,10 @@ export async function getPostReferenceForShowcaseId(
 
     if (legacyError) {
       if (isMissingPostReviewStatusColumnError(legacyError)) {
-        console.error('Cannot enforce the public post moderation boundary:', legacyError);
+        logBackendError('cannot_enforce_the_public_post_moderation_boundary', { error: legacyError });
         return null;
       }
-      console.error('Failed to resolve showcase post by generation id:', legacyError);
+      logBackendError('failed_to_resolve_showcase_post_by_generation_id', { error: legacyError });
       throw legacyError;
     }
 
@@ -343,7 +344,7 @@ export async function getPublicPostDetail(
       .maybeSingle();
 
     if (profileError) {
-      console.error('Failed to fetch public post creator profile:', profileError);
+      logBackendError('failed_to_fetch_public_post_creator_profile', { error: profileError });
     } else if (profile) {
       const typedProfile = profile as ProfileSummary;
       creator = {
@@ -375,7 +376,7 @@ export async function getPublicPostDetail(
       .maybeSingle();
 
     if (generationError) {
-      console.error('Failed to fetch post generation model:', generationError);
+      logBackendError('failed_to_fetch_post_generation_model', { error: generationError });
     } else if (generation?.model) {
       model = generation.model;
     }

@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -75,7 +76,7 @@ export async function getSavedMediaFeedForRoute({
     .range(offset, rangeEnd);
 
   if (postSaveError && !isMissingPostsSchemaError(postSaveError)) {
-    console.error('Error fetching post saved media:', postSaveError);
+    logBackendError('error_fetching_post_saved_media', { error: postSaveError });
     return { ok: false, status: 500, body: { error: 'Failed to fetch saved media' } };
   }
 
@@ -97,7 +98,7 @@ export async function getSavedMediaFeedForRoute({
       .range(offset, rangeEnd);
 
     if (legacyError && postSaveError) {
-      console.error('Error fetching legacy showcase saved media:', legacyError);
+      logBackendError('error_fetching_legacy_showcase_saved_media', { error: legacyError });
       return { ok: false, status: 500, body: { error: 'Failed to fetch saved media' } };
     }
 
@@ -149,7 +150,7 @@ export async function getSavedMediaFeedForRoute({
     .in('visibility', ['public', 'unlisted']);
 
   if (postError) {
-    console.error('Error fetching saved post rows:', postError);
+    logBackendError('error_fetching_saved_post_rows', { error: postError });
     return { ok: false, status: 500, body: { error: 'Failed to fetch saved media' } };
   }
 
@@ -171,7 +172,7 @@ export async function getSavedMediaFeedForRoute({
       !item.creator?.id || !blockedCreatorIds.has(item.creator.id)
     ));
   } catch (error) {
-    console.error('Error filtering blocked creators from saved media:', error);
+    logBackendError('error_filtering_blocked_creators_from_saved_media', { error: error });
     viewerSafeItems = [];
   }
 
