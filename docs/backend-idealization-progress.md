@@ -22,10 +22,10 @@ Target architecture is unchanged from v1:
 
 ## Overall Progress
 
-**Total completion: 78.8%**
+**Total completion: 86.7%**
 
 - Completed milestones: **26**
-- Open completion gates: **7**
+- Open completion gates: **4**
 - Active workstreams: **0**
 
 The percentage is `completed milestones / (completed milestones + open completion gates)` and now measures the v2 scope only, so it deliberately restarts low. Active workstreams are status-only and excluded because they duplicate open completion gates. Update this block whenever a checklist item is added or completed; `src/__tests__/backend-idealization-progress.test.ts` verifies that the displayed counts and percentage match the checklist.
@@ -92,25 +92,47 @@ the threshold rationale.
 
 ### Workstream C — Core decomposition and legacy retirement
 
-**Execute in this order.** A 2026-07-25 line-level survey of `generation-services.ts`
-(3,281 lines) corrected the sequencing. The start paths are 1,719 lines, 52% of
-the file, and break down as `startImageGeneration` 351, `startVideoGeneration`
-818, `startMotionGeneration` 147, `startVoiceoverGeneration` 134,
-`startSoundEffectGeneration` 90 — against `startCatalogGeneration` at 174 lines,
-which is the generic path designed to replace all five. Splitting first would
-mean carefully relocating ~1,540 lines into new modules and then deleting them.
-Collapse first; the split then runs against a file half the size.
+**The catalog migration and the collapse were dropped on 2026-07-25 as
+won't-do decisions, after the stated justification failed review.** They were
+scoped on the belief that migrating the 28 legacy-adapter models onto
+`kie-task-v1` was a prerequisite for adding models as data and for removing a
+duplicated source of truth. Checking the code disproved both:
 
-- [ ] **First — make the catalog actually able to drive every path.** This is a data and release project, not a code refactor, and it must precede the collapse. A 2026-07-25 check of the active release found the catalog covers 29 models — image 15, video 12, motion 2 — and that **no voiceover or sound-effect models are registered at all**, in the catalog or in `generation_models`. Those two paths are driven solely by the static `VOICEOVER_MODELS` and `SOUND_EFFECT_MODELS` registries. Separately, only **1 of 29** models (Seedance 2) uses the generic `kie-task-v1` adapter; the other 28 use the per-type `image-v1`, `video-v1`, and `motion-v1` adapters. So the catalog currently *encodes* the same per-type split the collapse is meant to remove. Required before any code change: register voiceover and sound-effect models with adapter and pricing config, and migrate the 28 legacy-adapter entries onto `kie-task-v1`, each through the reviewed manifest → stage → verify → publish cycle.
-- [ ] **Second — collapse.** Only once the catalog can drive all five paths: replace the per-type start functions with `startCatalogGeneration`. Stage one model type per commit with the full suite green between each, so a regression bisects to one model type rather than to a 1,500-line change. Note the earlier characterisation of this as "mostly deletion" was wrong — it is only mostly deletion *after* the catalog work above.
-- [ ] **Second — retire.** Demote or delete `src/lib/models.ts`. This largely falls out of the collapse: every use of the static registries (`IMAGE_MODELS` line 1615, `VIDEO_MODELS` 1996, `MOTION_MODELS` 2776, `VOICEOVER_MODELS` 3087, `SOUND_EFFECT_MODELS` 3215) sits inside a per-type start function, and `startCatalogGeneration` uses none of them. The soak question is already settled: production runs active catalog release `seedance2-hd-v2-20260724` at schema v2 with 29 models, with the schema-v1 release `e271b74557d1e248` correctly `retired`, so the control plane has completed a full publish-and-retire cycle rather than merely being switched on. Twelve other non-test modules still import `@/lib/models`, so finish those before deleting the file.
-- [ ] **Third — split.** Divide what remains along its seams: settlement (263–348), provider task attachment (349–862), output persistence (863–1507), and status sync (1508–1561). Public behaviour unchanged, tests moved alongside.
+- **New models already ship without a code change.** `seedance-2` runs on
+  `kie-task-v1` in production today and has completed generations. The control
+  plane's headline benefit is already available without migrating anything.
+- **Pricing is already catalog-authoritative for all 29 models.** The route
+  quotes from the catalog and passes `quotedCostCredits` into the start path,
+  where `resolveQuotedGenerationCost` returns the quote and discards the
+  statically computed cost. `models.ts`'s pricing helpers are only a fallback
+  when no quote is supplied, so there is no two-sources-of-truth risk on the
+  money path.
 
-Safety note: every start path quotes a price, deducts credits, and creates a paid
-provider task, so an error here double-charges a user or takes money for a
-generation that never runs. The 185 pgTAP assertions proving the credit RPCs are
-single-effect under replay are the net that makes this survivable; do not begin
-before they are green.
+What remains duplicated is capability metadata and five imperative request
+builders — maintenance cost, not a correctness risk. Against that, migrating
+28 models means reverse-engineering each model's exact provider request and
+re-encoding it declaratively, verifiable only by running real paid
+generations. At 79 lifetime generations with 8 models ever used, that is a
+poor trade. Retiring `src/lib/models.ts` falls with the collapse, since every
+use of the static registries sits inside a per-type start function.
+
+**Standing rule instead:** new models are registered on `kie-task-v1`, which is
+already what happens. Revisit the collapse if the per-type paths start
+accumulating bugs, or if model onboarding becomes frequent enough that five
+imperative builders are a real cost.
+
+- [ ] **Finish splitting `generation-services.ts`.** Two of the four seams are
+  extracted (2026-07-25), taking the file from 3,308 to 2,838 lines; the
+  remaining two are provider task attachment and output persistence. A line
+  survey found the seams sit *entirely before* the start paths, so they extract
+  without touching a single start function — an earlier entry claiming the
+  split had to wait for the collapse confused the start paths with the split
+  targets. Done so far: `generation-service-core.ts` (shared primitives,
+  extracted first to keep the split acyclic), `generation-settlement.ts`, and
+  `generation-status-sync.ts`. Remaining work is more entangled: the
+  output-persistence functions are interleaved with image-start helpers
+  (`getKieImageModelId`, `getIdeogramImageSize`), so that extraction is
+  non-contiguous and needs care rather than a range move.
 
 ### Workstream D — Provider call resilience
 

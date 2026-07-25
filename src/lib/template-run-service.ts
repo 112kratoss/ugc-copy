@@ -7,8 +7,8 @@ import path from 'node:path';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
-  syncGenerationStatuses,
 } from '@/lib/generation-services';
+import { syncGenerationStatuses } from '@/lib/generation-status-sync';
 import {
   getPublicGenerationStartFailure,
   normalizeGenerationStartFailureCode,

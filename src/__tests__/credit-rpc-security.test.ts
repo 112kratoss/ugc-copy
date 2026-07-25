@@ -102,6 +102,9 @@ describe('credit mutation security boundary', () => {
     const videoStartService = readFileSync(join(projectRoot, 'src/lib/video-generation-start-service.ts'), 'utf8');
     const videoStatusService = readFileSync(join(projectRoot, 'src/lib/video-generation-status-service.ts'), 'utf8');
     const generationServices = readFileSync(join(projectRoot, 'src/lib/generation-services.ts'), 'utf8');
+    // Terminal settlement moved to its own module in the 2026-07-25 split.
+    // The assertion follows the code rather than being relaxed.
+    const generationSettlement = readFileSync(join(projectRoot, 'src/lib/generation-settlement.ts'), 'utf8');
 
     expect(razorpayOrder).toContain('postRazorpayCreditOrderRouteResponse');
     expect(razorpayOrderAdapter).toMatch(/adminSupabase:\s*dependencies\.createServiceClient\(\)/);
@@ -129,7 +132,7 @@ describe('credit mutation security boundary', () => {
     expect(generationServices).toContain("supabase.rpc('attach_generation_provider_task'");
     expect(generationServices).toContain("creditSupabase.rpc('refund_credits'");
     expect(generationServices).toContain("params.creditSupabase.rpc('settle_generation_start_failed'");
-    expect(generationServices).toContain("creditSupabase.rpc('settle_generation_failed'");
-    expect(generationServices).toContain("settlementSupabase.rpc('settle_generation_succeeded'");
+    expect(generationSettlement).toContain("creditSupabase.rpc('settle_generation_failed'");
+    expect(generationSettlement).toContain("settlementSupabase.rpc('settle_generation_succeeded'");
   });
 });

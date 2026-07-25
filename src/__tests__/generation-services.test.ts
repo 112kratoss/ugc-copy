@@ -2771,7 +2771,7 @@ describe('generation services', () => {
   });
 
   it('syncs processing audio generations into succeeded storage-backed outputs', async () => {
-    const { syncGenerationStatuses } = await import('@/lib/generation-services');
+    const { syncGenerationStatuses } = await import('@/lib/generation-status-sync');
     const statusSignal = AbortSignal.abort();
     const mediaSignal = AbortSignal.abort();
     const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
@@ -2844,7 +2844,7 @@ describe('generation services', () => {
   });
 
   it('bounds provider status polling calls with a timeout signal', async () => {
-    const { syncGenerationStatuses } = await import('@/lib/generation-services');
+    const { syncGenerationStatuses } = await import('@/lib/generation-status-sync');
     const timeoutSignal = AbortSignal.abort();
     const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
     let providerInit: RequestInit | undefined;
@@ -2886,7 +2886,7 @@ describe('generation services', () => {
   });
 
   it('settles failed async generations with one atomic backend RPC', async () => {
-    const { syncGenerationStatuses } = await import('@/lib/generation-services');
+    const { syncGenerationStatuses } = await import('@/lib/generation-status-sync');
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValue({
       ok: true,
@@ -2931,7 +2931,7 @@ describe('generation services', () => {
   });
 
   it('syncs one generation by provider task id for webhook completion jobs', async () => {
-    const { syncGenerationStatusByPredictionId } = await import('@/lib/generation-services');
+    const { syncGenerationStatusByPredictionId } = await import('@/lib/generation-status-sync');
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValue({
       ok: true,
@@ -2984,7 +2984,7 @@ describe('generation services', () => {
   });
 
   it('applies terminal webhook failure payloads without polling provider status', async () => {
-    const { syncGenerationStatusByPredictionId } = await import('@/lib/generation-services');
+    const { syncGenerationStatusByPredictionId } = await import('@/lib/generation-status-sync');
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockRejectedValue(new Error('provider status should not be polled'));
 

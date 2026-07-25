@@ -6,9 +6,9 @@ import {
   startSoundEffectGeneration,
   startVideoGeneration,
   startVoiceoverGeneration,
-  syncGenerationStatuses,
   type TemplateGenerationContext,
 } from '@/lib/generation-services';
+import { syncGenerationStatuses } from '@/lib/generation-status-sync';
 import {
   type ApprovalGateNodeData,
   type AudioInputNodeData,

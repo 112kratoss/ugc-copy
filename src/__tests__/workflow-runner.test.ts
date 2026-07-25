@@ -48,6 +48,11 @@ vi.mock('@/lib/server-helpers', () => ({
     resolveStoredMediaUrlMock(...args),
 }));
 
+vi.mock('@/lib/generation-status-sync', () => ({
+  syncGenerationStatuses: (...args: unknown[]) =>
+    (syncGenerationStatusesMock as (...a: unknown[]) => unknown)(...args),
+}));
+
 vi.mock('@/lib/generation-services', () => ({
   startImageGeneration: vi.fn(),
   startMotionGeneration: vi.fn(),
@@ -55,8 +60,6 @@ vi.mock('@/lib/generation-services', () => ({
   startVideoGeneration: (...args: Parameters<typeof startVideoGenerationMock>) =>
     startVideoGenerationMock(...args),
   startVoiceoverGeneration: vi.fn(),
-  syncGenerationStatuses: (...args: Parameters<typeof syncGenerationStatusesMock>) =>
-    syncGenerationStatusesMock(...args),
 }));
 
 vi.mock('@/lib/generation-model-catalog-store', () => ({

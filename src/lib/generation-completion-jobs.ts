@@ -3,8 +3,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   attachGenerationProviderTask,
   settleGenerationFailed,
-  syncGenerationStatusByPredictionId,
 } from '@/lib/generation-services';
+import { syncGenerationStatusByPredictionId } from '@/lib/generation-status-sync';
 
 const DEFAULT_LOCK_TTL_SECONDS = 300;
 const DEFAULT_RETRY_DELAY_SECONDS = 60;

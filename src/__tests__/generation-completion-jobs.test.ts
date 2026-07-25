@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   attachGenerationProviderTask,
   settleGenerationFailed,
-  syncGenerationStatusByPredictionId,
 } from '@/lib/generation-services';
+import { syncGenerationStatusByPredictionId } from '@/lib/generation-status-sync';
 import {
   claimGenerationCompletionJobs,
   enqueueGenerationCompletionJob,
@@ -17,10 +17,13 @@ import {
   shouldPruneGenerationCompletionJobs,
 } from '@/lib/generation-completion-jobs';
 
+vi.mock('@/lib/generation-status-sync', () => ({
+  syncGenerationStatusByPredictionId: vi.fn(),
+}));
+
 vi.mock('@/lib/generation-services', () => ({
   attachGenerationProviderTask: vi.fn(),
   settleGenerationFailed: vi.fn(),
-  syncGenerationStatusByPredictionId: vi.fn(),
 }));
 
 function createRpcClient(results: Array<{ data: unknown; error: Error | null }>) {

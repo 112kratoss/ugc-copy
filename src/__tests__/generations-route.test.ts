@@ -182,8 +182,12 @@ vi.mock('@supabase/supabase-js', async (importOriginal) => {
   };
 });
 
+vi.mock('@/lib/generation-status-sync', () => ({
+  syncGenerationStatuses: (...args: unknown[]) =>
+    (syncGenerationStatusesMock as (...a: unknown[]) => unknown)(...args),
+}));
+
 vi.mock('@/lib/generation-services', () => ({
-  syncGenerationStatuses: (params: { generationIds: string[] }) => syncGenerationStatusesMock(params),
 }));
 
 vi.mock('@/lib/server-helpers', () => ({

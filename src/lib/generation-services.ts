@@ -44,10 +44,6 @@ import {
   type SeedanceAssetCollections,
 } from '@/lib/seedance-assets';
 import {
-  getGenerationKind,
-  normalizeMarketGenerationTiming,
-  normalizeVeoGenerationTiming,
-  toIsoTimestamp,
 } from '@/lib/generation-timing';
 import {
   collectImageInputCandidates,
@@ -56,7 +52,7 @@ import {
   type PersistGenerationInputCandidate,
 } from '@/lib/generation-input-media';
 import { resolveStoredMediaUrl } from '@/lib/server-helpers';
-import { buildKieWebhookCallbackUrl, extractKieWebhookTaskId } from '@/lib/kie-webhook';
+import { buildKieWebhookCallbackUrl } from '@/lib/kie-webhook';
 import type { GenerationStartResult } from '@/lib/generation-start-idempotency';
 import {
   getPublicGenerationStartFailure,
@@ -65,15 +61,27 @@ import {
 } from '@/lib/generation-public-failure';
 export { getPublicGenerationStartFailure };
 export type { GenerationStartFailureCode, PublicGenerationStartFailure };
-import { resolveGenerationAppModelId } from '@/lib/generation-model-attribution';
+import {
+  GenerationServiceError,
+  isRecord,
+  KIE_API_KEY,
+  requireKieGenerationConfiguration,
+  resolveQuotedGenerationCost,
+  supabaseErrorMessage,
+} from '@/lib/generation-service-core';
+export { GenerationServiceError };
+import {
+  settleGenerationFailed,
+  settleGenerationSucceeded,
+  type GenerationTerminalSettlementStatus,
+} from '@/lib/generation-settlement';
+export { settleGenerationFailed, settleGenerationSucceeded };
+export type { GenerationTerminalSettlementStatus };
 import { logBackendError } from '@/lib/backend-logger';
 
 const TEMPLATE_START_FAILED_EVENT = 'template_generation_start_failed_after_reservation';
 import {
-  fetchWithProviderRetry,
   fetchWithProviderTimeout,
-  PROVIDER_STATUS_POLL_RETRY_POLICY,
-  PROVIDER_STATUS_POLL_TIMEOUT_MS,
   PROVIDER_TASK_CREATE_TIMEOUT_MS,
   withProviderModel,
 } from '@/lib/provider-fetch';
@@ -92,7 +100,6 @@ import {
   type GenericGenerationAdapterOperation,
 } from '@/lib/generation-model-adapters';
 
-const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 const PROVIDER_TASK_ATTACH_ATTEMPTS = 3;
 
 interface DialogueTurnInput {
@@ -128,17 +135,6 @@ export type TemplateGenerationContext = Readonly<{
   stepId: string;
 }>;
 
-export class GenerationServiceError extends Error {
-  status: number;
-  failureCode: GenerationStartFailureCode | null;
-
-  constructor(message: string, status = 400, failureCode: GenerationStartFailureCode | null = null) {
-    super(message);
-    this.name = 'GenerationServiceError';
-    this.status = status;
-    this.failureCode = failureCode;
-  }
-}
 
 function generationStartDiagnostic(error: unknown) {
   const status = error && typeof error === 'object' && 'status' in error
@@ -169,7 +165,6 @@ export interface SyncableGenerationRecord {
 }
 
 export type GenerationSyncStatus = 'missing' | 'skipped' | 'waiting' | 'processing' | 'succeeded' | 'failed';
-type GenerationTerminalSettlementStatus = 'succeeded' | 'failed';
 export type GenerationProviderTaskAttachStatus =
   | 'attached'
   | 'already_attached'
@@ -190,63 +185,9 @@ export interface PersistedGenerationOutputListResult {
   outputs: PersistedGenerationOutput[];
 }
 
-function supabaseErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message) return error.message;
-  if (error && typeof error === 'object' && 'message' in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === 'string' && message.trim()) return message;
-  }
-  return fallback;
-}
 
-function requireApiKey(): string {
-  if (!KIE_API_KEY) {
-    throw new Error('Server configuration error: API key missing');
-  }
-  return KIE_API_KEY;
-}
 
-function failKieGenerationConfiguration(component: 'provider_api_key' | 'callback_base_url' | 'callback_auth'): never {
-  logBackendError('generation_start_configuration_preflight_failed', { component });
-  throw new GenerationServiceError(
-    'Generation setup is incomplete. No credits were charged for this attempt. Ask an administrator to finish the service setup before retrying.',
-    503,
-    'service_misconfigured',
-  );
-}
 
-/** Validate every server-side dependency required to submit a durable KIE
- * task. Start services call this before storage resolution, credit RPCs, or
- * provider requests so an operator configuration error cannot reserve funds. */
-function requireKieGenerationConfiguration(): void {
-  if (!KIE_API_KEY) {
-    failKieGenerationConfiguration('provider_api_key');
-  }
-  if (!process.env.KIE_WEBHOOK_HMAC_KEY?.trim()) {
-    failKieGenerationConfiguration('callback_auth');
-  }
-
-  try {
-    buildKieWebhookCallbackUrl();
-  } catch (error) {
-    const component = error instanceof Error && error.message.includes('callback URL')
-      ? 'callback_base_url'
-      : 'callback_auth';
-    failKieGenerationConfiguration(component);
-  }
-}
-
-function resolveQuotedGenerationCost(computedCost: number, quotedCostCredits?: number): number {
-  if (quotedCostCredits === undefined) {
-    return computedCost;
-  }
-
-  if (!Number.isInteger(quotedCostCredits) || quotedCostCredits < 0) {
-    throw new GenerationServiceError('Invalid quoted generation cost.', 500);
-  }
-
-  return quotedCostCredits;
-}
 
 async function refundCreditsQuietly(creditSupabase: SupabaseClient, userId: string, amount: number): Promise<boolean> {
   try {
@@ -260,92 +201,6 @@ async function refundCreditsQuietly(creditSupabase: SupabaseClient, userId: stri
     logBackendError('generation_credit_refund_failed', { userId, amount, error });
     return false;
   }
-}
-
-export async function settleGenerationFailed(
-  creditSupabase: SupabaseClient,
-  predictionId: string,
-  completedAt?: string | null,
-): Promise<'failed' | 'succeeded'> {
-  const { data, error } = await creditSupabase.rpc('settle_generation_failed', {
-    p_prediction_id: predictionId,
-    p_completed_at: completedAt ?? null,
-  });
-
-  if (error || !isRecord(data)) {
-    throw new GenerationServiceError(
-      supabaseErrorMessage(error, 'Failed to settle failed generation.'),
-      500,
-    );
-  }
-
-  const status = typeof data.status === 'string' ? data.status : null;
-  if (status === 'failed') return 'failed';
-  if (status === 'already_succeeded') return 'succeeded';
-
-  if (status === 'missing') {
-    throw new GenerationServiceError('Generation not found for failure settlement.', 404);
-  }
-
-  if (status === 'invalid_request') {
-    throw new GenerationServiceError('Invalid generation failure settlement request.', 400);
-  }
-
-  if (status === 'profile_not_found') {
-    throw new GenerationServiceError('Could not find a credit profile for this account.', 500);
-  }
-
-  throw new GenerationServiceError('Failed to settle failed generation.', 500);
-}
-
-export async function settleGenerationSucceeded(
-  settlementSupabase: SupabaseClient,
-  params: {
-    predictionId: string;
-    outputUrl?: string | null;
-    completedAt?: string | null;
-    previewUrl?: string | null;
-    previewThumbhash?: string | null;
-    previewStatus?: 'pending' | 'ready' | 'failed' | string | null;
-    previewAttemptCount?: number | null;
-    previewError?: string | null;
-    previewGeneratedAt?: string | null;
-    workflowSettings?: Record<string, unknown> | null;
-  },
-): Promise<GenerationTerminalSettlementStatus> {
-  const { data, error } = await settlementSupabase.rpc('settle_generation_succeeded', {
-    p_prediction_id: params.predictionId,
-    p_output_url: params.outputUrl ?? null,
-    p_completed_at: params.completedAt ?? null,
-    p_preview_url: params.previewUrl ?? null,
-    p_preview_thumbhash: params.previewThumbhash ?? null,
-    p_preview_status: params.previewStatus ?? null,
-    p_preview_attempt_count: params.previewAttemptCount ?? null,
-    p_preview_error: params.previewError ?? null,
-    p_preview_generated_at: params.previewGeneratedAt ?? null,
-    p_workflow_settings: params.workflowSettings ?? null,
-  });
-
-  if (error || !isRecord(data)) {
-    throw new GenerationServiceError(
-      supabaseErrorMessage(error, 'Failed to settle successful generation.'),
-      500,
-    );
-  }
-
-  const status = typeof data.status === 'string' ? data.status : null;
-  if (status === 'succeeded' || status === 'already_succeeded') return 'succeeded';
-  if (status === 'already_failed') return 'failed';
-
-  if (status === 'missing') {
-    throw new GenerationServiceError('Generation not found for success settlement.', 404);
-  }
-
-  if (status === 'invalid_request') {
-    throw new GenerationServiceError('Invalid generation success settlement request.', 400);
-  }
-
-  throw new GenerationServiceError('Failed to settle successful generation.', 500);
 }
 
 export async function attachGenerationProviderTask(
@@ -724,9 +579,6 @@ function assertGenerationRequest(condition: unknown, message: string, status = 4
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
-}
 
 function normalizeMediaUrlList(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -861,7 +713,7 @@ function buildVoicePromptPreview(model: VoiceoverModelId, text: string | undefin
   return text?.trim() || '';
 }
 
-function getStoredWorkflowModel(workflowSettings: Record<string, unknown> | null, fallbackModel: string): string {
+export function getStoredWorkflowModel(workflowSettings: Record<string, unknown> | null, fallbackModel: string): string {
   const model = workflowSettings?.model;
   return typeof model === 'string' ? model : fallbackModel;
 }
@@ -893,7 +745,7 @@ export function getGenerationResultUrls(value: unknown): string[] {
   return [];
 }
 
-function getFirstResultUrl(value: unknown): string | null {
+export function getFirstResultUrl(value: unknown): string | null {
   return getGenerationResultUrls(value)[0] ?? null;
 }
 
@@ -1064,7 +916,7 @@ function getFallbackPreviewUrl(
   return category === 'image' || contentType?.startsWith('image/') ? outputUrl : null;
 }
 
-async function persistGeneratedOutput(
+export async function persistGeneratedOutput(
   supabase: SupabaseClient,
   settlementSupabase: SupabaseClient,
   generation: SyncableGenerationRecord,
@@ -1259,331 +1111,6 @@ export async function persistGeneratedOutputList(
   });
 
   return { status, outputs };
-}
-
-async function markGenerationFailed(
-  creditSupabase: SupabaseClient,
-  generation: SyncableGenerationRecord,
-  completedAt?: string | null
-): Promise<'failed' | 'succeeded'> {
-  if (!generation.prediction_id) {
-    throw new GenerationServiceError('Generation does not have a provider task id.', 500);
-  }
-
-  return settleGenerationFailed(
-    creditSupabase,
-    generation.prediction_id,
-    completedAt ?? new Date().toISOString(),
-  );
-}
-
-function isVeoGeneration(generation: SyncableGenerationRecord): boolean {
-  const workflowModel = getStoredWorkflowModel(generation.workflow_settings, generation.model);
-  return workflowModel === 'veo-3.1' || generation.model === 'veo3' || generation.model === 'veo3_fast';
-}
-
-function getProviderPayloadTaskData(
-  providerPayload: Record<string, unknown> | null | undefined,
-  predictionId: string,
-): Record<string, unknown> | null {
-  if (!providerPayload) return null;
-
-  const taskId = extractKieWebhookTaskId(providerPayload);
-  if (taskId && taskId !== predictionId) return null;
-
-  const data = isRecord(providerPayload.data) ? providerPayload.data : providerPayload;
-  return isRecord(data) ? data : null;
-}
-
-async function syncSingleGenerationStatusFromProviderPayload(
-  supabase: SupabaseClient,
-  creditSupabase: SupabaseClient,
-  generation: SyncableGenerationRecord,
-  providerPayload: Record<string, unknown> | null | undefined,
-): Promise<Exclude<GenerationSyncStatus, 'missing'> | null> {
-  if (!generation.prediction_id || !['processing', 'waiting'].includes(generation.status)) {
-    return null;
-  }
-
-  const taskData = getProviderPayloadTaskData(providerPayload, generation.prediction_id);
-  if (!taskData) return null;
-
-  const kind = getGenerationKind({
-    category: generation.category,
-    model: generation.model,
-  });
-  const fallbackStartedAtMs = Number.isNaN(Date.parse(generation.created_at))
-    ? null
-    : Date.parse(generation.created_at);
-
-  if (isVeoGeneration(generation)) {
-    const successFlag = taskData.successFlag;
-    const responseData = isRecord(taskData.response) ? taskData.response : null;
-    const timing = normalizeVeoGenerationTiming({
-      kind,
-      task: taskData,
-      fallbackStartedAtMs,
-    });
-
-    if (successFlag === 1) {
-      const tempUrl = getFirstResultUrl(responseData?.resultUrls) || getFirstResultUrl(responseData?.originUrls);
-      if (tempUrl) {
-        return persistGeneratedOutput(creditSupabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
-      } else {
-        return settleGenerationSucceeded(creditSupabase, {
-          predictionId: generation.prediction_id,
-          completedAt: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-        });
-      }
-    }
-
-    if (successFlag === 2 || successFlag === 3) {
-      return markGenerationFailed(creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
-    }
-
-    return null;
-  }
-
-  const state = taskData.state;
-  const timing = normalizeMarketGenerationTiming({
-    kind,
-    task: taskData,
-    fallbackStartedAtMs,
-  });
-
-  if (state === 'success') {
-    let tempUrl: string | null = null;
-    let result: unknown = null;
-
-    try {
-      result = typeof taskData.resultJson === 'string'
-        ? JSON.parse(taskData.resultJson)
-        : taskData.resultJson;
-      tempUrl = getFirstResultUrl(result);
-    } catch (error) {
-      logBackendError('generation_result_parse_failed', { error });
-    }
-
-    if (tempUrl) {
-      if (generation.model === 'grok-imagine-image') {
-        return (await persistGeneratedOutputList(
-          creditSupabase,
-          creditSupabase,
-          generation,
-          getGenerationResultUrls(result),
-          toIsoTimestamp(timing.completedAtMs)
-        )).status;
-      } else {
-        return persistGeneratedOutput(creditSupabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
-      }
-    } else {
-      return settleGenerationSucceeded(creditSupabase, {
-        predictionId: generation.prediction_id,
-        completedAt: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-      });
-    }
-  }
-
-  if (state === 'fail') {
-    return markGenerationFailed(creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
-  }
-
-  return null;
-}
-
-async function syncSingleGenerationStatus(
-  supabase: SupabaseClient,
-  creditSupabase: SupabaseClient,
-  generation: SyncableGenerationRecord
-): Promise<Exclude<GenerationSyncStatus, 'missing'>> {
-  if (!generation.prediction_id || !['processing', 'waiting'].includes(generation.status)) {
-    if (generation.status === 'succeeded' || generation.status === 'failed') {
-      return generation.status;
-    }
-    return 'skipped';
-  }
-
-  const kind = getGenerationKind({
-    category: generation.category,
-    model: generation.model,
-  });
-  const fallbackStartedAtMs = Number.isNaN(Date.parse(generation.created_at))
-    ? null
-    : Date.parse(generation.created_at);
-
-  if (isVeoGeneration(generation)) {
-    const response = await withProviderModel(resolveGenerationAppModelId(generation), () => fetchWithProviderRetry(`https://api.kie.ai/api/v1/veo/record-info?taskId=${generation.prediction_id}`, {
-      headers: { Authorization: `Bearer ${KIE_API_KEY}` },
-    }, PROVIDER_STATUS_POLL_TIMEOUT_MS, PROVIDER_STATUS_POLL_RETRY_POLICY, fetch, 'KIE Veo status'));
-    const data = await response.json();
-
-    if (!response.ok || data.code !== 200) {
-      throw new Error(data.msg || 'Failed to check Veo status');
-    }
-
-    const successFlag = data.data?.successFlag;
-    const responseData = data.data?.response;
-    const timing = normalizeVeoGenerationTiming({
-      kind,
-      task: data.data,
-      fallbackStartedAtMs,
-    });
-
-    if (successFlag === 1) {
-      const tempUrl = getFirstResultUrl(responseData?.resultUrls) || getFirstResultUrl(responseData?.originUrls);
-      if (tempUrl) {
-        return persistGeneratedOutput(creditSupabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
-      } else {
-        return settleGenerationSucceeded(creditSupabase, {
-          predictionId: generation.prediction_id,
-          completedAt: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-        });
-      }
-    }
-
-    if (successFlag === 2 || successFlag === 3) {
-      return markGenerationFailed(creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
-    }
-
-    const nextStatus = timing.appStatus === 'waiting' ? 'waiting' : 'processing';
-    if (generation.status !== nextStatus) {
-      await creditSupabase.from('generations').update({ status: nextStatus }).eq('id', generation.id);
-    }
-
-    return nextStatus;
-  }
-
-  const response = await withProviderModel(resolveGenerationAppModelId(generation), () => fetchWithProviderRetry(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${generation.prediction_id}`, {
-    headers: { Authorization: `Bearer ${KIE_API_KEY}` },
-  }, PROVIDER_STATUS_POLL_TIMEOUT_MS, PROVIDER_STATUS_POLL_RETRY_POLICY, fetch, 'KIE task status'));
-  const data = await response.json();
-
-  if (!response.ok || data.code !== 200) {
-    throw new Error(data.msg || 'Failed to check generation status');
-  }
-
-  const state = data.data?.state;
-  const timing = normalizeMarketGenerationTiming({
-    kind,
-    task: data.data,
-    fallbackStartedAtMs,
-  });
-
-  if (state === 'success') {
-    let tempUrl: string | null = null;
-    let result: unknown = null;
-
-    try {
-      result = typeof data.data?.resultJson === 'string'
-        ? JSON.parse(data.data.resultJson)
-        : data.data?.resultJson;
-      tempUrl = getFirstResultUrl(result);
-    } catch (error) {
-      logBackendError('generation_result_parse_failed', { error });
-    }
-
-    if (tempUrl) {
-      if (generation.model === 'grok-imagine-image') {
-        return (await persistGeneratedOutputList(
-          creditSupabase,
-          creditSupabase,
-          generation,
-          getGenerationResultUrls(result),
-          toIsoTimestamp(timing.completedAtMs)
-        )).status;
-      } else {
-        return persistGeneratedOutput(creditSupabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
-      }
-    } else {
-      return settleGenerationSucceeded(creditSupabase, {
-        predictionId: generation.prediction_id,
-        completedAt: toIsoTimestamp(timing.completedAtMs) ?? new Date().toISOString(),
-      });
-    }
-  }
-
-  if (state === 'fail') {
-    return markGenerationFailed(creditSupabase, generation, toIsoTimestamp(timing.completedAtMs));
-  }
-
-  const nextStatus = timing.appStatus === 'waiting' ? 'waiting' : 'processing';
-  if (generation.status !== nextStatus) {
-    await creditSupabase.from('generations').update({ status: nextStatus }).eq('id', generation.id);
-  }
-  return nextStatus;
-}
-
-async function loadGenerationByPredictionId(
-  supabase: SupabaseClient,
-  predictionId: string,
-): Promise<SyncableGenerationRecord | null> {
-  const { data, error } = await supabase
-    .from('generations')
-    .select('id, user_id, prediction_id, status, output_url, model, category, workflow_settings, created_at, completed_at')
-    .eq('prediction_id', predictionId)
-    .single();
-
-  if (error) {
-    const code = (error as { code?: string }).code;
-    if (code === 'PGRST116') return null;
-    throw error;
-  }
-
-  return (data ?? null) as SyncableGenerationRecord | null;
-}
-
-export async function syncGenerationStatusByPredictionId(params: {
-  supabase: SupabaseClient;
-  creditSupabase: SupabaseClient;
-  predictionId: string;
-  providerPayload?: Record<string, unknown> | null;
-}): Promise<GenerationStatusSyncResult> {
-  requireApiKey();
-
-  const generation = await loadGenerationByPredictionId(params.supabase, params.predictionId);
-  if (!generation) {
-    return { found: false, status: 'missing', generation: null };
-  }
-
-  const status = await syncSingleGenerationStatusFromProviderPayload(
-    params.supabase,
-    params.creditSupabase,
-    generation,
-    params.providerPayload,
-  ) ?? await syncSingleGenerationStatus(params.supabase, params.creditSupabase, generation);
-  const updatedGeneration = await loadGenerationByPredictionId(params.supabase, params.predictionId);
-
-  return {
-    found: true,
-    status,
-    generation: updatedGeneration ?? { ...generation, status },
-  };
-}
-
-export async function syncGenerationStatuses(params: {
-  supabase: SupabaseClient;
-  creditSupabase: SupabaseClient;
-  generationIds: string[];
-}) {
-  requireApiKey();
-
-  const generationIds = Array.from(new Set(params.generationIds.filter(Boolean)));
-  if (generationIds.length === 0) {
-    return;
-  }
-
-  const { data: generations } = await params.supabase
-    .from('generations')
-    .select('id, user_id, prediction_id, status, output_url, model, category, workflow_settings, created_at, completed_at')
-    .in('id', generationIds);
-
-  for (const generation of (generations || []) as SyncableGenerationRecord[]) {
-    try {
-      await syncSingleGenerationStatus(params.supabase, params.creditSupabase, generation);
-    } catch (error) {
-      logBackendError('generation_status_sync_failed', { generationId: generation.id, error });
-    }
-  }
 }
 
 export async function startImageGeneration(params: {
