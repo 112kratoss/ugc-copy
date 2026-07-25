@@ -4,6 +4,7 @@ import { logBackendRouteError } from '@/lib/backend-logger';
 import { NextResponse } from 'next/server';
 
 import { createPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
+import { getClientNetworkKey } from '@/lib/client-network-key';
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import {
   createGenerationModelQuote,
@@ -26,10 +27,7 @@ function resolveDependencies(dependencies: GenerationModelQuoteRouteDependencies
 }
 
 function getQuoteRateLimitKey(request: Request) {
-  const forwardedFor = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
-  const realIp = request.headers.get('x-real-ip')?.trim();
-
-  return forwardedFor || realIp || '127.0.0.1';
+  return getClientNetworkKey(request.headers);
 }
 
 function getQuotePlatform(request: Request) {

@@ -127,7 +127,7 @@ describe('startVideoGenerationForRoute', () => {
     });
     const userClient = createClientMock({
       sourceGeneration: {
-        id: 'source-1',
+        id: '3f8f0c70-9a54-4f6e-8f5a-1c2d3e4f5a6b',
         user_id: 'creator-1',
         is_public: true,
       },
@@ -147,7 +147,7 @@ describe('startVideoGenerationForRoute', () => {
         sound: false,
         startImageUrl: 'https://example.com/start.png',
         endImageUrl: 'https://example.com/end.png',
-        sourceGenerationId: 'source-1',
+        sourceGenerationId: '3f8f0c70-9a54-4f6e-8f5a-1c2d3e4f5a6b',
         catalogRevision,
       },
       userId: 'user-1',
@@ -175,7 +175,7 @@ describe('startVideoGenerationForRoute', () => {
       fixedLens: false,
       referenceMode: 'frames',
       quotedCostCredits: 70,
-      sourceGenerationId: 'source-1',
+      sourceGenerationId: '3f8f0c70-9a54-4f6e-8f5a-1c2d3e4f5a6b',
     }));
     expect(result).toEqual({
       success: true,

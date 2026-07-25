@@ -5,6 +5,8 @@ import {
   SourceGenerationValidationError,
 } from '@/lib/source-generation';
 
+const SOURCE_ID = '0f0e0d0c-0b0a-4901-8807-060504030201';
+
 function createSupabaseMock(result: {
   data: Record<string, unknown> | null;
   error: Error | null;
@@ -43,10 +45,10 @@ function createSupabaseMock(result: {
 }
 
 describe('source generation validation', () => {
-  it('filters remix source lookups to generations the user owns or public generations', async () => {
+  it('resolves public remix sources without interpolating the user id into a filter', async () => {
     const { calls, supabase } = createSupabaseMock({
       data: {
-        id: 'source-1',
+        id: SOURCE_ID,
         user_id: 'other-user',
         is_public: true,
       },
@@ -56,13 +58,52 @@ describe('source generation validation', () => {
     await expect(resolveSourceGenerationId(
       supabase as never,
       'user-1',
-      ' source-1 ',
-    )).resolves.toBe('source-1');
+      ` ${SOURCE_ID} `,
+    )).resolves.toBe(SOURCE_ID);
 
     expect(calls.tables).toEqual(['generations']);
     expect(calls.selects).toEqual(['id, user_id, is_public']);
-    expect(calls.eqs).toEqual([{ column: 'id', value: 'source-1' }]);
-    expect(calls.ors).toEqual(['user_id.eq.user-1,is_public.eq.true']);
+    expect(calls.eqs).toEqual([{ column: 'id', value: SOURCE_ID }]);
+    // The visibility rule lives in code, so no caller-influenced value is ever
+    // embedded in a PostgREST `.or()` filter expression.
+    expect(calls.ors).toEqual([]);
+  });
+
+  it('resolves sources the requesting user owns even when private', async () => {
+    const { supabase } = createSupabaseMock({
+      data: {
+        id: SOURCE_ID,
+        user_id: 'user-1',
+        is_public: false,
+      },
+      error: null,
+    });
+
+    await expect(resolveSourceGenerationId(
+      supabase as never,
+      'user-1',
+      SOURCE_ID,
+    )).resolves.toBe(SOURCE_ID);
+  });
+
+  it('rejects private sources owned by someone else', async () => {
+    const { supabase } = createSupabaseMock({
+      data: {
+        id: SOURCE_ID,
+        user_id: 'other-user',
+        is_public: false,
+      },
+      error: null,
+    });
+
+    await expect(resolveSourceGenerationId(
+      supabase as never,
+      'user-1',
+      SOURCE_ID,
+    )).rejects.toMatchObject({
+      name: 'SourceGenerationValidationError',
+      status: 400,
+    });
   });
 
   it('returns null when no remix source is provided', async () => {
@@ -73,13 +114,34 @@ describe('source generation validation', () => {
     expect(calls.tables).toEqual([]);
   });
 
+  it('rejects malformed and filter-injection source ids without querying', async () => {
+    const { calls, supabase } = createSupabaseMock({ data: null, error: null });
+
+    for (const malicious of [
+      'not-a-uuid',
+      `${SOURCE_ID},user_id.not.is.null`,
+      'x)or(is_public.eq.true',
+    ]) {
+      await expect(resolveSourceGenerationId(
+        supabase as never,
+        'user-1',
+        malicious,
+      )).rejects.toMatchObject({
+        name: 'SourceGenerationValidationError',
+        status: 400,
+      });
+    }
+
+    expect(calls.tables).toEqual([]);
+  });
+
   it('throws a validation error when the source is not visible', async () => {
     const { supabase } = createSupabaseMock({ data: null, error: null });
 
     await expect(resolveSourceGenerationId(
       supabase as never,
       'user-1',
-      'source-1',
+      SOURCE_ID,
     )).rejects.toMatchObject({
       name: 'SourceGenerationValidationError',
       status: 400,
@@ -92,13 +154,13 @@ describe('source generation validation', () => {
     await expect(resolveSourceGenerationId(
       supabase as never,
       'user-1',
-      'source-1',
+      SOURCE_ID,
     )).rejects.toBeInstanceOf(SourceGenerationValidationError);
 
     await expect(resolveSourceGenerationId(
       supabase as never,
       'user-1',
-      'source-1',
+      SOURCE_ID,
     )).rejects.toMatchObject({ status: 500 });
   });
 });

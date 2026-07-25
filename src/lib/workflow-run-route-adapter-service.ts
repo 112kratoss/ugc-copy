@@ -124,8 +124,10 @@ async function handleWorkflowRunDetailsGET(
 
     return NextResponse.json({ run });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to fetch workflow run.';
-    return NextResponse.json({ error: message }, { status: 404 });
+    // Load failures collapse to a fixed not-found response; the underlying
+    // detail (which may include database messages) stays in the logs.
+    logBackendError('workflow_run_details_load_failed', { error: error });
+    return NextResponse.json({ error: 'Workflow run not found.' }, { status: 404 });
   }
 }
 

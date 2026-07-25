@@ -8,8 +8,7 @@ import type { ShowcaseCreator, ShowcaseItemCategory } from '@/lib/showcase';
 type PublicGenerationRow = {
   id: string;
   output_url: string | null;
-  preview_url?: string | null;
-  thumbnail_url?: string | null;
+  preview_url: string | null;
   showcase_asset_path: string | null;
   model: string;
   prompt: string | null;
@@ -83,84 +82,36 @@ async function resolvePublicGenerationUrl(
 
 async function resolvePublicGenerationPreviewUrl(
   adminSupabase: ReturnType<typeof createServiceClient>,
-  generation: Pick<PublicGenerationRow, 'preview_url' | 'thumbnail_url' | 'category'>,
+  generation: Pick<PublicGenerationRow, 'preview_url' | 'category'>,
   outputUrl: string
 ) {
-  const previewSource = generation.preview_url || generation.thumbnail_url || null;
-  if (previewSource) {
-    return resolveStoredMediaUrl(adminSupabase, previewSource);
+  if (generation.preview_url) {
+    return resolveStoredMediaUrl(adminSupabase, generation.preview_url);
   }
 
   return resolveItemCategory(generation.category) === 'image' ? outputUrl : null;
 }
 
+const PUBLIC_GENERATION_COLUMNS = 'id, output_url, preview_url, showcase_asset_path, model, prompt, title, description, category, save_count, remix_count, share_count, share_visit_count, created_at, user_id';
+
 async function fetchPublicGenerationRow(id: string): Promise<PublicGenerationRow | null> {
   const adminSupabase = createServiceClient();
 
-  const selectWithAllColumns = 'id, output_url, preview_url, thumbnail_url, showcase_asset_path, model, prompt, title, description, category, save_count, remix_count, share_count, share_visit_count, created_at, user_id';
-  const selectWithoutShareColumns = 'id, output_url, preview_url, thumbnail_url, showcase_asset_path, model, prompt, title, description, category, save_count, remix_count, created_at, user_id';
-  const selectWithoutShareAndAsset = 'id, output_url, preview_url, thumbnail_url, model, prompt, title, description, category, save_count, remix_count, created_at, user_id';
-  const selectLegacyColumns = 'id, output_url, model, prompt, title, description, category, save_count, remix_count, created_at, user_id';
+  const { data, error } = await adminSupabase
+    .from('generations')
+    .select(PUBLIC_GENERATION_COLUMNS)
+    .eq('id', id)
+    .eq('is_public', true)
+    .is('archived_at', null)
+    .eq('status', 'succeeded')
+    .maybeSingle();
 
-  type PublicGenerationAttempt = {
-    data: PublicGenerationRow | null;
-    error: { code?: string } | null;
-  };
-
-  const attempt = async (
-    selectClause: string,
-    includeAsset: boolean,
-    includeShareCounts: boolean
-  ): Promise<PublicGenerationAttempt> => {
-    const result = await adminSupabase
-      .from('generations')
-      .select(selectClause)
-      .eq('id', id)
-      .eq('is_public', true)
-      .is('archived_at', null)
-      .eq('status', 'succeeded')
-      .maybeSingle();
-
-    if (!result.data || result.error) {
-      return {
-        data: null,
-        error: result.error,
-      };
-    }
-
-    const row = result.data as Partial<PublicGenerationRow>;
-
-    return {
-      data: {
-        ...row,
-        showcase_asset_path: includeAsset ? row.showcase_asset_path ?? null : null,
-        share_count: includeShareCounts ? row.share_count ?? 0 : 0,
-        share_visit_count: includeShareCounts ? row.share_visit_count ?? 0 : 0,
-      } as PublicGenerationRow,
-      error: null,
-    };
-  };
-
-  let result = await attempt(selectWithAllColumns, true, true);
-
-  if (result.error?.code === '42703') {
-    result = await attempt(selectWithoutShareColumns, true, false);
+  if (error) {
+    logBackendError('failed_to_fetch_public_generation_detail', { error });
+    throw error;
   }
 
-  if (result.error?.code === '42703') {
-    result = await attempt(selectWithoutShareAndAsset, false, false);
-  }
-
-  if (result.error?.code === '42703') {
-    result = await attempt(selectLegacyColumns, false, false);
-  }
-
-  if (result.error) {
-    logBackendError('failed_to_fetch_public_generation_detail', { error: result.error });
-    throw result.error;
-  }
-
-  return (result.data as PublicGenerationRow | null) ?? null;
+  return (data as PublicGenerationRow | null) ?? null;
 }
 
 export async function getPublicGenerationDetail(id: string): Promise<PublicGenerationDetail | null> {

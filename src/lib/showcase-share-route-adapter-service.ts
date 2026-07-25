@@ -10,6 +10,7 @@ import {
   createBackendRateLimitResponse,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { getClientNetworkKey } from '@/lib/client-network-key';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import {
   parseShowcaseSharePayloadForRoute,
@@ -40,10 +41,7 @@ function resolveDependencies(dependencies: ShowcaseShareRouteDependencies | unde
 function getShareRateLimitKey(request: Request, userId: string | null) {
   if (userId) return userId;
 
-  const forwardedFor = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
-  const realIp = request.headers.get('x-real-ip')?.trim();
-
-  return forwardedFor || realIp || '127.0.0.1';
+  return getClientNetworkKey(request.headers);
 }
 
 async function getOptionalActorUserId(

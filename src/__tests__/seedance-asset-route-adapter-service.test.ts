@@ -67,6 +67,37 @@ describe('Seedance asset route adapter service', () => {
     expect(createSeedanceAssetForRoute).not.toHaveBeenCalled();
   });
 
+  it('keeps unexpected creation failures generic while logging the detail', async () => {
+    const logError = vi.fn();
+
+    const response = await postSeedanceAssetRouteResponse({
+      request: new Request('http://localhost/api/seedance-assets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: 'uploads/user-1/reference.mp4', assetType: 'Video' }),
+      }),
+      dependencies: {
+        authenticateRequest: vi.fn(async () => ({
+          userId: 'user-1',
+          supabase: {} as SupabaseClient,
+        })),
+        createSeedanceAssetForRoute: vi.fn(async () => {
+          throw new Error('provider credential rejected: key kie_live_1234');
+        }),
+        createServiceClient: vi.fn(() => ({ kind: 'admin' } as unknown as SupabaseClient)),
+        logError,
+        requireKieApiKey: vi.fn(() => 'test-key'),
+      },
+    });
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: 'Failed to create Seedance asset' });
+    expect(logError).toHaveBeenCalledWith(
+      'Seedance asset creation error:',
+      expect.objectContaining({ message: expect.stringContaining('provider credential rejected') }),
+    );
+  });
+
   it('creates Seedance assets through the service with private no-store headers', async () => {
     const adminSupabase = { kind: 'admin' } as unknown as SupabaseClient;
     const createSeedanceAssetForRoute = vi.fn(async () => ({

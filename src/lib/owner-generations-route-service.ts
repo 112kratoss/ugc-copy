@@ -20,7 +20,6 @@ type GenerationRow = {
   id: string;
   output_url: string | null;
   preview_url?: string | null;
-  thumbnail_url?: string | null;
   preview_thumbhash?: string | null;
   preview_status?: MediaPreviewStatus;
   creation_mode?: 'motion' | null;
@@ -165,7 +164,7 @@ function resolveGenerationPreviewUrl(
   outputUrl: string | null,
   resolvedMediaUrls: Map<string, string | null>,
 ): string | null {
-  const previewSource = generation.preview_url || generation.thumbnail_url || null;
+  const previewSource = generation.preview_url || null;
   if (previewSource) {
     return resolvedMediaUrls.get(previewSource) ?? null;
   }
@@ -188,9 +187,8 @@ function collectOwnerMediaUrlCandidates(
       candidates.add(generation.output_url);
     }
 
-    const previewSource = generation.preview_url || generation.thumbnail_url || null;
-    if (previewSource) {
-      candidates.add(previewSource);
+    if (generation.preview_url) {
+      candidates.add(generation.preview_url);
     }
 
     if (!summaryOnly) {
@@ -241,23 +239,6 @@ async function loadLinkedPostMap(params: {
   return linkedPostMap;
 }
 
-type SupabaseSchemaError = {
-  code?: string;
-  message?: string;
-};
-
-function isMissingGenerationPreviewColumnError(error: unknown) {
-  if (!error || typeof error !== 'object') {
-    return false;
-  }
-
-  const { code, message = '' } = error as SupabaseSchemaError;
-  return (
-    (code === '42703' || code === 'PGRST204')
-    && /preview_(url|thumbhash|status)|thumbnail_url|creation_mode/.test(message)
-  );
-}
-
 function parsePositiveInteger(value: string | null, fallback: number): number {
   if (!value) {
     return fallback;
@@ -304,55 +285,41 @@ async function fetchOwnerGenerations({
   const projectionColumns = 'template_run_id, template_run_step_id, studio_visible';
   const statusColumns = `id, status, created_at, completed_at, model, category, archived_at, ${projectionColumns}`;
   const baseColumns = `id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at, ${projectionColumns}`;
-  const selectCandidates = statusOnly ? [statusColumns] : [
-    `${baseColumns}, preview_url, thumbnail_url, preview_thumbhash, preview_status, creation_mode`,
-    `${baseColumns}, preview_url, thumbnail_url`,
-    `${baseColumns}, preview_url`,
-    `${baseColumns}, thumbnail_url`,
-    baseColumns,
-  ];
+  const columns = statusOnly
+    ? statusColumns
+    : `${baseColumns}, preview_url, preview_thumbhash, preview_status, creation_mode`;
 
-  let lastPreviewColumnError: unknown = null;
-  for (const columns of selectCandidates) {
-    let query = supabase
-      .from('generations')
-      .select(columns)
-      .eq('user_id', userId)
-      .or('and(template_run_id.is.null,template_run_step_id.is.null),studio_visible.eq.true')
-      .order('created_at', { ascending: false });
+  let query = supabase
+    .from('generations')
+    .select(columns)
+    .eq('user_id', userId)
+    .or('and(template_run_id.is.null,template_run_step_id.is.null),studio_visible.eq.true')
+    .order('created_at', { ascending: false });
 
-    if (!includeArchived) {
-      query = query.is('archived_at', null);
-    }
-
-    if (requestedGenerationId) {
-      query = query.eq('id', requestedGenerationId).range(0, 0);
-    } else if (requestedGenerationIds) {
-      query = query.in('id', requestedGenerationIds).range(0, Math.max(0, requestedGenerationIds.length - 1));
-    } else {
-      query = query.range(cursorOffset, cursorOffset + pageLimit);
-    }
-
-    const result = await query;
-
-    if (result.error) {
-      if (isMissingGenerationPreviewColumnError(result.error)) {
-        lastPreviewColumnError = result.error;
-        continue;
-      }
-
-      throw result.error;
-    }
-
-    const rows = (result.data || []) as unknown as GenerationRow[];
-    const hasMore = requestedGenerationId || requestedGenerationIds ? false : rows.length > pageLimit;
-    return {
-      rows: hasMore ? rows.slice(0, pageLimit) : rows,
-      hasMore,
-    };
+  if (!includeArchived) {
+    query = query.is('archived_at', null);
   }
 
-  throw lastPreviewColumnError ?? new Error('Failed to fetch generations');
+  if (requestedGenerationId) {
+    query = query.eq('id', requestedGenerationId).range(0, 0);
+  } else if (requestedGenerationIds) {
+    query = query.in('id', requestedGenerationIds).range(0, Math.max(0, requestedGenerationIds.length - 1));
+  } else {
+    query = query.range(cursorOffset, cursorOffset + pageLimit);
+  }
+
+  const result = await query;
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  const rows = (result.data || []) as unknown as GenerationRow[];
+  const hasMore = requestedGenerationId || requestedGenerationIds ? false : rows.length > pageLimit;
+  return {
+    rows: hasMore ? rows.slice(0, pageLimit) : rows,
+    hasMore,
+  };
 }
 
 async function authorizeOwnerStudioProjection({
@@ -554,7 +521,7 @@ export async function listOwnerGenerationsForRoute({
       contentType: inferVisualContentType(generation.output_url),
     });
     const canonicalCategory = classification?.category ?? generation.category;
-    const previewSource = generation.preview_url || generation.thumbnail_url || null;
+    const previewSource = generation.preview_url || null;
     const previewStatus: MediaPreviewStatus = generation.preview_status
       ?? (previewSource ? 'ready' : 'pending');
     const expiresAt = getStoredMediaLocation(generation.output_url ?? '')

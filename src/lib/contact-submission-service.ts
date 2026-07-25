@@ -8,6 +8,7 @@ import {
   CONTACT_SUBMISSION_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { getClientNetworkKey } from '@/lib/client-network-key';
 
 type ContactSubmissionBody = {
   name?: unknown;
@@ -34,6 +35,13 @@ export type ContactSubmissionRouteResult =
       rateLimitError?: BackendRateLimitError;
     };
 
+export const CONTACT_FIELD_MAX_LENGTH = 200;
+export const CONTACT_MESSAGE_MAX_LENGTH = 5000;
+
+// Deliberately simple: one non-space local part, an @, a domain with a dot,
+// and no whitespace anywhere. Deliverability is not validated here.
+const CONTACT_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 function normalizeBody(value: unknown): ContactSubmissionBody {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as ContactSubmissionBody
@@ -46,6 +54,14 @@ function normalizeRequiredText(value: unknown) {
 
 function normalizeSubject(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : 'general';
+}
+
+function createValidationErrorResult(message: string): ContactSubmissionRouteResult {
+  return {
+    ok: false,
+    status: 400,
+    body: { error: message },
+  };
 }
 
 function createRateLimitResult(error: BackendRateLimitError): ContactSubmissionRouteResult {
@@ -72,10 +88,7 @@ function createInternalErrorResult(): ContactSubmissionRouteResult {
 }
 
 export function getContactRateLimitKey(headers: Headers) {
-  const forwardedFor = headers.get('x-forwarded-for')?.split(',')[0]?.trim();
-  const realIp = headers.get('x-real-ip')?.trim();
-
-  return forwardedFor || realIp || '127.0.0.1';
+  return getClientNetworkKey(headers);
 }
 
 export async function submitContactMessageForRoute({
@@ -98,21 +111,26 @@ export async function submitContactMessageForRoute({
   const name = normalizeRequiredText(body.name);
   const email = normalizeRequiredText(body.email);
   const message = normalizeRequiredText(body.message);
+  const subject = normalizeSubject(body.subject);
 
   if (!name || !email || !message) {
-    return {
-      ok: false,
-      status: 400,
-      body: { error: 'Name, email, and message are required' },
-    };
+    return createValidationErrorResult('Name, email, and message are required');
   }
 
-  if (!email.includes('@') || !email.includes('.')) {
-    return {
-      ok: false,
-      status: 400,
-      body: { error: 'Invalid email address' },
-    };
+  if (name.length > CONTACT_FIELD_MAX_LENGTH) {
+    return createValidationErrorResult(`Name must be ${CONTACT_FIELD_MAX_LENGTH} characters or fewer.`);
+  }
+
+  if (email.length > CONTACT_FIELD_MAX_LENGTH || !CONTACT_EMAIL_PATTERN.test(email)) {
+    return createValidationErrorResult('Invalid email address');
+  }
+
+  if (subject.length > CONTACT_FIELD_MAX_LENGTH) {
+    return createValidationErrorResult(`Subject must be ${CONTACT_FIELD_MAX_LENGTH} characters or fewer.`);
+  }
+
+  if (message.length > CONTACT_MESSAGE_MAX_LENGTH) {
+    return createValidationErrorResult(`Message must be ${CONTACT_MESSAGE_MAX_LENGTH} characters or fewer.`);
   }
 
   let adminSupabase: SupabaseClient;
@@ -146,7 +164,7 @@ export async function submitContactMessageForRoute({
     .insert({
       name,
       email: email.toLowerCase(),
-      subject: normalizeSubject(body.subject),
+      subject,
       message,
     });
 

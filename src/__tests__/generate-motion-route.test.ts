@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The media-source guard parses storage locations for real; keep the genuine
+// implementation so fixtures exercise the same validation production does.
+import { getStoredMediaLocation as actualGetStoredMediaLocation } from '@/lib/media-urls';
+
 const rawCreateClientMock = vi.hoisted(() => vi.fn());
 const createUserClientMock = vi.hoisted(() => vi.fn());
 
@@ -264,6 +268,7 @@ vi.mock('@supabase/supabase-js', async (importOriginal) => {
 });
 
 vi.mock('@/lib/server-helpers', () => ({
+  getStoredMediaLocation: actualGetStoredMediaLocation,
   createUserClient: (request: Request) => createUserClientMock(request),
   createServiceClient: vi.fn(() => currentSupabaseMock.client),
   resolveStoredMediaUrl: vi.fn(),

@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ProviderFetchTelemetryEvent } from '@/lib/provider-fetch';
-import { recordProviderDependencyEvent } from '@/lib/provider-dependency-telemetry';
+import {
+  PAYMENT_WEBHOOK_PROCESSING_SERVICE_NAMES,
+  RAZORPAY_WEBHOOK_PROCESSING_SERVICE_NAME,
+  REVENUECAT_WEBHOOK_PROCESSING_SERVICE_NAME,
+  recordPaymentWebhookProcessingFailure,
+  recordProviderDependencyEvent,
+} from '@/lib/provider-dependency-telemetry';
 
 describe('provider dependency telemetry', () => {
   it('stores sanitized provider dependency events for ops dashboards', async () => {
@@ -79,5 +85,64 @@ describe('provider dependency telemetry', () => {
     // Absent rather than null or 'unknown': a placeholder would accumulate all
     // non-generation traffic under one key and skew per-model rates.
     expect(insert.mock.calls[0][0]).not.toHaveProperty('model_id');
+  });
+
+  it('records payment webhook processing failures under their dedicated service name', async () => {
+    const insert = vi.fn(async () => ({ error: null }));
+    const client = { from: vi.fn(() => ({ insert })) };
+
+    await recordPaymentWebhookProcessingFailure({
+      serviceName: RAZORPAY_WEBHOOK_PROCESSING_SERVICE_NAME,
+      failureCode: 'credit_transaction_settlement_failed',
+    }, client as never);
+
+    expect(client.from).toHaveBeenCalledWith('provider_dependency_events');
+    expect(insert).toHaveBeenCalledWith({
+      service_name: 'razorpay-webhook-processing',
+      outcome: 'http_error',
+      method: 'POST',
+      host: null,
+      timeout_ms: 0,
+      duration_ms: 0,
+      status: 500,
+      ok: false,
+      error_name: 'credit_transaction_settlement_failed',
+    });
+  });
+
+  it('records the response status the webhook actually returned to the provider', async () => {
+    const insert = vi.fn(async () => ({ error: null }));
+    const client = { from: vi.fn(() => ({ insert })) };
+
+    await recordPaymentWebhookProcessingFailure({
+      serviceName: REVENUECAT_WEBHOOK_PROCESSING_SERVICE_NAME,
+      failureCode: 'refund_purchase_not_synced',
+      status: 503,
+    }, client as never);
+
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({
+      service_name: 'revenuecat-webhook-processing',
+      status: 503,
+      error_name: 'refund_purchase_not_synced',
+    }));
+  });
+
+  it('never throws when recording a payment webhook failure fails', async () => {
+    const insert = vi.fn(async () => {
+      throw new Error('insert unavailable');
+    });
+    const client = { from: vi.fn(() => ({ insert })) };
+
+    await expect(recordPaymentWebhookProcessingFailure({
+      serviceName: RAZORPAY_WEBHOOK_PROCESSING_SERVICE_NAME,
+      failureCode: 'credit_refund_reconciliation_failed',
+    }, client as never)).resolves.toBeUndefined();
+  });
+
+  it('exposes both payment webhook service names for backend health matching', () => {
+    expect(PAYMENT_WEBHOOK_PROCESSING_SERVICE_NAMES).toEqual([
+      'razorpay-webhook-processing',
+      'revenuecat-webhook-processing',
+    ]);
   });
 });

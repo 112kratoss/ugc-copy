@@ -1,4 +1,5 @@
 import 'server-only';
+import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
@@ -20,6 +21,7 @@ type SeedanceAssetRouteDependencies = {
   createSeedanceAssetForRoute?: typeof createSeedanceAssetForRoute;
   createServiceClient?: typeof createServiceClient;
   getSeedanceAssetForRoute?: typeof getSeedanceAssetForRoute;
+  logError?: typeof logBackendRouteError;
   requireKieApiKey?: typeof requireKieApiKey;
 };
 
@@ -29,6 +31,7 @@ function resolveDependencies(dependencies: SeedanceAssetRouteDependencies | unde
     createSeedanceAssetForRoute: dependencies?.createSeedanceAssetForRoute ?? createSeedanceAssetForRoute,
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     getSeedanceAssetForRoute: dependencies?.getSeedanceAssetForRoute ?? getSeedanceAssetForRoute,
+    logError: dependencies?.logError ?? logBackendRouteError,
     requireKieApiKey: dependencies?.requireKieApiKey ?? requireKieApiKey,
   };
 }
@@ -83,8 +86,9 @@ async function handleSeedanceAssetPOST(
       userId: auth.userId,
     }));
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to create Seedance asset';
-    return NextResponse.json({ error: message }, { status: 500 });
+    // Unexpected failures keep their detail in the backend logs only.
+    dependencies.logError('Seedance asset creation error:', error);
+    return NextResponse.json({ error: 'Failed to create Seedance asset' }, { status: 500 });
   }
 }
 

@@ -90,8 +90,9 @@ describe('razorpay credit verify route adapter service', () => {
     });
   });
 
-  it('returns stable private failures when verification throws', async () => {
+  it('returns stable private failures without leaking internal detail when verification throws', async () => {
     const logError = vi.fn();
+    const failure = new Error('provider exploded: secret key rejected');
     const response = await postRazorpayCreditVerifyRouteResponse({
       request: new Request('http://localhost/api/razorpay/verify', {
         method: 'POST',
@@ -102,7 +103,7 @@ describe('razorpay credit verify route adapter service', () => {
         createUserClient: vi.fn(),
         logError,
         verifyCreditRazorpayPaymentForRoute: vi.fn(async () => {
-          throw new Error('provider exploded');
+          throw failure;
         }),
       },
     });
@@ -110,7 +111,9 @@ describe('razorpay credit verify route adapter service', () => {
     expect(response.status).toBe(500);
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(response.headers.get('x-request-id')).toBe('credit-verify-error-1');
-    await expect(response.json()).resolves.toEqual({ error: 'provider exploded' });
-    expect(logError).toHaveBeenCalledWith('Razorpay Verify Error:', expect.any(Error));
+    // The raw error message stays in the structured log; the client body is a
+    // fixed generic string on this money path.
+    await expect(response.json()).resolves.toEqual({ error: 'Internal Server Error' });
+    expect(logError).toHaveBeenCalledWith('Razorpay Verify Error:', failure);
   });
 });

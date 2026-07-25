@@ -14,6 +14,7 @@ import {
   GENERATION_MODEL_CATALOG_V1_SCHEMA_VERSION,
 } from '@/lib/generation-model-catalog';
 import { loadPublishedGenerationModelCatalog } from '@/lib/generation-model-catalog-store';
+import { PAYMENT_WEBHOOK_PROCESSING_SERVICE_NAMES } from '@/lib/provider-dependency-telemetry';
 
 export type BackendHealthStatus = 'ok' | 'warning' | 'degraded';
 
@@ -186,6 +187,13 @@ export type BackendProviderDependencyHealth = {
    */
   countsByModel: Record<string, number>;
   failedByModel: Record<string, number>;
+  /**
+   * Payment webhook processing failures durably recorded under the dedicated
+   * 'razorpay-webhook-processing' / 'revenuecat-webhook-processing' service
+   * identifiers. Any occurrence in the window degrades health: each event is a
+   * paid transaction whose settlement did not complete.
+   */
+  paymentWebhookProcessingFailureCount: number;
   oldestRecentEventAt: string | null;
 };
 
@@ -223,6 +231,7 @@ const PROVIDER_DEPENDENCY_SLOW_AFTER_MS = 15_000;
 const PROVIDER_DEPENDENCY_FAILURE_DEGRADED_COUNT = 5;
 const PROVIDER_DEPENDENCY_TIMEOUT_DEGRADED_COUNT = 3;
 const PROVIDER_DEPENDENCY_SLOW_DEGRADED_COUNT = 5;
+const PAYMENT_WEBHOOK_PROCESSING_FAILURE_DEGRADED_COUNT = 1;
 const JOB_RECENT_FAILURE_WARNING_COUNT = 3;
 
 function minutesSince(timestamp: string, now: Date): number {
@@ -643,6 +652,7 @@ function buildProviderDependencyHealth(
   let timeoutCount = 0;
   let networkErrorCount = 0;
   let slowCount = 0;
+  let paymentWebhookProcessingFailureCount = 0;
 
   for (const row of rows) {
     const outcome = row.outcome ?? 'unknown';
@@ -664,6 +674,9 @@ function buildProviderDependencyHealth(
       failedEventCount += 1;
       incrementCount(failedByService, serviceName);
       if (modelId) incrementCount(failedByModel, modelId);
+      if (PAYMENT_WEBHOOK_PROCESSING_SERVICE_NAMES.includes(serviceName)) {
+        paymentWebhookProcessingFailureCount += 1;
+      }
     }
     if (outcome === 'timeout') {
       timeoutCount += 1;
@@ -680,6 +693,15 @@ function buildProviderDependencyHealth(
   const issues: BackendHealthIssue[] = [];
   let status: BackendHealthStatus = 'ok';
 
+  if (paymentWebhookProcessingFailureCount >= PAYMENT_WEBHOOK_PROCESSING_FAILURE_DEGRADED_COUNT) {
+    status = 'degraded';
+    issues.push({
+      severity: 'degraded',
+      code: 'PAYMENT_WEBHOOK_PROCESSING_FAILURE',
+      message: `${paymentWebhookProcessingFailureCount} payment webhook processing failure(s) were recorded in the last ${PROVIDER_DEPENDENCY_RECENT_WINDOW_MINUTES} minutes.`,
+    });
+  }
+
   if (
     failedEventCount >= PROVIDER_DEPENDENCY_FAILURE_DEGRADED_COUNT
     || timeoutCount >= PROVIDER_DEPENDENCY_TIMEOUT_DEGRADED_COUNT
@@ -691,7 +713,9 @@ function buildProviderDependencyHealth(
       message: `${failedEventCount} provider dependency failure(s) were recorded in the last ${PROVIDER_DEPENDENCY_RECENT_WINDOW_MINUTES} minutes.`,
     });
   } else if (failedEventCount > 0) {
-    status = 'warning';
+    // maxStatus keeps this warning from downgrading an already-degraded status
+    // (payment webhook failures also count toward failedEventCount).
+    status = maxStatus([status, 'warning']);
     issues.push({
       severity: 'warning',
       code: 'PROVIDER_DEPENDENCY_FAILURES',
@@ -735,6 +759,7 @@ function buildProviderDependencyHealth(
       slowByService,
       countsByModel,
       failedByModel,
+      paymentWebhookProcessingFailureCount,
       oldestRecentEventAt: oldestRecentEvent?.created_at ?? null,
     },
     issues,

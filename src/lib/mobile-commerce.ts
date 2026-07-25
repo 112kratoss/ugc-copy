@@ -87,6 +87,7 @@ interface RevenueCatPurchase {
   store_transaction_id?: string | number | null;
   purchase_date?: string | null;
   refunded_at?: string | null;
+  is_sandbox?: boolean | null;
 }
 
 interface RevenueCatSubscriber {
@@ -152,8 +153,13 @@ export function normalizeMobileCommercePayload(body: unknown): NormalizedMobileC
 }
 
 export function resolveMobileCreditProduct(productId: string): PricingPlan | null {
-  const planId = MOBILE_CREDIT_PRODUCTS[productId as MobileCreditProductId];
-  return planId ? PRICING_PLAN_MAP[planId] : null;
+  // Object.hasOwn keeps prototype keys ('constructor', '__proto__', …) from
+  // resolving to truthy Object.prototype members through the plain-object map.
+  if (!Object.hasOwn(MOBILE_CREDIT_PRODUCTS, productId)) {
+    return null;
+  }
+
+  return PRICING_PLAN_MAP[MOBILE_CREDIT_PRODUCTS[productId as MobileCreditProductId]];
 }
 
 function providerStoreMatches(provider: MobilePurchaseProvider, store: string | null | undefined) {
@@ -162,6 +168,19 @@ function providerStoreMatches(provider: MobilePurchaseProvider, store: string | 
   }
 
   return store === provider;
+}
+
+/**
+ * Sandbox purchases (TestFlight, Play internal testing, RevenueCat sandbox
+ * receipts) must never grant production entitlements. Staging/QA environments
+ * opt in explicitly with MOBILE_COMMERCE_ALLOW_SANDBOX=1.
+ */
+function sandboxMobilePurchasesAllowed(environment: NodeJS.ProcessEnv = process.env) {
+  return environment.MOBILE_COMMERCE_ALLOW_SANDBOX === '1';
+}
+
+function isDisallowedSandboxPurchase(purchase: RevenueCatPurchase) {
+  return purchase.is_sandbox === true && !sandboxMobilePurchasesAllowed();
 }
 
 function isProviderTimeoutError(error: unknown) {
@@ -194,6 +213,10 @@ function findRevenueCatPurchase(
   const productPurchases = subscriber?.non_subscriptions?.[productId] ?? [];
   const validPurchases = productPurchases.filter((purchase) => {
     if (purchase.refunded_at) {
+      return false;
+    }
+
+    if (isDisallowedSandboxPurchase(purchase)) {
       return false;
     }
 
@@ -282,6 +305,10 @@ function listRestorableMobileCreditPurchases(response: RevenueCatResponse): Rest
         continue;
       }
 
+      if (isDisallowedSandboxPurchase(purchase)) {
+        continue;
+      }
+
       const transactionId = revenueCatPurchaseTransactionId(productId, purchase);
       if (!transactionId) {
         continue;
@@ -324,6 +351,10 @@ export async function verifyMobilePurchase({
   if (provider === 'sandbox') {
     if (nodeEnv === 'production') {
       throw new MobileCommerceError('Sandbox mobile purchases are disabled in production.', 400);
+    }
+
+    if (!sandboxMobilePurchasesAllowed()) {
+      throw new MobileCommerceError('Sandbox mobile purchases require an explicit server opt-in.', 400);
     }
 
     return {

@@ -148,6 +148,7 @@ describe('RevenueCat webhook route adapter service', () => {
       error: null,
     }));
     const logError = vi.fn();
+    const recordPaymentWebhookProcessingFailure = vi.fn(async () => {});
 
     const response = await postRevenueCatWebhookRouteResponse({
       request: webhookRequest({
@@ -161,6 +162,7 @@ describe('RevenueCat webhook route adapter service', () => {
         createServiceClient: () => ({ rpc }) as never,
         getExpectedAuthorization: () => 'Bearer revenuecat-webhook-secret',
         logError,
+        recordPaymentWebhookProcessingFailure,
       },
     });
 
@@ -172,5 +174,70 @@ describe('RevenueCat webhook route adapter service', () => {
         message: 'Backfilled mobile transaction mobile_play_store_GPA.1234-5678-9012-34567 requires catalog binding to magicbooklet.marketplace.usd900',
       }),
     );
+    expect(recordPaymentWebhookProcessingFailure).toHaveBeenCalledWith(
+      {
+        serviceName: 'revenuecat-webhook-processing',
+        failureCode: 'refund_reconciliation_failed',
+        status: 503,
+      },
+      expect.objectContaining({ rpc }),
+    );
+  });
+
+  it('asks RevenueCat to retry refunds that arrive before the purchase has synced', async () => {
+    const rpc = vi.fn(async () => ({
+      data: { status: 'not_found', rewards: [] },
+      error: null,
+    }));
+    const logError = vi.fn();
+    const recordPaymentWebhookProcessingFailure = vi.fn(async () => {});
+
+    const response = await postRevenueCatWebhookRouteResponse({
+      request: webhookRequest(refundPayload),
+      dependencies: {
+        createServiceClient: () => ({ rpc }) as never,
+        getExpectedAuthorization: () => 'Bearer revenuecat-webhook-secret',
+        logError,
+        recordPaymentWebhookProcessingFailure,
+      },
+    });
+
+    // A 200 here would stop RevenueCat's redelivery and permanently drop the
+    // refund for a purchase whose sync has not landed yet.
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: 'Purchase is not synced yet.' });
+    expect(recordPaymentWebhookProcessingFailure).toHaveBeenCalledWith(
+      {
+        serviceName: 'revenuecat-webhook-processing',
+        failureCode: 'refund_purchase_not_synced',
+        status: 503,
+      },
+      expect.objectContaining({ rpc }),
+    );
+  });
+
+  it('acknowledges permanent reconciliation outcomes without asking for a retry', async () => {
+    const recordPaymentWebhookProcessingFailure = vi.fn(async () => {});
+
+    for (const status of ['duplicate_event', 'stale_event', 'identity_mismatch', 'refunded']) {
+      const rpc = vi.fn(async () => ({
+        data: { status, rewards: [] },
+        error: null,
+      }));
+
+      const response = await postRevenueCatWebhookRouteResponse({
+        request: webhookRequest(refundPayload),
+        dependencies: {
+          createServiceClient: () => ({ rpc }) as never,
+          getExpectedAuthorization: () => 'Bearer revenuecat-webhook-secret',
+          recordPaymentWebhookProcessingFailure,
+        },
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ received: true, result: status });
+    }
+
+    expect(recordPaymentWebhookProcessingFailure).not.toHaveBeenCalled();
   });
 });

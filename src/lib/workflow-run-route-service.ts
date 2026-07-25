@@ -200,8 +200,9 @@ export async function startWorkflowRunForRoute({
 
     return { ok: true, body: result };
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Workflow run failed.';
+    // Unexpected runner failures keep their detail in the backend logs only;
+    // node-level validation problems surface through per-step error states.
     logBackendError('workflow_canvas_run_failed', { error: error });
-    return { ok: false, status: 500, body: { error: message } };
+    return { ok: false, status: 500, body: { error: 'Workflow run failed.' } };
   }
 }

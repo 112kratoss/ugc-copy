@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { collectBackendEnvironmentHealth } from "./src/lib/backend-environment";
 import { SHOWCASE_PUBLIC_MEDIA_MINIMUM_CACHE_TTL_SECONDS } from "./src/lib/showcase-media-cache";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -16,6 +17,86 @@ if (
 ) {
   throw new Error("E2E authentication bypass must never be enabled in a production build.");
 }
+
+// Fail production builds fast when the backend environment contract is not
+// met, instead of shipping a deploy that degrades at runtime. Only the
+// requirement ids are ever printed — never values.
+if (process.env.VERCEL_ENV === "production") {
+  const { missing } = collectBackendEnvironmentHealth(process.env);
+  if (missing.length > 0) {
+    throw new Error(
+      "Production build is missing required backend environment configuration: "
+      + `${missing.join(", ")}. See src/lib/backend-environment.ts for the `
+      + "environment variables that satisfy each requirement id."
+    );
+  }
+}
+
+// Report-Only content security policy. This is deliberately NOT enforcing:
+// it exists to surface real-world violations in browser consoles and reports
+// first; promotion to an enforcing Content-Security-Policy header is a later,
+// separate step once the report stream is clean.
+const mediaImportHostCspSources = (process.env.MEDIA_IMPORT_HOST_ALLOWLIST ?? "")
+  .split(",")
+  .map((host) => host.trim().toLowerCase().replace(/\.$/, ""))
+  .filter(Boolean)
+  .map((host) => `https://${host}`);
+const supabaseCspSources = supabaseUrl
+  ? [supabaseUrl.origin, `wss://${supabaseUrl.host}`]
+  : [];
+
+function buildCspDirective(directive: string, sources: string[]): string {
+  return [directive, ...sources].join(" ");
+}
+
+const contentSecurityPolicyReportOnly = [
+  buildCspDirective("default-src", ["'self'"]),
+  // 'unsafe-inline' covers the Next.js bootstrap scripts and the inline
+  // Google Analytics snippet until a nonce pipeline exists.
+  buildCspDirective("script-src", [
+    "'self'",
+    "'unsafe-inline'",
+    "https://checkout.razorpay.com",
+    "https://www.googletagmanager.com",
+    "https://va.vercel-scripts.com",
+  ]),
+  buildCspDirective("style-src", ["'self'", "'unsafe-inline'"]),
+  buildCspDirective("img-src", [
+    "'self'",
+    "blob:",
+    "data:",
+    ...supabaseCspSources,
+    ...mediaImportHostCspSources,
+  ]),
+  buildCspDirective("media-src", [
+    "'self'",
+    "blob:",
+    "data:",
+    ...supabaseCspSources,
+    ...mediaImportHostCspSources,
+  ]),
+  buildCspDirective("font-src", ["'self'", "data:"]),
+  buildCspDirective("connect-src", [
+    "'self'",
+    ...supabaseCspSources,
+    "https://api.razorpay.com",
+    "https://lumberjack.razorpay.com",
+    "https://checkout.razorpay.com",
+    "https://www.googletagmanager.com",
+    "https://www.google-analytics.com",
+    "https://*.google-analytics.com",
+    "https://va.vercel-scripts.com",
+  ]),
+  buildCspDirective("frame-src", [
+    "https://api.razorpay.com",
+    "https://checkout.razorpay.com",
+  ]),
+  buildCspDirective("worker-src", ["'self'", "blob:"]),
+  buildCspDirective("object-src", ["'none'"]),
+  buildCspDirective("base-uri", ["'self'"]),
+  buildCspDirective("form-action", ["'self'"]),
+  buildCspDirective("frame-ancestors", ["'none'"]),
+].join("; ");
 
 const nextConfig: NextConfig = {
   // Inline the source-scoped route CSS to remove the render-blocking stylesheet
@@ -91,6 +172,10 @@ const nextConfig: NextConfig = {
           {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=()",
+          },
+          {
+            key: "Content-Security-Policy-Report-Only",
+            value: contentSecurityPolicyReportOnly,
           },
         ],
       },

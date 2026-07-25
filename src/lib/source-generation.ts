@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export class SourceGenerationValidationError extends Error {
   status: number;
 
@@ -19,12 +21,22 @@ export async function resolveSourceGenerationId(
     return null;
   }
 
+  // `generations.id` is a uuid column, so any other shape can never resolve.
+  // Rejecting it up front keeps malformed client input out of the query and
+  // avoids uuid cast failures surfacing as server errors.
   const sourceGenerationId = rawSourceGenerationId.trim();
+  if (!UUID_PATTERN.test(sourceGenerationId)) {
+    throw new SourceGenerationValidationError('Source generation not found or inaccessible.');
+  }
+
+  // Visibility is enforced by the ownership/public check below (and by RLS for
+  // user-scoped clients). Keeping the filter out of the query avoids
+  // interpolating values into a PostgREST `.or()` expression, which
+  // postgrest-js does not escape.
   const { data, error } = await supabase
     .from('generations')
     .select('id, user_id, is_public')
     .eq('id', sourceGenerationId)
-    .or(`user_id.eq.${userId},is_public.eq.true`)
     .maybeSingle();
 
   if (error) {

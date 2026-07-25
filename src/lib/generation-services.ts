@@ -5,6 +5,7 @@ import {
   compileImagePromptWithElements,
   compilePromptWithElements,
   findUnknownPromptHandles,
+  isUploadsStoragePath,
   isValidElementHandle,
   normalizeElementDisplayName,
   normalizeSubmittedElementDescriptors,
@@ -51,7 +52,7 @@ import {
   persistGenerationInputMedia,
   type PersistGenerationInputCandidate,
 } from '@/lib/generation-input-media';
-import { resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { getStoredMediaLocation, resolveStoredMediaUrl } from '@/lib/server-helpers';
 import { buildKieWebhookCallbackUrl } from '@/lib/kie-webhook';
 import type { GenerationStartResult } from '@/lib/generation-start-idempotency';
 import {
@@ -85,7 +86,7 @@ import {
   PROVIDER_TASK_CREATE_TIMEOUT_MS,
   withProviderModel,
 } from '@/lib/provider-fetch';
-import type { RemoteMediaKind } from '@/lib/remote-media-security';
+import { isAllowlistedRemoteMediaUrl, type RemoteMediaKind } from '@/lib/remote-media-security';
 import { stageAllowlistedRemoteMedia } from '@/lib/staged-remote-media';
 import { loadGenerationModelOperationalConfig } from '@/lib/generation-model-catalog-store';
 import {
@@ -525,6 +526,8 @@ async function settleGenerationStartFailureQuietly(params: {
 }) {
   const failure = getPublicGenerationStartFailure(params.error);
   try {
+    // The atomic settlement RPC is deployed everywhere; it refunds and marks
+    // the generation in one statement, so no manual refund fallback remains.
     const { data, error } = await params.creditSupabase.rpc('settle_generation_start_failed', {
       p_generation_id: params.generationId,
       p_error_message: failure.message,
@@ -535,26 +538,10 @@ async function settleGenerationStartFailureQuietly(params: {
 
     if (!error && (status === 'failed' || status === 'already_failed')) return;
 
-    const errorCode = error && typeof error === 'object' && 'code' in error
-      ? String((error as { code?: unknown }).code ?? '')
-      : '';
-    const missingRpc = errorCode === 'PGRST202' || errorCode === '42883';
-    if (!missingRpc) {
-      logBackendError('generation_start_failure_settlement_failed', {
-        generationId: params.generationId,
-        settlementStatus: status,
-        error: supabaseErrorMessage(error, 'Unexpected generation start settlement status.'),
-      });
-      return;
-    }
-
-    // Rolling-deploy compatibility for an app release briefly ahead of the
-    // migration. Mark refunded only when the legacy refund succeeds so the
-    // promotional-credit trigger restores the recorded source amount.
-    const refunded = await refundCreditsQuietly(params.creditSupabase, params.userId, params.cost);
-    await markGenerationStartFailedQuietly(params.creditSupabase, params.generationId, {
-      errorMessage: failure.message,
-      refunded,
+    logBackendError('generation_start_failure_settlement_failed', {
+      generationId: params.generationId,
+      settlementStatus: status,
+      error: supabaseErrorMessage(error, 'Unexpected generation start settlement status.'),
     });
   } catch (settlementError) {
     logBackendError('generation_start_failure_settlement_failed', {
@@ -564,10 +551,21 @@ async function settleGenerationStartFailureQuietly(params: {
   }
 }
 
+// Generous ceiling above every supported model's accepted prompt size; it only
+// exists to stop unbounded payloads from reaching the provider and database.
+const GENERATION_PROMPT_MAX_LENGTH = 10000;
+
 function trimPrompt(prompt: string, errorMessage: string): string {
   const trimmed = prompt.trim();
   if (!trimmed) {
     throw new GenerationServiceError(errorMessage, 400);
+  }
+
+  if (trimmed.length > GENERATION_PROMPT_MAX_LENGTH) {
+    throw new GenerationServiceError(
+      `Prompts support up to ${GENERATION_PROMPT_MAX_LENGTH} characters.`,
+      400
+    );
   }
 
   return trimmed;
@@ -689,11 +687,78 @@ function normalizeKlingVideoElementInputs(value: KlingVideoElementInput[] | unde
     } => Boolean(element));
 }
 
+// Storage prefixes the generation pipeline resolves through the app's own
+// Supabase project (see resolveStoredMediaUrl's private template handling).
+const PRIVATE_TEMPLATE_STORAGE_PREFIXES = ['template_inputs/', 'template_assets/'] as const;
+
+// Seedance/Kling reference slots accept provider-issued asset handles instead
+// of URLs. These opaque tokens contain no scheme or path separators, so they
+// cannot address a network host.
+const PROVIDER_ASSET_HANDLE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/;
+
+function getConfiguredSupabaseOrigin(): string | null {
+  const configured = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+  if (!configured) return null;
+  try {
+    return new URL(configured).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Guards every media reference forwarded to the paid generation provider.
+ * Allowed shapes:
+ * - storage paths and Supabase storage-object URLs (resolved via own storage),
+ * - `uploads/` and private template storage paths,
+ * - URLs on the app's own Supabase origin (signed upload URLs),
+ * - remote URLs whose host passes the media-import allowlist,
+ * - bare provider asset handles (Seedance/Kling reference ids).
+ * Anything else — arbitrary third-party URLs in particular — is rejected.
+ */
+function isAllowedGenerationMediaSource(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+
+  if (getStoredMediaLocation(trimmed)) return true;
+  if (isUploadsStoragePath(trimmed)) return true;
+  if (PRIVATE_TEMPLATE_STORAGE_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) return true;
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      if (new URL(trimmed).origin === getConfiguredSupabaseOrigin()) return true;
+    } catch {
+      return false;
+    }
+    return isAllowlistedRemoteMediaUrl(trimmed);
+  }
+
+  return PROVIDER_ASSET_HANDLE_PATTERN.test(trimmed);
+}
+
+function assertAllowedGenerationMediaSource(value: string): string {
+  if (!isAllowedGenerationMediaSource(value)) {
+    throw new GenerationServiceError(
+      'Media references must come from your uploads, your generations, or a supported media source.',
+      400
+    );
+  }
+
+  return value;
+}
+
+async function resolveGenerationMediaSource(
+  supabase: SupabaseClient,
+  url: string
+): Promise<string> {
+  return resolveStoredMediaUrl(supabase, assertAllowedGenerationMediaSource(url));
+}
+
 async function resolveMediaUrls(
   supabase: SupabaseClient,
   urls: string[]
 ): Promise<string[]> {
-  return Promise.all(urls.map((url) => resolveStoredMediaUrl(supabase, url)));
+  return Promise.all(urls.map((url) => resolveGenerationMediaSource(supabase, url)));
 }
 
 function normalizeDialogueTurns(dialogueTurns: DialogueTurnInput[] | undefined): DialogueTurnInput[] {
@@ -1632,7 +1697,7 @@ export async function startVideoGeneration(params: {
   const resolvedKlingVideoElements = model === 'kling-3.0-video'
     ? await Promise.all(normalizedKlingVideoElements.map(async (element) => ({
         ...element,
-        url: await resolveStoredMediaUrl(supabase, element.url),
+        url: await resolveGenerationMediaSource(supabase, element.url),
       })))
     : [];
   const resolvedElementImageUrls = normalizedReferences.length > 0
@@ -1719,8 +1784,8 @@ export async function startVideoGeneration(params: {
     );
   }
 
-  const resolvedStartImageUrl = startImageUrl ? await resolveStoredMediaUrl(supabase, startImageUrl) : null;
-  const resolvedEndImageUrl = endImageUrl ? await resolveStoredMediaUrl(supabase, endImageUrl) : null;
+  const resolvedStartImageUrl = startImageUrl ? await resolveGenerationMediaSource(supabase, startImageUrl) : null;
+  const resolvedEndImageUrl = endImageUrl ? await resolveGenerationMediaSource(supabase, endImageUrl) : null;
 
   const frameImageUrls = [
     resolvedStartImageUrl || resolvedLegacyImageUrls[0] || null,
@@ -2327,6 +2392,11 @@ export async function startMotionGeneration(params: {
     throw new Error('Motion generation requires both a reference video and a character image.');
   }
 
+  // Motion inputs are forwarded to the provider as-is, so gate their sources
+  // the same way as the resolved reference URLs elsewhere in this module.
+  assertAllowedGenerationMediaSource(characterImageUrl);
+  assertAllowedGenerationMediaSource(referenceVideoUrl);
+
   const selectedModel = MOTION_MODELS[model];
   if (!selectedModel) {
     throw new Error(`Unsupported motion model: ${model}`);
@@ -2471,7 +2541,7 @@ export async function startCatalogGeneration(params: {
   const resolvedInputs = await Promise.all(inputs.map(async (asset) => ({
     ...asset,
     url: typeof asset.url === 'string' && asset.url.trim()
-      ? await resolveStoredMediaUrl(supabase, asset.url)
+      ? await resolveGenerationMediaSource(supabase, asset.url)
       : null,
   })));
   const providerRequest = buildGenerationProviderRequest({

@@ -129,7 +129,7 @@ describe('startMotionGenerationForRoute', () => {
     });
     const userClient = createClientMock({
       sourceGeneration: {
-        id: 'source-1',
+        id: '3f8f0c70-9a54-4f6e-8f5a-1c2d3e4f5a6b',
         user_id: 'creator-1',
         is_public: true,
       },
@@ -158,7 +158,7 @@ describe('startMotionGenerationForRoute', () => {
           label: 'Reference video',
           sourceGenerationId: 'source-video-1',
         },
-        sourceGenerationId: 'source-1',
+        sourceGenerationId: '3f8f0c70-9a54-4f6e-8f5a-1c2d3e4f5a6b',
         catalogRevision,
       },
       userId: 'user-1',
@@ -181,7 +181,7 @@ describe('startMotionGenerationForRoute', () => {
       characterOrientation: 'image',
       mode: '1080p',
       quotedCostCredits: 162,
-      sourceGenerationId: 'source-1',
+      sourceGenerationId: '3f8f0c70-9a54-4f6e-8f5a-1c2d3e4f5a6b',
       characterImage: expect.objectContaining({
         kind: 'image',
         label: 'Character image',

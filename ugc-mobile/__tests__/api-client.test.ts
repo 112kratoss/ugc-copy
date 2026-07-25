@@ -1,6 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ApiError, createApiClient } from '../lib/api-client';
+import {
+  ApiError,
+  UpgradeRequiredError,
+  createApiClient,
+  setUpgradeRequiredHandler,
+} from '../lib/api-client';
 
 function jsonResponse(body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -8,6 +13,22 @@ function jsonResponse(body: unknown) {
     headers: {
       'Content-Type': 'application/json',
     },
+  });
+}
+
+function upgradeRequiredResponse() {
+  return new Response(JSON.stringify({
+    code: 'MOBILE_UPDATE_REQUIRED',
+    error: 'Update Magicbooklet to continue.',
+    compatibility: {
+      currentApiVersion: 1,
+      minimumApiVersion: 1,
+      minimumAppVersion: '1.1.0',
+      supportedCatalogSchemaVersions: [1],
+    },
+  }), {
+    status: 426,
+    headers: { 'Content-Type': 'application/json' },
   });
 }
 
@@ -113,19 +134,7 @@ describe('mobile api client caching', () => {
   });
 
   it('exposes stable compatibility error codes to update handling', async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({
-      code: 'MOBILE_UPDATE_REQUIRED',
-      error: 'Update Magicbooklet to continue.',
-      compatibility: {
-        currentApiVersion: 1,
-        minimumApiVersion: 1,
-        minimumAppVersion: '1.1.0',
-        supportedCatalogSchemaVersions: [1],
-      },
-    }), {
-      status: 426,
-      headers: { 'Content-Type': 'application/json' },
-    }));
+    const fetcher = vi.fn(async () => upgradeRequiredResponse());
     const api = createApiClient({
       baseUrl: 'https://magicbooklet.test',
       getAccessToken: async () => 'token-1',
@@ -137,8 +146,12 @@ describe('mobile api client caching', () => {
       fetcher: fetcher as unknown as typeof fetch,
     });
 
-    await expect(api.getProfile()).rejects.toMatchObject({
-      name: 'ApiError',
+    const error = await api.getProfile().catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(UpgradeRequiredError);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      name: 'UpgradeRequiredError',
       status: 426,
       code: 'MOBILE_UPDATE_REQUIRED',
       message: 'Update Magicbooklet to continue.',
@@ -1013,5 +1026,126 @@ describe('mobile api client caching', () => {
     expect(init.method).toBe('DELETE');
     expect(JSON.parse(String(init.body))).toEqual({ force: true });
     expect((init.headers as Headers).get('Content-Type')).toBe('application/json');
+  });
+});
+
+describe('mobile api client forced-upgrade handling', () => {
+  afterEach(() => {
+    setUpgradeRequiredHandler(null);
+    vi.useRealTimers();
+  });
+
+  function upgradeApi(fetcher: ReturnType<typeof vi.fn>) {
+    return createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      clientInfo: {
+        appVersion: '1.0.0',
+        apiVersion: 1,
+        catalogSchemaVersion: 1,
+      },
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+  }
+
+  it('invokes the registered handler exactly once for concurrent 426 responses', async () => {
+    const handler = vi.fn();
+    setUpgradeRequiredHandler(handler);
+    const fetcher = vi.fn(async () => upgradeRequiredResponse());
+    const api = upgradeApi(fetcher);
+
+    const results = await Promise.allSettled([
+      api.getProfile(),
+      api.getOnboardingState(),
+      api.getWelcomeCredits(),
+    ]);
+
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    for (const result of results) {
+      expect(result.status).toBe('rejected');
+      expect((result as PromiseRejectedResult).reason).toBeInstanceOf(UpgradeRequiredError);
+    }
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toMatchObject({
+      status: 426,
+      code: 'MOBILE_UPDATE_REQUIRED',
+    });
+  });
+
+  it('notifies again after the renotify window so a stranded user is re-routed', async () => {
+    vi.useFakeTimers({ now: new Date('2026-07-25T10:00:00.000Z'), toFake: ['Date'] });
+    const handler = vi.fn();
+    setUpgradeRequiredHandler(handler);
+    const fetcher = vi.fn(async () => upgradeRequiredResponse());
+    const api = upgradeApi(fetcher);
+
+    await expect(api.getProfile()).rejects.toBeInstanceOf(UpgradeRequiredError);
+    await expect(api.getProfile()).rejects.toBeInstanceOf(UpgradeRequiredError);
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date('2026-07-25T10:00:11.000Z'));
+    await expect(api.getProfile()).rejects.toBeInstanceOf(UpgradeRequiredError);
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not invoke the handler for other error statuses', async () => {
+    const handler = vi.fn();
+    setUpgradeRequiredHandler(handler);
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ error: 'Backend unavailable' }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    const api = upgradeApi(fetcher);
+
+    const error = await api.getProfile().catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).not.toBeInstanceOf(UpgradeRequiredError);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('still throws the typed error when no handler is registered', async () => {
+    const api = upgradeApi(vi.fn(async () => upgradeRequiredResponse()));
+
+    await expect(api.getProfile()).rejects.toBeInstanceOf(UpgradeRequiredError);
+  });
+
+  it('surfaces the typed error even when the handler itself throws', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      setUpgradeRequiredHandler(() => {
+        throw new Error('navigation exploded');
+      });
+      const api = upgradeApi(vi.fn(async () => upgradeRequiredResponse()));
+
+      await expect(api.getProfile()).rejects.toBeInstanceOf(UpgradeRequiredError);
+      expect(warn).toHaveBeenCalledWith('Upgrade-required handler failed', expect.any(Error));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('resets deduplication when a new handler registers', async () => {
+    const firstHandler = vi.fn();
+    setUpgradeRequiredHandler(firstHandler);
+    const api = upgradeApi(vi.fn(async () => upgradeRequiredResponse()));
+
+    await expect(api.getProfile()).rejects.toBeInstanceOf(UpgradeRequiredError);
+    expect(firstHandler).toHaveBeenCalledTimes(1);
+
+    const secondHandler = vi.fn();
+    setUpgradeRequiredHandler(secondHandler);
+    await expect(api.getProfile()).rejects.toBeInstanceOf(UpgradeRequiredError);
+    expect(secondHandler).toHaveBeenCalledTimes(1);
+    expect(firstHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes 426 responses from the catalog fetch path through the same handler', async () => {
+    const handler = vi.fn();
+    setUpgradeRequiredHandler(handler);
+    const api = upgradeApi(vi.fn(async () => upgradeRequiredResponse()));
+
+    await expect(api.fetchGenerationModels()).rejects.toBeInstanceOf(UpgradeRequiredError);
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });

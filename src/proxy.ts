@@ -35,15 +35,55 @@ const mobileCorsExposedHeaders = [
   'ETag',
 ].join(', ');
 
-const mobileCorsHeaders = {
-  'Access-Control-Allow-Headers': mobileCorsAllowedHeaders,
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Expose-Headers': mobileCorsExposedHeaders,
-  'Access-Control-Max-Age': '86400',
-  Vary: 'Origin, Access-Control-Request-Headers, Access-Control-Request-Method',
-  ...createMobileCompatibilityResponseHeaders(),
-};
+function getConfiguredSiteOrigin(): string | null {
+  const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  if (!configured) return null;
+  try {
+    return new URL(configured).origin;
+  } catch {
+    return null;
+  }
+}
+
+function isLocalDevelopmentOrigin(origin: string): boolean {
+  try {
+    const parsed = new URL(origin);
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:')
+      && (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Native mobile clients send no Origin header, so they never need
+ * Access-Control-Allow-Origin. Browsers only get the header back when the
+ * request comes from the site's own origin (or localhost during development);
+ * any other origin receives no CORS grant at all.
+ */
+function resolveAllowedCorsOrigin(request: NextRequest): string | null {
+  const origin = request.headers.get('origin')?.trim();
+  if (!origin) return null;
+
+  if (origin === getConfiguredSiteOrigin()) return origin;
+  if (process.env.NODE_ENV !== 'production' && isLocalDevelopmentOrigin(origin)) return origin;
+
+  return null;
+}
+
+function buildMobileCorsHeaders(request: NextRequest): Record<string, string> {
+  const allowedOrigin = resolveAllowedCorsOrigin(request);
+
+  return {
+    'Access-Control-Allow-Headers': mobileCorsAllowedHeaders,
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+    ...(allowedOrigin ? { 'Access-Control-Allow-Origin': allowedOrigin } : {}),
+    'Access-Control-Expose-Headers': mobileCorsExposedHeaders,
+    'Access-Control-Max-Age': '86400',
+    Vary: 'Origin, Access-Control-Request-Headers, Access-Control-Request-Method',
+    ...createMobileCompatibilityResponseHeaders(),
+  };
+}
 
 export function isRootAuthCodeRedirect(request: NextRequest) {
   return request.nextUrl.pathname === '/' && request.nextUrl.searchParams.has('code');
@@ -58,8 +98,8 @@ export function isMobileCorsPath(pathname: string) {
   });
 }
 
-function applyMobileCorsHeaders(response: NextResponse) {
-  for (const [key, value] of Object.entries(mobileCorsHeaders)) {
+function applyMobileCorsHeaders(request: NextRequest, response: NextResponse) {
+  for (const [key, value] of Object.entries(buildMobileCorsHeaders(request))) {
     response.headers.set(key, value);
   }
   return response;
@@ -90,7 +130,7 @@ export function proxy(request: NextRequest) {
     }, {
       status: compatibility.status,
       headers: {
-        ...(isMobilePath ? mobileCorsHeaders : createMobileCompatibilityResponseHeaders()),
+        ...(isMobilePath ? buildMobileCorsHeaders(request) : createMobileCompatibilityResponseHeaders()),
         'Cache-Control': 'private, no-store',
       },
     });
@@ -102,13 +142,13 @@ export function proxy(request: NextRequest) {
 
   if (request.method === 'OPTIONS') {
     return new NextResponse(null, {
-      headers: mobileCorsHeaders,
+      headers: buildMobileCorsHeaders(request),
       status: 204,
     });
   }
 
   return isMobilePath
-    ? applyMobileCorsHeaders(NextResponse.next())
+    ? applyMobileCorsHeaders(request, NextResponse.next())
     : applyMobileCompatibilityHeaders(NextResponse.next());
 }
 

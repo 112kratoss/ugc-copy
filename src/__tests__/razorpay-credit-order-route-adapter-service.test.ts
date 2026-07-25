@@ -82,6 +82,82 @@ describe('razorpay credit order route adapter service', () => {
     expect(createCreditRazorpayOrderForRoute).not.toHaveBeenCalled();
   });
 
+  it.each(['constructor', '__proto__', 'toString'])(
+    'rejects prototype-chain planId %s before Supabase or provider work',
+    async (planId) => {
+      const createServiceClient = vi.fn();
+      const createUserClientDependency = vi.fn();
+      const createCreditRazorpayOrderForRoute = vi.fn();
+
+      const response = await postRazorpayCreditOrderRouteResponse({
+        request: new Request('http://localhost/api/razorpay/order', {
+          method: 'POST',
+          body: JSON.stringify({ planId }),
+        }),
+        dependencies: {
+          createCreditRazorpayOrderForRoute,
+          createServiceClient,
+          createUserClient: createUserClientDependency,
+        },
+      });
+
+      // Plain-object indexing would resolve these to Object.prototype members,
+      // which are truthy and slip past the plan validation.
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: 'Invalid planId' });
+      expect(createUserClientDependency).not.toHaveBeenCalled();
+      expect(createServiceClient).not.toHaveBeenCalled();
+      expect(createCreditRazorpayOrderForRoute).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects non-string planId values as invalid', async () => {
+    const createCreditRazorpayOrderForRoute = vi.fn();
+
+    const response = await postRazorpayCreditOrderRouteResponse({
+      request: new Request('http://localhost/api/razorpay/order', {
+        method: 'POST',
+        body: JSON.stringify({ planId: { starter: true } }),
+      }),
+      dependencies: {
+        createCreditRazorpayOrderForRoute,
+        createServiceClient: vi.fn(),
+        createUserClient: vi.fn(),
+      },
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: 'Invalid planId' });
+    expect(createCreditRazorpayOrderForRoute).not.toHaveBeenCalled();
+  });
+
+  it('returns a fixed generic error and logs the detail when order creation throws', async () => {
+    const logError = vi.fn();
+    const failure = new Error('razorpay auth failed for key rzp_test_internal');
+    const createCreditRazorpayOrderForRoute = vi.fn(async () => {
+      throw failure;
+    });
+
+    const response = await postRazorpayCreditOrderRouteResponse({
+      request: new Request('http://localhost/api/razorpay/order', {
+        method: 'POST',
+        headers: { 'x-request-id': 'credit-order-error-1' },
+        body: JSON.stringify({ planId: 'starter' }),
+      }),
+      dependencies: {
+        createCreditRazorpayOrderForRoute,
+        createServiceClient: vi.fn(() => ({} as unknown as SupabaseClient)),
+        createUserClient: () => createUserClient('user-1'),
+        logError,
+      },
+    });
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    await expect(response.json()).resolves.toEqual({ error: 'Internal Server Error' });
+    expect(logError).toHaveBeenCalledWith('Razorpay Order Error:', failure);
+  });
+
   it('delegates valid order requests and maps rate-limit responses with private headers', async () => {
     const adminSupabase = { kind: 'admin' } as unknown as SupabaseClient;
     const rateLimitError = new BackendRateLimitError({

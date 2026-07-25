@@ -26,11 +26,23 @@ function createAdminSupabaseMock(state: {
   bundleOrder?: OrderRow;
   bundleRpcMode?: 'success' | 'fail-return' | 'error';
   creditRpcMode?: 'success' | 'false-settled' | 'false-mismatched' | 'false-unsettled' | 'error';
+  creditTransactionLoadError?: boolean;
+  marketplaceOrderLoadError?: boolean;
 }) {
   const tableReads: string[] = [];
   const rpcCalls: Array<{ name: string; payload: Record<string, unknown> }> = [];
+  const providerDependencyInserts: Array<Record<string, unknown>> = [];
   const client = {
     from(table: string) {
+      if (table === 'provider_dependency_events') {
+        return {
+          async insert(row: Record<string, unknown>) {
+            providerDependencyInserts.push(row);
+            return { error: null };
+          },
+        };
+      }
+
       return {
         select() {
           return {
@@ -42,11 +54,15 @@ function createAdminSupabaseMock(state: {
                   tableReads.push(table);
 
                   if (table === 'transactions') {
-                    return { data: state.creditTransaction ?? null, error: null };
+                    return state.creditTransactionLoadError
+                      ? { data: null, error: { message: 'transactions read failed' } }
+                      : { data: state.creditTransaction ?? null, error: null };
                   }
 
                   if (table === 'marketplace_orders') {
-                    return { data: state.marketplaceOrder ?? null, error: null };
+                    return state.marketplaceOrderLoadError
+                      ? { data: null, error: { message: 'marketplace_orders read failed' } }
+                      : { data: state.marketplaceOrder ?? null, error: null };
                   }
 
                   if (table === 'post_resource_bundle_orders') {
@@ -125,6 +141,7 @@ function createAdminSupabaseMock(state: {
     // assertion in one reviewable place instead of scattering casts through the
     // tests.
     client: client as unknown as SupabaseClient,
+    providerDependencyInserts,
     rpcCalls,
     tableReads,
   };
@@ -211,6 +228,109 @@ describe('processRazorpayWebhookForRoute', () => {
       },
     ]);
     expect(createAdminSupabase).toHaveBeenCalledTimes(1);
+    expect(admin.providerDependencyInserts).toEqual([]);
+  });
+
+  it('asks Razorpay to retry when the credit transaction load fails transiently', async () => {
+    const admin = createAdminSupabaseMock({
+      creditTransaction: {
+        id: 'txn-1',
+        user_id: 'user-1',
+        credits: 100,
+        status: 'pending',
+      },
+      creditTransactionLoadError: true,
+    });
+
+    const result = await processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+    });
+
+    expect(result).toEqual({ status: 500, body: 'Failed to assign credits' });
+    // The DB read error must not fall through to the marketplace/bundle
+    // lookups and end in a 200 that forfeits Razorpay's retry.
+    expect(admin.tableReads).toEqual(['transactions']);
+    expect(admin.rpcCalls).toEqual([]);
+    expect(admin.providerDependencyInserts).toEqual([
+      expect.objectContaining({
+        service_name: 'razorpay-webhook-processing',
+        outcome: 'http_error',
+        error_name: 'credit_transaction_settlement_failed',
+      }),
+    ]);
+  });
+
+  it('asks Razorpay to retry when the marketplace order load fails transiently', async () => {
+    const admin = createAdminSupabaseMock({
+      marketplaceOrder: {
+        id: 'marketplace-order-1',
+        buyer_user_id: 'user-1',
+        status: 'created',
+      },
+      marketplaceOrderLoadError: true,
+    });
+
+    const result = await processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+    });
+
+    expect(result).toEqual({ status: 500, body: 'Failed to finalize marketplace purchase' });
+    expect(admin.tableReads).toEqual(['transactions', 'marketplace_orders']);
+    expect(admin.rpcCalls).toEqual([]);
+    expect(admin.providerDependencyInserts).toEqual([
+      expect.objectContaining({
+        service_name: 'razorpay-webhook-processing',
+        error_name: 'marketplace_purchase_settlement_failed',
+      }),
+    ]);
+  });
+
+  it('still acknowledges payments with no matching order without recording a failure', async () => {
+    const admin = createAdminSupabaseMock({});
+
+    const result = await processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+    });
+
+    expect(result).toEqual({ status: 200, body: 'OK' });
+    expect(admin.tableReads).toEqual([
+      'transactions',
+      'marketplace_orders',
+      'post_resource_bundle_orders',
+    ]);
+    expect(admin.providerDependencyInserts).toEqual([]);
+  });
+
+  it('records a durable payment failure when add_credits errors', async () => {
+    const admin = createAdminSupabaseMock({
+      creditTransaction: {
+        id: 'txn-1',
+        user_id: 'user-1',
+        credits: 100,
+        status: 'pending',
+      },
+      creditRpcMode: 'error',
+    });
+
+    const result = await processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+    });
+
+    expect(result).toEqual({ status: 500, body: 'Failed to assign credits' });
+    expect(admin.providerDependencyInserts).toEqual([
+      expect.objectContaining({
+        service_name: 'razorpay-webhook-processing',
+        outcome: 'http_error',
+        method: 'POST',
+        status: 500,
+        ok: false,
+        error_name: 'credit_transaction_settlement_failed',
+      }),
+    ]);
   });
 
   it('asks Razorpay to retry when bundle completion remains unresolved', async () => {
@@ -246,6 +366,12 @@ describe('processRazorpayWebhookForRoute', () => {
       'marketplace_orders',
       'post_resource_bundle_orders',
       'post_resource_bundle_orders',
+    ]);
+    expect(admin.providerDependencyInserts).toEqual([
+      expect.objectContaining({
+        service_name: 'razorpay-webhook-processing',
+        error_name: 'post_resource_bundle_settlement_failed',
+      }),
     ]);
   });
 

@@ -23,12 +23,22 @@ function configuredValue(name: string): string | null {
   return Deno.env.get(name)?.trim() || null;
 }
 
-function safeEqual(left: string | null, right: string | null): boolean {
-  if (!left || !right || left.length !== right.length) return false;
+async function safeEqual(left: string | null, right: string | null): Promise<boolean> {
+  if (!left || !right) return false;
+
+  // Compare fixed-length digests instead of the raw values so neither the
+  // length nor any prefix of the configured secret leaks through timing.
+  const encoder = new TextEncoder();
+  const [leftDigest, rightDigest] = await Promise.all([
+    crypto.subtle.digest('SHA-256', encoder.encode(left)),
+    crypto.subtle.digest('SHA-256', encoder.encode(right)),
+  ]);
+  const leftBytes = new Uint8Array(leftDigest);
+  const rightBytes = new Uint8Array(rightDigest);
 
   let result = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    result |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  for (let index = 0; index < leftBytes.length; index += 1) {
+    result |= leftBytes[index] ^ rightBytes[index];
   }
   return result === 0;
 }
@@ -118,7 +128,12 @@ serve(async (request: Request) => {
 
   const incomingUrl = new URL(request.url);
   const requestSecret = incomingUrl.searchParams.get('secret');
-  if (!providerSecrets.some((secret) => safeEqual(secret, requestSecret))) {
+  // Check every configured secret (no early exit) so the comparison cost does
+  // not reveal which secret, if any, matched.
+  const secretChecks = await Promise.all(
+    providerSecrets.map((secret) => safeEqual(secret, requestSecret)),
+  );
+  if (!secretChecks.some(Boolean)) {
     return jsonResponse({ error: 'Unauthorized' }, 401);
   }
 

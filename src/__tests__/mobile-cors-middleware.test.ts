@@ -59,7 +59,10 @@ describe('mobile API CORS proxy', () => {
         method: 'OPTIONS',
       }));
       expect(response.status, pathname).toBe(204);
-      expect(response.headers.get('Access-Control-Allow-Origin'), pathname).toBe('*');
+      // Localhost is reflected outside production so the Expo web build and the
+      // dev server keep working; it is never a blanket wildcard.
+      expect(response.headers.get('Access-Control-Allow-Origin'), pathname)
+        .toBe('http://localhost:8082');
     }
   });
 
@@ -76,7 +79,7 @@ describe('mobile API CORS proxy', () => {
     );
 
     expect(response.status).toBe(204);
-    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:8082');
     expect(response.headers.get('Access-Control-Allow-Headers')).toContain('Authorization');
     expect(response.headers.get('Access-Control-Allow-Headers')).toContain('X-Magicbooklet-Api-Version');
     expect(response.headers.get('Access-Control-Allow-Headers')).toContain('X-Magicbooklet-Installation-Id');
@@ -86,12 +89,38 @@ describe('mobile API CORS proxy', () => {
   it('adds CORS headers to mobile API responses', () => {
     const response = proxy(new NextRequest('http://localhost/api/showcase/feed?limit=4'));
 
-    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    // A native client sends no Origin, so no grant is issued — and none is
+    // needed, because CORS only constrains browsers.
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBeNull();
     expect(response.headers.get('Access-Control-Allow-Methods')).toContain('GET');
     expect(response.headers.get('x-magicbooklet-api-version')).toBe('1');
     expect(response.headers.get('x-magicbooklet-min-api-version')).toBe('1');
     expect(response.headers.get('x-magicbooklet-min-app-version')).toBe('0.0.1');
     expect(response.headers.get('x-magicbooklet-catalog-schema-version')).toBe('2');
+  });
+
+  it('refuses a CORS grant to foreign browser origins', () => {
+    // The mobile path allowlist governs *which routes* answer CORS; it must not
+    // hand every website on the internet a grant to drive them from a victim's
+    // browser and IP.
+    for (const origin of ['https://evil.example', 'http://magicbooklet.com.evil.example']) {
+      const preflight = proxy(new NextRequest('http://localhost/api/marketplace/resources', {
+        headers: {
+          'Access-Control-Request-Headers': 'Authorization',
+          'Access-Control-Request-Method': 'GET',
+          Origin: origin,
+        },
+        method: 'OPTIONS',
+      }));
+      expect(preflight.headers.get('Access-Control-Allow-Origin'), origin).toBeNull();
+
+      const response = proxy(new NextRequest('http://localhost/api/showcase/feed', {
+        headers: { Origin: origin },
+      }));
+      expect(response.headers.get('Access-Control-Allow-Origin'), origin).toBeNull();
+      // Vary must stay set so a cache never reuses one origin's answer for another.
+      expect(response.headers.get('Vary'), origin).toContain('Origin');
+    }
   });
 
   it('keeps unversioned released clients on the legacy v1 contract', () => {

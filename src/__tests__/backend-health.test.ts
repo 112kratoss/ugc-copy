@@ -598,6 +598,142 @@ describe('collectBackendHealth', () => {
     );
   });
 
+  it('degrades when payment webhook processing failures were durably recorded', async () => {
+    const now = new Date('2026-06-21T10:00:00.000Z');
+    const db = createClient({
+      backend_job_runs: {
+        error: null,
+        data: [
+          {
+            job_name: 'backend-alert-delivery',
+            status: 'skipped',
+            started_at: '2026-06-21T09:59:00.000Z',
+            finished_at: '2026-06-21T09:59:01.000Z',
+            duration_ms: 1000,
+            skip_reason: 'alert_delivery_not_configured',
+            error_message: null,
+          },
+          {
+            job_name: 'media-preview-repair',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:45:00.000Z',
+            finished_at: '2026-06-21T09:45:02.000Z',
+            duration_ms: 2000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'mobile-push-receipts',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'operational-data-retention',
+            status: 'succeeded',
+            started_at: '2026-06-21T00:50:00.000Z',
+            finished_at: '2026-06-21T00:50:03.000Z',
+            duration_ms: 3000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
+            job_name: 'generation-completions',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:58:00.000Z',
+            finished_at: '2026-06-21T09:58:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+        ],
+      },
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+      provider_dependency_events: {
+        error: null,
+        data: [
+          {
+            service_name: 'razorpay-webhook-processing',
+            outcome: 'http_error',
+            duration_ms: 0,
+            timeout_ms: 0,
+            status: 500,
+            created_at: '2026-06-21T09:55:00.000Z',
+          },
+          {
+            service_name: 'revenuecat-webhook-processing',
+            outcome: 'http_error',
+            duration_ms: 0,
+            timeout_ms: 0,
+            status: 503,
+            created_at: '2026-06-21T09:56:00.000Z',
+          },
+        ],
+      },
+    });
+
+    const health = await collectBackendHealth(db.client as never, now);
+
+    // A single event is a paid transaction whose settlement did not complete,
+    // so this degrades even below the generic failure-spike threshold.
+    expect(health.status).toBe('degraded');
+    expect(health.providerDependencies).toMatchObject({
+      status: 'degraded',
+      failedEventCount: 2,
+      paymentWebhookProcessingFailureCount: 2,
+      countsByService: {
+        'razorpay-webhook-processing': 1,
+        'revenuecat-webhook-processing': 1,
+      },
+    });
+    expect(health.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'PAYMENT_WEBHOOK_PROCESSING_FAILURE',
+        severity: 'degraded',
+        message: expect.stringContaining('2 payment webhook processing failure(s)'),
+      }),
+    ]));
+  });
+
+  it('does not raise the payment webhook issue for non-payment provider failures', async () => {
+    const now = new Date('2026-06-21T10:00:00.000Z');
+    const db = createClient({
+      backend_job_runs: { error: null, data: [] },
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+      provider_dependency_events: {
+        error: null,
+        data: [
+          {
+            service_name: 'KIE task status',
+            outcome: 'http_error',
+            duration_ms: 2400,
+            timeout_ms: 10_000,
+            status: 502,
+            created_at: '2026-06-21T09:55:00.000Z',
+          },
+        ],
+      },
+    });
+
+    const health = await collectBackendHealth(db.client as never, now);
+
+    expect(health.providerDependencies.paymentWebhookProcessingFailureCount).toBe(0);
+    expect(health.issues).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'PAYMENT_WEBHOOK_PROCESSING_FAILURE' }),
+    ]));
+  });
+
   it('warns when a scheduled job has no recent run records', async () => {
     const db = createClient({
       backend_job_runs: { error: null, data: [] },

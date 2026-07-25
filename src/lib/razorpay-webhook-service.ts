@@ -8,6 +8,10 @@ import {
   settleCreditPurchaseReferralRewards,
 } from '@/lib/credit-referral-integration';
 import { invalidateMarketplaceResourceListCache as defaultInvalidateMarketplaceResourceListCache } from '@/lib/marketplace-resource-list-cache';
+import {
+  RAZORPAY_WEBHOOK_PROCESSING_SERVICE_NAME,
+  recordPaymentWebhookProcessingFailure,
+} from '@/lib/provider-dependency-telemetry';
 import { reconcileRazorpayCreditPurchaseAdjustment } from '@/lib/referral-reward-service';
 
 type CreditTransactionRow = {
@@ -105,6 +109,16 @@ export async function processRazorpayWebhookForRoute({
     return supabaseAdmin;
   }
 
+  // Called wherever processing fails after signature verification and we ask
+  // Razorpay to retry with a 500. Durable, so ops alerting does not depend on
+  // ephemeral logs; recording failures are swallowed inside the helper.
+  async function recordProcessingFailure(failureCode: string) {
+    await recordPaymentWebhookProcessingFailure({
+      serviceName: RAZORPAY_WEBHOOK_PROCESSING_SERVICE_NAME,
+      failureCode,
+    }, getSupabaseAdmin());
+  }
+
   async function handleCreditTransaction(orderId: string, paymentId: string): Promise<HandlerResult> {
     const { data: txn, error: txnError } = await getSupabaseAdmin()
       .from('transactions')
@@ -114,8 +128,10 @@ export async function processRazorpayWebhookForRoute({
 
     const typedTxn = (txn as CreditTransactionRow | null) ?? null;
     if (txnError) {
+      // A transient DB read failure is indistinguishable from a matching order
+      // we could not see; acknowledging with 200 would forfeit Razorpay's retry.
       logBackendError('razorpay_webhook_credit_transaction_load_failed', { orderId, error: txnError });
-      return { handled: false, shouldRetry: false };
+      return { handled: true, shouldRetry: true };
     }
 
     if (!typedTxn) {
@@ -336,8 +352,10 @@ export async function processRazorpayWebhookForRoute({
 
     const typedMarketplaceOrder = (marketplaceOrder as OrderRow | null) ?? null;
     if (marketplaceOrderError) {
+      // Same retry semantics as the credit transaction load: a DB read error
+      // must surface as a 500 so Razorpay redelivers the event.
       logBackendError('razorpay_webhook_marketplace_order_load_failed', { orderId, error: marketplaceOrderError });
-      return { handled: false, shouldRetry: false };
+      return { handled: true, shouldRetry: true };
     }
 
     if (!typedMarketplaceOrder) {
@@ -427,16 +445,20 @@ export async function processRazorpayWebhookForRoute({
 
   if (event.event === 'refund.processed') {
     const result = await handleRefundProcessed();
-    return result.shouldRetry
-      ? { status: 500, body: 'Failed to reconcile credit refund' }
-      : { status: 200, body: 'OK' };
+    if (result.shouldRetry) {
+      await recordProcessingFailure('credit_refund_reconciliation_failed');
+      return { status: 500, body: 'Failed to reconcile credit refund' };
+    }
+    return { status: 200, body: 'OK' };
   }
 
   if (typeof event.event === 'string' && event.event.startsWith('payment.dispute.')) {
     const result = await handleDisputeEvent(event.event);
-    return result.shouldRetry
-      ? { status: 500, body: 'Failed to reconcile credit dispute' }
-      : { status: 200, body: 'OK' };
+    if (result.shouldRetry) {
+      await recordProcessingFailure('credit_dispute_reconciliation_failed');
+      return { status: 500, body: 'Failed to reconcile credit dispute' };
+    }
+    return { status: 200, body: 'OK' };
   }
 
   if (event.event !== 'payment.captured') {
@@ -459,6 +481,7 @@ export async function processRazorpayWebhookForRoute({
 
   const creditResult = await handleCreditTransaction(orderId, paymentId);
   if (creditResult.shouldRetry) {
+    await recordProcessingFailure('credit_transaction_settlement_failed');
     return { status: 500, body: 'Failed to assign credits' };
   }
   if (creditResult.handled) {
@@ -467,6 +490,7 @@ export async function processRazorpayWebhookForRoute({
 
   const marketplaceResult = await handleMarketplaceOrder(orderId, paymentId);
   if (marketplaceResult.shouldRetry) {
+    await recordProcessingFailure('marketplace_purchase_settlement_failed');
     return { status: 500, body: 'Failed to finalize marketplace purchase' };
   }
   if (marketplaceResult.handled) {
@@ -475,6 +499,7 @@ export async function processRazorpayWebhookForRoute({
 
   const bundleOrderResult = await handlePostResourceBundleOrder(orderId, paymentId);
   if (bundleOrderResult.shouldRetry) {
+    await recordProcessingFailure('post_resource_bundle_settlement_failed');
     return { status: 500, body: 'Failed to finalize post resource bundle purchase' };
   }
   if (bundleOrderResult.handled) {

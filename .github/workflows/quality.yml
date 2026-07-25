@@ -66,6 +66,48 @@ jobs:
       - name: Verify packaged FFmpeg runtime
         run: npm run build:verify
 
+  e2e:
+    name: E2E smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      # Playwright boots its own dev server on :3100 with the E2E auth bypass
+      # (see playwright.config.ts). The specs stub every API route they touch,
+      # so placeholder Supabase/provider values are sufficient; the bypass
+      # stays dev-only because `next dev` never runs a production build.
+      - name: Run E2E smoke tests
+        run: npm run test:e2e
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+          NEXT_PUBLIC_SITE_URL: http://127.0.0.1:3100
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
+          NEXT_PUBLIC_RAZORPAY_KEY_ID: ci-placeholder-razorpay-key
+          SUPABASE_SERVICE_ROLE_KEY: ci-placeholder-service-role-key
+          KIE_AI_API_KEY: ci-placeholder-kie-key
+          WEBHOOK_SECRET: ci-placeholder-webhook-secret
+          CRON_SECRET: ci-placeholder-cron-secret
+          RAZORPAY_KEY_SECRET: ci-placeholder-razorpay-secret
+          RAZORPAY_WEBHOOK_SECRET: ci-placeholder-razorpay-webhook-secret
+          REVENUECAT_REST_API_KEY: ci-placeholder-revenuecat-key
+          REVENUECAT_WEBHOOK_AUTH_TOKEN: ci-placeholder-revenuecat-webhook-token
+
   mobile:
     name: Mobile app
     runs-on: ubuntu-latest

@@ -50,11 +50,10 @@ async function handleRazorpayCreditVerifyPOST(
       createAdminSupabase: () => dependencies.createServiceClient(),
     }));
   } catch (error: unknown) {
+    // Detail stays in the structured log; clients get a fixed generic message
+    // so provider/config internals never leak through this money path.
     dependencies.logError('Razorpay Verify Error:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Internal Server Error' },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
 

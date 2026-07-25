@@ -28,6 +28,19 @@ describe('Supabase KIE webhook forwarding function', () => {
     expect(functionSource).not.toContain('generations');
   });
 
+  it('compares the provider secret in constant time via fixed-length digests', () => {
+    // The query secret must never be compared character-by-character with an
+    // early length exit: both sides are hashed to fixed-length SHA-256
+    // digests and the digests are compared byte-for-byte.
+    expect(functionSource).toContain("crypto.subtle.digest('SHA-256', encoder.encode(left))");
+    expect(functionSource).toContain("crypto.subtle.digest('SHA-256', encoder.encode(right))");
+    expect(functionSource).toContain('leftBytes[index] ^ rightBytes[index]');
+    expect(functionSource).not.toContain('left.length !== right.length');
+    expect(functionSource).not.toContain('charCodeAt');
+    // Every configured secret is checked; no early exit on first match.
+    expect(functionSource).toContain('providerSecrets.map((secret) => safeEqual(secret, requestSecret))');
+  });
+
   it('allows unauthenticated provider callbacks while keeping verification in the function', () => {
     expect(config).toContain('[functions.kie-webhook]');
     expect(config).toContain('verify_jwt = false');

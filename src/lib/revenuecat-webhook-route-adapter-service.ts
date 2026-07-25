@@ -6,6 +6,10 @@ import { NextResponse } from 'next/server';
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { reconcileMobilePurchaseAdjustment } from '@/lib/mobile-commerce';
 import {
+  REVENUECAT_WEBHOOK_PROCESSING_SERVICE_NAME,
+  recordPaymentWebhookProcessingFailure,
+} from '@/lib/provider-dependency-telemetry';
+import {
   parseRevenueCatRefundEvent,
   webhookAuthorizationMatches,
 } from '@/lib/revenuecat-webhook';
@@ -20,6 +24,7 @@ type RevenueCatWebhookRouteDependencies = {
   logError?: typeof logBackendRouteError;
   parseRevenueCatRefundEvent?: typeof parseRevenueCatRefundEvent;
   readBoundedWebhookBody?: typeof readBoundedWebhookBody;
+  recordPaymentWebhookProcessingFailure?: typeof recordPaymentWebhookProcessingFailure;
   webhookAuthorizationMatches?: typeof webhookAuthorizationMatches;
 };
 
@@ -36,6 +41,9 @@ function resolveDependencies(dependencies: RevenueCatWebhookRouteDependencies | 
       dependencies?.parseRevenueCatRefundEvent ?? parseRevenueCatRefundEvent,
     readBoundedWebhookBody:
       dependencies?.readBoundedWebhookBody ?? readBoundedWebhookBody,
+    recordPaymentWebhookProcessingFailure:
+      dependencies?.recordPaymentWebhookProcessingFailure
+      ?? recordPaymentWebhookProcessingFailure,
     webhookAuthorizationMatches:
       dependencies?.webhookAuthorizationMatches ?? webhookAuthorizationMatches,
   };
@@ -90,7 +98,25 @@ async function handleRevenueCatWebhookPOST(
     });
   } catch (error) {
     dependencies.logError('RevenueCat purchase adjustment reconciliation failed:', error);
+    await dependencies.recordPaymentWebhookProcessingFailure({
+      serviceName: REVENUECAT_WEBHOOK_PROCESSING_SERVICE_NAME,
+      failureCode: 'refund_reconciliation_failed',
+      status: 503,
+    }, adminSupabase);
     return NextResponse.json({ error: 'Refund reconciliation failed.' }, { status: 503 });
+  }
+
+  if (settlement.status === 'not_found') {
+    // The refunded purchase has not been synced into the ledger yet (webhook
+    // raced the client sync). A 200 would end RevenueCat's redelivery and lose
+    // the refund; answer retryable so a later attempt lands after the sync.
+    dependencies.logError('RevenueCat refund arrived before the purchase was synced; requesting retry.');
+    await dependencies.recordPaymentWebhookProcessingFailure({
+      serviceName: REVENUECAT_WEBHOOK_PROCESSING_SERVICE_NAME,
+      failureCode: 'refund_purchase_not_synced',
+      status: 503,
+    }, adminSupabase);
+    return NextResponse.json({ error: 'Purchase is not synced yet.' }, { status: 503 });
   }
 
   return NextResponse.json({ received: true, result: settlement.status });

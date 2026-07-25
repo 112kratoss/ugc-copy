@@ -214,7 +214,7 @@ describe('startWorkflowRunForRoute', () => {
     });
   });
 
-  it('maps runner failures to route-ready 500 responses', async () => {
+  it('maps runner failures to a fixed 500 response without leaking error details', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const canvas = createCanvasClient();
     const admin = createAdminClient();
@@ -226,7 +226,7 @@ describe('startWorkflowRunForRoute', () => {
       canvasId: 'canvas-1',
       body: { startNodeId: 'node-1' },
       executeRun: vi.fn(async () => {
-        throw new Error('Node dependency is missing.');
+        throw new Error('connection refused: db-internal:5432');
       }),
       scheduleMonitor: vi.fn(),
     });
@@ -234,7 +234,7 @@ describe('startWorkflowRunForRoute', () => {
     expect(result).toEqual({
       ok: false,
       status: 500,
-      body: { error: 'Node dependency is missing.' },
+      body: { error: 'Workflow run failed.' },
     });
   });
 });

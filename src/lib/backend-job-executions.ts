@@ -34,6 +34,10 @@ import {
 } from '@/lib/referral-reward-reconciliation';
 import { withRequestTrace } from '@/lib/request-trace';
 import { createServiceClient } from '@/lib/server-helpers';
+import {
+  hasStalledGenerationWork,
+  reapStalledGenerations,
+} from '@/lib/stalled-generation-reaper';
 
 const GENERATION_COMPLETION_BATCH_LIMIT = 25;
 
@@ -293,7 +297,10 @@ export function runGenerationCompletionsBackendJob(options: {
       completed: 'generation_completions_completed',
       failed: 'generation_completions_failed',
     },
-    hasWork: (client, context) => hasDueGenerationCompletionJobs(client, { nowMs: context.startedAtMs }),
+    hasWork: async (client, context) => (
+      await hasDueGenerationCompletionJobs(client, { nowMs: context.startedAtMs })
+      || await hasStalledGenerationWork(client, { nowMs: context.startedAtMs })
+    ),
     onNoWork: async (client, context) => ({
       pruned: await maybePruneGenerationCompletionJobs(client, { nowMs: context.startedAtMs }),
     }),
@@ -304,9 +311,18 @@ export function runGenerationCompletionsBackendJob(options: {
         lockedBy: context.lockOwner,
         limit: GENERATION_COMPLETION_BATCH_LIMIT,
       });
+      // Webhook-less safety net: reconcile stalled generations that the
+      // durable completion queue never heard about (missed webhook, closed
+      // app) so credit holds cannot linger forever. Bounded and idempotent.
+      const stalled = await reapStalledGenerations({
+        supabase: client,
+        creditSupabase: client,
+        nowMs: context.startedAtMs,
+      });
       const pruned = await maybePruneGenerationCompletionJobs(client, { nowMs: context.startedAtMs });
       return {
         ...completionSummary,
+        stalled,
         pruned,
       };
     },

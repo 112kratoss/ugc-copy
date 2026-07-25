@@ -27,6 +27,7 @@ type GenerationRow = {
 
 let generationsState: GenerationRow[] = [];
 let generationPreviewColumnsAvailable = true;
+let trackGenerationSelect: ((columns: string) => void) | null = null;
 let linkedPostsState: Array<{
   id: string;
   generation_id: string | null;
@@ -65,6 +66,7 @@ function createSupabaseClientMock() {
       if (table === 'generations') {
         return {
           select(columns?: string) {
+            trackGenerationSelect?.(columns ?? '');
             const filters: Record<string, unknown> = {};
             let rangeStart = 0;
             let rangeEnd: number | null = null;
@@ -310,6 +312,7 @@ describe('/api/generations route', () => {
     createUserClientMock.mockReset();
     createUserClientMock.mockImplementation(() => createSupabaseClientMock());
     generationPreviewColumnsAvailable = true;
+    trackGenerationSelect = null;
     serviceTableCalls = [];
     generationsState = [
       {
@@ -705,7 +708,12 @@ describe('/api/generations route', () => {
     expect(data.generations[1].media.expiresAt).toEqual(expect.any(String));
   });
 
-  it('falls back to base generation columns when preview columns are not deployed yet', async () => {
+  it('surfaces a schema error instead of retrying a narrower column list', async () => {
+    // The route used to probe a ladder of column lists, leading with a
+    // `thumbnail_url` column that no longer exists in production — so every
+    // request logged a guaranteed Postgres error before falling back. The
+    // schema is stable now, so a missing column is a genuine fault: it must
+    // surface rather than be masked by a retry.
     generationPreviewColumnsAvailable = false;
     generationsState = [
       {
@@ -726,24 +734,6 @@ describe('/api/generations route', () => {
         prompt: 'An image generation.',
         workflow_settings: null,
       },
-      {
-        id: 'gen-video-legacy-schema',
-        user_id: 'user-1',
-        output_url: 'generated_videos/user-1/video-output.mp4',
-        showcase_asset_path: null,
-        status: 'succeeded',
-        created_at: '2026-03-24T11:00:00.000Z',
-        completed_at: '2026-03-24T11:01:00.000Z',
-        duration: null,
-        cost: 12,
-        model: 'kling-3.0-video',
-        category: 'video',
-        is_public: false,
-        title: 'Video output',
-        description: null,
-        prompt: 'A video generation.',
-        workflow_settings: null,
-      },
     ];
 
     const { GET } = await import('@/app/api/generations/route');
@@ -756,10 +746,31 @@ describe('/api/generations route', () => {
       } as never
     );
 
-    const data = await response.json();
+    expect(response.status).toBe(500);
+  });
+
+  it('never selects the retired thumbnail_url column', async () => {
+    const selectedColumnLists: string[] = [];
+    generationsState = [];
+    trackGenerationSelect = (columns: string) => {
+      selectedColumnLists.push(columns);
+    };
+
+    const { GET } = await import('@/app/api/generations/route');
+    const response = await GET(
+      {
+        headers: new Headers({
+          Authorization: 'Bearer test-token',
+        }),
+        nextUrl: new URL('http://localhost/api/generations'),
+      } as never
+    );
+
     expect(response.status).toBe(200);
-    expect(data.generations[0].preview_url).toBe('https://signed.example.com/generated_images/user-1/image-output.jpg');
-    expect(data.generations[1].preview_url).toBeNull();
+    expect(selectedColumnLists.length).toBeGreaterThan(0);
+    for (const columns of selectedColumnLists) {
+      expect(columns).not.toContain('thumbnail_url');
+    }
   });
 
   it('prefers durable showcase assets over expired provider URLs', async () => {

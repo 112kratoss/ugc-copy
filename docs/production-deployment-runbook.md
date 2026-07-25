@@ -1,6 +1,6 @@
 # Production Deployment And Operations Runbook
 
-Last updated: 2026-07-12
+Last updated: 2026-07-25
 
 ## Production Topology
 
@@ -21,8 +21,8 @@ The protected backend health endpoint reports only missing capability names, nev
 - Supabase client key: `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
 - Supabase privileged key: `SUPABASE_SERVICE_ROLE_KEY`.
 - Canonical origin: `NEXT_PUBLIC_SITE_URL`.
-- Scheduler authentication: `CRON_SECRET`.
-- Protected ops dashboard authentication: `OPS_READ_SECRET`.
+- Scheduler authentication: `CRON_SECRET`. `CRON_SECRET_PREVIOUS` is a temporary rotation-only variable (see the rotation procedure below).
+- Protected ops dashboard authentication: `OPS_READ_SECRET`. `OPS_READ_SECRET_PREVIOUS` is a temporary rotation-only variable (see the rotation procedure below).
 - Generation provider: `KIE_AI_API_KEY`.
 - Generation model catalog: `GENERATION_MODEL_CATALOG_SOURCE` set to `shadow` while comparing a candidate database release, then `database` after the active release is verified. `code` is the emergency fallback.
 - Generation webhook ingress: `KIE_PROVIDER_WEBHOOK_SECRET` (with legacy `WEBHOOK_SECRET` accepted only during rotation). KIE callbacks go to the Supabase `kie-webhook` Edge Function, never directly to the HMAC-only application endpoint.
@@ -39,6 +39,17 @@ The protected backend health endpoint reports only missing capability names, nev
 Optional alert delivery can be enabled with `BACKEND_ALERT_DELIVERY_URL`, plus optional `BACKEND_ALERT_DELIVERY_AUTH_HEADER`. The protected backend dashboard is the no-extra-vendor monitoring baseline, so the external alert hook is not a required production capability.
 
 Keep secrets scoped to Production unless a separate preview environment has isolated provider credentials and an isolated database. Never connect untrusted preview branches to production service-role credentials.
+
+### Rotating `CRON_SECRET` And `OPS_READ_SECRET`
+
+Both secrets support dual-key rotation, mirroring the KIE `*_PREVIOUS` webhook pattern, so rotation is a two-step deploy instead of a hard cutover:
+
+1. Copy the current value into `CRON_SECRET_PREVIOUS` (or `OPS_READ_SECRET_PREVIOUS`) in the Vercel Production environment.
+2. Set a new value in `CRON_SECRET` (or `OPS_READ_SECRET`) and redeploy. Both values now authenticate, so Vercel cron and any external monitor keep working mid-rotation.
+3. Move every external consumer to the new value. Vercel cron reads `CRON_SECRET` from the same environment and follows automatically; uptime monitors and operator scripts that call `/api/ops/*` must be updated by hand.
+4. Remove the `*_PREVIOUS` variable and redeploy. Confirm the old value now receives `401` and the new value still receives `200`.
+
+Authorization stays fail-closed: when neither the primary nor the `*_PREVIOUS` variable is configured, every request is rejected. Do not leave `*_PREVIOUS` values in place after rotation completes.
 
 ## Pre-Deployment Gate
 
@@ -300,6 +311,7 @@ Production migrations are forward-only. Do not run destructive down migrations d
 | Signal | Initial threshold | Immediate response |
 | --- | --- | --- |
 | Failed generation settlement | Any unreconciled paid generation older than 15 minutes | Disable affected model if systemic, inspect provider task and idempotency record, reconcile or refund. |
+| Stalled active generation (`GENERATION_STALLED_ACTIVE`, `GENERATION_PENDING_WITHOUT_PROVIDER_TASK`) | Any active generation older than 60 minutes, or pending without a provider task after 5 minutes | Remediation is automatic: every `generation-completions` tick reaps stalled work in bounded batches — re-polling provider status for stalled `waiting`/`processing` generations that have a provider task (after 30 minutes) and settling/refunding `pending` generations that never received one (after 45 minutes). Follow up manually only if the signal persists across two scheduler intervals: check `stalled_generation_*` log events, KIE webhook forwarding, provider status, and the `generation-completions` job-run ledger. |
 | Stale scheduler/job | No healthy run within the job health window | Check cron manifest, `CRON_SECRET`, function logs, job lock expiry, and Supabase connectivity. |
 | Payment reconciliation failure | Any failed verified payment/refund event | Stop the affected purchase path if repeated, preserve event payload/id, reconcile idempotently. |
 | Provider errors | Five failures or three timeouts in one hour | Check provider status and latency, reduce retries, disable only the affected model/provider when necessary. |
@@ -329,6 +341,38 @@ External alert delivery should route on the stable outbound payload:
 - `delivery.monitorEndpoints`: include the protected follow-up endpoints to inspect.
 
 Use `/api/ops/backend-dashboard` as the primary dashboard feed. Use `/api/ops/backend-health` and `/api/ops/backend-costs` as drill-down panels. Use `/api/ops/backend-alerts` as the paging source because it combines health, cost, spend, provider, scheduler, media, and settlement signals into one normalized contract.
+
+## External Monitoring (Required Operator Setup)
+
+Everything in this section lives outside the repository and cannot be verified by CI. Treat each item as a required next step for the production operator; the in-repo alerting only works if something outside the platform is watching it.
+
+### 1. External uptime monitor on the paging endpoint
+
+The scheduler cannot report its own death. Configure an external uptime monitor (any provider — Better Stack, UptimeRobot, Pingdom, a cron on separate infrastructure) to poll the paging endpoint every 5 minutes with the ops read secret:
+
+```bash
+curl -fsS -m 20 \
+  -H "Authorization: Bearer $OPS_READ_SECRET" \
+  https://magicbooklet.com/api/ops/backend-alerts
+```
+
+Alerting rules:
+
+- Any non-`200` response is alertable. `401` means the monitor's secret is wrong or was rotated without updating the monitor. Timeouts and `5xx` mean the platform or the app is down.
+- `503` returns the normalized alert payload for a degraded backend. Notify on the first `503`; page on repeated `503` (two consecutive checks), which indicates a persisted degraded state rather than a transient dip.
+- Store `OPS_READ_SECRET` in the monitor's secret storage, never in the check's URL or a public status page. After rotating `OPS_READ_SECRET`, update the monitor before removing `OPS_READ_SECRET_PREVIOUS`.
+
+### 2. Verify `BACKEND_ALERT_DELIVERY_URL` is set in Vercel production
+
+Outbound alert delivery silently no-ops when `BACKEND_ALERT_DELIVERY_URL` is unset: the `backend-alert-delivery` job records a skipped run with `alert_delivery_not_configured` and no notification is ever sent. Confirm the variable (plus `BACKEND_ALERT_DELIVERY_AUTH_HEADER` when the destination needs it) exists in the Vercel Production environment with `npx --yes vercel@latest env ls production --format=json`, and confirm the job's runs show `succeeded` rather than `skipped` in `/api/ops/backend-dashboard` after the next scheduler tick.
+
+### 3. Vercel log drain
+
+Vercel function logs are otherwise ephemeral, which makes post-incident reconstruction of `stalled_generation_*`, webhook, and settlement events impossible. In the Vercel dashboard (Team Settings → Log Drains), add a drain for the `ugc-app` project to a retained destination (Better Stack, Axiom, Datadog, or an S3-compatible bucket), covering function and edge logs in NDJSON format. The application already emits single-line structured JSON through `backend-logger`, so any destination that indexes JSON fields can filter by `msg`, `job`, `route`, and `requestId`. Verify events arrive by triggering one scheduler tick and searching the drain for `generation_completions_completed`.
+
+### 4. Sentry (web and mobile)
+
+Backend health covers jobs and settlement, but unhandled client-side exceptions currently vanish. Add Sentry to both clients as a required next step: the Next.js SDK (`@sentry/nextjs`) for the web app with source maps uploaded during the Vercel build and `SENTRY_DSN`/`NEXT_PUBLIC_SENTRY_DSN` set in the Vercel Production environment, and the Expo-compatible React Native SDK (`@sentry/react-native`) for `ugc-mobile` with the DSN injected through EAS build secrets. Route Sentry alerts into the same incident channel as `BACKEND_ALERT_DELIVERY_URL` so one channel pages for backend, web, and mobile failures. Until this is done, treat user-reported blank screens and mobile crashes as unmonitored blind spots.
 
 ## Performance Monitoring And Load Budgets
 

@@ -97,12 +97,15 @@ function mapMotionStartError(error: unknown): MotionGenerationRouteResult {
   }
 
   logBackendError('error_starting_video_generation', { error: error });
-  const message = error instanceof Error ? error.message : 'Failed to start video generation';
-  const status = error instanceof GenerationServiceError ? error.status : 500;
+  if (error instanceof GenerationServiceError) {
+    return { ok: false, body: { error: error.message }, status: error.status };
+  }
+
+  // Unexpected errors stay in the backend logs; clients get a fixed message.
   return {
     ok: false,
-    body: { error: message || 'Failed to start video generation' },
-    status,
+    body: { error: 'Failed to start video generation' },
+    status: 500,
   };
 }
 

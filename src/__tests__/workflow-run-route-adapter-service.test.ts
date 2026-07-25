@@ -234,6 +234,25 @@ describe('workflow run route adapter service', () => {
     await expect(response.json()).resolves.toEqual({ error: 'Workflow run not found.' });
   });
 
+  it('never leaks underlying load-failure details through the 404 response', async () => {
+    const response = await getWorkflowRunDetailsRouteResponse({
+      request: new Request('http://localhost/api/workflow-canvases/canvas-1/runs/run-1'),
+      context: { params: Promise.resolve({ id: 'canvas-1', runId: 'run-1' }) },
+      dependencies: {
+        authenticateRequest: vi.fn(async () => ({
+          userId: 'user-1',
+          supabase: { kind: 'user-client' } as unknown as SupabaseClient,
+        })),
+        getWorkflowRunDetails: vi.fn(async () => {
+          throw new Error('permission denied for table workflow_canvas_runs');
+        }),
+      },
+    });
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: 'Workflow run not found.' });
+  });
+
   it('approves a workflow checkpoint with rate limiting and private response headers', async () => {
     const supabase = { kind: 'user-client' } as unknown as SupabaseClient;
     const adminSupabase = { kind: 'admin-client' };

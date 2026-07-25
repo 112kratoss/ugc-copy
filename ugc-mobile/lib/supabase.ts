@@ -1,9 +1,9 @@
 import 'react-native-url-polyfill/auto';
 
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
 
 import { env, isMobileEnvConfigured } from './env';
+import { secureSessionStorage } from './secure-session-storage';
 import { withSuppressedInvalidRefreshTokenConsoleError } from './supabase-auth-recovery';
 
 export const isSupabaseConfigured = isMobileEnvConfigured();
@@ -20,7 +20,9 @@ export const supabase = createClient(
   isSupabaseConfigured ? env.supabasePublishableKey : 'missing-mobile-env',
   {
     auth: {
-      storage: typeof window === 'undefined' ? serverAuthStorage : AsyncStorage,
+      // Session (refresh token) persistence goes through SecureStore-backed
+      // storage with transparent AsyncStorage migration and fallback.
+      storage: typeof window === 'undefined' ? serverAuthStorage : secureSessionStorage,
       storageKey: supabaseAuthStorageKey,
       autoRefreshToken: true,
       persistSession: true,
@@ -55,11 +57,13 @@ export async function clearPersistedSupabaseAuthSession() {
     return;
   }
 
-  await AsyncStorage.multiRemove([
+  // removeItem clears both the SecureStore chunks and any legacy plaintext
+  // AsyncStorage copy for each key.
+  await Promise.all([
     supabaseAuthStorageKey,
     `${supabaseAuthStorageKey}-code-verifier`,
     `${supabaseAuthStorageKey}-user`,
-  ]);
+  ].map((key) => secureSessionStorage.removeItem(key)));
 }
 
 function getSupabaseAuthStorageKey() {

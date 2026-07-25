@@ -10,6 +10,7 @@ import {
   completeMobilePostResourceUnlock,
   createMobilePurchaseIntent,
   normalizeMobileCommercePayload,
+  resolveMobileCreditProduct,
   restoreMobileEntitlements,
   verifyMobilePurchase,
 } from '@/lib/mobile-commerce';
@@ -19,6 +20,7 @@ const userId = '11111111-1111-1111-1111-111111111111';
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 function createCreditSupabase(options: {
@@ -314,6 +316,16 @@ describe('mobile commerce helpers', () => {
     });
   });
 
+  it('does not resolve prototype-chain product ids as credit products', () => {
+    expect(resolveMobileCreditProduct('constructor')).toBeNull();
+    expect(resolveMobileCreditProduct('__proto__')).toBeNull();
+    expect(resolveMobileCreditProduct('toString')).toBeNull();
+    expect(resolveMobileCreditProduct('magicbooklet.credits.starter')).toMatchObject({
+      id: 'starter',
+      credits: 500,
+    });
+  });
+
   it('requires an opaque server intent for non-credit products', () => {
     expect(() => normalizeMobileCommercePayload({
       provider: 'play_store',
@@ -496,6 +508,157 @@ describe('mobile commerce helpers', () => {
       revenueCatApiKey: 'rc-secret',
     })).rejects.toMatchObject({
       status: 400,
+    });
+  });
+
+  it('rejects sandbox RevenueCat receipts so TestFlight purchases never grant real credits', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      subscriber: {
+        non_subscriptions: {
+          'magicbooklet.credits.creator': [
+            {
+              id: 'rc-sandbox-1',
+              store: 'app_store',
+              store_transaction_id: '2000000123456789',
+              purchase_date: '2026-05-12T12:00:00Z',
+              is_sandbox: true,
+            },
+          ],
+        },
+      },
+    }), {
+      headers: { 'content-type': 'application/json' },
+      status: 200,
+    }));
+
+    await expect(verifyMobilePurchase({
+      userId,
+      productId: 'magicbooklet.credits.creator',
+      provider: 'app_store',
+      fetcher: fetcher as unknown as typeof fetch,
+      revenueCatApiKey: 'rc-secret',
+    })).rejects.toMatchObject({
+      status: 400,
+      message: 'Mobile purchase receipt is invalid or not owned by this user.',
+    });
+  });
+
+  it('verifies sandbox receipts when MOBILE_COMMERCE_ALLOW_SANDBOX=1 is set for staging QA', async () => {
+    vi.stubEnv('MOBILE_COMMERCE_ALLOW_SANDBOX', '1');
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      subscriber: {
+        non_subscriptions: {
+          'magicbooklet.credits.creator': [
+            {
+              id: 'rc-sandbox-1',
+              store: 'app_store',
+              store_transaction_id: '2000000123456789',
+              purchase_date: '2026-05-12T12:00:00Z',
+              is_sandbox: true,
+            },
+          ],
+        },
+      },
+    }), {
+      headers: { 'content-type': 'application/json' },
+      status: 200,
+    }));
+
+    await expect(verifyMobilePurchase({
+      userId,
+      productId: 'magicbooklet.credits.creator',
+      provider: 'app_store',
+      fetcher: fetcher as unknown as typeof fetch,
+      revenueCatApiKey: 'rc-secret',
+    })).resolves.toMatchObject({
+      provider: 'app_store',
+      transactionId: '2000000123456789',
+    });
+  });
+
+  it('still verifies the production purchase when a sandbox sibling shares the product', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      subscriber: {
+        non_subscriptions: {
+          'magicbooklet.credits.creator': [
+            {
+              id: 'rc-sandbox-1',
+              store: 'app_store',
+              store_transaction_id: '2000000123456789',
+              purchase_date: '2026-05-14T12:00:00Z',
+              is_sandbox: true,
+            },
+            {
+              id: 'rc-production-1',
+              store: 'app_store',
+              store_transaction_id: '1000000123456789',
+              purchase_date: '2026-05-12T12:00:00Z',
+              is_sandbox: false,
+            },
+          ],
+        },
+      },
+    }), {
+      headers: { 'content-type': 'application/json' },
+      status: 200,
+    }));
+
+    await expect(verifyMobilePurchase({
+      userId,
+      productId: 'magicbooklet.credits.creator',
+      provider: 'app_store',
+      fetcher: fetcher as unknown as typeof fetch,
+      revenueCatApiKey: 'rc-secret',
+    })).resolves.toMatchObject({
+      provider: 'app_store',
+      transactionId: '1000000123456789',
+    });
+  });
+
+  it('rejects client-declared sandbox purchases without the explicit server opt-in', async () => {
+    const fetcher = vi.fn();
+
+    await expect(verifyMobilePurchase({
+      userId,
+      productId: 'magicbooklet.credits.starter',
+      provider: 'sandbox',
+      fetcher: fetcher as unknown as typeof fetch,
+      revenueCatApiKey: 'rc-secret',
+      nodeEnv: 'development',
+    })).rejects.toMatchObject({
+      status: 400,
+      message: 'Sandbox mobile purchases require an explicit server opt-in.',
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('keeps client-declared sandbox purchases disabled in production even with the opt-in', async () => {
+    vi.stubEnv('MOBILE_COMMERCE_ALLOW_SANDBOX', '1');
+
+    await expect(verifyMobilePurchase({
+      userId,
+      productId: 'magicbooklet.credits.starter',
+      provider: 'sandbox',
+      revenueCatApiKey: 'rc-secret',
+      nodeEnv: 'production',
+    })).rejects.toMatchObject({
+      status: 400,
+      message: 'Sandbox mobile purchases are disabled in production.',
+    });
+  });
+
+  it('allows client-declared sandbox purchases outside production only with the opt-in', async () => {
+    vi.stubEnv('MOBILE_COMMERCE_ALLOW_SANDBOX', '1');
+
+    await expect(verifyMobilePurchase({
+      userId,
+      productId: 'magicbooklet.credits.starter',
+      provider: 'sandbox',
+      revenueCatApiKey: 'rc-secret',
+      nodeEnv: 'development',
+    })).resolves.toMatchObject({
+      provider: 'sandbox',
+      transactionId: 'sandbox_magicbooklet.credits.starter',
     });
   });
 
@@ -962,6 +1125,82 @@ describe('mobile commerce helpers', () => {
       ]),
     });
     expect(fakeSupabase.transactions).toHaveLength(2);
+  });
+
+  it('excludes sandbox purchases from restore so TestFlight receipts do not mint credits', async () => {
+    const fakeSupabase = createCreditSupabase({ credits: 100 });
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      subscriber: {
+        non_subscriptions: {
+          'magicbooklet.credits.starter': [
+            {
+              id: 'rc-sandbox',
+              store: 'app_store',
+              store_transaction_id: '2000000123456700',
+              purchase_date: '2026-05-13T12:00:00Z',
+              is_sandbox: true,
+            },
+            {
+              id: 'rc-production',
+              store: 'app_store',
+              store_transaction_id: '1000000123456700',
+              purchase_date: '2026-05-12T12:00:00Z',
+              is_sandbox: false,
+            },
+          ],
+        },
+      },
+    }), {
+      headers: { 'content-type': 'application/json' },
+      status: 200,
+    }));
+
+    await expect(restoreMobileEntitlements(fakeSupabase.client, userId, {
+      fetcher: fetcher as unknown as typeof fetch,
+      revenueCatApiKey: 'rc-secret',
+    })).resolves.toMatchObject({
+      success: true,
+      credits: 600,
+      restoredCreditPurchases: 1,
+      alreadyProcessedCreditPurchases: 0,
+    });
+    expect(fakeSupabase.transactions).toHaveLength(1);
+    expect(fakeSupabase.transactions[0]?.razorpay_order_id).toBe(
+      buildMobileExternalOrderId('app_store', '1000000123456700'),
+    );
+  });
+
+  it('restores sandbox purchases when MOBILE_COMMERCE_ALLOW_SANDBOX=1 is set for staging QA', async () => {
+    vi.stubEnv('MOBILE_COMMERCE_ALLOW_SANDBOX', '1');
+    const fakeSupabase = createCreditSupabase({ credits: 100 });
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      subscriber: {
+        non_subscriptions: {
+          'magicbooklet.credits.starter': [
+            {
+              id: 'rc-sandbox',
+              store: 'app_store',
+              store_transaction_id: '2000000123456700',
+              purchase_date: '2026-05-13T12:00:00Z',
+              is_sandbox: true,
+            },
+          ],
+        },
+      },
+    }), {
+      headers: { 'content-type': 'application/json' },
+      status: 200,
+    }));
+
+    await expect(restoreMobileEntitlements(fakeSupabase.client, userId, {
+      fetcher: fetcher as unknown as typeof fetch,
+      revenueCatApiKey: 'rc-secret',
+    })).resolves.toMatchObject({
+      success: true,
+      credits: 600,
+      restoredCreditPurchases: 1,
+    });
+    expect(fakeSupabase.transactions).toHaveLength(1);
   });
 
   it('fails restore reconciliation clearly when RevenueCat verification is not configured', async () => {

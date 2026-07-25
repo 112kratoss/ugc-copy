@@ -79,6 +79,49 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Thrown when the server demands a forced app upgrade (HTTP 426) mid-session.
+ * Callers can ignore it — the registered upgrade handler routes the user to
+ * the update screen — or detect it via `instanceof` to skip error UI.
+ */
+export class UpgradeRequiredError extends ApiError {
+  constructor(message: string, details?: unknown, requestId?: string, code?: string) {
+    super(message, 426, details, requestId, code ?? 'MOBILE_UPDATE_REQUIRED');
+    this.name = 'UpgradeRequiredError';
+  }
+}
+
+export type UpgradeRequiredHandler = (error: UpgradeRequiredError) => void;
+
+// The app shell (app/_layout.tsx) registers navigation to /update-required
+// here so this lib never imports the router. Concurrent 426 responses collapse
+// into a single handler invocation per notification window.
+const UPGRADE_REQUIRED_RENOTIFY_INTERVAL_MS = 10_000;
+let upgradeRequiredHandler: UpgradeRequiredHandler | null = null;
+let upgradeRequiredNotifiedAt: number | null = null;
+
+export function setUpgradeRequiredHandler(handler: UpgradeRequiredHandler | null) {
+  upgradeRequiredHandler = handler;
+  upgradeRequiredNotifiedAt = null;
+}
+
+function notifyUpgradeRequired(error: UpgradeRequiredError) {
+  if (!upgradeRequiredHandler) return;
+  const now = Date.now();
+  if (
+    upgradeRequiredNotifiedAt !== null
+    && now - upgradeRequiredNotifiedAt < UPGRADE_REQUIRED_RENOTIFY_INTERVAL_MS
+  ) {
+    return;
+  }
+  upgradeRequiredNotifiedAt = now;
+  try {
+    upgradeRequiredHandler(error);
+  } catch (handlerError) {
+    console.warn('Upgrade-required handler failed', handlerError);
+  }
+}
+
 export interface ApiClientOptions {
   baseUrl: string;
   getAccessToken: () => Promise<string | null>;
@@ -287,6 +330,22 @@ async function parseResponse(response: Response) {
   return response.text();
 }
 
+function throwHttpApiError(status: number, body: unknown, requestId: string | undefined): never {
+  const message =
+    typeof body === 'object' && body && 'error' in body
+      ? String((body as { error?: unknown }).error)
+      : `Request failed with status ${status}`;
+  const code = typeof body === 'object' && body && 'code' in body && typeof body.code === 'string'
+    ? body.code
+    : undefined;
+  if (status === 426) {
+    const upgradeError = new UpgradeRequiredError(message, body, requestId, code);
+    notifyUpgradeRequired(upgradeError);
+    throw upgradeError;
+  }
+  throw new ApiError(message, status, body, requestId, code);
+}
+
 export function createApiClient({
   baseUrl,
   getAccessToken,
@@ -371,14 +430,7 @@ export function createApiClient({
       const responseRequestId = response.headers.get(REQUEST_ID_HEADER) ?? requestId;
 
       if (!response.ok) {
-        const message =
-          typeof body === 'object' && body && 'error' in body
-            ? String((body as { error?: unknown }).error)
-            : `Request failed with status ${response.status}`;
-        const code = typeof body === 'object' && body && 'code' in body && typeof body.code === 'string'
-          ? body.code
-          : undefined;
-        throw new ApiError(message, response.status, body, responseRequestId, code);
+        throwHttpApiError(response.status, body, responseRequestId);
       }
 
       return body as T;
@@ -644,10 +696,7 @@ export function createApiClient({
       }
       const body = await parseResponse(response);
       if (!response.ok) {
-        const message = typeof body === 'object' && body && 'error' in body
-          ? String((body as { error?: unknown }).error)
-          : `Request failed with status ${response.status}`;
-        throw new ApiError(message, response.status, body, response.headers.get(REQUEST_ID_HEADER) ?? undefined);
+        throwHttpApiError(response.status, body, response.headers.get(REQUEST_ID_HEADER) ?? undefined);
       }
       return {
         catalog: parseGenerationModelCatalog(

@@ -39,10 +39,21 @@ function isAuthorizedBearerRequest(
   return secrets.some((secret) => timingSafeStringEqual(authorization, `Bearer ${secret}`));
 }
 
+// `*_PREVIOUS` variables exist only to make rotation a two-step deploy instead
+// of a hard cutover, mirroring the KIE webhook secret rotation pattern: set the
+// new value in the primary variable, keep the old value in `*_PREVIOUS` until
+// every caller (Vercel cron, external monitors) uses the new secret, then
+// remove `*_PREVIOUS`. Authorization stays fail-closed when nothing is
+// configured, and every comparison remains timing-safe.
 export function isAuthorizedCronRequest(request: Request) {
-  return isAuthorizedBearerRequest(request, ['CRON_SECRET']);
+  return isAuthorizedBearerRequest(request, ['CRON_SECRET', 'CRON_SECRET_PREVIOUS']);
 }
 
 export function isAuthorizedOpsRequest(request: Request) {
-  return isAuthorizedBearerRequest(request, ['OPS_READ_SECRET', 'CRON_SECRET']);
+  return isAuthorizedBearerRequest(request, [
+    'OPS_READ_SECRET',
+    'OPS_READ_SECRET_PREVIOUS',
+    'CRON_SECRET',
+    'CRON_SECRET_PREVIOUS',
+  ]);
 }

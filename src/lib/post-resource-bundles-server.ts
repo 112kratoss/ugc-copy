@@ -2022,12 +2022,23 @@ export async function getSellerPostResourceBundleDashboard(
   };
 }
 
+const RESOURCE_IDENTIFIER_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function resolvePostIdForResourceIdentifier(identifier: string): Promise<string | null> {
+  // Both bundle ids and legacy marketplace asset ids are uuid columns. The
+  // identifier arrives raw from an unauthenticated route path segment and
+  // postgrest-js does not escape `.or()` filter values, so anything that is
+  // not a plain UUID is rejected before it can reach the filter expression.
+  const normalizedIdentifier = typeof identifier === 'string' ? identifier.trim().toLowerCase() : '';
+  if (!RESOURCE_IDENTIFIER_UUID_PATTERN.test(normalizedIdentifier)) {
+    return null;
+  }
+
   const adminSupabase = createServiceClient();
   const { data, error } = await adminSupabase
     .from('post_resource_bundles')
     .select('post_id, legacy_asset_id')
-    .or(`id.eq.${identifier},legacy_asset_id.eq.${identifier}`)
+    .or(`id.eq.${normalizedIdentifier},legacy_asset_id.eq.${normalizedIdentifier}`)
     .maybeSingle();
 
   if (error) {
@@ -2035,7 +2046,7 @@ export async function resolvePostIdForResourceIdentifier(identifier: string): Pr
       const { data: legacyAsset, error: legacyError } = await adminSupabase
         .from('marketplace_assets')
         .select('post_id')
-        .eq('id', identifier)
+        .eq('id', normalizedIdentifier)
         .maybeSingle();
 
       if (legacyError) {

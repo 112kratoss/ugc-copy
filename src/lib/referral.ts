@@ -2,6 +2,9 @@ import 'server-only';
 
 import { createHmac } from 'node:crypto';
 
+import { logBackendWarning } from '@/lib/backend-logger';
+import { getClientNetworkKey } from '@/lib/client-network-key';
+
 export const REFERRAL_VISIT_COOKIE_NAME = 'mb_referral_visit';
 export const REFERRAL_VISIT_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 export const DEFAULT_REFERRAL_DESTINATION = '/login?mode=signup&next=%2Fcreate';
@@ -113,10 +116,23 @@ export function readReferralVisitCookie(cookieHeader: string | null): string | n
   return null;
 }
 
+let hasWarnedAboutAttributionSecretFallback = false;
+
 function getAttributionHashSecret(): string {
-  const secret = process.env.REFERRAL_ATTRIBUTION_HASH_SECRET?.trim()
-    || process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-  if (secret) return secret;
+  const dedicatedSecret = process.env.REFERRAL_ATTRIBUTION_HASH_SECRET?.trim();
+  if (dedicatedSecret) return dedicatedSecret;
+
+  const fallbackSecret = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (fallbackSecret) {
+    if (!hasWarnedAboutAttributionSecretFallback) {
+      hasWarnedAboutAttributionSecretFallback = true;
+      logBackendWarning('referral_attribution_hash_secret_fallback', {
+        message: 'REFERRAL_ATTRIBUTION_HASH_SECRET is not set; falling back to SUPABASE_SERVICE_ROLE_KEY for referral risk hashing. Configure the dedicated secret.',
+      });
+    }
+    return fallbackSecret;
+  }
+
   if (process.env.NODE_ENV !== 'production') return 'local-referral-attribution-secret';
   throw new Error('REFERRAL_ATTRIBUTION_HASH_SECRET is not configured');
 }
@@ -128,9 +144,7 @@ export function hashReferralRiskSignal(value: string | null | undefined): string
 }
 
 export function getReferralClientIp(headers: Headers): string {
-  return headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    || headers.get('x-real-ip')?.trim()
-    || '127.0.0.1';
+  return getClientNetworkKey(headers);
 }
 
 export function getReferralRiskContext(headers: Headers) {

@@ -55,7 +55,11 @@ async function handleRazorpayCreditOrderPOST(
       return NextResponse.json({ error: 'Missing planId' }, { status: 400 });
     }
 
-    const plan = PRICING_PLAN_MAP[planId as keyof typeof PRICING_PLAN_MAP];
+    // Object.hasOwn keeps prototype keys ('constructor', '__proto__', …) from
+    // resolving to a truthy non-plan value through the plain-object map.
+    const plan = typeof planId === 'string' && Object.hasOwn(PRICING_PLAN_MAP, planId)
+      ? PRICING_PLAN_MAP[planId as keyof typeof PRICING_PLAN_MAP]
+      : undefined;
     if (!plan) {
       return NextResponse.json({ error: 'Invalid planId' }, { status: 400 });
     }
@@ -75,11 +79,10 @@ async function handleRazorpayCreditOrderPOST(
       plan,
     }));
   } catch (error: unknown) {
+    // Detail stays in the structured log; clients get a fixed generic message
+    // so provider/config internals never leak through this money path.
     dependencies.logError('Razorpay Order Error:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Internal Server Error' },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
 

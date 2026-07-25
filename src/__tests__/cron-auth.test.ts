@@ -1,14 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   isAuthorizedCronRequest,
   isAuthorizedOpsRequest,
 } from '@/lib/cron-auth';
 
 const originalCronSecret = process.env.CRON_SECRET;
+const originalCronSecretPrevious = process.env.CRON_SECRET_PREVIOUS;
 const originalOpsReadSecret = process.env.OPS_READ_SECRET;
+const originalOpsReadSecretPrevious = process.env.OPS_READ_SECRET_PREVIOUS;
 const sourcePath = path.resolve(process.cwd(), 'src/lib/cron-auth.ts');
 
 function requestWithBearer(token: string) {
@@ -23,7 +25,13 @@ function requestWithAuthorization(authorization: string | null) {
   });
 }
 
-function restoreEnvironment(key: 'CRON_SECRET' | 'OPS_READ_SECRET', value: string | undefined) {
+type SecretEnvironmentKey =
+  | 'CRON_SECRET'
+  | 'CRON_SECRET_PREVIOUS'
+  | 'OPS_READ_SECRET'
+  | 'OPS_READ_SECRET_PREVIOUS';
+
+function restoreEnvironment(key: SecretEnvironmentKey, value: string | undefined) {
   if (value === undefined) {
     delete process.env[key];
   } else {
@@ -31,12 +39,25 @@ function restoreEnvironment(key: 'CRON_SECRET' | 'OPS_READ_SECRET', value: strin
   }
 }
 
+function clearSecretEnvironment() {
+  delete process.env.CRON_SECRET;
+  delete process.env.CRON_SECRET_PREVIOUS;
+  delete process.env.OPS_READ_SECRET;
+  delete process.env.OPS_READ_SECRET_PREVIOUS;
+}
+
 afterEach(() => {
   restoreEnvironment('CRON_SECRET', originalCronSecret);
+  restoreEnvironment('CRON_SECRET_PREVIOUS', originalCronSecretPrevious);
   restoreEnvironment('OPS_READ_SECRET', originalOpsReadSecret);
+  restoreEnvironment('OPS_READ_SECRET_PREVIOUS', originalOpsReadSecretPrevious);
 });
 
 describe('cron and ops authorization', () => {
+  beforeEach(() => {
+    clearSecretEnvironment();
+  });
+
   it('requires an exact bearer token match for cron execution', () => {
     process.env.CRON_SECRET = 'cron-secret';
     process.env.OPS_READ_SECRET = 'ops-secret';
@@ -74,6 +95,58 @@ describe('cron and ops authorization', () => {
     process.env.OPS_READ_SECRET = '   ';
 
     expect(isAuthorizedOpsRequest(requestWithBearer('ops-secret'))).toBe(false);
+  });
+
+  it('accepts the current and previous cron secrets during rotation', () => {
+    process.env.CRON_SECRET = 'cron-secret-new';
+    process.env.CRON_SECRET_PREVIOUS = 'cron-secret-old';
+
+    expect(isAuthorizedCronRequest(requestWithBearer('cron-secret-new'))).toBe(true);
+    expect(isAuthorizedCronRequest(requestWithBearer('cron-secret-old'))).toBe(true);
+    expect(isAuthorizedCronRequest(requestWithBearer('cron-secret-wrong'))).toBe(false);
+  });
+
+  it('accepts the current and previous ops read secrets during rotation', () => {
+    process.env.OPS_READ_SECRET = 'ops-secret-new';
+    process.env.OPS_READ_SECRET_PREVIOUS = 'ops-secret-old';
+
+    expect(isAuthorizedOpsRequest(requestWithBearer('ops-secret-new'))).toBe(true);
+    expect(isAuthorizedOpsRequest(requestWithBearer('ops-secret-old'))).toBe(true);
+    expect(isAuthorizedOpsRequest(requestWithBearer('ops-secret-wrong'))).toBe(false);
+  });
+
+  it('keeps previous ops read secrets scoped away from cron execution', () => {
+    process.env.CRON_SECRET = 'cron-secret';
+    process.env.CRON_SECRET_PREVIOUS = 'cron-secret-old';
+    process.env.OPS_READ_SECRET = 'ops-secret';
+    process.env.OPS_READ_SECRET_PREVIOUS = 'ops-secret-old';
+
+    expect(isAuthorizedCronRequest(requestWithBearer('ops-secret-old'))).toBe(false);
+    expect(isAuthorizedOpsRequest(requestWithBearer('cron-secret-old'))).toBe(true);
+  });
+
+  it('behaves exactly as before when no previous secrets are configured', () => {
+    process.env.CRON_SECRET = 'cron-secret';
+    process.env.OPS_READ_SECRET = 'ops-secret';
+
+    expect(isAuthorizedCronRequest(requestWithBearer('cron-secret'))).toBe(true);
+    expect(isAuthorizedCronRequest(requestWithBearer('cron-secret-old'))).toBe(false);
+    expect(isAuthorizedOpsRequest(requestWithBearer('ops-secret'))).toBe(true);
+    expect(isAuthorizedOpsRequest(requestWithBearer('ops-secret-old'))).toBe(false);
+  });
+
+  it('ignores blank previous secrets and fails closed when nothing is configured', () => {
+    process.env.CRON_SECRET = 'cron-secret';
+    process.env.CRON_SECRET_PREVIOUS = '   ';
+
+    expect(isAuthorizedCronRequest(requestWithBearer('cron-secret'))).toBe(true);
+    expect(isAuthorizedCronRequest(requestWithBearer('   '))).toBe(false);
+
+    clearSecretEnvironment();
+
+    expect(isAuthorizedCronRequest(requestWithBearer('cron-secret'))).toBe(false);
+    expect(isAuthorizedOpsRequest(requestWithBearer('ops-secret'))).toBe(false);
+    expect(isAuthorizedCronRequest(requestWithAuthorization(null))).toBe(false);
   });
 
   it('uses a timing-safe comparison for protected bearer secrets', () => {

@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The media-source guard parses storage locations for real; keep the genuine
+// implementation so fixtures exercise the same validation production does.
+import { getStoredMediaLocation as actualGetStoredMediaLocation } from '@/lib/media-urls';
+
 import { hashGenerationStartIdempotencyKey } from '@/lib/generation-start-idempotency';
 
 const rawCreateClientMock = vi.hoisted(() => vi.fn());
@@ -280,6 +284,7 @@ vi.mock('@supabase/supabase-js', async (importOriginal) => {
 });
 
 vi.mock('@/lib/server-helpers', () => ({
+  getStoredMediaLocation: actualGetStoredMediaLocation,
   createUserClient: (request: Request) => createUserClientMock(request),
   createServiceClient: vi.fn(() => currentSupabaseMock.client),
   resolveStoredMediaUrl: vi.fn(),
@@ -384,7 +389,7 @@ describe('/api/generate-image route', () => {
 
   it('persists sourceGenerationId when the remix source is accessible', async () => {
     currentSupabaseMock = createSupabaseMock({
-      id: 'source-1',
+      id: '11111111-1111-4111-8111-111111111111',
       user_id: 'other-user',
       is_public: true,
     });
@@ -402,7 +407,7 @@ describe('/api/generate-image route', () => {
         body: JSON.stringify({
           prompt: 'A product hero image',
           model: 'nano-banana-2',
-          sourceGenerationId: 'source-1',
+          sourceGenerationId: '11111111-1111-4111-8111-111111111111',
         }),
       }) as never
     );
@@ -411,7 +416,7 @@ describe('/api/generate-image route', () => {
     expect(response.status).toBe(200);
     expect(data.success).toBe(true);
     expect(data.generationId).toBe('gen-logged-1');
-    expect(currentSupabaseMock.inserts[0].source_generation_id).toBe('source-1');
+    expect(currentSupabaseMock.inserts[0].source_generation_id).toBe('11111111-1111-4111-8111-111111111111');
     expect(currentSupabaseMock.inserts[0].client_request_key_hash)
       .toBe(hashGenerationStartIdempotencyKey('user-1', 'image-route-fallback-1'));
   });
@@ -508,7 +513,7 @@ describe('/api/generate-image route', () => {
 
   it('persists image element sourceGenerationId values for future remixes', async () => {
     currentSupabaseMock = createSupabaseMock({
-      id: 'source-1',
+      id: '11111111-1111-4111-8111-111111111111',
       user_id: 'other-user',
       is_public: true,
     });
@@ -525,16 +530,16 @@ describe('/api/generate-image route', () => {
         body: JSON.stringify({
           prompt: 'A refreshed creator frame',
           model: 'nano-banana-2',
-          imageUrls: ['https://signed.example.com/source-1.png'],
+          imageUrls: ['https://project.supabase.co/storage/v1/object/sign/uploads/user-1/source-1.png'],
           elements: [
             {
               id: 'el-1',
               displayName: 'Original result',
               handle: '@original_result',
-              sourceGenerationId: 'source-1',
+              sourceGenerationId: '11111111-1111-4111-8111-111111111111',
             },
           ],
-          sourceGenerationId: 'source-1',
+          sourceGenerationId: '11111111-1111-4111-8111-111111111111',
         }),
       }) as never
     );
@@ -546,7 +551,7 @@ describe('/api/generate-image route', () => {
           id: 'el-1',
           displayName: 'Original result',
           handle: '@original_result',
-          sourceGenerationId: 'source-1',
+          sourceGenerationId: '11111111-1111-4111-8111-111111111111',
         },
       ],
     });

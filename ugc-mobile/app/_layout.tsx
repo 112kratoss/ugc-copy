@@ -4,12 +4,13 @@ import Constants from 'expo-constants';
 import { AppMetricsRoot } from 'expo-observe';
 import { Stack, router, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import 'react-native-reanimated';
 import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-url-polyfill/auto';
 
+import { setUpgradeRequiredHandler } from '@/lib/api-client';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
 import { useReducedMotion } from '@/lib/motion';
@@ -64,6 +65,7 @@ function RootLayoutNav() {
         <OnboardingProvider>
           <NotificationResponseCoordinator />
           <StartupCoordinator />
+          <UpgradeRequiredCoordinator />
           <SafeAreaProvider>
             <ThemeProvider value={navigationTheme}>
               <View style={{ flex: 1, backgroundColor: appTheme.colors.app }}>
@@ -195,6 +197,27 @@ function StartupCoordinator() {
   if ((!isHydrated || isLoading) && pathname === '/') {
     return <View pointerEvents="none" style={{ position: 'absolute', inset: 0, zIndex: 100, backgroundColor: appTheme.colors.background }} />;
   }
+  return null;
+}
+
+function UpgradeRequiredCoordinator() {
+  // Routes forced-upgrade (HTTP 426) responses that arrive mid-session to the
+  // update screen. Startup version checks are handled by StartupCoordinator.
+  const pathname = usePathname();
+  const pathnameRef = useRef(pathname);
+
+  useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
+
+  useEffect(() => {
+    setUpgradeRequiredHandler(() => {
+      if (pathnameRef.current === '/update-required') return;
+      router.replace('/update-required' as never);
+    });
+    return () => setUpgradeRequiredHandler(null);
+  }, []);
+
   return null;
 }
 

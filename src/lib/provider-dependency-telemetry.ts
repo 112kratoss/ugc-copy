@@ -19,6 +19,29 @@ type ProviderDependencyInsert = {
   error_name?: string;
 };
 
+export const RAZORPAY_WEBHOOK_PROCESSING_SERVICE_NAME = 'razorpay-webhook-processing';
+export const REVENUECAT_WEBHOOK_PROCESSING_SERVICE_NAME = 'revenuecat-webhook-processing';
+
+/**
+ * Service identifiers under which payment webhook processing failures are
+ * durably recorded. Backend health raises a dedicated degraded issue code
+ * whenever any event with one of these names lands in its lookback window.
+ */
+export const PAYMENT_WEBHOOK_PROCESSING_SERVICE_NAMES: readonly string[] = [
+  RAZORPAY_WEBHOOK_PROCESSING_SERVICE_NAME,
+  REVENUECAT_WEBHOOK_PROCESSING_SERVICE_NAME,
+];
+
+export type PaymentWebhookProcessingFailure = {
+  serviceName:
+    | typeof RAZORPAY_WEBHOOK_PROCESSING_SERVICE_NAME
+    | typeof REVENUECAT_WEBHOOK_PROCESSING_SERVICE_NAME;
+  /** Stable machine-readable reason, e.g. 'credit_transaction_settlement_failed'. */
+  failureCode: string;
+  /** HTTP status the webhook returned to the provider (defaults to 500). */
+  status?: number;
+};
+
 function hasSupabaseServiceConfig(): boolean {
   return Boolean(
     process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
@@ -80,4 +103,31 @@ export async function recordProviderDependencyEvent(
       error: errorMessage(error),
   });
   }
+}
+
+/**
+ * Durably records a payment webhook processing failure (a failure that occurs
+ * after signature verification, e.g. a failed add_credits RPC or an
+ * unreconcilable refund) into the provider_dependency_events pipeline so ops
+ * alerting does not depend on ephemeral logs.
+ *
+ * Reuses the provider dependency insert path, so it never throws: a recording
+ * failure is logged and must not change the webhook response.
+ */
+export async function recordPaymentWebhookProcessingFailure(
+  failure: PaymentWebhookProcessingFailure,
+  client?: SupabaseClient,
+) {
+  await recordProviderDependencyEvent({
+    type: 'provider_fetch',
+    serviceName: failure.serviceName,
+    outcome: 'http_error',
+    method: 'POST',
+    host: null,
+    timeoutMs: 0,
+    durationMs: 0,
+    status: failure.status ?? 500,
+    ok: false,
+    errorName: failure.failureCode,
+  }, client);
 }

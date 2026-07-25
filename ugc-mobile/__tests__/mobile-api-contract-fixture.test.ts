@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import mobileApiOperationsV1 from '../../contracts/mobile-api-operations-v1.json';
-import { createApiClient, type MagicbookletApiClient } from '../lib/api-client';
+import { ApiError, createApiClient, type MagicbookletApiClient } from '../lib/api-client';
 
 type ContractEndpointKey = keyof typeof mobileApiContract.endpoints;
 type ContractEndpoint = {
@@ -323,8 +323,10 @@ describe('mobile shared API v1 contract fixture', () => {
       })) as unknown as typeof fetch,
     });
 
-    await expect(api.getProfile()).rejects.toMatchObject({
-      name: 'ApiError',
+    const error = await api.getProfile().catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      name: 'UpgradeRequiredError',
       status: 426,
       code: 'MOBILE_UPDATE_REQUIRED',
       details: endpoint.response,

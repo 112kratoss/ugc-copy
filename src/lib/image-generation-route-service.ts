@@ -92,12 +92,15 @@ function mapImageStartError(error: unknown): ImageGenerationRouteResult {
   }
 
   logBackendError('error_starting_image_generation', { error: error });
-  const message = error instanceof Error ? error.message : 'Failed to start image generation';
-  const status = error instanceof GenerationServiceError ? error.status : 500;
+  if (error instanceof GenerationServiceError) {
+    return { ok: false, body: { error: error.message }, status: error.status };
+  }
+
+  // Unexpected errors stay in the backend logs; clients get a fixed message.
   return {
     ok: false,
-    body: { error: message },
-    status,
+    body: { error: 'Failed to start image generation' },
+    status: 500,
   };
 }
 

@@ -6,6 +6,7 @@ import { NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
+import { getClientNetworkKey } from '@/lib/client-network-key';
 import {
   createPostResourceFileReadUrlForRoute,
   type PostResourceFileReadUrlClient,
@@ -36,10 +37,7 @@ function resolveDependencies(dependencies: PostResourceFileUrlRouteDependencies 
 function getResourceFileRateLimitKey(request: Request, userId: string | null) {
   if (userId) return userId;
 
-  const forwardedFor = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
-  const realIp = request.headers.get('x-real-ip')?.trim();
-
-  return forwardedFor || realIp || '127.0.0.1';
+  return getClientNetworkKey(request.headers);
 }
 
 async function getViewerUserId(request: Request, createClient: typeof createUserClient) {
