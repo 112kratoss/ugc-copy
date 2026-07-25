@@ -54,18 +54,39 @@ function createServiceClientMock({ rpcError = null }: { rpcError?: unknown } = {
   };
 }
 
+/**
+ * Derived from the real dependency rather than restated as
+ * `Record<string, unknown>`: the loose shape does not satisfy the service's
+ * declared return type, and hard-coding a literal here would drift the moment
+ * the row shape changes.
+ */
+type RemixPostReference = Awaited<
+  ReturnType<ShowcaseRemixServiceDependencies['findPublicPostReferenceByIdOrGenerationId']>
+>;
+
+type RemixPostCategory = NonNullable<RemixPostReference>['category'];
+
 function createDependencies(
-  post: Record<string, unknown> | null = {
+  // The previous fixture omitted visibility, prompt, and source_kind. Those are
+  // required on PostReferenceRow, and the service reads visibility to decide
+  // whether a post may be remixed at all — so the fixture was not merely
+  // incomplete, it was under-specifying the field the behaviour turns on.
+  post: RemixPostReference = {
     id: 'post-1',
     generation_id: 'gen-1',
     user_id: 'creator-1',
     category: 'image',
+    visibility: 'public',
+    prompt: 'a prompt',
+    source_kind: 'magicbooklet',
   },
 ) {
   return {
     findPublicPostReferenceByIdOrGenerationId: vi.fn(async () => post),
     isUserRelationshipBlocked: vi.fn(async () => false),
-    notifyPostSocialActivity: vi.fn(async () => undefined),
+    // `null`, not `undefined`: the real notifier returns null when it declines
+    // to send (missing recipient or actor), and never returns undefined.
+    notifyPostSocialActivity: vi.fn(async () => null),
   } satisfies Partial<ShowcaseRemixServiceDependencies>;
 }
 
@@ -118,7 +139,8 @@ describe('remixShowcasePostForRoute', () => {
     ['motion', '/create-motion'],
     ['unknown', '/create'],
     [null, '/create'],
-  ])('maps %s posts to the expected remix creator path', async (category, expectedPath) => {
+  ] as Array<[RemixPostCategory, string]>)(
+    'maps %s posts to the expected remix creator path', async (category, expectedPath) => {
     const userClient = createUserClientMock();
     const serviceClient = createServiceClientMock();
     const dependencies = createDependencies({
@@ -126,6 +148,9 @@ describe('remixShowcasePostForRoute', () => {
       generation_id: 'gen-1',
       user_id: 'creator-1',
       category,
+      visibility: 'public',
+      prompt: 'a prompt',
+      source_kind: 'magicbooklet',
     });
 
     const result = await remixShowcasePostForRoute({
@@ -195,6 +220,9 @@ describe('remixShowcasePostForRoute', () => {
       generation_id: null,
       user_id: 'creator-1',
       category: 'image',
+      visibility: 'public',
+      prompt: 'a prompt',
+      source_kind: 'magicbooklet',
     });
 
     const result = await remixShowcasePostForRoute({

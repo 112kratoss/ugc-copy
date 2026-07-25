@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+
+import { expectOk } from '@/__tests__/fixtures/route-result';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
@@ -181,16 +183,16 @@ describe('getWorkflowCanvasForRoute', () => {
       userId: 'user-1',
     });
 
-    expect(result.ok).toBe(true);
-    expect(result.body.canvas).toMatchObject({
+    const ok = expectOk(result);
+    expect(ok.body.canvas).toMatchObject({
       id: 'canvas-1',
       title: 'Legacy workflow',
       revision: 2,
       status: 'draft',
       published_at: null,
     });
-    expect(result.body.canvas.graph.nodes).toEqual([]);
-    expect(result.body.canvas.graph.edges).toEqual([]);
+    expect(ok.body.canvas.graph.nodes).toEqual([]);
+    expect(ok.body.canvas.graph.edges).toEqual([]);
   });
 });
 
@@ -302,12 +304,12 @@ describe('patchWorkflowCanvasForRoute', () => {
       userId: 'user-1',
     });
 
-    expect(result.ok).toBe(true);
-    expect(result.body.canvas.title).toBe('Edited workflow');
-    expect(result.body.canvas.status).toBe('draft');
-    expect(result.body.canvas.revision).toBe(5);
-    expect(result.body.canvas.graph.nodes[0].data.title).toBe('Edited node');
-    expect(result.body.canvas.graph.nodes[0].data.runState).toMatchObject({
+    const ok = expectOk(result);
+    expect(ok.body.canvas.title).toBe('Edited workflow');
+    expect(ok.body.canvas.status).toBe('draft');
+    expect(ok.body.canvas.revision).toBe(5);
+    expect(ok.body.canvas.graph.nodes[0].data.title).toBe('Edited node');
+    expect(ok.body.canvas.graph.nodes[0].data.runState).toMatchObject({
       status: 'succeeded',
       generationId: 'gen-123',
       outputUrl: 'https://example.com/output.jpg',

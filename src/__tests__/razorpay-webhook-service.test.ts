@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { processRazorpayWebhookForRoute } from '@/lib/razorpay-webhook-service';
 
@@ -117,7 +118,13 @@ function createAdminSupabaseMock(state: {
   };
 
   return {
-    client,
+    // Cast once here rather than at each of the nine call sites. `client` is a
+    // deliberate partial double — it implements only the `from`/`rpc` surface
+    // this service actually exercises, against a `SupabaseClient` interface with
+    // dozens of members. Widening it to the real type at the boundary keeps the
+    // assertion in one reviewable place instead of scattering casts through the
+    // tests.
+    client: client as unknown as SupabaseClient,
     rpcCalls,
     tableReads,
   };
