@@ -118,4 +118,4 @@ All web unit/integration tests live flat in `src/__tests__/` (~480 files) — ne
 
 ## Operational runbooks (`docs/`)
 
-`production-deployment-runbook.md` (topology, env contract, gates), `supabase-local-prod-workflow.md`, `generation-model-catalog-operations.md`, `moderation-operations.md` (staffed queue, service-role CLI), `mobile-store-product-catalog.md` (IAP tier provisioning), `post-resource-bundle-v1.md`, and `backend-idealization-progress.md` (live backend completion tracker + architectural history; its displayed counts are enforced by `src/__tests__/backend-idealization-progress.test.ts`, so update the Overall Progress block whenever checklist items change).
+`production-deployment-runbook.md` (topology, env contract, gates), `supabase-local-prod-workflow.md`, `generation-model-catalog-operations.md`, `moderation-operations.md` (staffed queue, service-role CLI), `mobile-store-product-catalog.md` (IAP tier provisioning), and `post-resource-bundle-v1.md`.
