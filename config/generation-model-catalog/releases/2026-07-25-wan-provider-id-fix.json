@@ -1,0 +1,323 @@
+{
+  "manifestVersion": 1,
+  "mode": "clone-active",
+  "release": {
+    "schemaVersion": 2,
+    "revision": "wan-provider-id-fix-20260725",
+    "basedOnRevision": "seedance2-hd-v2-20260724",
+    "changeNote": "Correct the Wan 2.7 image provider model ids. Kie rejects the dotted app ids; its OpenAPI specs declare wan/2-7-image and wan/2-7-image-pro as the sole allowed model enum values. Provider routing only \u2014 pricing, descriptors, availability, validation, and adapters are byte-identical to the active release.",
+    "createdBy": "catalog-operations"
+  },
+  "upgrade": {
+    "legacyDescriptorsToV2": true
+  },
+  "expectedModelIds": [
+    "flux-2-pro",
+    "gemini-omni-video",
+    "gpt-image-2",
+    "grok-imagine-image",
+    "grok-imagine-video",
+    "hailuo-2.3",
+    "happyhorse-1.1",
+    "ideogram-v3",
+    "imagen-4",
+    "imagen-4-fast",
+    "imagen-4-ultra",
+    "kling-2.6",
+    "kling-3.0",
+    "kling-3.0-turbo",
+    "kling-3.0-video",
+    "nano-banana-2",
+    "nano-banana-2-lite",
+    "nano-banana-pro",
+    "seedance-1.5-pro",
+    "seedance-2",
+    "seedance-2-fast",
+    "seedance-2-mini",
+    "seedream-5-lite",
+    "seedream-5-pro",
+    "veo-3.1",
+    "wan-2.7",
+    "wan-2.7-image",
+    "wan-2.7-image-pro",
+    "z-image"
+  ],
+  "defaults": {
+    "web": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    },
+    "mobile": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    }
+  },
+  "entries": [
+    {
+      "modelId": "wan-2.7-image",
+      "kind": "image",
+      "publicDescriptor": {
+        "id": "wan-2.7-image",
+        "kind": "image",
+        "badge": "Value",
+        "inputs": {
+          "endFrame": false,
+          "startFrame": false,
+          "audioReferences": null,
+          "imageReferences": {
+            "max": 9,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "characterReferences": null,
+          "preparedAudioReferences": null,
+          "combineFramesWithReferences": false
+        },
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "type": "choice",
+            "label": "Aspect ratio",
+            "options": [
+              {
+                "label": "auto",
+                "value": "auto"
+              }
+            ],
+            "defaultValue": "auto",
+            "presentation": "chips"
+          },
+          {
+            "key": "resolution",
+            "type": "choice",
+            "label": "Resolution",
+            "options": [
+              {
+                "label": "1K",
+                "value": "1K"
+              },
+              {
+                "label": "2K",
+                "value": "2K"
+              }
+            ],
+            "defaultValue": "1K",
+            "presentation": "chips"
+          }
+        ],
+        "sortOrder": 60,
+        "inputModes": [
+          {
+            "key": "default",
+            "label": "Default",
+            "slots": [
+              {
+                "key": "imageReferences",
+                "max": 9,
+                "min": 0,
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "supportsNaming": true
+              }
+            ],
+            "default": true
+          }
+        ],
+        "description": "Affordable text generation and editing with up to nine references",
+        "displayName": "Wan 2.7 Image",
+        "recommended": false,
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "capabilities": {
+          "sound": false,
+          "fixedLens": false,
+          "multiShot": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "schemaVersion": 2,
+        "inputConstraints": [],
+        "minClientSchemaVersion": 1
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "image-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "wan/2-7-image"
+      },
+      "pricingStrategy": "image-v1",
+      "pricingConfig": {
+        "id": "wan-2.7-image",
+        "badge": "Value",
+        "pricing": {
+          "1K": 4.8,
+          "2K": 4.8
+        },
+        "maxImages": 9,
+        "badgeColor": "from-emerald-500 to-cyan-500",
+        "accentColor": "blue",
+        "description": "Affordable text generation and editing with up to nine references",
+        "displayName": "Wan 2.7 Image",
+        "resolutions": [
+          "1K",
+          "2K"
+        ],
+        "aspectRatios": [
+          "auto"
+        ],
+        "outputFormats": [
+          "jpg"
+        ],
+        "supportsGoogleSearch": false,
+        "supportsOutputFormat": false
+      },
+      "validationStrategy": "image-v1",
+      "validationConfig": {},
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "wan-2.7-image-pro",
+      "kind": "image",
+      "publicDescriptor": {
+        "id": "wan-2.7-image-pro",
+        "kind": "image",
+        "badge": "Pro",
+        "inputs": {
+          "endFrame": false,
+          "startFrame": false,
+          "audioReferences": null,
+          "imageReferences": {
+            "max": 9,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "characterReferences": null,
+          "preparedAudioReferences": null,
+          "combineFramesWithReferences": false
+        },
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "type": "choice",
+            "label": "Aspect ratio",
+            "options": [
+              {
+                "label": "auto",
+                "value": "auto"
+              }
+            ],
+            "defaultValue": "auto",
+            "presentation": "chips"
+          },
+          {
+            "key": "resolution",
+            "type": "choice",
+            "label": "Resolution",
+            "options": [
+              {
+                "label": "1K",
+                "value": "1K"
+              },
+              {
+                "label": "2K",
+                "value": "2K"
+              },
+              {
+                "label": "4K",
+                "value": "4K"
+              }
+            ],
+            "defaultValue": "1K",
+            "presentation": "chips"
+          }
+        ],
+        "sortOrder": 70,
+        "inputModes": [
+          {
+            "key": "default",
+            "label": "Default",
+            "slots": [
+              {
+                "key": "imageReferences",
+                "max": 9,
+                "min": 0,
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "supportsNaming": true
+              }
+            ],
+            "default": true
+          }
+        ],
+        "description": "High-fidelity Wan generation and editing with optional 4K output",
+        "displayName": "Wan 2.7 Image Pro",
+        "recommended": false,
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "capabilities": {
+          "sound": false,
+          "fixedLens": false,
+          "multiShot": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "schemaVersion": 2,
+        "inputConstraints": [],
+        "minClientSchemaVersion": 1
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "image-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "wan/2-7-image-pro"
+      },
+      "pricingStrategy": "image-v1",
+      "pricingConfig": {
+        "id": "wan-2.7-image-pro",
+        "badge": "Pro",
+        "pricing": {
+          "1K": 12,
+          "2K": 12,
+          "4K": 12
+        },
+        "maxImages": 9,
+        "badgeColor": "from-blue-500 to-indigo-500",
+        "accentColor": "blue",
+        "description": "High-fidelity Wan generation and editing with optional 4K output",
+        "displayName": "Wan 2.7 Image Pro",
+        "resolutions": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "aspectRatios": [
+          "auto"
+        ],
+        "outputFormats": [
+          "jpg"
+        ],
+        "supportsGoogleSearch": false,
+        "supportsOutputFormat": false
+      },
+      "validationStrategy": "image-v1",
+      "validationConfig": {},
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    }
+  ]
+}
