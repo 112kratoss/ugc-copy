@@ -576,7 +576,9 @@ describe('CreationsPage', () => {
       headers: { Authorization: 'Bearer layout-session-token' },
     });
     const sellPackageCheckbox = screen.getByRole('checkbox', { name: /sell the prompt and setup/i });
-    expect(sellPackageCheckbox).toBeChecked();
+    await waitFor(() => {
+      expect(sellPackageCheckbox).toBeChecked();
+    });
     expect(navigationState.push).not.toHaveBeenCalled();
 
     fireEvent.click(sellPackageCheckbox);
