@@ -100,7 +100,6 @@ interface LegacyGenerationRow {
   output_url: string | null;
   showcase_asset_path?: string | null;
   preview_url?: string | null;
-  thumbnail_url?: string | null;
   model: string;
   prompt: string | null;
   title: string | null;
@@ -121,24 +120,12 @@ function resolveItemCategory(category: string | null): ShowcaseItemCategory {
   return 'image';
 }
 
-function isMissingGenerationPreviewColumnError(error: unknown) {
-  if (!error || typeof error !== 'object') {
-    return false;
-  }
-
-  const { code, message = '' } = error as { code?: string; message?: string };
-  return (
-    (code === '42703' || code === 'PGRST204')
-    && (message.includes('preview_url') || message.includes('thumbnail_url'))
-  );
-}
-
 async function resolveLegacyGenerationPreviewUrl(
   adminSupabase: ReturnType<typeof createServiceClient>,
-  generation: Pick<LegacyGenerationRow, 'preview_url' | 'thumbnail_url' | 'category'>,
+  generation: Pick<LegacyGenerationRow, 'preview_url' | 'category'>,
   mediaUrl: string
 ) {
-  const previewSource = generation.preview_url || generation.thumbnail_url || null;
+  const previewSource = generation.preview_url || null;
   if (previewSource) {
     return resolveStoredMediaUrl(adminSupabase, previewSource);
   }
@@ -477,25 +464,15 @@ export async function resolvePostRowsToFeedItems(
       id: string;
       model: string;
       preview_url?: string | null;
-      thumbnail_url?: string | null;
       category?: string | null;
     };
 
     const modelsWithPreviewResult = await adminSupabase
       .from('generations')
-      .select('id, model, preview_url, thumbnail_url, category')
+      .select('id, model, preview_url, category')
       .in('id', generationIds);
-    let models = modelsWithPreviewResult.data as GenerationInfoRow[] | null;
-    let modelsError = modelsWithPreviewResult.error;
-
-    if (isMissingGenerationPreviewColumnError(modelsError)) {
-      const legacyModelsResult = await adminSupabase
-        .from('generations')
-        .select('id, model')
-        .in('id', generationIds);
-      models = legacyModelsResult.data as GenerationInfoRow[] | null;
-      modelsError = legacyModelsResult.error;
-    }
+    const models = modelsWithPreviewResult.data as GenerationInfoRow[] | null;
+    const modelsError = modelsWithPreviewResult.error;
 
     if (modelsError) {
       logBackendError('error_fetching_showcase_generation_models', { error: modelsError });
@@ -505,9 +482,7 @@ export async function resolvePostRowsToFeedItems(
         const previewSource =
           typeof generation.preview_url === 'string' && generation.preview_url
             ? generation.preview_url
-            : typeof generation.thumbnail_url === 'string' && generation.thumbnail_url
-              ? generation.thumbnail_url
-              : null;
+            : null;
         return [Promise.resolve(previewSource ? resolveStoredMediaUrl(adminSupabase, previewSource) : null)
           .then((previewUrl) => [generation.id, { model: generation.model, previewUrl }] as const)];
       }));
@@ -829,10 +804,12 @@ async function fetchLegacyGenerationRows(
     return [] as LegacyGenerationRow[];
   }
 
-  const selectWithAssetAndPreview = 'id, output_url, showcase_asset_path, preview_url, thumbnail_url, model, prompt, title, category, save_count, remix_count, created_at, user_id';
-  const selectWithAsset = 'id, output_url, showcase_asset_path, model, prompt, title, category, save_count, remix_count, created_at, user_id';
-  const selectWithoutAssetAndPreview = 'id, output_url, preview_url, thumbnail_url, model, prompt, title, category, save_count, remix_count, created_at, user_id';
-  const selectWithoutAsset = 'id, output_url, model, prompt, title, category, save_count, remix_count, created_at, user_id';
+  // Single canonical column list. This used to be a probe ladder that led with
+  // a retired `thumbnail_url` column, so every legacy showcase read logged a
+  // guaranteed 42703 before falling back — noise that would bury a real schema
+  // fault. The preview columns have long since shipped; a missing column here
+  // is now a genuine error and must surface.
+  const generationSelect = 'id, output_url, showcase_asset_path, preview_url, model, prompt, title, category, save_count, remix_count, created_at, user_id';
 
   const buildQuery = (selectClause: string) => {
     let query = adminSupabase
@@ -864,16 +841,7 @@ async function fetchLegacyGenerationRows(
     return query.range(offset, offset + limit);
   };
 
-  let result = await buildQuery(selectWithAssetAndPreview);
-  if (isMissingGenerationPreviewColumnError(result.error)) {
-    result = await buildQuery(selectWithAsset);
-  }
-  if (result.error?.code === '42703') {
-    result = await buildQuery(selectWithoutAssetAndPreview);
-  }
-  if (isMissingGenerationPreviewColumnError(result.error)) {
-    result = await buildQuery(selectWithoutAsset);
-  }
+  const result = await buildQuery(generationSelect);
 
   if (result.error) {
     logBackendError('error_fetching_legacy_showcase_feed', { error: result.error });
