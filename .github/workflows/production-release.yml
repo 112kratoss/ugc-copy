@@ -158,7 +158,10 @@ jobs:
             }
             if (body.status === 'warning') {
               const issues = Array.isArray(body.issues)
-                ? body.issues.map((issue) => issue.code).filter(Boolean).join(', ')
+                ? body.issues
+                    .map((issue) => [issue.code, issue.message].filter(Boolean).join(': '))
+                    .filter(Boolean)
+                    .join('; ')
                 : 'unspecified';
               console.warn('::warning::Staged backend health warnings: ' + issues);
             }
@@ -189,13 +192,27 @@ jobs:
         run: |
           set -euo pipefail
           production_origin="${PRODUCTION_BASE_URL%/}"
-          curl --fail --silent --show-error \
-            "${production_origin}/api/app-version" \
-            --output "${RUNNER_TEMP}/production-app-version.json"
-          node -e "
-            const fs = require('node:fs');
-            const body = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/production-app-version.json', 'utf8'));
-            if (body.buildId !== process.env.RELEASE_SHA) {
-              throw new Error('Production build id ' + body.buildId + ' does not match ' + process.env.RELEASE_SHA);
-            }
-          "
+          for attempt in $(seq 1 12); do
+            if curl --fail --silent --show-error \
+              "${production_origin}/api/app-version?release=${RELEASE_SHA}&attempt=${attempt}" \
+              --output "${RUNNER_TEMP}/production-app-version.json"
+            then
+              current_build="$(
+                node -e "
+                  const fs = require('node:fs');
+                  const body = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/production-app-version.json', 'utf8'));
+                  process.stdout.write(String(body.buildId || ''));
+                "
+              )"
+              if [ "${current_build}" = "${RELEASE_SHA}" ]; then
+                echo "Production serves ${RELEASE_SHA}."
+                exit 0
+              fi
+              echo "Production still serves ${current_build:-an unknown build}; retrying (${attempt}/12)."
+            else
+              echo "Production version probe failed; retrying (${attempt}/12)."
+            fi
+            sleep 5
+          done
+          echo "::error::Production did not serve ${RELEASE_SHA} within 60 seconds of promotion."
+          exit 1
