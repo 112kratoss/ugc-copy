@@ -122,15 +122,15 @@ jobs:
           DEPLOYMENT_URL: ${{ steps.stage.outputs.deployment_url }}
         run: |
           set -euo pipefail
-          npx --yes vercel@57.0.0 curl \
+          npx --yes vercel@57.0.0 --token="${VERCEL_TOKEN}" curl \
             "/" \
             --deployment "${DEPLOYMENT_URL}" \
-            --token="${VERCEL_TOKEN}" \
+            -- \
             --fail --silent --show-error --output /dev/null
-          npx --yes vercel@57.0.0 curl \
+          npx --yes vercel@57.0.0 --token="${VERCEL_TOKEN}" curl \
             "/api/app-version" \
             --deployment "${DEPLOYMENT_URL}" \
-            --token="${VERCEL_TOKEN}" \
+            -- \
             --fail --silent --show-error \
             --output "${RUNNER_TEMP}/app-version.json"
           node -e "
@@ -140,10 +140,10 @@ jobs:
               throw new Error('Staged build id ' + body.buildId + ' does not match ' + process.env.RELEASE_SHA);
             }
           "
-          npx --yes vercel@57.0.0 curl \
+          npx --yes vercel@57.0.0 --token="${VERCEL_TOKEN}" curl \
             "/api/ops/backend-health" \
             --deployment "${DEPLOYMENT_URL}" \
-            --token="${VERCEL_TOKEN}" \
+            -- \
             --fail --silent --show-error \
             --header "Authorization: Bearer ${OPS_READ_SECRET}" \
             --output "${RUNNER_TEMP}/backend-health.json"
