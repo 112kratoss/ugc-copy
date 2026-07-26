@@ -98,7 +98,7 @@ describe('profile follow route adapter service', () => {
         createUserClient: () => createUserClient('follower-1'),
         updateCreatorFollowForRoute: vi.fn(async () => ({
           ok: false as const,
-          status: 429,
+          status: 429 as const,
           rateLimitError,
           body: { code: 'RATE_LIMITED' },
         })),
@@ -220,7 +220,7 @@ describe('profile follow route adapter service', () => {
         createUserClient: () => createUserClient('follower-1'),
         notifyCreatorFollowForRoute: vi.fn(async () => ({
           ok: false as const,
-          status: 429,
+          status: 429 as const,
           rateLimitError,
           body: { code: 'RATE_LIMITED' },
         })),

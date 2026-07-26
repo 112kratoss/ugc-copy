@@ -9,6 +9,7 @@ import {
   PROFILE_MEDIA_UPLOAD_SIGN_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { canUserCreateDurableUpload } from '@/lib/account-deletion-guard';
 import { isAllowedStorageBucketMimeType } from '@/lib/storage-upload-mime-policy';
 
 const PROFILE_MEDIA_BUCKET = 'profiles';
@@ -51,7 +52,7 @@ export type ProfileMediaUploadIntentResult =
     }
   | {
       ok: false;
-      status: 400 | 429 | 500;
+      status: 400 | 409 | 429 | 500;
       body: Record<string, unknown>;
       rateLimitError?: BackendRateLimitError;
     };
@@ -167,6 +168,30 @@ export async function createProfileMediaUploadIntent({
   }
 
   const resolvedClient = resolveClient(client);
+  const deletionState = await canUserCreateDurableUpload(resolvedClient, userId);
+  if (!deletionState.allowed) {
+    if (deletionState.error) {
+      logBackendError('profile_media_account_deletion_guard_failed', {
+        error: deletionState.error,
+        userId,
+      });
+      return {
+        ok: false,
+        status: 500,
+        body: { error: 'Failed to verify account upload eligibility.' },
+      };
+    }
+
+    return {
+      ok: false,
+      status: 409,
+      body: {
+        error: 'Uploads are disabled because this account is being deleted.',
+        code: 'ACCOUNT_DELETION_IN_PROGRESS',
+      },
+    };
+  }
+
   try {
     await enforceBackendRateLimit(resolvedClient, {
       ...PROFILE_MEDIA_UPLOAD_SIGN_RATE_LIMIT,

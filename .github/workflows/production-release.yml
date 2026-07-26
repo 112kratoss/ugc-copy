@@ -1,0 +1,195 @@
+name: Production release
+
+on:
+  workflow_run:
+    workflows:
+      - Quality
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Migrate, stage, verify, and promote
+    if: >-
+      github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      OPS_READ_SECRET: ${{ secrets.OPS_READ_SECRET }}
+      PRODUCTION_BASE_URL: ${{ vars.PRODUCTION_BASE_URL || 'https://magicbooklet.com' }}
+    steps:
+      - name: Check out the quality-verified commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 1
+
+      - name: Reject a stale release before changing production
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          test -n "${current_main}"
+          if [ "${current_main}" != "${RELEASE_SHA}" ]; then
+            echo "::error::Refusing to release stale commit ${RELEASE_SHA}; main is ${current_main}."
+            exit 1
+          fi
+
+      - name: Validate required release credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in \
+            SUPABASE_ACCESS_TOKEN SUPABASE_PROJECT_REF \
+            VERCEL_ORG_ID VERCEL_PROJECT_ID VERCEL_TOKEN OPS_READ_SECRET
+          do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Required production environment value ${name} is missing."
+              exit 1
+            fi
+          done
+          if [[ ! "${PRODUCTION_BASE_URL}" =~ ^https://[^[:space:]]+$ ]]; then
+            echo "::error::PRODUCTION_BASE_URL must be an absolute HTTPS origin."
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@v3
+        with:
+          version: 2.109.1
+
+      - name: Migrate the production database through the Management API
+        shell: bash
+        run: node .github/scripts/apply-supabase-migrations.mjs
+
+      - name: Deploy the generation webhook edge function
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase functions deploy kie-webhook \
+            --project-ref "${SUPABASE_PROJECT_REF}" \
+            --use-api
+
+      - name: Stage a production-configured Vercel deployment
+        id: stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes vercel@57.0.0 pull \
+            --yes \
+            --environment=production \
+            --token="${VERCEL_TOKEN}"
+          deployment_url="$(
+            npx --yes vercel@57.0.0 deploy \
+              --prod \
+              --skip-domain \
+              --yes \
+              --token="${VERCEL_TOKEN}" \
+              --meta "gitCommitSha=${RELEASE_SHA}" \
+              --build-env "RELEASE_GIT_SHA=${RELEASE_SHA}" \
+              --env "RELEASE_GIT_SHA=${RELEASE_SHA}"
+          )"
+          if [[ ! "${deployment_url}" =~ ^https://[^[:space:]]+$ ]]; then
+            echo "::error::Vercel did not return a deployment URL."
+            exit 1
+          fi
+          echo "deployment_url=${deployment_url}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify the staged deployment and exact commit
+        shell: bash
+        env:
+          DEPLOYMENT_URL: ${{ steps.stage.outputs.deployment_url }}
+        run: |
+          set -euo pipefail
+          npx --yes vercel@57.0.0 curl \
+            "/" \
+            --deployment "${DEPLOYMENT_URL}" \
+            --token="${VERCEL_TOKEN}" \
+            --fail --silent --show-error --output /dev/null
+          npx --yes vercel@57.0.0 curl \
+            "/api/app-version" \
+            --deployment "${DEPLOYMENT_URL}" \
+            --token="${VERCEL_TOKEN}" \
+            --fail --silent --show-error \
+            --output "${RUNNER_TEMP}/app-version.json"
+          node -e "
+            const fs = require('node:fs');
+            const body = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/app-version.json', 'utf8'));
+            if (body.buildId !== process.env.RELEASE_SHA) {
+              throw new Error('Staged build id ' + body.buildId + ' does not match ' + process.env.RELEASE_SHA);
+            }
+          "
+          npx --yes vercel@57.0.0 curl \
+            "/api/ops/backend-health" \
+            --deployment "${DEPLOYMENT_URL}" \
+            --token="${VERCEL_TOKEN}" \
+            --fail --silent --show-error \
+            --header "Authorization: Bearer ${OPS_READ_SECRET}" \
+            --output "${RUNNER_TEMP}/backend-health.json"
+          node -e "
+            const fs = require('node:fs');
+            const body = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/backend-health.json', 'utf8'));
+            if (body.buildId && body.buildId !== process.env.RELEASE_SHA) {
+              throw new Error('Health build id does not match the release commit');
+            }
+            if (body.status && body.status !== 'ok') {
+              throw new Error('Staged backend health is ' + body.status);
+            }
+          "
+
+      - name: Reject a stale release before promotion
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          if [ "${current_main}" != "${RELEASE_SHA}" ]; then
+            echo "::error::A newer main commit exists; leaving the verified deployment staged."
+            exit 1
+          fi
+
+      - name: Promote the verified deployment
+        shell: bash
+        env:
+          DEPLOYMENT_URL: ${{ steps.stage.outputs.deployment_url }}
+        run: |
+          set -euo pipefail
+          npx --yes vercel@57.0.0 promote "${DEPLOYMENT_URL}" \
+            --yes \
+            --token="${VERCEL_TOKEN}"
+
+      - name: Verify production serves the released commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          production_origin="${PRODUCTION_BASE_URL%/}"
+          curl --fail --silent --show-error \
+            "${production_origin}/api/app-version" \
+            --output "${RUNNER_TEMP}/production-app-version.json"
+          node -e "
+            const fs = require('node:fs');
+            const body = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/production-app-version.json', 'utf8'));
+            if (body.buildId !== process.env.RELEASE_SHA) {
+              throw new Error('Production build id ' + body.buildId + ' does not match ' + process.env.RELEASE_SHA);
+            }
+          "

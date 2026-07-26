@@ -81,7 +81,12 @@ function createAdminSupabaseMock({
                 return query;
               },
               maybeSingle: vi.fn(async () => {
-                if (table === 'generations' && filters.id === generation?.id && filters.user_id === generation.user_id) {
+                if (
+                  generation
+                  && table === 'generations'
+                  && filters.id === generation.id
+                  && filters.user_id === generation.user_id
+                ) {
                   return { data: generation, error: null };
                 }
 

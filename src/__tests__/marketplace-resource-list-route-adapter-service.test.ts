@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
 
 import { getMarketplaceResourceListRouteResponse } from '@/lib/marketplace-resource-list-route-adapter-service';
+import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
 function createRequest(search = '', headers: Record<string, string> = {}) {
   return new Request(`http://localhost/api/marketplace/resources${search}`, {
@@ -13,7 +14,7 @@ function createRequest(search = '', headers: Record<string, string> = {}) {
 describe('marketplace resource list route adapter service', () => {
   it('normalizes list filters and returns shared cache headers for anonymous web and mobile clients', async () => {
     const getMarketplaceResourceList = vi.fn(async () => ({
-      items: [{ id: 'resource-1' }],
+      items: [{ id: 'resource-1' } as unknown as MarketplaceResourceListItem],
       pageInfo: {
         hasMore: false,
         limit: 48,
@@ -94,7 +95,7 @@ describe('marketplace resource list route adapter service', () => {
       request: createRequest('?offset=960&limit=48'),
       dependencies: {
         getMarketplaceResourceList: vi.fn(async () => ({
-          items: [{ id: 'resource-1' }],
+          items: [{ id: 'resource-1' } as unknown as MarketplaceResourceListItem],
           pageInfo: {
             hasMore: true,
             limit: 48,

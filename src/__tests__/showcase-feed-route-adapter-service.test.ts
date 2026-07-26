@@ -97,7 +97,7 @@ describe('showcase feed route adapter service', () => {
         resolveFeedAnonymousIdentity: vi.fn(() => ({
           anonymousKeyHash: 'anonymous-feed-hash',
           cookieValueToSet: `fid_${'a'.repeat(64)}`,
-          source: 'web-cookie',
+          source: 'web-cookie' as const,
         })),
         getShowcaseFeedPage: getShowcaseFeedPageMock as unknown as typeof getShowcaseFeedPage,
       },

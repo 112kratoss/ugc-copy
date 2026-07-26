@@ -10,14 +10,18 @@ type CreditTransactionRow = {
   amount?: number;
   credit_reversed_amount_subunits?: number;
   credit_effect_applied?: boolean;
+  razorpay_order_id?: string;
   razorpay_payment_id?: string;
-  status: 'pending' | 'success';
+  status: 'created' | 'pending' | 'success' | 'failed' | 'refunded';
 } | null;
 
 type OrderRow = {
   id: string;
   buyer_user_id: string;
-  status: 'created' | 'paid';
+  amount_subunits?: number;
+  currency?: string;
+  razorpay_payment_id?: string;
+  status: 'created' | 'paid' | 'failed';
 } | null;
 
 function createAdminSupabaseMock(state: {
@@ -28,6 +32,9 @@ function createAdminSupabaseMock(state: {
   creditRpcMode?: 'success' | 'false-settled' | 'false-mismatched' | 'false-unsettled' | 'error';
   creditTransactionLoadError?: boolean;
   marketplaceOrderLoadError?: boolean;
+  marketplaceAdjustmentStatus?: string;
+  resourceAdjustmentStatus?: string;
+  adjustmentError?: boolean;
 }) {
   const tableReads: string[] = [];
   const rpcCalls: Array<{ name: string; payload: Record<string, unknown> }> = [];
@@ -46,27 +53,61 @@ function createAdminSupabaseMock(state: {
       return {
         select() {
           return {
-            eq(_column: string, _value: unknown) {
-              void _column;
-              void _value;
+            eq(column: string, value: unknown) {
               return {
                 async maybeSingle() {
                   tableReads.push(table);
 
                   if (table === 'transactions') {
+                    const transaction = state.creditTransaction
+                      ? {
+                          amount: 10_000,
+                          razorpay_order_id: 'order_123',
+                          ...state.creditTransaction,
+                        }
+                      : null;
+                    const matchesFilter = !transaction
+                      || (column === 'razorpay_payment_id'
+                        ? transaction.razorpay_payment_id === value
+                        : column === 'razorpay_order_id'
+                          ? transaction.razorpay_order_id === value
+                          : column === 'id'
+                            ? transaction.id === value
+                            : true);
                     return state.creditTransactionLoadError
                       ? { data: null, error: { message: 'transactions read failed' } }
-                      : { data: state.creditTransaction ?? null, error: null };
+                      : {
+                          data: matchesFilter ? transaction : null,
+                          error: null,
+                        };
                   }
 
                   if (table === 'marketplace_orders') {
                     return state.marketplaceOrderLoadError
                       ? { data: null, error: { message: 'marketplace_orders read failed' } }
-                      : { data: state.marketplaceOrder ?? null, error: null };
+                      : {
+                          data: state.marketplaceOrder
+                            ? {
+                                amount_subunits: 10_000,
+                                currency: 'INR',
+                                ...state.marketplaceOrder,
+                              }
+                            : null,
+                          error: null,
+                        };
                   }
 
                   if (table === 'post_resource_bundle_orders') {
-                    return { data: state.bundleOrder ?? null, error: null };
+                    return {
+                      data: state.bundleOrder
+                        ? {
+                            amount_subunits: 10_000,
+                            currency: 'INR',
+                            ...state.bundleOrder,
+                          }
+                        : null,
+                      error: null,
+                    };
                   }
 
                   throw new Error(`Unexpected table access: ${table}`);
@@ -108,8 +149,21 @@ function createAdminSupabaseMock(state: {
         return { data: { status: 'partially_reversed', rewards: [] }, error: null };
       }
 
+      if (name === 'reconcile_marketplace_cash_adjustment') {
+        return state.adjustmentError
+          ? { data: null, error: { message: 'adjustment failed' } }
+          : { data: { status: state.marketplaceAdjustmentStatus ?? 'not_found' }, error: null };
+      }
+
+      if (name === 'reconcile_post_resource_cash_adjustment') {
+        return state.adjustmentError
+          ? { data: null, error: { message: 'adjustment failed' } }
+          : { data: { status: state.resourceAdjustmentStatus ?? 'not_found' }, error: null };
+      }
+
       if (name === 'complete_marketplace_purchase' && state.marketplaceOrder) {
         state.marketplaceOrder.status = 'paid';
+        state.marketplaceOrder.razorpay_payment_id = String(payload.p_razorpay_payment_id);
         return { data: true, error: null };
       }
 
@@ -124,6 +178,7 @@ function createAdminSupabaseMock(state: {
 
         if (state.bundleOrder) {
           state.bundleOrder.status = 'paid';
+          state.bundleOrder.razorpay_payment_id = String(payload.p_razorpay_payment_id);
         }
 
         return { data: true, error: null };
@@ -155,6 +210,15 @@ function paymentCapturedBody(orderId = 'order_123') {
         entity: {
           id: 'pay_123',
           order_id: orderId,
+          amount: 10_000,
+          amount_refunded: 0,
+          currency: 'INR',
+          status: 'captured',
+          captured: true,
+          notes: {
+            user_id: 'user-1',
+            buyer_user_id: 'user-1',
+          },
         },
       },
     },
@@ -167,6 +231,22 @@ function refundProcessedBody() {
     payload: {
       payment: { entity: { id: 'pay_123', order_id: 'order_123', amount: 10_000, amount_refunded: 5_000 } },
       refund: { entity: { id: 'rfnd_123', payment_id: 'pay_123', amount: 5_000, status: 'processed' } },
+    },
+  });
+}
+
+function commerceRefundProcessedBodyWithoutPaymentEntity() {
+  return JSON.stringify({
+    event: 'refund.processed',
+    payload: {
+      refund: {
+        entity: {
+          id: 'rfnd_123',
+          payment_id: 'pay_123',
+          amount: 5_000,
+          status: 'processed',
+        },
+      },
     },
   });
 }
@@ -486,11 +566,47 @@ describe('processRazorpayWebhookForRoute', () => {
       payload: {
         p_transaction_id: 'txn-1',
         p_provider_event_id: 'refund:rfnd_123',
+        p_payment_id: 'pay_123',
         p_cumulative_reversed_subunits: 5_000,
         p_action: 'reverse',
         p_reason: 'razorpay_refund_processed',
       },
     });
+  });
+
+  it('routes a refund-before-capture through the atomic zero-delta reconciliation guard', async () => {
+    const admin = createAdminSupabaseMock({
+      creditTransaction: {
+        id: 'txn-1',
+        user_id: 'user-1',
+        credits: 100,
+        amount: 10_000,
+        credit_effect_applied: false,
+        razorpay_order_id: 'order_123',
+        status: 'created',
+      },
+    });
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: refundProcessedBody(),
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+
+    expect(admin.tableReads).toEqual(['transactions', 'transactions']);
+    expect(admin.rpcCalls).toContainEqual({
+      name: 'reconcile_razorpay_credit_purchase_adjustment',
+      payload: {
+        p_transaction_id: 'txn-1',
+        p_provider_event_id: 'refund:rfnd_123',
+        p_payment_id: 'pay_123',
+        p_cumulative_reversed_subunits: 5_000,
+        p_action: 'reverse',
+        p_reason: 'razorpay_refund_processed',
+      },
+    });
+    expect(admin.rpcCalls).not.toContainEqual(expect.objectContaining({
+      name: 'add_credits',
+    }));
   });
 
   it('reverses an opened dispute and restores only that amount when won', async () => {
@@ -532,6 +648,161 @@ describe('processRazorpayWebhookForRoute', () => {
           p_cumulative_reversed_subunits: 0,
           p_action: 'restore',
         }),
+      },
+    ]));
+  });
+
+  it('does not fulfill a captured webhook whose amount differs from the stored order', async () => {
+    const admin = createAdminSupabaseMock({
+      creditTransaction: {
+        id: 'txn-1',
+        user_id: 'user-1',
+        credits: 100,
+        amount: 9_999,
+        status: 'pending',
+      },
+    });
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+    expect(admin.rpcCalls).toEqual([]);
+    expect(admin.tableReads).toEqual(['transactions']);
+  });
+
+  it('does not re-grant commerce access when a delayed capture arrives after reversal', async () => {
+    const admin = createAdminSupabaseMock({
+      marketplaceOrder: {
+        id: 'marketplace-order-1',
+        buyer_user_id: 'user-1',
+        razorpay_payment_id: 'pay_123',
+        status: 'failed',
+      },
+    });
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+
+    expect(admin.rpcCalls).not.toContainEqual(expect.objectContaining({
+      name: 'complete_marketplace_purchase',
+    }));
+    expect(admin.tableReads).toEqual(['transactions', 'marketplace_orders']);
+  });
+
+  it('revokes a marketplace entitlement for a processed refund', async () => {
+    const admin = createAdminSupabaseMock({
+      marketplaceAdjustmentStatus: 'adjusted',
+    });
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: refundProcessedBody(),
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+
+    expect(admin.rpcCalls).toContainEqual({
+      name: 'reconcile_marketplace_cash_adjustment',
+      payload: {
+        p_provider_event_id: 'refund:rfnd_123',
+        p_payment_id: 'pay_123',
+        p_provider_order_id: 'order_123',
+        p_action: 'refund',
+        p_reason: 'razorpay_refund_processed',
+      },
+    });
+  });
+
+  it('asks Razorpay to retry when commerce refund reconciliation finds an ownership conflict', async () => {
+    const admin = createAdminSupabaseMock({
+      marketplaceAdjustmentStatus: 'payment_conflict',
+    });
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: refundProcessedBody(),
+    })).resolves.toEqual({
+      status: 500,
+      body: 'Failed to reconcile payment refund',
+    });
+
+    expect(admin.providerDependencyInserts).toEqual([
+      expect.objectContaining({
+        service_name: 'razorpay-webhook-processing',
+        error_name: 'payment_refund_reconciliation_failed',
+      }),
+    ]);
+  });
+
+  it('revokes a commerce entitlement even when the refund webhook omits the payment entity', async () => {
+    const admin = createAdminSupabaseMock({
+      marketplaceAdjustmentStatus: 'adjusted',
+    });
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: commerceRefundProcessedBodyWithoutPaymentEntity(),
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+
+    expect(admin.rpcCalls).toContainEqual({
+      name: 'reconcile_marketplace_cash_adjustment',
+      payload: {
+        p_provider_event_id: 'refund:rfnd_123',
+        p_payment_id: 'pay_123',
+        p_provider_order_id: null,
+        p_action: 'refund',
+        p_reason: 'razorpay_refund_processed',
+      },
+    });
+  });
+
+  it('revokes commerce access on a terminal lost dispute even if the opened event was missed', async () => {
+    const admin = createAdminSupabaseMock({
+      marketplaceAdjustmentStatus: 'adjusted',
+    });
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: disputeBody('payment.dispute.lost', 'lost'),
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+
+    expect(admin.rpcCalls).toContainEqual({
+      name: 'reconcile_marketplace_cash_adjustment',
+      payload: {
+        p_provider_event_id: 'dispute:disp_123:reverse',
+        p_payment_id: 'pay_123',
+        p_provider_order_id: 'order_123',
+        p_action: 'dispute',
+        p_reason: 'razorpay_dispute_opened',
+      },
+    });
+  });
+
+  it('falls through to resource entitlements and records dispute-won manual review', async () => {
+    const admin = createAdminSupabaseMock({
+      marketplaceAdjustmentStatus: 'not_found',
+      resourceAdjustmentStatus: 'manual_review',
+    });
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: disputeBody('payment.dispute.won', 'won'),
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+
+    expect(admin.rpcCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'reconcile_marketplace_cash_adjustment',
+      }),
+      {
+        name: 'reconcile_post_resource_cash_adjustment',
+        payload: {
+          p_provider_event_id: 'dispute:disp_123:won',
+          p_payment_id: 'pay_123',
+          p_provider_order_id: 'order_123',
+          p_action: 'restore',
+          p_reason: 'razorpay_dispute_won',
+        },
       },
     ]));
   });

@@ -6,6 +6,7 @@
     "node": ">=22 <25"
   },
   "overrides": {
+    "brace-expansion": "5.0.8",
     "next": {
       "postcss": "^8.5.10"
     },
@@ -32,6 +33,7 @@
     "perf:load:self-test": "node scripts/performance-load-test.mjs --self-test",
     "perf:lighthouse": "lhci autorun --config=config/lighthouse.cjs",
     "perf:lighthouse:self-test": "node config/lighthouse.cjs",
+    "postinstall": "patch-package",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
@@ -71,6 +73,7 @@
     "eslint": "^9",
     "eslint-config-next": "^16.2.9",
     "jsdom": "^28.1.0",
+    "patch-package": "^8.0.1",
     "pg": "^8.22.0",
     "tailwindcss": "^4",
     "tsx": "^4.20.6",

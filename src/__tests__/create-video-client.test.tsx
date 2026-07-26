@@ -2,13 +2,24 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateVideoClient from '@/app/create-video/CreateVideoClient';
+import type { PersistedImageElementRecord } from '@/lib/persisted-media';
 
 const mockPush = vi.fn();
 const mockUpdateCredits = vi.fn();
 const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
 const temporaryUploadMock = vi.hoisted(() => vi.fn());
-const getPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(async () => []));
-const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(async () => undefined));
+const getPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
+  async (_key: string): Promise<PersistedImageElementRecord[]> => {
+    void _key;
+    return [];
+  }
+));
+const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
+  async (_key: string, _elements: PersistedImageElementRecord[]): Promise<void> => {
+    void _key;
+    void _elements;
+  }
+));
 const uploadMock = vi.fn(async () => ({ error: null }));
 const createSignedUrlMock = vi.fn(async () => ({
   data: { signedUrl: 'https://signed.example.com/uploads/user-1/kling-ref.mp4' },

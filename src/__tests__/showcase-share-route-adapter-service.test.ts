@@ -68,7 +68,7 @@ describe('postShowcaseShareRouteResponse', () => {
     const serviceClient = createServiceClient();
     const shareShowcasePostForRoute = vi.fn(async () => ({
       ok: true as const,
-      body: { success: true },
+      body: { success: true as const },
     }));
 
     const response = await postShowcaseShareRouteResponse({
@@ -112,7 +112,7 @@ describe('postShowcaseShareRouteResponse', () => {
     const serviceClient = createServiceClient();
     const shareShowcasePostForRoute = vi.fn(async () => ({
       ok: true as const,
-      body: { success: true },
+      body: { success: true as const },
     }));
 
     const response = await postShowcaseShareRouteResponse({

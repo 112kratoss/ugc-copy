@@ -100,8 +100,8 @@ describe('postResourceBundleFreeUnlockRouteResponse', () => {
         createServiceClient: vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient),
         createUserClient: () => createUserClient('buyer-1'),
         unlockFreePostResourceBundleForRoute: vi.fn(async () => ({
-          ok: false,
-          status: 429,
+          ok: false as const,
+          status: 429 as const,
           rateLimitError,
           body: { code: 'RATE_LIMITED' },
         })),
@@ -130,8 +130,8 @@ describe('postResourceBundleFreeUnlockRouteResponse', () => {
         createServiceClient: vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient),
         createUserClient: () => createUserClient('buyer-1'),
         unlockFreePostResourceBundleForRoute: vi.fn(async () => ({
-          ok: false,
-          status: 400,
+          ok: false as const,
+          status: 400 as const,
           body: { error: 'This bundle requires payment.' },
         })),
       },

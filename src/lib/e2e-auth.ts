@@ -60,8 +60,19 @@ export function createE2ESession(): Session {
 }
 
 export function isE2EAuthBypassEnabled() {
+  const isBrowser = typeof document !== 'undefined';
   return resolveE2EAuthBypass({
-    isBrowser: typeof document !== 'undefined',
+    // Next.js only substitutes NEXT_PUBLIC_* variables in browser bundles
+    // when they are referenced directly. Passing the whole process.env object
+    // leaves the client-side test flag undefined and produces a misleading
+    // server-only bypass.
+    environment: isBrowser
+      ? {
+          NEXT_PUBLIC_E2E_AUTH_BYPASS: process.env.NEXT_PUBLIC_E2E_AUTH_BYPASS,
+          NODE_ENV: process.env.NODE_ENV,
+        }
+      : process.env,
+    isBrowser,
   });
 }
 

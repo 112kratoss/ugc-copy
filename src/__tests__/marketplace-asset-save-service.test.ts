@@ -7,6 +7,8 @@ type PostRow = {
   id: string;
   user_id: string;
   visibility: 'public' | 'unlisted' | 'private';
+  archived_at: string | null;
+  review_status: string | null;
 };
 
 type MarketplaceAssetRow = {
@@ -20,6 +22,23 @@ type WorkflowCanvasRow = {
   user_id: string;
   graph: Record<string, unknown>;
 };
+
+const POSTS: PostRow[] = [
+  {
+    id: 'post-public',
+    user_id: 'user-1',
+    visibility: 'public',
+    archived_at: null,
+    review_status: 'visible',
+  },
+  {
+    id: 'post-private',
+    user_id: 'user-1',
+    visibility: 'private',
+    archived_at: null,
+    review_status: 'visible',
+  },
+];
 
 function createAdminSupabaseMock(options?: {
   rateLimited?: boolean;
@@ -39,6 +58,29 @@ function createAdminSupabaseMock(options?: {
         error: null,
       };
     },
+    from(table: string) {
+      if (table !== 'posts') {
+        throw new Error(`Unexpected admin table: ${table}`);
+      }
+
+      return {
+        select() {
+          const filters: Record<string, unknown> = {};
+          return {
+            eq(column: string, value: unknown) {
+              filters[column] = value;
+              return this;
+            },
+            async maybeSingle() {
+              const row = POSTS.find((post) =>
+                Object.entries(filters).every(([key, value]) => post[key as keyof PostRow] === value)
+              ) ?? null;
+              return { data: row, error: null };
+            },
+          };
+        },
+      };
+    },
   };
 
   return {
@@ -48,18 +90,6 @@ function createAdminSupabaseMock(options?: {
 }
 
 function createUserSupabaseMock(options?: { sellerReady?: boolean }) {
-  const posts: PostRow[] = [
-    {
-      id: 'post-public',
-      user_id: 'user-1',
-      visibility: 'public',
-    },
-    {
-      id: 'post-private',
-      user_id: 'user-1',
-      visibility: 'private',
-    },
-  ];
   const marketplaceAssets: MarketplaceAssetRow[] = [];
   const workflowCanvases: WorkflowCanvasRow[] = [
     {
@@ -103,7 +133,7 @@ function createUserSupabaseMock(options?: { sellerReady?: boolean }) {
                 return this;
               },
               async maybeSingle() {
-                const row = posts.find((post) =>
+                const row = POSTS.find((post) =>
                   Object.entries(filters).every(([key, value]) => post[key as keyof PostRow] === value)
                 ) ?? null;
                 return { data: row, error: null };

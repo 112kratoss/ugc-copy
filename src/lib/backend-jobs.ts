@@ -1,4 +1,5 @@
 export type BackendJobName =
+  | 'account-deletion-resweeps'
   | 'backend-alert-delivery'
   | 'feed-maintenance'
   | 'generation-completions'
@@ -164,6 +165,15 @@ export const BACKEND_JOB_SCHEDULER = {
 } as const satisfies BackendJobSchedulerDefinition;
 
 export const BACKEND_JOB_REGISTRY = [
+  defineBackendJob({
+    name: 'account-deletion-resweeps',
+    route: '/api/cron/account-deletion-resweeps',
+    schedule: '*/10 * * * *',
+    maxDurationSeconds: 300,
+    lockTtlSeconds: 14 * 60,
+    noWorkSkipReason: 'no_due_account_deletion_cleanup',
+    maxMissedRunsBeforeDegraded: 3,
+  }),
   defineBackendJob({
     name: 'backend-alert-delivery',
     route: '/api/cron/backend-alert-delivery',

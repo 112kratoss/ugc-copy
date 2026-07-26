@@ -2583,9 +2583,9 @@ describe('generation services', () => {
 
   it('keeps Seedance frame guidance separate from reusable references', async () => {
     const { startVideoGeneration } = await import('@/lib/generation-services');
-    let providerBody: Record<string, unknown> | null = null;
+    const providerBodies: Record<string, unknown>[] = [];
     vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      providerBody = JSON.parse(String(init?.body));
+      providerBodies.push(JSON.parse(String(init?.body)));
       return { ok: true, json: async () => ({ code: 200, data: { taskId: 'task-seedance-frames-1' } }) } as Response;
     });
 
@@ -2604,14 +2604,14 @@ describe('generation services', () => {
       endImageUrl: 'https://cdn.example.com/end.jpg',
     });
 
-    expect(providerBody).toMatchObject({
+    expect(providerBodies[0]).toMatchObject({
       model: 'bytedance/seedance-2-mini',
       input: {
         first_frame_url: 'https://cdn.example.com/start.jpg',
         last_frame_url: 'https://cdn.example.com/end.jpg',
       },
     });
-    expect((providerBody as { input: Record<string, unknown> }).input).not.toHaveProperty('reference_image_urls');
+    expect((providerBodies[0] as { input: Record<string, unknown> }).input).not.toHaveProperty('reference_image_urls');
   });
 
   it('routes Kling 3 Turbo between text and image endpoints', async () => {

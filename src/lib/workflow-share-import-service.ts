@@ -104,7 +104,7 @@ export async function importWorkflowShareForRoute({
     return { ok: false, status: 500, body: { error: 'Failed to import workflow share.' } };
   }
 
-  const { data: share, error: shareError } = await userSupabase
+  const { data: share, error: shareError } = await serviceSupabase
     .from('workflow_shares')
     .select(WORKFLOW_SHARE_SELECT)
     .eq('id', shareId)

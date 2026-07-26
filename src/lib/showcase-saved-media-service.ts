@@ -141,20 +141,22 @@ export async function getSavedMediaFeedForRoute({
     hasMore = savedReferences.length >= limit;
   }
 
-  const { data: postRows, error: postError } = await userSupabase
+  const adminSupabase = createAdminSupabase();
+  const { data: postRows, error: postError } = await adminSupabase
     .from('posts')
     .select(
       'id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility'
     )
     .in(saveSource === 'post' ? 'id' : 'generation_id', lookupIds)
-    .in('visibility', ['public', 'unlisted']);
+    .in('visibility', ['public', 'unlisted'])
+    .eq('review_status', 'visible')
+    .is('archived_at', null);
 
   if (postError) {
     logBackendError('error_fetching_saved_post_rows', { error: postError });
     return { ok: false, status: 500, body: { error: 'Failed to fetch saved media' } };
   }
 
-  const adminSupabase = createAdminSupabase();
   const hydratedItems = await resolvePostRowsToFeedItems(
     (postRows ?? []) as Parameters<typeof resolvePostRowsToFeedItems>[0],
     adminSupabase

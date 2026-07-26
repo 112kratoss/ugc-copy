@@ -89,6 +89,8 @@ describe('post resource bundle verification route adapter service', () => {
       dependencies: {
         createServiceClient,
         createUserClient: () => createUserClient('buyer-1'),
+        razorpayKeyId: 'test-key-id',
+        razorpayKeySecret: 'test-secret',
         verifyPostResourceBundlePaymentForRoute,
       },
     });
@@ -101,8 +103,41 @@ describe('post resource bundle verification route adapter service', () => {
     expect(verifyPostResourceBundlePaymentForRoute).toHaveBeenCalledWith({
       adminSupabase,
       buyerUserId: 'buyer-1',
-      keySecret: process.env.RAZORPAY_KEY_SECRET,
+      keyId: 'test-key-id',
+      keySecret: 'test-secret',
       readBody: expect.any(Function),
+    });
+  });
+
+  it('preserves the authorized-but-uncaptured 202 contract', async () => {
+    verifyPostResourceBundlePaymentForRoute.mockResolvedValueOnce({
+      ok: true,
+      status: 202,
+      body: {
+        success: false,
+        status: 'pending',
+        pending: true,
+        code: 'PAYMENT_PENDING',
+      },
+    });
+
+    const response = await postPostResourceBundleVerifyRouteResponse({
+      request: new Request('http://localhost/api/posts/post-1/resource-bundle/verify', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }),
+      dependencies: {
+        createServiceClient,
+        createUserClient: () => createUserClient('buyer-1'),
+        verifyPostResourceBundlePaymentForRoute,
+      },
+    });
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'pending',
+      pending: true,
+      code: 'PAYMENT_PENDING',
     });
   });
 

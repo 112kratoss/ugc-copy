@@ -186,6 +186,7 @@ describe('discardWorkflowAssistantProposalForRoute', () => {
     });
 
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('Expected setup-required response');
     expect(result.status).toBe(503);
     expect(result.body).toMatchObject({
       availability: 'setup_required',
@@ -205,6 +206,7 @@ describe('discardWorkflowAssistantProposalForRoute', () => {
     });
 
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('Expected setup-required response');
     expect(result.status).toBe(503);
     expect(result.body).toMatchObject({
       availability: 'setup_required',

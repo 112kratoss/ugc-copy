@@ -12,16 +12,20 @@ function createClient({
   publicUrl = 'https://storage.example.test/profiles/user-1/avatar-upload-id-avatar-photo.png',
   storageError = null as Error | null,
 } = {}) {
-  const rpc = vi.fn(async () => ({
-    data: {
-      allowed,
-      limit: 30,
-      remaining: allowed ? 29 : 0,
-      retryAfterSeconds: allowed ? 0 : 45,
-      resetAt: '2026-06-22T06:30:00.000Z',
-    },
-    error: null,
-  }));
+  const rpc = vi.fn(async (fn: string) => (
+    fn === 'is_account_deletion_requested'
+      ? { data: false, error: null }
+      : {
+          data: {
+            allowed,
+            limit: 30,
+            remaining: allowed ? 29 : 0,
+            retryAfterSeconds: allowed ? 0 : 45,
+            resetAt: '2026-06-22T06:30:00.000Z',
+          },
+          error: null,
+        }
+  ));
   const createSignedUploadUrl = vi.fn(async () => ({
     data: storageError ? null : { token, signedUrl },
     error: storageError,

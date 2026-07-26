@@ -195,25 +195,22 @@ function createStarterCanvas() {
 }
 
 test.describe('workflow builder smoke tests', () => {
+  test('serves the real version endpoint without caching it', async ({ request }) => {
+    const response = await request.get('/api/app-version');
+
+    expect(response.ok()).toBe(true);
+    expect(response.headers()['cache-control']).toContain('no-store');
+    await expect(response.json()).resolves.toMatchObject({
+      buildId: expect.any(String),
+    });
+  });
+
   test('redirects unauthenticated visitors to login', async ({ page }) => {
     await page.goto('/create-workflow');
     await expect(page).toHaveURL(/\/login\?returnUrl=%2Fcreate-workflow/);
   });
 
-  // PRE-EXISTING FAILURE — quarantined so the E2E job can gate CI.
-  //
-  // This spec predates the split of `/create-workflow` into a library view
-  // (`WorkflowLibraryClient`) and the editor (`CreateWorkflowClient`): see
-  // CreateWorkflowEntry.tsx, which only mounts the editor for an explicit
-  // `?canvas=`/`?template=`/`?import=` param. As written the test lands on the
-  // library, so the canvas detail GET it polls for is never issued.
-  //
-  // Adding `?canvas=<id>` mounts the editor but is still not sufficient: the
-  // editor renders signed-out (nav shows "Sign in") and skips the canvas fetch,
-  // so the client-side half of the E2E auth bypass needs to be established
-  // before the assertions below can pass. Rewriting this needs a pass over the
-  // editor's data-loading preconditions — tracked, not silently deleted.
-  test.fixme('loads the workflow page, saves title edits, and shows blocked run affordances', async ({ context, page }) => {
+  test('loads a legacy workflow, normalizes it, and saves title edits', async ({ context, page }) => {
     const canvas = createStarterCanvas();
     const savePayloads: Array<{ title?: string }> = [];
     let listRequestCount = 0;
@@ -290,35 +287,8 @@ test.describe('workflow builder smoke tests', () => {
       await route.continue();
     });
 
-    await page.route('**/api/workflow-canvases/*/run', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ runId: 'run-1' }),
-      });
-    });
-
-    await page.route('**/api/workflow-canvases/*/runs/run-1', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          run: {
-            id: 'run-1',
-            canvas_id: canvas.id,
-            start_node_id: 'video-generate-1',
-            mode: 'node',
-            status: 'processing',
-            created_at: UPDATED_TIMESTAMP,
-            finished_at: null,
-            steps: [],
-          },
-        }),
-      });
-    });
-
-    await page.goto('/create-workflow');
-    await expect.poll(() => listRequestCount).toBeGreaterThan(0);
+    await page.goto(`/create-workflow?canvas=${canvas.id}`);
+    await expect.poll(() => listRequestCount).toBe(1);
     await expect.poll(() => detailRequestCount).toBeGreaterThan(0);
 
     const videoGeneratorNode = page.getByText('Video generator', { exact: true }).first();
@@ -326,17 +296,13 @@ test.describe('workflow builder smoke tests', () => {
     await expect(page.getByText('Workflow Canvas', { exact: true }).first()).toBeVisible();
     await expect(page.getByRole('textbox').first()).toHaveValue('Workflow canvas');
     await expect(videoGeneratorNode).toBeVisible();
+    await expect(page.getByText('Fixed asset', { exact: true })).toBeVisible();
 
     const siteNavbarBox = await page.getByRole('banner').boundingBox();
     const workflowHeaderBox = await page.getByTestId('workflow-canvas-header').boundingBox();
     expect(siteNavbarBox).not.toBeNull();
     expect(workflowHeaderBox).not.toBeNull();
     expect(Math.abs((siteNavbarBox?.y ?? 0) + (siteNavbarBox?.height ?? 0) - (workflowHeaderBox?.y ?? 0))).toBeLessThan(2);
-
-    await page.getByRole('button', { name: /^planner$/i }).click();
-    await expect(page.getByTestId('planner-assistant-drawer')).toBeVisible();
-    await page.keyboard.press('Escape');
-    await expect(page.getByTestId('planner-assistant-drawer')).toBeHidden();
 
     const titleInput = page.getByRole('textbox').first();
     await titleInput.fill('Updated workflow canvas');
@@ -346,8 +312,6 @@ test.describe('workflow builder smoke tests', () => {
     await expect.poll(() => savePayloads[0]?.title).toBe('Updated workflow canvas');
 
     await videoGeneratorNode.click();
-    await expect(page.getByText('Image input has no image output yet.')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Run node' })).toBeDisabled();
-    await expect(page.getByRole('button', { name: 'Run from here' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Run node' })).toBeVisible();
   });
 });

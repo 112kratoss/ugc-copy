@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildBackendAlertSummary, collectBackendAlerts } from '@/lib/backend-alerts';
 import type { BackendCostReport } from '@/lib/backend-cost-report';
 import type { BackendHealth } from '@/lib/backend-health';
+import type { BackendModerationHealth } from '@/lib/backend-moderation-health';
 
 const operationsRunbook = fs.readFileSync(
   path.resolve(process.cwd(), 'docs/production-deployment-runbook.md'),
@@ -25,6 +26,19 @@ const quietCosts = {
   window: { recentHours: 24, since: '2026-06-21T10:00:00.000Z' },
   issues: [],
 } as unknown as BackendCostReport;
+
+const quietModeration = {
+  status: 'ok',
+  checkedAt: '2026-06-22T10:00:00.000Z',
+  queue: {
+    postReportCount: 0,
+    subjectReportCount: 0,
+    totalOpenCount: 0,
+    oldestCreatedAt: null,
+    oldestAgeMinutes: null,
+  },
+  issues: [],
+} as unknown as BackendModerationHealth;
 
 describe('backend alerts', () => {
   it('combines backend health and cost report issues into source-labelled alerts', () => {
@@ -51,6 +65,24 @@ describe('backend alerts', () => {
           },
         ],
       },
+      moderation: {
+        ...quietModeration,
+        status: 'warning',
+        queue: {
+          ...quietModeration.queue,
+          postReportCount: 10,
+          totalOpenCount: 10,
+          oldestCreatedAt: '2026-06-22T04:00:00.000Z',
+          oldestAgeMinutes: 360,
+        },
+        issues: [
+          {
+            severity: 'warning',
+            code: 'MODERATION_QUEUE_AGE_WARNING',
+            message: 'The moderation queue is ageing.',
+          },
+        ],
+      },
       checkedAt: '2026-06-22T10:01:00.000Z',
     });
 
@@ -62,17 +94,20 @@ describe('backend alerts', () => {
         healthStatus: 'degraded',
         costStatus: 'warning',
         costWindowHours: 24,
+        moderationStatus: 'warning',
+        moderationOpenCount: 10,
+        moderationOldestAgeMinutes: 360,
       },
       counts: {
-        total: 2,
+        total: 3,
         degraded: 1,
-        warning: 1,
+        warning: 2,
       },
       delivery: {
         severity: 'degraded',
-        title: 'Backend alerts degraded: 1 degraded, 1 warning',
-        dedupeKey: 'backend-alerts:degraded:GENERATION_STALLED_ACTIVE,FAILED_PAID_GENERATIONS',
-        summary: 'GENERATION_STALLED_ACTIVE: 1 active generation is stalled. | FAILED_PAID_GENERATIONS: 1 paid generation failed.',
+        title: 'Backend alerts degraded: 1 degraded, 2 warning',
+        dedupeKey: 'backend-alerts:degraded:GENERATION_STALLED_ACTIVE,FAILED_PAID_GENERATIONS,MODERATION_QUEUE_AGE_WARNING',
+        summary: 'GENERATION_STALLED_ACTIVE: 1 active generation is stalled. | FAILED_PAID_GENERATIONS: 1 paid generation failed. | MODERATION_QUEUE_AGE_WARNING: The moderation queue is ageing.',
         runbookPath: 'docs/production-deployment-runbook.md#alert-response-guide',
         monitorEndpoints: [
           '/api/ops/backend-health',
@@ -98,6 +133,12 @@ describe('backend alerts', () => {
           code: 'FAILED_PAID_GENERATIONS',
           message: '1 paid generation failed.',
         },
+        {
+          source: 'moderation',
+          severity: 'warning',
+          code: 'MODERATION_QUEUE_AGE_WARNING',
+          message: 'The moderation queue is ageing.',
+        },
       ],
     });
   });
@@ -106,12 +147,14 @@ describe('backend alerts', () => {
     const client = { service: 'supabase' };
     const collectHealth = vi.fn(async () => healthyBackend);
     const collectCosts = vi.fn(async () => quietCosts);
+    const collectModeration = vi.fn(async () => quietModeration);
     const now = new Date('2026-06-22T10:00:00.000Z');
 
     const summary = await collectBackendAlerts(client as never, {
       now,
       collectHealth,
       collectCosts,
+      collectModeration,
     });
 
     expect(summary.status).toBe('ok');
@@ -120,10 +163,11 @@ describe('backend alerts', () => {
       severity: 'ok',
       title: 'Backend alerts ok',
       dedupeKey: 'backend-alerts:ok',
-      summary: 'No backend health or cost alerts.',
+      summary: 'No backend health, cost, or moderation alerts.',
     });
     expect(collectHealth).toHaveBeenCalledWith(client, now);
     expect(collectCosts).toHaveBeenCalledWith(client, now);
+    expect(collectModeration).toHaveBeenCalledWith(client, now);
   });
 
   it('documents production alert delivery wiring against the normalized payload', () => {

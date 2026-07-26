@@ -16,6 +16,7 @@
 @source "./auth";
 @source "./blog";
 @source "./cancellation";
+@source "./child-safety";
 @source "./contact";
 @source "./create";
 @source "./create-image";

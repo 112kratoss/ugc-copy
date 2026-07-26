@@ -107,8 +107,31 @@ describe('moderation operations', () => {
       },
       error: null,
     }));
+    const post = queryResult({
+      id: POST_ID,
+      generation_id: '80000000-0000-4000-8000-000000000008',
+      showcase_asset_path: `showcase/80000000-0000-4000-8000-000000000008/output.webp`,
+      output_url: 'https://provider.example/original-output',
+    });
+    const postMedia = queryResult([{
+      storage_path: `posts/${POST_ID}/0/proof.webp`,
+      preview_storage_path: `posts/${POST_ID}/0/proof.preview.webp`,
+      external_url: null,
+    }]);
+    const from = vi.fn((table: string) => {
+      if (table === 'posts') return post;
+      if (table === 'post_media') return postMedia;
+      throw new Error(`Unexpected table ${table}`);
+    });
+    const remove = vi.fn(async () => ({ data: [], error: null }));
+    const exists = vi.fn(async () => ({ data: false, error: { status: 404 } }));
+    const storageFrom = vi.fn(() => ({ remove, exists }));
 
-    const result = await resolvePostReport({ rpc } as unknown as SupabaseClient, {
+    const result = await resolvePostReport({
+      rpc,
+      from,
+      storage: { from: storageFrom },
+    } as unknown as SupabaseClient, {
       reportId: REPORT_ID,
       reviewerId: REVIEWER_ID,
       action: 'take_down',
@@ -127,7 +150,51 @@ describe('moderation operations', () => {
       postReviewStatus: 'hidden',
       resolvedReportCount: 2,
       reviewedBy: REVIEWER_ID,
+      revokedMediaCount: 3,
+      mediaRevocationVerified: true,
+      externalMediaRevocationRequired: true,
     });
+    expect(remove).toHaveBeenCalledWith([
+      'showcase/80000000-0000-4000-8000-000000000008/output.webp',
+      `posts/${POST_ID}/0/proof.webp`,
+      `posts/${POST_ID}/0/proof.preview.webp`,
+    ]);
+    expect(exists).toHaveBeenCalledTimes(3);
+  });
+
+  it('fails closed when Storage still exposes a taken-down post object', async () => {
+    const rpc = vi.fn(async () => ({
+      data: {
+        status: 'taken_down',
+        report_id: REPORT_ID,
+        post_id: POST_ID,
+        report_status: 'reviewed',
+        post_review_status: 'hidden',
+        reviewed_at: '2026-07-21T03:00:00.000Z',
+        reviewed_by: REVIEWER_ID,
+      },
+      error: null,
+    }));
+    const from = vi.fn((table: string) => table === 'posts'
+      ? queryResult({
+          id: POST_ID,
+          generation_id: null,
+          showcase_asset_path: `posts/${POST_ID}/0/proof.webp`,
+          output_url: null,
+        })
+      : queryResult([]));
+    const remove = vi.fn(async () => ({ data: [], error: null }));
+    const exists = vi.fn(async () => ({ data: true, error: null }));
+
+    await expect(resolvePostReport({
+      rpc,
+      from,
+      storage: { from: vi.fn(() => ({ remove, exists })) },
+    } as unknown as SupabaseClient, {
+      reportId: REPORT_ID,
+      reviewerId: REVIEWER_ID,
+      action: 'take_down',
+    })).rejects.toThrow('still exists after Storage revocation');
   });
 
   it('rejects malformed identifiers before touching the privileged client', async () => {

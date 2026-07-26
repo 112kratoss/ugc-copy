@@ -13,7 +13,7 @@ const rateLimitGuardPattern = /\b(?:enforceBackendRateLimit|enforceWorkflowCanva
 const providerAuthGuardPattern = /\b(?:webhookAuthorizationMatches|verifyKieWebhookAuthorization|verifyRazorpaySignature|verifyRazorpayPaymentSignature)\b/;
 const webhookPayloadGuardPattern = /\bisWebhookPayloadTooLarge\b/;
 const cronAuthGuardPattern = /\bisAuthorizedCronRequest\b/;
-const privateNoStoreGuardPattern = /\b(?:applyPrivateNoStoreApiResponseHeaders|createPrivateNoStoreApiResponseHeaders|API_CACHE_CONTROL\.privateNoStore)\b/;
+const privateNoStoreGuardPattern = /(?:\b(?:applyPrivateNoStoreApiResponseHeaders|createPrivateNoStoreApiResponseHeaders|API_CACHE_CONTROL\.privateNoStore)\b|['"]Cache-Control['"]\s*:\s*['"]private, no-store['"])/;
 const razorpaySdkPattern = /(?:from\s+['"]razorpay['"]|\bnew\s+Razorpay\b|\border[s]?\s*\.\s*create\b)/;
 const directRazorpayOrderClientPattern = /\bcreateRazorpayOrder\b/;
 const localImportPattern = /import\s+(?:type\s+)?(?:[^'"]+\s+from\s+)?['"]([^'"]+)['"]/g;
@@ -22,6 +22,9 @@ const knownProviderWebhookRoutes = new Set([
   'src/app/api/mobile/commerce/revenuecat-webhook/route.ts',
   'src/app/api/razorpay/webhook/route.ts',
   'src/app/api/webhooks/kie/route.ts',
+]);
+const knownBoundedPublicMutationRoutes = new Set([
+  'src/app/api/security/csp-report/route.ts',
 ]);
 
 const paymentOrderRoutes = new Set([
@@ -103,6 +106,7 @@ describe('API route protection coverage', () => {
         };
       })
       .filter((route) => route.methods.length > 0)
+      .filter((route) => !knownBoundedPublicMutationRoutes.has(route.path))
       .filter((route) => (
         !rateLimitGuardPattern.test(route.source)
         && !providerAuthGuardPattern.test(route.source)

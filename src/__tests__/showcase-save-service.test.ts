@@ -44,12 +44,16 @@ function createServiceClientMock() {
 describe('saveShowcasePostForRoute', () => {
   it('idempotently saves a post, records analytics, and notifies when save state changes', async () => {
     const serviceClient = createServiceClientMock();
-    const notifyPostSocialActivity = vi.fn(async () => undefined);
+    const notifyPostSocialActivity = vi.fn(async () => null);
     const dependencies = {
       findPublicPostReferenceByIdOrGenerationId: vi.fn(async () => ({
         id: 'post-1',
         generation_id: 'gen-1',
         user_id: 'creator-1',
+        visibility: 'public' as const,
+        category: 'image' as const,
+        prompt: null,
+        source_kind: 'magicbooklet' as const,
       })),
       isMissingPostsSchemaError: vi.fn(() => false),
       isUserRelationshipBlocked: vi.fn(async () => false),
@@ -102,7 +106,7 @@ describe('saveShowcasePostForRoute', () => {
   ])('fails closed before saving or notifying when there is %s', async (_label, isUserRelationshipBlocked) => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const serviceClient = createServiceClientMock();
-    const notifyPostSocialActivity = vi.fn(async () => undefined);
+    const notifyPostSocialActivity = vi.fn(async () => null);
 
     const result = await saveShowcasePostForRoute({
       actorUserId: 'user-1',
@@ -115,6 +119,10 @@ describe('saveShowcasePostForRoute', () => {
           id: 'post-1',
           generation_id: 'gen-1',
           user_id: 'creator-1',
+          visibility: 'public' as const,
+          category: 'image' as const,
+          prompt: null,
+          source_kind: 'magicbooklet' as const,
         })),
         isMissingPostsSchemaError: vi.fn(() => false),
         isUserRelationshipBlocked,

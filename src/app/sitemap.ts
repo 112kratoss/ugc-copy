@@ -17,6 +17,7 @@ const INDEXABLE_ROUTES: Array<{
     { path: '/ai-motion-transfer', changeFrequency: 'weekly', priority: 0.8 },
     { path: '/ai-workflow-builder', changeFrequency: 'weekly', priority: 0.8 },
     { path: '/contact', changeFrequency: 'monthly', priority: 0.55 },
+    { path: '/child-safety', changeFrequency: 'yearly', priority: 0.4 },
     { path: '/terms', changeFrequency: 'yearly', priority: 0.3 },
     { path: '/privacy', changeFrequency: 'yearly', priority: 0.3 },
 ];

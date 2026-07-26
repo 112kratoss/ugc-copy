@@ -30,6 +30,7 @@ describe('app shell navigation', () => {
     expect(isMinimalAppChromePath('/login')).toBe(true);
     expect(isMinimalAppChromePath('/auth/reset-password')).toBe(true);
     expect(isMinimalAppChromePath('/r/friend123')).toBe(true);
+    expect(isMinimalAppChromePath('/child-safety')).toBe(true);
     expect(isMinimalAppChromePath('/showcase')).toBe(false);
   });
 });

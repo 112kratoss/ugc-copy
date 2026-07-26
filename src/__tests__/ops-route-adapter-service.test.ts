@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
   createProtectedOpsRouteHandlers,
@@ -32,7 +33,7 @@ describe('ops route adapter service', () => {
   });
 
   it('delegates authorized checks with private headers and maps healthy payloads to 200', async () => {
-    const serviceClient = { service: 'supabase' };
+    const serviceClient = { service: 'supabase' } as unknown as SupabaseClient;
     const collect = vi.fn(async () => ({
       status: 'ok',
       checkedAt: '2026-06-23T10:00:00.000Z',
@@ -71,7 +72,9 @@ describe('ops route adapter service', () => {
       failureLogMessage: 'backend_alerts_failed',
       failureResponseError: 'Failed to collect backend alerts.',
       dependencies: {
-        createServiceClient: vi.fn(() => ({ service: 'supabase' })),
+        createServiceClient: vi.fn(
+          () => ({ service: 'supabase' }) as unknown as SupabaseClient
+        ),
         isAuthorizedOpsRequest: () => true,
       },
     });
@@ -97,7 +100,9 @@ describe('ops route adapter service', () => {
       failureLogMessage: 'backend_health_failed',
       failureResponseError: 'Failed to collect backend health.',
       dependencies: {
-        createServiceClient: vi.fn(() => ({ service: 'supabase' })),
+        createServiceClient: vi.fn(
+          () => ({ service: 'supabase' }) as unknown as SupabaseClient
+        ),
         isAuthorizedOpsRequest: () => true,
         logError,
       },
@@ -132,7 +137,9 @@ describe('ops route adapter service', () => {
       failureLogMessage: 'backend_cost_report_failed',
       failureResponseError: 'Failed to collect backend cost report.',
       dependencies: {
-        createServiceClient: vi.fn(() => ({ service: 'supabase' })),
+        createServiceClient: vi.fn(
+          () => ({ service: 'supabase' }) as unknown as SupabaseClient
+        ),
         isAuthorizedOpsRequest: () => true,
         logError,
       },
@@ -145,7 +152,7 @@ describe('ops route adapter service', () => {
   });
 
   it('creates protected GET handlers that forward requests through the ops adapter', async () => {
-    const serviceClient = { service: 'supabase' };
+    const serviceClient = { service: 'supabase' } as unknown as SupabaseClient;
     const collect = vi.fn(async () => ({
       status: 'ok',
       checkedAt: '2026-06-23T11:00:00.000Z',

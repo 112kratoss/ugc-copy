@@ -4,6 +4,7 @@ import {
   createPostResourceFileReadUrlForRoute,
   type PostResourceFileReadUrlClient,
 } from '@/lib/post-resource-file-url-service';
+import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 
 function createClient({
   allowed = true,
@@ -37,7 +38,10 @@ function createClient({
   };
 }
 
-function createAccessibleDetail(storagePath: string, title = 'Hero reference') {
+function createAccessibleDetail(
+  storagePath: string,
+  title = 'Hero reference'
+): PostResourceBundleDetail {
   return {
     viewerCanAccess: true,
     resources: {
@@ -47,7 +51,7 @@ function createAccessibleDetail(storagePath: string, title = 'Hero reference') {
         storagePath,
       }],
     },
-  };
+  } as unknown as PostResourceBundleDetail;
 }
 
 describe('createPostResourceFileReadUrlForRoute', () => {
@@ -80,10 +84,10 @@ describe('createPostResourceFileReadUrlForRoute', () => {
   it('blocks locked or unrelated bundle files before rate-limit and storage work', async () => {
     const client = createClient();
     const clientFactory = vi.fn(() => client.client);
-    const getLockedDetail = vi.fn(async () => ({
+    const getLockedDetail = vi.fn(async (): Promise<PostResourceBundleDetail> => ({
       viewerCanAccess: false,
       resources: null,
-    }));
+    } as unknown as PostResourceBundleDetail));
 
     await expect(createPostResourceFileReadUrlForRoute({
       body: { storagePath: 'user-1/generation-references/gen-1/reference.png' },

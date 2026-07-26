@@ -47,16 +47,23 @@ const mocks = vi.hoisted(() => {
   const select = vi.fn(() => ({ single }));
   const insert = vi.fn(() => ({ select }));
   const from = vi.fn(() => ({ insert }));
-  const rpc = vi.fn(async () => ({
-    data: {
-      allowed: true,
-      limit: 10,
-      remaining: 9,
-      retryAfterSeconds: 0,
-      resetAt: '2026-06-21T06:30:00.000Z',
-    },
-    error: null,
-  }));
+  const rpc = vi.fn(async (
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<{ data: unknown; error: unknown }> => {
+    void name;
+    void args;
+    return {
+      data: {
+        allowed: true,
+        limit: 10,
+        remaining: 9,
+        retryAfterSeconds: 0,
+        resetAt: '2026-06-21T06:30:00.000Z',
+      },
+      error: null,
+    };
+  });
   const createServiceClient = vi.fn(() => ({ from, rpc }));
 
   return {
@@ -120,15 +127,37 @@ describe('/api/razorpay/order route', () => {
     }));
     mocks.rawGetUser.mockClear();
     mocks.rpc.mockClear();
-    mocks.rpc.mockResolvedValue({
-      data: {
-        allowed: true,
-        limit: 10,
-        remaining: 9,
-        retryAfterSeconds: 0,
-        resetAt: '2026-06-21T06:30:00.000Z',
-      },
-      error: null,
+    mocks.rpc.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+      if (name === 'claim_razorpay_checkout_intent') {
+        return {
+          data: {
+            status: 'claimed',
+            intent_id: '10000000-0000-4000-8000-000000000001',
+            provider_receipt: 'mb_10000000000040008000000000000001',
+            provider_order_id: null,
+          },
+          error: null,
+        };
+      }
+      if (name === 'complete_razorpay_checkout_intent') {
+        return {
+          data: { status: 'recorded', provider_order_id: args.p_provider_order_id },
+          error: null,
+        };
+      }
+      if (name === 'abandon_razorpay_checkout_intent') {
+        return { data: { status: 'abandoned' }, error: null };
+      }
+      return {
+        data: {
+          allowed: true,
+          limit: 10,
+          remaining: 9,
+          retryAfterSeconds: 0,
+          resetAt: '2026-06-21T06:30:00.000Z',
+        },
+        error: null,
+      };
     });
     mocks.select.mockClear();
     mocks.single.mockClear();
@@ -159,7 +188,10 @@ describe('/api/razorpay/order route', () => {
 
   it('authenticates through the shared user client before creating Razorpay orders', async () => {
     const { POST } = await import('@/app/api/razorpay/order/route');
-    const response = await POST(buildOrderRequest({ planId: 'starter' }, {
+    const response = await POST(buildOrderRequest({
+      planId: 'starter',
+      clientIntentKey: 'intent-credit-route-123456',
+    }, {
       Authorization: 'Bearer private-token',
       'x-request-id': 'credit-order-auth-1',
     }));
@@ -184,7 +216,10 @@ describe('/api/razorpay/order route', () => {
     });
 
     const { POST } = await import('@/app/api/razorpay/order/route');
-    const response = await POST(buildOrderRequest({ planId: 'starter' }, {
+    const response = await POST(buildOrderRequest({
+      planId: 'starter',
+      clientIntentKey: 'intent-credit-timeout-123456',
+    }, {
       'x-request-id': 'credit-order-success-1',
     }));
 
@@ -268,7 +303,10 @@ describe('/api/razorpay/order route', () => {
     mocks.providerFetch.mockRejectedValueOnce(new DOMException('Timed out', 'TimeoutError'));
 
     const { POST } = await import('@/app/api/razorpay/order/route');
-    const response = await POST(buildOrderRequest({ planId: 'starter' }, {
+    const response = await POST(buildOrderRequest({
+      planId: 'starter',
+      clientIntentKey: 'intent-credit-timeout-123456',
+    }, {
       'x-request-id': 'credit-order-timeout-1',
     }));
 
@@ -277,7 +315,7 @@ describe('/api/razorpay/order route', () => {
     await expect(response.json()).resolves.toEqual({
       error: 'Payment provider timed out. Please try again.',
     });
-    expect(mocks.providerFetch).toHaveBeenCalledOnce();
+    expect(mocks.providerFetch).toHaveBeenCalledTimes(2);
     expect(mocks.from).not.toHaveBeenCalled();
     expect(mocks.insert).not.toHaveBeenCalled();
     // Now reported through the structured logger, which also carries the

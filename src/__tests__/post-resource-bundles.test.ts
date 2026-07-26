@@ -223,12 +223,23 @@ describe('post resource bundle validation', () => {
         title: 'Confidential launch hook',
         kind: 'scene',
         description: 'Reveal the unreleased product here.',
+        sortOrder: 0,
       }],
       items: [{
         type: 'prompt',
+        role: 'primary',
         title: 'Unreleased campaign prompt',
+        description: null,
         textContent: 'This text must never appear before purchase.',
+        externalUrl: null,
+        storagePath: null,
+        contentType: null,
+        sizeBytes: null,
+        workflowSnapshot: null,
         sectionId: 'private-hook',
+        sortOrder: 0,
+        isPrimary: true,
+        remixUse: 'none',
       }],
     });
 

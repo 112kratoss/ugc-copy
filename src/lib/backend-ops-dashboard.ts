@@ -17,6 +17,10 @@ import {
   type BackendHealth,
   type BackendHealthStatus,
 } from '@/lib/backend-health';
+import {
+  collectBackendModerationHealth,
+  type BackendModerationHealth,
+} from '@/lib/backend-moderation-health';
 
 export type BackendOpsDashboardStatus = 'ok' | 'warning' | 'degraded';
 
@@ -56,6 +60,10 @@ type CollectBackendOpsDashboardOptions = {
   environment?: NodeJS.ProcessEnv;
   collectHealth?: (client: SupabaseClient, now: Date) => Promise<BackendHealth>;
   collectCosts?: (client: SupabaseClient, now: Date) => Promise<BackendCostReport>;
+  collectModeration?: (
+    client: SupabaseClient,
+    now: Date,
+  ) => Promise<BackendModerationHealth>;
 };
 
 const SOURCES = {
@@ -126,6 +134,8 @@ export function buildBackendOpsDashboard({
         total: alerts.counts.total,
         degraded: alerts.counts.degraded,
         warning: alerts.counts.warning,
+        moderationOpenReports: alerts.signals.moderationOpenCount,
+        moderationOldestAgeMinutes: alerts.signals.moderationOldestAgeMinutes,
       },
     },
   ];
@@ -155,13 +165,16 @@ export async function collectBackendOpsDashboard(
     ?? ((costClient: SupabaseClient, costNow: Date) => (
       collectBackendCostReport(costClient, costNow, { environment })
     ));
-  const [health, costs] = await Promise.all([
+  const collectModeration = options.collectModeration ?? collectBackendModerationHealth;
+  const [health, costs, moderation] = await Promise.all([
     collectHealth(client, now),
     collectCosts(client, now),
+    collectModeration(client, now),
   ]);
   const alerts = buildBackendAlertSummary({
     health,
     costs,
+    moderation,
     checkedAt: now.toISOString(),
   });
 

@@ -1,6 +1,7 @@
 {
   "cli": {
-    "version": ">= 13.0.0",
+    "version": "21.2.0",
+    "requireCommit": true,
     "appVersionSource": "remote"
   },
   "build": {
@@ -35,6 +36,15 @@
     }
   },
   "submit": {
+    "staging": {
+      "ios": {
+        "ascAppId": "6773286115"
+      },
+      "android": {
+        "track": "alpha",
+        "releaseStatus": "draft"
+      }
+    },
     "alpha": {
       "android": {
         "track": "alpha"

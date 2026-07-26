@@ -110,7 +110,9 @@ describe('operational table growth', () => {
       },
     };
 
-    const report = await collectOperationalTableGrowth(client);
+    const report = await collectOperationalTableGrowth(
+      client as unknown as Parameters<typeof collectOperationalTableGrowth>[0]
+    );
 
     expect(calls).toEqual(['get_operational_table_growth']);
     expect(report.status).toBe('ok');
@@ -122,6 +124,8 @@ describe('operational table growth', () => {
       rpc: async () => ({ data: null, error: new Error('permission denied') }),
     };
 
-    await expect(collectOperationalTableGrowth(client)).rejects.toThrow('permission denied');
+    await expect(collectOperationalTableGrowth(
+      client as unknown as Parameters<typeof collectOperationalTableGrowth>[0]
+    )).rejects.toThrow('permission denied');
   });
 });

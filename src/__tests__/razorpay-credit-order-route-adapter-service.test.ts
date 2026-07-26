@@ -61,7 +61,10 @@ describe('razorpay credit order route adapter service', () => {
           Authorization: 'Bearer private-token',
           'x-request-id': 'credit-order-auth-1',
         },
-        body: JSON.stringify({ planId: 'starter' }),
+        body: JSON.stringify({
+          planId: 'starter',
+          clientIntentKey: 'intent-credit-route-123456',
+        }),
       }),
       dependencies: {
         createCreditRazorpayOrderForRoute,
@@ -178,7 +181,10 @@ describe('razorpay credit order route adapter service', () => {
       request: new Request('http://localhost/api/razorpay/order', {
         method: 'POST',
         headers: { 'x-request-id': 'credit-order-limit-1' },
-        body: JSON.stringify({ planId: 'starter' }),
+        body: JSON.stringify({
+          planId: 'starter',
+          clientIntentKey: 'intent-credit-route-123456',
+        }),
       }),
       dependencies: {
         createCreditRazorpayOrderForRoute,
@@ -198,6 +204,7 @@ describe('razorpay credit order route adapter service', () => {
     });
     expect(createCreditRazorpayOrderForRoute).toHaveBeenCalledWith({
       adminSupabase,
+      clientIntentKey: 'intent-credit-route-123456',
       userId: 'user-1',
       plan: expect.objectContaining({
         credits: 500,

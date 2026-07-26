@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
   getBackendJobRequestId,
+  runAccountDeletionResweepsBackendJob,
   runBackendAlertDeliveryJob,
   runFeedMaintenanceBackendJob,
   runGenerationCompletionsBackendJob,
@@ -26,6 +27,7 @@ type BackendJobsRouteDependencies = {
   createServiceClient?: () => SupabaseClient;
   getBackendJobRequestId?: (request: Request) => string;
   getDueBackendJobs?: (timestampMs: number) => BackendJobDefinition[];
+  runAccountDeletionResweepsBackendJob?: typeof runAccountDeletionResweepsBackendJob;
   runBackendAlertDeliveryJob?: typeof runBackendAlertDeliveryJob;
   runFeedMaintenanceBackendJob?: typeof runFeedMaintenanceBackendJob;
   runGenerationCompletionsBackendJob?: typeof runGenerationCompletionsBackendJob;
@@ -62,6 +64,9 @@ function resolveDependencies(dependencies: BackendJobsRouteDependencies | undefi
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     getBackendJobRequestId: dependencies?.getBackendJobRequestId ?? getBackendJobRequestId,
     getDueBackendJobs: dependencies?.getDueBackendJobs ?? getDueBackendJobs,
+    runAccountDeletionResweepsBackendJob:
+      dependencies?.runAccountDeletionResweepsBackendJob
+      ?? runAccountDeletionResweepsBackendJob,
     runBackendAlertDeliveryJob: dependencies?.runBackendAlertDeliveryJob
       ?? runBackendAlertDeliveryJob,
     runFeedMaintenanceBackendJob: dependencies?.runFeedMaintenanceBackendJob
@@ -99,6 +104,8 @@ async function runDueBackendJob(
   };
 
   switch (job.name) {
+    case 'account-deletion-resweeps':
+      return options.dependencies.runAccountDeletionResweepsBackendJob(runOptions);
     case 'backend-alert-delivery':
       return options.dependencies.runBackendAlertDeliveryJob(runOptions);
     case 'feed-maintenance':

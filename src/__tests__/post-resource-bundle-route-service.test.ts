@@ -12,6 +12,7 @@ import {
   getPostResourceBundleForRoute,
   putPostResourceBundleForRoute,
 } from '@/lib/post-resource-bundle-route-service';
+import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 
 const validBundleBody = {
   resourceBundle: {
@@ -74,7 +75,8 @@ function createUserSupabaseMock(post: PostRow | null) {
   };
 }
 
-function createAdminSupabaseMock(allowed: boolean) {
+function createAdminSupabaseMock(allowed: boolean, post: PostRow | null) {
+  const tableCalls: string[] = [];
   const rpc = vi.fn(async () => ({
     data: {
       allowed,
@@ -86,9 +88,36 @@ function createAdminSupabaseMock(allowed: boolean) {
     error: null,
   }));
 
-  return {
-    client: { rpc } as unknown as SupabaseClient,
+  const client = {
     rpc,
+    from(table: string) {
+      tableCalls.push(table);
+      if (table !== 'posts') {
+        throw new Error(`Unexpected admin table access: ${table}`);
+      }
+
+      const query = {
+        select() {
+          return query;
+        },
+        eq() {
+          return query;
+        },
+        async maybeSingle() {
+          return {
+            data: post,
+            error: null,
+          };
+        },
+      };
+      return query;
+    },
+  };
+
+  return {
+    client: client as unknown as SupabaseClient,
+    rpc,
+    tableCalls,
   };
 }
 
@@ -109,7 +138,11 @@ function privatePost(overrides: Partial<PostRow> = {}): PostRow {
 
 describe('getPostResourceBundleForRoute', () => {
   it('loads bundle detail with viewer and country context', async () => {
-    const getDetailByPostId = vi.fn(async () => ({ id: 'bundle-1', accessMode: 'free' }));
+    const bundleDetail = {
+      id: 'bundle-1',
+      accessMode: 'free',
+    } as unknown as PostResourceBundleDetail;
+    const getDetailByPostId = vi.fn(async () => bundleDetail);
 
     const result = await getPostResourceBundleForRoute({
       postId: 'post-1',
@@ -122,7 +155,7 @@ describe('getPostResourceBundleForRoute', () => {
       ok: true,
       body: {
         success: true,
-        bundle: { id: 'bundle-1', accessMode: 'free' },
+        bundle: bundleDetail,
       },
     });
     expect(getDetailByPostId).toHaveBeenCalledWith('post-1', {
@@ -139,7 +172,7 @@ describe('putPostResourceBundleForRoute', () => {
 
   it('rate limits before parsing the request body or loading the post', async () => {
     const userSupabase = createUserSupabaseMock(privatePost());
-    const adminSupabase = createAdminSupabaseMock(false);
+    const adminSupabase = createAdminSupabaseMock(false, privatePost());
     const readBody = vi.fn(async () => validBundleBody);
 
     const result = await putPostResourceBundleForRoute({
@@ -154,13 +187,18 @@ describe('putPostResourceBundleForRoute', () => {
     expect(result).toHaveProperty('rateLimitError');
     expect(readBody).not.toHaveBeenCalled();
     expect(userSupabase.tableCalls).toEqual([]);
+    expect(adminSupabase.tableCalls).toEqual([]);
   });
 
   it('saves private draft unlock bundles without marketplace quality gating', async () => {
     const userSupabase = createUserSupabaseMock(privatePost());
-    const adminSupabase = createAdminSupabaseMock(true);
+    const adminSupabase = createAdminSupabaseMock(true, privatePost());
     const getMarketplaceQualityErrorForPostBundle = vi.fn(async () => 'Quality should not run.');
-    const savePostResourceBundle = vi.fn(async () => ({ id: 'bundle-1', status: 'draft' }));
+    const savePostResourceBundle = vi.fn(async () => ({
+      id: 'bundle-1',
+      postId: 'post-1',
+      status: 'draft' as const,
+    }));
 
     const result = await putPostResourceBundleForRoute({
       postId: 'post-1',
@@ -178,7 +216,7 @@ describe('putPostResourceBundleForRoute', () => {
       ok: true,
       body: {
         success: true,
-        bundle: { id: 'bundle-1', status: 'draft' },
+        bundle: { id: 'bundle-1', postId: 'post-1', status: 'draft' },
       },
     });
     expect(getMarketplaceQualityErrorForPostBundle).not.toHaveBeenCalled();
@@ -193,8 +231,12 @@ describe('putPostResourceBundleForRoute', () => {
 
   it('invalidates the feed after saving a public post resource bundle', async () => {
     const userSupabase = createUserSupabaseMock(privatePost({ visibility: 'public' }));
-    const adminSupabase = createAdminSupabaseMock(true);
-    const savePostResourceBundle = vi.fn(async () => ({ id: 'bundle-1', status: 'published' }));
+    const adminSupabase = createAdminSupabaseMock(true, privatePost({ visibility: 'public' }));
+    const savePostResourceBundle = vi.fn(async () => ({
+      id: 'bundle-1',
+      postId: 'post-1',
+      status: 'published' as const,
+    }));
 
     const result = await putPostResourceBundleForRoute({
       postId: 'post-1',
@@ -212,7 +254,7 @@ describe('putPostResourceBundleForRoute', () => {
       ok: true,
       body: {
         success: true,
-        bundle: { id: 'bundle-1', status: 'published' },
+        bundle: { id: 'bundle-1', postId: 'post-1', status: 'published' },
       },
     });
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
@@ -220,8 +262,12 @@ describe('putPostResourceBundleForRoute', () => {
 
   it('rejects public bundle saves that fail marketplace quality gates', async () => {
     const userSupabase = createUserSupabaseMock(privatePost({ visibility: 'public' }));
-    const adminSupabase = createAdminSupabaseMock(true);
-    const savePostResourceBundle = vi.fn(async () => ({ id: 'bundle-1' }));
+    const adminSupabase = createAdminSupabaseMock(true, privatePost({ visibility: 'public' }));
+    const savePostResourceBundle = vi.fn(async () => ({
+      id: 'bundle-1',
+      postId: 'post-1',
+      status: 'published' as const,
+    }));
 
     const result = await putPostResourceBundleForRoute({
       postId: 'post-1',
@@ -245,7 +291,7 @@ describe('putPostResourceBundleForRoute', () => {
 
   it('maps unavailable profile verification to a server failure', async () => {
     const userSupabase = createUserSupabaseMock(privatePost({ visibility: 'public' }));
-    const adminSupabase = createAdminSupabaseMock(true);
+    const adminSupabase = createAdminSupabaseMock(true, privatePost({ visibility: 'public' }));
 
     const result = await putPostResourceBundleForRoute({
       postId: 'post-1',

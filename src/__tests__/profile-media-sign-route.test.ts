@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const createUserClientMock = vi.fn();
-const rpcMock = vi.fn(async () => ({
+const rpcMock = vi.fn(async (): Promise<{ data: unknown; error: unknown }> => ({
   data: {
     allowed: true,
     limit: 30,
@@ -51,6 +51,7 @@ describe('/api/profile/media/sign route', () => {
     createUserClientMock.mockReset();
     createServiceClientFactory.mockClear();
     rpcMock.mockReset();
+    rpcMock.mockResolvedValueOnce({ data: false, error: null });
     rpcMock.mockResolvedValue({
       data: {
         allowed: true,

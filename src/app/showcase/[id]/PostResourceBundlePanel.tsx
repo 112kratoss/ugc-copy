@@ -32,6 +32,11 @@ import {
 } from '@/lib/post-resource-bundles';
 import { getCurrentInternalPath } from '@/lib/share';
 import { trackProductEvent } from '@/lib/product-analytics';
+import {
+  clearRazorpayCheckoutIntentKey,
+  getOrCreateRazorpayCheckoutIntentKey,
+  verifyRazorpayCheckoutUntilSettled,
+} from '@/lib/razorpay-checkout-client';
 
 declare global {
   interface Window {
@@ -340,6 +345,8 @@ export default function PostResourceBundlePanel({
       setFeedback(null);
       setError(null);
 
+      const checkoutIntentScope = `post-resource:${postId}`;
+      const clientIntentKey = getOrCreateRazorpayCheckoutIntentKey(checkoutIntentScope);
       const orderResponse = await fetch(`/api/posts/${postId}/resource-bundle/order`, {
         method: 'POST',
         headers: {
@@ -348,15 +355,20 @@ export default function PostResourceBundlePanel({
         },
         body: JSON.stringify({
           locale: typeof navigator !== 'undefined' ? navigator.language : null,
+          clientIntentKey,
         }),
       });
       const orderData = await orderResponse.json();
 
       if (!orderResponse.ok) {
+        if (orderData.code === 'CHECKOUT_PAYLOAD_MISMATCH') {
+          clearRazorpayCheckoutIntentKey(checkoutIntentScope);
+        }
         throw new Error(orderData.error || 'Failed to start checkout.');
       }
 
       if (orderData.alreadyPurchased) {
+        clearRazorpayCheckoutIntentKey(checkoutIntentScope);
         await fetchLatestBundle();
         return;
       }
@@ -378,20 +390,17 @@ export default function PostResourceBundlePanel({
           razorpay_signature: string;
         }) => {
           try {
-            const verifyResponse = await fetch(`/api/posts/${postId}/resource-bundle/verify`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${session?.access_token}`,
-              },
-              body: JSON.stringify(response),
+            const verification = await verifyRazorpayCheckoutUntilSettled({
+              url: `/api/posts/${postId}/resource-bundle/verify`,
+              token: session?.access_token ?? '',
+              body: response,
             });
-            const verifyData = await verifyResponse.json();
-
-            if (!verifyResponse.ok || !verifyData.success) {
-              throw new Error(verifyData.error || 'Payment verification failed.');
+            if (verification.state === 'pending') {
+              setFeedback('Payment received and waiting for capture. This recipe will unlock automatically once confirmed.');
+              return;
             }
 
+            clearRazorpayCheckoutIntentKey(checkoutIntentScope);
             await fetchLatestBundle();
             trackProductEvent('recipe_checkout_succeeded', { method: 'razorpay', post_id: postId });
           } catch (verifyError) {

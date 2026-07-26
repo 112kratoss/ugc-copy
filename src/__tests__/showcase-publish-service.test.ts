@@ -142,6 +142,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
     const publishGenerationPostWithResourceBundleAtomically = vi.fn(async () => ({
       postId: 'post-template-1',
       visibility: 'private' as const,
+      bundleId: null,
       bundleStatus: null,
     }));
 
@@ -163,7 +164,12 @@ describe('publishGenerationToShowcaseForRoute', () => {
           createdLocation: null,
         })),
         listSourceToolsCatalog: vi.fn(async () => [
-          { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
+          {
+            slug: 'magicbooklet',
+            label: 'magicbooklet',
+            models: [],
+            supportedMediaKinds: ['image' as const, 'video' as const],
+          },
         ]),
         publishGenerationPostWithResourceBundleAtomically,
       },
@@ -206,8 +212,6 @@ describe('publishGenerationToShowcaseForRoute', () => {
   ])('rejects %s when the ordinary owner query cannot see it', async (_label, overrides, canonicalRun) => {
     const generation = {
       id: 'hidden-generation-1',
-      user_id: 'user-1',
-      status: 'succeeded',
       model: 'nano-banana-2',
       category: 'image',
       creation_mode: null,
@@ -290,6 +294,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
     const publishGenerationPostWithResourceBundleAtomically = vi.fn(async () => ({
       postId: 'post-1',
       visibility: 'private' as const,
+      bundleId: null,
       bundleStatus: null,
     }));
     const dependencies = {
@@ -298,7 +303,12 @@ describe('publishGenerationToShowcaseForRoute', () => {
         createdLocation: null,
       })),
       listSourceToolsCatalog: vi.fn(async () => [
-        { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
+        {
+          slug: 'magicbooklet',
+          label: 'magicbooklet',
+          models: [],
+          supportedMediaKinds: ['image' as const, 'video' as const],
+        },
       ]),
       publishGenerationPostWithResourceBundleAtomically,
     } satisfies Partial<ShowcasePublishServiceDependencies>;

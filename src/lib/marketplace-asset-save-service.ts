@@ -23,6 +23,8 @@ type LinkedPostRow = {
   id: string;
   user_id: string;
   visibility: 'public' | 'unlisted' | 'private';
+  archived_at: string | null;
+  review_status: string | null;
 };
 
 type ExistingAssetRow = {
@@ -195,10 +197,11 @@ export async function saveMarketplaceAssetForRoute({
   }
 
   if (postId) {
-    const { data: linkedPost, error: linkedPostError } = await userSupabase
+    const { data: linkedPost, error: linkedPostError } = await adminSupabase
       .from('posts')
-      .select('id, user_id, visibility')
+      .select('id, user_id, visibility, archived_at, review_status')
       .eq('id', postId)
+      .eq('user_id', userId)
       .maybeSingle();
 
     const typedLinkedPost = (linkedPost as LinkedPostRow | null) ?? null;
@@ -207,7 +210,14 @@ export async function saveMarketplaceAssetForRoute({
       return { ok: false, status: 400, body: { error: 'You can only attach listings to your own posts.' } };
     }
 
-    if (status === 'active' && typedLinkedPost.visibility !== 'public') {
+    if (
+      status === 'active'
+      && (
+        typedLinkedPost.visibility !== 'public'
+        || typedLinkedPost.archived_at !== null
+        || typedLinkedPost.review_status !== 'visible'
+      )
+    ) {
       return {
         ok: false,
         status: 400,

@@ -111,10 +111,16 @@ describe('postReportRouteResponse', () => {
         createServiceClient: vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient),
         createUserClient: () => createUserClient('reporter-1'),
         submitPostReportForRoute: vi.fn(async () => ({
-          ok: false,
-          status: 429,
+          ok: false as const,
+          status: 429 as const,
           rateLimitError,
-          body: { code: 'RATE_LIMITED', error: 'Too many reports.' },
+          body: {
+            code: 'RATE_LIMITED' as const,
+            error: 'Too many reports.',
+            retryAfterSeconds: 55,
+            limit: 10,
+            resetAt: '2026-06-23T12:00:00.000Z',
+          },
         })),
       },
     });
@@ -147,8 +153,8 @@ describe('postReportRouteResponse', () => {
         createServiceClient,
         createUserClient: () => createUserClient('reporter-1'),
         submitPostReportForRoute: vi.fn(async () => ({
-          ok: false,
-          status: 400,
+          ok: false as const,
+          status: 400 as const,
           body: { error: 'Choose a valid report reason.' },
         })),
       },

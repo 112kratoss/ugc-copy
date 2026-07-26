@@ -14,6 +14,7 @@ import {
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
 type RazorpayCreditOrderBody = {
+  clientIntentKey?: unknown;
   planId?: unknown;
 };
 
@@ -49,7 +50,7 @@ async function handleRazorpayCreditOrderPOST(
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
   try {
-    const { planId } = await request.json() as RazorpayCreditOrderBody;
+    const { clientIntentKey, planId } = await request.json() as RazorpayCreditOrderBody;
 
     if (!planId) {
       return NextResponse.json({ error: 'Missing planId' }, { status: 400 });
@@ -75,6 +76,7 @@ async function handleRazorpayCreditOrderPOST(
 
     return toJsonResponse(await dependencies.createCreditRazorpayOrderForRoute({
       adminSupabase: dependencies.createServiceClient(),
+      clientIntentKey: typeof clientIntentKey === 'string' ? clientIntentKey : '',
       userId: user.id,
       plan,
     }));

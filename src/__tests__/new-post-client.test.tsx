@@ -6,6 +6,7 @@ import NewPostClient from '@/app/post/new/NewPostClient';
 const mockPush = vi.fn();
 const fetchMock = vi.fn();
 const temporaryUploadMock = vi.hoisted(() => vi.fn());
+const directResourceUploadMock = vi.hoisted(() => vi.fn(async () => ({ error: null })));
 const searchParamsState = vi.hoisted(() => ({
   value: new URLSearchParams(),
 }));
@@ -28,6 +29,16 @@ vi.mock('@/app/components/AuthProvider', () => ({
 
 vi.mock('@/lib/temporary-media-upload', () => ({
   uploadMediaToTemporaryStorage: temporaryUploadMock,
+}));
+
+vi.mock('@/lib/supabase', () => ({
+  supabase: {
+    storage: {
+      from: () => ({
+        uploadToSignedUrl: directResourceUploadMock,
+      }),
+    },
+  },
 }));
 
 const SOURCE_TOOLS_RESPONSE = {

@@ -18,7 +18,15 @@ function lifecycleColumnError() {
   return { code: '42703', message: 'column workflow_canvases.status does not exist' };
 }
 
-function createServiceSupabaseMock({ allowed = true } = {}) {
+function createServiceSupabaseMock({
+  allowed = true,
+  shareInsertError = false,
+}: {
+  allowed?: boolean;
+  shareInsertError?: boolean;
+} = {}) {
+  const insertedShares: Array<Record<string, unknown>> = [];
+  const tableReads: string[] = [];
   const rpc = vi.fn(async () => ({
     data: {
       allowed,
@@ -30,19 +38,59 @@ function createServiceSupabaseMock({ allowed = true } = {}) {
     error: null,
   }));
 
-  return {
-    client: { rpc },
+  const client = {
     rpc,
+    from(table: string) {
+      if (table !== 'workflow_shares') {
+        throw new Error(`Unexpected service table: ${table}`);
+      }
+
+      return {
+        insert(payload: Record<string, unknown>) {
+          insertedShares.push(payload);
+          return {
+            select(columns: string) {
+              return {
+                async single() {
+                  tableReads.push(table);
+                  if (shareInsertError) {
+                    return { data: null, error: { message: 'insert failed' } };
+                  }
+
+                  return {
+                    data: {
+                      id: SHARE_ID,
+                      title: String(payload.title),
+                      node_count: Number(payload.node_count ?? 0),
+                      edge_count: Number(payload.edge_count ?? 0),
+                      import_count: 0,
+                      created_at: '2026-04-02T10:00:00.000Z',
+                      selectedColumns: columns,
+                    },
+                    error: null,
+                  };
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+  };
+
+  return {
+    client,
+    insertedShares,
+    rpc,
+    tableReads,
   };
 }
 
 function createUserSupabaseMock(options?: {
   canvasMissing?: boolean;
   fallbackCanvasLoad?: boolean;
-  shareInsertError?: boolean;
 }) {
   const selectedCanvasColumns: string[] = [];
-  const insertedShares: Array<Record<string, unknown>> = [];
   const tableReads: string[] = [];
 
   const canvasRow = {
@@ -83,46 +131,12 @@ function createUserSupabaseMock(options?: {
         };
       }
 
-      if (table === 'workflow_shares') {
-        return {
-          insert(payload: Record<string, unknown>) {
-            insertedShares.push(payload);
-            return {
-              select(columns: string) {
-                return {
-                  async single() {
-                    tableReads.push(table);
-                    if (options?.shareInsertError) {
-                      return { data: null, error: { message: 'insert failed' } };
-                    }
-
-                    return {
-                      data: {
-                        id: SHARE_ID,
-                        title: String(payload.title),
-                        node_count: Number(payload.node_count ?? 0),
-                        edge_count: Number(payload.edge_count ?? 0),
-                        import_count: 0,
-                        created_at: '2026-04-02T10:00:00.000Z',
-                        selectedColumns: columns,
-                      },
-                      error: null,
-                    };
-                  },
-                };
-              },
-            };
-          },
-        };
-      }
-
       throw new Error(`Unexpected user table: ${table}`);
     },
   };
 
   return {
     client,
-    insertedShares,
     selectedCanvasColumns,
     tableReads,
   };
@@ -156,7 +170,7 @@ describe('createWorkflowShareForRoute', () => {
       p_window_seconds: 600,
     });
     expect(userSupabase.tableReads).toEqual([]);
-    expect(userSupabase.insertedShares).toEqual([]);
+    expect(serviceSupabase.insertedShares).toEqual([]);
   });
 
   it('loads owner canvases with legacy lifecycle fallback before creating share snapshots', async () => {
@@ -189,7 +203,7 @@ describe('createWorkflowShareForRoute', () => {
       WORKFLOW_CANVAS_SELECT,
       WORKFLOW_CANVAS_SELECT_LEGACY,
     ]);
-    expect(userSupabase.insertedShares[0]).toMatchObject({
+    expect(serviceSupabase.insertedShares[0]).toMatchObject({
       owner_user_id: 'user-1',
       source_canvas_id: 'canvas-1',
       source_revision: 3,
@@ -217,13 +231,13 @@ describe('createWorkflowShareForRoute', () => {
       status: 404,
       body: { error: 'Workflow canvas not found.' },
     });
-    expect(userSupabase.insertedShares).toEqual([]);
+    expect(serviceSupabase.insertedShares).toEqual([]);
   });
 
   it('maps share insert failures to stable route errors', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const userSupabase = createUserSupabaseMock({ shareInsertError: true });
-    const serviceSupabase = createServiceSupabaseMock();
+    const userSupabase = createUserSupabaseMock();
+    const serviceSupabase = createServiceSupabaseMock({ shareInsertError: true });
 
     const result = await createWorkflowShareForRoute({
       canvasId: 'canvas-1',
@@ -238,7 +252,7 @@ describe('createWorkflowShareForRoute', () => {
       status: 500,
       body: { error: 'Failed to create workflow share link.' },
     });
-    expect(userSupabase.insertedShares[0]).toMatchObject({
+    expect(serviceSupabase.insertedShares[0]).toMatchObject({
       owner_user_id: 'user-1',
     });
   });
@@ -255,8 +269,8 @@ describe('createWorkflowShareForRoute', () => {
       userSupabase: userSupabase.client,
     });
 
-    expect(userSupabase.tableReads).toContain('workflow_shares');
-    expect(userSupabase.insertedShares).toHaveLength(1);
+    expect(serviceSupabase.tableReads).toContain('workflow_shares');
+    expect(serviceSupabase.insertedShares).toHaveLength(1);
     expect(WORKFLOW_SHARE_SUMMARY_SELECT).toContain('import_count');
   });
 });

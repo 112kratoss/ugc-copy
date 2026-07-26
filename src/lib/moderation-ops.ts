@@ -3,6 +3,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 const UUID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const DEFAULT_QUEUE_LIMIT = 50;
 const MAX_QUEUE_LIMIT = 200;
+const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
+const SHOWCASE_PUBLIC_URL_MARKER = '/storage/v1/object/public/showcase_media/';
 
 export type PostModerationQueueItem = {
   id: string;
@@ -56,6 +58,9 @@ export type PostReportResolution = {
   resolutionAction?: string | null;
   postReviewStatus?: string;
   resolvedReportCount?: number;
+  revokedMediaCount?: number;
+  mediaRevocationVerified?: boolean;
+  externalMediaRevocationRequired?: boolean;
 };
 
 export type SubjectReportResolution = {
@@ -85,6 +90,19 @@ type PostRow = {
   review_status: string;
   report_count: number;
   created_at: string;
+};
+
+type PostModerationMediaRow = {
+  id: string;
+  generation_id: string | null;
+  showcase_asset_path: string | null;
+  output_url: string | null;
+};
+
+type PostMediaModerationRow = {
+  storage_path: string | null;
+  preview_storage_path: string | null;
+  external_url: string | null;
 };
 
 type SubjectReportRow = {
@@ -129,6 +147,112 @@ function databaseError(operation: string, error: unknown) {
   const candidate = asRecord(error);
   const message = typeof candidate.message === 'string' ? candidate.message : 'Unknown database error';
   return new Error(`${operation}: ${message}`);
+}
+
+function normalizeShowcaseMediaPath(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+
+  let path = trimmed.replace(/^\/+/, '');
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const url = new URL(trimmed);
+      const markerIndex = url.pathname.indexOf(SHOWCASE_PUBLIC_URL_MARKER);
+      if (markerIndex < 0) return null;
+      path = decodeURIComponent(url.pathname.slice(markerIndex + SHOWCASE_PUBLIC_URL_MARKER.length));
+    } catch {
+      return null;
+    }
+  }
+
+  if (path.startsWith(`${SHOWCASE_MEDIA_BUCKET}/`)) {
+    path = path.slice(SHOWCASE_MEDIA_BUCKET.length + 1);
+  }
+
+  return path && !path.includes('..') && !path.includes('\\') ? path : null;
+}
+
+function isOwnedModerationMediaPath(path: string, postId: string, generationId: string | null) {
+  return path.startsWith(`posts/${postId}/`)
+    || Boolean(generationId && path.startsWith(`showcase/${generationId}/`));
+}
+
+async function revokePostPublicMedia(
+  supabase: SupabaseClient,
+  postId: string,
+): Promise<{
+  revokedMediaCount: number;
+  mediaRevocationVerified: true;
+  externalMediaRevocationRequired: boolean;
+}> {
+  const [postResult, mediaResult] = await Promise.all([
+    supabase
+      .from('posts')
+      .select('id, generation_id, showcase_asset_path, output_url')
+      .eq('id', postId)
+      .maybeSingle(),
+    supabase
+      .from('post_media')
+      .select('storage_path, preview_storage_path, external_url')
+      .eq('post_id', postId),
+  ]);
+
+  if (postResult.error) {
+    throw databaseError('Failed to load taken-down post media', postResult.error);
+  }
+  if (mediaResult.error) {
+    throw databaseError('Failed to load taken-down post gallery media', mediaResult.error);
+  }
+
+  const post = postResult.data as PostModerationMediaRow | null;
+  if (!post) {
+    throw new Error('Taken-down post could not be loaded for media revocation.');
+  }
+
+  const mediaRows = (mediaResult.data ?? []) as PostMediaModerationRow[];
+  const rawStorageValues = [
+    post.showcase_asset_path,
+    post.output_url,
+    ...mediaRows.flatMap((row) => [row.storage_path, row.preview_storage_path]),
+  ];
+  const storagePaths = [...new Set(rawStorageValues
+    .map(normalizeShowcaseMediaPath)
+    .filter((path): path is string => Boolean(path)))];
+
+  const unsafePaths = storagePaths.filter(
+    (path) => !isOwnedModerationMediaPath(path, postId, post.generation_id),
+  );
+  if (unsafePaths.length > 0) {
+    throw new Error('Refusing to revoke a taken-down media path outside the reported post scope.');
+  }
+
+  if (storagePaths.length > 0) {
+    const removal = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove(storagePaths);
+    if (removal.error) {
+      throw databaseError('Failed to revoke taken-down public media', removal.error);
+    }
+
+    const verification = await Promise.all(
+      storagePaths.map((path) => supabase.storage.from(SHOWCASE_MEDIA_BUCKET).exists(path)),
+    );
+    if (verification.some((result) => result.data === true)) {
+      throw new Error('Taken-down public media still exists after Storage revocation.');
+    }
+  }
+
+  const hasExternalReference = [
+    post.output_url,
+    ...mediaRows.map((row) => row.external_url),
+  ].some((value) => Boolean(
+    value?.trim()
+    && normalizeShowcaseMediaPath(value) === null,
+  ));
+
+  return {
+    revokedMediaCount: storagePaths.length,
+    mediaRevocationVerified: true,
+    externalMediaRevocationRequired: hasExternalReference,
+  };
 }
 
 export async function listOpenModerationReports(
@@ -251,7 +375,7 @@ export async function resolvePostReport(
     throw new Error('Post report resolver returned an invalid response.');
   }
 
-  return {
+  const resolution: PostReportResolution = {
     status,
     reportId: String(result.report_id ?? reportId),
     postId: String(result.post_id ?? ''),
@@ -263,6 +387,21 @@ export async function resolvePostReport(
     resolvedReportCount: typeof result.resolved_report_count === 'number'
       ? result.resolved_report_count
       : undefined,
+  };
+
+  const requiresMediaRevocation = options.action === 'take_down'
+    && (
+      status === 'taken_down'
+      || (status === 'already_resolved' && resolution.resolutionAction === 'take_down')
+    );
+  if (!requiresMediaRevocation) {
+    return resolution;
+  }
+
+  const mediaRevocation = await revokePostPublicMedia(supabase, resolution.postId);
+  return {
+    ...resolution,
+    ...mediaRevocation,
   };
 }
 

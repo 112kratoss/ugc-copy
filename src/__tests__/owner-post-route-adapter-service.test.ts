@@ -8,6 +8,36 @@ import {
   patchOwnerPostRouteResponse,
   putOwnerPostRouteResponse,
 } from '@/lib/owner-post-route-adapter-service';
+import type { OwnerPostDetail } from '@/lib/owner-posts';
+
+const ownerPostFixture = {
+  id: 'post-1',
+  generationId: null,
+  visibility: 'private',
+  archivedAt: null,
+  mediaUrl: null,
+  mediaKind: null,
+  mediaItems: [],
+  title: 'Draft post',
+  description: '',
+  prompt: '',
+  body: '',
+  category: 'image',
+  postFormat: 'text',
+  sourceKind: 'external',
+  sourceTool: null,
+  sourceToolSlug: null,
+  sourceLabel: 'Uploaded',
+  createdAt: '2026-06-23T10:00:00.000Z',
+  updatedAt: '2026-06-23T10:00:00.000Z',
+  publicPath: null,
+  ownerPath: '/post/post-1/edit',
+  resourcePath: null,
+  canShare: false,
+  bundle: null,
+  resourceBundleInput: { accessMode: 'none' },
+  hasPaidOrders: false,
+} satisfies OwnerPostDetail;
 
 function createContext(postId = 'post-1') {
   return {
@@ -29,10 +59,7 @@ describe('owner post route adapter service', () => {
       ok: true as const,
       body: {
         success: true as const,
-        post: {
-          id: 'post-1',
-          title: 'Draft post',
-        },
+        post: ownerPostFixture,
       },
     }));
     const request = createRequest('GET', { 'x-request-id': 'owner-post-get-1' });
@@ -50,10 +77,7 @@ describe('owner post route adapter service', () => {
     expect(response.headers.get('x-request-id')).toBe('owner-post-get-1');
     await expect(response.json()).resolves.toEqual({
       success: true,
-      post: {
-        id: 'post-1',
-        title: 'Draft post',
-      },
+      post: ownerPostFixture,
     });
     expect(getOwnerPostDetailForRoute).toHaveBeenCalledWith({ request, postId: 'post-1' });
   });
@@ -97,7 +121,13 @@ describe('owner post route adapter service', () => {
         updateOwnerPostRoute: vi.fn(async () => ({
           ok: false as const,
           status: 429 as const,
-          body: { code: 'RATE_LIMITED' },
+          body: {
+            error: rateLimitError.message,
+            code: 'RATE_LIMITED' as const,
+            retryAfterSeconds: 29,
+            limit: 60,
+            resetAt: '2026-06-23T14:00:00.000Z',
+          },
           rateLimitError,
         })),
       },
@@ -118,9 +148,13 @@ describe('owner post route adapter service', () => {
     const updateOwnerPostRoute = vi.fn(async () => ({
       ok: true as const,
       body: {
-        success: true,
+        success: true as const,
         postId: 'post-1',
-        visibility: 'private',
+        visibility: 'private' as const,
+        showcasePath: null,
+        ownerPath: '/post/post-1/edit',
+        resourceBundlePath: '/post/post-1/edit#recipe',
+        resourceBundleStatus: null,
       },
     }));
     const request = createRequest('PATCH', {
@@ -149,8 +183,8 @@ describe('owner post route adapter service', () => {
     const deleteOwnerPostRoute = vi.fn(async () => ({
       ok: true as const,
       body: {
-        success: true,
-        deleted: true,
+        success: true as const,
+        deleted: true as const,
       },
     }));
     const request = createRequest('DELETE', { 'x-request-id': 'owner-post-delete-1' });
@@ -176,15 +210,34 @@ describe('owner post route adapter service', () => {
   it('creates compact handlers for the owner post route entrypoint', async () => {
     const getOwnerPostDetailForRoute = vi.fn(async ({ postId }) => ({
       ok: true as const,
-      body: { success: true, method: 'GET', postId },
+      body: {
+        success: true as const,
+        method: 'GET',
+        postId,
+        post: { ...ownerPostFixture, id: postId },
+      },
     }));
     const updateOwnerPostRoute = vi.fn(async ({ postId }) => ({
       ok: true as const,
-      body: { success: true, method: 'MUTATE', postId },
+      body: {
+        success: true as const,
+        method: 'MUTATE',
+        postId,
+        visibility: 'private' as const,
+        showcasePath: null,
+        ownerPath: `/post/${postId}/edit`,
+        resourceBundlePath: `/post/${postId}/edit#recipe`,
+        resourceBundleStatus: null,
+      },
     }));
     const deleteOwnerPostRoute = vi.fn(async ({ postId }) => ({
       ok: true as const,
-      body: { success: true, method: 'DELETE', postId },
+      body: {
+        success: true as const,
+        deleted: true as const,
+        method: 'DELETE',
+        postId,
+      },
     }));
     const { DELETE, GET, PATCH, PUT } = createOwnerPostRouteHandlers({
       dependencies: {
@@ -205,22 +258,22 @@ describe('owner post route adapter service', () => {
 
     expect(getResponse.headers.get('Cache-Control')).toBe('private, no-store');
     expect(getResponse.headers.get('x-request-id')).toBe('owner-post-factory-get');
-    await expect(getResponse.json()).resolves.toEqual({
+    await expect(getResponse.json()).resolves.toMatchObject({
       success: true,
       method: 'GET',
       postId: 'post-from-factory',
     });
-    await expect(putResponse.json()).resolves.toEqual({
+    await expect(putResponse.json()).resolves.toMatchObject({
       success: true,
       method: 'MUTATE',
       postId: 'post-from-factory',
     });
-    await expect(patchResponse.json()).resolves.toEqual({
+    await expect(patchResponse.json()).resolves.toMatchObject({
       success: true,
       method: 'MUTATE',
       postId: 'post-from-factory',
     });
-    await expect(deleteResponse.json()).resolves.toEqual({
+    await expect(deleteResponse.json()).resolves.toMatchObject({
       success: true,
       method: 'DELETE',
       postId: 'post-from-factory',

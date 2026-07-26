@@ -51,7 +51,7 @@ describe('workflow asset read-url route adapter service', () => {
     const createWorkflowAssetReadUrl = vi.fn(async () => ({
       ok: true as const,
       response: {
-        success: true,
+        success: true as const,
         signedUrl: 'https://storage.example.test/signed/workflow-input.png',
         expiresInSeconds: 3600,
       },

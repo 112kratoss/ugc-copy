@@ -46,7 +46,7 @@ describe('workflow assistant state route adapter service', () => {
     const getWorkflowAssistantStateForRoute = vi.fn(async () => ({
       ok: true as const,
       body: {
-        availability: 'ready',
+        availability: 'ready' as const,
         messages: [],
         proposal: null,
         setupMessage: null,

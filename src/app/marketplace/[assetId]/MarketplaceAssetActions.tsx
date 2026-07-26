@@ -7,6 +7,11 @@ import { Copy, Download, Loader2, ShoppingCart, Sparkles } from 'lucide-react';
 
 import { useAuth } from '@/app/components/AuthProvider';
 import { getMarketplaceAssetTypeLabel } from '@/lib/marketplace';
+import {
+  clearRazorpayCheckoutIntentKey,
+  getOrCreateRazorpayCheckoutIntentKey,
+  verifyRazorpayCheckoutUntilSettled,
+} from '@/lib/razorpay-checkout-client';
 import type { ShowcaseAssetType } from '@/lib/showcase';
 
 declare global {
@@ -96,6 +101,8 @@ export default function MarketplaceAssetActions({
       setError(null);
       setFeedback(null);
 
+      const checkoutIntentScope = `marketplace:${assetId}`;
+      const clientIntentKey = getOrCreateRazorpayCheckoutIntentKey(checkoutIntentScope);
       const orderResponse = await fetch('/api/marketplace/order', {
         method: 'POST',
         headers: {
@@ -105,15 +112,20 @@ export default function MarketplaceAssetActions({
         body: JSON.stringify({
           assetId,
           locale: typeof navigator !== 'undefined' ? navigator.language : null,
+          clientIntentKey,
         }),
       });
 
       const orderData = await orderResponse.json();
       if (!orderResponse.ok) {
+        if (orderData.code === 'CHECKOUT_PAYLOAD_MISMATCH') {
+          clearRazorpayCheckoutIntentKey(checkoutIntentScope);
+        }
         throw new Error(orderData.error || (isFree ? 'Failed to get the free recipe.' : 'Failed to start checkout.'));
       }
 
       if (orderData.alreadyPurchased || orderData.free) {
+        clearRazorpayCheckoutIntentKey(checkoutIntentScope);
         router.refresh();
         return;
       }
@@ -135,20 +147,17 @@ export default function MarketplaceAssetActions({
           razorpay_signature: string;
         }) => {
           try {
-            const verifyResponse = await fetch('/api/marketplace/verify', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${session.access_token}`,
-              },
-              body: JSON.stringify(response),
+            const verification = await verifyRazorpayCheckoutUntilSettled({
+              url: '/api/marketplace/verify',
+              token: session.access_token,
+              body: response,
             });
-            const verifyData = await verifyResponse.json();
-
-            if (!verifyResponse.ok || !verifyData.success) {
-              throw new Error(verifyData.error || 'Payment verification failed.');
+            if (verification.state === 'pending') {
+              setFeedback('Payment received and waiting for capture. Access will appear automatically once confirmed.');
+              return;
             }
 
+            clearRazorpayCheckoutIntentKey(checkoutIntentScope);
             router.refresh();
           } catch (verifyError) {
             setError(verifyError instanceof Error ? verifyError.message : 'Payment verification failed.');

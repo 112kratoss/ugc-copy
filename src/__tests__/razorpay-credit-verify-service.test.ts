@@ -2,7 +2,9 @@ import crypto from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { verifyCreditRazorpayPaymentForRoute } from '@/lib/razorpay-credit-verify-service';
+import {
+  verifyCreditRazorpayPaymentForRoute as verifyCreditRazorpayPaymentForRouteImpl,
+} from '@/lib/razorpay-credit-verify-service';
 
 type TransactionRow = {
   id: string;
@@ -24,6 +26,25 @@ function validBody() {
     razorpay_signature: signatureFor('order_123', 'pay_123'),
     userId: 'user_123',
   };
+}
+
+function verifyCreditRazorpayPaymentForRoute(
+  input: Parameters<typeof verifyCreditRazorpayPaymentForRouteImpl>[0],
+) {
+  return verifyCreditRazorpayPaymentForRouteImpl({
+    keyId: 'test-key',
+    fetchPayment: vi.fn(async ({ paymentId }) => ({
+      id: paymentId,
+      orderId: 'order_123',
+      amount: 15_000,
+      amountRefunded: 0,
+      currency: 'INR',
+      status: 'captured' as const,
+      captured: true,
+      notes: { user_id: 'user_123' },
+    })),
+    ...input,
+  });
 }
 
 function createUserSupabaseMock({
@@ -62,7 +83,15 @@ function createUserSupabaseMock({
         },
         async single() {
           return {
-            data: transaction,
+            data: transaction
+              ? {
+                  user_id: 'user_123',
+                  amount: 15_000,
+                  razorpay_payment_id: transaction.status === 'success' ? 'pay_123' : null,
+                  credit_effect_applied: transaction.status === 'success',
+                  ...transaction,
+                }
+              : null,
             error: transactionError,
           };
         },
@@ -375,5 +404,68 @@ describe('verifyCreditRazorpayPaymentForRoute', () => {
       'add_credits',
       'settle_referral_purchase_rewards',
     ]);
+  });
+
+  it('returns 202 without granting credits while the provider payment is authorized', async () => {
+    const user = createUserSupabaseMock();
+    const admin = createAdminSupabaseMock();
+
+    const result = await verifyCreditRazorpayPaymentForRoute({
+      keySecret: 'test-secret',
+      readBody: vi.fn(async () => validBody()),
+      createUserSupabase: vi.fn(() => user.client),
+      createAdminSupabase: vi.fn(() => admin.client),
+      fetchPayment: vi.fn(async () => ({
+        id: 'pay_123',
+        orderId: 'order_123',
+        amount: 15_000,
+        amountRefunded: 0,
+        currency: 'INR',
+        status: 'authorized' as const,
+        captured: false,
+        notes: { user_id: 'user_123' },
+      })),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      status: 202,
+      body: expect.objectContaining({
+        success: false,
+        status: 'pending',
+        pending: true,
+        code: 'PAYMENT_PENDING',
+      }),
+    });
+    expect(admin.calls.rpc.map((call) => call.name)).toEqual(['check_backend_rate_limit']);
+  });
+
+  it('rejects a captured provider payment whose amount differs from the transaction', async () => {
+    const user = createUserSupabaseMock();
+    const admin = createAdminSupabaseMock();
+
+    const result = await verifyCreditRazorpayPaymentForRoute({
+      keySecret: 'test-secret',
+      readBody: vi.fn(async () => validBody()),
+      createUserSupabase: vi.fn(() => user.client),
+      createAdminSupabase: vi.fn(() => admin.client),
+      fetchPayment: vi.fn(async () => ({
+        id: 'pay_123',
+        orderId: 'order_123',
+        amount: 1,
+        amountRefunded: 0,
+        currency: 'INR',
+        status: 'captured' as const,
+        captured: true,
+        notes: { user_id: 'user_123' },
+      })),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'Payment details do not match the order.' },
+    });
+    expect(admin.calls.rpc.map((call) => call.name)).toEqual(['check_backend_rate_limit']);
   });
 });

@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { postRevenueCatWebhookRouteResponse } from '@/lib/revenuecat-webhook-route-adapter-service';
@@ -37,7 +38,9 @@ const refundPayload = {
 describe('RevenueCat webhook route adapter service', () => {
   it('fails closed before privileged work when the webhook secret is not configured', async () => {
     const rpc = vi.fn();
-    const createServiceClient = vi.fn(() => ({ rpc }));
+    const createServiceClient = vi.fn(
+      () => ({ rpc }) as unknown as SupabaseClient,
+    );
 
     const response = await postRevenueCatWebhookRouteResponse({
       request: webhookRequest(refundPayload, 'Bearer revenuecat-webhook-secret', {
@@ -60,7 +63,9 @@ describe('RevenueCat webhook route adapter service', () => {
 
   it('rejects oversized payloads before JSON parsing or privileged work', async () => {
     const rpc = vi.fn();
-    const createServiceClient = vi.fn(() => ({ rpc }));
+    const createServiceClient = vi.fn(
+      () => ({ rpc }) as unknown as SupabaseClient,
+    );
 
     const response = await postRevenueCatWebhookRouteResponse({
       request: webhookRequest(refundPayload, 'Bearer revenuecat-webhook-secret', {
@@ -83,7 +88,9 @@ describe('RevenueCat webhook route adapter service', () => {
 
   it('uses the bounded body reader even when Content-Length is absent', async () => {
     const rpc = vi.fn();
-    const createServiceClient = vi.fn(() => ({ rpc }));
+    const createServiceClient = vi.fn(
+      () => ({ rpc }) as unknown as SupabaseClient,
+    );
     const readBoundedWebhookBody = vi.fn(async () => ({
       ok: false as const,
       reason: 'too_large' as const,
@@ -109,7 +116,9 @@ describe('RevenueCat webhook route adapter service', () => {
       data: { status: 'refunded', rewards: [] },
       error: null,
     }));
-    const createServiceClient = vi.fn(() => ({ rpc }));
+    const createServiceClient = vi.fn(
+      () => ({ rpc }) as unknown as SupabaseClient,
+    );
 
     const response = await postRevenueCatWebhookRouteResponse({
       request: webhookRequest(refundPayload, 'Bearer revenuecat-webhook-secret', {

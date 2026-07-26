@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   createServiceClient: vi.fn(),
+  runAccountDeletionResweepsBackendJob: vi.fn(),
   runBackendAlertDeliveryJob: vi.fn(),
   runFeedMaintenanceBackendJob: vi.fn(),
   runGenerationCompletionsBackendJob: vi.fn(),
@@ -30,6 +31,9 @@ vi.mock('@/lib/backend-job-executions', async () => {
 
   return {
     ...actual,
+    runAccountDeletionResweepsBackendJob: (...args: unknown[]) => (
+      mocks.runAccountDeletionResweepsBackendJob(...args)
+    ),
     runBackendAlertDeliveryJob: (...args: unknown[]) => (
       mocks.runBackendAlertDeliveryJob(...args)
     ),
@@ -59,6 +63,15 @@ describe('/api/cron/backend-jobs route', () => {
     vi.stubEnv('CRON_SECRET', 'secret-123');
     mocks.createServiceClient.mockReset();
     mocks.createServiceClient.mockReturnValue({ service: 'supabase' });
+    mocks.runAccountDeletionResweepsBackendJob.mockReset();
+    mocks.runAccountDeletionResweepsBackendJob.mockResolvedValue({
+      success: true,
+      job: 'account-deletion-resweeps',
+      route: '/api/cron/account-deletion-resweeps',
+      status: 'skipped',
+      skipped: true,
+      reason: 'no_due_account_deletion_cleanup',
+    });
     mocks.runBackendAlertDeliveryJob.mockReset();
     mocks.runBackendAlertDeliveryJob.mockResolvedValue({
       success: true,
@@ -130,6 +143,7 @@ describe('/api/cron/backend-jobs route', () => {
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(response.headers.get('x-request-id')).toBe('cron-reject-1');
     expect(mocks.createServiceClient).not.toHaveBeenCalled();
+    expect(mocks.runAccountDeletionResweepsBackendJob).not.toHaveBeenCalled();
     expect(mocks.runBackendAlertDeliveryJob).not.toHaveBeenCalled();
     expect(mocks.runFeedMaintenanceBackendJob).not.toHaveBeenCalled();
     expect(mocks.runGenerationCompletionsBackendJob).not.toHaveBeenCalled();
@@ -156,6 +170,10 @@ describe('/api/cron/backend-jobs route', () => {
       serviceClient: { service: 'supabase' },
       triggerRoute: '/api/cron/backend-jobs',
     };
+    expect(mocks.runAccountDeletionResweepsBackendJob).toHaveBeenCalledWith({
+      ...expectedOptions,
+      requestId: 'iad1::scheduler-1:account-deletion-resweeps',
+    });
     expect(mocks.runBackendAlertDeliveryJob).toHaveBeenCalledWith({
       ...expectedOptions,
       requestId: 'iad1::scheduler-1:backend-alert-delivery',
@@ -175,7 +193,7 @@ describe('/api/cron/backend-jobs route', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       scheduler: '/api/cron/backend-jobs',
-      dueJobs: ['backend-alert-delivery', 'generation-completions', 'media-preview-repair', 'mobile-push-receipts'],
+      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'generation-completions', 'media-preview-repair', 'mobile-push-receipts'],
     });
   });
 
@@ -230,6 +248,7 @@ describe('/api/cron/backend-jobs route', () => {
     await Promise.resolve();
 
     expect(mocks.runBackendAlertDeliveryJob).toHaveBeenCalledTimes(1);
+    expect(mocks.runAccountDeletionResweepsBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runGenerationCompletionsBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runMediaPreviewRepairBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runMobilePushReceiptsBackendJob).toHaveBeenCalledTimes(1);
@@ -245,6 +264,7 @@ describe('/api/cron/backend-jobs route', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       results: [
+        expect.objectContaining({ job: 'account-deletion-resweeps', status: 'skipped' }),
         expect.objectContaining({ job: 'backend-alert-delivery', status: 'skipped' }),
         expect.objectContaining({ job: 'generation-completions', status: 'succeeded' }),
         expect.objectContaining({ job: 'media-preview-repair', status: 'skipped' }),
@@ -262,13 +282,14 @@ describe('/api/cron/backend-jobs route', () => {
     }));
 
     expect(response.status).toBe(200);
+    expect(mocks.runAccountDeletionResweepsBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runBackendAlertDeliveryJob).toHaveBeenCalledTimes(1);
     expect(mocks.runFeedMaintenanceBackendJob).not.toHaveBeenCalled();
     expect(mocks.runGenerationCompletionsBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     expect(mocks.runMobilePushReceiptsBackendJob).toHaveBeenCalledTimes(1);
     await expect(response.json()).resolves.toMatchObject({
-      dueJobs: ['backend-alert-delivery', 'generation-completions', 'mobile-push-receipts'],
+      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'generation-completions', 'mobile-push-receipts'],
     });
   });
 
@@ -284,6 +305,7 @@ describe('/api/cron/backend-jobs route', () => {
     }));
 
     expect(response.status).toBe(200);
+    expect(mocks.runAccountDeletionResweepsBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runFeedMaintenanceBackendJob).toHaveBeenCalledWith({
       requestId: 'scheduler-feed-20:feed-maintenance',
       startedAtMs: Date.parse('2026-06-22T10:20:00.000Z'),
@@ -292,7 +314,7 @@ describe('/api/cron/backend-jobs route', () => {
     });
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
-      dueJobs: ['backend-alert-delivery', 'feed-maintenance', 'generation-completions', 'mobile-push-receipts'],
+      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-maintenance', 'generation-completions', 'mobile-push-receipts'],
     });
   });
 
@@ -308,6 +330,7 @@ describe('/api/cron/backend-jobs route', () => {
     }));
 
     expect(response.status).toBe(200);
+    expect(mocks.runAccountDeletionResweepsBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runReferralRewardReconciliationBackendJob).toHaveBeenCalledWith({
       requestId: 'scheduler-referral-40:referral-reward-reconciliation',
       startedAtMs: Date.parse('2026-06-22T10:40:00.000Z'),
@@ -318,6 +341,7 @@ describe('/api/cron/backend-jobs route', () => {
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
       dueJobs: [
+        'account-deletion-resweeps',
         'backend-alert-delivery',
         'generation-completions',
         'mobile-push-receipts',
@@ -341,6 +365,7 @@ describe('/api/cron/backend-jobs route', () => {
     }));
 
     expect(response.status).toBe(500);
+    expect(mocks.runAccountDeletionResweepsBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runBackendAlertDeliveryJob).toHaveBeenCalledTimes(1);
     expect(mocks.runGenerationCompletionsBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runMediaPreviewRepairBackendJob).toHaveBeenCalledTimes(1);
@@ -348,6 +373,7 @@ describe('/api/cron/backend-jobs route', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: false,
       results: [
+        expect.objectContaining({ job: 'account-deletion-resweeps', status: 'skipped' }),
         expect.objectContaining({ status: 'skipped' }),
         expect.objectContaining({ status: 'failed' }),
         expect.objectContaining({ status: 'succeeded' }),

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildBackendAlertSummary } from '@/lib/backend-alerts';
 import type { BackendCostReport } from '@/lib/backend-cost-report';
 import type { BackendHealth } from '@/lib/backend-health';
+import type { BackendModerationHealth } from '@/lib/backend-moderation-health';
 import {
   deliverBackendAlerts,
   hasConfiguredBackendAlertDelivery,
@@ -21,6 +22,15 @@ const quietCosts = {
   window: { recentHours: 24, since: '2026-06-22T10:00:00.000Z' },
   issues: [],
 } as unknown as BackendCostReport;
+
+const quietModeration = {
+  status: 'ok',
+  queue: {
+    totalOpenCount: 0,
+    oldestAgeMinutes: null,
+  },
+  issues: [],
+} as unknown as BackendModerationHealth;
 
 /**
  * `NodeJS.ProcessEnv` types NODE_ENV as required, so a bare `{}` or a
@@ -45,6 +55,7 @@ describe('backend alert delivery', () => {
     const summary = buildBackendAlertSummary({
       health: healthyBackend,
       costs: quietCosts,
+      moderation: quietModeration,
       checkedAt: '2026-06-23T10:01:00.000Z',
     });
 
@@ -79,6 +90,7 @@ describe('backend alert delivery', () => {
         }],
       },
       costs: quietCosts,
+      moderation: quietModeration,
       checkedAt: '2026-06-23T10:02:00.000Z',
     });
 
@@ -128,6 +140,7 @@ describe('backend alert delivery', () => {
         }],
       },
       costs: quietCosts,
+      moderation: quietModeration,
       checkedAt: '2026-06-23T10:03:00.000Z',
     });
 

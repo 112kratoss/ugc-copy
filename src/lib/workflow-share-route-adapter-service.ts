@@ -112,7 +112,7 @@ async function handleWorkflowSharePreviewGET(
     return NextResponse.json({ error: 'Workflow share not found.' }, { status: 404 });
   }
 
-  const { data, error } = await auth.supabase
+  const { data, error } = await dependencies.createServiceClient()
     .from('workflow_shares')
     .select(WORKFLOW_SHARE_SELECT)
     .eq('id', shareId)

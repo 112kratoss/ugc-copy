@@ -1,8 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { createPostResourceBundleOrderForRoute } from '@/lib/post-resource-bundle-order-service';
+import {
+  createPostResourceBundleOrderForRoute as createPostResourceBundleOrderForRouteImpl,
+} from '@/lib/post-resource-bundle-order-service';
 import { ExternalServiceTimeoutError } from '@/lib/provider-fetch';
+
+type CreateBundleOrderInput = Parameters<typeof createPostResourceBundleOrderForRouteImpl>[0];
+
+function createPostResourceBundleOrderForRoute(
+  input: Omit<CreateBundleOrderInput, 'fetchRazorpayOrderByReceipt'>,
+) {
+  const originalReadBody = input.readBody;
+  return createPostResourceBundleOrderForRouteImpl({
+    ...input,
+    readBody: async () => ({
+      clientIntentKey: 'intent-post-resource-123456',
+      ...(await originalReadBody()),
+    }),
+    fetchRazorpayOrderByReceipt: vi.fn(async () => null),
+  });
+}
 
 type BundleForOrder = {
   id: string;
@@ -67,6 +85,30 @@ function createAdminSupabaseMock(options?: {
           },
           error: null,
         };
+      }
+
+      if (fn === 'claim_razorpay_checkout_intent') {
+        return {
+          data: {
+            status: 'claimed',
+            intent_id: '30000000-0000-4000-8000-000000000003',
+            provider_receipt: 'mb_30000000000040008000000000000003',
+            provider_order_id: null,
+          },
+          error: null,
+        };
+      }
+      if (fn === 'complete_razorpay_checkout_intent') {
+        return {
+          data: {
+            status: 'recorded',
+            provider_order_id: args.p_provider_order_id,
+          },
+          error: null,
+        };
+      }
+      if (fn === 'abandon_razorpay_checkout_intent') {
+        return { data: { status: 'abandoned' }, error: null };
       }
 
       return { data: true, error: null };
@@ -200,7 +242,6 @@ describe('createPostResourceBundleOrderForRoute', () => {
       getBundleForOrderByPostId: vi.fn(async () => createBundle()),
       getPostResourceBundlePriceQuote,
       createRazorpayOrder,
-      now: () => 1_787_355_200_000,
     });
 
     expect(result).toEqual({
@@ -223,11 +264,12 @@ describe('createPostResourceBundleOrderForRoute', () => {
       keySecret: process.env.RAZORPAY_KEY_SECRET,
       amount: 58100,
       currency: 'INR',
-      receipt: 'bundle_buyer-1_1787355200000',
+      receipt: 'mb_30000000000040008000000000000003',
       notes: {
         bundle_id: 'bundle-1',
         buyer_user_id: 'buyer-1',
         post_id: 'post-1',
+        purchase_kind: 'post_resource',
       },
     });
     expect(admin.inserts).toEqual([

@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
@@ -6,8 +7,8 @@ import type { CreditRazorpayVerifyRouteResult } from '@/lib/razorpay-credit-veri
 
 describe('razorpay credit verify route adapter service', () => {
   it('passes lazy request and Supabase factories into the verification service with private trace headers', async () => {
-    const userSupabase = { kind: 'user' };
-    const adminSupabase = { kind: 'admin' };
+    const userSupabase = { kind: 'user' } as unknown as SupabaseClient;
+    const adminSupabase = { kind: 'admin' } as unknown as SupabaseClient;
     const createUserClient = vi.fn(() => userSupabase);
     const createServiceClient = vi.fn(() => adminSupabase);
     // Typed with the real signature so `mock.calls` is a tuple of its actual
@@ -30,6 +31,7 @@ describe('razorpay credit verify route adapter service', () => {
       dependencies: {
         createServiceClient,
         createUserClient,
+        getRazorpayKeyId: () => 'test-key-id',
         getRazorpayKeySecret: () => 'test-secret',
         verifyCreditRazorpayPaymentForRoute,
       },
@@ -42,12 +44,41 @@ describe('razorpay credit verify route adapter service', () => {
     expect(verifyCreditRazorpayPaymentForRoute).toHaveBeenCalledTimes(1);
 
     const serviceInput = verifyCreditRazorpayPaymentForRoute.mock.calls[0][0];
+    expect(serviceInput.keyId).toBe('test-key-id');
     expect(serviceInput.keySecret).toBe('test-secret');
     await expect(serviceInput.readBody()).resolves.toEqual({ razorpay_order_id: 'order_123' });
     expect(serviceInput.createUserSupabase()).toBe(userSupabase);
     expect(serviceInput.createAdminSupabase()).toBe(adminSupabase);
     expect(createUserClient).toHaveBeenCalledWith(request);
     expect(createServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the authorized-but-uncaptured 202 contract', async () => {
+    const response = await postRazorpayCreditVerifyRouteResponse({
+      request: new Request('http://localhost/api/razorpay/verify', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }),
+      dependencies: {
+        verifyCreditRazorpayPaymentForRoute: vi.fn(async () => ({
+          ok: true as const,
+          status: 202 as const,
+          body: {
+            success: false,
+            status: 'pending' as const,
+            pending: true,
+            code: 'PAYMENT_PENDING',
+          },
+        })),
+      },
+    });
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'pending',
+      pending: true,
+      code: 'PAYMENT_PENDING',
+    });
   });
 
   it('maps service rate-limit responses with standard rate-limit and private headers', async () => {

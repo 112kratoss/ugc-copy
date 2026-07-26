@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { BackendAlertSummary } from '@/lib/backend-alerts';
 import type { BackendCostReport } from '@/lib/backend-cost-report';
 import type { BackendHealth } from '@/lib/backend-health';
+import type { BackendModerationHealth } from '@/lib/backend-moderation-health';
 import {
   buildBackendOpsDashboard,
   collectBackendOpsDashboard,
@@ -45,6 +46,25 @@ const backendCosts = {
   ],
 } as unknown as BackendCostReport;
 
+const backendModeration = {
+  status: 'warning',
+  checkedAt: '2026-06-23T10:00:00.000Z',
+  queue: {
+    postReportCount: 7,
+    subjectReportCount: 3,
+    totalOpenCount: 10,
+    oldestCreatedAt: '2026-06-23T04:00:00.000Z',
+    oldestAgeMinutes: 360,
+  },
+  issues: [
+    {
+      severity: 'warning',
+      code: 'MODERATION_QUEUE_AGE_WARNING',
+      message: 'The moderation queue is ageing.',
+    },
+  ],
+} as unknown as BackendModerationHealth;
+
 const backendAlerts = {
   status: 'degraded',
   checkedAt: '2026-06-23T10:00:00.000Z',
@@ -53,6 +73,9 @@ const backendAlerts = {
     healthStatus: 'degraded',
     costStatus: 'warning',
     costWindowHours: 24,
+    moderationStatus: 'warning',
+    moderationOpenCount: 10,
+    moderationOldestAgeMinutes: 360,
   },
   counts: { total: 2, degraded: 1, warning: 1 },
   delivery: {
@@ -123,9 +146,10 @@ describe('backend ops dashboard', () => {
     });
   });
 
-  it('collects health and costs once and derives the alert summary from them', async () => {
+  it('collects health, costs, and moderation once and derives the alert summary from them', async () => {
     const collectHealth = vi.fn(async () => backendHealth);
     const collectCosts = vi.fn(async () => backendCosts);
+    const collectModeration = vi.fn(async () => backendModeration);
     const client = { service: 'supabase' };
     const now = new Date('2026-06-23T10:02:00.000Z');
 
@@ -133,11 +157,13 @@ describe('backend ops dashboard', () => {
       now,
       collectHealth,
       collectCosts,
+      collectModeration,
     });
 
     expect(dashboard.status).toBe('degraded');
     expect(dashboard.alertDelivery.severity).toBe('degraded');
     expect(collectHealth).toHaveBeenCalledWith(client, now);
     expect(collectCosts).toHaveBeenCalledWith(client, now);
+    expect(collectModeration).toHaveBeenCalledWith(client, now);
   });
 });

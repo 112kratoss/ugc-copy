@@ -61,6 +61,7 @@ function createClient(results: Record<string, QueryResult>) {
 describe('collectBackendCostReport', () => {
   it('loads budget thresholds from environment variables and keeps degraded limits at or above warning limits', () => {
     const policy = buildBackendCostBudgetPolicy({}, {
+      NODE_ENV: 'test',
       BACKEND_BUDGET_GENERATION_CREDITS_WARNING: '42',
       BACKEND_BUDGET_GENERATION_CREDITS_DEGRADED: '41',
       BACKEND_BUDGET_QUOTE_REQUESTS_WARNING: '20',

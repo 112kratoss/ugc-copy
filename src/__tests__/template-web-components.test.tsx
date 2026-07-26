@@ -407,7 +407,7 @@ describe('template web run API', () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it('uses generic start and public run-step UUID endpoints', async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       run: { id: 'run-1', templateId: 'template-1', status: 'processing', inputSlots: [], inputs: {}, steps: [], result: null },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     vi.stubGlobal('fetch', fetcher);

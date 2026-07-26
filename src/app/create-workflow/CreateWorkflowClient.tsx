@@ -24,6 +24,7 @@ import {
   inspectWorkflowNodeCapabilities,
   isRunnableNode,
   normalizeNodeData,
+  normalizeWorkflowGraph,
   syncWorkflowGraphElementBindings,
   validateWorkflowTemplateAuthoringGraph,
   validateWorkflowConnectionForGraph,
@@ -331,7 +332,9 @@ export default function CreateWorkflowClient({
       }
     }
     syncPersistedCanvasRef.current(canvas);
-    const syncedGraph = syncWorkflowGraphElementBindings(canvas.graph);
+    // Persisted canvases can predate newer node fields. Normalize at the API
+    // boundary before rendering so a legacy node cannot crash the editor.
+    const syncedGraph = normalizeWorkflowGraph(canvas.graph);
     setNodes(syncedGraph.nodes.map((node) => ({ ...node, selected: false })));
     setEdges(syncedGraph.edges.map((edge) => decorateWorkflowEdge({ ...edge, selected: false })));
     setViewport(canvas.graph.viewport || DEFAULT_VIEWPORT);

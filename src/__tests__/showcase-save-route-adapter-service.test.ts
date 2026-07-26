@@ -98,7 +98,13 @@ describe('showcase save route adapter service', () => {
   it('delegates valid save requests with normalized state and private headers', async () => {
     const serviceClient = { kind: 'service' } as unknown as SupabaseClient;
     const createServiceClient = vi.fn(() => serviceClient);
-    const enforceBackendRateLimit = vi.fn(async () => undefined);
+    const enforceBackendRateLimit = vi.fn(async () => ({
+      allowed: true,
+      limit: 120,
+      remaining: 119,
+      retryAfterSeconds: 0,
+      resetAt: '2026-06-23T10:10:00.000Z',
+    }));
     const body = {
       postId: 'post-1',
       shouldSave: true,
@@ -107,7 +113,7 @@ describe('showcase save route adapter service', () => {
     const saveShowcasePostForRoute = vi.fn(async () => ({
       ok: true as const,
       body: {
-        success: true,
+        success: true as const,
         isSaved: true,
         saveCount: 5,
         changed: true,
@@ -162,7 +168,13 @@ describe('showcase save route adapter service', () => {
     const dependencies = {
       createServiceClient: vi.fn(() => ({ kind: 'service' }) as unknown as SupabaseClient),
       createUserClient: () => createUserClient('user-1'),
-      enforceBackendRateLimit: vi.fn(async () => undefined),
+      enforceBackendRateLimit: vi.fn(async () => ({
+        allowed: true,
+        limit: 120,
+        remaining: 119,
+        retryAfterSeconds: 0,
+        resetAt: '2026-06-23T10:10:00.000Z',
+      })),
       saveShowcasePostForRoute: vi.fn(),
     };
 

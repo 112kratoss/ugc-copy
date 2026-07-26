@@ -1,0 +1,213 @@
+name: Mobile signed store build
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Signed platform artifact to build
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - ios
+          - android
+      submit_to_test_track:
+        description: Submit successful builds to TestFlight / closed alpha
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mobile-store-release
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    name: Authorize exact main revision
+    runs-on: ubuntu-latest
+    outputs:
+      release_sha: ${{ steps.revision.outputs.release_sha }}
+    steps:
+      - name: Check out current main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Require current remote main and a green Quality run
+        id: revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_sha="$(git rev-parse HEAD)"
+          remote_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
+          test "$release_sha" = "$remote_sha"
+          successful_runs="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/quality.yml/runs?head_sha=${release_sha}&status=completed&per_page=100" \
+              --jq '[.workflow_runs[] | select(.conclusion == "success")] | length'
+          )"
+          test "$successful_runs" -gt 0
+          echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
+
+  validate:
+    name: Validate mobile release inputs
+    needs: authorize
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ugc-mobile
+    steps:
+      - name: Check out authorized revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.authorize.outputs.release_sha }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: ugc-mobile/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate Expo dependency alignment
+        run: npx expo install --check
+
+      - name: Run Expo Doctor
+        run: npx --yes expo-doctor@1.20.1
+
+      - name: Test fail-closed production environment guard
+        run: npm run release-env:self-test
+
+      - name: Run mobile tests and typecheck
+        run: |
+          npm test
+          npm run typecheck
+
+      - name: Validate production native configuration
+        run: npx expo prebuild --clean --no-install
+        env:
+          MAGICBOOKLET_INCLUDE_DEV_CLIENT: "false"
+
+  build:
+    name: Signed ${{ matrix.platform }} build
+    needs:
+      - authorize
+      - validate
+    runs-on: ubuntu-latest
+    environment: mobile-production
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(inputs.platform == 'all' && '["ios","android"]' || format('["{0}"]', inputs.platform)) }}
+    steps:
+      - name: Check out authorized revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.authorize.outputs.release_sha }}
+          fetch-depth: 1
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
+      - name: Authenticate EAS
+        working-directory: ugc-mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$EXPO_TOKEN"
+          npx --yes eas-cli@21.2.0 whoami
+
+      - name: Build signed production artifact
+        id: build
+        working-directory: ugc-mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          RELEASE_SHA: ${{ needs.authorize.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          metadata="$RUNNER_TEMP/eas-build-${{ matrix.platform }}.json"
+          npx --yes eas-cli@21.2.0 build \
+            --profile production \
+            --platform "${{ matrix.platform }}" \
+            --non-interactive \
+            --wait \
+            --json \
+            --message "GitHub main ${RELEASE_SHA}" > "$metadata"
+          METADATA_PATH="$metadata" node - <<'NODE'
+          const fs = require('node:fs');
+          const payload = JSON.parse(fs.readFileSync(process.env.METADATA_PATH, 'utf8'));
+          const build = Array.isArray(payload) ? payload[0] : payload;
+          if (!build?.id) throw new Error('EAS did not return a build ID');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `build_id=${build.id}\n`);
+          NODE
+
+      - name: Verify EAS artifact belongs to the authorized commit
+        working-directory: ugc-mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EXPECTED_SHA: ${{ needs.authorize.outputs.release_sha }}
+          BUILD_ID: ${{ steps.build.outputs.build_id }}
+        run: |
+          set -euo pipefail
+          view="$RUNNER_TEMP/eas-build-view-${{ matrix.platform }}.json"
+          npx --yes eas-cli@21.2.0 build:view "$BUILD_ID" \
+            --json \
+            --non-interactive > "$view"
+          VIEW_PATH="$view" node - <<'NODE'
+          const fs = require('node:fs');
+          const build = JSON.parse(fs.readFileSync(process.env.VIEW_PATH, 'utf8'));
+          if (build.status !== 'FINISHED') {
+            throw new Error(`EAS build is not finished: ${build.status}`);
+          }
+          if (build.gitCommitHash !== process.env.EXPECTED_SHA) {
+            throw new Error(
+              `EAS build SHA mismatch: expected ${process.env.EXPECTED_SHA}, received ${build.gitCommitHash ?? 'missing'}`,
+            );
+          }
+          NODE
+
+      - name: Save verified build metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: eas-${{ matrix.platform }}-${{ needs.authorize.outputs.release_sha }}
+          path: |
+            ${{ runner.temp }}/eas-build-${{ matrix.platform }}.json
+            ${{ runner.temp }}/eas-build-view-${{ matrix.platform }}.json
+          retention-days: 30
+
+      - name: Reconfirm main before test-track submission
+        if: ${{ inputs.submit_to_test_track }}
+        env:
+          EXPECTED_SHA: ${{ needs.authorize.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          remote_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
+          test "$remote_sha" = "$EXPECTED_SHA"
+
+      - name: Submit to TestFlight or closed alpha
+        if: ${{ inputs.submit_to_test_track }}
+        working-directory: ugc-mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          BUILD_ID: ${{ steps.build.outputs.build_id }}
+        run: |
+          set -euo pipefail
+          npx --yes eas-cli@21.2.0 submit \
+            --profile staging \
+            --platform "${{ matrix.platform }}" \
+            --id "$BUILD_ID" \
+            --non-interactive \
+            --wait

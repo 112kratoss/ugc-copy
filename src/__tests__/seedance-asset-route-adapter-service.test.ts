@@ -103,10 +103,10 @@ describe('Seedance asset route adapter service', () => {
     const createSeedanceAssetForRoute = vi.fn(async () => ({
       ok: true as const,
       body: {
-        success: true,
+        success: true as const,
         assetId: 'asset-123',
-        assetType: 'Video',
-        status: 'processing',
+        assetType: 'Video' as const,
+        status: 'processing' as const,
         rawStatus: 'processing',
         error: null,
         sourceUrl: 'https://signed.example.com/reference.mp4',
@@ -153,10 +153,10 @@ describe('Seedance asset route adapter service', () => {
     const getSeedanceAssetForRoute = vi.fn(async () => ({
       ok: true as const,
       body: {
-        success: true,
+        success: true as const,
         assetId: 'asset-456',
-        assetType: 'Audio',
-        status: 'active',
+        assetType: 'Audio' as const,
+        status: 'active' as const,
         rawStatus: 'Success',
         error: null,
         sourceUrl: 'https://signed.example.com/ref.wav',
@@ -192,10 +192,10 @@ describe('Seedance asset route adapter service', () => {
     const createSeedanceAssetForRoute = vi.fn(async () => ({
       ok: true as const,
       body: {
-        success: true,
+        success: true as const,
         assetId: 'asset-created',
-        assetType: 'Video',
-        status: 'processing',
+        assetType: 'Video' as const,
+        status: 'processing' as const,
         rawStatus: 'processing',
         error: null,
         sourceUrl: 'https://signed.example.com/reference.mp4',
@@ -205,10 +205,10 @@ describe('Seedance asset route adapter service', () => {
     const getSeedanceAssetForRoute = vi.fn(async () => ({
       ok: true as const,
       body: {
-        success: true,
+        success: true as const,
         assetId: 'asset-loaded',
-        assetType: 'Video',
-        status: 'active',
+        assetType: 'Video' as const,
+        status: 'active' as const,
         rawStatus: 'Success',
         error: null,
         sourceUrl: 'https://signed.example.com/reference.mp4',

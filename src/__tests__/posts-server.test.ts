@@ -19,13 +19,18 @@ type ResourceBundleRow = {
   status: 'published' | 'draft';
 };
 
+type TestDatabaseError = {
+  code: string;
+  message: string;
+};
+
 let resourceBundlesState: ResourceBundleRow[] = [];
-let rpcErrorState: unknown = null;
+let rpcErrorState: TestDatabaseError | null = null;
 let lastRpcResponseState: Array<Record<string, unknown>> | null = null;
 let rpcCallsState: string[] = [];
 let tableAccessesState: string[] = [];
 let selectedColumnsState: string[] = [];
-let tableQueryErrorState: unknown = null;
+let tableQueryErrorState: TestDatabaseError | null = null;
 
 function createThenableQuery<T extends Record<string, unknown>>(rows: T[]) {
   const filters: Array<(row: T) => boolean> = [];

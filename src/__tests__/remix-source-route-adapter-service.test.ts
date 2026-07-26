@@ -13,8 +13,14 @@ function createRequest(url: string) {
 describe('remix source route adapter service', () => {
   it('delegates source loading with generation and post ids using private no-store headers', async () => {
     const loadRemixSourceBundle = vi.fn(async () => ({
-      generation: { id: 'generation-1', title: 'Remix source' },
-      result: { mediaType: 'image', url: 'https://example.com/source.png' },
+      generation: {
+        id: 'generation-1',
+        title: 'Remix source',
+        prompt: 'A remix source prompt',
+        category: 'image' as const,
+        model: 'nano-banana-2',
+      },
+      result: { mediaType: 'image' as const, url: 'https://example.com/source.png' },
       inputs: {},
       inputMedia: [],
       workflowSettings: {},

@@ -88,9 +88,10 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       # Playwright boots its own dev server on :3100 with the E2E auth bypass
-      # (see playwright.config.ts). The specs stub every API route they touch,
-      # so placeholder Supabase/provider values are sufficient; the bypass
-      # stays dev-only because `next dev` never runs a production build.
+      # (see playwright.config.ts). The authenticated workflow test stubs only
+      # persistence APIs; public version and auth-boundary checks use the real
+      # app routes. The bypass stays dev-only because `next dev` never runs a
+      # production build.
       - name: Run E2E smoke tests
         run: npm run test:e2e
         env:
@@ -134,6 +135,9 @@ jobs:
       - name: Run Expo Doctor
         run: npx --yes expo-doctor@1.20.1
 
+      - name: Test production build environment guard
+        run: npm run release-env:self-test
+
       - name: Validate production native configuration
         run: npx expo prebuild --clean --no-install
         env:
@@ -174,7 +178,7 @@ jobs:
       - name: Install pinned Supabase CLI
         uses: supabase/setup-cli@v3
         with:
-          version: 2.75.0
+          version: 2.109.1
 
       - name: Start isolated Supabase database
         run: |

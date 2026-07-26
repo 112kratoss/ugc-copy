@@ -29,6 +29,17 @@ describe('app version route adapter service', () => {
   });
 
   it('falls back through deployment metadata before using the local development id', async () => {
+    const releaseResponse = await getAppVersionRouteResponse({
+      request: new Request('http://localhost/api/app-version'),
+      environment: {
+        RELEASE_GIT_SHA: 'release-commit-1',
+        VERCEL_GIT_COMMIT_SHA: 'git-commit-ignored',
+      },
+    });
+    await expect(releaseResponse.json()).resolves.toMatchObject({
+      buildId: 'release-commit-1',
+    });
+
     const deploymentIdResponse = await getAppVersionRouteResponse({
       request: new Request('http://localhost/api/app-version'),
       environment: {

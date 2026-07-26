@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { canUserCreateDurableUpload } from '@/lib/account-deletion-guard';
 import {
 } from '@/lib/generation-services';
 import { syncGenerationStatuses } from '@/lib/generation-status-sync';
@@ -604,6 +605,25 @@ export async function createTemplateInputUploadIntent(params: {
   const mimeType = typeof input.mimeType === 'string' ? input.mimeType.trim().toLowerCase() : '';
   const sizeBytes = Number(input.sizeBytes);
   validateTemplateInputDescriptor({ kind: slot.kind, mimeType, sizeBytes });
+  const deletionState = await canUserCreateDurableUpload(params.client, params.userId);
+  if (!deletionState.allowed) {
+    if (deletionState.error) {
+      logBackendError('template_input_account_deletion_guard_failed', {
+        error: deletionState.error,
+        userId: params.userId,
+      });
+      throw new MediaTemplateError(
+        'Failed to verify account upload eligibility.',
+        500,
+        'UPLOAD_ELIGIBILITY_FAILED',
+      );
+    }
+    throw new MediaTemplateError(
+      'Uploads are disabled because this account is being deleted.',
+      409,
+      'ACCOUNT_DELETION_IN_PROGRESS',
+    );
+  }
   const fileName = sanitizeUploadFileName(input.fileName, slot.kind, mimeType);
   const objectPath = `${params.userId}/${run.id}/staging/${slot.key}/${randomUUID()}-${fileName}`;
   const { data, error } = await params.client.storage.from(TEMPLATE_INPUT_BUCKET).createSignedUploadUrl(objectPath);

@@ -181,6 +181,7 @@ export async function reconcileRazorpayCreditPurchaseAdjustment(
   input: {
     transactionId: string;
     providerEventId: string;
+    paymentId: string;
     cumulativeReversedSubunits: number;
     action: 'reverse' | 'restore';
     reason: string;
@@ -192,6 +193,7 @@ export async function reconcileRazorpayCreditPurchaseAdjustment(
     {
       p_transaction_id: input.transactionId,
       p_provider_event_id: input.providerEventId,
+      p_payment_id: input.paymentId,
       p_cumulative_reversed_subunits: input.cumulativeReversedSubunits,
       p_action: input.action,
       p_reason: input.reason,

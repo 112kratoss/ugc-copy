@@ -120,7 +120,13 @@ describe('generation restore-media route adapter service', () => {
   it('delegates authenticated restore requests to the restore service with private headers', async () => {
     const adminSupabase = { kind: 'admin' } as unknown as SupabaseClient;
     const createServiceClient = vi.fn(() => adminSupabase);
-    const enforceBackendRateLimit = vi.fn(async () => undefined);
+    const enforceBackendRateLimit = vi.fn(async () => ({
+      allowed: true,
+      limit: 60,
+      remaining: 59,
+      retryAfterSeconds: 0,
+      resetAt: '2026-06-23T10:10:00.000Z',
+    }));
     const body = {
       storagePath: 'uploads/user-1/replacement.png',
       originalName: 'replacement.png',
@@ -129,7 +135,7 @@ describe('generation restore-media route adapter service', () => {
     const restoreGenerationMediaForRoute = vi.fn(async () => ({
       ok: true as const,
       body: {
-        success: true,
+        success: true as const,
         outputUrl: 'generated_images/user-1/restored-gen-1.png',
       },
     }));

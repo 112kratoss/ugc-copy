@@ -174,7 +174,7 @@ async function createPreview(row) {
     const upload = await supabase.storage
       .from(location.bucket)
       .upload(location.filePath, preview, {
-        cacheControl: '31536000',
+        cacheControl: '300',
         contentType: 'image/webp',
         upsert: true,
       });

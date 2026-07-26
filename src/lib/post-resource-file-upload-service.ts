@@ -12,7 +12,7 @@ import {
 import type { PostResourceAttachment } from '@/lib/post-resource-bundles';
 
 const RESOURCE_FILES_BUCKET = 'post_resource_files';
-const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
+export const MAX_POST_RESOURCE_FILE_SIZE_BYTES = 50 * 1024 * 1024;
 const RESOURCE_FILE_CONTENT_TYPE_BY_EXTENSION = new Map([
   ['.json', 'application/json'],
   ['.txt', 'text/plain'],
@@ -138,7 +138,7 @@ type UploadPostResourceFileParams = {
   createUploadId?: () => string;
 };
 
-function sanitizeFileName(fileName: string): string {
+export function sanitizePostResourceFileName(fileName: string): string {
   const originalExtension = path.extname(fileName);
   const extension = originalExtension.toLowerCase();
   const stem = path.basename(fileName, originalExtension).toLowerCase();
@@ -146,7 +146,7 @@ function sanitizeFileName(fileName: string): string {
   return `${safeStem}${extension || '.bin'}`;
 }
 
-function resolveResourceFileContentType(file: File): string | null {
+export function resolveResourceFileContentType(file: Pick<File, 'name' | 'type'>): string | null {
   const extension = path.extname(file.name).toLowerCase();
   const contentType = file.type.toLowerCase();
 
@@ -213,7 +213,7 @@ export async function uploadPostResourceFileForRoute({
     return { ok: false, status: 400, body: { error: 'Choose a workflow or resource file to upload.' } };
   }
 
-  if (file.size > MAX_FILE_SIZE_BYTES) {
+  if (file.size > MAX_POST_RESOURCE_FILE_SIZE_BYTES) {
     return { ok: false, status: 400, body: { error: 'Resource files must be 50MB or smaller.' } };
   }
 
@@ -228,7 +228,7 @@ export async function uploadPostResourceFileForRoute({
     };
   }
 
-  const safeName = sanitizeFileName(file.name);
+  const safeName = sanitizePostResourceFileName(file.name);
   const storagePath = `${userId}/${createUploadId()}-${safeName}`;
   const { error: uploadError } = await client.storage
     .from(RESOURCE_FILES_BUCKET)

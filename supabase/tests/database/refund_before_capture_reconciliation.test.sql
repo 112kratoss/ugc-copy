@@ -11,7 +11,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(21);
+select plan(24);
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
 values (
@@ -36,12 +36,22 @@ values
 -- ─── Refund before the grant ever applied ────────────────────────────────────
 
 select is(
-  public.reconcile_credit_purchase_adjustment(
+  public.reconcile_razorpay_credit_purchase_adjustment(
     '90000000-0000-4000-8000-000000000001'::uuid,
-    'razorpay', 'evt_before_grant', 49900, 'reverse', 'payment_refunded'
+    'evt_before_grant', 'pay_before_grant', 49900, 'reverse', 'payment_refunded'
   ) ->> 'base_credit_delta',
   '0',
   'a refund on an ungranted transaction reports a zero balance delta'
+);
+
+select is(
+  (
+    select razorpay_payment_id
+    from public.transactions
+    where id = '90000000-0000-4000-8000-000000000001'::uuid
+  ),
+  'pay_before_grant',
+  'refund-before-capture binds provider payment evidence atomically'
 );
 
 select is(
@@ -117,6 +127,21 @@ select is(
   (select credits from public.profiles where id = '00000000-0000-4000-8000-0000000000d1'::uuid),
   100,
   'no void-path event ever moved the balance'
+);
+
+select is(
+  public.reconcile_razorpay_credit_purchase_adjustment(
+    '90000000-0000-4000-8000-000000000002'::uuid,
+    'evt_payment_conflict', 'pay_before_grant', 1000, 'reverse', 'payment_refunded'
+  ) ->> 'status',
+  'payment_conflict',
+  'one Razorpay payment cannot be bound to two credit transactions'
+);
+
+select is(
+  (select status from public.transactions where id = '90000000-0000-4000-8000-000000000002'::uuid),
+  'created',
+  'a payment binding conflict leaves the second transaction untouched'
 );
 
 -- ─── Refund after the grant applied ──────────────────────────────────────────

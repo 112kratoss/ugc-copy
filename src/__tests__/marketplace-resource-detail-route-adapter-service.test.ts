@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
 
 import { getMarketplaceResourceDetailRouteResponse } from '@/lib/marketplace-resource-detail-route-adapter-service';
+import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 
 function createContext(resourceId = 'bundle-1') {
   return {
@@ -24,7 +26,7 @@ function createUserClient(userId: string | null = 'viewer-1') {
         error: null,
       })),
     },
-  };
+  } as unknown as SupabaseClient;
 }
 
 describe('marketplace resource detail route adapter service', () => {
@@ -33,7 +35,7 @@ describe('marketplace resource detail route adapter service', () => {
     const getPostResourceBundleDetailByPostId = vi.fn(async () => ({
       id: 'bundle-1',
       postId: 'post-1',
-    }));
+    } as unknown as PostResourceBundleDetail));
     const withProviderFetchRequestId = mockRequestIdPassthrough();
 
     const response = await getMarketplaceResourceDetailRouteResponse({
@@ -70,7 +72,7 @@ describe('marketplace resource detail route adapter service', () => {
     const getPostResourceBundleDetailByPostId = vi.fn(async () => ({
       id: 'bundle-1',
       postId: 'post-1',
-    }));
+    } as unknown as PostResourceBundleDetail));
 
     const response = await getMarketplaceResourceDetailRouteResponse({
       request: createRequest({

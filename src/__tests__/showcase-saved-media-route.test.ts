@@ -90,14 +90,14 @@ vi.mock('@/lib/server-helpers', () => ({
   }),
   createServiceClient: vi.fn(() => ({
     from: () => ({
-      select: vi.fn(() => ({
-        in: vi.fn(() => ({
-          eq: vi.fn(() => ({
-            data: [],
-            error: null,
-          })),
-        })),
-      })),
+      select: vi.fn(() => {
+        const query = {
+          in: vi.fn(() => query),
+          eq: vi.fn(() => query),
+          is: vi.fn(() => postsInResult()),
+        };
+        return query;
+      }),
     }),
     storage: {
       from: () => ({

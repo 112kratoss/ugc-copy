@@ -20,11 +20,16 @@ const mocks = vi.hoisted(() => ({
     void _options;
     return 0;
   }),
-  hasMobilePushMaintenanceWork: vi.fn(async (_client: unknown) => {
+  hasMobilePushMaintenanceWork: vi.fn(async (_client: unknown, _options?: unknown) => {
     void _client;
+    void _options;
     return true;
   }),
-  processMobilePushMaintenance: vi.fn(),
+  processMobilePushMaintenance: vi.fn(async (_client: unknown, _options?: unknown) => {
+    void _client;
+    void _options;
+    return {};
+  }),
   startBackendJobRun: vi.fn(async (_client, options: {
     name: string;
     route: string;
@@ -49,8 +54,12 @@ vi.mock('@/lib/mobile-notifications', async () => {
   const actual = await vi.importActual<typeof import('@/lib/mobile-notifications')>('@/lib/mobile-notifications');
   return {
     ...actual,
-    hasMobilePushMaintenanceWork: (...args: unknown[]) => mocks.hasMobilePushMaintenanceWork(...args),
-    processMobilePushMaintenance: (...args: unknown[]) => mocks.processMobilePushMaintenance(...args),
+    hasMobilePushMaintenanceWork: (client: unknown, options?: unknown) => (
+      mocks.hasMobilePushMaintenanceWork(client, options)
+    ),
+    processMobilePushMaintenance: (client: unknown, options?: unknown) => (
+      mocks.processMobilePushMaintenance(client, options)
+    ),
   };
 });
 

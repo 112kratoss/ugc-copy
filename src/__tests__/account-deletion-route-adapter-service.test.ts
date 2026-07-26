@@ -58,6 +58,7 @@ describe('account deletion route', () => {
     const calls: string[] = [];
     const removed: Array<{ bucket: string; paths: string[] }> = [];
     const invalidateShowcaseFeedCache = vi.fn();
+    const signOut = vi.fn(async () => ({ data: null, error: null }));
     const deleteUser = vi.fn(async (userId: string) => {
       calls.push(`delete:${userId}`);
       return { data: null, error: null };
@@ -69,7 +70,7 @@ describe('account deletion route', () => {
           auth: { getUser: vi.fn(async () => ({ data: { user: authenticatedUser() }, error: null })) },
         })) as never,
         createServiceClient: (() => ({
-          auth: { admin: { deleteUser } },
+          auth: { admin: { deleteUser, signOut } },
           rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
             calls.push(`rpc:${name}:${String(args.p_status ?? '')}`);
             if (name === 'prepare_account_deletion') {
@@ -123,9 +124,14 @@ describe('account deletion route', () => {
     });
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ success: true, deleted: true });
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      deleted: true,
+      cleanupPending: true,
+    });
     expect(calls.indexOf('delete:user-1')).toBeLessThan(calls.indexOf('rpc:mark_account_deletion_stage:completed'));
     expect(deleteUser).toHaveBeenCalledWith('user-1');
+    expect(signOut).toHaveBeenCalledWith('token', 'global');
     expect(calls.filter((call) => call.startsWith('rpc:mark_account_deletion_stage:'))).toEqual([
       'rpc:mark_account_deletion_stage:storage_deleting',
       'rpc:mark_account_deletion_stage:storage_deleted',
@@ -198,6 +204,7 @@ describe('account deletion route', () => {
     await expect(response.json()).resolves.toEqual({
       success: true,
       deleted: true,
+      cleanupPending: false,
       alreadyDeleted: true,
     });
     expect(deleteUser).not.toHaveBeenCalled();
@@ -210,6 +217,7 @@ describe('account deletion route', () => {
       data: null,
       error: { status: 404, message: 'User not found' },
     }));
+    const signOut = vi.fn(async () => ({ data: null, error: null }));
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
@@ -217,7 +225,7 @@ describe('account deletion route', () => {
           auth: { getUser: vi.fn(async () => ({ data: { user: authenticatedUser() }, error: null })) },
         })) as never,
         createServiceClient: (() => ({
-          auth: { admin: { deleteUser } },
+          auth: { admin: { deleteUser, signOut } },
           rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
             if (name === 'prepare_account_deletion') {
               return {
@@ -263,9 +271,76 @@ describe('account deletion route', () => {
     });
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ success: true, deleted: true });
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      deleted: true,
+      cleanupPending: true,
+    });
     expect(deleteUser).toHaveBeenCalledWith('user-1');
     expect(invalidateShowcaseFeedCache).toHaveBeenCalledOnce();
+  });
+
+  it('persists a retryable failure when global session revocation fails', async () => {
+    const deleteUser = vi.fn();
+    const stages: string[] = [];
+    const response = await deleteAccountRouteResponse({
+      request: request({ confirmation: 'DELETE' }),
+      dependencies: {
+        createUserClient: (() => ({
+          auth: { getUser: vi.fn(async () => ({ data: { user: authenticatedUser() }, error: null })) },
+        })) as never,
+        createServiceClient: (() => ({
+          auth: {
+            admin: {
+              deleteUser,
+              signOut: vi.fn(async () => ({
+                data: null,
+                error: { status: 500, message: 'Auth service unavailable' },
+              })),
+            },
+          },
+          rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+            if (name === 'prepare_account_deletion') {
+              return {
+                data: {
+                  status: 'prepared',
+                  storage_manifest: {
+                    user_prefix_buckets: [
+                      'profiles',
+                      'uploads',
+                      'generated_images',
+                      'generated_videos',
+                      'generated_audio',
+                      'generation_inputs',
+                      'post_resource_files',
+                      'template_inputs',
+                    ],
+                    showcase_media_paths: [],
+                    template_asset_prefixes: [],
+                  },
+                },
+                error: null,
+              };
+            }
+            stages.push(String(args.p_status));
+            return { data: { status: args.p_status }, error: null };
+          }),
+        })) as never,
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true,
+          limit: 3,
+          remaining: 2,
+          retryAfterSeconds: 0,
+          resetAt: new Date().toISOString(),
+        })),
+        logError: vi.fn(),
+        now: () => NOW,
+      },
+    });
+
+    expect(response.status).toBe(500);
+    expect(stages).toEqual(['storage_deleting', 'failed']);
+    expect(deleteUser).not.toHaveBeenCalled();
   });
 
   it('rate limits repeated permanent deletion attempts before changing account data', async () => {

@@ -15,8 +15,14 @@ import {
 import type { MarketplacePriceQuote } from '@/lib/marketplace';
 import {
   createRazorpayOrder as defaultCreateRazorpayOrder,
+  fetchRazorpayOrderByReceipt as defaultFetchRazorpayOrderByReceipt,
   type RazorpayOrderResponse,
 } from '@/lib/razorpay-orders';
+import {
+  claimRazorpayCheckoutIntent,
+  createOrRecoverRazorpayCheckoutOrder,
+  RazorpayCheckoutIntentError,
+} from '@/lib/razorpay-checkout-intents';
 
 type MarketplaceOrderAssetRow = {
   id: string;
@@ -33,7 +39,7 @@ export type MarketplaceOrderRouteResult =
     }
   | {
       ok: false;
-      status: 400 | 404 | 429 | 500;
+      status: 400 | 404 | 409 | 429 | 500;
       body: Record<string, unknown>;
       rateLimitError?: BackendRateLimitError;
     };
@@ -51,10 +57,11 @@ type CreateMarketplaceOrderParams = {
   adminSupabase: SupabaseClient;
   assetId: string;
   buyerUserId: string;
+  clientIntentKey: string;
   countryCode: string | null;
   createRazorpayOrder?: CreateRazorpayOrder;
+  fetchRazorpayOrderByReceipt?: typeof defaultFetchRazorpayOrderByReceipt;
   getMarketplacePriceQuote?: (priceUsdCents: number, countryCode?: string | null) => Promise<MarketplacePriceQuote>;
-  now?: () => number;
   randomId?: () => string;
 };
 
@@ -70,10 +77,6 @@ export function inferMarketplaceOrderCountryFromLocale(locale: string | null): s
     const match = locale.match(/-([A-Za-z]{2})\b/);
     return match ? match[1].toUpperCase() : null;
   }
-}
-
-function buildReceipt(userId: string, now: () => number) {
-  return `mkt_${userId.slice(0, 8)}_${now()}`;
 }
 
 function createRateLimitResult(error: BackendRateLimitError): MarketplaceOrderRouteResult {
@@ -95,10 +98,11 @@ export async function createMarketplaceOrderForRoute({
   adminSupabase,
   assetId,
   buyerUserId,
+  clientIntentKey,
   countryCode,
   createRazorpayOrder = defaultCreateRazorpayOrder,
+  fetchRazorpayOrderByReceipt = defaultFetchRazorpayOrderByReceipt,
   getMarketplacePriceQuote = defaultGetMarketplacePriceQuote,
-  now = Date.now,
   randomId = randomUUID,
 }: CreateMarketplaceOrderParams): Promise<MarketplaceOrderRouteResult> {
   try {
@@ -198,20 +202,89 @@ export async function createMarketplaceOrderForRoute({
   }
 
   const priceQuote = await getMarketplacePriceQuote(asset.price_usd_cents, countryCode);
-  const razorpayOrder = await createRazorpayOrder({
-    keyId: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
-    keySecret: process.env.RAZORPAY_KEY_SECRET,
-    amount: priceQuote.amountSubunits,
-    currency: priceQuote.currency,
-    receipt: buildReceipt(buyerUserId, now),
-    notes: {
-      asset_id: asset.id,
-      buyer_user_id: buyerUserId,
-    },
-  });
+  let checkoutIntent: Awaited<ReturnType<typeof claimRazorpayCheckoutIntent>>;
+  let razorpayOrder: RazorpayOrderResponse;
+  try {
+    checkoutIntent = await claimRazorpayCheckoutIntent(adminSupabase, {
+      userId: buyerUserId,
+      purchaseKind: 'marketplace',
+      clientIntentKey,
+      requestPayload: {
+        amount: priceQuote.amountSubunits,
+        assetId: asset.id,
+        currency: priceQuote.currency,
+      },
+    });
+    razorpayOrder = await createOrRecoverRazorpayCheckoutOrder({
+      adminSupabase,
+      claim: checkoutIntent,
+      userId: buyerUserId,
+      keyId: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+      keySecret: process.env.RAZORPAY_KEY_SECRET,
+      expectedAmount: priceQuote.amountSubunits,
+      expectedCurrency: priceQuote.currency,
+      fetchProviderOrderByReceipt: fetchRazorpayOrderByReceipt,
+      createProviderOrder: (receipt) => createRazorpayOrder({
+        keyId: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+        keySecret: process.env.RAZORPAY_KEY_SECRET,
+        amount: priceQuote.amountSubunits,
+        currency: priceQuote.currency,
+        receipt,
+        notes: {
+          asset_id: asset.id,
+          buyer_user_id: buyerUserId,
+          purchase_kind: 'marketplace',
+        },
+      }),
+    });
+  } catch (error) {
+    if (error instanceof RazorpayCheckoutIntentError) {
+      return {
+        ok: false,
+        status: error.status,
+        body: { error: error.message, code: error.code },
+      };
+    }
+    throw error;
+  }
 
   if (!razorpayOrder?.id) {
     return { ok: false, status: 500, body: { error: 'Failed to create Razorpay order.' } };
+  }
+
+  if (checkoutIntent.status === 'replay') {
+    const { data: existingOrder, error: existingOrderError } = await adminSupabase
+      .from('marketplace_orders')
+      .select('asset_id, buyer_user_id, amount_subunits, currency')
+      .eq('razorpay_order_id', razorpayOrder.id)
+      .maybeSingle();
+    if (existingOrderError) {
+      logBackendError('failed_to_load_replayed_marketplace_order', { error: existingOrderError });
+      return { ok: false, status: 500, body: { error: 'Failed to load order.' } };
+    }
+    if (existingOrder) {
+      if (
+        existingOrder.asset_id !== asset.id
+        || existingOrder.buyer_user_id !== buyerUserId
+        || existingOrder.amount_subunits !== priceQuote.amountSubunits
+        || existingOrder.currency !== priceQuote.currency
+      ) {
+        return { ok: false, status: 409, body: { error: 'Checkout details conflict with the recorded order.' } };
+      }
+      return {
+        ok: true,
+        body: {
+          success: true,
+          assetId: asset.id,
+          orderId: razorpayOrder.id,
+          amount: priceQuote.amountSubunits,
+          currency: priceQuote.currency,
+          displayPrice: priceQuote.formatted,
+          note: priceQuote.note,
+          listingTitle: asset.title,
+        },
+      };
+    }
   }
 
   const { error: orderInsertError } = await adminSupabase
@@ -226,6 +299,33 @@ export async function createMarketplaceOrderForRoute({
     });
 
   if (orderInsertError) {
+    if (orderInsertError.code === '23505') {
+      const { data: existingOrder } = await adminSupabase
+        .from('marketplace_orders')
+        .select('asset_id, buyer_user_id, amount_subunits, currency')
+        .eq('razorpay_order_id', razorpayOrder.id)
+        .maybeSingle();
+      if (
+        existingOrder?.asset_id === asset.id
+        && existingOrder.buyer_user_id === buyerUserId
+        && existingOrder.amount_subunits === priceQuote.amountSubunits
+        && existingOrder.currency === priceQuote.currency
+      ) {
+        return {
+          ok: true,
+          body: {
+            success: true,
+            assetId: asset.id,
+            orderId: razorpayOrder.id,
+            amount: priceQuote.amountSubunits,
+            currency: priceQuote.currency,
+            displayPrice: priceQuote.formatted,
+            note: priceQuote.note,
+            listingTitle: asset.title,
+          },
+        };
+      }
+    }
     logBackendError('failed_to_record_marketplace_order', { error: orderInsertError });
     return { ok: false, status: 500, body: { error: 'Failed to record order.' } };
   }

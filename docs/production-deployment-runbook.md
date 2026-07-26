@@ -1,6 +1,6 @@
 # Production Deployment And Operations Runbook
 
-Last updated: 2026-07-25
+Last updated: 2026-07-26
 
 ## Production Topology
 
@@ -11,7 +11,12 @@ Last updated: 2026-07-25
 - Production domains: `magicbooklet.com` and `www.magicbooklet.com`.
 - Background scheduler: `/api/cron/backend-jobs` every ten minutes.
 
-Vercel Git integration owns normal production deployments. Do not also run `vercel --prod` for the same commit. Manual production deployment is reserved for recovery when Git deployment is unavailable and must be recorded in the change history.
+`.github/workflows/production-release.yml` owns normal production releases. It runs
+only after every `Quality` job succeeds for the current `main` SHA, applies
+Supabase migrations, deploys the Edge Function, creates a production-configured
+Vercel deployment without assigning the domains, verifies that deployment, and
+only then promotes it. Vercel Git integration may continue to create previews,
+but it must not independently move the production domains for `main`.
 
 ## Required Environment Contract
 
@@ -33,6 +38,8 @@ The protected backend health endpoint reports only missing capability names, nev
 - Invite attribution hashing: `REFERRAL_ATTRIBUTION_HASH_SECRET` set to a dedicated long random secret.
 - Verified iOS links: `APPLE_TEAM_ID` and `IOS_BUNDLE_ID`.
 - Verified Android links: `ANDROID_APP_SHA256_FINGERPRINTS` and `ANDROID_PACKAGE_NAME`.
+- Release identity: `RELEASE_GIT_SHA` is injected by the production release
+  workflow. Do not configure it manually in Vercel.
 
 `NEXT_PUBLIC_APP_STORE_URL` and `NEXT_PUBLIC_PLAY_STORE_URL` are optional until their store listings are live. When present, they are the install fallbacks on public invite links.
 
@@ -74,7 +81,7 @@ npm run typecheck
 6. List production environment variable names without pulling values:
 
 ```bash
-npx --yes vercel@latest env ls production --format=json
+npx --yes vercel@57.0.0 env ls production --format=json
 ```
 
 7. Confirm Supabase security and performance advisors. Leaked-password protection must be enabled before broad public launch. Use percentage-based Auth database connections before increasing compute size.
@@ -83,6 +90,16 @@ npx --yes vercel@latest env ls production --format=json
 
 These settings are intentionally verified against the provider dashboards/advisors because they are outside the application codebase:
 
+- GitHub `production` environment: configure `SUPABASE_ACCESS_TOKEN`,
+  `SUPABASE_PROJECT_REF`, `VERCEL_ORG_ID`,
+  `VERCEL_PROJECT_ID`, `VERCEL_TOKEN`, and `OPS_READ_SECRET`; set
+  `PRODUCTION_BASE_URL` as an environment variable. Protect the environment
+  with the repository's chosen release approvers.
+- Vercel project: keep Git previews if useful, but disable independent automatic
+  production-domain assignment for `main`. Configure the `Quality` GitHub
+  Actions workflow as a required Deployment Check as a second guard. Verify
+  with a harmless release that a failed or still-running `Quality` workflow
+  cannot move `magicbooklet.com`; only `Production release` may promote it.
 - Supabase project `ildfmhozpibwiopeavfg`: enable leaked-password protection in Auth Email/password settings, then re-run security advisors until `auth_leaked_password_protection` is gone. Supabase docs: `https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection`.
 - Supabase project `ildfmhozpibwiopeavfg`: switch Auth database connections from the fixed `10` connection strategy to percentage-based allocation before increasing compute size, then re-run performance advisors until `auth_db_connections_absolute` is gone. Supabase docs: `https://supabase.com/docs/guides/deployment/going-into-prod`.
 - Google Auth Platform: set Branding app name to `Magicbooklet`, add `magicbooklet.com` as an authorized domain, publish/verify the OAuth consent screen, and keep the production Google OAuth client connected in Supabase Dashboard > Auth > Providers > Google. Supabase docs: `https://supabase.com/docs/guides/auth/social-login/auth-google`.
@@ -118,13 +135,18 @@ This probe does not replace the provider-dashboard gate. After it passes, send t
 ## Deployment Order
 
 1. Keep schema changes additive and compatible with the currently released web and mobile clients.
-2. Apply reviewed Supabase migrations with `supabase db push --linked --yes`.
-3. Re-run migration parity and critical metadata checks.
-4. Commit and push the verified code to `main` once.
-5. Allow the Git integration to create the production deployment. Do not start a second CLI deployment for the same commit.
-6. Wait for the deployment to reach `READY` and confirm the production alias points to the expected commit.
-7. Run the post-deployment smoke tests below.
+2. Commit and push the reviewed code to `main` once.
+3. `Quality` replays all migrations, runs database behavior tests, and verifies the web, E2E, and mobile gates.
+4. A successful `Quality` run triggers `Production release` for its exact SHA.
+5. The release workflow refuses stale SHAs, previews and applies Supabase migrations, and deploys `kie-webhook`.
+6. It creates a production-configured Vercel deployment with `--skip-domain`, verifies public and protected health plus `/api/app-version`, and checks `buildId` equals the quality-verified SHA.
+7. It re-checks that `main` has not advanced, promotes the staged deployment, and verifies the production domain serves the same SHA.
 8. Monitor runtime errors, backend alerts, provider failures, and payment reconciliation for at least one scheduler interval.
+
+If the release workflow fails before promotion, production domains remain on the
+last known-good deployment. Do not manually promote the staged deployment until
+the failed gate is understood. Manual production deployment is recovery-only and
+must be recorded in the change history.
 
 ## Generation Model Catalog Control Plane
 
@@ -237,7 +259,7 @@ If email/password sign-up is ever wanted:
 
 ## Durable Queue Graduation Decision
 
-Current decision: keep the Vercel cron orchestrator for `backend-alert-delivery`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `media-preview-repair`, `mobile-push-receipts`, `operational-data-retention`, and `referral-reward-reconciliation`.
+Current decision: keep the Vercel cron orchestrator for `account-deletion-resweeps`, `backend-alert-delivery`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `media-preview-repair`, `mobile-push-receipts`, `operational-data-retention`, and `referral-reward-reconciliation`.
 
 This is the cost-efficient production baseline for the current workload because the jobs are idempotent, lock-protected in Supabase, bounded by 300-second function limits, and tolerant of the current ten-minute or hourly cadence. The single `/api/cron/backend-jobs` scheduler keeps Vercel cron invocations at 144 per day while logical jobs can still run at their own cadence.
 
@@ -299,7 +321,18 @@ Use Vercel rollback or promote the last known-good deployment. Verify custom dom
 
 Production migrations are forward-only. Do not run destructive down migrations during an incident. Prefer a corrective additive migration, restore a feature flag/default, or temporarily disable the affected route.
 
-Point-in-time recovery is **not available on this project** — PITR is an unpurchased Supabase add-on (see Accepted blind spots under External Monitoring). Recovery means restoring the most recent *daily* physical backup, so confirmed data loss or corruption costs up to 24 hours of writes and still requires an application write freeze while restoring. Storage objects are not covered by those backups at all. Weigh a restore against corrective forward migration accordingly: for anything short of broad corruption, fixing forward loses less data than restoring.
+Supabase scheduled daily physical database backups are active for the production
+project. They provide a database recovery point with a worst-case recovery point
+objective of roughly 24 hours. Point-in-time recovery is available only as a
+paid provider add-on and is not enabled for the lean launch.
+
+Supabase database backups do not restore deleted Storage objects. There is no
+independent Storage backup for the lean launch, so accidental or malicious
+deletion of uploaded/generated media may be irreversible. This is an explicitly
+accepted launch risk. During a real incident, freeze writes, preserve provider
+webhooks, contact Supabase support when appropriate, restore the selected
+database backup into an isolated project first, and prefer forward corrective
+migrations over destructive rollback.
 
 ### Provider And Spend Containment
 
@@ -318,6 +351,7 @@ Point-in-time recovery is **not available on this project** — PITR is an unpur
 | Payment reconciliation failure | Any failed verified payment/refund event | Stop the affected purchase path if repeated, preserve event payload/id, reconcile idempotently. |
 | Provider errors | Five failures or three timeouts in one hour | Check provider status and latency, reduce retries, disable only the affected model/provider when necessary. |
 | Media repair backlog | Repairable assets remain after two hourly repair windows | Check storage read/write access, source URL expiry, FFmpeg/runtime limits, and job locks. |
+| Moderation queue age or volume | Oldest report reaches 4 hours, or 10 reports remain open | Page the staffed moderation role, review the oldest/highest-risk reports first, and follow `docs/moderation-operations.md`. A 24-hour-old report or 25 open reports is degraded. |
 | Missing environment capability | Any item in backend health `environment.missing` | Treat as a release blocker for the affected capability and restore the production variable. |
 | Spend anomaly | Daily provider spend or failed paid cost exceeds its configured budget | Disable new paid work for the affected provider, preserve reconciliation, and investigate pricing or abuse. |
 
@@ -348,7 +382,7 @@ Use `/api/ops/backend-dashboard` as the primary dashboard feed. Use `/api/ops/ba
 
 **Standing decision: no third-party monitoring services and no paid platform add-ons.** Observability is built from what the existing GitHub, Vercel, and Supabase plans already provide. The accepted blind spots this leaves are recorded below — they are deliberate, not oversights, and should be revisited if the product starts carrying meaningful revenue.
 
-### 1. Watchdog (in repo, active)
+### 1. Watchdog (repository-controlled; activation must be verified)
 
 The scheduler cannot report its own death: alert generation *and* alert delivery both run inside `/api/cron/backend-jobs`, so a dead cron, broken deploy, or bad `CRON_SECRET` silences the very thing that would report it.
 
@@ -362,7 +396,7 @@ curl -fsS -m 20 \
 
 A failing run sends GitHub's standard workflow-failure email to the repo owner; that email **is** the alert channel. The workflow fails on: no response (platform or deploy down), `401`/`403` (the secret drifted from production), `503` (the app itself reporting degraded health), or any other non-`200`.
 
-**Operator setup — the watchdog is inert until this is done.** Add `OPS_READ_SECRET` under *Settings → Secrets and variables → Actions* with the same value as the Vercel Production variable. Without it the workflow logs a loud warning and exits successfully rather than emailing every hour. Optionally set a `PRODUCTION_BASE_URL` repository variable to override the default domain. When rotating `OPS_READ_SECRET`, update the GitHub secret before removing `OPS_READ_SECRET_PREVIOUS` from Vercel.
+**Operator setup — the watchdog fails until this is done.** Add `OPS_READ_SECRET` under *Settings → Secrets and variables → Actions* with the same value as the Vercel Production variable. Without it the workflow exits with an error so missing configuration cannot appear green. Optionally set a valid HTTPS `PRODUCTION_BASE_URL` repository variable to override the default domain. When rotating `OPS_READ_SECRET`, update the GitHub secret before removing `OPS_READ_SECRET_PREVIOUS` from Vercel. A launch sign-off must link a successful manual watchdog run; the workflow file alone is not evidence that monitoring is active.
 
 Cost: each run bills roughly one GitHub Actions minute on a private repo (hourly ≈ 720/month against the 2,000-minute free allowance, leaving headroom for CI); public repos bill nothing. Adjust the `cron:` expression to trade detection latency against minutes.
 
@@ -374,10 +408,15 @@ Outbound alert *push* silently no-ops when unset: the `backend-alert-delivery` j
 
 These are known gaps, consciously left open under the no-third-party, no-paid-add-on decision:
 
-- **No error tracking (web or mobile).** Unhandled client-side exceptions and mobile crashes are not reported anywhere. Treat user reports of blank screens or crashes as the only signal, and reproduce locally. Backend faults *are* covered, via `backend-health` and the watchdog.
+- **No dedicated client error tracking.** Review native iOS crash reports in App
+  Store Connect and Android crashes in Google Play Console. Browser exceptions
+  and handled mobile JavaScript errors depend on user reports and reproduction.
+  Backend faults are covered by `backend-health` and the watchdog.
 - **No log drain.** Vercel function logs expire with the plan's retention, so post-incident reconstruction is limited to that window. When an incident happens, capture the relevant logs *before* they age out. The app emits single-line structured JSON via `backend-logger`, so copying the raw lines out of the Vercel log view preserves everything needed.
-- **No PITR.** Recovery is limited to Supabase's daily physical backups, so worst-case data loss is up to 24 hours. The Database Recovery section's PITR procedure is therefore **not currently executable** — restoring means accepting the most recent daily backup.
-- **Storage objects are not backed up at all.** Supabase database backups exclude the Storage API, so generated media and uploads have no recovery path. A bucket-level deletion is unrecoverable.
+- **No PITR until the paid provider add-on is activated.** Supabase scheduled
+  physical database backups have a daily RPO; they are not continuous recovery.
+- **No independent Storage recovery.** Supabase database backups do not cover
+  Storage objects, and the lean launch has no off-platform media backup.
 - **No mobile OTA channel.** Every client fix requires a store release; the server-side 426 gate is the only fast lever, and it can only push users toward a build that must already be approved.
 
 ## Performance Monitoring And Load Budgets

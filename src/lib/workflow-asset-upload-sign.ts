@@ -6,6 +6,7 @@ import {
   WORKFLOW_ASSET_UPLOAD_SIGN_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { canUserCreateDurableUpload } from '@/lib/account-deletion-guard';
 import { isAllowedStorageBucketMimeType } from '@/lib/storage-upload-mime-policy';
 
 const SIGNED_UPLOAD_EXPIRES_IN_SECONDS = 2 * 60 * 60;
@@ -184,6 +185,21 @@ export async function createWorkflowAssetUploadIntent({
   }
 
   const resolvedClient = resolveClient(client);
+  const deletionState = await canUserCreateDurableUpload(resolvedClient, userId);
+  if (!deletionState.allowed) {
+    return deletionState.error
+      ? {
+          ok: false,
+          status: 500,
+          error: 'Failed to verify account upload eligibility.',
+        }
+      : {
+          ok: false,
+          status: 409,
+          code: 'ACCOUNT_DELETION_IN_PROGRESS',
+          error: 'Uploads are disabled because this account is being deleted.',
+        };
+  }
 
   try {
     await enforceBackendRateLimit(resolvedClient, {

@@ -36,7 +36,14 @@ function createServiceClientMock() {
   const updateIs = vi.fn(async () => ({ data: null, error: null }));
   const update = vi.fn(() => ({ eq: updateEq }));
   const from = vi.fn(() => ({ update }));
-  const rpc = vi.fn(async () => ({
+  const rpc = vi.fn(async (): Promise<{
+    data: {
+      status: string;
+      generation_id: string;
+      prediction_id: string | null;
+    };
+    error: null;
+  }> => ({
     data: { status: 'attached', generation_id: 'gen-1', prediction_id: 'task-1' },
     error: null,
   }));

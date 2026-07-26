@@ -12,6 +12,12 @@ import {
   RAZORPAY_WEBHOOK_PROCESSING_SERVICE_NAME,
   recordPaymentWebhookProcessingFailure,
 } from '@/lib/provider-dependency-telemetry';
+import { verifyRazorpayPaymentAgainstOrder } from '@/lib/razorpay-payment-verification';
+import {
+  parseRazorpayPaymentResponse,
+  RazorpayPaymentError,
+  type RazorpayPaymentResponse,
+} from '@/lib/razorpay-orders';
 import { reconcileRazorpayCreditPurchaseAdjustment } from '@/lib/referral-reward-service';
 
 type CreditTransactionRow = {
@@ -28,6 +34,9 @@ type CreditTransactionRow = {
 type OrderRow = {
   id: string;
   buyer_user_id: string;
+  amount_subunits: number;
+  currency: string;
+  razorpay_payment_id?: string | null;
   status: 'created' | 'paid' | string;
 };
 
@@ -50,6 +59,10 @@ type RazorpayWebhookEvent = {
         order_id?: unknown;
         amount?: unknown;
         amount_refunded?: unknown;
+        currency?: unknown;
+        status?: unknown;
+        captured?: unknown;
+        notes?: unknown;
       };
     };
     refund?: {
@@ -119,10 +132,50 @@ export async function processRazorpayWebhookForRoute({
     }, getSupabaseAdmin());
   }
 
-  async function handleCreditTransaction(orderId: string, paymentId: string): Promise<HandlerResult> {
+  function isCapturedPaymentValid({
+    buyerNoteKey,
+    expectedAmount,
+    expectedBuyerUserId,
+    expectedCurrency,
+    payment,
+    purchaseKind,
+  }: {
+    buyerNoteKey: 'user_id' | 'buyer_user_id';
+    expectedAmount: number;
+    expectedBuyerUserId: string;
+    expectedCurrency: string;
+    payment: RazorpayPaymentResponse;
+    purchaseKind: 'credits' | 'marketplace' | 'post_resource';
+  }): boolean {
+    const verification = verifyRazorpayPaymentAgainstOrder({
+      payment,
+      expectedPaymentId: payment.id,
+      expectedOrderId: payment.orderId,
+      expectedAmount,
+      expectedCurrency,
+      expectedBuyerUserId,
+      buyerNoteKey,
+    });
+    if (verification.state !== 'captured') {
+      logBackendError('razorpay_webhook_payment_validation_failed', {
+        orderId: payment.orderId,
+        purchaseKind,
+        reason: verification.state === 'rejected'
+          ? verification.reason
+          : 'payment_not_captured',
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  async function handleCreditTransaction(payment: RazorpayPaymentResponse): Promise<HandlerResult> {
+    const orderId = payment.orderId;
+    const paymentId = payment.id;
     const { data: txn, error: txnError } = await getSupabaseAdmin()
       .from('transactions')
-      .select('id, user_id, credits, status, razorpay_payment_id, credit_effect_applied')
+      .select('id, user_id, credits, amount, status, razorpay_payment_id, credit_effect_applied')
       .eq('razorpay_order_id', orderId)
       .maybeSingle();
 
@@ -136,6 +189,39 @@ export async function processRazorpayWebhookForRoute({
 
     if (!typedTxn) {
       return { handled: false, shouldRetry: false };
+    }
+
+    if (typedTxn.status === 'failed' || typedTxn.status === 'refunded') {
+      logBackendInfo('razorpay_webhook_credit_transaction_not_fulfillable', {
+        orderId,
+        status: typedTxn.status,
+      });
+      return { handled: true, shouldRetry: false };
+    }
+
+    if (
+      !Number.isSafeInteger(typedTxn.amount)
+      || !isCapturedPaymentValid({
+        payment,
+        expectedAmount: typedTxn.amount ?? -1,
+        expectedCurrency: 'INR',
+        expectedBuyerUserId: typedTxn.user_id,
+        buyerNoteKey: 'user_id',
+        purchaseKind: 'credits',
+      })
+    ) {
+      return { handled: true, shouldRetry: false };
+    }
+
+    if (
+      typedTxn.status === 'success'
+      && typedTxn.razorpay_payment_id !== paymentId
+    ) {
+      logBackendError('razorpay_webhook_credit_payment_id_conflict', {
+        orderId,
+        transactionId: typedTxn.id,
+      });
+      return { handled: true, shouldRetry: false };
     }
 
     if (typedTxn.status === 'success') {
@@ -229,12 +315,14 @@ export async function processRazorpayWebhookForRoute({
   async function applyCreditPurchaseAdjustment({
     action,
     cumulativeReversedSubunits,
+    paymentId,
     providerEventId,
     reason,
     transaction,
   }: {
     action: 'reverse' | 'restore';
     cumulativeReversedSubunits: number;
+    paymentId: string;
     providerEventId: string;
     reason: string;
     transaction: CreditTransactionRow;
@@ -243,6 +331,7 @@ export async function processRazorpayWebhookForRoute({
       const settlement = await reconcileRazorpayCreditPurchaseAdjustment(getSupabaseAdmin(), {
         transactionId: transaction.id,
         providerEventId,
+        paymentId,
         cumulativeReversedSubunits,
         action,
         reason,
@@ -255,6 +344,78 @@ export async function processRazorpayWebhookForRoute({
     }
   }
 
+  async function applyCommerceAdjustment({
+    action,
+    paymentId,
+    providerOrderId,
+    providerEventId,
+    reason,
+  }: {
+    action: 'refund' | 'dispute' | 'restore';
+    paymentId: string;
+    providerOrderId: string;
+    providerEventId: string;
+    reason: string;
+  }): Promise<HandlerResult> {
+    const rpcNames = [
+      'reconcile_marketplace_cash_adjustment',
+      'reconcile_post_resource_cash_adjustment',
+    ] as const;
+
+    for (const rpcName of rpcNames) {
+      const { data, error } = await getSupabaseAdmin().rpc(rpcName, {
+        p_provider_event_id: providerEventId,
+        p_payment_id: paymentId,
+        p_provider_order_id: providerOrderId || null,
+        p_action: action,
+        p_reason: reason,
+      });
+      if (error) {
+        logBackendError('razorpay_webhook_commerce_adjustment_failed', {
+          action,
+          paymentId,
+          providerEventId,
+          purchaseKind: rpcName === 'reconcile_marketplace_cash_adjustment'
+            ? 'marketplace'
+            : 'post_resource',
+          error,
+        });
+        return { handled: true, shouldRetry: true };
+      }
+
+      const status = data && typeof data === 'object' && 'status' in data
+        ? stringValue((data as { status?: unknown }).status)
+        : '';
+      if (status === 'not_found') {
+        continue;
+      }
+      if (
+        status === 'entitlement_missing'
+        || status === 'order_conflict'
+        || status === 'payment_conflict'
+        || !status
+      ) {
+        logBackendError('razorpay_webhook_commerce_adjustment_unresolved', {
+          action,
+          paymentId,
+          providerEventId,
+          status: status || 'invalid_rpc_response',
+        });
+        return { handled: true, shouldRetry: true };
+      }
+
+      if (status === 'manual_review') {
+        logBackendInfo('razorpay_webhook_commerce_restore_requires_manual_review', {
+          paymentId,
+          providerEventId,
+        });
+      }
+      return { handled: true, shouldRetry: false };
+    }
+
+    return { handled: false, shouldRetry: false };
+  }
+
   async function handleRefundProcessed(): Promise<HandlerResult> {
     const refund = event.payload?.refund?.entity;
     const payment = event.payload?.payment?.entity;
@@ -263,7 +424,7 @@ export async function processRazorpayWebhookForRoute({
     const orderId = stringValue(payment?.order_id);
     const cumulativeRefunded = nonNegativeInteger(payment?.amount_refunded);
 
-    if (!refundId || !paymentId || cumulativeRefunded === null) {
+    if (!refundId || !paymentId) {
       logBackendError('razorpay_webhook_invalid_refund_payload');
       return { handled: true, shouldRetry: false };
     }
@@ -275,7 +436,19 @@ export async function processRazorpayWebhookForRoute({
       logBackendError('razorpay_webhook_refunded_transaction_load_failed', { error });
       return { handled: true, shouldRetry: true };
     }
-    if (!transaction) return { handled: false, shouldRetry: false };
+    if (!transaction) {
+      return applyCommerceAdjustment({
+        action: 'refund',
+        paymentId,
+        providerOrderId: orderId,
+        providerEventId: `refund:${refundId}`,
+        reason: 'razorpay_refund_processed',
+      });
+    }
+    if (cumulativeRefunded === null) {
+      logBackendError('razorpay_webhook_missing_credit_refund_total', { refundId });
+      return { handled: true, shouldRetry: false };
+    }
     if (!transaction.amount || cumulativeRefunded > transaction.amount) {
       logBackendError('razorpay_webhook_invalid_refund_amount', { refundId });
       return { handled: true, shouldRetry: false };
@@ -284,6 +457,7 @@ export async function processRazorpayWebhookForRoute({
     return applyCreditPurchaseAdjustment({
       action: 'reverse',
       cumulativeReversedSubunits: cumulativeRefunded,
+      paymentId,
       providerEventId: `refund:${refundId}`,
       reason: 'razorpay_refund_processed',
       transaction,
@@ -298,6 +472,11 @@ export async function processRazorpayWebhookForRoute({
     const orderId = stringValue(payment?.order_id);
     const disputeAmount = nonNegativeInteger(dispute?.amount);
     const paymentRefunded = nonNegativeInteger(payment?.amount_refunded) ?? 0;
+    const isReverseEvent = eventName === 'payment.dispute.created'
+      || eventName === 'payment.dispute.action_required'
+      || eventName === 'payment.dispute.under_review'
+      || eventName === 'payment.dispute.lost'
+      || eventName === 'payment.dispute.closed';
     if (!disputeId || !paymentId || disputeAmount === null || disputeAmount <= 0) {
       logBackendError('razorpay_webhook_invalid_dispute_payload', { eventName });
       return { handled: true, shouldRetry: false };
@@ -310,7 +489,27 @@ export async function processRazorpayWebhookForRoute({
       logBackendError('razorpay_webhook_disputed_transaction_load_failed', { error });
       return { handled: true, shouldRetry: true };
     }
-    if (!transaction) return { handled: false, shouldRetry: false };
+    if (!transaction) {
+      if (eventName === 'payment.dispute.won') {
+        return applyCommerceAdjustment({
+          action: 'restore',
+          paymentId,
+          providerOrderId: orderId,
+          providerEventId: `dispute:${disputeId}:won`,
+          reason: 'razorpay_dispute_won',
+        });
+      }
+      if (isReverseEvent) {
+        return applyCommerceAdjustment({
+          action: 'dispute',
+          paymentId,
+          providerOrderId: orderId,
+          providerEventId: `dispute:${disputeId}:reverse`,
+          reason: 'razorpay_dispute_opened',
+        });
+      }
+      return { handled: false, shouldRetry: false };
+    }
     const amount = transaction.amount ?? 0;
     if (amount <= 0 || disputeAmount > amount || paymentRefunded > amount) {
       return { handled: true, shouldRetry: false };
@@ -321,19 +520,21 @@ export async function processRazorpayWebhookForRoute({
       return applyCreditPurchaseAdjustment({
         action: 'restore',
         cumulativeReversedSubunits: Math.max(paymentRefunded, currentReversed - disputeAmount),
+        paymentId,
         providerEventId: `dispute:${disputeId}:won`,
         reason: 'razorpay_dispute_won',
         transaction,
       });
     }
 
-    if (eventName === 'payment.dispute.created' || eventName === 'payment.dispute.action_required') {
+    if (isReverseEvent) {
       return applyCreditPurchaseAdjustment({
         action: 'reverse',
         cumulativeReversedSubunits: Math.min(
           amount,
           Math.max(currentReversed, paymentRefunded) + disputeAmount,
         ),
+        paymentId,
         providerEventId: `dispute:${disputeId}:reverse`,
         reason: 'razorpay_dispute_opened',
         transaction,
@@ -343,10 +544,12 @@ export async function processRazorpayWebhookForRoute({
     return { handled: true, shouldRetry: false };
   }
 
-  async function handleMarketplaceOrder(orderId: string, paymentId: string): Promise<HandlerResult> {
+  async function handleMarketplaceOrder(payment: RazorpayPaymentResponse): Promise<HandlerResult> {
+    const orderId = payment.orderId;
+    const paymentId = payment.id;
     const { data: marketplaceOrder, error: marketplaceOrderError } = await getSupabaseAdmin()
       .from('marketplace_orders')
-      .select('id, status, buyer_user_id')
+      .select('id, status, buyer_user_id, amount_subunits, currency, razorpay_payment_id')
       .eq('razorpay_order_id', orderId)
       .maybeSingle();
 
@@ -362,12 +565,44 @@ export async function processRazorpayWebhookForRoute({
       return { handled: false, shouldRetry: false };
     }
 
+    if (
+      typedMarketplaceOrder.status === 'failed'
+      || typedMarketplaceOrder.status === 'refunded'
+    ) {
+      logBackendInfo('razorpay_webhook_marketplace_order_not_fulfillable', {
+        orderId,
+        status: typedMarketplaceOrder.status,
+      });
+      return { handled: true, shouldRetry: false };
+    }
+
+    if (!isCapturedPaymentValid({
+      payment,
+      expectedAmount: typedMarketplaceOrder.amount_subunits,
+      expectedCurrency: typedMarketplaceOrder.currency,
+      expectedBuyerUserId: typedMarketplaceOrder.buyer_user_id,
+      buyerNoteKey: 'buyer_user_id',
+      purchaseKind: 'marketplace',
+    })) {
+      return { handled: true, shouldRetry: false };
+    }
+    if (
+      isPaidStatus(typedMarketplaceOrder)
+      && typedMarketplaceOrder.razorpay_payment_id !== paymentId
+    ) {
+      logBackendError('razorpay_webhook_marketplace_payment_id_conflict', {
+        orderId,
+        marketplaceOrderId: typedMarketplaceOrder.id,
+      });
+      return { handled: true, shouldRetry: false };
+    }
+
     if (isPaidStatus(typedMarketplaceOrder)) {
       logBackendInfo('razorpay_webhook_marketplace_order_already_processed', { orderId });
       return { handled: true, shouldRetry: false };
     }
 
-    const { error: rpcError } = await getSupabaseAdmin().rpc('complete_marketplace_purchase', {
+    const { data: completionResult, error: rpcError } = await getSupabaseAdmin().rpc('complete_marketplace_purchase', {
       p_razorpay_order_id: orderId,
       p_razorpay_payment_id: paymentId,
     });
@@ -377,14 +612,46 @@ export async function processRazorpayWebhookForRoute({
       return { handled: true, shouldRetry: true };
     }
 
+    if (!completionResult) {
+      const { data: refreshedOrder, error: refreshedOrderError } = await getSupabaseAdmin()
+        .from('marketplace_orders')
+        .select('status, razorpay_payment_id')
+        .eq('razorpay_order_id', orderId)
+        .maybeSingle();
+
+      if (refreshedOrderError) {
+        logBackendError('razorpay_webhook_marketplace_order_reload_failed', {
+          orderId,
+          error: refreshedOrderError,
+        });
+        return { handled: true, shouldRetry: true };
+      }
+      if (
+        isPaidStatus((refreshedOrder as { status?: unknown } | null) ?? null)
+        && refreshedOrder?.razorpay_payment_id === paymentId
+      ) {
+        logBackendInfo('razorpay_webhook_marketplace_order_completed_concurrently', { orderId });
+        return { handled: true, shouldRetry: false };
+      }
+      if (refreshedOrder?.status === 'failed' || refreshedOrder?.status === 'refunded') {
+        logBackendInfo('razorpay_webhook_marketplace_order_reversed_concurrently', { orderId });
+        return { handled: true, shouldRetry: false };
+      }
+
+      logBackendError('razorpay_webhook_marketplace_order_unresolved', { orderId });
+      return { handled: true, shouldRetry: true };
+    }
+
     logBackendInfo('razorpay_webhook_marketplace_purchase_completed', { buyerUserId: typedMarketplaceOrder.buyer_user_id, orderId });
     return { handled: true, shouldRetry: false };
   }
 
-  async function handlePostResourceBundleOrder(orderId: string, paymentId: string): Promise<HandlerResult> {
+  async function handlePostResourceBundleOrder(payment: RazorpayPaymentResponse): Promise<HandlerResult> {
+    const orderId = payment.orderId;
+    const paymentId = payment.id;
     const { data: bundleOrder, error: bundleOrderError } = await getSupabaseAdmin()
       .from('post_resource_bundle_orders')
-      .select('id, status, buyer_user_id')
+      .select('id, status, buyer_user_id, amount_subunits, currency, razorpay_payment_id')
       .eq('razorpay_order_id', orderId)
       .maybeSingle();
 
@@ -396,6 +663,35 @@ export async function processRazorpayWebhookForRoute({
 
     if (!typedBundleOrder) {
       return { handled: false, shouldRetry: false };
+    }
+
+    if (typedBundleOrder.status === 'failed' || typedBundleOrder.status === 'refunded') {
+      logBackendInfo('razorpay_webhook_bundle_order_not_fulfillable', {
+        orderId,
+        status: typedBundleOrder.status,
+      });
+      return { handled: true, shouldRetry: false };
+    }
+
+    if (!isCapturedPaymentValid({
+      payment,
+      expectedAmount: typedBundleOrder.amount_subunits,
+      expectedCurrency: typedBundleOrder.currency,
+      expectedBuyerUserId: typedBundleOrder.buyer_user_id,
+      buyerNoteKey: 'buyer_user_id',
+      purchaseKind: 'post_resource',
+    })) {
+      return { handled: true, shouldRetry: false };
+    }
+    if (
+      isPaidStatus(typedBundleOrder)
+      && typedBundleOrder.razorpay_payment_id !== paymentId
+    ) {
+      logBackendError('razorpay_webhook_bundle_payment_id_conflict', {
+        orderId,
+        resourceOrderId: typedBundleOrder.id,
+      });
+      return { handled: true, shouldRetry: false };
     }
 
     if (isPaidStatus(typedBundleOrder)) {
@@ -419,7 +715,7 @@ export async function processRazorpayWebhookForRoute({
     if (!completionResult) {
       const { data: refreshedOrder, error: refreshedOrderError } = await getSupabaseAdmin()
         .from('post_resource_bundle_orders')
-        .select('status')
+        .select('status, razorpay_payment_id')
         .eq('razorpay_order_id', orderId)
         .maybeSingle();
 
@@ -428,8 +724,15 @@ export async function processRazorpayWebhookForRoute({
         return { handled: true, shouldRetry: true };
       }
 
-      if (isPaidStatus((refreshedOrder as { status?: unknown } | null) ?? null)) {
+      if (
+        isPaidStatus((refreshedOrder as { status?: unknown } | null) ?? null)
+        && refreshedOrder?.razorpay_payment_id === paymentId
+      ) {
         logBackendInfo('razorpay_webhook_bundle_order_completed_concurrently', { orderId });
+        return { handled: true, shouldRetry: false };
+      }
+      if (refreshedOrder?.status === 'failed' || refreshedOrder?.status === 'refunded') {
+        logBackendInfo('razorpay_webhook_bundle_order_reversed_concurrently', { orderId });
         return { handled: true, shouldRetry: false };
       }
 
@@ -446,8 +749,8 @@ export async function processRazorpayWebhookForRoute({
   if (event.event === 'refund.processed') {
     const result = await handleRefundProcessed();
     if (result.shouldRetry) {
-      await recordProcessingFailure('credit_refund_reconciliation_failed');
-      return { status: 500, body: 'Failed to reconcile credit refund' };
+      await recordProcessingFailure('payment_refund_reconciliation_failed');
+      return { status: 500, body: 'Failed to reconcile payment refund' };
     }
     return { status: 200, body: 'OK' };
   }
@@ -455,8 +758,8 @@ export async function processRazorpayWebhookForRoute({
   if (typeof event.event === 'string' && event.event.startsWith('payment.dispute.')) {
     const result = await handleDisputeEvent(event.event);
     if (result.shouldRetry) {
-      await recordProcessingFailure('credit_dispute_reconciliation_failed');
-      return { status: 500, body: 'Failed to reconcile credit dispute' };
+      await recordProcessingFailure('payment_dispute_reconciliation_failed');
+      return { status: 500, body: 'Failed to reconcile payment dispute' };
     }
     return { status: 200, body: 'OK' };
   }
@@ -465,21 +768,23 @@ export async function processRazorpayWebhookForRoute({
     return { status: 200, body: 'OK' };
   }
 
-  const payment = event.payload?.payment?.entity;
-  if (!payment) {
+  const paymentEntity = event.payload?.payment?.entity;
+  if (!paymentEntity) {
     logBackendError('razorpay_webhook_missing_payment_entity');
     return { status: 200, body: 'OK' };
   }
 
-  const orderId = typeof payment.order_id === 'string' ? payment.order_id : '';
-  const paymentId = typeof payment.id === 'string' ? payment.id : '';
-
-  if (!orderId) {
-    logBackendError('razorpay_webhook_missing_order_id');
+  let payment: RazorpayPaymentResponse;
+  try {
+    payment = parseRazorpayPaymentResponse(paymentEntity);
+  } catch (error) {
+    logBackendError('razorpay_webhook_invalid_captured_payment_entity', {
+      error: error instanceof RazorpayPaymentError ? error.message : error,
+    });
     return { status: 200, body: 'OK' };
   }
 
-  const creditResult = await handleCreditTransaction(orderId, paymentId);
+  const creditResult = await handleCreditTransaction(payment);
   if (creditResult.shouldRetry) {
     await recordProcessingFailure('credit_transaction_settlement_failed');
     return { status: 500, body: 'Failed to assign credits' };
@@ -488,7 +793,7 @@ export async function processRazorpayWebhookForRoute({
     return { status: 200, body: 'OK' };
   }
 
-  const marketplaceResult = await handleMarketplaceOrder(orderId, paymentId);
+  const marketplaceResult = await handleMarketplaceOrder(payment);
   if (marketplaceResult.shouldRetry) {
     await recordProcessingFailure('marketplace_purchase_settlement_failed');
     return { status: 500, body: 'Failed to finalize marketplace purchase' };
@@ -497,7 +802,7 @@ export async function processRazorpayWebhookForRoute({
     return { status: 200, body: 'OK' };
   }
 
-  const bundleOrderResult = await handlePostResourceBundleOrder(orderId, paymentId);
+  const bundleOrderResult = await handlePostResourceBundleOrder(payment);
   if (bundleOrderResult.shouldRetry) {
     await recordProcessingFailure('post_resource_bundle_settlement_failed');
     return { status: 500, body: 'Failed to finalize post resource bundle purchase' };
@@ -506,6 +811,6 @@ export async function processRazorpayWebhookForRoute({
     return { status: 200, body: 'OK' };
   }
 
-  logBackendInfo('razorpay_webhook_no_matching_order', { orderId });
+  logBackendInfo('razorpay_webhook_no_matching_order', { orderId: payment.orderId });
   return { status: 200, body: 'OK' };
 }

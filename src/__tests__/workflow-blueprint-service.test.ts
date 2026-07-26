@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
+import type { fetchWithProviderTimeout } from '@/lib/provider-fetch';
 
 const validBlueprintInput = {
   brandName: 'Magic Booklet',
@@ -114,14 +115,14 @@ function createProviderResponse(content: unknown) {
 describe('workflow blueprint service', () => {
   let createAdminSupabase: Mock<() => unknown>;
   let createUserSupabase: Mock<() => unknown>;
-  let providerFetch: ReturnType<typeof vi.fn>;
+  let providerFetch: Mock<typeof fetchWithProviderTimeout>;
   let adminClient: ReturnType<typeof createAdminClient>;
 
   beforeEach(() => {
     adminClient = createAdminClient();
     createAdminSupabase = vi.fn(() => adminClient);
     createUserSupabase = vi.fn(() => createUserClient());
-    providerFetch = vi.fn(async () => createProviderResponse({
+    providerFetch = vi.fn<typeof fetchWithProviderTimeout>(async () => createProviderResponse({
       title: 'Launch workflow',
       creativeStrategy: 'Open with the pain point and show the solution.',
       hook: 'Stop wasting time on scattered tools.',

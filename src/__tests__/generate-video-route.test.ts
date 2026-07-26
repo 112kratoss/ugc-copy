@@ -23,6 +23,7 @@ type LocalGenerationRow = {
   completed_at?: string | null;
   model: string;
   category: string | null;
+  creation_mode?: string | null;
 };
 
 let currentSupabaseMock: ReturnType<typeof createSupabaseMock>;

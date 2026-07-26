@@ -41,6 +41,11 @@ import {
   type PostResourceSection,
 } from '@/lib/post-resource-bundles';
 import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
+import {
+  clearRazorpayCheckoutIntentKey,
+  getOrCreateRazorpayCheckoutIntentKey,
+  verifyRazorpayCheckoutUntilSettled,
+} from '@/lib/razorpay-checkout-client';
 import { getCurrentInternalPath } from '@/lib/share';
 import { isGenerationRecipeAssetId, type ShowcaseFeedItem, type ShowcaseMediaItem } from '@/lib/showcase';
 
@@ -266,6 +271,7 @@ export default function ShowcaseReelViewer({
   const [activeUnlockCheckoutItemId, setActiveUnlockCheckoutItemId] = useState<string | null>(null);
   const [unlockWorkingAction, setUnlockWorkingAction] = useState<ReelUnlockAction>(null);
   const [unlockError, setUnlockError] = useState<string | null>(null);
+  const [unlockNotice, setUnlockNotice] = useState<string | null>(null);
   const [unlockSuccessItemId, setUnlockSuccessItemId] = useState<string | null>(null);
   const [unlockedResources, setUnlockedResources] = useState<ReelBundleResources | null>(null);
   const [showUnlockedDetails, setShowUnlockedDetails] = useState(false);
@@ -296,6 +302,7 @@ export default function ShowcaseReelViewer({
     setActiveUnlockCheckoutItemId(null);
     setUnlockWorkingAction(null);
     setUnlockError(null);
+    setUnlockNotice(null);
     setShowUnlockedDetails(false);
     setActiveMediaIndex(0);
     setTransitionDirection(direction);
@@ -342,6 +349,7 @@ export default function ShowcaseReelViewer({
     setActiveUnlockCheckoutItemId(null);
     setUnlockWorkingAction(null);
     setUnlockError(null);
+    setUnlockNotice(null);
     setShowUnlockedDetails(false);
     setTransitionDirection('neutral');
     onClose();
@@ -379,6 +387,7 @@ export default function ShowcaseReelViewer({
 
     setActiveUnlockCheckoutItemId(item.id);
     setUnlockError(null);
+    setUnlockNotice(null);
     setShowUnlockedDetails(false);
     window.requestAnimationFrame(() => {
       detailsScrollerRef.current?.scrollTo({
@@ -825,6 +834,7 @@ export default function ShowcaseReelViewer({
     setUnlockedResources(bundle.resources);
     setShowUnlockedDetails(false);
     setUnlockError(null);
+    setUnlockNotice(null);
   };
 
   const openFreeUnlock = async () => {
@@ -835,6 +845,7 @@ export default function ShowcaseReelViewer({
     try {
       setUnlockWorkingAction('free');
       setUnlockError(null);
+      setUnlockNotice(null);
       const response = await fetch(`/api/posts/${item.id}/resource-bundle/unlock-free`, {
         method: 'POST',
         headers: {
@@ -864,6 +875,9 @@ export default function ShowcaseReelViewer({
     try {
       setUnlockWorkingAction('cash');
       setUnlockError(null);
+      setUnlockNotice(null);
+      const checkoutIntentScope = `post-resource:${item.id}`;
+      const clientIntentKey = getOrCreateRazorpayCheckoutIntentKey(checkoutIntentScope);
       const orderResponse = await fetch(`/api/posts/${item.id}/resource-bundle/order`, {
         method: 'POST',
         headers: {
@@ -872,15 +886,20 @@ export default function ShowcaseReelViewer({
         },
         body: JSON.stringify({
           locale: typeof navigator !== 'undefined' ? navigator.language : null,
+          clientIntentKey,
         }),
       });
       const orderData = await orderResponse.json();
 
       if (!orderResponse.ok) {
+        if (orderData.code === 'CHECKOUT_PAYLOAD_MISMATCH') {
+          clearRazorpayCheckoutIntentKey(checkoutIntentScope);
+        }
         throw new Error(orderData.error || 'Failed to start checkout.');
       }
 
       if (orderData.alreadyPurchased) {
+        clearRazorpayCheckoutIntentKey(checkoutIntentScope);
         await finishReelUnlock();
         return;
       }
@@ -903,20 +922,17 @@ export default function ShowcaseReelViewer({
         }) => {
           try {
             setUnlockWorkingAction('cash');
-            const verifyResponse = await fetch(`/api/posts/${item.id}/resource-bundle/verify`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${session?.access_token}`,
-              },
-              body: JSON.stringify(response),
+            const verification = await verifyRazorpayCheckoutUntilSettled({
+              url: `/api/posts/${item.id}/resource-bundle/verify`,
+              token: session?.access_token ?? '',
+              body: response,
             });
-            const verifyData = await verifyResponse.json();
-
-            if (!verifyResponse.ok || !verifyData.success) {
-              throw new Error(verifyData.error || 'Payment verification failed.');
+            if (verification.state === 'pending') {
+              setUnlockNotice('Payment received and waiting for capture. This recipe will unlock automatically once confirmed.');
+              return;
             }
 
+            clearRazorpayCheckoutIntentKey(checkoutIntentScope);
             await finishReelUnlock();
           } catch (verifyError) {
             setUnlockError(verifyError instanceof Error ? verifyError.message : 'Payment verification failed.');
@@ -955,6 +971,7 @@ export default function ShowcaseReelViewer({
     try {
       setUnlockWorkingAction('tokens');
       setUnlockError(null);
+      setUnlockNotice(null);
       const response = await fetch(`/api/posts/${item.id}/resource-bundle/unlock-with-credits`, {
         method: 'POST',
         headers: {
@@ -1303,6 +1320,12 @@ export default function ShowcaseReelViewer({
             </button>
           </div>
         )}
+
+        {unlockNotice ? (
+          <div className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-50">
+            {unlockNotice}
+          </div>
+        ) : null}
 
         {unlockError ? (
           <div className="mt-3 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">

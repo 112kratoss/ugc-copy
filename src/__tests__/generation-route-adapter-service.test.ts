@@ -42,7 +42,7 @@ describe('generation route adapter service', () => {
       });
 
       return {
-        ok: true,
+        ok: true as const,
         body: {
           success: true,
           predictionId: 'task-image-1',
@@ -161,7 +161,7 @@ describe('generation route adapter service', () => {
       });
 
       return {
-        ok: true,
+        ok: true as const,
         body: { predictionId: 'task-factory-post' },
       };
     });
@@ -170,7 +170,7 @@ describe('generation route adapter service', () => {
       expect(input.readRequestBody).toBeUndefined();
 
       return {
-        ok: true,
+        ok: true as const,
         body: { status: 'completed' },
       };
     });

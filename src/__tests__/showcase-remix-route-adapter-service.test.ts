@@ -113,7 +113,13 @@ describe('showcase remix route adapter service', () => {
       dependencies: {
         createServiceClient: vi.fn(() => adminSupabase),
         createUserClient: () => userSupabase,
-        enforceBackendRateLimit: vi.fn(async () => undefined),
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true,
+          limit: 60,
+          remaining: 59,
+          retryAfterSeconds: 0,
+          resetAt: '2026-06-23T10:10:00.000Z',
+        })),
         remixShowcasePostForRoute,
       },
     });

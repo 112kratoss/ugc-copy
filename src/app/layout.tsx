@@ -81,6 +81,7 @@ export default function RootLayout({
   const gaMeasurementId = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
   const speedInsightsEnabled = process.env.NEXT_PUBLIC_SPEED_INSIGHTS_ENABLED === '1';
   const buildId =
+    process.env.RELEASE_GIT_SHA?.trim() ||
     process.env.VERCEL_GIT_COMMIT_SHA?.trim() ||
     process.env.VERCEL_DEPLOYMENT_ID?.trim() ||
     process.env.VERCEL_URL?.trim() ||

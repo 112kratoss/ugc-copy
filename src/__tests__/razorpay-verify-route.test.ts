@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
   type UserResult = {
@@ -13,12 +13,31 @@ const mocks = vi.hoisted(() => {
     data: { user: null },
     error: new Error('missing session'),
   }));
+  const providerFetch = vi.fn(async () => new Response(JSON.stringify({
+    id: 'pay_123',
+    order_id: 'order_123',
+    amount: 41500,
+    amount_refunded: 0,
+    currency: 'INR',
+    status: 'captured',
+    captured: true,
+    notes: {
+      user_id: 'user_123',
+    },
+  }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  }));
 
   const single = vi.fn(async () => ({
     data: {
       id: 'txn_123',
+      user_id: 'user_123',
       credits: 500,
+      amount: 41500,
       status: 'created',
+      razorpay_payment_id: null,
+      credit_effect_applied: false,
     },
     error: null,
   }));
@@ -55,7 +74,14 @@ const mocks = vi.hoisted(() => {
     };
   });
 
-  const rpc = vi.fn(async () => ({ data: true, error: null }));
+  const rpc = vi.fn(async (
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<{ data: unknown; error: unknown }> => {
+    void name;
+    void args;
+    return { data: true, error: null };
+  });
   const createServiceClient = vi.fn(() => ({ rpc }));
 
   return {
@@ -66,6 +92,7 @@ const mocks = vi.hoisted(() => {
     from,
     rawGetUser,
     rpc,
+    providerFetch,
     secondEq,
     select,
     single,
@@ -118,6 +145,10 @@ function buildVerifyRequest(body: Record<string, unknown>, headers: Record<strin
 }
 
 describe('/api/razorpay/verify route', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   beforeEach(() => {
     vi.resetModules();
     mocks.createClient.mockClear();
@@ -127,6 +158,22 @@ describe('/api/razorpay/verify route', () => {
     mocks.from.mockClear();
     mocks.rawGetUser.mockClear();
     mocks.rpc.mockClear();
+    mocks.providerFetch.mockClear();
+    mocks.providerFetch.mockImplementation(async () => new Response(JSON.stringify({
+      id: 'pay_123',
+      order_id: 'order_123',
+      amount: 41500,
+      amount_refunded: 0,
+      currency: 'INR',
+      status: 'captured',
+      captured: true,
+      notes: {
+        user_id: 'user_123',
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
     mocks.secondEq.mockClear();
     mocks.select.mockClear();
     mocks.single.mockClear();
@@ -138,8 +185,12 @@ describe('/api/razorpay/verify route', () => {
     mocks.single.mockResolvedValue({
       data: {
         id: 'txn_123',
+        user_id: 'user_123',
         credits: 500,
+        amount: 41500,
         status: 'created',
+        razorpay_payment_id: null,
+        credit_effect_applied: false,
       },
       error: null,
     });
@@ -161,7 +212,9 @@ describe('/api/razorpay/verify route', () => {
     });
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'anon-key';
+    process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID = 'rzp_test_key';
     process.env.RAZORPAY_KEY_SECRET = 'razorpay-secret';
+    vi.stubGlobal('fetch', mocks.providerFetch);
   });
 
   it('rejects malformed payloads before creating Supabase clients', async () => {
@@ -252,7 +305,9 @@ describe('/api/razorpay/verify route', () => {
     expect(mocks.createUserClient).toHaveBeenCalledTimes(1);
     expect(mocks.createClient).not.toHaveBeenCalled();
     expect(mocks.from).toHaveBeenCalledWith('transactions');
-    expect(mocks.select).toHaveBeenCalledWith('id, credits, status');
+    expect(mocks.select).toHaveBeenCalledWith(
+      'id, user_id, credits, amount, status, razorpay_payment_id, credit_effect_applied',
+    );
     expect(mocks.firstEq).toHaveBeenCalledWith('razorpay_order_id', 'order_123');
     expect(mocks.secondEq).toHaveBeenCalledWith('user_id', 'user_123');
     expect(mocks.createServiceClient).toHaveBeenCalledTimes(1);

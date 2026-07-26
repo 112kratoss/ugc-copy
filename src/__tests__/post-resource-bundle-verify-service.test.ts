@@ -2,7 +2,9 @@ import crypto from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { verifyPostResourceBundlePaymentForRoute } from '@/lib/post-resource-bundle-verify-service';
+import {
+  verifyPostResourceBundlePaymentForRoute as verifyPostResourceBundlePaymentForRouteImpl,
+} from '@/lib/post-resource-bundle-verify-service';
 
 type BundleOrderRow = {
   id: string;
@@ -23,6 +25,25 @@ function validBody() {
     razorpay_payment_id: 'pay_bundle_123',
     razorpay_signature: signatureFor('order_bundle_123', 'pay_bundle_123'),
   };
+}
+
+function verifyPostResourceBundlePaymentForRoute(
+  input: Parameters<typeof verifyPostResourceBundlePaymentForRouteImpl>[0],
+) {
+  return verifyPostResourceBundlePaymentForRouteImpl({
+    keyId: 'test-key',
+    fetchPayment: vi.fn(async ({ paymentId }) => ({
+      id: paymentId,
+      orderId: 'order_bundle_123',
+      amount: 9_900,
+      amountRefunded: 0,
+      currency: 'INR',
+      status: 'captured' as const,
+      captured: true,
+      notes: { buyer_user_id: 'buyer-1' },
+    })),
+    ...input,
+  });
 }
 
 function createAdminSupabaseMock({
@@ -56,13 +77,22 @@ function createAdminSupabaseMock({
         async maybeSingle() {
           if (calls.rpc.some((call) => call.name === 'complete_post_resource_bundle_purchase')) {
             return {
-              data: order ? { status: refreshedStatus } : null,
+              data: order
+                ? { status: refreshedStatus, razorpay_payment_id: 'pay_bundle_123' }
+                : null,
               error: null,
             };
           }
 
           return {
-            data: order,
+            data: order
+              ? {
+                  amount_subunits: 9_900,
+                  currency: 'INR',
+                  razorpay_payment_id: order.status === 'paid' ? 'pay_bundle_123' : null,
+                  ...order,
+                }
+              : null,
             error: null,
           };
         },
@@ -303,5 +333,68 @@ describe('verifyPostResourceBundlePaymentForRoute', () => {
       status: 500,
       body: { error: 'Failed to complete purchase.' },
     });
+  });
+
+  it('returns 202 without unlocking resources for an authorized payment', async () => {
+    const admin = createAdminSupabaseMock();
+    const invalidateMarketplaceResourceListCache = vi.fn();
+
+    const result = await verifyPostResourceBundlePaymentForRoute({
+      adminSupabase: admin.client,
+      buyerUserId: 'buyer-1',
+      keySecret: 'test-secret',
+      readBody: vi.fn(async () => validBody()),
+      fetchPayment: vi.fn(async () => ({
+        id: 'pay_bundle_123',
+        orderId: 'order_bundle_123',
+        amount: 9_900,
+        amountRefunded: 0,
+        currency: 'INR',
+        status: 'authorized' as const,
+        captured: false,
+        notes: { buyer_user_id: 'buyer-1' },
+      })),
+      invalidateMarketplaceResourceListCache,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      status: 202,
+      body: expect.objectContaining({
+        status: 'pending',
+        pending: true,
+        code: 'PAYMENT_PENDING',
+      }),
+    });
+    expect(admin.calls.rpc.map((call) => call.name)).toEqual(['check_backend_rate_limit']);
+    expect(invalidateMarketplaceResourceListCache).not.toHaveBeenCalled();
+  });
+
+  it('rejects a captured payment with a mismatched currency', async () => {
+    const admin = createAdminSupabaseMock();
+
+    const result = await verifyPostResourceBundlePaymentForRoute({
+      adminSupabase: admin.client,
+      buyerUserId: 'buyer-1',
+      keySecret: 'test-secret',
+      readBody: vi.fn(async () => validBody()),
+      fetchPayment: vi.fn(async () => ({
+        id: 'pay_bundle_123',
+        orderId: 'order_bundle_123',
+        amount: 9_900,
+        amountRefunded: 0,
+        currency: 'USD',
+        status: 'captured' as const,
+        captured: true,
+        notes: { buyer_user_id: 'buyer-1' },
+      })),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'Payment details do not match the order.' },
+    });
+    expect(admin.calls.rpc.map((call) => call.name)).toEqual(['check_backend_rate_limit']);
   });
 });

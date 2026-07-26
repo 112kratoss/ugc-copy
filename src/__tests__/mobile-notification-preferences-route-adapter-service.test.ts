@@ -15,7 +15,7 @@ describe('mobile notification preferences route adapter service', () => {
     const getMobileNotificationPreferencesForRoute = vi.fn(async () => ({
       ok: true as const,
       body: {
-        success: true,
+        success: true as const,
         preferences: {
           pushEnabled: true,
           generationEnabled: true,
@@ -55,7 +55,7 @@ describe('mobile notification preferences route adapter service', () => {
       return {
         ok: true as const,
         body: {
-          success: true,
+          success: true as const,
           preferences: {
             pushEnabled: false,
             generationEnabled: true,
@@ -144,7 +144,7 @@ describe('mobile notification preferences route adapter service', () => {
     const getMobileNotificationPreferencesForRoute = vi.fn(async () => ({
       ok: true as const,
       body: {
-        success: true,
+        success: true as const,
         preferences: {
           pushEnabled: true,
           generationEnabled: true,
@@ -156,7 +156,7 @@ describe('mobile notification preferences route adapter service', () => {
     const updateMobileNotificationPreferencesForRoute = vi.fn(async () => ({
       ok: true as const,
       body: {
-        success: true,
+        success: true as const,
         preferences: {
           pushEnabled: false,
           generationEnabled: true,

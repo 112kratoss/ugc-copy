@@ -8,6 +8,11 @@ import { useRouter } from "next/navigation";
 
 import { JsonLd } from "@/app/components/JsonLd";
 import { PRICING_CURRENCY, PRICING_PLANS, type PricingPlanId } from "@/lib/pricing";
+import {
+    clearRazorpayCheckoutIntentKey,
+    getOrCreateRazorpayCheckoutIntentKey,
+    verifyRazorpayCheckoutUntilSettled,
+} from "@/lib/razorpay-checkout-client";
 import { supabase } from "@/lib/supabase";
 import { buildSoftwareApplicationSchema, siteConfig } from "@/lib/seo";
 import {
@@ -231,18 +236,23 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                 throw new Error("Authentication token not found. Please log in again.");
             }
 
+            const checkoutIntentScope = `credits:${planId}`;
+            const clientIntentKey = getOrCreateRazorpayCheckoutIntentKey(checkoutIntentScope);
             const orderRes = await fetch('/api/razorpay/order', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify({ planId, userId }),
+                body: JSON.stringify({ planId, userId, clientIntentKey }),
             });
 
             const orderData = await orderRes.json();
 
             if (!orderRes.ok) {
+                if (orderData.code === 'CHECKOUT_PAYLOAD_MISMATCH') {
+                    clearRazorpayCheckoutIntentKey(checkoutIntentScope);
+                }
                 throw new Error(orderData.error || 'Failed to create order');
             }
 
@@ -255,31 +265,34 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                 order_id: orderData.orderId,
                 handler: async function (response: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) {
                     try {
-                        const verifyRes = await fetch('/api/razorpay/verify', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Authorization': `Bearer ${token}`
-                            },
-                            body: JSON.stringify({
+                        const verification = await verifyRazorpayCheckoutUntilSettled({
+                            url: '/api/razorpay/verify',
+                            token,
+                            body: {
                                 razorpay_payment_id: response.razorpay_payment_id,
                                 razorpay_order_id: response.razorpay_order_id,
                                 razorpay_signature: response.razorpay_signature,
                                 userId,
-                            }),
+                            },
                         });
 
-                        const verifyData = await verifyRes.json();
-
-                        if (verifyRes.ok && verifyData.success) {
-                            alert("Payment successful! Credits added to your account.");
+                        if (verification.state === 'pending') {
+                            // The payment is now bound to this provider order and
+                            // the webhook owns final settlement. Credits are
+                            // repeat-purchasable, so do not pin the next checkout
+                            // to an order that may already become paid.
+                            clearRazorpayCheckoutIntentKey(checkoutIntentScope);
+                            alert("Payment received and waiting for capture. Your credits will appear automatically once Razorpay confirms it.");
                             window.location.href = '/';
-                        } else {
-                            alert("Payment verification failed. Please contact support.");
+                            return;
                         }
+
+                        clearRazorpayCheckoutIntentKey(checkoutIntentScope);
+                        alert("Payment successful! Credits added to your account.");
+                        window.location.href = '/';
                     } catch (err) {
                         console.error("Verification error:", err);
-                        alert("An error occurred while verifying the payment.");
+                        alert(err instanceof Error ? err.message : "An error occurred while verifying the payment.");
                     }
                 },
                 theme: {

@@ -51,7 +51,7 @@ describe('mobile notifications', () => {
   it('sends push payloads through the Expo push API', async () => {
     const timeoutSignal = AbortSignal.abort();
     const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutSignal);
-    const fetcher = vi.fn(async () =>
+    const fetcher = vi.fn<typeof fetch>(async () =>
       new Response(JSON.stringify({
         data: {
           status: 'ok',
@@ -73,7 +73,7 @@ describe('mobile notifications', () => {
         type: 'generation_succeeded',
         category: 'generation',
       },
-      fetcher: fetcher as unknown as typeof fetch,
+      fetcher,
     })).resolves.toEqual({
       status: 'ok',
       id: 'ticket-1',

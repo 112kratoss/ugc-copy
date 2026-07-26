@@ -108,18 +108,24 @@ reset role;
 set local role anon;
 select set_config('request.jwt.claims', '{"role": "anon"}', true);
 
-select is(
-  (select count(*) from public.generations
-   where id = 'a0000000-0000-4000-8000-000000000004'::uuid),
-  1::bigint,
-  'an anonymous client can read public generations'
+select throws_ok(
+  $$
+    select id from public.generations
+    where id = 'a0000000-0000-4000-8000-000000000004'::uuid
+  $$,
+  '42501',
+  null,
+  'an anonymous client cannot query public generations directly'
 );
 
-select is(
-  (select count(*) from public.generations
-   where id = 'a0000000-0000-4000-8000-000000000002'::uuid),
-  0::bigint,
-  'an anonymous client cannot read private generations'
+select throws_ok(
+  $$
+    select id from public.generations
+    where id = 'a0000000-0000-4000-8000-000000000002'::uuid
+  $$,
+  '42501',
+  null,
+  'an anonymous client cannot query private generations directly'
 );
 
 -- Posts intentionally carry no client table grants: every post read goes

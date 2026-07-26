@@ -57,6 +57,19 @@ vi.mock('@/lib/server-helpers', () => ({
   }),
   createServiceClient: () => ({
     rpc: rateLimitRpcMock,
+    from(table: string) {
+      if (table !== 'posts') {
+        throw new Error(`Unexpected service table access: ${table}`);
+      }
+      const query = {
+        select() { return query; },
+        eq() { return query; },
+        async maybeSingle() {
+          return { data: loadedPost.value, error: null };
+        },
+      };
+      return query;
+    },
   }),
 }));
 

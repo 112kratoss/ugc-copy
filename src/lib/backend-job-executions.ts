@@ -3,6 +3,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
 
 import { getApiRequestId } from '@/lib/api-cache';
+import {
+  hasDueAccountDeletionCleanup,
+  processAccountDeletionCleanup,
+} from '@/lib/account-deletion-service';
 import { logBackendEvent } from '@/lib/backend-logger';
 import {
   deliverBackendAlerts,
@@ -38,8 +42,54 @@ import {
   hasStalledGenerationWork,
   reapStalledGenerations,
 } from '@/lib/stalled-generation-reaper';
+import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 const GENERATION_COMPLETION_BATCH_LIMIT = 25;
+
+export function runAccountDeletionResweepsBackendJob(options: {
+  requestId?: string;
+  startedAtMs?: number;
+  serviceClient?: SupabaseClient;
+  triggerRoute?: string;
+} = {}) {
+  const job = BACKEND_JOBS_BY_NAME['account-deletion-resweeps'];
+  return runManagedBackendJob({
+    ...options,
+    job,
+    messages: {
+      started: 'account_deletion_cleanup_started',
+      skippedNoWork: 'account_deletion_cleanup_skipped_no_work',
+      skippedLocked: 'account_deletion_cleanup_skipped',
+      completed: 'account_deletion_cleanup_completed',
+      failed: 'account_deletion_cleanup_failed',
+    },
+    hasWork: (client, context) => (
+      hasDueAccountDeletionCleanup(client, new Date(context.startedAtMs))
+    ),
+    run: async (client, context) => {
+      try {
+        return await processAccountDeletionCleanup({
+          admin: client,
+          workerId: `${job.name}:${context.requestId.slice(0, 64)}:${context.startedAtMs}`,
+        });
+      } finally {
+        // A resumed initial deletion can cascade posts after the request that
+        // originally primed the cache is gone. Invalidating on every attempted
+        // cleanup also covers partial batches that successfully deleted one
+        // account before another item was durably rescheduled.
+        try {
+          invalidateShowcaseFeedCache();
+        } catch (error) {
+          logBackendEvent('error', 'account_deletion_showcase_cache_invalidation_failed', {
+            route: job.route,
+            job: job.name,
+            error: errorMessage(error),
+          });
+        }
+      }
+    },
+  });
+}
 
 export type BackendJobExecutionResult =
   | {

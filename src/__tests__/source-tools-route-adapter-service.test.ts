@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { getSourceToolsRouteResponse } from '@/lib/source-tools-route-adapter-service';
+import type { SourceToolOption } from '@/lib/source-tools';
 
 describe('source tools route adapter service', () => {
   it('returns a public cached catalog response with deterministic ETag and trace headers', async () => {
-    const listSourceToolsCatalog = vi.fn(async () => [
+    const listSourceToolsCatalog = vi.fn(async (): Promise<SourceToolOption[]> => [
       {
         slug: 'higgsfield',
         label: 'Higgsfield',
@@ -45,7 +46,7 @@ describe('source tools route adapter service', () => {
         supportedMediaKinds: ['image'],
         models: [{ slug: 'nano-banana-2', label: 'Nano Banana 2.0' }],
       },
-    ];
+    ] satisfies SourceToolOption[];
     const listSourceToolsCatalog = vi.fn(async () => tools);
     const firstResponse = await getSourceToolsRouteResponse({
       request: new Request('http://localhost/api/source-tools'),
@@ -73,7 +74,7 @@ describe('source tools route adapter service', () => {
   it('creates stable cache headers when called without a Next route request', async () => {
     const response = await getSourceToolsRouteResponse({
       dependencies: {
-        listSourceToolsCatalog: vi.fn(async () => []),
+        listSourceToolsCatalog: vi.fn(async (): Promise<SourceToolOption[]> => []),
       },
     });
 

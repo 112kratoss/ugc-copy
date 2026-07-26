@@ -5,6 +5,8 @@ type PostRow = {
   id: string;
   user_id: string;
   visibility: 'public' | 'unlisted' | 'private';
+  archived_at: string | null;
+  review_status: 'visible' | 'hidden';
 };
 
 type MarketplaceAssetRow = {
@@ -39,16 +41,22 @@ describe('/api/marketplace/assets route', () => {
         id: 'post-public',
         user_id: 'user-1',
         visibility: 'public',
+        archived_at: null,
+        review_status: 'visible',
       },
       {
         id: 'post-unlisted',
         user_id: 'user-1',
         visibility: 'unlisted',
+        archived_at: null,
+        review_status: 'visible',
       },
       {
         id: 'post-private',
         user_id: 'user-1',
         visibility: 'private',
+        archived_at: null,
+        review_status: 'visible',
       },
     ];
     marketplaceAssetsState = [];
@@ -67,7 +75,33 @@ describe('/api/marketplace/assets route', () => {
       },
       error: null,
     });
-    createServiceClientMock.mockReturnValue({ rpc: serviceRpcMock });
+    createServiceClientMock.mockReturnValue({
+      rpc: serviceRpcMock,
+      from(table: string) {
+        if (table !== 'posts') {
+          throw new Error(`Unexpected service table access: ${table}`);
+        }
+        return {
+          select() {
+            const filters: Record<string, unknown> = {};
+            return {
+              eq(column: string, value: unknown) {
+                filters[column] = value;
+                return this;
+              },
+              async maybeSingle() {
+                const row = postsState.find((post) =>
+                  Object.entries(filters).every(
+                    ([key, value]) => post[key as keyof PostRow] === value,
+                  )
+                ) ?? null;
+                return { data: row, error: null };
+              },
+            };
+          },
+        };
+      },
+    });
     createUserClientMock.mockReturnValue({
       auth: {
         getUser: vi.fn(async () => ({
@@ -213,7 +247,7 @@ describe('/api/marketplace/assets route', () => {
         'x-request-id': 'marketplace-asset-save-rate-limit-1',
       }),
       json: jsonMock,
-    } as NextRequest);
+    } as unknown as NextRequest);
 
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBe('31');

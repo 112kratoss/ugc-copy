@@ -381,7 +381,9 @@ describe('ShowcaseReelViewer pagination', () => {
 
   it('records reel open, qualified impression, and dwell events with delivery context', async () => {
     vi.useFakeTimers();
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true })));
+    const fetchMock = vi.fn<typeof fetch>(
+      async () => new Response(JSON.stringify({ success: true }))
+    );
     vi.stubGlobal('fetch', fetchMock);
     const rankedItem = createShowcaseItem({
       recommendation: {
@@ -446,7 +448,9 @@ describe('ShowcaseReelViewer pagination', () => {
 
   it('records a quick skip instead of dwell when a reel closes before qualification', async () => {
     vi.useFakeTimers();
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true })));
+    const fetchMock = vi.fn<typeof fetch>(
+      async () => new Response(JSON.stringify({ success: true }))
+    );
     vi.stubGlobal('fetch', fetchMock);
     const rankedItem = createShowcaseItem({
       recommendation: {

@@ -3,6 +3,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 let orderStatus: 'created' | 'paid' = 'created';
 let rateLimitAllowed = true;
+const providerFetchMock = vi.fn(async () => new Response(JSON.stringify({
+  id: 'pay_123',
+  order_id: 'order_123',
+  amount: 41500,
+  amount_refunded: 0,
+  currency: 'INR',
+  status: 'captured',
+  captured: true,
+  notes: {
+    buyer_user_id: 'user-1',
+  },
+}), {
+  status: 200,
+  headers: { 'Content-Type': 'application/json' },
+}));
 const completionRpcMock = vi.fn(async (_payload: unknown) => {
   void _payload;
   orderStatus = 'paid';
@@ -50,6 +65,9 @@ function createServiceClientMock() {
                         data: {
                           id: 'order-row',
                           buyer_user_id: 'user-1',
+                          amount_subunits: 41500,
+                          currency: 'INR',
+                          razorpay_payment_id: orderStatus === 'paid' ? 'pay_123' : null,
                           status: orderStatus,
                         },
                         error: null,
@@ -62,6 +80,9 @@ function createServiceClientMock() {
                     data: {
                       id: 'order-row',
                       buyer_user_id: 'user-1',
+                      amount_subunits: 41500,
+                      currency: 'INR',
+                      razorpay_payment_id: orderStatus === 'paid' ? 'pay_123' : null,
                       status: orderStatus,
                     },
                     error: null,
@@ -99,6 +120,22 @@ describe('/api/marketplace/verify route', () => {
     createUserClientMock.mockReset();
     createServiceClientFactory.mockClear();
     createServiceClientFactory.mockImplementation(() => createServiceClientMock());
+    providerFetchMock.mockClear();
+    providerFetchMock.mockImplementation(async () => new Response(JSON.stringify({
+      id: 'pay_123',
+      order_id: 'order_123',
+      amount: 41500,
+      amount_refunded: 0,
+      currency: 'INR',
+      status: 'captured',
+      captured: true,
+      notes: {
+        buyer_user_id: 'user-1',
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
     createUserClientMock.mockReturnValue({
       auth: {
         getUser: vi.fn(async () => ({
@@ -106,7 +143,9 @@ describe('/api/marketplace/verify route', () => {
         })),
       },
     });
+    process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID = 'rzp_test_key';
     process.env.RAZORPAY_KEY_SECRET = 'test-secret';
+    vi.stubGlobal('fetch', providerFetchMock);
   });
 
   it('does not create an admin client before authentication succeeds', async () => {
@@ -142,6 +181,7 @@ describe('/api/marketplace/verify route', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('rate limits payment verification before parsing payment details or completing the order', async () => {

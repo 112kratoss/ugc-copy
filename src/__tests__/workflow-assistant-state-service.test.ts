@@ -282,6 +282,7 @@ describe('getWorkflowAssistantStateForRoute', () => {
     });
 
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('Expected setup-required response');
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
       availability: 'setup_required',

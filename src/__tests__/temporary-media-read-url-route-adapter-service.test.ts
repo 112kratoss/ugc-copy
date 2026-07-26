@@ -51,7 +51,7 @@ describe('temporary media read-url route adapter service', () => {
     const createTemporaryMediaReadUrl = vi.fn(async () => ({
       ok: true as const,
       response: {
-        success: true,
+        success: true as const,
         signedUrl: 'https://storage.example.test/signed/reference.png',
         expiresInSeconds: 3600,
       },

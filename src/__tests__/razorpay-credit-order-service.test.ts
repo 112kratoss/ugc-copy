@@ -3,7 +3,22 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { ExternalServiceTimeoutError } from '@/lib/provider-fetch';
 import { RazorpayOrderError } from '@/lib/razorpay-orders';
-import { createCreditRazorpayOrderForRoute } from '@/lib/razorpay-credit-order-service';
+import {
+  createCreditRazorpayOrderForRoute as createCreditRazorpayOrderForRouteImpl,
+} from '@/lib/razorpay-credit-order-service';
+
+type CreateCreditOrderInput = Parameters<typeof createCreditRazorpayOrderForRouteImpl>[0];
+
+function createCreditRazorpayOrderForRoute(
+  input: Omit<CreateCreditOrderInput, 'clientIntentKey' | 'fetchRazorpayOrderByReceipt'>
+    & Partial<Pick<CreateCreditOrderInput, 'clientIntentKey' | 'fetchRazorpayOrderByReceipt'>>,
+) {
+  return createCreditRazorpayOrderForRouteImpl({
+    clientIntentKey: 'intent-credit-123456',
+    fetchRazorpayOrderByReceipt: vi.fn(async () => null),
+    ...input,
+  });
+}
 
 function createAdminSupabaseMock({
   rateLimitAllowed = true,
@@ -41,20 +56,42 @@ function createAdminSupabaseMock({
     },
     rpc(name: string, args: Record<string, unknown>) {
       calls.rpc.push({ name, args });
-      if (name !== 'check_backend_rate_limit') {
-        throw new Error(`Unexpected RPC: ${name}`);
+      if (name === 'claim_razorpay_checkout_intent') {
+        return Promise.resolve({
+          data: {
+            status: 'claimed',
+            intent_id: '10000000-0000-4000-8000-000000000001',
+            provider_receipt: 'mb_10000000000040008000000000000001',
+            provider_order_id: null,
+          },
+          error: null,
+        });
       }
-
-      return Promise.resolve({
-        data: {
-          allowed: rateLimitAllowed,
-          limit: 10,
-          remaining: rateLimitAllowed ? 9 : 0,
-          retryAfterSeconds: rateLimitAllowed ? 0 : 48,
-          resetAt: '2026-06-21T06:30:00.000Z',
-        },
-        error: null,
-      });
+      if (name === 'complete_razorpay_checkout_intent') {
+        return Promise.resolve({
+          data: {
+            status: 'recorded',
+            provider_order_id: args.p_provider_order_id,
+          },
+          error: null,
+        });
+      }
+      if (name === 'abandon_razorpay_checkout_intent') {
+        return Promise.resolve({ data: { status: 'abandoned' }, error: null });
+      }
+      if (name === 'check_backend_rate_limit') {
+        return Promise.resolve({
+          data: {
+            allowed: rateLimitAllowed,
+            limit: 10,
+            remaining: rateLimitAllowed ? 9 : 0,
+            retryAfterSeconds: rateLimitAllowed ? 0 : 48,
+            resetAt: '2026-06-21T06:30:00.000Z',
+          },
+          error: null,
+        });
+      }
+      throw new Error(`Unexpected RPC: ${name}`);
     },
   };
 
@@ -74,10 +111,12 @@ describe('createCreditRazorpayOrderForRoute', () => {
       userId: 'user_123456789',
       plan: { priceInr: 415, credits: 500 },
       createRazorpayOrder,
-      now: () => 1000,
     });
 
     expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error('Expected credit order rate limiting to fail.');
+    }
     expect(result.status).toBe(429);
     expect(result).toHaveProperty('rateLimitError');
     expect(createRazorpayOrder).not.toHaveBeenCalled();
@@ -104,7 +143,6 @@ describe('createCreditRazorpayOrderForRoute', () => {
       userId: 'user_123456789',
       plan: { priceInr: 415, credits: 500 },
       createRazorpayOrder,
-      now: () => 123456,
     });
 
     expect(result).toEqual({
@@ -120,7 +158,11 @@ describe('createCreditRazorpayOrderForRoute', () => {
       keySecret: process.env.RAZORPAY_KEY_SECRET,
       amount: 41500,
       currency: 'INR',
-      receipt: 'rcpt_user_123_123456',
+      receipt: 'mb_10000000000040008000000000000001',
+      notes: {
+        user_id: 'user_123456789',
+        purchase_kind: 'credits',
+      },
     });
     expect(admin.calls.inserts).toEqual([
       {

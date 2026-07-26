@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 describe('KIE webhook route adapter service', () => {
   it('delegates webhook handling and applies private route headers', async () => {
-    const createServiceClient = vi.fn(() => ({ service: 'supabase-admin' }));
+    const createServiceClient = vi.fn(
+      () => ({ service: 'supabase-admin' }) as unknown as SupabaseClient
+    );
     const handleKieWebhookForRoute = vi.fn(async () => ({
       body: { received: true, predictionId: 'task-1' },
       status: 202,

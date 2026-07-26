@@ -19,10 +19,13 @@ const mocks = vi.hoisted(() => {
     createSignedUrl,
     download,
   }));
-  const createUserClient = vi.fn(() => ({
-    auth: { getUser },
-    storage: { from: storageFrom },
-  }));
+  const createUserClient = vi.fn((_request?: Request) => {
+    void _request;
+    return {
+      auth: { getUser },
+      storage: { from: storageFrom },
+    };
+  });
   const serviceClient = { rpc };
   const createServiceClient = vi.fn(() => serviceClient);
 

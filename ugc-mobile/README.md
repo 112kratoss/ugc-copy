@@ -35,23 +35,21 @@ Keep the version in `app.json`, `package.json`, and `package-lock.json` aligned
 before creating a store build. EAS owns the monotonically increasing native
 build/version codes through `appVersionSource: remote` and `autoIncrement`.
 
-```sh
-# Build store artifacts from the production environment
-eas build --profile production --platform ios
-eas build --profile production --platform android
+Use the manual `Mobile signed store build` GitHub workflow. It accepts only the
+current `main` SHA with a successful exact-SHA `Quality` run, creates signed EAS
+production artifacts, re-reads EAS build metadata to verify the Git commit, and
+optionally submits only to TestFlight or Google Play closed alpha. It never
+promotes a public store release.
 
-# Submit an Android test release without promoting it publicly
-eas submit --profile alpha --platform android
+The GitHub `mobile-production` environment needs `EXPO_TOKEN`. The EAS
+`production` environment must contain the public site/API/Supabase/RevenueCat
+variables below. Store signing and submission credentials stay in EAS. The build
+hook fails before dependency installation if the production profile has a
+missing, placeholder, insecure, wrong-platform, or non-production value.
 
-# Submit the approved public releases
-eas submit --profile production --platform ios
-eas submit --profile production --platform android
-```
-
-The `alpha` submit profile targets Google Play's closed alpha track. The
-`production` profile targets Google Play production and must be used only after
-the release checklist, store listing, privacy disclosures, product catalog,
-sandbox purchases, signed webhooks, and staged-rollout decision are complete.
+Public App Store / Play promotion remains a deliberate operator action after
+TestFlight/closed-alpha purchases, auth, generation, account deletion, privacy
+disclosures, crash reporting, and staged-rollout checks pass.
 The public legal URLs are `https://magicbooklet.com/terms`,
 `https://magicbooklet.com/privacy`, `https://magicbooklet.com/cancellation`, and
 `https://magicbooklet.com/delete-account`.
@@ -93,6 +91,13 @@ Copy `.env.example` to `.env.local` and fill in:
 - `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 - `EXPO_PUBLIC_REVENUECAT_IOS_API_KEY`
 - `EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY`
+
+For the lean launch, review native iOS crash reports in App Store Connect and
+Android vitals/crash reports in Google Play Console before each public
+promotion. This has no extra vendor account or app integration, but it provides
+less JavaScript context and no JavaScript source-map symbolication. Handled
+JavaScript errors that do not become native crashes depend on user reports,
+reproduction, and the app's existing backend health signals.
 
 For local API development, run the web app on port `3000` from the repo root.
 Use `http://10.0.2.2:3000` for `EXPO_PUBLIC_API_BASE_URL` in an Android emulator.

@@ -8,11 +8,23 @@ import {
   MARKETPLACE_ORDER_VERIFY_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import {
+  createPendingPaymentResultBody,
+  verifyRazorpayPaymentAgainstOrder,
+} from '@/lib/razorpay-payment-verification';
+import {
+  fetchRazorpayPayment as defaultFetchRazorpayPayment,
+  RazorpayPaymentError,
+} from '@/lib/razorpay-orders';
 import { verifyRazorpayPaymentSignature } from '@/lib/razorpay-signature';
+import { isExternalServiceTimeoutError } from '@/lib/provider-fetch';
 
 type MarketplaceOrderRow = {
   id: string;
   buyer_user_id: string;
+  amount_subunits: number;
+  currency: string;
+  razorpay_payment_id?: string | null;
   status: 'created' | 'paid' | 'failed';
 };
 
@@ -25,11 +37,12 @@ type MarketplaceVerifyBody = {
 export type MarketplaceVerifyRouteResult =
   | {
       ok: true;
+      status?: 200 | 202;
       body: Record<string, unknown>;
     }
   | {
       ok: false;
-      status: 400 | 404 | 429 | 500 | 503;
+      status: 400 | 404 | 429 | 500 | 502 | 503 | 504;
       body: Record<string, unknown>;
       rateLimitError?: BackendRateLimitError;
     };
@@ -47,15 +60,19 @@ function normalizeBody(value: unknown): MarketplaceVerifyBody {
 export async function verifyMarketplacePaymentForRoute({
   adminSupabase,
   buyerUserId,
+  keyId,
   keySecret,
   readBody,
   verifySignature = verifyRazorpayPaymentSignature,
+  fetchPayment = defaultFetchRazorpayPayment,
 }: {
   adminSupabase: SupabaseClient;
   buyerUserId: string;
+  keyId?: string | null;
   keySecret?: string | null;
   readBody: () => Promise<unknown>;
   verifySignature?: typeof verifyRazorpayPaymentSignature;
+  fetchPayment?: typeof defaultFetchRazorpayPayment;
 }): Promise<MarketplaceVerifyRouteResult> {
   try {
     await enforceBackendRateLimit(adminSupabase, {
@@ -91,9 +108,10 @@ export async function verifyMarketplacePaymentForRoute({
     return { ok: false, status: 400, body: { error: 'Missing required payment parameters.' } };
   }
 
+  const resolvedKeyId = keyId?.trim();
   const secret = keySecret?.trim();
-  if (!secret) {
-    logBackendError('razorpay_key_secret_not_configured');
+  if (!resolvedKeyId || !secret) {
+    logBackendError('razorpay_api_credentials_not_configured');
     return { ok: false, status: 503, body: { error: 'Payment verification is not configured.' } };
   }
 
@@ -108,7 +126,7 @@ export async function verifyMarketplacePaymentForRoute({
 
   const { data: orderData, error: orderError } = await adminSupabase
     .from('marketplace_orders')
-    .select('id, buyer_user_id, status')
+    .select('id, buyer_user_id, amount_subunits, currency, status, razorpay_payment_id')
     .eq('razorpay_order_id', razorpayOrderId)
     .maybeSingle();
 
@@ -120,6 +138,66 @@ export async function verifyMarketplacePaymentForRoute({
   const order = (orderData as MarketplaceOrderRow | null) ?? null;
   if (!order || order.buyer_user_id !== buyerUserId) {
     return { ok: false, status: 404, body: { error: 'Order not found.' } };
+  }
+
+  if (order.status === 'paid' && order.razorpay_payment_id !== razorpayPaymentId) {
+    logBackendError('marketplace_verify_payment_id_conflict', {
+      orderId: razorpayOrderId,
+      marketplaceOrderId: order.id,
+    });
+    return { ok: false, status: 400, body: { error: 'Payment details do not match the order.' } };
+  }
+  if (order.status === 'failed') {
+    return { ok: false, status: 400, body: { error: 'This order cannot be fulfilled.' } };
+  }
+
+  let payment;
+  try {
+    payment = await fetchPayment({
+      keyId: resolvedKeyId,
+      keySecret: secret,
+      paymentId: razorpayPaymentId,
+    });
+  } catch (error) {
+    logBackendError('marketplace_payment_lookup_failed', {
+      orderId: razorpayOrderId,
+      error,
+    });
+    if (isExternalServiceTimeoutError(error)) {
+      return { ok: false, status: 504, body: { error: 'Payment provider timed out. Please try again.' } };
+    }
+    if (error instanceof RazorpayPaymentError) {
+      return {
+        ok: false,
+        status: error.status as 400 | 500 | 502,
+        body: { error: error.status === 400 ? 'Payment could not be verified.' : 'Payment provider is unavailable.' },
+      };
+    }
+    return { ok: false, status: 502, body: { error: 'Payment provider is unavailable.' } };
+  }
+
+  const paymentVerification = verifyRazorpayPaymentAgainstOrder({
+    payment,
+    expectedPaymentId: razorpayPaymentId,
+    expectedOrderId: razorpayOrderId,
+    expectedAmount: order.amount_subunits,
+    expectedCurrency: order.currency,
+    expectedBuyerUserId: buyerUserId,
+    buyerNoteKey: 'buyer_user_id',
+  });
+  if (paymentVerification.state === 'pending') {
+    return {
+      ok: true,
+      status: 202,
+      body: createPendingPaymentResultBody(),
+    };
+  }
+  if (paymentVerification.state === 'rejected') {
+    logBackendError('marketplace_payment_validation_failed', {
+      orderId: razorpayOrderId,
+      reason: paymentVerification.reason,
+    });
+    return { ok: false, status: 400, body: { error: 'Payment details do not match the order.' } };
   }
 
   if (order.status === 'paid') {
@@ -139,11 +217,18 @@ export async function verifyMarketplacePaymentForRoute({
   if (!completionResult) {
     const { data: refreshedOrder } = await adminSupabase
       .from('marketplace_orders')
-      .select('status')
+      .select('status, razorpay_payment_id')
       .eq('razorpay_order_id', razorpayOrderId)
       .maybeSingle();
 
-    if (refreshedOrder?.status === 'paid') {
+    if (refreshedOrder?.status === 'failed' || refreshedOrder?.status === 'refunded') {
+      return { ok: false, status: 400, body: { error: 'This order cannot be fulfilled.' } };
+    }
+
+    if (
+      refreshedOrder?.status === 'paid'
+      && refreshedOrder.razorpay_payment_id === razorpayPaymentId
+    ) {
       return { ok: true, body: { success: true, alreadyProcessed: true } };
     }
 

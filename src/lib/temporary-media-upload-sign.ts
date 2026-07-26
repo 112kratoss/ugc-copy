@@ -6,6 +6,7 @@ import {
   TEMPORARY_MEDIA_UPLOAD_SIGN_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { canUserCreateDurableUpload } from '@/lib/account-deletion-guard';
 import { isAllowedStorageMediaMimeType } from '@/lib/storage-upload-mime-policy';
 
 export type TemporaryMediaUploadSignClient = Parameters<typeof enforceBackendRateLimit>[0] & {
@@ -168,6 +169,21 @@ export async function createTemporaryMediaUploadIntent({
   }
 
   const resolvedClient = resolveClient(client);
+  const deletionState = await canUserCreateDurableUpload(resolvedClient, userId);
+  if (!deletionState.allowed) {
+    return deletionState.error
+      ? {
+          ok: false,
+          status: 500,
+          error: 'Failed to verify account upload eligibility.',
+        }
+      : {
+          ok: false,
+          status: 409,
+          code: 'ACCOUNT_DELETION_IN_PROGRESS',
+          error: 'Uploads are disabled because this account is being deleted.',
+        };
+  }
 
   try {
     await enforceBackendRateLimit(resolvedClient, {

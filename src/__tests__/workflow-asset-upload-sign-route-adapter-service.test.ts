@@ -55,7 +55,7 @@ describe('workflow asset upload-sign route adapter service', () => {
     const createWorkflowAssetUploadIntent = vi.fn(async () => ({
       ok: true as const,
       response: {
-        success: true,
+        success: true as const,
         bucket: 'generated_images' as const,
         path: 'user-1/workflow-input-upload-id-1-reference.png',
         storagePath: 'generated_images/user-1/workflow-input-upload-id-1-reference.png',

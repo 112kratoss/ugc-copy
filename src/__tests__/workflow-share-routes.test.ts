@@ -49,6 +49,37 @@ function createServiceSupabaseMock() {
       }
 
       return {
+        insert(payload: Record<string, unknown>) {
+          insertedSharePayloads.push(payload);
+          return {
+            select() {
+              return {
+                async single() {
+                  return {
+                    data: {
+                      id: SHARE_ID,
+                      title: String(payload.title),
+                      node_count: Number(payload.node_count ?? 0),
+                      edge_count: Number(payload.edge_count ?? 0),
+                      import_count: 0,
+                      created_at: '2026-04-02T10:00:00.000Z',
+                    },
+                    error: null,
+                  };
+                },
+              };
+            },
+          };
+        },
+        select() {
+          const query = {
+            eq() { return query; },
+            async maybeSingle() {
+              return { data: shareRow, error: null };
+            },
+          };
+          return query;
+        },
         update(payload: Record<string, unknown>) {
           shareImportCountUpdates.push(payload);
 

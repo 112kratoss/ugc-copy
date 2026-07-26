@@ -137,6 +137,7 @@ describe('cleanupProfileMedia', () => {
         resetAt: '2026-06-23T04:10:00.000Z',
       },
     });
+    if (result.ok) throw new Error('Expected a rate-limit error');
     expect(result.rateLimitError?.retryAfterSeconds).toBe(42);
     expect(remove).not.toHaveBeenCalled();
   });

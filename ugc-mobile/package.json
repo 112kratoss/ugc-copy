@@ -3,10 +3,19 @@
   "version": "0.0.4",
   "private": true,
   "main": "expo-router/entry",
+  "expo": {
+    "install": {
+      "exclude": [
+        "react-native"
+      ]
+    }
+  },
   "scripts": {
     "android": "expo run:android",
+    "eas-build-pre-install": "node ./scripts/verify-production-build-env.mjs",
     "postinstall": "patch-package",
     "profile:android:physical": "node ./scripts/profile-android-physical.mjs",
+    "release-env:self-test": "node ./scripts/verify-production-build-env.mjs --self-test",
     "start": "expo start",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
@@ -40,11 +49,12 @@
     "expo-secure-store": "~55.0.16",
     "expo-splash-screen": "~55.0.23",
     "expo-status-bar": "~55.0.6",
+    "expo-system-ui": "~55.0.20",
     "expo-video": "~55.0.19",
     "expo-web-browser": "~55.0.18",
     "lucide-react-native": "1.14.0",
     "react": "19.2.0",
-    "react-native": "0.83.6",
+    "react-native": "0.83.10",
     "react-native-purchases": "10.1.0",
     "react-native-reanimated": "4.2.1",
     "react-native-safe-area-context": "5.6.2",
@@ -64,6 +74,7 @@
     "vitest": "4.1.6"
   },
   "overrides": {
+    "brace-expansion": "5.0.8",
     "uuid": "11.1.1"
   }
 }

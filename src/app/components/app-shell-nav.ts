@@ -141,6 +141,7 @@ export function getAppShellTitle(pathname: string) {
 
 export function isMinimalAppChromePath(pathname: string) {
   return (
+    pathname === '/child-safety' ||
     pathname === '/auth' ||
     pathname.startsWith('/auth/') ||
     pathname === '/login' ||

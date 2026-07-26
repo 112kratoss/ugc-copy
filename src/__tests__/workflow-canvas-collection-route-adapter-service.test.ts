@@ -149,10 +149,10 @@ describe('workflow canvas collection route adapter service', () => {
         })),
         createServiceClient: vi.fn(() => ({ rpc: vi.fn() }) as unknown as SupabaseClient),
         createWorkflowCanvasForRoute: vi.fn(async () => ({
-          ok: false,
-          status: 429,
+          ok: false as const,
+          status: 429 as const,
           rateLimitError,
-          body: { code: 'RATE_LIMITED' },
+          body: { code: 'RATE_LIMITED' as const },
         })),
       },
     });

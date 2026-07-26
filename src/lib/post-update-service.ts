@@ -149,7 +149,7 @@ export type PostUpdateRouteResult =
     }
   | {
       ok: false;
-      status: 400 | 404 | 500;
+      status: 400 | 404 | 409 | 500;
       body: {
         error: string;
         field?: string;
@@ -670,6 +670,13 @@ export async function updateOwnerPostForRoute({
     const post = await loadOwnedPost(adminSupabase, postId, ownerUserId);
     if (!post) {
       return { ok: false, status: 404, body: { error: 'Post not found.' } };
+    }
+    if (post.review_status && post.review_status !== 'visible') {
+      return {
+        ok: false,
+        status: 409,
+        body: { error: 'This post is locked while a moderation decision is in effect.' },
+      };
     }
     const existingBundle = await loadOwnedBundleStatus(adminSupabase, postId, ownerUserId);
 

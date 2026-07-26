@@ -1,16 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const createUserClientMock = vi.fn();
-const rpcMock = vi.fn(async () => ({
-  data: {
-    allowed: true,
-    limit: 10,
-    remaining: 9,
-    retryAfterSeconds: 0,
-    resetAt: '2026-06-21T06:30:00.000Z',
-  },
-  error: null,
-}));
+const rpcMock = vi.fn(async (
+  name: string,
+  args: Record<string, unknown>,
+): Promise<{ data: unknown; error: unknown }> => {
+  void name;
+  void args;
+  return {
+    data: {
+      allowed: true,
+      limit: 10,
+      remaining: 9,
+      retryAfterSeconds: 0,
+      resetAt: '2026-06-21T06:30:00.000Z',
+    },
+    error: null,
+  };
+});
 const fromMock = vi.fn();
 const orderInsertMock = vi.fn(async () => ({ error: null }));
 const adminClient = { from: fromMock, rpc: rpcMock };
@@ -74,15 +81,37 @@ describe('/api/posts/[postId]/resource-bundle/order route', () => {
     createUserClientMock.mockReset();
     createServiceClientFactory.mockClear();
     rpcMock.mockReset();
-    rpcMock.mockResolvedValue({
-      data: {
-        allowed: true,
-        limit: 10,
-        remaining: 9,
-        retryAfterSeconds: 0,
-        resetAt: '2026-06-21T06:30:00.000Z',
-      },
-      error: null,
+    rpcMock.mockImplementation(async (name: string, args: Record<string, unknown>) => {
+      if (name === 'claim_razorpay_checkout_intent') {
+        return {
+          data: {
+            status: 'claimed',
+            intent_id: '30000000-0000-4000-8000-000000000003',
+            provider_receipt: 'mb_30000000000040008000000000000003',
+            provider_order_id: null,
+          },
+          error: null,
+        };
+      }
+      if (name === 'complete_razorpay_checkout_intent') {
+        return {
+          data: { status: 'recorded', provider_order_id: args.p_provider_order_id },
+          error: null,
+        };
+      }
+      if (name === 'abandon_razorpay_checkout_intent') {
+        return { data: { status: 'abandoned' }, error: null };
+      }
+      return {
+        data: {
+          allowed: true,
+          limit: 10,
+          remaining: 9,
+          retryAfterSeconds: 0,
+          resetAt: '2026-06-21T06:30:00.000Z',
+        },
+        error: null,
+      };
     });
     fromMock.mockReset();
     fromMock.mockImplementation((table: string) => {
@@ -184,7 +213,10 @@ describe('/api/posts/[postId]/resource-bundle/order route', () => {
           'Content-Type': 'application/json',
           'x-request-id': 'bundle-order-rate-limit-1',
         },
-        body: JSON.stringify({ locale: 'en-IN' }),
+        body: JSON.stringify({
+          locale: 'en-IN',
+          clientIntentKey: 'intent-bundle-route-123456',
+        }),
       }) as never,
       { params: Promise.resolve({ postId: 'post-1' }) }
     );
@@ -224,7 +256,10 @@ describe('/api/posts/[postId]/resource-bundle/order route', () => {
           'x-vercel-ip-country': 'IN',
           'x-request-id': 'bundle-order-success-1',
         },
-        body: JSON.stringify({ locale: 'en-IN' }),
+        body: JSON.stringify({
+          locale: 'en-IN',
+          clientIntentKey: 'intent-bundle-timeout-123456',
+        }),
       }) as never,
       { params: Promise.resolve({ postId: 'post-1' }) }
     );
@@ -274,7 +309,10 @@ describe('/api/posts/[postId]/resource-bundle/order route', () => {
           'x-vercel-ip-country': 'IN',
           'x-request-id': 'bundle-order-timeout-1',
         },
-        body: JSON.stringify({ locale: 'en-IN' }),
+        body: JSON.stringify({
+          locale: 'en-IN',
+          clientIntentKey: 'intent-bundle-timeout-123456',
+        }),
       }) as never,
       { params: Promise.resolve({ postId: 'post-1' }) }
     );
@@ -284,7 +322,7 @@ describe('/api/posts/[postId]/resource-bundle/order route', () => {
     await expect(response.json()).resolves.toEqual({
       error: 'Payment provider timed out. Please try again.',
     });
-    expect(providerFetchMock).toHaveBeenCalledOnce();
+    expect(providerFetchMock).toHaveBeenCalledTimes(2);
     expect(orderInsertMock).not.toHaveBeenCalled();
   });
 });

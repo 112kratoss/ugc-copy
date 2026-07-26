@@ -70,6 +70,7 @@ describe('postMarketplaceVerifyRouteResponse', () => {
       dependencies: {
         createServiceClient: vi.fn(() => adminSupabase),
         createUserClient: () => createUserClient('buyer-1'),
+        razorpayKeyId: 'test-key-id',
         razorpayKeySecret: 'test-secret',
         verifyMarketplacePaymentForRoute,
       },
@@ -82,8 +83,39 @@ describe('postMarketplaceVerifyRouteResponse', () => {
     expect(verifyMarketplacePaymentForRoute).toHaveBeenCalledWith({
       adminSupabase,
       buyerUserId: 'buyer-1',
+      keyId: 'test-key-id',
       keySecret: 'test-secret',
       readBody: expect.any(Function),
+    });
+  });
+
+  it('preserves the authorized-but-uncaptured 202 contract', async () => {
+    const response = await postMarketplaceVerifyRouteResponse({
+      request: new Request('http://localhost/api/marketplace/verify', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient),
+        createUserClient: () => createUserClient('buyer-1'),
+        verifyMarketplacePaymentForRoute: vi.fn(async () => ({
+          ok: true as const,
+          status: 202 as const,
+          body: {
+            success: false,
+            status: 'pending' as const,
+            pending: true,
+            code: 'PAYMENT_PENDING',
+          },
+        })),
+      },
+    });
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'pending',
+      pending: true,
+      code: 'PAYMENT_PENDING',
     });
   });
 
@@ -109,8 +141,8 @@ describe('postMarketplaceVerifyRouteResponse', () => {
         createServiceClient: vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient),
         createUserClient: () => createUserClient('buyer-1'),
         verifyMarketplacePaymentForRoute: vi.fn(async () => ({
-          ok: false,
-          status: 429,
+          ok: false as const,
+          status: 429 as const,
           rateLimitError,
           body: { code: 'RATE_LIMITED' },
         })),

@@ -468,6 +468,8 @@ describe('PublishToShowcaseModal', () => {
         paywallPrefill={{
           resourceKinds: ['files'],
           allowRemix: false,
+          promptText: null,
+          notesMarkdown: null,
           referenceCount: 1,
           referenceKindCounts: { image: 1 },
         }}

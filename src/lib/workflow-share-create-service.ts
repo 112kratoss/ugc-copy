@@ -70,7 +70,7 @@ export type WorkflowShareCreateRouteResult =
 type CreateWorkflowShareForRouteParams = {
   canvasId: string;
   origin: string;
-  serviceSupabase: WorkflowShareRateLimitClient;
+  serviceSupabase: WorkflowShareRateLimitClient & WorkflowShareCreateUserClient;
   userId: string;
   userSupabase: WorkflowShareCreateUserClient;
 };
@@ -94,8 +94,8 @@ function workflowCanvasTable(userSupabase: WorkflowShareCreateUserClient) {
   return userSupabase.from('workflow_canvases') as WorkflowCanvasLookupTable;
 }
 
-function workflowShareTable(userSupabase: WorkflowShareCreateUserClient) {
-  return userSupabase.from('workflow_shares') as WorkflowShareInsertTable;
+function workflowShareTable(serviceSupabase: WorkflowShareCreateUserClient) {
+  return serviceSupabase.from('workflow_shares') as WorkflowShareInsertTable;
 }
 
 async function loadOwnedCanvas({
@@ -172,7 +172,7 @@ export async function createWorkflowShareForRoute({
     edge_count: shareGraph.edges.length,
   };
 
-  const { data: share, error: shareError } = await workflowShareTable(userSupabase)
+  const { data: share, error: shareError } = await workflowShareTable(serviceSupabase)
     .insert(shareInsert)
     .select(WORKFLOW_SHARE_SUMMARY_SELECT)
     .single();

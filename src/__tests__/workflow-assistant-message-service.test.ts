@@ -102,6 +102,7 @@ describe('createWorkflowAssistantMessageForRoute', () => {
     });
 
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('Expected setup-required response');
     expect(result.status).toBe(503);
     expect(result.body).toMatchObject({
       code: WORKFLOW_ASSISTANT_SETUP_ERROR_CODE,

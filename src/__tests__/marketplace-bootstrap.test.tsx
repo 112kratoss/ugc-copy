@@ -127,7 +127,8 @@ describe('MarketplaceBootstrap', () => {
     );
 
     const form = screen.getByRole('search');
-    const formData = new FormData(form);
+    expect(form).toBeInstanceOf(HTMLFormElement);
+    const formData = new FormData(form as HTMLFormElement);
 
     expect(form).toHaveAttribute('action', '/marketplace');
     expect(form).toHaveAttribute('method', 'get');

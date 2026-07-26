@@ -1,16 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { postGenerationModelQuoteRouteResponse } from '@/lib/generation-model-quote-route-adapter-service';
 import type { GenerationModelQuoteServiceResult } from '@/lib/generation-model-quote-service';
 
 describe('generation model quote route adapter service', () => {
   it('delegates valid quote requests with the forwarded IP rate-limit key and private headers', async () => {
-    const rateLimitClient = { kind: 'rate-limit-client' };
+    const rateLimitClient = { kind: 'rate-limit-client' } as unknown as SupabaseClient;
     const createServiceClient = vi.fn(() => rateLimitClient);
     const createGenerationModelQuote = vi.fn(async (): Promise<GenerationModelQuoteServiceResult> => ({
       ok: true,
       quote: {
-        kind: 'motion',
         modelId: 'kling-2.6',
         catalogRevision: 'generation-models-v1-test',
         normalizedSettings: { resolution: '1080p', duration: 10, characterOrientation: 'video' },
@@ -84,7 +84,9 @@ describe('generation model quote route adapter service', () => {
       }),
       dependencies: {
         createGenerationModelQuote,
-        createServiceClient: vi.fn(() => ({ kind: 'rate-limit-client' })),
+        createServiceClient: vi.fn(
+          () => ({ kind: 'rate-limit-client' }) as unknown as SupabaseClient
+        ),
       },
     });
 

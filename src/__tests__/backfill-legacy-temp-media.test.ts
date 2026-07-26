@@ -55,7 +55,7 @@ function objectKey(extension: string, bucket = 'generated_images') {
 }
 
 function mediaResponse(bytes: Uint8Array, contentType: string) {
-  return new Response(bytes, {
+  return new Response(Uint8Array.from(bytes), {
     status: 200,
     headers: {
       'content-length': String(bytes.byteLength),

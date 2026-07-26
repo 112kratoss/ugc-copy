@@ -2,6 +2,39 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { getSavedMediaFeedForRoute } from '@/lib/showcase-saved-media-service';
+import type { ShowcaseFeedItem } from '@/lib/showcase';
+
+function createFeedItem(
+  id: string,
+  title: string,
+  creatorId = 'creator-1'
+): ShowcaseFeedItem {
+  return {
+    id,
+    mediaUrl: null,
+    mediaKind: null,
+    model: 'nano-banana-2',
+    title,
+    prompt: '',
+    body: '',
+    category: 'image',
+    postFormat: 'text',
+    saveCount: 0,
+    remixCount: 0,
+    createdAt: '2026-06-10T09:00:00Z',
+    creator: {
+      id: creatorId,
+      username: null,
+      name: 'Creator',
+      avatar: null,
+    },
+    sourceKind: 'magicbooklet',
+    sourceTool: null,
+    generationId: null,
+    asset: null,
+    canRemix: false,
+  };
+}
 
 function createUserSupabaseMock(options?: {
   postSaves?: Array<{ post_id: string; created_at: string }>;
@@ -57,33 +90,45 @@ function createUserSupabaseMock(options?: {
     from(table: string) {
       if (table === 'post_saves') return createSaveQuery(table);
       if (table === 'showcase_saves') return createSaveQuery(table);
+      throw new Error(`Unexpected user table access: ${table}`);
+    },
+  };
+
+  const adminClient = {
+    from(table: string) {
       if (table === 'posts') {
         return {
           select(_columns: string) {
             void _columns;
-            return {
+            const query = {
               in(_column: string, _values: unknown[]) {
                 void _column;
                 void _values;
-                return {
-                  in(_visibilityColumn: string, _visibilityValues: unknown[]) {
-                    void _visibilityColumn;
-                    void _visibilityValues;
-                    tableReads.push('posts:lookup');
-                    return Promise.resolve({ data: options?.posts ?? [], error: null });
-                  },
-                };
+                return query;
+              },
+              eq(_column: string, _value: unknown) {
+                void _column;
+                void _value;
+                return query;
+              },
+              is(_column: string, _value: unknown) {
+                void _column;
+                void _value;
+                tableReads.push('posts:lookup');
+                return Promise.resolve({ data: options?.posts ?? [], error: null });
               },
             };
+            return query;
           },
         };
       }
 
-      throw new Error(`Unexpected table access: ${table}`);
+      throw new Error(`Unexpected admin table access: ${table}`);
     },
   };
 
   return {
+    adminClient: adminClient as unknown as SupabaseClient,
     client: client as unknown as SupabaseClient,
     tableReads,
   };
@@ -133,15 +178,11 @@ describe('getSavedMediaFeedForRoute', () => {
       ],
       totalPostSaves: 5,
     });
-    const adminSupabase = { service: 'admin' } as unknown as SupabaseClient;
+    const adminSupabase = userSupabase.adminClient;
     const createAdminSupabase = vi.fn(() => adminSupabase);
     const loadBlockedCreatorIds = vi.fn(async () => new Set<string>());
     const resolvePostRowsToFeedItems = vi.fn(async (rows: Array<{ id: string; title?: string | null }>) =>
-      rows.map((row) => ({
-        id: row.id,
-        title: row.title ?? row.id,
-        generationId: null,
-      }))
+      rows.map((row) => createFeedItem(row.id, row.title ?? row.id))
     );
 
     const result = await getSavedMediaFeedForRoute({
@@ -155,6 +196,7 @@ describe('getSavedMediaFeedForRoute', () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('Expected a saved-media page');
     expect(result.body.items.map((item: { id: string }) => item.id)).toEqual(['post-2', 'post-1']);
     expect(result.body.items).toMatchObject([
       { id: 'post-2', isSaved: true, savedAt: '2026-06-10T12:00:00Z' },
@@ -169,7 +211,7 @@ describe('getSavedMediaFeedForRoute', () => {
     expect(createAdminSupabase).toHaveBeenCalledTimes(1);
     expect(loadBlockedCreatorIds).toHaveBeenCalledWith({
       adminSupabase,
-      creatorIds: [],
+      creatorIds: ['creator-1', 'creator-1'],
       viewerUserId: 'user-1',
     });
     expect(resolvePostRowsToFeedItems).toHaveBeenCalledWith(
@@ -192,11 +234,11 @@ describe('getSavedMediaFeedForRoute', () => {
         { id: 'post-visible', generation_id: null, title: 'Visible post' },
       ],
     });
-    const adminSupabase = { service: 'admin' } as unknown as SupabaseClient;
+    const adminSupabase = userSupabase.adminClient;
     const loadBlockedCreatorIds = vi.fn(async () => new Set(['creator-blocked']));
     const resolvePostRowsToFeedItems = vi.fn(async () => [
-      { id: 'post-blocked', generationId: null, creator: { id: 'creator-blocked' } },
-      { id: 'post-visible', generationId: null, creator: { id: 'creator-visible' } },
+      createFeedItem('post-blocked', 'Blocked post', 'creator-blocked'),
+      createFeedItem('post-visible', 'Visible post', 'creator-visible'),
     ]);
 
     const result = await getSavedMediaFeedForRoute({
@@ -210,6 +252,7 @@ describe('getSavedMediaFeedForRoute', () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('Expected a saved-media page');
     expect(result.body.items.map((item: { id: string }) => item.id)).toEqual(['post-visible']);
     expect(loadBlockedCreatorIds).toHaveBeenCalledWith({
       adminSupabase,

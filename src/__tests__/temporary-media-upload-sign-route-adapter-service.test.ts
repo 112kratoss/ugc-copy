@@ -55,7 +55,7 @@ describe('temporary media upload-sign route adapter service', () => {
     const createTemporaryMediaUploadIntent = vi.fn(async () => ({
       ok: true as const,
       response: {
-        success: true,
+        success: true as const,
         bucket: 'uploads' as const,
         path: 'user-1/upload-id-1-reference.png',
         storagePath: 'uploads/user-1/upload-id-1-reference.png',

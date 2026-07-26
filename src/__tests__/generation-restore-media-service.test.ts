@@ -122,7 +122,7 @@ describe('restoreGenerationMediaForRoute', () => {
       persistGenerationMediaBlob: vi.fn(async () => ({
         outputUrl: 'generated_images/user-1/restored-gen-1.png',
         createdLocation: {
-          bucket: 'generated_images',
+          bucket: 'generated_images' as const,
           filePath: 'user-1/restored-gen-1.png',
         },
       })),

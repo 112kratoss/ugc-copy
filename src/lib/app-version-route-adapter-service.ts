@@ -6,6 +6,7 @@ import { API_CACHE_CONTROL, createApiResponseHeaders } from '@/lib/api-cache';
 import { MOBILE_CLIENT_COMPATIBILITY_POLICY } from '@/lib/mobile-client-compatibility';
 
 type AppVersionEnvironment = {
+  RELEASE_GIT_SHA?: string;
   VERCEL_GIT_COMMIT_SHA?: string;
   VERCEL_DEPLOYMENT_ID?: string;
   VERCEL_URL?: string;
@@ -24,6 +25,7 @@ function firstNonEmpty(values: Array<string | undefined>): string | null {
 
 function resolveBuildId(environment: AppVersionEnvironment): string {
   return firstNonEmpty([
+    environment.RELEASE_GIT_SHA,
     environment.VERCEL_GIT_COMMIT_SHA,
     environment.VERCEL_DEPLOYMENT_ID,
     environment.VERCEL_URL,
@@ -32,6 +34,7 @@ function resolveBuildId(environment: AppVersionEnvironment): string {
 
 function readProcessEnvironment(): AppVersionEnvironment {
   return {
+    RELEASE_GIT_SHA: process.env.RELEASE_GIT_SHA,
     VERCEL_GIT_COMMIT_SHA: process.env.VERCEL_GIT_COMMIT_SHA,
     VERCEL_DEPLOYMENT_ID: process.env.VERCEL_DEPLOYMENT_ID,
     VERCEL_URL: process.env.VERCEL_URL,

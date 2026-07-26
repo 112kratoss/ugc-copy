@@ -43,6 +43,7 @@ import {
   type PostResourceSectionKind,
 } from '@/lib/post-resource-bundles';
 import { slugifySourceTool, type SourceToolOption } from '@/lib/source-tools';
+import { supabase } from '@/lib/supabase';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
 import CreatableCombobox, { type CreatableComboboxOption } from './CreatableCombobox';
@@ -714,23 +715,64 @@ function getInitialResourceSectionRows(bundle: PostResourceBundleInput | null | 
 }
 
 async function uploadResourceFile(file: File, accessToken: string): Promise<PostResourceAttachment> {
-  const formData = new FormData();
-  formData.set('file', file);
-
-  const response = await fetch('/api/posts/resource-files', {
+  const contentType = file.type || 'application/octet-stream';
+  const signResponse = await fetch('/api/posts/resource-files/sign', {
     method: 'POST',
     headers: {
+      'Content-Type': 'application/json',
       Authorization: `Bearer ${accessToken}`,
     },
-    body: formData,
+    body: JSON.stringify({
+      fileName: file.name,
+      contentType,
+      sizeBytes: file.size,
+    }),
   });
-  const data = await response.json();
+  const uploadIntent = await signResponse.json() as {
+    bucket?: 'post_resource_files';
+    path?: string;
+    token?: string;
+    error?: string;
+  };
 
-  if (!response.ok || !data.attachment) {
-    throw new Error(data.error || 'Failed to upload resource file.');
+  if (
+    !signResponse.ok
+    || uploadIntent.bucket !== 'post_resource_files'
+    || !uploadIntent.path
+    || !uploadIntent.token
+  ) {
+    throw new Error(uploadIntent.error || 'Failed to prepare resource upload.');
   }
 
-  return data.attachment as PostResourceAttachment;
+  const { error: uploadError } = await supabase.storage
+    .from(uploadIntent.bucket)
+    .uploadToSignedUrl(uploadIntent.path, uploadIntent.token, file, { contentType });
+  if (uploadError) {
+    throw new Error(`Resource upload failed: ${uploadError.message}`);
+  }
+
+  const finalizeResponse = await fetch('/api/posts/resource-files/finalize', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      path: uploadIntent.path,
+      fileName: file.name,
+      contentType,
+      sizeBytes: file.size,
+    }),
+  });
+  const finalized = await finalizeResponse.json() as {
+    attachment?: PostResourceAttachment;
+    error?: string;
+  };
+  if (!finalizeResponse.ok || !finalized.attachment) {
+    throw new Error(finalized.error || 'Failed to verify resource upload.');
+  }
+
+  return finalized.attachment;
 }
 
 function getInitialPriceUsd(bundle: PostResourceBundleInput | null | undefined): string {

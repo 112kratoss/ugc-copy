@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { createOwnerPostForRoute } from '@/lib/post-create-route-service';
+import type { PostCreationSubmission } from '@/lib/post-creation-submission-service';
 import type { SourceToolOption } from '@/lib/source-tools';
 
 const sourceToolCatalog: SourceToolOption[] = [
@@ -53,6 +54,7 @@ describe('createOwnerPostForRoute', () => {
     });
 
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('Expected a rate-limit error');
     expect(result).toHaveProperty('rateLimitError');
     expect(result.status).toBe(429);
     expect(admin.calls).toEqual([
@@ -89,7 +91,7 @@ describe('createOwnerPostForRoute', () => {
       normalizedSourceTool: { label: null, slug: null },
       sourceKind: 'manual',
       resourceBundle: null,
-    } as const;
+    } satisfies PostCreationSubmission;
     const publishBody = {
       success: true,
       postId: 'post-123',
@@ -102,11 +104,11 @@ describe('createOwnerPostForRoute', () => {
     const readFormData = vi.fn(async () => formData);
     const listSourceToolsCatalog = vi.fn(async () => sourceToolCatalog);
     const preparePostCreationSubmission = vi.fn(async () => ({
-      ok: true,
+      ok: true as const,
       submission: preparedSubmission,
     }));
     const publishPreparedPost = vi.fn(async () => ({
-      ok: true,
+      ok: true as const,
       body: publishBody,
     }));
 
@@ -151,8 +153,8 @@ describe('createOwnerPostForRoute', () => {
       dependencies: {
         listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
         preparePostCreationSubmission: vi.fn(async () => ({
-          ok: false,
-          status: 400,
+          ok: false as const,
+          status: 400 as const,
           body: { error: 'Media is required.' },
         })),
         publishPreparedPost,

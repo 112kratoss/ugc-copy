@@ -15,6 +15,7 @@ type MarketplaceVerifyRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   logError?: typeof logBackendRouteError;
+  razorpayKeyId?: string | null;
   razorpayKeySecret?: string | null;
   verifyMarketplacePaymentForRoute?: typeof verifyMarketplacePaymentForRoute;
 };
@@ -24,6 +25,9 @@ function resolveDependencies(dependencies: MarketplaceVerifyRouteDependencies | 
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     logError: dependencies?.logError ?? logBackendRouteError,
+    razorpayKeyId: dependencies && 'razorpayKeyId' in dependencies
+      ? dependencies.razorpayKeyId
+      : process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
     razorpayKeySecret: dependencies && 'razorpayKeySecret' in dependencies
       ? dependencies.razorpayKeySecret
       : process.env.RAZORPAY_KEY_SECRET,
@@ -37,7 +41,9 @@ function toJsonResponse(result: MarketplaceVerifyRouteResult) {
     return createBackendRateLimitResponse(result.rateLimitError);
   }
 
-  return NextResponse.json(result.body, { status: result.ok ? 200 : result.status });
+  return NextResponse.json(result.body, {
+    status: result.ok ? (result.status ?? 200) : result.status,
+  });
 }
 
 async function handleMarketplaceVerifyPOST({
@@ -61,6 +67,7 @@ async function handleMarketplaceVerifyPOST({
     return toJsonResponse(await dependencies.verifyMarketplacePaymentForRoute({
       adminSupabase: dependencies.createServiceClient(),
       buyerUserId: user.id,
+      keyId: dependencies.razorpayKeyId,
       keySecret: dependencies.razorpayKeySecret,
       readBody: () => request.json(),
     }));

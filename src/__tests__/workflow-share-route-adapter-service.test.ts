@@ -207,6 +207,7 @@ describe('workflow share route adapter service', () => {
       context: createShareContext(),
       dependencies: {
         authenticateRequest: vi.fn(async () => ({ supabase, userId: 'user-2' })),
+        createServiceClient: vi.fn(() => supabase),
       },
     });
 

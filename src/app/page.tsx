@@ -371,6 +371,7 @@ export default function Home() {
           <p>© {new Date().getFullYear()} magicbooklet.</p>
           <nav className="flex flex-wrap justify-center gap-x-5 gap-y-2" aria-label="Legal and support">
             <Link href="/contact" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Contact</Link>
+            <Link href="/child-safety" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Child safety</Link>
             <Link href="/privacy" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Privacy</Link>
             <Link href="/terms" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Terms</Link>
             <Link href="/cancellation" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Cancellation</Link>

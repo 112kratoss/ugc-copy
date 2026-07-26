@@ -2,7 +2,9 @@ import crypto from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { verifyMarketplacePaymentForRoute } from '@/lib/marketplace-verify-service';
+import {
+  verifyMarketplacePaymentForRoute as verifyMarketplacePaymentForRouteImpl,
+} from '@/lib/marketplace-verify-service';
 
 type OrderRow = {
   id: string;
@@ -46,13 +48,22 @@ function createAdminSupabaseMock({
         async maybeSingle() {
           if (calls.rpc.some((call) => call.name === 'complete_marketplace_purchase')) {
             return {
-              data: order ? { status: refreshedStatus } : null,
+              data: order
+                ? { status: refreshedStatus, razorpay_payment_id: 'pay_123' }
+                : null,
               error: null,
             };
           }
 
           return {
-            data: order,
+            data: order
+              ? {
+                  amount_subunits: 12_300,
+                  currency: 'INR',
+                  razorpay_payment_id: order.status === 'paid' ? 'pay_123' : null,
+                  ...order,
+                }
+              : null,
             error: null,
           };
         },
@@ -98,6 +109,25 @@ function validBody() {
     razorpay_payment_id: 'pay_123',
     razorpay_signature: signatureFor('order_123', 'pay_123'),
   };
+}
+
+function verifyMarketplacePaymentForRoute(
+  input: Parameters<typeof verifyMarketplacePaymentForRouteImpl>[0],
+) {
+  return verifyMarketplacePaymentForRouteImpl({
+    keyId: 'test-key',
+    fetchPayment: vi.fn(async ({ paymentId }) => ({
+      id: paymentId,
+      orderId: 'order_123',
+      amount: 12_300,
+      amountRefunded: 0,
+      currency: 'INR',
+      status: 'captured' as const,
+      captured: true,
+      notes: { buyer_user_id: 'user-1' },
+    })),
+    ...input,
+  });
 }
 
 describe('verifyMarketplacePaymentForRoute', () => {
@@ -229,5 +259,65 @@ describe('verifyMarketplacePaymentForRoute', () => {
       body: { success: true, alreadyProcessed: true },
     });
     expect(admin.calls.tables).toEqual(['marketplace_orders', 'marketplace_orders']);
+  });
+
+  it('returns 202 without creating an entitlement for an authorized payment', async () => {
+    const admin = createAdminSupabaseMock();
+
+    const result = await verifyMarketplacePaymentForRoute({
+      adminSupabase: admin.client,
+      buyerUserId: 'user-1',
+      keySecret: 'test-secret',
+      readBody: vi.fn(async () => validBody()),
+      fetchPayment: vi.fn(async () => ({
+        id: 'pay_123',
+        orderId: 'order_123',
+        amount: 12_300,
+        amountRefunded: 0,
+        currency: 'INR',
+        status: 'authorized' as const,
+        captured: false,
+        notes: { buyer_user_id: 'user-1' },
+      })),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      status: 202,
+      body: expect.objectContaining({
+        status: 'pending',
+        pending: true,
+        code: 'PAYMENT_PENDING',
+      }),
+    });
+    expect(admin.calls.rpc.map((call) => call.name)).toEqual(['check_backend_rate_limit']);
+  });
+
+  it('rejects a captured payment bound to another buyer', async () => {
+    const admin = createAdminSupabaseMock();
+
+    const result = await verifyMarketplacePaymentForRoute({
+      adminSupabase: admin.client,
+      buyerUserId: 'user-1',
+      keySecret: 'test-secret',
+      readBody: vi.fn(async () => validBody()),
+      fetchPayment: vi.fn(async () => ({
+        id: 'pay_123',
+        orderId: 'order_123',
+        amount: 12_300,
+        amountRefunded: 0,
+        currency: 'INR',
+        status: 'captured' as const,
+        captured: true,
+        notes: { buyer_user_id: 'other-user' },
+      })),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'Payment details do not match the order.' },
+    });
+    expect(admin.calls.rpc.map((call) => call.name)).toEqual(['check_backend_rate_limit']);
   });
 });

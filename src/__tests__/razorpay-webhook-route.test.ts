@@ -19,6 +19,9 @@ type MarketplaceOrderRow = {
 type BundleOrderRow = {
   id: string;
   buyer_user_id: string;
+  amount_subunits: number;
+  currency: string;
+  razorpay_payment_id: string | null;
   status: OrderStatus;
 } | null;
 
@@ -155,6 +158,21 @@ function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string)
   expect(response.headers.get('x-request-id')).toBe(requestId);
 }
 
+function capturedPaymentEntity() {
+  return {
+    id: 'pay_123',
+    order_id: 'order_123',
+    amount: 41500,
+    amount_refunded: 0,
+    currency: 'INR',
+    status: 'captured',
+    captured: true,
+    notes: {
+      buyer_user_id: 'user-1',
+    },
+  };
+}
+
 describe('/api/razorpay/webhook route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -178,6 +196,9 @@ describe('/api/razorpay/webhook route', () => {
     bundleOrderState = {
       id: 'bundle-order-1',
       buyer_user_id: 'user-1',
+      amount_subunits: 41500,
+      currency: 'INR',
+      razorpay_payment_id: null,
       status: 'created',
     };
 
@@ -187,10 +208,7 @@ describe('/api/razorpay/webhook route', () => {
         event: 'payment.captured',
         payload: {
           payment: {
-            entity: {
-              id: 'pay_123',
-              order_id: 'order_123',
-            },
+            entity: capturedPaymentEntity(),
           },
         },
       },
@@ -236,6 +254,9 @@ describe('/api/razorpay/webhook route', () => {
     bundleOrderState = {
       id: 'bundle-order-1',
       buyer_user_id: 'user-1',
+      amount_subunits: 41500,
+      currency: 'INR',
+      razorpay_payment_id: 'pay_123',
       status: 'paid',
     };
 
@@ -244,10 +265,7 @@ describe('/api/razorpay/webhook route', () => {
       event: 'payment.captured',
       payload: {
         payment: {
-          entity: {
-            id: 'pay_123',
-            order_id: 'order_123',
-          },
+          entity: capturedPaymentEntity(),
         },
       },
     }));
@@ -263,6 +281,9 @@ describe('/api/razorpay/webhook route', () => {
     bundleOrderState = {
       id: 'bundle-order-1',
       buyer_user_id: 'user-1',
+      amount_subunits: 41500,
+      currency: 'INR',
+      razorpay_payment_id: null,
       status: 'created',
     };
     bundleRpcMode = 'fail-return';
@@ -272,10 +293,7 @@ describe('/api/razorpay/webhook route', () => {
       event: 'payment.captured',
       payload: {
         payment: {
-          entity: {
-            id: 'pay_123',
-            order_id: 'order_123',
-          },
+          entity: capturedPaymentEntity(),
         },
       },
     }));
@@ -291,10 +309,7 @@ describe('/api/razorpay/webhook route', () => {
       event: 'payment.captured',
       payload: {
         payment: {
-          entity: {
-            id: 'pay_123',
-            order_id: 'order_123',
-          },
+          entity: capturedPaymentEntity(),
         },
       },
     }));

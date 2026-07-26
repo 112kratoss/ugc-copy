@@ -178,7 +178,11 @@ describe('workflow run route adapter service', () => {
     const getWorkflowRunDetails = vi.fn(async () => ({
       id: 'run-1',
       canvas_id: 'canvas-1',
-      status: 'processing',
+      start_node_id: 'node-1',
+      mode: 'branch' as const,
+      status: 'processing' as const,
+      created_at: '2026-06-23T10:00:00.000Z',
+      finished_at: null,
       steps: [],
     }));
 
@@ -200,7 +204,11 @@ describe('workflow run route adapter service', () => {
       run: {
         id: 'run-1',
         canvas_id: 'canvas-1',
+        start_node_id: 'node-1',
+        mode: 'branch',
         status: 'processing',
+        created_at: '2026-06-23T10:00:00.000Z',
+        finished_at: null,
         steps: [],
       },
     });
@@ -259,10 +267,20 @@ describe('workflow run route adapter service', () => {
     const approveWorkflowRunStep = vi.fn(async () => ({
       id: 'run-1',
       canvas_id: 'canvas-1',
-      status: 'processing',
+      start_node_id: 'node-1',
+      mode: 'branch' as const,
+      status: 'processing' as const,
+      created_at: '2026-06-23T10:00:00.000Z',
+      finished_at: null,
       steps: [],
     }));
-    const enforceBackendRateLimit = vi.fn(async () => undefined);
+    const enforceBackendRateLimit = vi.fn(async () => ({
+      allowed: true,
+      limit: 60,
+      remaining: 59,
+      retryAfterSeconds: 0,
+      resetAt: '2026-06-23T10:10:00.000Z',
+    }));
 
     const response = await postWorkflowRunApprovalRouteResponse({
       request: new Request('http://localhost/api/workflow-canvases/canvas-1/runs/run-1/approval-steps/step-1/approve', {
@@ -311,7 +329,13 @@ describe('workflow run route adapter service', () => {
           throw new WorkflowRunApprovalError('This approval step is not waiting for review.', 409);
         }),
         createServiceClient: vi.fn(() => ({ kind: 'admin-client' }) as never),
-        enforceBackendRateLimit: vi.fn(async () => undefined),
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true,
+          limit: 60,
+          remaining: 59,
+          retryAfterSeconds: 0,
+          resetAt: '2026-06-23T10:10:00.000Z',
+        })),
       },
     });
 

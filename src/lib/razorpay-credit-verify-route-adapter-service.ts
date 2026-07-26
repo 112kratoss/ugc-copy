@@ -14,6 +14,7 @@ import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 type RazorpayCreditVerifyRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
+  getRazorpayKeyId?: () => string | undefined;
   getRazorpayKeySecret?: () => string | undefined;
   logError?: typeof logBackendRouteError;
   verifyCreditRazorpayPaymentForRoute?: typeof verifyCreditRazorpayPaymentForRoute;
@@ -23,6 +24,7 @@ function resolveDependencies(dependencies: RazorpayCreditVerifyRouteDependencies
   return {
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
+    getRazorpayKeyId: dependencies?.getRazorpayKeyId ?? (() => process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID),
     getRazorpayKeySecret: dependencies?.getRazorpayKeySecret ?? (() => process.env.RAZORPAY_KEY_SECRET),
     logError: dependencies?.logError ?? logBackendRouteError,
     verifyCreditRazorpayPaymentForRoute:
@@ -35,7 +37,9 @@ function toJsonResponse(result: CreditRazorpayVerifyRouteResult) {
     return createBackendRateLimitResponse(result.rateLimitError);
   }
 
-  return NextResponse.json(result.body, { status: result.ok ? 200 : result.status });
+  return NextResponse.json(result.body, {
+    status: result.ok ? (result.status ?? 200) : result.status,
+  });
 }
 
 async function handleRazorpayCreditVerifyPOST(
@@ -44,6 +48,7 @@ async function handleRazorpayCreditVerifyPOST(
 ) {
   try {
     return toJsonResponse(await dependencies.verifyCreditRazorpayPaymentForRoute({
+      keyId: dependencies.getRazorpayKeyId(),
       keySecret: dependencies.getRazorpayKeySecret(),
       readBody: () => request.json(),
       createUserSupabase: () => dependencies.createUserClient(request),

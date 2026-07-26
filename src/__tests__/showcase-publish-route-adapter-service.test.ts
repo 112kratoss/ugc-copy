@@ -105,7 +105,13 @@ describe('showcase publish route adapter service', () => {
       dependencies: {
         createServiceClient: vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient),
         createUserClient: () => createUserClient('user-1'),
-        enforceBackendRateLimit: vi.fn(async () => undefined),
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true,
+          limit: 60,
+          remaining: 59,
+          retryAfterSeconds: 0,
+          resetAt: '2026-06-23T10:10:00.000Z',
+        })),
         publishGenerationToShowcaseForRoute,
       },
     });
@@ -121,7 +127,13 @@ describe('showcase publish route adapter service', () => {
     const supabase = createUserClient('user-1');
     const adminSupabase = { kind: 'admin' } as unknown as SupabaseClient;
     const createServiceClient = vi.fn(() => adminSupabase);
-    const enforceBackendRateLimit = vi.fn(async () => undefined);
+    const enforceBackendRateLimit = vi.fn(async () => ({
+      allowed: true,
+      limit: 60,
+      remaining: 59,
+      retryAfterSeconds: 0,
+      resetAt: '2026-06-23T10:10:00.000Z',
+    }));
     const fetchWithProviderTimeout = vi.fn();
     const body = {
       generationId: 'gen-1',
@@ -131,7 +143,7 @@ describe('showcase publish route adapter service', () => {
     const publishGenerationToShowcaseForRoute = vi.fn(async () => ({
       ok: true as const,
       body: {
-        success: true,
+        success: true as const,
         isPublic: true,
         visibility: 'public' as const,
         postId: 'post-1',

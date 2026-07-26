@@ -110,7 +110,7 @@ describe('credit unlock route adapter service', () => {
   it('delegates successful marketplace credit unlocks after rate limiting', async () => {
     const adminSupabase = { service: 'admin' } as unknown as SupabaseClient;
     const unlockMarketplaceAssetWithCredits = vi.fn(async () => ({
-      success: true,
+      success: true as const,
       entitlement: 'marketplace_unlock' as const,
       assetId: 'asset-1',
       credits: 18,
@@ -151,7 +151,7 @@ describe('credit unlock route adapter service', () => {
   it('delegates successful post resource credit unlocks after rate limiting', async () => {
     const adminSupabase = { service: 'admin' } as unknown as SupabaseClient;
     const unlockPostResourceBundleWithCredits = vi.fn(async () => ({
-      success: true,
+      success: true as const,
       entitlement: 'post_resource_unlock' as const,
       postId: 'post-1',
       credits: 12,

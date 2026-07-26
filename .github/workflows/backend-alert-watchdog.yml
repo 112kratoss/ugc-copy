@@ -49,16 +49,22 @@ jobs:
           set -uo pipefail
 
           if [ -z "${OPS_READ_SECRET}" ]; then
-            echo "::warning title=Watchdog inert::OPS_READ_SECRET is not set, so the backend alert watchdog is not actually checking anything. Add it under Settings > Secrets and variables > Actions."
+            echo "::error title=Watchdog not configured::OPS_READ_SECRET is missing. Add the production read-only secret under Settings > Secrets and variables > Actions."
             {
-              echo "### Backend alert watchdog: INERT"
+              echo "### Backend alert watchdog: NOT CONFIGURED"
               echo
               echo "\`OPS_READ_SECRET\` is missing, so no probe was performed."
-              echo "Add the repository secret to activate this check."
+              echo "This is a failed safety check. Add the repository secret and rerun the workflow."
             } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
 
+          if [[ ! "${BASE_URL}" =~ ^https://[^[:space:]]+$ ]]; then
+            echo "::error title=Invalid production URL::PRODUCTION_BASE_URL must be an absolute HTTPS origin."
+            exit 1
+          fi
+
+          BASE_URL="${BASE_URL%/}"
           echo "Probing ${BASE_URL}/api/ops/backend-alerts"
 
           # --max-time bounds a hung connection; the body is captured so the

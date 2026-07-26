@@ -53,8 +53,13 @@ describe('posts route adapter service', () => {
     const createOwnerPostForRoute = vi.fn(async () => ({
       ok: true as const,
       body: {
-        success: true,
+        success: true as const,
         postId: 'post-1',
+        visibility: 'private' as const,
+        showcasePath: null,
+        ownerPath: '/post/post-1/edit',
+        resourceBundlePath: '/post/post-1/edit#recipe',
+        resourceBundleStatus: null,
       },
     }));
     const request = new Request('http://localhost/api/posts', {
@@ -75,7 +80,15 @@ describe('posts route adapter service', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(response.headers.get('x-request-id')).toBe('posts-create-1');
-    await expect(response.json()).resolves.toEqual({ success: true, postId: 'post-1' });
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      postId: 'post-1',
+      visibility: 'private',
+      showcasePath: null,
+      ownerPath: '/post/post-1/edit',
+      resourceBundlePath: '/post/post-1/edit#recipe',
+      resourceBundleStatus: null,
+    });
     expect(createOwnerPostForRoute).toHaveBeenCalledWith({
       adminSupabase,
       ownerUserId: 'user-1',
@@ -100,8 +113,14 @@ describe('posts route adapter service', () => {
       dependencies: {
         createOwnerPostForRoute: vi.fn(async () => ({
           ok: false as const,
-          status: 429,
-          body: { code: 'RATE_LIMITED' },
+          status: 429 as const,
+          body: {
+            error: rateLimitError.message,
+            code: 'RATE_LIMITED' as const,
+            retryAfterSeconds: 37,
+            limit: 60,
+            resetAt: '2026-06-23T13:00:00.000Z',
+          },
           rateLimitError,
         })),
         createServiceClient: vi.fn(() => ({ rpc: vi.fn() }) as unknown as SupabaseClient),
@@ -123,6 +142,12 @@ describe('posts route adapter service', () => {
     const listOwnerPostsForRoute = vi.fn(async () => ({
       ok: true as const,
       posts,
+      pageInfo: {
+        hasMore: false,
+        limit: null,
+        nextOffset: null,
+        offset: 0,
+      },
     }));
     const request = new Request('http://localhost/api/posts?scope=owner&visibility=public');
 
@@ -138,6 +163,12 @@ describe('posts route adapter service', () => {
     await expect(response.json()).resolves.toEqual({
       success: true,
       posts,
+      pageInfo: {
+        hasMore: false,
+        limit: null,
+        nextOffset: null,
+        offset: 0,
+      },
     });
     expect(listOwnerPostsForRoute).toHaveBeenCalledWith({
       userId: 'user-1',
@@ -150,11 +181,25 @@ describe('posts route adapter service', () => {
     const adminSupabase = { kind: 'admin' } as unknown as SupabaseClient;
     const createOwnerPostForRoute = vi.fn(async () => ({
       ok: true as const,
-      body: { success: true, postId: 'post-2' },
+      body: {
+        success: true as const,
+        postId: 'post-2',
+        visibility: 'private' as const,
+        showcasePath: null,
+        ownerPath: '/post/post-2/edit',
+        resourceBundlePath: '/post/post-2/edit#recipe',
+        resourceBundleStatus: null,
+      },
     }));
     const listOwnerPostsForRoute = vi.fn(async () => ({
       ok: true as const,
       posts,
+      pageInfo: {
+        hasMore: false,
+        limit: null,
+        nextOffset: null,
+        offset: 0,
+      },
     }));
     const { GET, POST } = createPostsRouteHandlers({
       dependencies: {
@@ -180,8 +225,25 @@ describe('posts route adapter service', () => {
     expect(postResponse.status).toBe(200);
     expect(postResponse.headers.get('Cache-Control')).toBe('private, no-store');
     expect(postResponse.headers.get('x-request-id')).toBe('posts-factory-post-1');
-    await expect(getResponse.json()).resolves.toEqual({ success: true, posts });
-    await expect(postResponse.json()).resolves.toEqual({ success: true, postId: 'post-2' });
+    await expect(getResponse.json()).resolves.toEqual({
+      success: true,
+      posts,
+      pageInfo: {
+        hasMore: false,
+        limit: null,
+        nextOffset: null,
+        offset: 0,
+      },
+    });
+    await expect(postResponse.json()).resolves.toEqual({
+      success: true,
+      postId: 'post-2',
+      visibility: 'private',
+      showcasePath: null,
+      ownerPath: '/post/post-2/edit',
+      resourceBundlePath: '/post/post-2/edit#recipe',
+      resourceBundleStatus: null,
+    });
     expect(listOwnerPostsForRoute).toHaveBeenCalledWith({
       userId: 'user-1',
       searchParams: new URL('http://localhost/api/posts?scope=owner').searchParams,
@@ -200,7 +262,7 @@ describe('posts route adapter service', () => {
         createUserClient: () => createUserClient('user-1'),
         listOwnerPostsForRoute: vi.fn(async () => ({
           ok: false as const,
-          status: 400,
+          status: 400 as const,
           error: 'Unsupported posts scope.',
         })),
       },

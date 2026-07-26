@@ -34,6 +34,22 @@ function createClient(results: Record<string, QueryResult | QueryResult[]>) {
     const rows = [...result.data];
     if (!rows.some((row) => (
       row && typeof row === 'object'
+      && (row as { job_name?: unknown }).job_name === 'account-deletion-resweeps'
+    ))) {
+      rows.push(
+        {
+          job_name: 'account-deletion-resweeps',
+          status: 'skipped',
+          started_at: '2026-06-21T09:50:00.000Z',
+          finished_at: '2026-06-21T09:50:01.000Z',
+          duration_ms: 1000,
+          skip_reason: 'no_due_account_deletion_cleanup',
+          error_message: null,
+        },
+      );
+    }
+    if (!rows.some((row) => (
+      row && typeof row === 'object'
       && (row as { job_name?: unknown }).job_name === 'referral-reward-reconciliation'
     ))) {
       rows.push(
@@ -102,6 +118,7 @@ function createClient(results: Record<string, QueryResult | QueryResult[]>) {
 }
 
 const COMPLETE_BACKEND_ENVIRONMENT = {
+  NODE_ENV: 'test',
   NEXT_PUBLIC_SUPABASE_URL: 'https://project.supabase.co',
   NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon-key',
   SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
@@ -216,9 +233,14 @@ describe('collectBackendHealth', () => {
       cadenceMinutes: 10,
       dailyInvocations: 144,
       dailyInvocationBudget: 180,
-      logicalDailyInvocations: 506,
-      coveredJobCount: 8,
+      logicalDailyInvocations: 650,
+      coveredJobCount: 9,
       coveredJobs: expect.arrayContaining([
+        expect.objectContaining({
+          name: 'account-deletion-resweeps',
+          cadenceMinutes: 10,
+          dailyInvocations: 144,
+        }),
         expect.objectContaining({
           name: 'backend-alert-delivery',
           cadenceMinutes: 10,
@@ -251,7 +273,7 @@ describe('collectBackendHealth', () => {
         }),
       ]),
     });
-    expect(health.jobs).toHaveLength(8);
+    expect(health.jobs).toHaveLength(9);
     expect(health.jobs.find((job) => job.name === 'backend-alert-delivery')).toMatchObject({
       status: 'ok',
       dailyInvocations: 144,
@@ -1263,5 +1285,55 @@ describe('collectBackendHealth', () => {
     });
 
     await expect(collectBackendHealth(db.client as never)).rejects.toThrow('database unavailable');
+  });
+
+  it('keeps a failed account deletion cleanup visible until a successful retry', async () => {
+    const db = createClient({
+      backend_job_runs: {
+        error: null,
+        data: [
+          {
+            job_name: 'account-deletion-resweeps',
+            status: 'skipped',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:01.000Z',
+            duration_ms: 1000,
+            skip_reason: 'no_due_account_deletion_cleanup',
+            error_message: null,
+          },
+          {
+            job_name: 'account-deletion-resweeps',
+            status: 'failed',
+            started_at: '2026-06-21T09:40:00.000Z',
+            finished_at: '2026-06-21T09:40:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: 'Storage timeout',
+          },
+        ],
+      },
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+    });
+
+    const health = await collectBackendHealth(
+      db.client as never,
+      new Date('2026-06-21T10:00:00.000Z'),
+    );
+
+    expect(health.jobs.find((job) => job.name === 'account-deletion-resweeps')).toMatchObject({
+      status: 'warning',
+      latestRun: { status: 'skipped' },
+      recentFailures: 1,
+    });
+    expect(health.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'ACCOUNT_DELETION_CLEANUP_RETRY_PENDING',
+        severity: 'warning',
+      }),
+    ]));
   });
 });

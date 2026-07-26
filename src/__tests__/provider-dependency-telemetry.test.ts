@@ -11,7 +11,10 @@ import {
 
 describe('provider dependency telemetry', () => {
   it('stores sanitized provider dependency events for ops dashboards', async () => {
-    const insert = vi.fn(async () => ({ error: null }));
+    const insert = vi.fn(async (_row: Record<string, unknown>) => {
+      void _row;
+      return { error: null };
+    });
     const client = {
       from: vi.fn(() => ({ insert })),
     };
@@ -49,7 +52,10 @@ describe('provider dependency telemetry', () => {
   });
 
   it('persists the model attribution when the event carries one', async () => {
-    const insert = vi.fn(async () => ({ error: null }));
+    const insert = vi.fn(async (_row: Record<string, unknown>) => {
+      void _row;
+      return { error: null };
+    });
     const client = { from: vi.fn(() => ({ insert })) };
     const event: ProviderFetchTelemetryEvent = {
       type: 'provider_fetch',
@@ -68,7 +74,10 @@ describe('provider dependency telemetry', () => {
   });
 
   it('omits the column entirely for calls with no model behind them', async () => {
-    const insert = vi.fn(async () => ({ error: null }));
+    const insert = vi.fn(async (_row: Record<string, unknown>) => {
+      void _row;
+      return { error: null };
+    });
     const client = { from: vi.fn(() => ({ insert })) };
     const event: ProviderFetchTelemetryEvent = {
       type: 'provider_fetch',
@@ -88,7 +97,10 @@ describe('provider dependency telemetry', () => {
   });
 
   it('records payment webhook processing failures under their dedicated service name', async () => {
-    const insert = vi.fn(async () => ({ error: null }));
+    const insert = vi.fn(async (_row: Record<string, unknown>) => {
+      void _row;
+      return { error: null };
+    });
     const client = { from: vi.fn(() => ({ insert })) };
 
     await recordPaymentWebhookProcessingFailure({
@@ -111,7 +123,10 @@ describe('provider dependency telemetry', () => {
   });
 
   it('records the response status the webhook actually returned to the provider', async () => {
-    const insert = vi.fn(async () => ({ error: null }));
+    const insert = vi.fn(async (_row: Record<string, unknown>) => {
+      void _row;
+      return { error: null };
+    });
     const client = { from: vi.fn(() => ({ insert })) };
 
     await recordPaymentWebhookProcessingFailure({

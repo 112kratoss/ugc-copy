@@ -9,6 +9,7 @@ import {
 } from '@/lib/backend-environment';
 
 const COMPLETE_ENVIRONMENT = {
+  NODE_ENV: 'test',
   NEXT_PUBLIC_SUPABASE_URL: 'https://project.supabase.co',
   NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon-key',
   SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',

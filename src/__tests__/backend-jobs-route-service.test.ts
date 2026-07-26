@@ -32,6 +32,7 @@ function succeededResult(job: BackendJobDefinition['name']): BackendJobExecution
 describe('runBackendJobsSchedulerForRoute', () => {
   const serviceClient = { service: 'supabase' };
   const createServiceClient = vi.fn();
+  const runAccountDeletionResweepsBackendJob = vi.fn();
   const runBackendAlertDeliveryJob = vi.fn();
   const runFeedMaintenanceBackendJob = vi.fn();
   const runGenerationCompletionsBackendJob = vi.fn();
@@ -42,6 +43,10 @@ describe('runBackendJobsSchedulerForRoute', () => {
   beforeEach(() => {
     createServiceClient.mockReset();
     createServiceClient.mockReturnValue(serviceClient);
+    runAccountDeletionResweepsBackendJob.mockReset();
+    runAccountDeletionResweepsBackendJob.mockResolvedValue(
+      succeededResult('account-deletion-resweeps'),
+    );
     runBackendAlertDeliveryJob.mockReset();
     runBackendAlertDeliveryJob.mockResolvedValue(succeededResult('backend-alert-delivery'));
     runFeedMaintenanceBackendJob.mockReset();
@@ -69,6 +74,7 @@ describe('runBackendJobsSchedulerForRoute', () => {
         now: () => Date.parse('2026-06-23T10:00:00.000Z'),
         createServiceClient,
         getDueBackendJobs: () => [
+          backendJob('account-deletion-resweeps'),
           backendJob('backend-alert-delivery'),
           backendJob('feed-maintenance'),
           backendJob('generation-completions'),
@@ -76,6 +82,7 @@ describe('runBackendJobsSchedulerForRoute', () => {
           backendJob('mobile-push-receipts'),
           backendJob('referral-reward-reconciliation'),
         ],
+        runAccountDeletionResweepsBackendJob,
         runBackendAlertDeliveryJob,
         runFeedMaintenanceBackendJob,
         runGenerationCompletionsBackendJob,
@@ -90,8 +97,9 @@ describe('runBackendJobsSchedulerForRoute', () => {
       body: {
         success: true,
         scheduler: '/api/cron/backend-jobs',
-        dueJobs: ['backend-alert-delivery', 'feed-maintenance', 'generation-completions', 'media-preview-repair', 'mobile-push-receipts', 'referral-reward-reconciliation'],
+        dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-maintenance', 'generation-completions', 'media-preview-repair', 'mobile-push-receipts', 'referral-reward-reconciliation'],
         results: [
+          expect.objectContaining({ job: 'account-deletion-resweeps', status: 'succeeded' }),
           expect.objectContaining({ job: 'backend-alert-delivery', status: 'succeeded' }),
           expect.objectContaining({ job: 'feed-maintenance', status: 'succeeded' }),
           expect.objectContaining({ job: 'generation-completions', status: 'succeeded' }),
@@ -102,6 +110,12 @@ describe('runBackendJobsSchedulerForRoute', () => {
       },
     });
     expect(createServiceClient).toHaveBeenCalledTimes(1);
+    expect(runAccountDeletionResweepsBackendJob).toHaveBeenCalledWith({
+      requestId: 'bom1::scheduler-42:account-deletion-resweeps',
+      startedAtMs: Date.parse('2026-06-23T10:00:00.000Z'),
+      serviceClient,
+      triggerRoute: '/api/cron/backend-jobs',
+    });
     expect(runBackendAlertDeliveryJob).toHaveBeenCalledWith({
       requestId: 'bom1::scheduler-42:backend-alert-delivery',
       startedAtMs: Date.parse('2026-06-23T10:00:00.000Z'),
@@ -147,6 +161,7 @@ describe('runBackendJobsSchedulerForRoute', () => {
         now: () => Date.parse('2026-06-23T10:05:00.000Z'),
         createServiceClient,
         getDueBackendJobs: () => [],
+        runAccountDeletionResweepsBackendJob,
         runBackendAlertDeliveryJob,
         runFeedMaintenanceBackendJob,
         runGenerationCompletionsBackendJob,
@@ -166,6 +181,7 @@ describe('runBackendJobsSchedulerForRoute', () => {
       },
     });
     expect(createServiceClient).not.toHaveBeenCalled();
+    expect(runAccountDeletionResweepsBackendJob).not.toHaveBeenCalled();
     expect(runBackendAlertDeliveryJob).not.toHaveBeenCalled();
     expect(runFeedMaintenanceBackendJob).not.toHaveBeenCalled();
     expect(runGenerationCompletionsBackendJob).not.toHaveBeenCalled();
@@ -195,6 +211,7 @@ describe('runBackendJobsSchedulerForRoute', () => {
           backendJob('generation-completions'),
           backendJob('media-preview-repair'),
         ],
+        runAccountDeletionResweepsBackendJob,
         runBackendAlertDeliveryJob,
         runFeedMaintenanceBackendJob,
         runGenerationCompletionsBackendJob,

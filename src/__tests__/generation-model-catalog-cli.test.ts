@@ -438,7 +438,7 @@ describe('generation-model catalog release CLI', () => {
     const messages: string[] = [];
     await runGenerationModelCatalogCli(
       ['validate', '--manifest', manifestPath, '--json'],
-      {},
+      { NODE_ENV: 'test' },
       { log: (message) => messages.push(message) },
     );
 

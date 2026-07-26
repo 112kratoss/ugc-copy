@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
   const cookieStore = {
-    get: vi.fn(() => undefined),
+    get: vi.fn((_name: string): { name: string; value: string } | undefined => {
+      void _name;
+      return undefined;
+    }),
     getAll: vi.fn(() => []),
     set: vi.fn(),
   };
@@ -20,10 +23,13 @@ const mocks = vi.hoisted(() => {
     profileQuery,
     getUser: vi.fn(),
     getSession: vi.fn(),
-    createServerClient: vi.fn(),
+    createServerClient: vi.fn<(...args: unknown[]) => unknown>(),
     createServiceClient: vi.fn(),
     isE2EAuthBypassEnabled: vi.fn(() => false),
-    hasE2EAuthCookie: vi.fn(() => false),
+    hasE2EAuthCookie: vi.fn((_value?: string) => {
+      void _value;
+      return false;
+    }),
     createE2ESession: vi.fn(),
   };
 });

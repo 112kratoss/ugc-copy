@@ -4,7 +4,10 @@ import {
   createGenerationModelQuote,
   type GenerationModelQuoteRateLimitClient,
 } from '@/lib/generation-model-quote-service';
-import { buildGenerationModelCatalog } from '@/lib/generation-model-catalog';
+import {
+  buildGenerationModelCatalog,
+  type GenerationModelQuoteInput,
+} from '@/lib/generation-model-catalog';
 
 function createRateLimitClient(
   data: {
@@ -50,7 +53,7 @@ describe('createGenerationModelQuote', () => {
     const rateLimit = createRateLimitClient();
 
     const result = await createGenerationModelQuote({
-      body: { kind: 'voice', modelId: '' },
+      body: { kind: 'voice', modelId: '' } as unknown as Partial<GenerationModelQuoteInput>,
       rateLimitKey: '203.0.113.10',
       rateLimitClient: rateLimit.client,
     });

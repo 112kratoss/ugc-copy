@@ -63,6 +63,9 @@ async function handleMarketplaceOrderPOST(
 
     const body = await request.json();
     const assetId = typeof body.assetId === 'string' ? body.assetId.trim() : '';
+    const clientIntentKey = typeof body.clientIntentKey === 'string'
+      ? body.clientIntentKey.trim()
+      : '';
     const clientLocale = typeof body.locale === 'string' ? body.locale.trim() : null;
 
     if (!assetId) {
@@ -77,6 +80,7 @@ async function handleMarketplaceOrderPOST(
       adminSupabase: dependencies.createServiceClient(),
       assetId,
       buyerUserId: user.id,
+      clientIntentKey,
       countryCode,
     }));
   } catch (error) {

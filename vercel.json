@@ -1,6 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "fluid": true,
+  "git": {
+    "deploymentEnabled": false
+  },
   "regions": ["bom1"],
   "crons": [
     {

@@ -85,7 +85,11 @@ describe('postMarketplaceOrderRouteResponse', () => {
           'Content-Type': 'application/json',
           'x-vercel-ip-country': 'in',
         },
-        body: JSON.stringify({ assetId: ' asset-1 ', locale: 'en-US' }),
+        body: JSON.stringify({
+          assetId: ' asset-1 ',
+          locale: 'en-US',
+          clientIntentKey: 'intent-market-route-123456',
+        }),
       }),
       dependencies: {
         createMarketplaceOrderForRoute,
@@ -103,6 +107,7 @@ describe('postMarketplaceOrderRouteResponse', () => {
       adminSupabase,
       assetId: 'asset-1',
       buyerUserId: 'buyer-1',
+      clientIntentKey: 'intent-market-route-123456',
       countryCode: 'IN',
     });
   });
@@ -150,7 +155,7 @@ describe('postMarketplaceOrderRouteResponse', () => {
       dependencies: {
         createMarketplaceOrderForRoute: vi.fn(async () => ({
           ok: false as const,
-          status: 429,
+          status: 429 as const,
           rateLimitError,
           body: { code: 'RATE_LIMITED' },
         })),

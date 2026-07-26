@@ -10,7 +10,7 @@ import {
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
-const SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL = '31536000';
+const SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL = '300';
 
 function isExistingStorageObjectError(error) {
   return error?.statusCode === '409'

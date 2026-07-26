@@ -54,7 +54,7 @@ describe('showcase priority poster inlining', () => {
 
   it('fetches without redirects and converts a bounded WebP response into a data URL', async () => {
     const bytes = createWebpBytes();
-    const fetchMock = vi.fn(async () => new Response(bytes, {
+    const fetchMock = vi.fn(async () => new Response(Uint8Array.from(bytes), {
       status: 200,
       headers: {
         'content-length': String(bytes.byteLength),
@@ -76,10 +76,10 @@ describe('showcase priority poster inlining', () => {
 
   it('rejects non-WebP responses and invalid file signatures', async () => {
     const { fetchInlineShowcasePriorityPoster } = await import('@/lib/showcase-priority-poster');
-    const pngFetch = vi.fn(async () => new Response(createWebpBytes(), {
+    const pngFetch = vi.fn(async () => new Response(Uint8Array.from(createWebpBytes()), {
       headers: { 'content-type': 'image/png' },
     }));
-    const invalidWebpFetch = vi.fn(async () => new Response(new Uint8Array(16), {
+    const invalidWebpFetch = vi.fn(async () => new Response(Uint8Array.from({ length: 16 }, () => 0), {
       headers: { 'content-type': 'image/webp' },
     }));
 
@@ -98,7 +98,7 @@ describe('showcase priority poster inlining', () => {
       SHOWCASE_PRIORITY_POSTER_MAX_BYTES,
       fetchInlineShowcasePriorityPoster,
     } = await import('@/lib/showcase-priority-poster');
-    const declaredOversizeFetch = vi.fn(async () => new Response(createWebpBytes(), {
+    const declaredOversizeFetch = vi.fn(async () => new Response(Uint8Array.from(createWebpBytes()), {
       headers: {
         'content-length': String(SHOWCASE_PRIORITY_POSTER_MAX_BYTES + 1),
         'content-type': 'image/webp',

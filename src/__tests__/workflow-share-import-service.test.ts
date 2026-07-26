@@ -34,7 +34,6 @@ function historyTableMissingError() {
 function createUserSupabaseMock(options?: {
   fallbackInsert?: boolean;
   historyMissing?: boolean;
-  shareMissing?: boolean;
 }) {
   const insertedCanvases: Array<Record<string, unknown>> = [];
   const historyInserts: Array<Record<string, unknown>> = [];
@@ -42,27 +41,6 @@ function createUserSupabaseMock(options?: {
 
   const client = {
     from(table: string) {
-      if (table === 'workflow_shares') {
-        return {
-          select() {
-            const query = {
-              eq() {
-                return query;
-              },
-              async maybeSingle() {
-                tableReads.push(table);
-                return {
-                  data: options?.shareMissing ? null : shareRow,
-                  error: null,
-                };
-              },
-            };
-
-            return query;
-          },
-        };
-      }
-
       if (table === 'workflow_canvases') {
         return {
           insert(payload: Record<string, unknown>) {
@@ -118,8 +96,9 @@ function createUserSupabaseMock(options?: {
   };
 }
 
-function createServiceSupabaseMock({ allowed = true } = {}) {
+function createServiceSupabaseMock({ allowed = true, shareMissing = false } = {}) {
   const importCountUpdates: Array<Record<string, unknown>> = [];
+  const tableReads: string[] = [];
   const rpc = vi.fn(async () => ({
     data: {
       allowed,
@@ -139,6 +118,22 @@ function createServiceSupabaseMock({ allowed = true } = {}) {
       }
 
       return {
+        select() {
+          const query = {
+            eq() {
+              return query;
+            },
+            async maybeSingle() {
+              tableReads.push(table);
+              return {
+                data: shareMissing ? null : shareRow,
+                error: null,
+              };
+            },
+          };
+
+          return query;
+        },
         update(payload: Record<string, unknown>) {
           importCountUpdates.push(payload);
           return {
@@ -155,6 +150,7 @@ function createServiceSupabaseMock({ allowed = true } = {}) {
     client: client as unknown as SupabaseClient,
     importCountUpdates,
     rpc,
+    tableReads,
   };
 }
 
@@ -178,6 +174,7 @@ describe('importWorkflowShareForRoute', () => {
     });
     expect(serviceSupabase.rpc).not.toHaveBeenCalled();
     expect(serviceSupabase.importCountUpdates).toEqual([]);
+    expect(serviceSupabase.tableReads).toEqual([]);
     expect(userSupabase.tableReads).toEqual([]);
   });
 
@@ -208,6 +205,7 @@ describe('importWorkflowShareForRoute', () => {
       p_window_seconds: 600,
     });
     expect(userSupabase.tableReads).toEqual([]);
+    expect(serviceSupabase.tableReads).toEqual([]);
     expect(userSupabase.insertedCanvases).toEqual([]);
     expect(serviceSupabase.importCountUpdates).toEqual([]);
   });

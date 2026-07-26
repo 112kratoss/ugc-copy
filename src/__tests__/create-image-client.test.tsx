@@ -2,9 +2,20 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateImageClient from '@/app/create-image/CreateImageClient';
+import type { PersistedImageElementRecord } from '@/lib/persisted-media';
 
-const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(async () => undefined));
-const getPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn());
+const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
+  async (_key: string, _elements: PersistedImageElementRecord[]): Promise<void> => {
+    void _key;
+    void _elements;
+  }
+));
+const getPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
+  async (_key: string): Promise<PersistedImageElementRecord[]> => {
+    void _key;
+    return [];
+  }
+));
 const removePersistedMediaMock = vi.hoisted(() => vi.fn(async () => undefined));
 const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
 const restoredFile = new File(['image-bytes'], 'restored-element.png', { type: 'image/png' });

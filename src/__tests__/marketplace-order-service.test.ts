@@ -1,7 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { createMarketplaceOrderForRoute } from '@/lib/marketplace-order-service';
+import {
+  createMarketplaceOrderForRoute as createMarketplaceOrderForRouteImpl,
+} from '@/lib/marketplace-order-service';
+
+type CreateMarketplaceOrderInput = Parameters<typeof createMarketplaceOrderForRouteImpl>[0];
+
+function createMarketplaceOrderForRoute(
+  input: Omit<CreateMarketplaceOrderInput, 'clientIntentKey' | 'fetchRazorpayOrderByReceipt'>
+    & Partial<Pick<CreateMarketplaceOrderInput, 'clientIntentKey' | 'fetchRazorpayOrderByReceipt'>>,
+) {
+  return createMarketplaceOrderForRouteImpl({
+    clientIntentKey: 'intent-marketplace-123456',
+    fetchRazorpayOrderByReceipt: vi.fn(async () => null),
+    ...input,
+  });
+}
 
 type MarketplaceAssetRow = {
   id: string;
@@ -69,6 +84,27 @@ function createAdminSupabaseMock(options?: {
             remaining: options?.rateLimited ? 0 : 9,
             retryAfterSeconds: options?.rateLimited ? 41 : 0,
             resetAt: '2026-06-22T10:00:00.000Z',
+          },
+          error: null,
+        };
+      }
+
+      if (fn === 'claim_razorpay_checkout_intent') {
+        return {
+          data: {
+            status: 'claimed',
+            intent_id: '20000000-0000-4000-8000-000000000002',
+            provider_receipt: 'mb_20000000000040008000000000000002',
+            provider_order_id: null,
+          },
+          error: null,
+        };
+      }
+      if (fn === 'complete_razorpay_checkout_intent') {
+        return {
+          data: {
+            status: 'recorded',
+            provider_order_id: args.p_provider_order_id,
           },
           error: null,
         };
@@ -159,7 +195,6 @@ describe('createMarketplaceOrderForRoute', () => {
       countryCode: 'IN',
       createRazorpayOrder,
       getMarketplacePriceQuote,
-      now: () => 1_787_355_200_000,
     });
 
     expect(result).toEqual({
@@ -182,10 +217,11 @@ describe('createMarketplaceOrderForRoute', () => {
       keySecret: process.env.RAZORPAY_KEY_SECRET,
       amount: 41500,
       currency: 'INR',
-      receipt: 'mkt_buyer-1_1787355200000',
+      receipt: 'mb_20000000000040008000000000000002',
       notes: {
         asset_id: 'asset-1',
         buyer_user_id: 'buyer-1',
+        purchase_kind: 'marketplace',
       },
     });
     expect(admin.inserts).toEqual([

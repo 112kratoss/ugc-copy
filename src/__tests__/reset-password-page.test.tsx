@@ -88,9 +88,9 @@ describe('ResetPasswordPage', () => {
     fireEvent.change(screen.getByLabelText(/confirm password/i), {
       target: { value: 'Strong-password1!' },
     });
-    vi.spyOn(window, 'setTimeout').mockImplementation((handler: TimerHandler) => {
-      if (typeof handler === 'function') handler();
-      return 1;
+    vi.spyOn(window, 'setTimeout').mockImplementation((handler: (_: void) => void) => {
+      handler();
+      return {} as ReturnType<typeof setTimeout>;
     });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /update password/i }));

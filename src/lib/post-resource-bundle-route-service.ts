@@ -131,10 +131,11 @@ export async function putPostResourceBundleForRoute({
   }
 
   const body = normalizeRequestBody(await readBody());
-  const { data: post, error: postError } = await userSupabase
+  const { data: post, error: postError } = await adminSupabase
     .from('posts')
     .select('id, user_id, title, body, visibility, archived_at, review_status, showcase_asset_path, output_url')
     .eq('id', postId)
+    .eq('user_id', ownerUserId)
     .maybeSingle();
 
   const typedPost = (post as PostResourceBundlePostRow | null) ?? null;

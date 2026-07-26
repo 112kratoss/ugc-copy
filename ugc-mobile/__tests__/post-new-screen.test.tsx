@@ -4,7 +4,7 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { readFileSync } from 'node:fs';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SourceToolOption } from '../lib/types';
 
 type MockProps = { children?: React.ReactNode; style?: unknown; visible?: boolean } & Record<string, unknown>;
@@ -224,8 +224,11 @@ async function renderScreen() {
     await Promise.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
+  mountedTrees.push(tree!);
   return tree!;
 }
+
+const mountedTrees: renderer.ReactTestRenderer[] = [];
 
 async function uploadManualMedia(assets = [
   { uri: 'file:///cover.png', fileName: 'cover.png', mimeType: 'image/png', fileSize: 1024, width: 1024, height: 1024 },
@@ -251,6 +254,13 @@ async function choosePreparedMedia(tree: renderer.ReactTestRenderer) {
 }
 
 describe('mobile external post composer', () => {
+  afterEach(() => {
+    renderer.act(() => {
+      for (const tree of mountedTrees.splice(0)) {
+        tree.unmount();
+      }
+    });
+  });
   it('uses the same full-screen push presentation as the media creator', () => {
     const layoutSource = readFileSync('app/_layout.tsx', 'utf8');
     const postRoute = layoutSource.match(/<Stack\.Screen\s+name="post\/new"[\s\S]*?\/>/)?.[0] ?? '';

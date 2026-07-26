@@ -106,6 +106,53 @@ describe('updateOwnerPostForRoute', () => {
     cacheMocks.invalidateShowcaseFeedCache.mockClear();
   });
 
+  it('does not let an owner edit or republish a moderated post', async () => {
+    const { client } = createSupabaseMock({
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'private',
+        title: 'Taken down',
+        description: null,
+        prompt: null,
+        body: 'Moderated content',
+        category: 'text',
+        post_format: 'text',
+        source_tool: null,
+        source_tool_slug: null,
+        source_kind: 'manual',
+        archived_at: null,
+        showcase_asset_path: null,
+        output_url: null,
+        review_status: 'hidden',
+      },
+    });
+    const dependencies = {
+      listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+      updatePostWithResourceBundleAtomically: vi.fn(),
+      replacePostSourceTools: vi.fn(),
+      replacePostMediaItems: vi.fn(),
+      createPostMediaPreview: vi.fn(),
+    } satisfies PostUpdateDependencies;
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: { visibility: 'public', title: 'Republished' },
+      dependencies,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      body: { error: 'This post is locked while a moderation decision is in effect.' },
+    });
+    expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
   it('updates private posts with draft unlock bundles without marketplace quality gating', async () => {
     const { client, rpcCalls } = createSupabaseMock();
     const dependencies = {
@@ -115,7 +162,7 @@ describe('updateOwnerPostForRoute', () => {
         postId: 'post-1',
         visibility: patch.visibility as 'private',
         bundleId: 'bundle-1',
-        bundleStatus: 'draft',
+        bundleStatus: 'draft' as const,
       })),
       replacePostSourceTools: vi.fn(async () => undefined),
       replacePostMediaItems: vi.fn(async () => undefined),
@@ -414,9 +461,9 @@ describe('updateOwnerPostForRoute', () => {
         getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
         updatePostWithResourceBundleAtomically: vi.fn(async () => ({
           postId: 'post-1',
-          visibility: 'private',
+          visibility: 'private' as const,
           bundleId: 'bundle-1',
-          bundleStatus: 'draft',
+          bundleStatus: 'draft' as const,
         })),
         replacePostSourceTools: vi.fn(async () => undefined),
         replacePostMediaItems,

@@ -241,7 +241,8 @@ function minutesSince(timestamp: string, now: Date): number {
 
 function getBuildId(): string {
   return (
-    process.env.VERCEL_GIT_COMMIT_SHA?.trim()
+    process.env.RELEASE_GIT_SHA?.trim()
+    || process.env.VERCEL_GIT_COMMIT_SHA?.trim()
     || process.env.VERCEL_DEPLOYMENT_ID?.trim()
     || process.env.VERCEL_URL?.trim()
     || 'dev'
@@ -268,6 +269,7 @@ function buildJobHealth(
     || (row.status === 'skipped' && row.skip_reason === expectedNoWorkSkipReason)
   )) ?? null;
   const recentFailures = jobRows.filter((row) => row.status === 'failed').length;
+  const latestFailure = jobRows.find((row) => row.status === 'failed') ?? null;
   const recentSkips = jobRows.filter((row) => row.status === 'skipped').length;
   const issues: BackendHealthIssue[] = [];
 
@@ -307,6 +309,22 @@ function buildJobHealth(
       severity: 'warning',
       code: 'JOB_RECENT_FAILURES',
       message: `${job.name} had ${recentFailures} failed run(s) in the last ${JOB_LOOKBACK_HOURS} hours.`,
+    });
+  }
+  if (
+    status === 'ok'
+    && job.name === 'account-deletion-resweeps'
+    && latestFailure
+    && (
+      !lastSuccess
+      || Date.parse(lastSuccess.started_at) < Date.parse(latestFailure.started_at)
+    )
+  ) {
+    status = 'warning';
+    issues.push({
+      severity: 'warning',
+      code: 'ACCOUNT_DELETION_CLEANUP_RETRY_PENDING',
+      message: 'Account deletion cleanup failed and has not yet recorded a successful retry.',
     });
   }
 

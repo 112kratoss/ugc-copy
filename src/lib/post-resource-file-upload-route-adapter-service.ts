@@ -71,3 +71,18 @@ export async function postPostResourceFileUploadRouteResponse({
     request,
   );
 }
+
+export function postRetiredPostResourceFileUploadRouteResponse(request: Request) {
+  return applyPrivateNoStoreApiResponseHeaders(
+    NextResponse.json(
+      {
+        error: 'Multipart resource uploads have been retired. Use the signed direct-upload flow.',
+        code: 'DIRECT_UPLOAD_REQUIRED',
+        signPath: '/api/posts/resource-files/sign',
+        finalizePath: '/api/posts/resource-files/finalize',
+      },
+      { status: 410 },
+    ),
+    request,
+  );
+}

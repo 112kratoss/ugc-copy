@@ -126,6 +126,7 @@ describe('submitPostReportForRoute', () => {
     });
 
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('Expected a rate-limit error');
     expect(result.status).toBe(429);
     expect(result).toHaveProperty('rateLimitError');
     expect(admin.calls.rpc).toEqual([

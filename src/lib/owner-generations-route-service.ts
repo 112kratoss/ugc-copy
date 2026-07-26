@@ -399,7 +399,6 @@ function buildPagination(pageLimit: number, hasMore: boolean, cursorOffset: numb
 
 export async function listOwnerGenerationsForRoute({
   userId,
-  supabase,
   getAdminSupabase,
   searchParams,
 }: {
@@ -469,7 +468,7 @@ export async function listOwnerGenerationsForRoute({
   const ordinaryGenerationIds = generationIds.filter((generationId) => !templateMetadata.has(generationId));
   const [linkedPostMap, inputMediaMap, resolvedMediaUrls] = await Promise.all([
     loadLinkedPostMap({
-      supabase,
+      supabase: adminSupabase,
       generationIds,
       userId,
       includeArchived,

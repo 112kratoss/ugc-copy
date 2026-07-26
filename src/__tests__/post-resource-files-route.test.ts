@@ -60,7 +60,7 @@ describe('/api/posts/resource-files route', () => {
     });
   });
 
-  it('does not create an admin client before authentication succeeds', async () => {
+  it('retires the legacy multipart path without creating privileged clients', async () => {
     const { POST } = await import('@/app/api/posts/resource-files/route');
     const response = await POST(
       new Request('http://localhost/api/posts/resource-files', {
@@ -69,12 +69,17 @@ describe('/api/posts/resource-files route', () => {
       }) as never
     );
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(410);
     expectPrivateNoStoreTraceHeaders(response, 'post-resource-file-auth-1');
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'DIRECT_UPLOAD_REQUIRED',
+      signPath: '/api/posts/resource-files/sign',
+      finalizePath: '/api/posts/resource-files/finalize',
+    });
     expect(createServiceClientFactory).not.toHaveBeenCalled();
   });
 
-  it('rate limits resource file uploads before multipart storage work', async () => {
+  it('does not parse or store a legacy multipart body', async () => {
     createUserClientMock.mockReturnValueOnce({
       auth: {
         getUser: vi.fn(async () => ({
@@ -106,16 +111,10 @@ describe('/api/posts/resource-files route', () => {
       }) as never
     );
 
-    expect(response.status).toBe(429);
-    expect(response.headers.get('Retry-After')).toBe('47');
+    expect(response.status).toBe(410);
     expectPrivateNoStoreTraceHeaders(response, 'post-resource-file-rate-limit-1');
-    await expect(response.json()).resolves.toMatchObject({ code: 'RATE_LIMITED' });
-    expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
-      p_scope: 'post-resource-file:upload',
-      p_subject_key: 'user-1',
-      p_limit: 30,
-      p_window_seconds: 600,
-    });
+    await expect(response.json()).resolves.toMatchObject({ code: 'DIRECT_UPLOAD_REQUIRED' });
+    expect(rpcMock).not.toHaveBeenCalled();
     expect(storageFromMock).not.toHaveBeenCalled();
     expect(storageUploadMock).not.toHaveBeenCalled();
   });
