@@ -160,7 +160,9 @@ describe('WorkflowTemplatePublishDrawer', () => {
     expect(await screen.findByText(/waiting for consumer uploads/i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /continue consumer test/i })).toHaveAttribute('target', '_blank');
     expect(screen.getByRole('button', { name: /continue test/i })).toBeEnabled();
-    expect(window.localStorage.getItem(`magicbooklet:template-test:canvas-1:${output.id}`)).toContain('run-1');
+    await waitFor(() => {
+      expect(window.localStorage.getItem(`magicbooklet:template-test:canvas-1:${output.id}`)).toContain('run-1');
+    });
   });
 
   it('clears an expired persisted test and offers a fresh test instead of polling the missing run', async () => {
@@ -322,7 +324,9 @@ describe('WorkflowTemplatePublishDrawer', () => {
     expect(screen.getByText(/consumer test restored and passed/i)).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('/api/template-runs/run-returned', expect.any(Object));
     expect(fetchMock).toHaveBeenCalledWith('/api/templates/validate', expect.objectContaining({ method: 'POST' }));
-    expect(window.localStorage.getItem(`magicbooklet:template-test:canvas-1:${output.id}`)).toContain('run-returned');
+    await waitFor(() => {
+      expect(window.localStorage.getItem(`magicbooklet:template-test:canvas-1:${output.id}`)).toContain('run-returned');
+    });
 
     fireEvent.click(screen.getByRole('checkbox'));
     await waitFor(() => expect(screen.getByRole('button', { name: /^publish$/i })).toBeEnabled());
