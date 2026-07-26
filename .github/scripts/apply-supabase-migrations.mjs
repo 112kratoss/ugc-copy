@@ -55,36 +55,40 @@ const migrationFiles = (await fs.readdir(migrationsDirectory))
   .filter(Boolean)
   .sort((left, right) => left.version.localeCompare(right.version));
 
-const duplicateNames = migrationFiles
-  .map(({ name }) => name)
-  .filter((name, index, names) => names.indexOf(name) !== index);
-
-if (duplicateNames.length > 0) {
-  throw new Error(
-    `Migration names must be unique: ${[...new Set(duplicateNames)].join(', ')}`,
-  );
-}
-
 const appliedMigrations = await request('GET');
 if (!Array.isArray(appliedMigrations)) {
   throw new Error('Supabase returned an invalid migration history response.');
 }
 
-const appliedNames = new Set(
-  appliedMigrations.map((migration) => migration.name),
+const localNameCounts = migrationFiles.reduce((counts, migration) => {
+  counts.set(migration.name, (counts.get(migration.name) ?? 0) + 1);
+  return counts;
+}, new Map());
+const appliedVersions = new Set(
+  appliedMigrations.map((migration) => migration.version),
 );
+const appliedNames = new Set(appliedMigrations.map((migration) => migration.name));
+const isApplied = (migration, versions, names) =>
+  versions.has(migration.version) ||
+  (localNameCounts.get(migration.name) === 1 && names.has(migration.name));
 const localVersionByName = new Map(
-  migrationFiles.map((migration) => [migration.name, migration.version]),
+  migrationFiles
+    .filter((migration) => localNameCounts.get(migration.name) === 1)
+    .map((migration) => [migration.name, migration.version]),
 );
 const latestAppliedLocalVersion = appliedMigrations.reduce(
   (latest, migration) => {
-    const localVersion = localVersionByName.get(migration.name);
+    const exactLocalMigration = migrationFiles.find(
+      (localMigration) => localMigration.version === migration.version,
+    );
+    const localVersion =
+      exactLocalMigration?.version ?? localVersionByName.get(migration.name);
     return localVersion && localVersion > latest ? localVersion : latest;
   },
   '',
 );
 const pendingMigrations = migrationFiles.filter(
-  (migration) => !appliedNames.has(migration.name),
+  (migration) => !isApplied(migration, appliedVersions, appliedNames),
 );
 
 const outOfOrderMigration = pendingMigrations.find(
@@ -120,12 +124,18 @@ for (const migration of pendingMigrations) {
 }
 
 const verifiedMigrations = await request('GET');
+const verifiedVersions = new Set(
+  verifiedMigrations.map((migration) => migration.version),
+);
 const verifiedNames = new Set(
   verifiedMigrations.map((migration) => migration.name),
 );
 const missingNames = pendingMigrations
-  .map((migration) => migration.name)
-  .filter((name) => !verifiedNames.has(name));
+  .filter(
+    (migration) =>
+      !isApplied(migration, verifiedVersions, verifiedNames),
+  )
+  .map((migration) => migration.name);
 
 if (missingNames.length > 0) {
   throw new Error('Supabase migration history verification failed.');
