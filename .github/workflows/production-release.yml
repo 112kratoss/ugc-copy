@@ -122,12 +122,12 @@ jobs:
           DEPLOYMENT_URL: ${{ steps.stage.outputs.deployment_url }}
         run: |
           set -euo pipefail
-          npx --yes vercel@57.0.0 --token="${VERCEL_TOKEN}" curl \
+          npx --yes vercel@57.0.0 curl \
             "/" \
             --deployment "${DEPLOYMENT_URL}" \
             -- \
             --fail --silent --show-error --output /dev/null
-          npx --yes vercel@57.0.0 --token="${VERCEL_TOKEN}" curl \
+          npx --yes vercel@57.0.0 curl \
             "/api/app-version" \
             --deployment "${DEPLOYMENT_URL}" \
             -- \
@@ -140,7 +140,7 @@ jobs:
               throw new Error('Staged build id ' + body.buildId + ' does not match ' + process.env.RELEASE_SHA);
             }
           "
-          npx --yes vercel@57.0.0 --token="${VERCEL_TOKEN}" curl \
+          npx --yes vercel@57.0.0 curl \
             "/api/ops/backend-health" \
             --deployment "${DEPLOYMENT_URL}" \
             -- \

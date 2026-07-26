@@ -18,7 +18,8 @@ describe('production release workflow', () => {
     expect(workflow).toContain('--skip-domain');
     expect(workflow).toContain('/api/ops/backend-health');
     expect(workflow).toContain('vercel@57.0.0 promote');
-    expect(workflow).toContain(
+    expect(workflow).toContain('vercel@57.0.0 curl');
+    expect(workflow).not.toContain(
       'vercel@57.0.0 --token="${VERCEL_TOKEN}" curl',
     );
     expect(workflow).toContain(
