@@ -153,8 +153,14 @@ jobs:
             if (body.buildId && body.buildId !== process.env.RELEASE_SHA) {
               throw new Error('Health build id does not match the release commit');
             }
-            if (body.status && body.status !== 'ok') {
+            if (!['ok', 'warning'].includes(body.status)) {
               throw new Error('Staged backend health is ' + body.status);
+            }
+            if (body.status === 'warning') {
+              const issues = Array.isArray(body.issues)
+                ? body.issues.map((issue) => issue.code).filter(Boolean).join(', ')
+                : 'unspecified';
+              console.warn('::warning::Staged backend health warnings: ' + issues);
             }
           "
 

@@ -25,6 +25,8 @@ describe('production release workflow', () => {
     expect(workflow).toContain(
       '--deployment "${DEPLOYMENT_URL}" \\\n            -- \\',
     );
+    expect(workflow).toContain("['ok', 'warning'].includes(body.status)");
+    expect(workflow).toContain('Staged backend health warnings:');
     expect(workflow).toContain('environment: production');
     expect(workflow).toContain(
       'node .github/scripts/apply-supabase-migrations.mjs',
