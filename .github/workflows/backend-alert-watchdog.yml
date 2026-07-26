@@ -1,0 +1,108 @@
+name: Backend alert watchdog
+
+# External dead-man's switch for the backend scheduler.
+#
+# Alert *generation* and alert *delivery* both run inside the Vercel cron
+# (/api/cron/backend-jobs). If that cron stops firing, the deploy breaks, or
+# CRON_SECRET rotation fails, the system that would report the outage is the
+# system that died — nothing inside the app can catch that.
+#
+# This workflow runs on GitHub's infrastructure, outside Vercel and outside
+# Supabase, so it stays alive when they do not. A failing run sends the repo
+# owner GitHub's standard workflow-failure email, which is the alert channel:
+# no third-party monitoring service and no paid add-on involved.
+#
+# It fails when:
+#   * the ops endpoint is unreachable (Vercel down, deploy broken, DNS gone),
+#   * it answers 503 — the app itself reporting degraded backend health,
+#   * it answers 401/403 — OPS_READ_SECRET drifted from production.
+#
+# Interval note: each run bills ~1 GitHub Actions minute on a private repo
+# (hourly ≈ 720 min/month against the 2,000-minute free allowance, leaving room
+# for CI). Public repos bill nothing. Tighten to '*/30 * * * *' for faster
+# detection if the allowance allows, or loosen to '0 */2 * * *' to save minutes.
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+# A stuck run must never block the next scheduled check.
+concurrency:
+  group: backend-alert-watchdog
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: Probe backend alerts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # No actions/checkout: the probe needs no repository content, and
+      # skipping it keeps each billed run as short as possible.
+      - name: Probe /api/ops/backend-alerts
+        env:
+          OPS_READ_SECRET: ${{ secrets.OPS_READ_SECRET }}
+          # Override by setting a repository variable named PRODUCTION_BASE_URL.
+          BASE_URL: ${{ vars.PRODUCTION_BASE_URL || 'https://magicbooklet.com' }}
+        run: |
+          set -uo pipefail
+
+          if [ -z "${OPS_READ_SECRET}" ]; then
+            echo "::warning title=Watchdog inert::OPS_READ_SECRET is not set, so the backend alert watchdog is not actually checking anything. Add it under Settings > Secrets and variables > Actions."
+            {
+              echo "### Backend alert watchdog: INERT"
+              echo
+              echo "\`OPS_READ_SECRET\` is missing, so no probe was performed."
+              echo "Add the repository secret to activate this check."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "Probing ${BASE_URL}/api/ops/backend-alerts"
+
+          # --max-time bounds a hung connection; the body is captured so the
+          # failure email explains *what* is degraded, not just that it is.
+          http_status=$(curl --silent --show-error \
+            --max-time 30 \
+            --retry 2 --retry-delay 5 --retry-connrefused \
+            --output response.json \
+            --write-out '%{http_code}' \
+            --header "Authorization: Bearer ${OPS_READ_SECRET}" \
+            "${BASE_URL}/api/ops/backend-alerts") || http_status="000"
+
+          echo "HTTP ${http_status}"
+          body=$(head -c 4000 response.json 2>/dev/null || echo '<no response body>')
+
+          {
+            echo "### Backend alert watchdog"
+            echo
+            echo "- Endpoint: \`${BASE_URL}/api/ops/backend-alerts\`"
+            echo "- HTTP status: \`${http_status}\`"
+            echo
+            echo '```json'
+            echo "${body}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          case "${http_status}" in
+            200)
+              echo "Backend reports healthy."
+              ;;
+            000)
+              echo "::error title=Backend unreachable::No HTTP response from ${BASE_URL}. Vercel may be down, the deploy may be broken, or DNS may be misconfigured."
+              exit 1
+              ;;
+            401|403)
+              echo "::error title=Ops auth rejected::The endpoint rejected OPS_READ_SECRET (HTTP ${http_status}). The GitHub secret has drifted from the value in Vercel; rotate using OPS_READ_SECRET_PREVIOUS so checks keep passing during the cutover."
+              exit 1
+              ;;
+            503)
+              echo "::error title=Backend degraded::The backend reports degraded health. See the response body above and the alert-response table in docs/production-deployment-runbook.md."
+              exit 1
+              ;;
+            *)
+              echo "::error title=Unexpected response::HTTP ${http_status} from the ops endpoint."
+              exit 1
+              ;;
+          esac

@@ -297,7 +297,9 @@ Use Vercel rollback or promote the last known-good deployment. Verify custom dom
 
 ### Database Recovery
 
-Production migrations are forward-only. Do not run destructive down migrations during an incident. Prefer a corrective additive migration, restore a feature flag/default, or temporarily disable the affected route. Use point-in-time recovery only for confirmed data loss or corruption and coordinate it with an application write freeze.
+Production migrations are forward-only. Do not run destructive down migrations during an incident. Prefer a corrective additive migration, restore a feature flag/default, or temporarily disable the affected route.
+
+Point-in-time recovery is **not available on this project** — PITR is an unpurchased Supabase add-on (see Accepted blind spots under External Monitoring). Recovery means restoring the most recent *daily* physical backup, so confirmed data loss or corruption costs up to 24 hours of writes and still requires an application write freeze while restoring. Storage objects are not covered by those backups at all. Weigh a restore against corrective forward migration accordingly: for anything short of broad corruption, fixing forward loses less data than restoring.
 
 ### Provider And Spend Containment
 
@@ -342,13 +344,15 @@ External alert delivery should route on the stable outbound payload:
 
 Use `/api/ops/backend-dashboard` as the primary dashboard feed. Use `/api/ops/backend-health` and `/api/ops/backend-costs` as drill-down panels. Use `/api/ops/backend-alerts` as the paging source because it combines health, cost, spend, provider, scheduler, media, and settlement signals into one normalized contract.
 
-## External Monitoring (Required Operator Setup)
+## External Monitoring
 
-Everything in this section lives outside the repository and cannot be verified by CI. Treat each item as a required next step for the production operator; the in-repo alerting only works if something outside the platform is watching it.
+**Standing decision: no third-party monitoring services and no paid platform add-ons.** Observability is built from what the existing GitHub, Vercel, and Supabase plans already provide. The accepted blind spots this leaves are recorded below — they are deliberate, not oversights, and should be revisited if the product starts carrying meaningful revenue.
 
-### 1. External uptime monitor on the paging endpoint
+### 1. Watchdog (in repo, active)
 
-The scheduler cannot report its own death. Configure an external uptime monitor (any provider — Better Stack, UptimeRobot, Pingdom, a cron on separate infrastructure) to poll the paging endpoint every 5 minutes with the ops read secret:
+The scheduler cannot report its own death: alert generation *and* alert delivery both run inside `/api/cron/backend-jobs`, so a dead cron, broken deploy, or bad `CRON_SECRET` silences the very thing that would report it.
+
+`.github/workflows/backend-alert-watchdog.yml` closes that loop. It runs hourly on GitHub's infrastructure — outside Vercel and outside Supabase — and polls the paging endpoint:
 
 ```bash
 curl -fsS -m 20 \
@@ -356,23 +360,25 @@ curl -fsS -m 20 \
   https://magicbooklet.com/api/ops/backend-alerts
 ```
 
-Alerting rules:
+A failing run sends GitHub's standard workflow-failure email to the repo owner; that email **is** the alert channel. The workflow fails on: no response (platform or deploy down), `401`/`403` (the secret drifted from production), `503` (the app itself reporting degraded health), or any other non-`200`.
 
-- Any non-`200` response is alertable. `401` means the monitor's secret is wrong or was rotated without updating the monitor. Timeouts and `5xx` mean the platform or the app is down.
-- `503` returns the normalized alert payload for a degraded backend. Notify on the first `503`; page on repeated `503` (two consecutive checks), which indicates a persisted degraded state rather than a transient dip.
-- Store `OPS_READ_SECRET` in the monitor's secret storage, never in the check's URL or a public status page. After rotating `OPS_READ_SECRET`, update the monitor before removing `OPS_READ_SECRET_PREVIOUS`.
+**Operator setup — the watchdog is inert until this is done.** Add `OPS_READ_SECRET` under *Settings → Secrets and variables → Actions* with the same value as the Vercel Production variable. Without it the workflow logs a loud warning and exits successfully rather than emailing every hour. Optionally set a `PRODUCTION_BASE_URL` repository variable to override the default domain. When rotating `OPS_READ_SECRET`, update the GitHub secret before removing `OPS_READ_SECRET_PREVIOUS` from Vercel.
 
-### 2. Verify `BACKEND_ALERT_DELIVERY_URL` is set in Vercel production
+Cost: each run bills roughly one GitHub Actions minute on a private repo (hourly ≈ 720/month against the 2,000-minute free allowance, leaving headroom for CI); public repos bill nothing. Adjust the `cron:` expression to trade detection latency against minutes.
 
-Outbound alert delivery silently no-ops when `BACKEND_ALERT_DELIVERY_URL` is unset: the `backend-alert-delivery` job records a skipped run with `alert_delivery_not_configured` and no notification is ever sent. Confirm the variable (plus `BACKEND_ALERT_DELIVERY_AUTH_HEADER` when the destination needs it) exists in the Vercel Production environment with `npx --yes vercel@latest env ls production --format=json`, and confirm the job's runs show `succeeded` rather than `skipped` in `/api/ops/backend-dashboard` after the next scheduler tick.
+### 2. `BACKEND_ALERT_DELIVERY_URL` (optional, currently unset)
 
-### 3. Vercel log drain
+Outbound alert *push* silently no-ops when unset: the `backend-alert-delivery` job records a skipped run with `alert_delivery_not_configured`. This is acceptable while the watchdog above is the alert channel — the watchdog pulls, so nothing needs to push. If a webhook destination that costs nothing is ever available (a Slack or Discord incoming webhook, for example), set the variable to get faster notification than the hourly poll, and confirm the job reports `succeeded` rather than `skipped` in `/api/ops/backend-dashboard`.
 
-Vercel function logs are otherwise ephemeral, which makes post-incident reconstruction of `stalled_generation_*`, webhook, and settlement events impossible. In the Vercel dashboard (Team Settings → Log Drains), add a drain for the `ugc-app` project to a retained destination (Better Stack, Axiom, Datadog, or an S3-compatible bucket), covering function and edge logs in NDJSON format. The application already emits single-line structured JSON through `backend-logger`, so any destination that indexes JSON fields can filter by `msg`, `job`, `route`, and `requestId`. Verify events arrive by triggering one scheduler tick and searching the drain for `generation_completions_completed`.
+### Accepted blind spots
 
-### 4. Sentry (web and mobile)
+These are known gaps, consciously left open under the no-third-party, no-paid-add-on decision:
 
-Backend health covers jobs and settlement, but unhandled client-side exceptions currently vanish. Add Sentry to both clients as a required next step: the Next.js SDK (`@sentry/nextjs`) for the web app with source maps uploaded during the Vercel build and `SENTRY_DSN`/`NEXT_PUBLIC_SENTRY_DSN` set in the Vercel Production environment, and the Expo-compatible React Native SDK (`@sentry/react-native`) for `ugc-mobile` with the DSN injected through EAS build secrets. Route Sentry alerts into the same incident channel as `BACKEND_ALERT_DELIVERY_URL` so one channel pages for backend, web, and mobile failures. Until this is done, treat user-reported blank screens and mobile crashes as unmonitored blind spots.
+- **No error tracking (web or mobile).** Unhandled client-side exceptions and mobile crashes are not reported anywhere. Treat user reports of blank screens or crashes as the only signal, and reproduce locally. Backend faults *are* covered, via `backend-health` and the watchdog.
+- **No log drain.** Vercel function logs expire with the plan's retention, so post-incident reconstruction is limited to that window. When an incident happens, capture the relevant logs *before* they age out. The app emits single-line structured JSON via `backend-logger`, so copying the raw lines out of the Vercel log view preserves everything needed.
+- **No PITR.** Recovery is limited to Supabase's daily physical backups, so worst-case data loss is up to 24 hours. The Database Recovery section's PITR procedure is therefore **not currently executable** — restoring means accepting the most recent daily backup.
+- **Storage objects are not backed up at all.** Supabase database backups exclude the Storage API, so generated media and uploads have no recovery path. A bucket-level deletion is unrecoverable.
+- **No mobile OTA channel.** Every client fix requires a store release; the server-side 426 gate is the only fast lever, and it can only push users toward a build that must already be approved.
 
 ## Performance Monitoring And Load Budgets
 
