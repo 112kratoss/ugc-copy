@@ -4,7 +4,13 @@ import { logBackendRouteError } from '@/lib/backend-logger';
 import { NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
-import { reconcileMobilePurchaseAdjustment } from '@/lib/mobile-commerce';
+import {
+  completeMobilePurchase,
+  reconcileMobilePurchaseAdjustment,
+  resolveMobileCreditProduct,
+  resolveMobilePurchaseAuthority,
+  verifyMobilePurchase,
+} from '@/lib/mobile-commerce';
 import {
   REVENUECAT_WEBHOOK_PROCESSING_SERVICE_NAME,
   recordPaymentWebhookProcessingFailure,
@@ -19,17 +25,23 @@ import { readBoundedWebhookBody } from '@/lib/webhook-request';
 type RevenueCatRefundRpcClient = Parameters<typeof reconcileMobilePurchaseAdjustment>[0];
 
 type RevenueCatWebhookRouteDependencies = {
+  completeMobilePurchase?: typeof completeMobilePurchase;
   createServiceClient?: () => RevenueCatRefundRpcClient;
   getExpectedAuthorization?: () => string | undefined;
   logError?: typeof logBackendRouteError;
   parseRevenueCatRefundEvent?: typeof parseRevenueCatRefundEvent;
   readBoundedWebhookBody?: typeof readBoundedWebhookBody;
   recordPaymentWebhookProcessingFailure?: typeof recordPaymentWebhookProcessingFailure;
+  resolveMobileCreditProduct?: typeof resolveMobileCreditProduct;
+  resolveMobilePurchaseAuthority?: typeof resolveMobilePurchaseAuthority;
+  verifyMobilePurchase?: typeof verifyMobilePurchase;
   webhookAuthorizationMatches?: typeof webhookAuthorizationMatches;
 };
 
 function resolveDependencies(dependencies: RevenueCatWebhookRouteDependencies | undefined) {
   return {
+    completeMobilePurchase:
+      dependencies?.completeMobilePurchase ?? completeMobilePurchase,
     createServiceClient:
       dependencies?.createServiceClient
       ?? (() => createServiceClient() as RevenueCatRefundRpcClient),
@@ -44,6 +56,12 @@ function resolveDependencies(dependencies: RevenueCatWebhookRouteDependencies | 
     recordPaymentWebhookProcessingFailure:
       dependencies?.recordPaymentWebhookProcessingFailure
       ?? recordPaymentWebhookProcessingFailure,
+    resolveMobileCreditProduct:
+      dependencies?.resolveMobileCreditProduct ?? resolveMobileCreditProduct,
+    resolveMobilePurchaseAuthority:
+      dependencies?.resolveMobilePurchaseAuthority ?? resolveMobilePurchaseAuthority,
+    verifyMobilePurchase:
+      dependencies?.verifyMobilePurchase ?? verifyMobilePurchase,
     webhookAuthorizationMatches:
       dependencies?.webhookAuthorizationMatches ?? webhookAuthorizationMatches,
   };
@@ -84,8 +102,52 @@ async function handleRevenueCatWebhookPOST(
     return NextResponse.json({ error: parsed.message }, { status: 400 });
   }
 
-  const { event } = parsed;
   const adminSupabase = dependencies.createServiceClient();
+  if (parsed.kind === 'purchase') {
+    const { event } = parsed;
+    // Only fixed server-owned credit SKUs can settle without a purchase intent.
+    // Subscription and marketplace events are acknowledged but never trusted
+    // to define their own entitlement or price.
+    if (!dependencies.resolveMobileCreditProduct(event.productId)) {
+      return NextResponse.json({ received: true, ignored: true });
+    }
+
+    try {
+      const verified = await dependencies.verifyMobilePurchase({
+        userId: event.userId,
+        productId: event.productId,
+        provider: event.provider,
+        transactionId: event.transactionId,
+      });
+      const authority = await dependencies.resolveMobilePurchaseAuthority({
+        adminSupabase,
+        userId: event.userId,
+        productId: event.productId,
+      });
+      const settlement = await dependencies.completeMobilePurchase({
+        adminSupabase,
+        userId: event.userId,
+        authority,
+        provider: verified.provider,
+        transactionId: verified.transactionId,
+      });
+
+      return NextResponse.json({
+        received: true,
+        result: settlement.alreadyProcessed ? 'already_processed' : 'completed',
+      });
+    } catch (error) {
+      dependencies.logError('RevenueCat purchase reconciliation failed:', error);
+      await dependencies.recordPaymentWebhookProcessingFailure({
+        serviceName: REVENUECAT_WEBHOOK_PROCESSING_SERVICE_NAME,
+        failureCode: 'purchase_reconciliation_failed',
+        status: 503,
+      }, adminSupabase);
+      return NextResponse.json({ error: 'Purchase reconciliation failed.' }, { status: 503 });
+    }
+  }
+
+  const { event } = parsed;
   let settlement;
   try {
     settlement = await reconcileMobilePurchaseAdjustment(adminSupabase, {

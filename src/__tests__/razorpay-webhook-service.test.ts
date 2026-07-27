@@ -235,6 +235,29 @@ function refundProcessedBody() {
   });
 }
 
+function creditRefundProcessedBodyWithoutCumulativeTotal() {
+  return JSON.stringify({
+    event: 'refund.processed',
+    payload: {
+      payment: {
+        entity: {
+          id: 'pay_123',
+          order_id: 'order_123',
+          amount: 10_000,
+        },
+      },
+      refund: {
+        entity: {
+          id: 'rfnd_123',
+          payment_id: 'pay_123',
+          amount: 5_000,
+          status: 'processed',
+        },
+      },
+    },
+  });
+}
+
 function commerceRefundProcessedBodyWithoutPaymentEntity() {
   return JSON.stringify({
     event: 'refund.processed',
@@ -572,6 +595,33 @@ describe('processRazorpayWebhookForRoute', () => {
         p_reason: 'razorpay_refund_processed',
       },
     });
+  });
+
+  it('asks Razorpay to retry when a credit refund omits the cumulative total', async () => {
+    const admin = createAdminSupabaseMock({
+      creditTransaction: {
+        id: 'txn-1',
+        user_id: 'user-1',
+        credits: 100,
+        amount: 10_000,
+        credit_reversed_amount_subunits: 0,
+        razorpay_payment_id: 'pay_123',
+        status: 'success',
+      },
+    });
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: creditRefundProcessedBodyWithoutCumulativeTotal(),
+    })).resolves.toEqual({
+      status: 500,
+      body: 'Failed to reconcile payment refund',
+    });
+    expect(admin.providerDependencyInserts).toEqual([
+      expect.objectContaining({
+        error_name: 'payment_refund_reconciliation_failed',
+      }),
+    ]);
   });
 
   it('routes a refund-before-capture through the atomic zero-delta reconciliation guard', async () => {

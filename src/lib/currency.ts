@@ -119,6 +119,20 @@ export function convertFromUsd(
   return amountUsd * (currencyPerInr / usdPerInr);
 }
 
+export const MIN_PLAUSIBLE_INR_PER_USD = 70;
+export const MAX_PLAUSIBLE_INR_PER_USD = 120;
+
+export function hasPlausibleUsdInrRate(inrRates: Record<string, number>): boolean {
+  const usdPerInr = inrRates.USD;
+  if (typeof usdPerInr !== 'number' || !Number.isFinite(usdPerInr) || usdPerInr <= 0) {
+    return false;
+  }
+
+  const inrPerUsd = 1 / usdPerInr;
+  return inrPerUsd >= MIN_PLAUSIBLE_INR_PER_USD
+    && inrPerUsd <= MAX_PLAUSIBLE_INR_PER_USD;
+}
+
 export function formatMoney(amount: number, currency: SupportedCurrency, locale?: string): string {
   const fractionDigits = currency === 'INR' ? 0 : 2;
   return new Intl.NumberFormat(locale, {

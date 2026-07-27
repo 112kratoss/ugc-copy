@@ -14,9 +14,19 @@ export interface RevenueCatRefundEvent {
   userId: string;
 }
 
+export interface RevenueCatPurchaseEvent {
+  eventId: string;
+  eventTimestampMs: number;
+  productId: string;
+  provider: Exclude<MobilePurchaseProvider, 'revenuecat' | 'sandbox'>;
+  transactionId: string;
+  userId: string;
+}
+
 type ParseResult =
   | { kind: 'ignored' }
   | { kind: 'invalid'; message: string }
+  | { kind: 'purchase'; event: RevenueCatPurchaseEvent }
   | { kind: 'refund'; event: RevenueCatRefundEvent };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -31,7 +41,9 @@ function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-function storeProvider(store: unknown): MobilePurchaseProvider | null {
+function storeProvider(
+  store: unknown,
+): Exclude<MobilePurchaseProvider, 'revenuecat' | 'sandbox'> | null {
   if (store === 'APP_STORE') return 'app_store';
   if (store === 'PLAY_STORE') return 'play_store';
   return null;
@@ -52,7 +64,8 @@ export function parseRevenueCatRefundEvent(payload: unknown): ParseResult {
 
   const event = payload.event;
   const type = nonEmptyString(event.type);
-  if (type !== 'CANCELLATION' && type !== 'REFUND_REVERSED') {
+  const isPurchase = type === 'NON_RENEWING_PURCHASE' || type === 'INITIAL_PURCHASE';
+  if (!isPurchase && type !== 'CANCELLATION' && type !== 'REFUND_REVERSED') {
     return { kind: 'ignored' };
   }
 
@@ -77,6 +90,20 @@ export function parseRevenueCatRefundEvent(payload: unknown): ParseResult {
     || eventTimestampMs <= 0
   ) {
     return { kind: 'invalid', message: 'Incomplete RevenueCat purchase adjustment event.' };
+  }
+
+  if (isPurchase) {
+    return {
+      kind: 'purchase',
+      event: {
+        eventId,
+        eventTimestampMs,
+        productId,
+        provider,
+        transactionId,
+        userId,
+      },
+    };
   }
 
   return {

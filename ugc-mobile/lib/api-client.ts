@@ -128,6 +128,7 @@ export interface ApiClientOptions {
   getInstallationId?: () => Promise<string | null>;
   clientInfo?: MobileClientInfo;
   fetcher?: typeof fetch;
+  requestTimeoutMs?: number;
 }
 
 export interface MobileClientInfo {
@@ -175,6 +176,7 @@ export type ModerationReportSourceSurface =
   | 'generation-viewer';
 
 const CONTENT_CACHE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_API_REQUEST_TIMEOUT_MS = 30_000;
 const REQUEST_ID_HEADER = 'x-request-id';
 const FEED_INSTALLATION_ID_HEADER = 'x-magicbooklet-installation-id';
 
@@ -352,6 +354,7 @@ export function createApiClient({
   getInstallationId,
   clientInfo,
   fetcher = fetch,
+  requestTimeoutMs = DEFAULT_API_REQUEST_TIMEOUT_MS,
 }: ApiClientOptions) {
   const root = normalizeBaseUrl(baseUrl);
   const catalogSchemaVersion = clientInfo?.catalogSchemaVersion === GENERATION_MODEL_CATALOG_SCHEMA_VERSION
@@ -415,16 +418,31 @@ export function createApiClient({
 
       const url = `${root}${path}`;
       let response: Response;
+      const requestController = new AbortController();
+      const upstreamSignal = init.signal;
+      const abortFromUpstream = () => requestController.abort(upstreamSignal?.reason);
+      if (upstreamSignal?.aborted) {
+        abortFromUpstream();
+      } else {
+        upstreamSignal?.addEventListener('abort', abortFromUpstream, { once: true });
+      }
+      const timeoutId = setTimeout(() => {
+        requestController.abort(new Error(`Request timed out after ${requestTimeoutMs}ms`));
+      }, requestTimeoutMs);
       try {
         response = await fetcher(url, {
           ...init,
           headers,
+          signal: requestController.signal,
         });
       } catch (error) {
         throw new ApiError(networkFailureMessage(root), 0, {
           url,
           cause: error instanceof Error ? error.message : String(error),
         }, requestId);
+      } finally {
+        clearTimeout(timeoutId);
+        upstreamSignal?.removeEventListener('abort', abortFromUpstream);
       }
       const body = await parseResponse(response);
       const responseRequestId = response.headers.get(REQUEST_ID_HEADER) ?? requestId;

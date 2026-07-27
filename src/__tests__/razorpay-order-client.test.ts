@@ -71,4 +71,24 @@ describe('Razorpay order client', () => {
       providerStatus: 400,
     });
   });
+
+  it('rejects test-mode credentials before contacting Razorpay in production', async () => {
+    vi.stubEnv('VERCEL_ENV', 'production');
+    const fetcher = vi.fn();
+    const { createRazorpayOrder } = await import('@/lib/razorpay-orders');
+
+    await expect(createRazorpayOrder({
+      keyId: 'rzp_test_accidental',
+      keySecret: 'secret',
+      amount: 41500,
+      currency: 'INR',
+      receipt: 'receipt-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    })).rejects.toMatchObject({
+      name: 'RazorpayOrderError',
+      message: 'Razorpay live credentials are required in production.',
+      status: 500,
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
 });

@@ -903,11 +903,18 @@ export async function collectBackendHealth(
     ? collectBackendEnvironmentHealth(environmentVariables)
     : null;
   const environmentIssues: BackendHealthIssue[] = environment?.status === 'degraded'
-    ? [{
+    ? [
+      ...(environment.missing.length > 0 ? [{
         severity: 'degraded',
         code: 'ENVIRONMENT_MISSING_REQUIRED',
         message: `Missing required backend environment capabilities: ${environment.missing.join(', ')}.`,
-      }]
+      } satisfies BackendHealthIssue] : []),
+      ...(environment.invalid.length > 0 ? [{
+        severity: 'degraded',
+        code: 'ENVIRONMENT_INVALID_PRODUCTION_SETTING',
+        message: `Unsafe production environment settings: ${environment.invalid.join(', ')}.`,
+      } satisfies BackendHealthIssue] : []),
+    ]
     : [];
   // Health uses the universally supported v1 projection during the transition.
   // The response still reports the release's actual schema version.

@@ -380,8 +380,8 @@ export function validateProfileUpdate(payload: ProfileUpdatePayload): ValidatedP
   if (avatarUrl) {
     try {
       const url = new URL(avatarUrl);
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-        fieldErrors.avatarUrl = 'Avatar URL must start with http:// or https://.';
+      if (!isAllowedProfileMediaUrl(url)) {
+        fieldErrors.avatarUrl = 'Use an HTTPS avatar from Magicbooklet or your connected sign-in provider.';
       }
     } catch {
       fieldErrors.avatarUrl = 'Enter a valid avatar URL.';
@@ -391,8 +391,8 @@ export function validateProfileUpdate(payload: ProfileUpdatePayload): ValidatedP
   if (coverUrl) {
     try {
       const url = new URL(coverUrl);
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-        fieldErrors.coverUrl = 'Cover URL must start with http:// or https://.';
+      if (!isAllowedProfileMediaUrl(url)) {
+        fieldErrors.coverUrl = 'Use an HTTPS cover image uploaded through Magicbooklet.';
       }
     } catch {
       fieldErrors.coverUrl = 'Enter a valid cover URL.';
@@ -425,4 +425,32 @@ export function validateProfileUpdate(payload: ProfileUpdatePayload): ValidatedP
     },
     fieldErrors,
   };
+}
+
+function configuredHostname(value: string | undefined): string | null {
+  if (!value?.trim()) return null;
+  try {
+    return new URL(value).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function isAllowedProfileMediaUrl(url: URL): boolean {
+  if (url.protocol !== 'https:' || url.username || url.password) return false;
+
+  // Development and unit-test fixtures can use arbitrary HTTPS origins.
+  if (process.env.NODE_ENV !== 'production') return true;
+
+  const hostname = url.hostname.toLowerCase();
+  const allowedHosts = new Set([
+    'magicbooklet.com',
+    configuredHostname(process.env.NEXT_PUBLIC_SITE_URL),
+    configuredHostname(process.env.NEXT_PUBLIC_SUPABASE_URL),
+  ].filter((value): value is string => Boolean(value)));
+
+  return allowedHosts.has(hostname)
+    || hostname.endsWith('.magicbooklet.com')
+    || hostname === 'googleusercontent.com'
+    || hostname.endsWith('.googleusercontent.com');
 }

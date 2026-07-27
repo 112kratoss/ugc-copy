@@ -144,7 +144,7 @@ describe('posts route adapter service', () => {
       posts,
       pageInfo: {
         hasMore: false,
-        limit: null,
+        limit: 48,
         nextOffset: null,
         offset: 0,
       },
@@ -165,7 +165,7 @@ describe('posts route adapter service', () => {
       posts,
       pageInfo: {
         hasMore: false,
-        limit: null,
+        limit: 48,
         nextOffset: null,
         offset: 0,
       },
@@ -196,7 +196,7 @@ describe('posts route adapter service', () => {
       posts,
       pageInfo: {
         hasMore: false,
-        limit: null,
+        limit: 48,
         nextOffset: null,
         offset: 0,
       },
@@ -230,7 +230,7 @@ describe('posts route adapter service', () => {
       posts,
       pageInfo: {
         hasMore: false,
-        limit: null,
+        limit: 48,
         nextOffset: null,
         offset: 0,
       },

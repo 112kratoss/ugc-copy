@@ -3,7 +3,11 @@ import { logBackendError } from '@/lib/backend-logger';
 
 import { cache } from 'react';
 
-import { convertFromUsd, formatMoney } from '@/lib/currency';
+import {
+  convertFromUsd,
+  formatMoney,
+  hasPlausibleUsdInrRate,
+} from '@/lib/currency';
 import {
   EXTERNAL_API_REQUEST_TIMEOUT_MS,
   fetchWithProviderTimeout,
@@ -183,6 +187,9 @@ const getInrFxRates = cache(async (): Promise<Record<string, number> | null> => 
       if (typeof value === 'number' && Number.isFinite(value)) {
         rates[currency] = value;
       }
+    }
+    if (!hasPlausibleUsdInrRate(rates)) {
+      throw new Error('FX upstream USD/INR rate is outside the accepted safety band');
     }
 
     return rates;

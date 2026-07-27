@@ -5,6 +5,7 @@ import {
   EXTERNAL_API_REQUEST_TIMEOUT_MS,
   fetchWithProviderTimeout,
 } from '@/lib/provider-fetch';
+import { hasPlausibleUsdInrRate } from '@/lib/currency';
 
 const UPSTREAM_URL = 'https://open.er-api.com/v6/latest/INR';
 
@@ -56,6 +57,11 @@ function normalizeFxPayload(payload: ExchangeRateApiResponse): FxRatesRouteResul
     throw new Error('FX upstream returned unexpected payload');
   }
 
+  const rates = pickSupportedRates(payload.rates);
+  if (!hasPlausibleUsdInrRate(rates)) {
+    throw new Error('FX upstream USD/INR rate is outside the accepted safety band');
+  }
+
   return {
     ok: true,
     body: {
@@ -63,7 +69,7 @@ function normalizeFxPayload(payload: ExchangeRateApiResponse): FxRatesRouteResul
       updatedAt: typeof payload.time_last_update_utc === 'string'
         ? payload.time_last_update_utc
         : new Date().toUTCString(),
-      rates: pickSupportedRates(payload.rates),
+      rates,
     },
   };
 }

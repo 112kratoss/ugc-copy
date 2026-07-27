@@ -23,9 +23,25 @@ describe('Supabase KIE webhook forwarding function', () => {
     expect(functionSource).not.toContain("'x-webhook-signature'");
     expect(functionSource).toContain("'kie-webhook-v2'");
     expect(functionSource).toContain('fetch(forwardUrl');
+    expect(functionSource).toContain('AbortSignal.timeout(FORWARD_TIMEOUT_MS)');
+    expect(functionSource).toContain('const FORWARD_TIMEOUT_MS = 15_000');
     expect(functionSource).not.toContain('@ts-nocheck');
     expect(functionSource).not.toContain('recordInfo');
     expect(functionSource).not.toContain('generations');
+  });
+
+  it('documents the provider-required query credential and its rotation boundary', () => {
+    const runbook = fs.readFileSync(
+      path.resolve(process.cwd(), 'docs/production-deployment-runbook.md'),
+      'utf8',
+    );
+
+    expect(runbook).toContain(
+      'Kie only supports a callback URL for this integration',
+    );
+    expect(runbook).toContain(
+      'must not be copied into application logs',
+    );
   });
 
   it('compares the provider secret in constant time via fixed-length digests', () => {

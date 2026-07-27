@@ -35,6 +35,20 @@ const refundPayload = {
   },
 };
 
+const purchasePayload = {
+  api_version: '1.0',
+  event: {
+    id: 'event-purchase-1',
+    type: 'NON_RENEWING_PURCHASE',
+    product_id: 'magicbooklet.credits.creator',
+    transaction_id: 'GPA.9876-5432-1098-76543',
+    original_transaction_id: 'GPA.9876-5432-1098-76543',
+    app_user_id: '6a0bf06c-2829-45c7-93c1-06f5fe4bc15d',
+    store: 'PLAY_STORE',
+    event_timestamp_ms: 1_766_000_000_100,
+  },
+};
+
 describe('RevenueCat webhook route adapter service', () => {
   it('fails closed before privileged work when the webhook secret is not configured', async () => {
     const rpc = vi.fn();
@@ -143,6 +157,83 @@ describe('RevenueCat webhook route adapter service', () => {
       p_product_id: 'magicbooklet.credits.creator',
       p_user_id: '6a0bf06c-2829-45c7-93c1-06f5fe4bc15d',
     });
+  });
+
+  it('verifies and idempotently settles credit purchase events without client sync', async () => {
+    const adminSupabase = { rpc: vi.fn() } as never;
+    const verifyMobilePurchase = vi.fn(async () => ({
+      provider: 'play_store' as const,
+      transactionId: 'GPA.9876-5432-1098-76543',
+      raw: {},
+    }));
+    const resolveMobilePurchaseAuthority = vi.fn(async () => ({
+      entitlementType: 'credits' as const,
+      productId: 'magicbooklet.credits.creator',
+      purchaseIntentId: null,
+      resourceId: null,
+      amountSubunits: 1_999_00,
+      currency: 'INR',
+      credits: 250,
+    }));
+    const completeMobilePurchase = vi.fn(async () => ({
+      success: true as const,
+      entitlement: 'credits' as const,
+      credits: 250,
+      alreadyProcessed: false,
+    }));
+
+    const response = await postRevenueCatWebhookRouteResponse({
+      request: webhookRequest(purchasePayload),
+      dependencies: {
+        createServiceClient: () => adminSupabase,
+        getExpectedAuthorization: () => 'Bearer revenuecat-webhook-secret',
+        verifyMobilePurchase,
+        resolveMobilePurchaseAuthority,
+        completeMobilePurchase,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      received: true,
+      result: 'completed',
+    });
+    expect(verifyMobilePurchase).toHaveBeenCalledWith({
+      userId: '6a0bf06c-2829-45c7-93c1-06f5fe4bc15d',
+      productId: 'magicbooklet.credits.creator',
+      provider: 'play_store',
+      transactionId: 'GPA.9876-5432-1098-76543',
+    });
+    expect(completeMobilePurchase).toHaveBeenCalledWith(expect.objectContaining({
+      adminSupabase,
+      provider: 'play_store',
+      transactionId: 'GPA.9876-5432-1098-76543',
+    }));
+  });
+
+  it('acknowledges unrelated purchase products without granting an entitlement', async () => {
+    const verifyMobilePurchase = vi.fn();
+    const completeMobilePurchase = vi.fn();
+    const response = await postRevenueCatWebhookRouteResponse({
+      request: webhookRequest({
+        ...purchasePayload,
+        event: {
+          ...purchasePayload.event,
+          product_id: 'unrelated.subscription.product',
+        },
+      }),
+      dependencies: {
+        createServiceClient: () => ({ rpc: vi.fn() }) as never,
+        getExpectedAuthorization: () => 'Bearer revenuecat-webhook-secret',
+        verifyMobilePurchase,
+        completeMobilePurchase,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ received: true, ignored: true });
+    expect(verifyMobilePurchase).not.toHaveBeenCalled();
+    expect(completeMobilePurchase).not.toHaveBeenCalled();
   });
 
   it('returns a retryable error until a backfilled order is bound to its real product', async () => {

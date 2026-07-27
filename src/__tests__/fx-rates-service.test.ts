@@ -88,4 +88,29 @@ describe('loadFxRatesForRoute', () => {
       body: { error: 'fx_unavailable' },
     });
   });
+
+  it('fails closed when the upstream USD/INR rate is outside the safety band', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        result: 'success',
+        base_code: 'INR',
+        rates: {
+          USD: 0.05,
+          EUR: 0.04,
+          GBP: 0.03,
+          AUD: 0.08,
+          CAD: 0.07,
+          SGD: 0.06,
+        },
+      }),
+    } as Response));
+
+    await expect(loadFxRatesForRoute({ fetchImpl })).resolves.toEqual({
+      ok: false,
+      status: 503,
+      body: { error: 'fx_unavailable' },
+    });
+  });
 });

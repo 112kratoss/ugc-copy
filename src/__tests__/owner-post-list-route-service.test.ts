@@ -36,6 +36,8 @@ describe('listOwnerPostsForRoute', () => {
 
     expect(loadOwnerPosts).toHaveBeenCalledWith('user-1', {
       includeArchived: true,
+      limit: 49,
+      offset: 0,
       visibility: 'archived',
     });
     expect(result).toEqual({
@@ -43,7 +45,7 @@ describe('listOwnerPostsForRoute', () => {
       posts,
       pageInfo: {
         hasMore: false,
-        limit: null,
+        limit: 48,
         nextOffset: null,
         offset: 0,
       },

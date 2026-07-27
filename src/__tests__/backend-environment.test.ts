@@ -19,7 +19,7 @@ const COMPLETE_ENVIRONMENT = {
   KIE_AI_API_KEY: 'kie-key',
   KIE_WEBHOOK_HMAC_KEY: 'kie-webhook-key',
   KIE_PROVIDER_WEBHOOK_SECRET: 'kie-provider-webhook-secret',
-  NEXT_PUBLIC_RAZORPAY_KEY_ID: 'rzp-key',
+  NEXT_PUBLIC_RAZORPAY_KEY_ID: 'rzp_live_key',
   RAZORPAY_KEY_SECRET: 'rzp-secret',
   RAZORPAY_WEBHOOK_SECRET: 'rzp-webhook-secret',
   REVENUECAT_SECRET_API_KEY: 'revenuecat-key',
@@ -38,6 +38,7 @@ describe('backend environment contract', () => {
       configuredRequirementCount: BACKEND_ENVIRONMENT_REQUIREMENTS.length,
       totalRequirementCount: BACKEND_ENVIRONMENT_REQUIREMENTS.length,
       missing: [],
+      invalid: [],
     });
     expect(JSON.stringify(health)).not.toContain('service-role-key');
   });
@@ -56,6 +57,7 @@ describe('backend environment contract', () => {
 
     expect(health.status).toBe('degraded');
     expect(health.missing).toEqual(['revenuecat-webhook-auth']);
+    expect(health.invalid).toEqual([]);
     expect(health.configuredRequirementCount).toBe(health.totalRequirementCount - 1);
   });
 
@@ -71,7 +73,24 @@ describe('backend environment contract', () => {
       configuredRequirementCount: BACKEND_ENVIRONMENT_REQUIREMENTS.length,
       totalRequirementCount: BACKEND_ENVIRONMENT_REQUIREMENTS.length,
       missing: [],
+      invalid: [],
     });
+  });
+
+  it('fails closed for test payments or sandbox receipts in production', () => {
+    const health = collectBackendEnvironmentHealth({
+      ...COMPLETE_ENVIRONMENT,
+      NODE_ENV: 'production',
+      NEXT_PUBLIC_RAZORPAY_KEY_ID: 'rzp_test_accidental',
+      MOBILE_COMMERCE_ALLOW_SANDBOX: '1',
+    });
+
+    expect(health.status).toBe('degraded');
+    expect(health.missing).toEqual([]);
+    expect(health.invalid).toEqual([
+      'razorpay-live-mode',
+      'mobile-commerce-sandbox-disabled',
+    ]);
   });
 
   it('documents every production-only secret in the environment template', () => {

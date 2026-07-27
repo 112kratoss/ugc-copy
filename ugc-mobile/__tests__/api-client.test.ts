@@ -248,6 +248,29 @@ describe('mobile api client caching', () => {
     });
   });
 
+  it('aborts hung API requests at the configured client timeout', async () => {
+    const fetcher = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => (
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(init.signal?.reason ?? new Error('aborted'));
+        }, { once: true });
+      })
+    ));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+      requestTimeoutMs: 5,
+    });
+
+    await expect(api.getProfile()).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 0,
+    });
+    const [, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(init.signal?.aborted).toBe(true);
+  });
+
   it('requests fresh authenticated showcase feed data by default', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       items: [],

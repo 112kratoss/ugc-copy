@@ -16,6 +16,7 @@ import {
   fetchWithProviderTimeout,
   isExternalServiceTimeoutError,
 } from '@/lib/provider-fetch';
+import { isProductionDeployment } from '@/lib/backend-environment';
 import { PRICING_PLAN_MAP, type PricingPlan } from '@/lib/pricing';
 import type {
   ReferralRewardNotification,
@@ -176,7 +177,8 @@ function providerStoreMatches(provider: MobilePurchaseProvider, store: string | 
  * opt in explicitly with MOBILE_COMMERCE_ALLOW_SANDBOX=1.
  */
 function sandboxMobilePurchasesAllowed(environment: NodeJS.ProcessEnv = process.env) {
-  return environment.MOBILE_COMMERCE_ALLOW_SANDBOX === '1';
+  return !isProductionDeployment(environment)
+    && environment.MOBILE_COMMERCE_ALLOW_SANDBOX === '1';
 }
 
 function isDisallowedSandboxPurchase(purchase: RevenueCatPurchase) {

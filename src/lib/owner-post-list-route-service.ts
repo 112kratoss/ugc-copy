@@ -26,7 +26,7 @@ export type OwnerPostListRouteResult =
       posts: Awaited<ReturnType<LoadOwnerPosts>>;
       pageInfo: {
         hasMore: boolean;
-        limit: number | null;
+        limit: number;
         nextOffset: number | null;
         offset: number;
       };
@@ -74,20 +74,20 @@ export async function listOwnerPostsForRoute({
 
   const visibility = normalizeOwnerPostVisibilityFilter(searchParams.get('visibility'));
   const includeArchived = searchParams.get('includeArchived') === 'true' || visibility === 'archived';
-  const hasExplicitLimit = searchParams.has('limit');
-  const limit = hasExplicitLimit ? Math.max(1, parseBoundedInteger(searchParams.get('limit'), 48, 100)) : null;
+  const limit = Math.max(1, parseBoundedInteger(searchParams.get('limit'), 48, 100));
   const offset = parseBoundedInteger(searchParams.get('offset'), 0, 1_000_000);
   const includeSummary = searchParams.get('includeSummary') === 'true';
   const [loadedPosts, summary] = await Promise.all([
     loadOwnerPosts(userId, {
       includeArchived,
-      ...(limit === null ? {} : { limit: limit + 1, offset }),
+      limit: limit + 1,
+      offset,
       visibility,
     }),
     includeSummary ? loadOwnerPostSalesSummary(userId) : Promise.resolve(null),
   ]);
-  const posts = limit === null ? loadedPosts : loadedPosts.slice(0, limit);
-  const hasMore = limit !== null && loadedPosts.length > limit;
+  const posts = loadedPosts.slice(0, limit);
+  const hasMore = loadedPosts.length > limit;
 
   return {
     ok: true,
@@ -95,7 +95,7 @@ export async function listOwnerPostsForRoute({
     pageInfo: {
       hasMore,
       limit,
-      nextOffset: hasMore && limit !== null ? offset + limit : null,
+      nextOffset: hasMore ? offset + limit : null,
       offset,
     },
     ...(summary ? { summary } : {}),

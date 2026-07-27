@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   getCreatorProfileReadiness,
@@ -7,6 +7,10 @@ import {
   isGeneratedProfileUsername,
   validateProfileUpdate,
 } from '@/lib/profile';
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe('creator profile readiness', () => {
   it('does not treat a generated signup handle as claimed identity', () => {
@@ -31,6 +35,27 @@ describe('creator profile readiness', () => {
       .toMatch(/reserved creator-xxxxxxxx/i);
     expect(validateProfileUpdate({ username: 'custom-creator' }).fieldErrors.username)
       .toBeUndefined();
+  });
+
+  it('requires HTTPS profile media and app-controlled hosts in production', () => {
+    expect(validateProfileUpdate({
+      username: 'custom-creator',
+      avatarUrl: 'http://magicbooklet.com/avatar.png',
+    }).fieldErrors.avatarUrl).toMatch(/HTTPS avatar/i);
+
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('NEXT_PUBLIC_SITE_URL', 'https://magicbooklet.com');
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project.supabase.co');
+
+    expect(validateProfileUpdate({
+      username: 'custom-creator',
+      avatarUrl: 'https://tracker.example/avatar.png',
+    }).fieldErrors.avatarUrl).toMatch(/Magicbooklet/i);
+    expect(validateProfileUpdate({
+      username: 'custom-creator',
+      avatarUrl: 'https://project.supabase.co/storage/v1/object/public/profiles/avatar.png',
+      coverUrl: 'https://cdn.magicbooklet.com/cover.png',
+    }).fieldErrors).toEqual({});
   });
 
   it('requires a claimed handle and display name for public publishing', () => {

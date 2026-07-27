@@ -447,7 +447,7 @@ export async function processRazorpayWebhookForRoute({
     }
     if (cumulativeRefunded === null) {
       logBackendError('razorpay_webhook_missing_credit_refund_total', { refundId });
-      return { handled: true, shouldRetry: false };
+      return { handled: true, shouldRetry: true };
     }
     if (!transaction.amount || cumulativeRefunded > transaction.amount) {
       logBackendError('razorpay_webhook_invalid_refund_amount', { refundId });

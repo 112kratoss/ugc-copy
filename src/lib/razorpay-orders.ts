@@ -5,6 +5,7 @@ import {
   ExternalServiceTimeoutError,
   fetchWithProviderTimeout,
 } from '@/lib/provider-fetch';
+import { isProductionRazorpayKeyAllowed } from '@/lib/backend-environment';
 
 const RAZORPAY_API_BASE_URL = 'https://api.razorpay.com/v1';
 const RAZORPAY_ORDERS_URL = `${RAZORPAY_API_BASE_URL}/orders`;
@@ -207,6 +208,12 @@ export async function createRazorpayOrder({
   if (!resolvedKeyId || !resolvedKeySecret) {
     throw new RazorpayOrderError('Razorpay order creation is not configured.', 500);
   }
+  if (!isProductionRazorpayKeyAllowed(resolvedKeyId)) {
+    throw new RazorpayOrderError(
+      'Razorpay live credentials are required in production.',
+      500,
+    );
+  }
 
   let response: Response;
   try {
@@ -255,6 +262,12 @@ export async function fetchRazorpayPayment({
   const resolvedPaymentId = paymentId.trim();
   if (!resolvedKeyId || !resolvedKeySecret) {
     throw new RazorpayPaymentError('Razorpay payment lookup is not configured.', 500);
+  }
+  if (!isProductionRazorpayKeyAllowed(resolvedKeyId)) {
+    throw new RazorpayPaymentError(
+      'Razorpay live credentials are required in production.',
+      500,
+    );
   }
   if (
     !resolvedPaymentId
@@ -310,6 +323,12 @@ export async function fetchRazorpayOrderByReceipt({
   const resolvedReceipt = receipt.trim();
   if (!resolvedKeyId || !resolvedKeySecret) {
     throw new RazorpayOrderError('Razorpay order recovery is not configured.', 500);
+  }
+  if (!isProductionRazorpayKeyAllowed(resolvedKeyId)) {
+    throw new RazorpayOrderError(
+      'Razorpay live credentials are required in production.',
+      500,
+    );
   }
   if (
     !resolvedReceipt

@@ -576,6 +576,40 @@ describe('mobile commerce helpers', () => {
     });
   });
 
+  it('ignores the sandbox opt-in when the server is a production deployment', async () => {
+    vi.stubEnv('MOBILE_COMMERCE_ALLOW_SANDBOX', '1');
+    vi.stubEnv('VERCEL_ENV', 'production');
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      subscriber: {
+        non_subscriptions: {
+          'magicbooklet.credits.creator': [
+            {
+              id: 'rc-sandbox-1',
+              store: 'app_store',
+              store_transaction_id: '2000000123456789',
+              purchase_date: '2026-05-12T12:00:00Z',
+              is_sandbox: true,
+            },
+          ],
+        },
+      },
+    }), {
+      headers: { 'content-type': 'application/json' },
+      status: 200,
+    }));
+
+    await expect(verifyMobilePurchase({
+      userId,
+      productId: 'magicbooklet.credits.creator',
+      provider: 'app_store',
+      fetcher: fetcher as unknown as typeof fetch,
+      revenueCatApiKey: 'rc-secret',
+    })).rejects.toMatchObject({
+      status: 400,
+      message: 'Mobile purchase receipt is invalid or not owned by this user.',
+    });
+  });
+
   it('still verifies the production purchase when a sandbox sibling shares the product', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
       subscriber: {

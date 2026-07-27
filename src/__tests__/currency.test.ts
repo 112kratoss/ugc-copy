@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   convertFromInr,
   convertFromUsd,
+  hasPlausibleUsdInrRate,
   inferCurrencyFromCountry,
   inferCurrencyFromNavigator,
 } from '@/lib/currency';
@@ -85,6 +86,15 @@ describe('currency helpers', () => {
 
     it('returns NaN when target rate is missing', () => {
       expect(Number.isNaN(convertFromUsd(5, 'GBP', { USD: 0.01 }))).toBe(true);
+    });
+  });
+
+  describe('hasPlausibleUsdInrRate', () => {
+    it('accepts normal rates and rejects manipulated or malformed values', () => {
+      expect(hasPlausibleUsdInrRate({ USD: 1 / 84 })).toBe(true);
+      expect(hasPlausibleUsdInrRate({ USD: 1 / 20 })).toBe(false);
+      expect(hasPlausibleUsdInrRate({ USD: 1 / 500 })).toBe(false);
+      expect(hasPlausibleUsdInrRate({ USD: Number.NaN })).toBe(false);
     });
   });
 });

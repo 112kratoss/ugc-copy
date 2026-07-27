@@ -128,7 +128,7 @@ const COMPLETE_BACKEND_ENVIRONMENT = {
   KIE_AI_API_KEY: 'kie-key',
   KIE_PROVIDER_WEBHOOK_SECRET: 'kie-provider-webhook-secret',
   KIE_WEBHOOK_HMAC_KEY: 'kie-webhook-key',
-  NEXT_PUBLIC_RAZORPAY_KEY_ID: 'rzp-key',
+  NEXT_PUBLIC_RAZORPAY_KEY_ID: 'rzp_live_key',
   RAZORPAY_KEY_SECRET: 'rzp-secret',
   RAZORPAY_WEBHOOK_SECRET: 'rzp-webhook-secret',
   REVENUECAT_SECRET_API_KEY: 'revenuecat-key',
@@ -223,6 +223,7 @@ describe('collectBackendHealth', () => {
       configuredRequirementCount: BACKEND_ENVIRONMENT_REQUIREMENTS.length,
       totalRequirementCount: BACKEND_ENVIRONMENT_REQUIREMENTS.length,
       missing: [],
+      invalid: [],
     });
     expect(health.catalog.activeModels).toBeGreaterThan(0);
     expect(health.catalog.schemaVersion).toBe(2);

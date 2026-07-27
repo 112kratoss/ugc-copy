@@ -1,5 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 
+const FORWARD_TIMEOUT_MS = 15_000;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
@@ -177,11 +179,20 @@ serve(async (request: Request) => {
     ),
   );
 
-  const response = await fetch(forwardUrl.toString(), {
-    method: 'POST',
-    headers,
-    body,
-  });
+  let response: Response;
+  try {
+    response = await fetch(forwardUrl.toString(), {
+      method: 'POST',
+      headers,
+      body,
+      signal: AbortSignal.timeout(FORWARD_TIMEOUT_MS),
+    });
+  } catch (error) {
+    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+      return jsonResponse({ error: 'Webhook forward timed out' }, 504);
+    }
+    return jsonResponse({ error: 'Webhook forward failed' }, 502);
+  }
   const responseBody = await response.text();
 
   return new Response(responseBody, {

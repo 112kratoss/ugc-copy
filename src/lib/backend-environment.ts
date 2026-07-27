@@ -5,6 +5,7 @@ export type BackendEnvironmentHealth = {
   configuredRequirementCount: number;
   totalRequirementCount: number;
   missing: string[];
+  invalid: string[];
 };
 
 export const BACKEND_ENVIRONMENT_REQUIREMENTS = [
@@ -31,17 +32,49 @@ function isConfigured(environment: NodeJS.ProcessEnv, keys: readonly string[]): 
   return keys.some((key) => Boolean(environment[key]?.trim()));
 }
 
+export function isProductionDeployment(environment: NodeJS.ProcessEnv = process.env): boolean {
+  return environment.NODE_ENV === 'production'
+    || environment.VERCEL_ENV === 'production'
+    || environment.VERCEL_TARGET_ENV === 'production';
+}
+
+export function collectInvalidProductionCommerceSettings(
+  environment: NodeJS.ProcessEnv,
+): string[] {
+  if (!isProductionDeployment(environment)) return [];
+
+  const invalid: string[] = [];
+  const razorpayKeyId = environment.NEXT_PUBLIC_RAZORPAY_KEY_ID?.trim();
+  if (razorpayKeyId && !razorpayKeyId.startsWith('rzp_live_')) {
+    invalid.push('razorpay-live-mode');
+  }
+  if (environment.MOBILE_COMMERCE_ALLOW_SANDBOX === '1') {
+    invalid.push('mobile-commerce-sandbox-disabled');
+  }
+  return invalid;
+}
+
+export function isProductionRazorpayKeyAllowed(
+  keyId: string | null | undefined,
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return !isProductionDeployment(environment)
+    || Boolean(keyId?.trim().startsWith('rzp_live_'));
+}
+
 export function collectBackendEnvironmentHealth(
   environment: NodeJS.ProcessEnv,
 ): BackendEnvironmentHealth {
   const missing = BACKEND_ENVIRONMENT_REQUIREMENTS
     .filter((requirement) => !isConfigured(environment, requirement.keys))
     .map((requirement) => requirement.id);
+  const invalid = collectInvalidProductionCommerceSettings(environment);
 
   return {
-    status: missing.length === 0 ? 'ok' : 'degraded',
+    status: missing.length === 0 && invalid.length === 0 ? 'ok' : 'degraded',
     configuredRequirementCount: BACKEND_ENVIRONMENT_REQUIREMENTS.length - missing.length,
     totalRequirementCount: BACKEND_ENVIRONMENT_REQUIREMENTS.length,
     missing,
+    invalid,
   };
 }
