@@ -28,7 +28,6 @@ export default function FeedClient({ initialFeed, initialChipId }: FeedClientPro
     const accessToken = session?.access_token ?? null;
 
     const [chipId, setChipId] = useState<FeedChipId>(initialChipId);
-    const [feedItems, setFeedItems] = useState<ShowcaseFeedItem[]>(initialFeed.items);
     const [nextOffset, setNextOffset] = useState<number | null>(
         initialFeed.pageInfo.hasMore ? initialFeed.pageInfo.nextOffset : null
     );
@@ -47,7 +46,11 @@ export default function FeedClient({ initialFeed, initialChipId }: FeedClientPro
         savingItemIds,
         toggleSave,
     } = useOptimisticPostSave<ShowcaseFeedItem>({
-        initialItems: feedItems,
+        // The server page only, and it never changes identity. The hook resets its
+        // optimistic save state whenever `initialItems` does, so later pages go
+        // through `setItems` — otherwise loading page 2 would roll back a save the
+        // viewer just made on page 1.
+        initialItems: initialFeed.items,
         accessToken,
         isSignedIn: Boolean(user),
         onAuthRequired: () => { window.location.href = '/login'; },
@@ -82,7 +85,7 @@ export default function FeedClient({ initialFeed, initialChipId }: FeedClientPro
             if (!response.ok) throw new Error(`Feed request failed with ${response.status}`);
 
             const page = await response.json() as ShowcaseFeedPage;
-            setFeedItems((current) => (replace
+            setItems((current) => (replace
                 ? page.items
                 // The ranker can repeat an item across pages; the id guard keeps
                 // React keys unique rather than trusting the page boundary.
@@ -96,13 +99,7 @@ export default function FeedClient({ initialFeed, initialChipId }: FeedClientPro
             setLoadingMore(false);
             setSwitching(false);
         }
-    }, [accessToken]);
-
-    // `useOptimisticPostSave` snapshots `initialItems`, so replacing the fetched
-    // list is what pushes new pages (and lane switches) into the rendered items.
-    useEffect(() => {
-        setItems(feedItems);
-    }, [feedItems, setItems]);
+    }, [accessToken, setItems]);
 
     useEffect(() => {
         const sentinel = sentinelRef.current;
@@ -136,10 +133,10 @@ export default function FeedClient({ initialFeed, initialChipId }: FeedClientPro
     }, []);
 
     const applyCommentCount = useCallback((postId: string, commentCount: number) => {
-        setFeedItems((current) => current.map((item) => (item.id === postId
+        setItems((current) => current.map((item) => (item.id === postId
             ? { ...item, commentCount: Math.max(0, commentCount) }
             : item)));
-    }, []);
+    }, [setItems]);
 
     return (
         <div className="mx-auto flex w-full max-w-[680px] flex-col gap-5 px-4 pb-24 pt-6 sm:px-6">
