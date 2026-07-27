@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { createGenerationOutputPreview } from '@/lib/generation-output-preview';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
+import { createPostMediaRendition } from '@/lib/post-media-rendition';
 import { getStoredMediaLocation } from '@/lib/server-helpers';
 import {
   fetchWithProviderRetry,
@@ -11,7 +12,15 @@ import {
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 const MAX_PREVIEW_ATTEMPTS = 3;
+export const MAX_RENDITION_ATTEMPTS = 3;
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
+/**
+ * Transcoding is far heavier than a poster frame, and this job shares a 300s
+ * budget with the preview sweep, so renditions take a much smaller bite and run
+ * one at a time. Backfill is expected to span several hourly runs.
+ */
+export const RENDITION_REPAIR_BATCH_SIZE = 5;
+const UNRESOLVED_STATUSES = ['pending', 'processing', 'failed'] as const;
 
 type RepairSummary = {
   attempted: number;
@@ -34,12 +43,36 @@ type PostMediaRepairRow = {
   preview_attempt_count: number | null;
 };
 
+type PostMediaRenditionRepairRow = {
+  id: string;
+  storage_path: string;
+  content_type: string | null;
+  rendition_attempt_count: number | null;
+};
+
 function hasRows(data: unknown): boolean {
   return Array.isArray(data) && data.length > 0;
 }
 
 export function canRepairPreview(attemptCount: number | null | undefined): boolean {
   return (attemptCount ?? 0) < MAX_PREVIEW_ATTEMPTS;
+}
+
+export function canRepairRendition(attemptCount: number | null | undefined): boolean {
+  return (attemptCount ?? 0) < MAX_RENDITION_ATTEMPTS;
+}
+
+/**
+ * Missing rendition columns must not take the whole sweep down: previews still
+ * need repairing on a database that has not run the rendition migration.
+ */
+export function isMissingRenditionColumnError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const { code, message = '' } = error as { code?: string; message?: string };
+  return (code === '42703' || code === 'PGRST204') && /rendition_/.test(message);
 }
 
 export async function hasRepairableMediaPreviews(supabase: SupabaseClient): Promise<boolean> {
@@ -65,7 +98,24 @@ export async function hasRepairableMediaPreviews(supabase: SupabaseClient): Prom
     .limit(1);
 
   if (postMediaResult.error) throw postMediaResult.error;
-  return hasRows(postMediaResult.data);
+  if (hasRows(postMediaResult.data)) return true;
+
+  // Renditions alone are enough work to justify a run; without this the job
+  // would report "no repairable media" and skip the entire backfill.
+  const renditionResult = await supabase
+    .from('post_media')
+    .select('id')
+    .eq('media_kind', 'video')
+    .in('rendition_status', UNRESOLVED_STATUSES)
+    .lt('rendition_attempt_count', MAX_RENDITION_ATTEMPTS)
+    .not('storage_path', 'is', null)
+    .limit(1);
+
+  if (renditionResult.error) {
+    if (isMissingRenditionColumnError(renditionResult.error)) return false;
+    throw renditionResult.error;
+  }
+  return hasRows(renditionResult.data);
 }
 
 function previewFailure(error: unknown, attemptCount: number) {
@@ -162,10 +212,104 @@ async function repairPostMedia(supabase: SupabaseClient, row: PostMediaRepairRow
   }
 }
 
+async function repairPostMediaRendition(
+  supabase: SupabaseClient,
+  row: PostMediaRenditionRepairRow,
+): Promise<boolean> {
+  const attempts = row.rendition_attempt_count ?? 0;
+  try {
+    await supabase.from('post_media').update({ rendition_status: 'processing' }).eq('id', row.id);
+    const download = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).download(row.storage_path);
+    if (download.error || !download.data) {
+      throw download.error ?? new Error('Stored post media could not be downloaded.');
+    }
+
+    const body = download.data;
+    const rendition = await createPostMediaRendition({
+      body,
+      contentType: row.content_type || body.type,
+      storagePath: row.storage_path,
+      supabase,
+    });
+
+    // 'skipped' is a correct terminal answer, not a failure — record it so the
+    // row stops appearing in this sweep.
+    if (rendition.status === 'skipped') {
+      const skipResult = await supabase.from('post_media').update({
+        rendition_status: 'skipped',
+        rendition_attempt_count: attempts + 1,
+        rendition_error: `Rendition skipped: ${rendition.reason}.`,
+      }).eq('id', row.id);
+      if (skipResult.error) throw skipResult.error;
+      return true;
+    }
+
+    const result = await supabase.from('post_media').update({
+      rendition_storage_path: rendition.renditionStoragePath,
+      rendition_status: 'ready',
+      rendition_attempt_count: attempts + 1,
+      rendition_error: null,
+      rendition_generated_at: new Date().toISOString(),
+      rendition_bytes: rendition.renditionBytes,
+      // Backfill the dimensions and duration the original publish never captured.
+      ...(rendition.width === null ? {} : { width: rendition.width }),
+      ...(rendition.height === null ? {} : { height: rendition.height }),
+      ...(rendition.durationSeconds === null ? {} : { duration_seconds: rendition.durationSeconds }),
+    }).eq('id', row.id);
+    if (result.error) throw result.error;
+    return true;
+  } catch (error) {
+    await supabase.from('post_media').update({
+      rendition_status: 'failed',
+      rendition_attempt_count: Math.min(MAX_RENDITION_ATTEMPTS, attempts + 1),
+      rendition_error: error instanceof Error ? error.message.slice(0, 500) : 'Rendition generation failed.',
+    }).eq('id', row.id);
+    return false;
+  }
+}
+
+export async function repairPostMediaRenditions(
+  supabase: SupabaseClient,
+  options: { batchSize?: number } = {},
+): Promise<RepairSummary> {
+  const batchSize = Math.max(1, Math.min(options.batchSize ?? RENDITION_REPAIR_BATCH_SIZE, 50));
+  const { data, error } = await supabase
+    .from('post_media')
+    .select('id, storage_path, content_type, rendition_attempt_count')
+    .eq('media_kind', 'video')
+    .in('rendition_status', UNRESOLVED_STATUSES)
+    .lt('rendition_attempt_count', MAX_RENDITION_ATTEMPTS)
+    .not('storage_path', 'is', null)
+    .order('created_at', { ascending: true })
+    .limit(batchSize);
+
+  if (error) {
+    if (isMissingRenditionColumnError(error)) {
+      return { attempted: 0, completed: 0, failed: 0 };
+    }
+    throw error;
+  }
+
+  const rows = ((data ?? []) as PostMediaRenditionRepairRow[])
+    .filter((row) => canRepairRendition(row.rendition_attempt_count));
+
+  // Sequential on purpose: concurrent ffmpeg processes would contend for the
+  // same one or two cores and push the job past its duration budget.
+  let completed = 0;
+  for (const row of rows) {
+    if (await repairPostMediaRendition(supabase, row)) {
+      completed += 1;
+    }
+  }
+
+  return { attempted: rows.length, completed, failed: rows.length - completed };
+}
+
 export async function repairMediaPreviews(
   supabase: SupabaseClient,
   options: {
     batchSize?: number;
+    renditionBatchSize?: number;
     invalidateFeedCache?: typeof invalidateShowcaseFeedCache;
   } = {}
 ): Promise<RepairSummary> {
@@ -200,11 +344,19 @@ export async function repairMediaPreviews(
     ...generations.filter((row) => canRepairPreview(row.preview_attempt_count)).map((row) => repairGeneration(supabase, row)),
     ...postMedia.filter((row) => canRepairPreview(row.preview_attempt_count)).map((row) => repairPostMedia(supabase, row)),
   ]);
-  const completed = results.filter(Boolean).length;
+
+  // Runs after the preview pass so poster frames — which the feed needs before
+  // anything can play at all — always win the shared duration budget.
+  const renditions = await repairPostMediaRenditions(supabase, {
+    batchSize: options.renditionBatchSize,
+  });
+
+  const completed = results.filter(Boolean).length + renditions.completed;
+  const attempted = results.length + renditions.attempted;
 
   if (completed > 0) {
     (options.invalidateFeedCache ?? invalidateShowcaseFeedCache)();
   }
 
-  return { attempted: results.length, completed, failed: results.length - completed };
+  return { attempted, completed, failed: attempted - completed };
 }

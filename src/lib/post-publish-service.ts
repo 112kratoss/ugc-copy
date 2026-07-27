@@ -24,6 +24,7 @@ import {
   type PostMediaPersistInput,
 } from '@/lib/post-media';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
+import { createPostMediaRendition } from '@/lib/post-media-rendition';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
 import {
@@ -59,6 +60,7 @@ export type PostPublishDependencies = {
   insertPostMediaItems?: typeof insertPostMediaItems;
   insertPostSourceTools?: typeof insertPostSourceTools;
   createPostMediaPreview?: typeof createPostMediaPreview;
+  createPostMediaRendition?: typeof createPostMediaRendition;
 };
 
 type ResolvedPostPublishDependencies = Required<PostPublishDependencies>;
@@ -96,6 +98,7 @@ function resolveDependencies(dependencies: PostPublishDependencies | undefined):
     insertPostMediaItems: dependencies?.insertPostMediaItems ?? insertPostMediaItems,
     insertPostSourceTools: dependencies?.insertPostSourceTools ?? insertPostSourceTools,
     createPostMediaPreview: dependencies?.createPostMediaPreview ?? createPostMediaPreview,
+    createPostMediaRendition: dependencies?.createPostMediaRendition ?? createPostMediaRendition,
   };
 }
 
@@ -267,6 +270,27 @@ export async function publishPreparedPost({
         logBackendWarning('failed_to_create_post_media_preview', { error: previewError });
       }
 
+      // A missing rendition costs bandwidth, never correctness — the feed falls
+      // back to the source and the repair sweep retries. Publishing must not
+      // fail because a transcode did.
+      let rendition: Awaited<ReturnType<typeof createPostMediaRendition>> | null = null;
+      let renditionFailed = false;
+      try {
+        rendition = await resolvedDependencies.createPostMediaRendition({
+          body: mediaBody,
+          contentType: mediaItem.contentType || mediaBody.type,
+          storagePath,
+          supabase: adminSupabase,
+        });
+        if (rendition.status === 'ready') {
+          storagePathsToCleanup.push(rendition.renditionStoragePath);
+        }
+      } catch (renditionError) {
+        renditionFailed = true;
+        logBackendWarning('failed_to_create_post_media_rendition', { error: renditionError });
+      }
+
+      const mediaKind = getSubmittedMediaKind(mediaItem);
       persistedMediaItems.push({
         mediaKey: mediaItem.mediaKey,
         storagePath,
@@ -276,11 +300,24 @@ export async function publishPreparedPost({
         previewAttemptCount: 1,
         previewError: preview ? null : 'Preview generation failed.',
         previewGeneratedAt: preview ? new Date().toISOString() : null,
-        mediaKind: getSubmittedMediaKind(mediaItem),
+        renditionStoragePath: rendition?.status === 'ready' ? rendition.renditionStoragePath : null,
+        renditionStatus: rendition?.status === 'ready'
+          ? 'ready'
+          : rendition?.status === 'skipped'
+            ? 'skipped'
+            : renditionFailed
+              ? 'failed'
+              : mediaKind === 'video' ? 'pending' : 'skipped',
+        renditionAttemptCount: mediaKind === 'video' ? 1 : 0,
+        renditionError: renditionFailed ? 'Rendition generation failed.' : null,
+        renditionGeneratedAt: rendition?.status === 'ready' ? new Date().toISOString() : null,
+        renditionBytes: rendition?.status === 'ready' ? rendition.renditionBytes : null,
+        mediaKind,
         contentType: mediaItem.contentType || mediaBody.type || null,
         originalName: mediaItem.originalName,
-        width: preview?.width ?? null,
-        height: preview?.height ?? null,
+        width: preview?.width ?? (rendition?.status === 'ready' ? rendition.width : null),
+        height: preview?.height ?? (rendition?.status === 'ready' ? rendition.height : null),
+        durationSeconds: rendition?.status === 'ready' ? rendition.durationSeconds : null,
         sortOrder: index,
       });
     }

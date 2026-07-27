@@ -5,7 +5,11 @@ import { AccessibilityInfo, FlatList, Platform, Pressable, Text, View } from 're
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { IMMERSIVE_HORIZONTAL_LIST_TUNING } from '@/lib/media-performance';
-import { getShowcaseMediaPreviewUrl, getShowcasePreviewMediaItems } from '@/lib/showcase-media';
+import {
+  getShowcaseMediaPreviewUrl,
+  getShowcaseMediaRenditionUrl,
+  getShowcasePreviewMediaItems,
+} from '@/lib/showcase-media';
 import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/types';
 
 type ShowcaseMediaPreviewProps = {
@@ -227,6 +231,7 @@ function ShowcaseMediaSlide({
       <View style={{ width, height }}>
         <FeedVideoPreview
           url={item.url}
+          renditionUrl={getShowcaseMediaRenditionUrl(item)}
           previewUrl={usablePreviewUrl}
           previewCacheKey={previewCacheKey}
           previewThumbhash={previewThumbhash}
