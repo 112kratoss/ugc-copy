@@ -7,6 +7,10 @@ import {
   deletePostCommentRouteResponse,
   getPostCommentsRouteResponse,
 } from '@/lib/post-comments-route-adapter-service';
+import type {
+  listPostCommentsForRoute as ListPostCommentsForRoute,
+  removePostCommentForRoute as RemovePostCommentForRoute,
+} from '@/lib/post-comments-service';
 
 const POST_ID = 'post-1';
 const COMMENT_ID = 'comment-1';
@@ -47,7 +51,8 @@ function emptyPage() {
 describe('getPostCommentsRouteResponse', () => {
   it('serves anonymous readers without resolving a viewer', async () => {
     const createUserClientSpy = vi.fn(() => createUserClient(null));
-    const listPostCommentsForRoute = vi.fn(async () => emptyPage());
+    const listPostCommentsForRoute = vi.fn<typeof ListPostCommentsForRoute>()
+      .mockResolvedValue(emptyPage());
 
     const response = await getPostCommentsRouteResponse({
       context: commentsContext(),
@@ -65,7 +70,8 @@ describe('getPostCommentsRouteResponse', () => {
   });
 
   it('passes normalized paging and sort params through to the service', async () => {
-    const listPostCommentsForRoute = vi.fn(async () => emptyPage());
+    const listPostCommentsForRoute = vi.fn<typeof ListPostCommentsForRoute>()
+      .mockResolvedValue(emptyPage());
 
     await getPostCommentsRouteResponse({
       context: commentsContext(),
@@ -252,11 +258,12 @@ describe('deletePostCommentRouteResponse', () => {
   });
 
   it('delegates the actor, post id, and comment id', async () => {
-    const removePostCommentForRoute = vi.fn(async () => ({
-      ok: true as const,
-      status: 200 as const,
-      body: { success: true as const, status: 'removed_by_author' as const, commentCount: 0 },
-    }));
+    const removePostCommentForRoute = vi.fn<typeof RemovePostCommentForRoute>()
+      .mockResolvedValue({
+        ok: true as const,
+        status: 200 as const,
+        body: { success: true as const, status: 'removed_by_author' as const, commentCount: 0 },
+      });
 
     const response = await deletePostCommentRouteResponse({
       context: commentContext(),

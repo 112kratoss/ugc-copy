@@ -21,6 +21,7 @@ function createFeedItem(
     postFormat: 'text',
     saveCount: 0,
     remixCount: 0,
+    commentCount: 0,
     createdAt: '2026-06-10T09:00:00Z',
     creator: {
       id: creatorId,

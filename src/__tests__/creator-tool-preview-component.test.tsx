@@ -38,6 +38,7 @@ function createItem(mediaKind: 'image' | 'video'): ShowcaseFeedItem {
     postFormat: 'media',
     saveCount: 0,
     remixCount: 0,
+    commentCount: 0,
     createdAt: '2026-07-15T00:00:00.000Z',
     creator: { id: 'creator-1', username: 'creator', name: 'Creator', avatar: null },
     sourceKind: 'magicbooklet',

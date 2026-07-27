@@ -112,6 +112,7 @@ function createShowcaseItem(overrides: Partial<ShowcaseFeedItem> = {}): Showcase
     postFormat: 'media',
     saveCount: 8,
     remixCount: 3,
+    commentCount: 0,
     createdAt: '2026-03-28T10:00:00.000Z',
     creator: {
       id: 'creator-1',
@@ -223,6 +224,7 @@ describe('HomeShowcasePreviewGrid', () => {
         postFormat: 'text',
         saveCount: 2,
         remixCount: 1,
+        commentCount: 0,
         createdAt: '2026-04-25T10:00:00.000Z',
         creator: {
           id: 'creator-1',

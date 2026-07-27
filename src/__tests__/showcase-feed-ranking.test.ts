@@ -25,6 +25,7 @@ function createItem(id: string, overrides: Partial<ShowcaseFeedItem> = {}): Show
     postFormat: 'media',
     saveCount: 0,
     remixCount: 0,
+    commentCount: 0,
     createdAt: '2026-07-11T05:00:00.000Z',
     creator: { id: `creator-${id}`, username: id, name: id, avatar: null },
     sourceKind: 'manual',

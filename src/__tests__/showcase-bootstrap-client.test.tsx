@@ -58,6 +58,7 @@ function createItem(overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFeedItem
     postFormat: 'media',
     saveCount: 7,
     remixCount: 3,
+    commentCount: 0,
     createdAt: '2026-07-16T10:00:00.000Z',
     creator: {
       id: 'creator-1',

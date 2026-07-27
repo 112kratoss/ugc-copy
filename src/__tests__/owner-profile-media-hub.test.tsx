@@ -126,6 +126,7 @@ const savedPost: ShowcaseFeedItem = {
   postFormat: 'media',
   saveCount: 4,
   remixCount: 1,
+  commentCount: 0,
   createdAt: '2026-06-30T00:00:00.000Z',
   savedAt: '2026-07-03T00:00:00.000Z',
   creator: { id: 'creator-2', username: 'creator-two', name: 'Creator Two', avatar: null },
