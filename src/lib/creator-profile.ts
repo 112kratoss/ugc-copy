@@ -562,6 +562,7 @@ export const getCreatorProfilePageData = cache(async (
           postFormat: 'media',
           saveCount: generation.save_count || 0,
           remixCount: generation.remix_count || 0,
+          commentCount: 0,
           createdAt: generation.created_at,
           creator: {
             id: profile.id,

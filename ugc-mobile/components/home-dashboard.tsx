@@ -1,71 +1,88 @@
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { FlashList } from '@shopify/flash-list';
+import { FlashList, type ListRenderItem, type ViewToken } from '@shopify/flash-list';
+import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { useIsFocused } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import {
   Bell,
-  ChevronRight,
   Crown,
-  FileText,
-  Heart,
   ImageIcon,
   Menu,
-  MoreHorizontal,
   Play,
   Plus,
   Rocket,
-  Share2,
   Sparkles,
   WandSparkles,
 } from 'lucide-react-native';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  AccessibilityInfo,
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  Share,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { FeedMediaFrame } from '@/components/feed-media-frame';
+import { CommentsSheet } from '@/components/comments-sheet';
+import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
+import { HomeFeedCardView } from '@/components/home-feed-card';
 import { HomeSideMenu } from '@/components/home-side-menu';
 import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
-import { TextPreviewCard } from '@/components/text-preview-card';
-import { AppText, SecondaryButton, StatusBlock } from '@/components/ui';
+import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
+import { env } from '@/lib/env';
 import {
-  HOME_UNLOCKS_FEED_HREF,
-  HOME_TOOL_SHORTCUTS,
-  formatUsdCents,
-  generationsToHomeCards,
-  getOwnerPostSalesSummary,
-  showcaseToCommunityCard,
-  type HomeCommunityCard,
-  type HomeGenerationCard,
-  type HomeToolShortcut,
-} from '@/lib/home-view-model';
-import { isShowcaseGridReady } from '@/lib/showcase-feed-view-model';
+  HOME_FEED_CHIPS,
+  buildHomeFeedCards,
+  getHomeFeedSlides,
+  type HomeFeedCard,
+  type HomeFeedChipId,
+  type HomeFeedSlide,
+} from '@/lib/home-feed-view-model';
+import { getOwnerPostSalesSummary } from '@/lib/home-view-model';
 import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
-import { HOME_RAIL_DRAW_DISTANCE } from '@/lib/media-performance';
+import { SHOWCASE_DRAW_DISTANCE, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS } from '@/lib/media-performance';
+import { useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
+import { selectActiveShowcaseVideoIds } from '@/lib/showcase-display';
+import {
+  SHOWCASE_PLAYBACK_VIEWABILITY,
+  SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY,
+  buildShowcaseFeedEventRequest,
+  canRecordShowcaseFeedEvent,
+  filterAnonymousSessionShowcaseFeedItems,
+  forgetAnonymousShowcaseFeedRemoval,
+  getQualifiedImpressionKey,
+  rememberAnonymousShowcaseFeedRemoval,
+  removeShowcaseFeedItemsFromInfiniteData,
+  type ShowcaseFeedEventDetails,
+} from '@/lib/showcase-feed-events';
 import {
   SHOWCASE_FEED_STALE_TIME_MS,
   createShowcaseFeedQueryKey,
+  createShowcaseFeedViewerQueryKey,
+  createShowcasePostQueryKey,
   flattenShowcaseFeedPages,
-  getNextShowcaseFeedOffset,
+  getNextShowcaseFeedPageParam,
   getShowcaseFeedPageParams,
+  getShowcaseFeedSessionContext,
+  type ShowcaseFeedPageParam,
 } from '@/lib/showcase-feed-query';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
-import { useReducedMotion } from '@/lib/motion';
 import { accentColor, appTheme } from '@/lib/theme';
-import type { MarketplaceResource } from '@/lib/types';
-
-interface UnlockCard {
-  id: string;
-  postId?: string;
-  title: string;
-  body: string;
-  priceLabel: string;
-  accessLabel: string;
-  mediaUrl: string | null;
-}
+import type {
+  ShowcaseFeedEventType,
+  ShowcaseFeedItem,
+  ShowcaseFeedResponse,
+  ShowcasePostResponse,
+} from '@/lib/types';
+import { getNativeRemixCreateHref } from '@/lib/viewer-actions';
+import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
 
 const DASHBOARD_COLORS = {
   background: appTheme.colors.background,
@@ -86,10 +103,12 @@ const TOOL_PREVIEW_IMAGES = {
   runner: require('../assets/images/home-previews/motion.jpg'),
 } as const;
 
+const LOAD_MORE_COOLDOWN_MS = 800;
+
 export function HomeDashboard() {
   const { user, api, credits, signOut } = useAuth();
+  const queryClient = useQueryClient();
   const isFocused = useIsFocused();
-  const [menuVisible, setMenuVisible] = useState(false);
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const topInset = resolvedTopInset(insets.top);
@@ -100,10 +119,21 @@ export function HomeDashboard() {
   const reduceMotion = useReducedMotion();
   const horizontalPadding = isCompact ? 15 : 18;
   const contentWidth = pageWidth - horizontalPadding * 2;
-  const toolGap = 10;
-  const toolCardWidth = Math.floor((contentWidth - toolGap) / 2);
-  const studioCardWidth = Math.max(162, Math.min(186, pageWidth * 0.43));
-  const previewCardWidth = Math.max(188, Math.min(220, pageWidth * 0.52));
+  const slideWidth = Math.round(contentWidth * 0.78);
+
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [activeChipId, setActiveChipId] = useState<HomeFeedChipId>('for-you');
+  const [activeVideoIds, setActiveVideoIds] = useState<string[]>([]);
+  const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
+  const [commentsItem, setCommentsItem] = useState<ShowcaseFeedItem | null>(null);
+  const visibleActiveVideoIds = isFocused ? activeVideoIds : [];
+
+  const activeChip = HOME_FEED_CHIPS.find((chip) => chip.id === activeChipId) ?? HOME_FEED_CHIPS[0];
+  const queryKey = useMemo(
+    () => createShowcaseFeedQueryKey(activeChip.filters, user?.id),
+    [activeChip, user?.id]
+  );
+  const viewerFeedQueryKey = useMemo(() => createShowcaseFeedViewerQueryKey(user?.id), [user?.id]);
 
   const generationsQuery = useQuery({
     queryKey: ['home-generations', user?.id],
@@ -127,60 +157,132 @@ export function HomeDashboard() {
   });
 
   useEffect(() => {
-    if (
-      !isFocused
-      || !user
-      || generationsQuery.isFetching
-      || !generationsQuery.isStale
-    ) return;
+    if (!isFocused || !user || generationsQuery.isFetching || !generationsQuery.isStale) return;
     void generationsQuery.refetch();
   }, [generationsQuery.isFetching, generationsQuery.isStale, isFocused, user?.id]);
 
   useEffect(() => {
-    if (
-      !isFocused
-      || !user
-      || !menuVisible
-      || sellerPostsQuery.isFetching
-      || !sellerPostsQuery.isStale
-    ) return;
+    if (!isFocused || !user || !menuVisible || sellerPostsQuery.isFetching || !sellerPostsQuery.isStale) return;
     void sellerPostsQuery.refetch();
   }, [isFocused, menuVisible, sellerPostsQuery.isFetching, sellerPostsQuery.isStale, user?.id]);
 
-  const discoveryReady = !user || generationsQuery.isFetched;
+  const loadingMoreRef = useRef(false);
+  const lastLoadMoreAtRef = useRef(0);
+  const lastLoadMoreItemCountRef = useRef(0);
+  const qualifiedImpressionsRef = useRef(new Set<string>());
+  const feedEventRuntimeRef = useRef({
+    api,
+    isFocused,
+    feedSessionId: null as string | null,
+    algorithmVersion: null as string | null,
+  });
 
-  const showcaseQuery = useInfiniteQuery({
-    queryKey: createShowcaseFeedQueryKey({ sort: 'recent' }, user?.id),
-    enabled: discoveryReady,
-    initialPageParam: 0,
-    queryFn: ({ pageParam }) => api.getShowcaseFeed(getShowcaseFeedPageParams({ offset: pageParam, sort: 'recent' })),
-    getNextPageParam: getNextShowcaseFeedOffset,
+  const recordFeedEvent = useCallback((
+    item: ShowcaseFeedItem,
+    eventType: ShowcaseFeedEventType,
+    details: ShowcaseFeedEventDetails = {}
+  ) => {
+    if (!canRecordShowcaseFeedEvent({ postId: item.id, recommendation: item.recommendation }, eventType)) return;
+    const runtime = feedEventRuntimeRef.current;
+    const request = buildShowcaseFeedEventRequest(
+      { postId: item.id, recommendation: item.recommendation },
+      eventType,
+      {
+        feedSessionId: runtime.feedSessionId,
+        algorithmVersion: item.recommendation?.algorithmVersion ?? runtime.algorithmVersion,
+        // The server only accepts the showcase surfaces; the metadata tag is how
+        // home-originated events stay separable in the ranker's telemetry.
+        sourceSurface: 'showcase',
+      },
+      { ...details, metadata: { ...(details.metadata ?? {}), surface: 'home-feed' } }
+    );
+    void runtime.api.recordShowcaseFeedEvent(request).catch(() => null);
+  }, []);
+
+  const onPlaybackViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<HomeFeedCard>> }) => {
+    const visibleItems = viewableItems
+      .filter((token) => token.isViewable && token.item)
+      .map((token) => token.item.item);
+    const nextVideoIds = selectActiveShowcaseVideoIds(visibleItems, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS);
+    setActiveVideoIds((current) => (
+      current.length === nextVideoIds.length && current.every((id, index) => id === nextVideoIds[index])
+        ? current
+        : nextVideoIds
+    ));
+  }, []);
+
+  const onQualifiedViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<HomeFeedCard>> }) => {
+    if (!feedEventRuntimeRef.current.isFocused) return;
+    for (const token of viewableItems) {
+      if (!token.isViewable || !token.item) continue;
+      const item = token.item.item;
+      const key = getQualifiedImpressionKey(
+        { postId: item.id, recommendation: item.recommendation },
+        feedEventRuntimeRef.current.feedSessionId
+      );
+      if (qualifiedImpressionsRef.current.has(key)) continue;
+      qualifiedImpressionsRef.current.add(key);
+      recordFeedEvent(item, 'impression', {
+        durationMs: SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY.minimumViewTime,
+        ...(typeof item.recommendation?.position !== 'number' && typeof token.index === 'number'
+          ? { position: token.index }
+          : {}),
+        metadata: {
+          visiblePercentThreshold: SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY.itemVisiblePercentThreshold,
+          qualification: 'viewability',
+        },
+      });
+    }
+  }, [recordFeedEvent]);
+
+  const viewabilityConfigCallbackPairs = useRef([
+    {
+      viewabilityConfig: SHOWCASE_PLAYBACK_VIEWABILITY,
+      onViewableItemsChanged: onPlaybackViewableItemsChanged,
+    },
+    {
+      viewabilityConfig: SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY,
+      onViewableItemsChanged: onQualifiedViewableItemsChanged,
+    },
+  ]).current;
+
+  const feedQuery = useInfiniteQuery({
+    queryKey,
+    initialPageParam: { offset: 0 } as ShowcaseFeedPageParam,
+    queryFn: ({ pageParam }) => api.getShowcaseFeed(getShowcaseFeedPageParams({
+      ...activeChip.filters,
+      ...pageParam,
+    })),
+    getNextPageParam: getNextShowcaseFeedPageParam,
     staleTime: SHOWCASE_FEED_STALE_TIME_MS,
   });
 
-  const marketplaceQuery = useQuery({
-    queryKey: ['home-marketplace-resources'],
-    enabled: discoveryReady,
-    queryFn: () => api.listMarketplaceResources({ limit: 6, sort: 'recent' }),
-    staleTime: SHOWCASE_FEED_STALE_TIME_MS,
-  });
+  const feedSession = useMemo(
+    () => getShowcaseFeedSessionContext(feedQuery.data?.pages),
+    [feedQuery.data?.pages]
+  );
+  feedEventRuntimeRef.current = {
+    api,
+    isFocused,
+    feedSessionId: feedSession.feedSessionId,
+    algorithmVersion: feedSession.algorithmVersion,
+  };
+
+  const feedItems = useMemo(() => {
+    const flattened = flattenShowcaseFeedPages(feedQuery.data?.pages);
+    return user ? flattened : filterAnonymousSessionShowcaseFeedItems(flattened);
+  }, [feedQuery.data?.pages, user]);
+
+  const cards = useMemo(() => buildHomeFeedCards(feedItems), [feedItems]);
+  const hasItems = cards.length > 0;
+  const isFirstLoad = feedQuery.isLoading && !hasItems;
+  const isRefreshing = feedQuery.isRefetching && !feedQuery.isFetchingNextPage;
+
+  const { toggleSave } = useShowcaseSaveMutation();
 
   const rawGenerations = generationsQuery.data?.generations ?? [];
-  const generationCards = useMemo(() => generationsToHomeCards(rawGenerations), [rawGenerations]);
-  const hasRecentStudio = generationCards.length > 0;
-  const activeGenerationCount = rawGenerations.filter((item) => ['waiting', 'processing', 'starting'].includes(item.status)).length;
-
-  const communityCards = useMemo(() => {
-    return flattenShowcaseFeedPages(showcaseQuery.data?.pages)
-      .filter(isShowcaseGridReady)
-      .slice(0, 4)
-      .map(showcaseToCommunityCard);
-  }, [showcaseQuery.data]);
-
-  const unlockCards = useMemo(
-    () => (marketplaceQuery.data?.items ?? []).slice(0, 4).map(resourceToUnlockCard),
-    [marketplaceQuery.data]
-  );
+  const activeGenerationCount = rawGenerations
+    .filter((item) => ['waiting', 'processing', 'starting'].includes(item.status)).length;
 
   const salesSummary = useMemo(
     () => sellerPostsQuery.data?.summary ?? getOwnerPostSalesSummary(sellerPostsQuery.data?.posts),
@@ -193,117 +295,346 @@ export function HomeDashboard() {
     user?.email?.split('@')[0] ||
     'Creator';
 
+  const requestNextPage = () => {
+    const now = Date.now();
+    if (
+      !feedQuery.hasNextPage ||
+      feedQuery.isFetchingNextPage ||
+      feedQuery.isLoading ||
+      loadingMoreRef.current ||
+      lastLoadMoreItemCountRef.current === feedItems.length ||
+      now - lastLoadMoreAtRef.current < LOAD_MORE_COOLDOWN_MS
+    ) {
+      return;
+    }
+
+    loadingMoreRef.current = true;
+    lastLoadMoreAtRef.current = now;
+    lastLoadMoreItemCountRef.current = feedItems.length;
+    void feedQuery.fetchNextPage().finally(() => {
+      loadingMoreRef.current = false;
+    });
+  };
+
+  const handleRefresh = () => {
+    lastLoadMoreItemCountRef.current = 0;
+    lastLoadMoreAtRef.current = 0;
+    queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
+      if (!current?.pages.length) return current;
+      return { pages: current.pages.slice(0, 1), pageParams: current.pageParams.slice(0, 1) };
+    });
+    void feedQuery.refetch();
+  };
+
+  const selectChip = (chipId: HomeFeedChipId) => {
+    if (chipId === activeChipId) return;
+    qualifiedImpressionsRef.current.clear();
+    lastLoadMoreItemCountRef.current = 0;
+    lastLoadMoreAtRef.current = 0;
+    setActiveChipId(chipId);
+  };
+
+  const openPost = (item: ShowcaseFeedItem) => {
+    recordFeedEvent(item, 'open');
+    queryClient.setQueryData<ShowcasePostResponse>(createShowcasePostQueryKey(item.id, user?.id), {
+      success: true,
+      item,
+    });
+    router.push(immersiveViewerHref({
+      source: 'showcase-feed',
+      initialId: item.id,
+      feedSessionId: feedSession.feedSessionId,
+      algorithmVersion: item.recommendation?.algorithmVersion ?? feedSession.algorithmVersion,
+    }) as never);
+  };
+
+  const openCreator = (item: ShowcaseFeedItem) => {
+    const username = item.creator.username?.trim();
+    if (!username) return;
+    router.push(`/creators/${encodeURIComponent(username)}` as never);
+  };
+
+  const shareItem = async (item: ShowcaseFeedItem) => {
+    const url = `${env.siteUrl}/showcase/${item.id}`;
+    try {
+      const result = await Share.share({ title: item.title, message: `${item.title}\n${url}`, url });
+      if (result.action === Share.sharedAction) {
+        void api.shareShowcasePost(item.id, 'native-share').catch(() => null);
+        recordFeedEvent(item, 'share');
+      }
+    } catch {
+      // A dismissed share sheet is not an error worth surfacing.
+    }
+  };
+
+  const remixItem = async (item: ShowcaseFeedItem) => {
+    if (!user) {
+      router.push('/auth' as never);
+      return;
+    }
+    try {
+      const result = await api.remixShowcasePost(item.id);
+      recordFeedEvent(item, 'remix_start');
+      const href = getNativeRemixCreateHref({
+        redirectTo: result.redirectTo,
+        recreateTool: item.category === 'video' ? 'video' : 'image',
+        prompt: item.prompt || item.body,
+      });
+      if (href) router.push(href as never);
+    } catch (error) {
+      Alert.alert('Could not start remix', error instanceof Error ? error.message : 'Please try again.');
+    }
+  };
+
+  const applyFeedFeedback = (eventType: 'not_interested' | 'hide_creator') => {
+    const item = feedbackItem;
+    if (!item) return;
+    if (eventType === 'hide_creator' && (!item.creator.id || item.creator.id === user?.id)) return;
+
+    const target = eventType === 'hide_creator' ? { creatorId: item.creator.id } : { postId: item.id };
+    const cachedFeeds = queryClient.getQueriesData<InfiniteData<ShowcaseFeedResponse>>({
+      queryKey: viewerFeedQueryKey,
+    });
+
+    if (!user) rememberAnonymousShowcaseFeedRemoval(target);
+
+    setFeedbackItem(null);
+    queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
+      { queryKey: viewerFeedQueryKey },
+      (current) => removeShowcaseFeedItemsFromInfiniteData(current, target)
+    );
+
+    const runtime = feedEventRuntimeRef.current;
+    const request = buildShowcaseFeedEventRequest(
+      { postId: item.id, recommendation: item.recommendation },
+      eventType,
+      {
+        feedSessionId: runtime.feedSessionId,
+        algorithmVersion: item.recommendation?.algorithmVersion ?? runtime.algorithmVersion,
+        sourceSurface: 'showcase',
+      },
+      { metadata: { surface: 'home-feed' } }
+    );
+
+    void runtime.api.recordShowcaseFeedEvent(request)
+      .then(() => AccessibilityInfo.announceForAccessibility(
+        eventType === 'hide_creator' ? 'Creator hidden from your feed.' : 'Post removed. Your feed will adapt.'
+      ))
+      .catch(() => {
+        if (!user) forgetAnonymousShowcaseFeedRemoval(target);
+        cachedFeeds.forEach(([cachedQueryKey, cachedData]) => {
+          queryClient.setQueryData(cachedQueryKey, cachedData);
+        });
+        Alert.alert('Couldn’t update your feed', 'The post was restored. Check your connection and try again.');
+      });
+  };
+
+  const requireModerationSignIn = () => {
+    if (user) return true;
+    setFeedbackItem(null);
+    router.push({ pathname: '/auth', params: { returnTo: '/(tabs)/index' } } as never);
+    return false;
+  };
+
+  const reportFeedbackContent = () => {
+    const item = feedbackItem;
+    if (!item || !requireModerationSignIn()) return;
+    setFeedbackItem(null);
+    Alert.alert(
+      'Report content?',
+      'Magicbooklet will send this post to the moderation team for a safety review.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Report content',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.reportPost(item.id, {
+                reason: 'unsafe_content',
+                details: 'Reported from the mobile home feed.',
+              });
+              queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
+                { queryKey: viewerFeedQueryKey },
+                (current) => removeShowcaseFeedItemsFromInfiniteData(current, { postId: item.id })
+              );
+              void AccessibilityInfo.announceForAccessibility('Content reported and removed from your feed.');
+            } catch (error) {
+              Alert.alert('Could not report content', error instanceof Error ? error.message : 'Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const reportFeedbackUser = () => {
+    const item = feedbackItem;
+    if (!item?.creator.id || !requireModerationSignIn()) return;
+    const creatorId = item.creator.id;
+    setFeedbackItem(null);
+    Alert.alert(
+      'Report this creator?',
+      'Our moderation team will review their recent activity.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Report user',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.reportUser(creatorId, { reason: 'harassment', sourceSurface: 'showcase' });
+              void AccessibilityInfo.announceForAccessibility('Creator reported.');
+            } catch (error) {
+              Alert.alert('Could not report user', error instanceof Error ? error.message : 'Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const blockFeedbackUser = () => {
+    const item = feedbackItem;
+    if (!item?.creator.id || !requireModerationSignIn()) return;
+    const creatorId = item.creator.id;
+    setFeedbackItem(null);
+    Alert.alert(
+      'Block this creator?',
+      'You will stop seeing their posts and neither of you can follow the other.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Block',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.blockUser(creatorId);
+              queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
+                { queryKey: viewerFeedQueryKey },
+                (current) => removeShowcaseFeedItemsFromInfiniteData(current, { creatorId })
+              );
+              void AccessibilityInfo.announceForAccessibility('Creator blocked.');
+            } catch (error) {
+              Alert.alert('Could not block user', error instanceof Error ? error.message : 'Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const renderCard: ListRenderItem<HomeFeedCard> = useCallback(({ item: card }) => (
+    <View style={{ paddingHorizontal: horizontalPadding, paddingBottom: 14 }}>
+      <HomeFeedCardView
+        card={card}
+        contentWidth={contentWidth}
+        showActiveVideo={visibleActiveVideoIds.includes(card.id)}
+        onOpen={() => openPost(card.item)}
+        onFeedbackOpen={() => setFeedbackItem(card.item)}
+        onCreatorOpen={() => openCreator(card.item)}
+        onSave={() => toggleSave({ postId: card.id, isSaved: card.isSaved, saveCount: card.item.saveCount })}
+        onComments={() => setCommentsItem(card.item)}
+        onRemix={() => void remixItem(card.item)}
+        onShare={() => void shareItem(card.item)}
+      />
+    </View>
+  ), [contentWidth, horizontalPadding, visibleActiveVideoIds, toggleSave]);
+
   return (
     <View style={{ flex: 1, backgroundColor: DASHBOARD_COLORS.background, paddingTop: topInset }}>
-      <ScrollView
-        bounces={false}
-        contentInsetAdjustmentBehavior="never"
-        overScrollMode="never"
+      <FlashList
+        data={cards}
+        keyExtractor={(card) => card.id}
+        renderItem={renderCard}
+        getItemType={(card) => card.previewKind}
+        extraData={visibleActiveVideoIds}
+        drawDistance={SHOWCASE_DRAW_DISTANCE}
+        onEndReached={requestNextPage}
+        onEndReachedThreshold={0.32}
+        onRefresh={handleRefresh}
+        refreshing={isRefreshing}
         showsVerticalScrollIndicator={false}
-        style={{ flex: 1, backgroundColor: 'transparent' }}
-        contentContainerStyle={{
-          paddingTop: 10,
-          paddingHorizontal: horizontalPadding,
-          paddingBottom: tabBarMetrics.contentBottomOverlapPadding + 24,
-          gap: 24,
-        }}
-      >
-        <HomeTopBar credits={credits ?? 0} onMenuPress={() => setMenuVisible(true)} />
+        viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
+        contentContainerStyle={{ paddingBottom: tabBarMetrics.contentBottomOverlapPadding + 24 }}
+        ListHeaderComponent={(
+          <View style={{ gap: 18, paddingTop: 10, paddingBottom: 6 }}>
+            <View style={{ paddingHorizontal: horizontalPadding }}>
+              <HomeTopBar credits={credits ?? 0} onMenuPress={() => setMenuVisible(true)} />
+            </View>
 
-        <WelcomePanel
-          displayName={displayName}
-          signedIn={Boolean(user)}
-          activeGenerationCount={activeGenerationCount}
-          reduceMotion={reduceMotion}
-        />
+            <TopSlider
+              activeGenerationCount={activeGenerationCount}
+              displayName={displayName}
+              horizontalPadding={horizontalPadding}
+              reduceMotion={reduceMotion}
+              signedIn={Boolean(user)}
+              slideWidth={slideWidth}
+            />
 
-        <OnboardingResumeCard />
+            <View style={{ paddingHorizontal: horizontalPadding }}>
+              <OnboardingResumeCard />
+            </View>
 
-        <View style={{ gap: 12 }}>
-          <SectionHeader title="Start with a format" actionLabel="All tools" onPress={() => router.push('/(tabs)/creator' as never)} />
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: toolGap }}>
-            {HOME_TOOL_SHORTCUTS.map((tool) => (
-              <ToolShortcutCard key={tool.id} tool={tool} width={toolCardWidth} reduceMotion={reduceMotion} />
-            ))}
-          </View>
-        </View>
-
-        {hasRecentStudio ? (
-          <View style={{ gap: 12 }}>
-            <SectionHeader title="Recent work" actionLabel="View all" onPress={() => router.push('/(tabs)/profile' as never)} compact />
-            <FlashList
-              data={generationCards}
-              drawDistance={HOME_RAIL_DRAW_DISTANCE}
-              horizontal
-              keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
-                <View style={{ marginRight: 10 }}>
-                  <RecentCreationCard item={item} width={studioCardWidth} />
-                </View>
-              )}
-              showsHorizontalScrollIndicator={false}
-              style={{ height: 160 }}
+            <FeedChips
+              activeChipId={activeChipId}
+              horizontalPadding={horizontalPadding}
+              onSelect={selectChip}
             />
           </View>
-        ) : user && generationsQuery.isError ? (
-          <RailFeedback
-            title="Recent work is unavailable"
-            body="Your creations are safe. Check your connection and try again."
-            onRetry={() => void generationsQuery.refetch()}
-          />
+        )}
+        ListEmptyComponent={(
+          <View style={{ paddingHorizontal: horizontalPadding, paddingTop: 32 }}>
+            {isFirstLoad ? (
+              <ActivityIndicator color={DASHBOARD_COLORS.faint} />
+            ) : feedQuery.isError ? (
+              <View style={{ gap: 12 }}>
+                <StatusBlock
+                  tone="danger"
+                  title="Your feed is unavailable"
+                  body="We could not load posts right now. Pull down to try again."
+                />
+                <SecondaryButton label="Retry" onPress={() => void feedQuery.refetch()} />
+              </View>
+            ) : (
+              <StatusBlock
+                tone="info"
+                title="Nothing here yet"
+                body="New community posts will appear here as creators publish them."
+              />
+            )}
+          </View>
+        )}
+        ListFooterComponent={feedQuery.isFetchingNextPage ? (
+          <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+            <ActivityIndicator color={DASHBOARD_COLORS.faint} />
+          </View>
         ) : null}
+      />
 
-        <View style={{ gap: 24 }}>
-          {showcaseQuery.isLoading && communityCards.length === 0 ? (
-            <RailLoading title="Loading showcase" />
-          ) : showcaseQuery.isError && communityCards.length === 0 ? (
-            <RailFeedback
-              title="Showcase is unavailable"
-              body="We could not load community work right now."
-              onRetry={() => void showcaseQuery.refetch()}
-            />
-          ) : communityCards.length === 0 ? (
-            <RailEmpty
-              title="No showcase posts yet"
-              body="New community work will appear here when it is published."
-              actionLabel="Open showcase"
-              onPress={() => router.push('/(tabs)/showcase' as never)}
-            />
-          ) : (
-            <PreviewRail
-              title="Showcase"
-              actionLabel="Browse"
-              onPress={() => router.push('/(tabs)/showcase' as never)}
-              items={communityCards}
-              width={previewCardWidth}
-            />
-          )}
-          {marketplaceQuery.isLoading && unlockCards.length === 0 ? (
-            <RailLoading title="Loading unlocks" />
-          ) : marketplaceQuery.isError && unlockCards.length === 0 ? (
-            <RailFeedback
-              title="Unlocks are unavailable"
-              body="We could not load creator resources right now."
-              onRetry={() => void marketplaceQuery.refetch()}
-            />
-          ) : unlockCards.length === 0 ? (
-            <RailEmpty
-              title="No unlocks yet"
-              body="Reusable creator resources will appear here as they are published."
-              actionLabel="Browse resources"
-              onPress={() => router.push(HOME_UNLOCKS_FEED_HREF as never)}
-            />
-          ) : (
-            <UnlockRail
-              title="Unlocks"
-              actionLabel="Open"
-              onPress={() => router.push(HOME_UNLOCKS_FEED_HREF as never)}
-              items={unlockCards}
-              width={previewCardWidth}
-            />
-          )}
-        </View>
-      </ScrollView>
+      <FeedFeedbackSheet
+        creatorLabel={feedbackItem?.creator.username || feedbackItem?.creator.name || 'this creator'}
+        hideCreatorDisabled={!feedbackItem?.creator.id || feedbackItem.creator.id === user?.id}
+        onBlockUser={blockFeedbackUser}
+        onClose={() => setFeedbackItem(null)}
+        onHideCreator={() => applyFeedFeedback('hide_creator')}
+        onNotInterested={() => applyFeedFeedback('not_interested')}
+        onReportContent={reportFeedbackContent}
+        onReportUser={reportFeedbackUser}
+        postTitle={feedbackItem?.title || 'this post'}
+        sessionOnly={!user}
+        visible={Boolean(feedbackItem)}
+      />
+
+      {commentsItem ? (
+        <CommentsSheet
+          postId={commentsItem.id}
+          postCreatorId={commentsItem.creator.id}
+          commentCount={commentsItem.commentCount}
+          onClose={() => setCommentsItem(null)}
+          visible
+        />
+      ) : null}
 
       <HomeSideMenu
         visible={menuVisible}
@@ -396,46 +727,99 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
   );
 }
 
-function WelcomePanel({
-  displayName,
-  signedIn,
+/**
+ * Data-driven so promotional slides can join the rotation later without
+ * touching the feed itself.
+ */
+function TopSlider({
   activeGenerationCount,
+  displayName,
+  horizontalPadding,
   reduceMotion,
+  signedIn,
+  slideWidth,
 }: {
-  displayName: string;
-  signedIn: boolean;
   activeGenerationCount: number;
+  displayName: string;
+  horizontalPadding: number;
   reduceMotion: boolean;
+  signedIn: boolean;
+  slideWidth: number;
 }) {
-  const title = signedIn ? `Ready when you are, ${displayName}` : 'Create something worth sharing';
-  const body = signedIn
-    ? 'Choose a format and turn the next idea into a polished post.'
-    : 'Choose a format, make a first draft, then sign in to save it.';
+  const slides = useMemo(() => getHomeFeedSlides(), []);
+  const gap = 10;
 
   return (
-    <View
-      style={{
-        borderRadius: 24,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: DASHBOARD_COLORS.borderStrong,
-        backgroundColor: DASHBOARD_COLORS.surfaceRaised,
-        padding: 18,
-        gap: 16,
-      }}
-    >
-        <View style={{ gap: 7 }}>
+    <FlashList
+      data={slides}
+      horizontal
+      keyExtractor={(slide) => slide.id}
+      showsHorizontalScrollIndicator={false}
+      snapToInterval={slideWidth + gap}
+      snapToAlignment="start"
+      disableIntervalMomentum
+      decelerationRate="fast"
+      style={{ height: 150 }}
+      contentContainerStyle={{ paddingHorizontal: horizontalPadding }}
+      renderItem={({ item: slide }) => (
+        <View style={{ marginRight: gap }}>
+          <TopSlide
+            activeGenerationCount={activeGenerationCount}
+            displayName={displayName}
+            reduceMotion={reduceMotion}
+            signedIn={signedIn}
+            slide={slide}
+            width={slideWidth}
+          />
+        </View>
+      )}
+    />
+  );
+}
+
+function TopSlide({
+  activeGenerationCount,
+  displayName,
+  reduceMotion,
+  signedIn,
+  slide,
+  width,
+}: {
+  activeGenerationCount: number;
+  displayName: string;
+  reduceMotion: boolean;
+  signedIn: boolean;
+  slide: HomeFeedSlide;
+  width: number;
+}) {
+  if (slide.kind === 'workspace') {
+    const title = signedIn ? `Ready when you are, ${displayName}` : 'Create something worth sharing';
+
+    return (
+      <View
+        style={{
+          width,
+          height: 150,
+          borderRadius: 20,
+          borderCurve: 'continuous',
+          borderWidth: 1,
+          borderColor: DASHBOARD_COLORS.borderStrong,
+          backgroundColor: DASHBOARD_COLORS.surfaceRaised,
+          padding: 14,
+          justifyContent: 'space-between',
+        }}
+      >
+        <View style={{ gap: 6 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: activeGenerationCount > 0 ? '#34d399' : DASHBOARD_COLORS.coral }} />
-            <Text style={{ color: DASHBOARD_COLORS.muted, fontSize: 12, fontWeight: '800', letterSpacing: 0.8, textTransform: 'uppercase' }}>
-              {activeGenerationCount > 0 ? `${activeGenerationCount} render${activeGenerationCount === 1 ? '' : 's'} in progress` : 'Creator workspace'}
+            <Text numberOfLines={1} style={{ color: DASHBOARD_COLORS.muted, fontSize: 11, fontWeight: '800', letterSpacing: 0.8, textTransform: 'uppercase' }}>
+              {activeGenerationCount > 0
+                ? `${activeGenerationCount} render${activeGenerationCount === 1 ? '' : 's'} in progress`
+                : 'Creator workspace'}
             </Text>
           </View>
-          <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82} style={{ color: DASHBOARD_COLORS.text, fontSize: 25, lineHeight: 30, fontWeight: '800', letterSpacing: -0.5 }}>
+          <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82} style={{ color: DASHBOARD_COLORS.text, fontSize: 19, lineHeight: 24, fontWeight: '800', letterSpacing: -0.4 }}>
             {title}
-          </Text>
-          <Text style={{ color: DASHBOARD_COLORS.muted, fontSize: 14, lineHeight: 20, fontWeight: '600' }}>
-            {body}
           </Text>
         </View>
 
@@ -443,83 +827,98 @@ function WelcomePanel({
           accessibilityRole="button"
           accessibilityLabel="Create new project"
           accessibilityHint="Opens the creator tools"
-          onPress={() => router.push('/(tabs)/creator' as never)}
+          onPress={() => router.push(slide.href as never)}
           style={({ pressed }) => ({
-            minHeight: 52,
-            borderRadius: 18,
+            minHeight: 44,
+            borderRadius: 14,
             backgroundColor: DASHBOARD_COLORS.coral,
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'center',
-            gap: 9,
+            gap: 8,
             opacity: pressed ? 0.84 : 1,
             transform: reduceMotion ? undefined : [{ scale: pressed ? 0.985 : 1 }],
           })}
         >
-          <WandSparkles size={19} color={appTheme.colors.onPrimary} strokeWidth={2.5} />
-          <Text style={{ color: appTheme.colors.onPrimary, fontSize: 15, fontWeight: '800' }}>Create new</Text>
+          <WandSparkles size={17} color={appTheme.colors.onPrimary} strokeWidth={2.5} />
+          <Text style={{ color: appTheme.colors.onPrimary, fontSize: 14, fontWeight: '800' }}>{slide.ctaLabel}</Text>
         </Pressable>
-    </View>
-  );
-}
+      </View>
+    );
+  }
 
-function ToolShortcutCard({ tool, width, reduceMotion }: { tool: HomeToolShortcut; width: number; reduceMotion: boolean }) {
-  const Icon = tool.id === 'image' ? ImageIcon : tool.id === 'video' ? Play : tool.id === 'motion' ? Rocket : Sparkles;
-  const colors = toolColors(tool.accent);
-  const disabled = !tool.href;
+  if (slide.kind === 'promo') {
+    return (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={slide.title}
+        onPress={() => router.push(slide.href as never)}
+        style={({ pressed }) => ({ width, opacity: pressed ? 0.86 : 1 })}
+      >
+        <View
+          style={{
+            height: 150,
+            borderRadius: 20,
+            borderCurve: 'continuous',
+            borderWidth: 1,
+            borderColor: DASHBOARD_COLORS.border,
+            backgroundColor: DASHBOARD_COLORS.surface,
+            overflow: 'hidden',
+            justifyContent: 'flex-end',
+          }}
+        >
+          {slide.imageUrl ? (
+            <Image source={{ uri: slide.imageUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+          ) : null}
+          <LinearGradient colors={['rgba(0,0,0,0.04)', 'rgba(0,0,0,0.72)']} style={{ position: 'absolute', inset: 0 }} />
+          <View style={{ padding: 12, gap: 4 }}>
+            <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 16, fontWeight: '800' }}>{slide.title}</Text>
+            <Text numberOfLines={2} style={{ color: 'rgba(255,255,255,0.78)', fontSize: 12, fontWeight: '600' }}>{slide.body}</Text>
+          </View>
+        </View>
+      </Pressable>
+    );
+  }
+
+  const Icon = slide.id === 'image' ? ImageIcon : slide.id === 'video' ? Play : slide.id === 'motion' ? Rocket : Sparkles;
+  const accent = accentColor(slide.accent);
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={tool.badge ? `${tool.title} ${tool.badge}` : tool.title}
-      disabled={disabled}
-      onPress={() => {
-        if (tool.href) {
-          router.push(tool.href as never);
-        }
-      }}
+      accessibilityLabel={slide.title}
+      onPress={() => router.push(slide.href as never)}
       style={({ pressed }) => ({
         width,
-        opacity: disabled ? 0.58 : pressed ? 0.82 : 1,
-        transform: reduceMotion ? undefined : [{ scale: pressed && !disabled ? 0.99 : 1 }],
+        opacity: pressed ? 0.82 : 1,
+        transform: reduceMotion ? undefined : [{ scale: pressed ? 0.99 : 1 }],
       })}
     >
       <View
         style={{
-          minHeight: 158,
+          height: 150,
           borderRadius: 20,
           borderCurve: 'continuous',
           borderWidth: 1,
           borderColor: DASHBOARD_COLORS.border,
           backgroundColor: DASHBOARD_COLORS.surface,
-          padding: tool.previewVariant ? 0 : 14,
           justifyContent: 'space-between',
           overflow: 'hidden',
         }}
       >
-        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, backgroundColor: colors.accent }} />
-        {tool.previewVariant ? (
-          <ToolPreview variant={tool.previewVariant} icon={<Icon size={18} color="#ffffff" fill={tool.id === 'video' ? 'transparent' : 'rgba(255,255,255,0.14)'} />} />
-        ) : (
-          <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
-            <View style={{ width: 38, height: 38, borderRadius: 13, backgroundColor: colors.soft, alignItems: 'center', justifyContent: 'center' }}>
-              <Icon size={20} color={colors.accent} fill={tool.id === 'video' ? 'transparent' : colors.fill} />
-            </View>
-            {tool.badge ? (
-              <View style={{ borderRadius: 999, borderWidth: 1, borderColor: DASHBOARD_COLORS.border, backgroundColor: DASHBOARD_COLORS.surfaceRaised, paddingHorizontal: 8, paddingVertical: 5 }}>
-                <Text style={{ color: DASHBOARD_COLORS.muted, fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>{tool.badge}</Text>
-              </View>
-            ) : (
-              <ChevronRight size={20} color={DASHBOARD_COLORS.muted} />
-            )}
-          </View>
-        )}
-        <View style={{ gap: 5, paddingHorizontal: tool.previewVariant ? 12 : 0, paddingBottom: tool.previewVariant ? 11 : 0, paddingTop: tool.previewVariant ? 10 : 0 }}>
-          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: appTheme.colors.text, fontSize: tool.previewVariant ? 16 : 17, fontWeight: '800' }}>
-            {tool.title}
+        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, backgroundColor: accent }} />
+        {slide.previewVariant ? (
+          <ToolPreview
+            variant={slide.previewVariant}
+            icon={<Icon size={18} color="#ffffff" fill={slide.id === 'video' ? 'transparent' : 'rgba(255,255,255,0.14)'} />}
+          />
+        ) : null}
+        <View style={{ gap: 4, paddingHorizontal: 12, paddingBottom: 11, paddingTop: 10 }}>
+          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: appTheme.colors.text, fontSize: 16, fontWeight: '800' }}>
+            {slide.title}
           </Text>
           <Text numberOfLines={2} style={{ color: DASHBOARD_COLORS.muted, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>
-            {tool.body}
+            {slide.body}
           </Text>
         </View>
       </View>
@@ -531,16 +930,13 @@ function ToolPreview({
   variant,
   icon,
 }: {
-  variant: NonNullable<HomeToolShortcut['previewVariant']>;
+  variant: 'kingdom' | 'city' | 'runner';
   icon: ReactNode;
 }) {
   return (
     <View style={{ height: 82, overflow: 'hidden', backgroundColor: DASHBOARD_COLORS.surfaceRaised }}>
       <Image source={TOOL_PREVIEW_IMAGES[variant]} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
-      <LinearGradient
-        colors={['rgba(0,0,0,0.04)', 'rgba(0,0,0,0.48)']}
-        style={{ position: 'absolute', inset: 0 }}
-      />
+      <LinearGradient colors={['rgba(0,0,0,0.04)', 'rgba(0,0,0,0.48)']} style={{ position: 'absolute', inset: 0 }} />
       <View style={{ position: 'absolute', left: 9, top: 9, width: 30, height: 30, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.38)', alignItems: 'center', justifyContent: 'center' }}>
         {icon}
       </View>
@@ -548,395 +944,41 @@ function ToolPreview({
   );
 }
 
-function RecentCreationCard({ item, width }: { item: HomeGenerationCard; width: number }) {
-  const Icon = item.kind === 'image' ? ImageIcon : item.kind === 'video' ? Play : item.kind === 'text' ? FileText : Rocket;
-  const isText = item.kind === 'text';
+function FeedChips({
+  activeChipId,
+  horizontalPadding,
+  onSelect,
+}: {
+  activeChipId: HomeFeedChipId;
+  horizontalPadding: number;
+  onSelect: (chipId: HomeFeedChipId) => void;
+}) {
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={item.title}
-      onPress={() => {
-        router.push(immersiveViewerHref({ source: item.viewerSource, initialId: item.sourceId }) as never);
-      }}
-      style={({ pressed }) => ({
-        width,
-        height: 160,
-        overflow: 'hidden',
-        borderRadius: 18,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.11)',
-        backgroundColor: DASHBOARD_COLORS.surface,
-        opacity: pressed ? 0.86 : 1,
+    <View style={{ flexDirection: 'row', gap: 18, paddingHorizontal: horizontalPadding }}>
+      {HOME_FEED_CHIPS.map((chip) => {
+        const active = chip.id === activeChipId;
+        return (
+          <Pressable
+            key={chip.id}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: active }}
+            accessibilityLabel={chip.label}
+            onPress={() => onSelect(chip.id)}
+            style={{ minHeight: 44, justifyContent: 'center', gap: 6 }}
+          >
+            <Text style={{ color: active ? DASHBOARD_COLORS.text : DASHBOARD_COLORS.faint, fontSize: 15, fontWeight: '800' }}>
+              {chip.label}
+            </Text>
+            <View
+              style={{
+                height: 2,
+                borderRadius: 1,
+                backgroundColor: active ? DASHBOARD_COLORS.coral : 'transparent',
+              }}
+            />
+          </Pressable>
+        );
       })}
-    >
-      {isText ? (
-        <TextPreviewCard text={item.previewText} accent={accentColor('amber')} height={160} radius={18} lines={4} />
-      ) : item.mediaUrl && item.kind === 'image' ? (
-        <FeedMediaFrame
-          kind="image"
-          url={item.previewUrl ?? item.mediaUrl}
-          cacheKey={item.previewCacheKey}
-          thumbhash={item.previewThumbhash}
-          recyclingKey={`home-generation:${item.id}`}
-          radius={18}
-          style={{ position: 'absolute', inset: 0 }}
-        />
-      ) : (
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: DASHBOARD_COLORS.surfaceRaised }}>
-          <Icon size={28} color={toolColors(item.kind === 'text' ? 'workflow' : item.kind).accent} strokeWidth={1.8} />
-        </View>
-      )}
-      <LinearGradient colors={['rgba(0,0,0,0.02)', 'rgba(0,0,0,0.82)']} style={{ position: 'absolute', inset: 0 }} />
-      <View style={{ position: 'absolute', left: 10, top: 10, borderRadius: 11, backgroundColor: 'rgba(0,0,0,0.38)', padding: 7 }}>
-        <Icon size={18} color="#ffffff" />
-      </View>
-      <View style={{ position: 'absolute', left: 12, right: 12, bottom: 11, gap: 5 }}>
-        <Text numberOfLines={1} style={{ color: '#fff', fontSize: 15, fontWeight: '800' }}>{item.title}</Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-          <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.68)', fontSize: 12, fontWeight: '700' }}>{item.label} • {item.timeLabel}</Text>
-          <MoreHorizontal size={19} color="#ffffff" />
-        </View>
-      </View>
-    </Pressable>
-  );
-}
-
-function RailLoading({ title }: { title: string }) {
-  return (
-    <View style={{ gap: appTheme.spacing.gap }}>
-      <AppText heading variant="cardTitle">{title}</AppText>
-      <View
-        accessible
-        accessibilityLabel={title}
-        accessibilityLiveRegion="polite"
-        style={{
-          minHeight: 96,
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexDirection: 'row',
-          gap: appTheme.spacing.gap,
-          borderRadius: appTheme.radii.lg,
-          borderWidth: 1,
-          borderColor: appTheme.colors.borderSubtle,
-          backgroundColor: appTheme.colors.panel,
-        }}
-      >
-        <ActivityIndicator color={appTheme.colors.primary} />
-        <AppText variant="bodySm" color="muted">Fetching the latest items…</AppText>
-      </View>
     </View>
   );
-}
-
-function RailFeedback({
-  title,
-  body,
-  onRetry,
-}: {
-  title: string;
-  body: string;
-  onRetry: () => void;
-}) {
-  return (
-    <View style={{ gap: appTheme.spacing.gap }}>
-      <StatusBlock tone="danger" title={title} body={body} />
-      <SecondaryButton label="Try again" onPress={onRetry} />
-    </View>
-  );
-}
-
-function RailEmpty({
-  title,
-  body,
-  actionLabel,
-  onPress,
-}: {
-  title: string;
-  body: string;
-  actionLabel: string;
-  onPress: () => void;
-}) {
-  return (
-    <View style={{ gap: appTheme.spacing.gap }}>
-      <StatusBlock title={title} body={body} />
-      <SecondaryButton label={actionLabel} onPress={onPress} />
-    </View>
-  );
-}
-
-function PreviewRail({
-  title,
-  actionLabel,
-  onPress,
-  items,
-  width,
-}: {
-  title: string;
-  actionLabel: string;
-  onPress: () => void;
-  items: HomeCommunityCard[];
-  width: number;
-}) {
-  return (
-    <View style={{ gap: 12 }}>
-      <SectionHeader title={title} actionLabel={actionLabel} onPress={onPress} compact />
-      <FlashList
-        data={items}
-        drawDistance={HOME_RAIL_DRAW_DISTANCE}
-        horizontal
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <View style={{ marginRight: 10 }}>
-            <CommunityPreviewCard item={item} width={width} />
-          </View>
-        )}
-        showsHorizontalScrollIndicator={false}
-        decelerationRate="fast"
-        disableIntervalMomentum
-        snapToAlignment="start"
-        snapToInterval={width + 10}
-        style={{ height: 204 }}
-      />
-    </View>
-  );
-}
-
-function CommunityPreviewCard({ item, width }: { item: HomeCommunityCard; width: number }) {
-  const isFallbackPreview = item.sourceId.startsWith('preview-');
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={item.title}
-      onPress={() => {
-        router.push(immersiveViewerHref({ source: item.viewerSource, initialId: item.sourceId }) as never);
-      }}
-      style={({ pressed }) => ({
-        width,
-        height: 202,
-        overflow: 'hidden',
-        borderRadius: 18,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: DASHBOARD_COLORS.border,
-        backgroundColor: DASHBOARD_COLORS.surface,
-        opacity: pressed ? 0.86 : 1,
-      })}
-    >
-      <View style={{ height: 108, overflow: 'hidden' }}>
-        {item.previewKind === 'text' ? (
-          <TextPreviewCard text={item.body} accent={accentColor('workflow')} height={108} radius={0} lines={3} compact />
-        ) : item.previewUrl || (item.mediaUrl && item.mediaKind === 'image') ? (
-          <FeedMediaFrame
-            kind="image"
-            url={item.previewUrl || item.mediaUrl as string}
-            cacheKey={item.previewCacheKey}
-            thumbhash={item.previewThumbhash}
-            imageBackdrop="none"
-            imageContentFit="cover"
-            recyclingKey={`home-community:${item.id}`}
-            style={{ position: 'absolute', inset: 0 }}
-          />
-        ) : (
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: DASHBOARD_COLORS.surfaceRaised }}>
-            <ImageIcon size={28} color={appTheme.colors.image} strokeWidth={1.8} />
-          </View>
-        )}
-        <LinearGradient colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.5)']} style={{ position: 'absolute', inset: 0 }} />
-        <View
-          style={{
-            position: 'absolute',
-            left: item.previewKind === 'text' ? undefined : 9,
-            right: item.previewKind === 'text' ? 9 : undefined,
-            top: 9,
-            borderRadius: 999,
-            backgroundColor: 'rgba(0,0,0,0.5)',
-            paddingHorizontal: 8,
-            paddingVertical: 5,
-          }}
-        >
-          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>{item.accessLabel}</Text>
-        </View>
-      </View>
-      <View style={{ flex: 1, paddingHorizontal: 10, paddingTop: 9, paddingBottom: 9, justifyContent: 'space-between', gap: 5 }}>
-        <View style={{ gap: 4 }}>
-          <Text numberOfLines={1} style={{ color: DASHBOARD_COLORS.text, fontSize: 14, lineHeight: 17, fontWeight: '800' }}>{item.title}</Text>
-          <Text numberOfLines={1} style={{ color: DASHBOARD_COLORS.muted, fontSize: 12, lineHeight: 14, fontWeight: '700' }}>{item.creatorHandle}</Text>
-        </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-          <MiniStat icon={<Heart size={13} color="#ffffff" />} label={item.saveLabel} />
-          <MiniStat icon={<Share2 size={13} color="#ffffff" />} label="Share" />
-        </View>
-      </View>
-    </Pressable>
-  );
-}
-
-function UnlockRail({
-  title,
-  actionLabel,
-  onPress,
-  items,
-  width,
-}: {
-  title: string;
-  actionLabel: string;
-  onPress: () => void;
-  items: UnlockCard[];
-  width: number;
-}) {
-  return (
-    <View style={{ gap: 12 }}>
-      <SectionHeader title={title} actionLabel={actionLabel} onPress={onPress} compact />
-      <FlashList
-        data={items}
-        drawDistance={HOME_RAIL_DRAW_DISTANCE}
-        horizontal
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <View style={{ marginRight: 10 }}>
-            <UnlockPreviewCard item={item} width={width} />
-          </View>
-        )}
-        showsHorizontalScrollIndicator={false}
-        decelerationRate="fast"
-        disableIntervalMomentum
-        snapToAlignment="start"
-        snapToInterval={width + 10}
-        style={{ height: 146 }}
-      />
-    </View>
-  );
-}
-
-function UnlockPreviewCard({ item, width }: { item: UnlockCard; width: number }) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={item.title}
-      onPress={() => {
-        const postQuery = item.postId ? `?postId=${encodeURIComponent(item.postId)}` : '';
-        router.push(`/marketplace/${encodeURIComponent(item.id)}${postQuery}` as never);
-      }}
-      style={({ pressed }) => ({
-        width,
-        minHeight: 144,
-        borderRadius: 18,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: DASHBOARD_COLORS.border,
-        backgroundColor: DASHBOARD_COLORS.surface,
-        overflow: 'hidden',
-        opacity: pressed ? 0.86 : 1,
-      })}
-    >
-      {item.mediaUrl ? (
-        <FeedMediaFrame kind="image" url={item.mediaUrl} recyclingKey={`home-unlock:${item.id}`} radius={18} style={{ position: 'absolute', inset: 0 }} />
-      ) : (
-        <View style={{ position: 'absolute', inset: 0, backgroundColor: DASHBOARD_COLORS.surfaceRaised }} />
-      )}
-      {item.mediaUrl ? <LinearGradient colors={['rgba(0,0,0,0.08)', 'rgba(0,0,0,0.86)']} style={{ position: 'absolute', inset: 0 }} /> : null}
-      <View style={{ minHeight: 144, padding: 12, justifyContent: 'space-between', gap: 12 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-          <View style={{ borderRadius: 999, backgroundColor: DASHBOARD_COLORS.coralSoft, borderWidth: 1, borderColor: appTheme.colors.primaryStrong, paddingHorizontal: 8, paddingVertical: 5 }}>
-            <Text numberOfLines={1} style={{ color: appTheme.colors.primaryStrong, fontSize: 11, fontWeight: '800' }}>{item.accessLabel}</Text>
-          </View>
-          <Text numberOfLines={1} style={{ color: DASHBOARD_COLORS.text, fontSize: 12, fontWeight: '800' }}>{item.priceLabel}</Text>
-        </View>
-        <View style={{ gap: 6 }}>
-          <Text numberOfLines={2} style={{ color: DASHBOARD_COLORS.text, fontSize: 15, lineHeight: 18, fontWeight: '800' }}>{item.title}</Text>
-          <Text numberOfLines={2} style={{ color: DASHBOARD_COLORS.muted, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>{item.body}</Text>
-        </View>
-      </View>
-    </Pressable>
-  );
-}
-
-function SectionHeader({
-  title,
-  actionLabel,
-  onPress,
-  compact = false,
-}: {
-  title: string;
-  actionLabel: string;
-  onPress: () => void;
-  compact?: boolean;
-}) {
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.84} style={{ color: appTheme.colors.text, flex: 1, fontSize: compact ? 16 : 18, fontWeight: '800' }}>
-        {title}
-      </Text>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${actionLabel} ${title}`}
-        hitSlop={10}
-        onPress={onPress}
-        style={({ pressed }) => ({
-          minHeight: 48,
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 3,
-          opacity: pressed ? 0.7 : 1,
-        })}
-      >
-        <Text numberOfLines={1} style={{ color: DASHBOARD_COLORS.coral, fontSize: compact ? 12 : 13, fontWeight: '800' }}>{actionLabel}</Text>
-        <ChevronRight size={compact ? 15 : 16} color={DASHBOARD_COLORS.coral} />
-      </Pressable>
-    </View>
-  );
-}
-
-function MiniStat({ icon, label }: { icon: ReactNode; label: string }) {
-  return (
-    <View style={{ minHeight: 24, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.07)', paddingHorizontal: 8 }}>
-      {icon}
-      <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>{label}</Text>
-    </View>
-  );
-}
-
-function toolColors(accent: HomeToolShortcut['accent']) {
-  if (accent === 'image') {
-    return {
-      accent: appTheme.colors.image,
-      soft: 'rgba(56,189,248,0.13)',
-      fill: 'rgba(56,189,248,0.16)',
-    };
-  }
-  if (accent === 'video') {
-    return {
-      accent: appTheme.colors.video,
-      soft: 'rgba(251,113,133,0.13)',
-      fill: 'rgba(251,113,133,0.16)',
-    };
-  }
-  if (accent === 'motion') {
-    return {
-      accent: appTheme.colors.motion,
-      soft: 'rgba(167,139,250,0.13)',
-      fill: 'rgba(167,139,250,0.16)',
-    };
-  }
-  return {
-    accent: appTheme.colors.workflow,
-    soft: 'rgba(52,211,153,0.13)',
-    fill: 'rgba(52,211,153,0.16)',
-  };
-}
-
-function resourceToUnlockCard(item: MarketplaceResource): UnlockCard {
-  const accessLabel = item.resourceKinds?.[0] ? item.resourceKinds[0] : item.accessMode === 'free' ? 'Free unlock' : 'Unlock';
-  return {
-    id: item.id,
-    postId: item.postId,
-    title: item.title,
-    body: item.summary ?? item.description ?? item.previewText ?? 'Reusable creator resource.',
-    priceLabel: item.accessMode === 'free' ? 'Free' : item.priceQuote?.formatted ?? formatUsdCents(item.priceUsdCents ?? 0),
-    accessLabel,
-    mediaUrl: item.mediaUrl ?? item.post?.mediaUrl ?? null,
-  };
 }

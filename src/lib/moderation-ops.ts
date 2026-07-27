@@ -30,9 +30,10 @@ export type PostModerationQueueItem = {
 export type SubjectModerationQueueItem = {
   id: string;
   reporterUserId: string | null;
-  targetType: 'user' | 'generation';
+  targetType: 'user' | 'generation' | 'comment';
   reportedUserId: string | null;
   generationId: string | null;
+  commentId: string | null;
   reason: string;
   details: string | null;
   sourceSurface: string;
@@ -108,9 +109,10 @@ type PostMediaModerationRow = {
 type SubjectReportRow = {
   id: string;
   reporter_user_id: string | null;
-  target_type: 'user' | 'generation';
+  target_type: 'user' | 'generation' | 'comment';
   reported_user_id: string | null;
   generation_id: string | null;
+  comment_id: string | null;
   reason: string;
   details: string | null;
   source_surface: string;
@@ -270,7 +272,7 @@ export async function listOpenModerationReports(
       .limit(limit),
     supabase
       .from('moderation_reports')
-      .select('id, reporter_user_id, target_type, reported_user_id, generation_id, reason, details, source_surface, status, created_at, updated_at, reviewed_at, reviewed_by')
+      .select('id, reporter_user_id, target_type, reported_user_id, generation_id, comment_id, reason, details, source_surface, status, created_at, updated_at, reviewed_at, reviewed_by')
       .in('status', ['open', 'reviewing'])
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
@@ -331,6 +333,7 @@ export async function listOpenModerationReports(
       targetType: row.target_type,
       reportedUserId: row.reported_user_id,
       generationId: row.generation_id,
+      commentId: row.comment_id,
       reason: row.reason,
       details: row.details,
       sourceSurface: row.source_surface,

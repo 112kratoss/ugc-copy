@@ -19,12 +19,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
-import { SecondaryButton, StatusBlock } from '@/components/ui';
+import { CreatorAvatar, SecondaryButton, StatusBlock } from '@/components/ui';
 import { WorkspaceSideMenuGestureLayer } from '@/components/workspace-side-menu-gesture-layer';
 import { useAuth } from '@/lib/auth';
 import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
-import { isShowcaseVideoPreviewCandidate, selectActiveShowcaseVideoIds } from '@/lib/showcase-display';
+import { isShowcaseVideoPreviewCandidate, isTextOnlyShowcasePost, selectActiveShowcaseVideoIds } from '@/lib/showcase-display';
 import {
   SHOWCASE_FEED_STALE_TIME_MS,
   createShowcaseFeedQueryKey,
@@ -231,7 +231,11 @@ export default function ShowcaseScreen() {
   };
   const showcaseItems = useMemo(() => {
     const flattened = flattenShowcaseFeedPages(showcaseQuery.data?.pages);
-    return user ? flattened : filterAnonymousSessionShowcaseFeedItems(flattened);
+    const visible = user ? flattened : filterAnonymousSessionShowcaseFeedItems(flattened);
+    // Showcase is the media grid; text-only posts live on the home feed, which
+    // renders every format. Ranked pages still include them, so they are dropped
+    // here until the feed API can exclude them server-side.
+    return visible.filter((item) => !isTextOnlyShowcasePost(item));
   }, [showcaseQuery.data?.pages, user]);
   const cards = useMemo(() => buildShowcaseMasonry(showcaseItems), [showcaseItems]);
   const hasItems = showcaseItems.length > 0;
@@ -1023,30 +1027,6 @@ function TextPinPreview({
           </Text>
         </View>
       </View>
-    </View>
-  );
-}
-
-function CreatorAvatar({ uri, name }: { uri: string | null; name: string }) {
-  const initial = name.trim()[0]?.toUpperCase() || 'C';
-
-  return (
-    <View
-      style={{
-        width: 25,
-        height: 25,
-        borderRadius: 12.5,
-        overflow: 'hidden',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#27272a',
-      }}
-    >
-      {uri ? (
-        <Image source={{ uri }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
-      ) : (
-        <Text style={{ color: appTheme.colors.text, fontSize: 11, fontWeight: '800' }}>{initial}</Text>
-      )}
     </View>
   );
 }

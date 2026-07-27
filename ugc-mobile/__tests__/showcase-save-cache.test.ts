@@ -21,6 +21,7 @@ function item(overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFeedItem {
     postFormat: 'media',
     saveCount: 4,
     remixCount: 0,
+    commentCount: 0,
     createdAt: '2026-06-10T00:00:00.000Z',
     creator: { id: 'creator-1', username: 'luna', name: 'Luna', avatar: null },
     isSaved: false,

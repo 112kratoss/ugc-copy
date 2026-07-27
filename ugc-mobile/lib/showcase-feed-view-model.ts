@@ -149,7 +149,7 @@ function cardBadge(item: ShowcaseFeedItem) {
   return 'Image';
 }
 
-function cardUnlock(item: ShowcaseFeedItem): ShowcaseMasonryUnlock | null {
+export function cardUnlock(item: ShowcaseFeedItem): ShowcaseMasonryUnlock | null {
   if (item.asset) {
     const free = item.asset.accessMode === 'free';
     return {
@@ -176,7 +176,7 @@ function isAppCreatedShowcaseItem(item: ShowcaseFeedItem) {
   return typeof item.generationId === 'string' && item.generationId.trim().length > 0;
 }
 
-function canRecreateShowcaseItem(item: ShowcaseFeedItem) {
+export function canRecreateShowcaseItem(item: ShowcaseFeedItem) {
   return isAppCreatedShowcaseItem(item) && item.canRemix;
 }
 

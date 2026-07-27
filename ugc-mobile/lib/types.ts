@@ -707,6 +707,7 @@ export interface ShowcaseFeedItem {
   postFormat: 'text' | 'media' | 'mixed';
   saveCount: number;
   remixCount: number;
+  commentCount: number;
   createdAt: string;
   creator: ShowcaseCreator;
   isSaved?: boolean;
@@ -738,6 +739,55 @@ export interface ShowcaseFeedResponse {
 export interface ShowcasePostResponse {
   success: boolean;
   item: ShowcaseFeedItem;
+}
+
+export type PostCommentStatus =
+  | 'active'
+  | 'removed_by_author'
+  | 'removed_by_owner'
+  | 'removed_by_moderation';
+
+export interface PostCommentAuthor {
+  id: string;
+  username: string | null;
+  displayName: string;
+  avatarUrl: string | null;
+}
+
+export interface PostComment {
+  id: string;
+  parentId: string | null;
+  body: string;
+  status: PostCommentStatus;
+  createdAt: string;
+  replyCount: number;
+  /** Null once a comment is removed — the server withholds the author too. */
+  author: PostCommentAuthor | null;
+}
+
+export interface PostCommentsResponse {
+  postId: string;
+  postCreatorId: string | null;
+  commentCount: number;
+  comments: PostComment[];
+  pageInfo: {
+    hasMore: boolean;
+    nextOffset: number | null;
+    limit: number;
+    offset: number;
+  };
+}
+
+export interface CreatePostCommentResponse {
+  success: true;
+  comment: PostComment;
+  commentCount: number;
+}
+
+export interface DeletePostCommentResponse {
+  success: true;
+  status: PostCommentStatus;
+  commentCount: number;
 }
 
 export interface CreatorProfileResponse {

@@ -26,6 +26,7 @@ function showcaseItem(overrides: Partial<ShowcaseFeedItem>): ShowcaseFeedItem {
     postFormat: 'media',
     saveCount: 1200,
     remixCount: 92,
+    commentCount: 0,
     createdAt: '2026-05-13T10:00:00.000Z',
     creator: { id: 'creator-1', username: 'luna', name: 'Luna', avatar: null },
     generationId: null,
@@ -402,7 +403,7 @@ describe('immersive preview view model', () => {
   describe('action builder available and disabled actions', () => {
     it('returns correct actions for saved media', () => {
       const [item] = buildImmersiveShowcaseItems('profile-saved', [showcaseItem({ id: 'saved-item', generationId: 'gen-saved', canRemix: true })]);
-      expect(item.availableActions).toEqual(['unsave', 'share', 'recreate', 'view-details', 'open-original']);
+      expect(item.availableActions).toEqual(['unsave', 'comment', 'share', 'recreate', 'view-details', 'open-original']);
       expect(item.disabledActions).toEqual({});
     });
 
@@ -442,7 +443,7 @@ describe('immersive preview view model', () => {
         }),
       ]);
 
-      expect(lockedItem.availableActions).toEqual(['save', 'share', 'unlock-remix', 'view-details', 'open-original']);
+      expect(lockedItem.availableActions).toEqual(['save', 'comment', 'share', 'unlock-remix', 'view-details', 'open-original']);
       expect(unlockedItem.availableActions).toContain('recreate');
     });
 
@@ -451,7 +452,7 @@ describe('immersive preview view model', () => {
         showcaseItem({ id: 'manual-showcase-post', generationId: null, canRemix: true }),
       ]);
 
-      expect(item.availableActions).toEqual(['save', 'share', 'view-details', 'open-original']);
+      expect(item.availableActions).toEqual(['save', 'comment', 'share', 'view-details', 'open-original']);
       expect(item.generationId).toBeNull();
     });
 

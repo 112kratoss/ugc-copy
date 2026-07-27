@@ -197,6 +197,7 @@ function mapOwnerPostToFeedItem(post: OwnerPost, creator: ShowcaseCreator): Show
     postFormat: post.postFormat,
     saveCount: 0,
     remixCount: 0,
+    commentCount: 0,
     createdAt: post.createdAt,
     creator,
     sourceKind: post.sourceKind,

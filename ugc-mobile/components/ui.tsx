@@ -3,6 +3,7 @@ import { Link } from 'expo-router';
 import {
   ActivityIndicator,
   Animated,
+  Image,
   Pressable,
   ScrollView,
   Text,
@@ -1080,4 +1081,38 @@ export function WebLinkButton({
 
 export function Row({ children }: { children: React.ReactNode }) {
   return <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact }}>{children}</View>;
+}
+
+export function CreatorAvatar({
+  uri,
+  name,
+  size = 25,
+}: {
+  uri: string | null;
+  name: string;
+  size?: number;
+}) {
+  const initial = name.trim()[0]?.toUpperCase() || 'C';
+
+  return (
+    <View
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        overflow: 'hidden',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: appTheme.colors.panelSoft,
+      }}
+    >
+      {uri ? (
+        <Image source={{ uri }} resizeMode="cover" style={{ position: 'absolute', inset: 0 }} />
+      ) : (
+        <Text style={{ color: appTheme.colors.text, fontSize: Math.max(10, Math.round(size * 0.44)), fontWeight: '800' }}>
+          {initial}
+        </Text>
+      )}
+    </View>
+  );
 }

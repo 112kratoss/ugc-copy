@@ -76,6 +76,9 @@ export interface ImmersivePreviewItem {
   badge: string;
   saveLabel: string;
   saveCount: number;
+  commentLabel: string;
+  commentCount: number;
+  canComment: boolean;
   isSaved: boolean;
   canSave: boolean;
   canShare: boolean;
@@ -287,6 +290,9 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
     badge: showcaseBadge(item),
     saveLabel: formatCompactCount(item.saveCount),
     saveCount: item.saveCount,
+    commentLabel: formatCompactCount(item.commentCount),
+    commentCount: item.commentCount ?? 0,
+    canComment: true,
     isSaved,
     canSave: true,
     canShare: true,
@@ -327,6 +333,7 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
     visibility: 'public',
     availableActions: [
       isSaved ? 'unsave' : 'save',
+      'comment',
       'share',
       ...(canRecreate ? ['recreate'] : []),
       ...(canUnlockRemix ? ['unlock-remix'] : []),
@@ -372,6 +379,9 @@ function generationToImmersiveItem(
     badge: getGenerationLabel(kind),
     saveLabel: 'Saved',
     saveCount: 0,
+    commentLabel: '0',
+    commentCount: 0,
+    canComment: false,
     isSaved: true,
     canSave: false,
     canShare: true,
@@ -478,6 +488,9 @@ function ownerPostToImmersiveItem(
     badge: ownerPostBadge(item),
     saveLabel: '0',
     saveCount: 0,
+    commentLabel: '0',
+    commentCount: 0,
+    canComment: false,
     isSaved: false,
     canSave: false,
     canShare: true,

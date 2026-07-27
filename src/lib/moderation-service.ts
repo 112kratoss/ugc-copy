@@ -23,14 +23,21 @@ const GENERATION_REPORT_REASONS = new Set([
   'unsafe_content',
   'other',
 ]);
+const COMMENT_REPORT_REASONS = new Set([
+  'spam',
+  'harassment',
+  'unsafe_content',
+  'other',
+]);
 const REPORT_SOURCE_SURFACES = new Set([
   'showcase',
   'showcase-reel',
   'creator-profile',
   'generation-viewer',
+  'comments',
 ]);
 
-export type ModerationReportTargetType = 'user' | 'generation';
+export type ModerationReportTargetType = 'user' | 'generation' | 'comment';
 
 type ModerationReportBody = {
   targetType?: unknown;
@@ -126,14 +133,20 @@ export async function submitModerationReportForRoute({
   reporterUserId: string;
 }): Promise<ModerationRouteResult> {
   const body = normalizeReportBody(rawBody);
-  const targetType = body.targetType === 'user' || body.targetType === 'generation'
+  const targetType = body.targetType === 'user'
+    || body.targetType === 'generation'
+    || body.targetType === 'comment'
     ? body.targetType
     : null;
   const targetId = normalizeUuid(body.targetId);
   const sourceSurface = typeof body.sourceSurface === 'string' && REPORT_SOURCE_SURFACES.has(body.sourceSurface)
     ? body.sourceSurface
     : null;
-  const allowedReasons = targetType === 'user' ? USER_REPORT_REASONS : GENERATION_REPORT_REASONS;
+  const allowedReasons = targetType === 'user'
+    ? USER_REPORT_REASONS
+    : targetType === 'comment'
+      ? COMMENT_REPORT_REASONS
+      : GENERATION_REPORT_REASONS;
   const reason = typeof body.reason === 'string' && allowedReasons.has(body.reason)
     ? body.reason
     : null;
@@ -163,6 +176,21 @@ export async function submitModerationReportForRoute({
       return { ok: false, status: 500, body: { error: 'Failed to validate reported user.' } };
     }
     if (!data) return { ok: false, status: 404, body: { error: 'Creator not found.' } };
+  } else if (targetType === 'comment') {
+    const { data, error } = await adminSupabase
+      .from('post_comments')
+      .select('id, user_id, status')
+      .eq('id', targetId)
+      .eq('status', 'active')
+      .maybeSingle();
+    if (error) {
+      logBackendError('failed_to_validate_reported_comment', { error: error });
+      return { ok: false, status: 500, body: { error: 'Failed to validate reported comment.' } };
+    }
+    if (!data) return { ok: false, status: 404, body: { error: 'Comment not found.' } };
+    if (String(data.user_id) === reporterUserId) {
+      return { ok: false, status: 400, body: { error: 'You cannot report your own comment.' } };
+    }
   } else {
     const { data, error } = await adminSupabase
       .from('generations')
@@ -182,6 +210,7 @@ export async function submitModerationReportForRoute({
     target_type: targetType,
     reported_user_id: targetType === 'user' ? targetId : null,
     generation_id: targetType === 'generation' ? targetId : null,
+    comment_id: targetType === 'comment' ? targetId : null,
     reason,
     details: normalizeDetails(body.details),
     source_surface: sourceSurface,

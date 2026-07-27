@@ -69,6 +69,7 @@ export interface PostRow {
   post_format: ShowcasePostFormat;
   save_count: number | null;
   remix_count: number | null;
+  comment_count?: number | null;
   created_at: string;
   user_id: string | null;
   source_kind: RawShowcaseSourceKind;
@@ -143,7 +144,7 @@ async function fetchPostRows(
   const adminSupabase = createServiceClient();
   let query = adminSupabase
     .from('posts')
-    .select('id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id')
+    .select('id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id')
     .eq('visibility', 'public')
     .is('archived_at', null);
 
@@ -240,7 +241,7 @@ async function fetchPostRowsByIds(
 
   const result = await adminSupabase
     .from('posts')
-    .select('id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id')
+    .select('id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id')
     .in('id', postIds)
     .eq('visibility', 'public')
     .is('archived_at', null);
@@ -615,6 +616,7 @@ export async function resolvePostRowsToFeedItems(
         postFormat: post.post_format,
         saveCount: post.save_count || 0,
         remixCount: post.remix_count || 0,
+        commentCount: post.comment_count || 0,
         createdAt: post.created_at,
         creator: {
           id: profile?.id ?? post.user_id ?? null,
@@ -921,6 +923,7 @@ async function getLegacyShowcaseFeedPageBase(
           postFormat: 'media',
           saveCount: generation.save_count || 0,
           remixCount: generation.remix_count || 0,
+          commentCount: 0,
           createdAt: generation.created_at,
           creator: {
             id: profile?.id ?? generation.user_id ?? null,
@@ -1305,7 +1308,7 @@ export async function getShowcaseFeedItemById(options: {
   const adminSupabase = createServiceClient();
   let result = await adminSupabase
     .from('posts')
-    .select('id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id')
+    .select('id, output_url, showcase_asset_path, prompt, title, body, category, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id')
     .eq('id', postId)
     .eq('visibility', 'public')
     .is('archived_at', null)
@@ -1326,6 +1329,7 @@ export async function getShowcaseFeedItemById(options: {
         data: {
           ...(result.data as LegacyPostRow),
           body: null,
+          comment_count: null,
           post_format: normalizeLegacyPostFormat((result.data as LegacyPostRow).category),
           source_tool_slug: slugifySourceTool((result.data as LegacyPostRow).source_tool),
           review_status: 'visible',

@@ -15,6 +15,7 @@ import { getViewerActionGroupLabel, getViewerActionLabel, isDestructiveViewerAct
 export function ViewerActionSheet({
   item,
   onClose,
+  onComments,
   onDetails,
   onHideCreator,
   onNotInterested,
@@ -28,6 +29,7 @@ export function ViewerActionSheet({
 }: {
   item: ImmersivePreviewItem;
   onClose: () => void;
+  onComments?: () => void;
   onDetails: () => void;
   onHideCreator?: () => void;
   onNotInterested?: () => void;
@@ -261,6 +263,10 @@ export function ViewerActionSheet({
     }
     if (action === 'open-original' && item.showcasePostId) {
       router.push(immersiveViewerHref({ source: 'showcase-feed', initialId: item.showcasePostId }) as never);
+      return;
+    }
+    if (action === 'comment') {
+      onComments?.();
       return;
     }
     if (action === 'share') {

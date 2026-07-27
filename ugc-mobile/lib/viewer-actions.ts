@@ -188,6 +188,8 @@ export function getViewerActionLabel(action: string) {
       return 'Save';
     case 'unsave':
       return 'Unsave';
+    case 'comment':
+      return 'Comments';
     case 'share':
       return 'Share';
     case 'recreate':

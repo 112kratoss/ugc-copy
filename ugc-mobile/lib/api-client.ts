@@ -45,6 +45,9 @@ import type {
   ShowcaseFeedEventResponse,
   ShowcaseFeedResponse,
   ShowcasePostResponse,
+  PostCommentsResponse,
+  CreatePostCommentResponse,
+  DeletePostCommentResponse,
   SourceToolOption,
   TemplateRunInputFinalizeRequest,
   TemplateRunInputSignRequest,
@@ -169,11 +172,13 @@ export interface SaveShowcasePostResponse {
 
 export type UserReportReason = 'spam' | 'harassment' | 'impersonation' | 'unsafe_content' | 'other';
 export type GenerationReportReason = 'offensive_ai_output' | 'unsafe_content' | 'other';
+export type CommentReportReason = 'spam' | 'harassment' | 'unsafe_content' | 'other';
 export type ModerationReportSourceSurface =
   | 'showcase'
   | 'showcase-reel'
   | 'creator-profile'
-  | 'generation-viewer';
+  | 'generation-viewer'
+  | 'comments';
 
 const CONTENT_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_API_REQUEST_TIMEOUT_MS = 30_000;
@@ -594,6 +599,32 @@ export function createApiClient({
         return { success: true, item };
       }
     },
+    listPostComments: (postId: string, params?: Record<string, QueryValue>) =>
+      request<PostCommentsResponse>(
+        `/api/showcase/posts/${encodeURIComponent(postId)}/comments${buildQuery(params)}`
+      ),
+    createPostComment: (postId: string, body: { body: string; parentId?: string | null }) =>
+      request<CreatePostCommentResponse>(
+        `/api/showcase/posts/${encodeURIComponent(postId)}/comments`,
+        { method: 'POST', body: JSON.stringify(body) }
+      ),
+    deletePostComment: (postId: string, commentId: string) =>
+      request<DeletePostCommentResponse>(
+        `/api/showcase/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}`,
+        { method: 'DELETE' }
+      ),
+    reportComment: (
+      commentId: string,
+      body: { reason: CommentReportReason; details?: string }
+    ) => request<{ success: true }>('/api/moderation/reports', {
+      method: 'POST',
+      body: JSON.stringify({
+        targetType: 'comment',
+        targetId: commentId,
+        sourceSurface: 'comments' satisfies ModerationReportSourceSurface,
+        ...body,
+      }),
+    }),
     getCreatorProfile: (username: string, params?: Record<string, QueryValue>) =>
       request<CreatorProfileResponse>(`/api/creators/${encodeURIComponent(username)}${buildQuery(params)}`),
     reportPost: (

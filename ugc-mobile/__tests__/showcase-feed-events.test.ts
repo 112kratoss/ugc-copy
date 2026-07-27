@@ -28,6 +28,7 @@ function item(id: string, creatorId: string | null): ShowcaseFeedItem {
     postFormat: 'media',
     saveCount: 0,
     remixCount: 0,
+    commentCount: 0,
     createdAt: '2026-07-11T00:00:00.000Z',
     creator: { id: creatorId, username: creatorId, name: creatorId ?? 'Creator', avatar: null },
     generationId: null,

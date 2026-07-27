@@ -1,8 +1,5 @@
-import type { CreatorToolId, GenerationListItem, OwnerPostListItem, ShowcaseFeedItem } from '@/lib/types';
+import type { CreatorToolId, OwnerPostListItem } from '@/lib/types';
 import type { ToolAccent } from '@/lib/theme';
-import type { PreviewViewerSource } from './immersive-preview-view-model';
-import { getGenerationKind, getGenerationLabel } from './generation-media';
-import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from './showcase-display';
 
 export type HomeToolShortcutId = CreatorToolId | 'workflow';
 
@@ -15,47 +12,6 @@ export interface HomeToolShortcut {
   previewVariant: 'kingdom' | 'city' | 'runner' | null;
   badge?: string;
 }
-
-export interface HomeGenerationCard {
-  id: string;
-  title: string;
-  kind: 'image' | 'video' | 'motion' | 'text';
-  label: string;
-  timeLabel: string;
-  mediaUrl: string | null;
-  previewUrl?: string | null;
-  previewThumbhash?: string | null;
-  previewCacheKey?: string;
-  previewText: string;
-  artVariant: 'kingdom' | 'city' | 'runner' | 'tree';
-  viewerSource: PreviewViewerSource;
-  sourceId: string;
-}
-
-export interface HomeCommunityCard {
-  id: string;
-  creatorName: string;
-  creatorHandle: string;
-  title: string;
-  body: string;
-  mediaUrl: string | null;
-  previewUrl?: string | null;
-  previewThumbhash?: string | null;
-  previewCacheKey?: string;
-  mediaKind: 'image' | 'video' | null;
-  previewKind: 'media' | 'text';
-  timeLabel: string;
-  saveLabel: string;
-  accessLabel: string;
-  artVariant: 'tree' | 'portal' | 'city';
-  viewerSource: PreviewViewerSource;
-  sourceId: string;
-}
-
-export const HOME_UNLOCKS_FEED_HREF = {
-  pathname: '/(tabs)/showcase',
-  params: { filter: 'unlocks' },
-} as const;
 
 export const HOME_TOOL_SHORTCUTS: HomeToolShortcut[] = [
   {
@@ -90,64 +46,6 @@ export const HOME_TOOL_SHORTCUTS: HomeToolShortcut[] = [
     href: null,
     previewVariant: null,
     badge: 'Soon',
-  },
-];
-
-export const FALLBACK_GENERATIONS: HomeGenerationCard[] = [
-  {
-    id: 'preview-floating-kingdom',
-    title: 'Floating Kingdom',
-    kind: 'image',
-    label: 'Image',
-    timeLabel: '2m ago',
-    mediaUrl: null,
-    previewText: 'A luminous floating kingdom above soft morning clouds.',
-    artVariant: 'kingdom',
-    viewerSource: 'home-creations',
-    sourceId: 'preview-floating-kingdom',
-  },
-  {
-    id: 'preview-cyber-drive',
-    title: 'Cyber City Drive',
-    kind: 'video',
-    label: 'Video',
-    timeLabel: '10m ago',
-    mediaUrl: null,
-    previewText: 'A neon cyber city drive with cinematic motion.',
-    artVariant: 'city',
-    viewerSource: 'home-creations',
-    sourceId: 'preview-cyber-drive',
-  },
-  {
-    id: 'preview-astronaut-run',
-    title: 'Astronaut Run',
-    kind: 'motion',
-    label: 'Motion',
-    timeLabel: '1h ago',
-    mediaUrl: null,
-    previewText: 'An astronaut sprinting through a moonlit studio scene.',
-    artVariant: 'runner',
-    viewerSource: 'home-creations',
-    sourceId: 'preview-astronaut-run',
-  },
-];
-
-export const FALLBACK_COMMUNITY: HomeCommunityCard[] = [
-  {
-    id: 'preview-luna-dreams',
-    creatorName: 'LunaDreams',
-    creatorHandle: '@lunadreams',
-    title: 'Celestial Grove Prompt',
-    body: 'A glowing island scene with soft pink clouds, cinematic lighting, and a premium fantasy editorial finish.',
-    mediaUrl: null,
-    mediaKind: 'image',
-    previewKind: 'media',
-    timeLabel: '2h ago',
-    saveLabel: '1.2K',
-    accessLabel: 'Paywalled',
-    artVariant: 'tree',
-    viewerSource: 'home-community',
-    sourceId: 'preview-luna-dreams',
   },
 ];
 
@@ -199,63 +97,6 @@ export function formatRelativeTime(value: string | null | undefined, now = new D
   if (diffWeeks < 5) return `${diffWeeks}w ago`;
 
   return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric' }).format(new Date(timestamp));
-}
-
-export function generationToHomeCard(item: GenerationListItem): HomeGenerationCard {
-  const kind = getGenerationKind(item);
-  return {
-    id: item.id,
-    title: item.title || item.prompt || 'Untitled creation',
-    kind,
-    label: getGenerationLabel(kind),
-    timeLabel: formatRelativeTime(item.completed_at ?? item.created_at),
-    mediaUrl: item.media?.url ?? item.output_urls?.[0] ?? item.output_url ?? null,
-    previewUrl: item.media?.previewUrl ?? item.previewUrl ?? item.preview_url ?? null,
-    previewThumbhash: item.media?.thumbhash ?? null,
-    previewCacheKey: item.media?.cacheKey ?? item.id,
-    previewText: item.prompt || item.description || item.title || 'A saved Magic Booklet generation.',
-    artVariant: kind === 'text' ? 'tree' : kind === 'motion' ? 'runner' : kind === 'video' ? 'city' : 'kingdom',
-    viewerSource: 'home-creations',
-    sourceId: item.id,
-  };
-}
-
-export function generationsToHomeCards(items: GenerationListItem[]) {
-  return items
-    .filter((item) => {
-      const kind = getGenerationKind(item);
-      if (kind === 'text') return item.status === 'succeeded';
-      return item.status === 'succeeded' && (item.media?.gridReady ?? Boolean(item.previewUrl ?? item.preview_url));
-    })
-    .slice(0, 6)
-    .map(generationToHomeCard);
-}
-
-export function showcaseToCommunityCard(item: ShowcaseFeedItem): HomeCommunityCard {
-  const hasUsableMedia = Boolean(item.mediaUrl && item.mediaKind);
-  const previewKind = isTextOnlyShowcasePost(item) || !hasUsableMedia ? 'text' : 'media';
-
-  const cover = item.mediaItems?.[0];
-  const preview = cover?.preview;
-  return {
-    id: item.id,
-    creatorName: item.creator.name,
-    creatorHandle: item.creator.username ? `@${item.creator.username}` : '@creator',
-    title: item.title || item.prompt || 'Community creation',
-    body: getShowcasePostDisplayText(item),
-    mediaUrl: item.mediaUrl,
-    previewUrl: preview?.previewUrl ?? cover?.previewUrl ?? null,
-    previewThumbhash: preview?.thumbhash ?? cover?.previewThumbhash ?? null,
-    previewCacheKey: preview?.cacheKey ?? cover?.previewCacheKey ?? cover?.id ?? item.id,
-    mediaKind: item.mediaKind,
-    previewKind,
-    timeLabel: formatRelativeTime(item.createdAt),
-    saveLabel: formatCompactCount(item.saveCount),
-    accessLabel: item.asset ? (item.asset.accessMode === 'free' ? 'Free unlock' : 'Paywalled') : 'Open',
-    artVariant: item.creationMode === 'motion' ? 'portal' : item.category === 'video' ? 'city' : 'tree',
-    viewerSource: 'home-community',
-    sourceId: item.id,
-  };
 }
 
 function trimOneDecimal(value: number) {

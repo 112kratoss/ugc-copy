@@ -183,6 +183,7 @@ describe('moderation service', () => {
       target_type: 'user',
       reported_user_id: CREATOR_ID,
       generation_id: null,
+      comment_id: null,
       reason: 'harassment',
       details: 'x'.repeat(1000),
       source_surface: 'creator-profile',

@@ -2,14 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   HOME_TOOL_SHORTCUTS,
-  HOME_UNLOCKS_FEED_HREF,
   formatCompactCount,
   formatRelativeTime,
   formatUsdCents,
-  generationsToHomeCards,
   getOwnerPostSalesSummary,
-  generationToHomeCard,
-  showcaseToCommunityCard,
 } from '../lib/home-view-model';
 
 describe('home view model', () => {
@@ -20,13 +16,6 @@ describe('home view model', () => {
       { id: 'motion', accent: 'motion', href: '/create/motion', badge: undefined, previewVariant: 'runner' },
       { id: 'workflow', accent: 'workflow', href: null, badge: 'Soon', previewVariant: null },
     ]);
-  });
-
-  it('routes the home unlocks rail to the feed unlocks filter', () => {
-    expect(HOME_UNLOCKS_FEED_HREF).toEqual({
-      pathname: '/(tabs)/showcase',
-      params: { filter: 'unlocks' },
-    });
   });
 
   it('formats compact counts and relative times for dashboard cards', () => {
@@ -71,156 +60,4 @@ describe('home view model', () => {
     ])).toEqual({ salesCount: 2, earningsUsdCents: 2400 });
   });
 
-  it('normalizes generation cards for the recent creations rail', () => {
-    expect(generationToHomeCard({
-      id: 'gen-1',
-      output_url: 'https://example.com/video.mp4',
-      status: 'succeeded',
-      created_at: '2026-05-13T11:00:00.000Z',
-      model: 'model',
-      category: 'motion',
-      title: null,
-      prompt: 'Astronaut running',
-    })).toMatchObject({
-      id: 'gen-1',
-      title: 'Astronaut running',
-      kind: 'motion',
-      label: 'Motion',
-      mediaUrl: 'https://example.com/video.mp4',
-      artVariant: 'runner',
-      viewerSource: 'home-creations',
-      sourceId: 'gen-1',
-    });
-
-    expect(generationToHomeCard({
-      id: 'text-1',
-      output_url: null,
-      status: 'succeeded',
-      created_at: '2026-05-13T11:00:00.000Z',
-      model: 'copy-model',
-      category: 'text',
-      title: 'Launch caption',
-      prompt: 'Write a launch caption for a skincare reel',
-    })).toMatchObject({
-      id: 'text-1',
-      title: 'Launch caption',
-      kind: 'text',
-      label: 'Text',
-      mediaUrl: null,
-      previewText: 'Write a launch caption for a skincare reel',
-      viewerSource: 'home-creations',
-      sourceId: 'text-1',
-    });
-  });
-
-  it('treats ugc-ad generations as video creations in the recent rail', () => {
-    expect(generationToHomeCard({
-      id: 'ugc-ad-1',
-      output_url: 'https://example.com/ugc-ad.mp4',
-      status: 'succeeded',
-      created_at: '2026-05-13T11:00:00.000Z',
-      model: 'ugc-ad-model',
-      category: 'ugc-ad',
-      title: 'Creator ad',
-      prompt: 'A creator ad spot',
-    })).toMatchObject({
-      id: 'ugc-ad-1',
-      kind: 'video',
-      label: 'Video',
-      mediaUrl: 'https://example.com/ugc-ad.mp4',
-      artVariant: 'city',
-    });
-  });
-
-  it('does not invent recent studio cards when no generations exist', () => {
-    expect(generationsToHomeCards([])).toEqual([]);
-  });
-
-  it('normalizes showcase posts for the community feed', () => {
-    const card = showcaseToCommunityCard({
-      id: 'post-1',
-      mediaUrl: null,
-      mediaKind: null,
-      model: 'manual',
-      title: 'Beauty Hook',
-      prompt: 'Prompt',
-      body: 'Post body',
-      category: 'image',
-      postFormat: 'text',
-      saveCount: 1200,
-      remixCount: 96,
-      createdAt: '2026-05-13T10:00:00.000Z',
-      creator: { id: 'user-1', username: 'luna', name: 'LunaDreams', avatar: null },
-      generationId: null,
-      asset: {
-        id: 'asset-1',
-        postId: 'post-1',
-        title: 'Unlock',
-        accessMode: 'paid',
-        priceUsdCents: 900,
-        previewText: 'Preview',
-        allowRemix: false,
-      },
-      canRemix: false,
-    });
-
-    expect(card).toMatchObject({
-      creatorName: 'LunaDreams',
-      creatorHandle: '@luna',
-      body: 'Post body',
-      previewKind: 'text',
-      saveLabel: '1.2K',
-      accessLabel: 'Paywalled',
-      viewerSource: 'home-community',
-      sourceId: 'post-1',
-    });
-    expect(card).not.toHaveProperty('remixLabel');
-  });
-
-  it('uses media previews for showcase posts with usable media', () => {
-    expect(showcaseToCommunityCard({
-      id: 'post-media',
-      mediaUrl: 'https://example.com/post.png',
-      mediaKind: 'image',
-      model: 'manual',
-      title: 'Image post',
-      prompt: 'Prompt copy',
-      body: 'Body copy',
-      category: 'image',
-      postFormat: 'media',
-      saveCount: 0,
-      remixCount: 0,
-      createdAt: '2026-05-13T10:00:00.000Z',
-      creator: { id: 'user-1', username: 'luna', name: 'LunaDreams', avatar: null },
-      generationId: null,
-      asset: null,
-      canRemix: false,
-    })).toMatchObject({
-      body: 'Body copy',
-      previewKind: 'media',
-      mediaUrl: 'https://example.com/post.png',
-    });
-  });
-
-  it('falls back through body, prompt, and title for showcase text previews', () => {
-    const basePost = {
-      id: 'post-text',
-      mediaUrl: null,
-      mediaKind: null,
-      model: 'manual',
-      category: 'image',
-      postFormat: 'text',
-      saveCount: 0,
-      remixCount: 0,
-      createdAt: '2026-05-13T10:00:00.000Z',
-      creator: { id: 'user-1', username: 'luna', name: 'LunaDreams', avatar: null },
-      generationId: null,
-      asset: null,
-      canRemix: false,
-    } as const;
-
-    expect(showcaseToCommunityCard({ ...basePost, title: 'Title copy', prompt: 'Prompt copy', body: 'Body copy' }).body).toBe('Body copy');
-    expect(showcaseToCommunityCard({ ...basePost, title: 'Title copy', prompt: 'Prompt copy', body: '' }).body).toBe('Prompt copy');
-    expect(showcaseToCommunityCard({ ...basePost, title: 'Title copy', prompt: '', body: '' }).body).toBe('Title copy');
-  });
 });

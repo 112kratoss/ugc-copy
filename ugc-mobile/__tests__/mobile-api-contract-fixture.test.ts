@@ -77,6 +77,9 @@ const successCases: Array<{
   { key: 'getShowcaseFeed', call: (api) => api.getShowcaseFeed({ limit: 10 }, { auth: false }) },
   { key: 'getSavedMedia', call: (api) => api.getSavedMedia({ limit: 10 }) },
   { key: 'getShowcasePost', call: (api) => api.getShowcasePost('post-1') },
+  { key: 'listPostComments', call: (api) => api.listPostComments('post-1', { sort: 'top', limit: 20 }) },
+  { key: 'createPostComment', call: (api) => api.createPostComment('post-1', { body: 'Nice work' }) },
+  { key: 'deletePostComment', call: (api) => api.deletePostComment('post-1', 'comment-1') },
   { key: 'saveShowcasePost', call: (api) => api.saveShowcasePost('post-1', { shouldSave: true }) },
   { key: 'remixShowcasePost', call: (api) => api.remixShowcasePost('post-1') },
   { key: 'shareShowcasePost', call: (api) => api.shareShowcasePost('post-1') },
@@ -208,6 +211,10 @@ const extendedOperationCases: Array<{
   {
     key: 'reportUser',
     call: (api) => api.reportUser('creator-1', { reason: 'harassment', sourceSurface: 'creator-profile' }),
+  },
+  {
+    key: 'reportComment',
+    call: (api) => api.reportComment('comment-1', { reason: 'harassment' }),
   },
   {
     key: 'reportGeneration',

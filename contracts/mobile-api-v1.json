@@ -301,6 +301,7 @@
             "postFormat": "media",
             "saveCount": 3,
             "remixCount": 1,
+            "commentCount": 2,
             "createdAt": "2026-06-22T06:00:00.000Z",
             "creator": {
               "id": "user-1",
@@ -357,6 +358,7 @@
             "postFormat": "media",
             "saveCount": 3,
             "remixCount": 1,
+            "commentCount": 2,
             "createdAt": "2026-06-22T06:00:00.000Z",
             "creator": {
               "id": "user-1",
@@ -400,6 +402,7 @@
           "postFormat": "media",
           "saveCount": 3,
           "remixCount": 1,
+          "commentCount": 2,
           "createdAt": "2026-06-22T06:00:00.000Z",
           "creator": {
             "id": "user-1",
@@ -412,6 +415,83 @@
           "asset": null,
           "canRemix": true
         }
+      }
+    },
+    "listPostComments": {
+      "method": "GET",
+      "path": "/api/showcase/posts/:postId/comments",
+      "auth": "optional",
+      "cacheControl": "private, no-store",
+      "response": {
+        "postId": "post-1",
+        "postCreatorId": "creator-1",
+        "commentCount": 2,
+        "comments": [
+          {
+            "id": "comment-1",
+            "parentId": null,
+            "body": "This prompt is unreal.",
+            "status": "active",
+            "createdAt": "2026-07-27T10:00:00.000Z",
+            "replyCount": 1,
+            "author": {
+              "id": "creator-2",
+              "username": "batman",
+              "displayName": "Batman",
+              "avatarUrl": null
+            }
+          },
+          {
+            "id": "comment-2",
+            "parentId": null,
+            "body": "",
+            "status": "removed_by_author",
+            "createdAt": "2026-07-27T09:00:00.000Z",
+            "replyCount": 2,
+            "author": null
+          }
+        ],
+        "pageInfo": {
+          "hasMore": false,
+          "nextOffset": null,
+          "limit": 20,
+          "offset": 0
+        }
+      }
+    },
+    "createPostComment": {
+      "method": "POST",
+      "path": "/api/showcase/posts/:postId/comments",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "commentCount": 3,
+        "comment": {
+          "id": "comment-3",
+          "parentId": null,
+          "body": "Saving this for later.",
+          "status": "active",
+          "createdAt": "2026-07-27T12:00:00.000Z",
+          "replyCount": 0,
+          "author": {
+            "id": "creator-1",
+            "username": "creator",
+            "displayName": "Creator",
+            "avatarUrl": null
+          }
+        }
+      }
+    },
+    "deletePostComment": {
+      "method": "DELETE",
+      "path": "/api/showcase/posts/:postId/comments/:commentId",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "status": "removed_by_author",
+        "commentCount": 1
       }
     },
     "saveShowcasePost": {

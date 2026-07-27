@@ -5,7 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer } from 'expo-video';
-import { ArrowLeft, Copy, FileText, Heart, ImageOff, Images, Lock, MoreVertical, Play, Repeat2, Share2, X } from 'lucide-react-native';
+import { ArrowLeft, Copy, FileText, Heart, ImageOff, Images, Lock, MessageCircle, MoreVertical, Play, Repeat2, Share2, X } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Alert, Animated, Easing, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
@@ -18,6 +18,7 @@ import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { PostResourceBundleContent } from '@/components/post-resource-bundle-content';
 import { Pill, SecondaryButton, StatusBlock } from '@/components/ui';
 import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
+import { CommentsSheet } from '@/components/comments-sheet';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
@@ -121,6 +122,7 @@ export default function ImmersivePreviewViewerScreen() {
   const [detailsPageOpenItemId, setDetailsPageOpenItemId] = useState<string | null>(null);
   const [detailsSheetOpenItemId, setDetailsSheetOpenItemId] = useState<string | null>(null);
   const [actionsOpenItemId, setActionsOpenItemId] = useState<string | null>(null);
+  const [commentsOpenItemId, setCommentsOpenItemId] = useState<string | null>(null);
   const [unlockRemixOpenItemId, setUnlockRemixOpenItemId] = useState<string | null>(null);
   const [isHorizontalScrolling, setIsHorizontalScrolling] = useState(false);
   const qualifiedImpressionsRef = useRef(new Set<string>());
@@ -184,6 +186,7 @@ export default function ImmersivePreviewViewerScreen() {
   const initialIndex = useMemo(() => getImmersiveInitialIndex(items, initialId), [items, initialId]);
   const overlayOpenItemId = getImmersiveVideoBlockerId({
     actionsOpenItemId,
+    commentsOpenItemId,
     detailsPageOpenItemId,
     detailsSheetOpenItemId,
     unlockRemixOpenItemId,
@@ -542,6 +545,7 @@ export default function ImmersivePreviewViewerScreen() {
             height={height}
             item={item}
             onActionsOpen={() => setActionsOpenItemId(item.id)}
+            onComments={item.canComment ? () => setCommentsOpenItemId(item.id) : undefined}
             onCreatorOpen={openCreatorProfile}
             onDetailsPageOpenChange={(open) => setDetailsPageOpenItemId(open ? item.id : null)}
             onHorizontalScrollToggle={setIsHorizontalScrolling}
@@ -598,6 +602,10 @@ export default function ImmersivePreviewViewerScreen() {
         <ViewerActionSheet
           item={activeItem}
           onClose={() => setActionsOpenItemId(null)}
+          onComments={activeItem.canComment ? () => {
+            setActionsOpenItemId(null);
+            setCommentsOpenItemId(activeItem.id);
+          } : undefined}
           onDetails={() => {
             setActionsOpenItemId(null);
             setDetailsSheetOpenItemId(activeItem.id);
@@ -627,6 +635,16 @@ export default function ImmersivePreviewViewerScreen() {
           onBlocked={() => leaveViewer()}
           onSourceRefresh={() => void sourceQuery.refetch()}
           visible={actionsOpenItemId === activeItem.id}
+        />
+      ) : null}
+      {activeItem?.canComment && activeItem.showcasePostId ? (
+        <CommentsSheet
+          postId={activeItem.showcasePostId}
+          postCreatorId={activeItem.creatorId ?? null}
+          commentCount={activeItem.commentCount}
+          onClose={() => setCommentsOpenItemId(null)}
+          onCommentCountChange={() => void sourceQuery.refetch()}
+          visible={commentsOpenItemId === activeItem.id}
         />
       ) : null}
       <UnlockRemixPrompt
@@ -676,6 +694,7 @@ function ImmersiveSlide({
   height,
   item,
   onActionsOpen,
+  onComments,
   onCreatorOpen,
   onDetailsPageOpenChange,
   onRecreate,
@@ -693,6 +712,7 @@ function ImmersiveSlide({
   height: number;
   item: ImmersivePreviewItem;
   onActionsOpen: () => void;
+  onComments?: () => void;
   onCreatorOpen: (item: ImmersivePreviewItem) => void;
   onDetailsPageOpenChange: (open: boolean) => void;
   onRecreate: (item: ImmersivePreviewItem) => void;
@@ -862,6 +882,13 @@ function ImmersiveSlide({
             tapAnimationSpec={getSaveHeartTapAnimationSpec({ willSave: !item.isSaved, enabled: item.canSave })}
             externalPopTrigger={saveHeartPopTrigger}
           />
+          {onComments ? (
+            <RailActionButton
+              icon={<MessageCircle size={27} color="#ffffff" strokeWidth={2.4} />}
+              label={item.commentCount > 0 ? item.commentLabel : 'Comment'}
+              onPress={onComments}
+            />
+          ) : null}
           <RailActionButton
             icon={<Share2 size={27} color="#ffffff" strokeWidth={2.4} />}
             label="Share"

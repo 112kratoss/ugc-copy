@@ -103,6 +103,7 @@ export interface ShowcaseFeedItem {
     postFormat: ShowcasePostFormat;
     saveCount: number;
     remixCount: number;
+    commentCount: number;
     createdAt: string;
     creator: ShowcaseCreator;
     isSaved?: boolean;
