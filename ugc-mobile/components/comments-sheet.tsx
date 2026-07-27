@@ -56,6 +56,7 @@ const ModalSurface: React.ComponentType<ModalProps> = IS_TEST_ENVIRONMENT ? Fall
 export function CommentsSheet({
   postId,
   postCreatorId,
+  postTitle,
   commentCount,
   visible,
   onClose,
@@ -63,6 +64,8 @@ export function CommentsSheet({
 }: {
   postId: string;
   postCreatorId: string | null;
+  /** Anchors the sheet when it is opened as a text post's discussion. */
+  postTitle?: string | null;
   commentCount: number;
   visible: boolean;
   onClose: () => void;
@@ -400,17 +403,16 @@ export function CommentsSheet({
               marginBottom: appTheme.spacing.gap,
             }}
           />
-          <Text
-            accessibilityRole="header"
-            style={{
-              color: appTheme.colors.text,
-              ...appTheme.type.cardTitle,
-              paddingHorizontal: appTheme.spacing.panel,
-              paddingBottom: appTheme.spacing.compact,
-            }}
-          >
-            {serverCommentCount > 0 ? `Comments · ${serverCommentCount}` : 'Comments'}
-          </Text>
+          <View style={{ paddingHorizontal: appTheme.spacing.panel, paddingBottom: appTheme.spacing.compact, gap: 2 }}>
+            {postTitle ? (
+              <Text numberOfLines={2} style={{ color: appTheme.colors.muted, ...appTheme.type.caption, fontWeight: '800' }}>
+                {postTitle}
+              </Text>
+            ) : null}
+            <Text accessibilityRole="header" style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>
+              {serverCommentCount > 0 ? `Comments · ${serverCommentCount}` : 'Comments'}
+            </Text>
+          </View>
 
           {commentsQuery.isError ? (
             <View style={{ padding: appTheme.spacing.panel }}>

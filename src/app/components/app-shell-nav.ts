@@ -3,6 +3,7 @@ import {
   Gift,
   Home,
   Layers3,
+  MessagesSquare,
   Sparkles,
   Store,
   UserRound,
@@ -12,7 +13,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 
 export interface AppNavItem {
-  id: 'home' | 'create' | 'studio' | 'showcase' | 'marketplace' | 'workflow' | 'profile' | 'alerts' | 'invite';
+  id: 'home' | 'feed' | 'create' | 'studio' | 'showcase' | 'marketplace' | 'workflow' | 'profile' | 'alerts' | 'invite';
   label: string;
   shortLabel: string;
   href: string;
@@ -33,6 +34,15 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     description: 'Dashboard and recent creative context',
     icon: Home,
     match: (pathname) => pathname === '/',
+  },
+  {
+    id: 'feed',
+    label: 'Feed',
+    shortLabel: 'Feed',
+    href: '/feed',
+    description: 'Community notes, prompts, and creations in one column',
+    icon: MessagesSquare,
+    match: (pathname) => isExactOrChild(pathname, '/feed'),
   },
   {
     id: 'create',

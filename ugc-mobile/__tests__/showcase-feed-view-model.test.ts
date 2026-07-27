@@ -73,16 +73,14 @@ describe('showcase feed view model', () => {
         canRemix: true,
       }),
       item({ id: 'video-post', category: 'video', mediaKind: 'video', saveCount: 34, remixCount: 8 }),
-      item({ id: 'text-post', category: 'text', postFormat: 'text', body: 'Caption framework for a food launch.' }),
     ]);
 
-    expect(cards.map((card) => card.id)).toEqual(['image-post', 'video-post', 'text-post']);
+    expect(cards.map((card) => card.id)).toEqual(['image-post', 'video-post']);
     expect(cards[0]).toMatchObject({
       accent: 'image',
       badge: 'Free unlock',
       creatorAvatar: null,
       creatorLabel: 'luna',
-      previewKind: 'media',
       saveLabel: '1.2K',
       remixLabel: '92',
       unlock: {
@@ -98,12 +96,15 @@ describe('showcase feed view model', () => {
       accent: 'video',
       badge: 'Video',
     });
-    expect(cards[2]).toMatchObject({
-      accent: 'amber',
-      badge: 'Prompt',
-      previewKind: 'text',
-    });
-    expect(new Set(cards.map((card) => card.height)).size).toBeGreaterThan(1);
+  });
+
+  it('leaves text-only posts to the home feed', () => {
+    const cards = buildShowcaseMasonry([
+      item({ id: 'image-post', category: 'image', mediaKind: 'image' }),
+      item({ id: 'text-post', category: 'text', postFormat: 'text', body: 'Caption framework for a food launch.' }),
+    ]);
+
+    expect(cards.map((card) => card.id)).toEqual(['image-post']);
   });
 
   it('describes paid unlocks and remixable posts for feed card CTAs', () => {
@@ -167,24 +168,15 @@ describe('showcase feed view model', () => {
   });
 
   it('replaces generic feed titles with useful post content', () => {
-    const [mediaCard, textCard] = buildShowcaseMasonry([
+    const [mediaCard] = buildShowcaseMasonry([
       item({
         id: 'generic-media',
         title: 'Untitled Creation',
         prompt: 'Editorial portrait with a teal rim light',
       }),
-      item({
-        id: 'generic-text',
-        category: 'text',
-        postFormat: 'text',
-        title: 'Untitled',
-        prompt: '',
-        body: 'Three hooks for a skincare launch.',
-      }),
     ]);
 
     expect(mediaCard?.title).toBe('Editorial portrait with a teal rim light');
-    expect(textCard?.title).toBe('Three hooks for a skincare launch.');
   });
 
   it('keeps the original feed item available for cache seeding', () => {

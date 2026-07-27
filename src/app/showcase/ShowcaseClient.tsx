@@ -9,7 +9,6 @@ import { useAuth } from '@/app/components/AuthProvider';
 import CreatorIdentity from '@/app/components/CreatorIdentity';
 import PublicShareButton from '@/app/components/PublicShareButton';
 import SkeletonLoader from '@/app/components/SkeletonLoader';
-import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
 import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
@@ -36,15 +35,15 @@ import {
     isGenerationRecipeAssetId,
 } from '@/lib/showcase';
 import {
-    formatPostResourceBundleCountSummary,
     getBundleAccessLabel,
     getPostResourceKindLabel,
     isPostResourceKind,
     type PostResourceKind,
 } from '@/lib/post-resource-bundles';
-import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { buildShowcaseDetailPath } from '@/lib/share';
-import { formatSourceToolsCompact, type SourceToolOption } from '@/lib/source-tools';
+import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
+import { isTextOnlyPost } from '@/lib/post-feed-presentation';
+import type { SourceToolOption } from '@/lib/source-tools';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import { mergeShowcaseFeedKeepingVisibleItems } from '@/lib/showcase-feed-stability';
 import {
@@ -85,7 +84,6 @@ const CATEGORIES: Array<{
     { id: 'all', label: 'All posts', icon: Layers },
     { id: 'image', label: 'Images', icon: ImageIcon },
     { id: 'video', label: 'Videos', icon: Video },
-    { id: 'text', label: 'Tips', icon: BookText },
 ];
 
 const SORTS: Array<{ id: ShowcaseSort; label: string }> = [
@@ -263,64 +261,8 @@ function AnonymousShowcaseCardShell({
     );
 }
 
-function getItemSummary(item: ShowcaseFeedItem): string {
-    if (item.body.trim()) {
-        return item.body;
-    }
-
-    if (item.prompt.trim()) {
-        return item.prompt;
-    }
-
-    const toolLabel = item.sourceTools && item.sourceTools.length > 0
-      ? formatSourceToolsCompact(item.sourceTools)
-      : item.sourceTool ?? item.model;
-    const creatorLabel = item.creator.name;
-    const metadata = [
-        toolLabel ? `Made with ${toolLabel}` : null,
-        `${item.category === 'text' ? 'Tip' : item.category} by ${creatorLabel}`,
-    ].filter(Boolean);
-
-    if (item.asset) {
-        const kinds = getItemResourceKinds(item);
-        const bundleCountSummary = formatPostResourceBundleCountSummary(item.asset.lockedPreview ?? null);
-        const unlockSummary = bundleCountSummary
-            ? `Recipe includes ${bundleCountSummary}.`
-            : kinds.length > 0
-            ? `Recipe includes ${formatResourceKinds(kinds).toLowerCase()}.`
-            : 'Reusable recipe attached.';
-
-        return [...metadata, unlockSummary].join(' · ');
-    }
-
-    return metadata.join(' · ');
-}
-
 function getItemResourceKinds(item: ShowcaseFeedItem): PostResourceKind[] {
     return (item.asset?.resourceKinds ?? []).filter(isPostResourceKind);
-}
-
-function formatResourceKinds(kinds: PostResourceKind[]): string {
-    if (kinds.length === 0) {
-        return 'Reusable parts';
-    }
-
-    return kinds.map((kind) => getPostResourceKindLabel(kind)).join(' + ');
-}
-
-function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
-    if (isGenerationRecipeAssetId(asset.id)) {
-        return 'Free recipe';
-    }
-
-    if (asset.priceQuote) {
-        return formatBundleAccessLabel({
-            accessMode: asset.accessMode,
-            priceQuote: asset.priceQuote,
-        }).replace(/\s+unlock$/i, ' recipe');
-    }
-
-    return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+unlock$/i, ' recipe');
 }
 
 function getAssetPurchaseCtaLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
@@ -526,8 +468,11 @@ export default function ShowcaseClient({
             section,
         });
     const isLoadingInitialFeed = isPending && items.length === 0 && !isAuthLoading;
-    const renderedItems = items.slice(0, renderedItemCount);
-    const hasDeferredItems = renderedItemCount < items.length;
+    // Showcase is the media grid. A text-only post has nothing to put in a tile,
+    // so it lives on /feed, which renders a written post at full width.
+    const tileableItems = items.filter((item) => !isTextOnlyPost(item));
+    const renderedItems = tileableItems.slice(0, renderedItemCount);
+    const hasDeferredItems = renderedItemCount < tileableItems.length;
     const hasAuthenticatedSession = Boolean(user && session?.access_token);
     const shouldUseInitialAnonymousCardShell = !isAuthLoading
         && !hasAuthenticatedSession
@@ -1539,7 +1484,6 @@ export default function ShowcaseClient({
                                 const isMixedMedia = new Set(mediaItems.map((mediaItem) => mediaItem.mediaKind)).size > 1;
                                 const useInitialAnonymousCardShell = shouldUseInitialAnonymousCardShell
                                     && itemIndex === 0
-                                    && item.postFormat !== 'text'
                                     && mediaItems.length > 0;
 
                                 return (
@@ -1566,25 +1510,7 @@ export default function ShowcaseClient({
                                         {/* Pinterest Style Card Frame */}
                                         <div className="group relative overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition duration-200 hover:border-[rgba(255,122,89,0.28)] hover:shadow-[0_12px_40px_rgba(0,0,0,0.42)] focus-within:border-[rgba(255,122,89,0.34)]">
                                             <div className="relative overflow-hidden bg-black">
-                                                {item.postFormat === 'text' ? (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => openPreview(item)}
-                                                        className="block w-full text-left"
-                                                    >
-                                                    <TextPostPreviewCard
-                                                        title={item.title}
-                                                        summary={getItemSummary(item)}
-                                                        sourceLabel={item.sourceTool || item.model}
-                                                        dateLabel={formatShowcaseDate(item.createdAt)}
-                                                        saveCount={item.saveCount}
-                                                        remixCount={item.remixCount}
-                                                        unlockLabel={item.asset ? getAssetAccessLabel(item.asset) : null}
-                                                        resourceKinds={getItemResourceKinds(item)}
-                                                        className="rounded-none border-0 shadow-none"
-                                                    />
-                                                    </button>
-                                                ) : mediaItems.length > 0 ? (
+                                                {mediaItems.length > 0 ? (
                                                     <ShowcaseMediaCarousel
                                                         mediaItems={mediaItems}
                                                         title={item.title}
@@ -1607,11 +1533,9 @@ export default function ShowcaseClient({
                                             {/* Hover State Controls Overlay (Pinterest Style) */}
                                             <div className="showcase-card-actions pointer-events-none absolute inset-0 z-20 flex flex-col justify-between bg-gradient-to-t from-black/70 via-transparent to-transparent p-3 transition-opacity duration-200">
                                                 <div className="flex justify-between items-start pointer-events-auto">
-                                                    {item.postFormat !== 'text' ? (
-                                                        <div className="px-2.5 py-1 bg-black/60 backdrop-blur-md rounded-full text-[11px] font-medium border border-white/10 flex items-center gap-1.5 text-white">
-                                                            <span>{isMixedMedia ? 'Mixed' : item.category}</span>
-                                                        </div>
-                                                    ) : <div />}
+                                                    <div className="px-2.5 py-1 bg-black/60 backdrop-blur-md rounded-full text-[11px] font-medium border border-white/10 flex items-center gap-1.5 text-white">
+                                                        <span>{isMixedMedia ? 'Mixed' : item.category}</span>
+                                                    </div>
                                                     <ShowcaseFeedbackMenu
                                                         itemTitle={item.title}
                                                         creatorName={item.creator.name}

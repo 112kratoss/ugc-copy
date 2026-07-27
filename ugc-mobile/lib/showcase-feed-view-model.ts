@@ -2,13 +2,13 @@ import type { ToolAccent } from '@/lib/theme';
 import type { ShowcaseFeedItem } from '@/lib/types';
 import type { PreviewViewerSource } from './immersive-preview-view-model';
 import { formatCompactCount } from './home-view-model';
+import { isTextOnlyShowcasePost } from './showcase-display';
 
 export interface ShowcaseMasonryCard {
   id: string;
   item: ShowcaseFeedItem;
   title: string;
   prompt: string;
-  previewKind: 'media' | 'text';
   creatorLabel: string;
   creatorAvatar: string | null;
   mediaUrl: string | null;
@@ -44,12 +44,19 @@ const MIN_SHOWCASE_MEDIA_HEIGHT = 104;
 const MAX_SHOWCASE_MEDIA_HEIGHT = 320;
 const FALLBACK_VIDEO_ASPECT_RATIO = 16 / 9;
 
+/**
+ * Showcase is the media grid. Text-only posts belong to the home feed, which
+ * can render a written post at full width — the grid can only offer them a
+ * media-shaped tile. The filter lives here rather than in the screen so the
+ * "every masonry card has media" invariant holds for anything that builds one.
+ */
 export function buildShowcaseMasonry(items: ShowcaseFeedItem[]) {
-  return items.filter(isShowcaseGridReady).map(showcaseToMasonryCard);
+  return items
+    .filter((item) => !isTextOnlyShowcasePost(item) && isShowcaseGridReady(item))
+    .map(showcaseToMasonryCard);
 }
 
 export function isShowcaseGridReady(item: ShowcaseFeedItem) {
-  if (item.category === 'text' || item.postFormat === 'text') return true;
   const cover = item.mediaItems?.[0];
   return cover?.preview?.gridReady ?? cover?.gridReady ?? false;
 }
@@ -66,7 +73,6 @@ export function getShowcaseGridLayout(windowWidth: number): ShowcaseGridLayout {
 
 export function showcaseToMasonryCard(item: ShowcaseFeedItem): ShowcaseMasonryCard {
   const accent = item.creationMode === 'motion' ? 'motion' : categoryAccent(item.category);
-  const textOnly = (item.category === 'text' || item.postFormat === 'text') && !item.mediaUrl;
   const unlock = cardUnlock(item);
   const cover = item.mediaItems?.[0];
   const preview = cover?.preview;
@@ -76,7 +82,6 @@ export function showcaseToMasonryCard(item: ShowcaseFeedItem): ShowcaseMasonryCa
     item,
     title: cardTitle(item),
     prompt: item.body || item.prompt || 'A creator-ready idea from the Magicbooklet community.',
-    previewKind: textOnly ? 'text' : 'media',
     creatorLabel: item.creator.username || item.creator.name,
     creatorAvatar: item.creator.avatar,
     mediaUrl: item.mediaUrl,
@@ -125,9 +130,6 @@ export function getShowcaseMediaHeight(
   columnWidth: number,
   resolvedAspectRatio?: number | null
 ) {
-  if (card.previewKind === 'text') {
-    return card.height;
-  }
   const aspectRatio = normalizeAspectRatio(resolvedAspectRatio)
     ?? card.aspectRatio
     ?? (card.mediaKind === 'video' ? FALLBACK_VIDEO_ASPECT_RATIO : null);

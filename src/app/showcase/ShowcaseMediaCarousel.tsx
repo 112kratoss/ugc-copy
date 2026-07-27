@@ -13,6 +13,15 @@ interface ShowcaseMediaCarouselProps {
   title: string;
   initialIndex?: number;
   mode?: 'feed' | 'detail' | 'reel';
+  /** Overrides the mode's default frame ratio, e.g. a single-column feed that
+   *  wants the cover's real shape instead of the grid's 4:5 tile. Pass 'auto'
+   *  when the server did not record dimensions and the cover should be measured
+   *  on load instead. */
+  aspectRatio?: number | string | null;
+  /** Overrides the mode's default object-fit for the same reason. */
+  fit?: 'cover' | 'contain';
+  /** Overrides the responsive `sizes` hint when the frame is not a grid cell. */
+  sizes?: string;
   className?: string;
   viewportClassName?: string;
   allowFullscreen?: boolean;
@@ -41,6 +50,9 @@ export default function ShowcaseMediaCarousel({
   title,
   initialIndex = 0,
   mode = 'feed',
+  aspectRatio = null,
+  fit,
+  sizes,
   className = '',
   viewportClassName = '',
   allowFullscreen = false,
@@ -325,6 +337,10 @@ export default function ShowcaseMediaCarousel({
   const isDetail = mode === 'detail';
   const isReel = mode === 'reel';
   const showControls = isDetail || isReel;
+  const frameAspectRatio = aspectRatio === 'auto'
+    ? coverAspectRatio ?? '4 / 5'
+    : aspectRatio ?? (mode === 'feed' ? '4 / 5' : coverAspectRatio ?? '16 / 10');
+  const frameFit = fit ?? (mode === 'feed' ? 'cover' : 'contain');
   const previewUrl = renderedActiveItem.previewUrl ?? null;
   const posterUrl = priorityPoster?.mediaId === renderedActiveItem.id
     ? priorityPoster.dataUrl
@@ -342,7 +358,7 @@ export default function ShowcaseMediaCarousel({
       <div
         data-showcase-media-viewport
         className={`group/carousel relative overflow-hidden bg-black ${isDetail ? 'rounded-[22px]' : ''} ${isReel ? 'h-full' : ''} ${onOpen ? 'cursor-pointer' : ''} ${viewportClassName}`}
-        style={isReel ? undefined : { aspectRatio: mode === 'feed' ? '4 / 5' : coverAspectRatio ?? '16 / 10' }}
+        style={isReel ? undefined : { aspectRatio: frameAspectRatio }}
         onClick={(event) => {
           if (!onOpen || event.target instanceof HTMLElement && event.target.closest('button, video[controls]')) {
             return;
@@ -415,7 +431,7 @@ export default function ShowcaseMediaCarousel({
                 onCanPlay={(event) => reportActiveVideoReady(event.currentTarget)}
                 onPlaying={(event) => reportActiveVideoReady(event.currentTarget)}
                 onError={reportActiveMediaError}
-                className={`h-full w-full ${mode === 'feed' ? 'object-cover' : 'object-contain'}`}
+                className={`h-full w-full ${frameFit === 'cover' ? 'object-cover' : 'object-contain'}`}
               />
               {!showControls ? (
                 <span className="pointer-events-none absolute bottom-3 left-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/65 text-white backdrop-blur-md">
@@ -429,10 +445,18 @@ export default function ShowcaseMediaCarousel({
               previewSrc={previewUrl ?? renderedActiveItem.url}
               fallbackSrc={renderedActiveItem.url}
               alt={title}
-              sizes="(min-width: 1280px) 25vw, (min-width: 768px) 33vw, (min-width: 640px) 50vw, 100vw"
+              sizes={sizes ?? '(min-width: 1280px) 25vw, (min-width: 768px) 33vw, (min-width: 640px) 50vw, 100vw'}
               priority={priority}
-              onLoad={() => reportMediaReady(renderedActiveItem, activeLoadKey)}
-              className="object-cover"
+              onLoad={(event) => {
+                // Only the cover defines the frame, and only when the server did
+                // not already record dimensions.
+                const image = event.currentTarget;
+                if (activeIndex === 0 && image.naturalWidth && image.naturalHeight) {
+                  setCoverAspectRatio(image.naturalWidth / image.naturalHeight);
+                }
+                reportMediaReady(renderedActiveItem, activeLoadKey);
+              }}
+              className={frameFit === 'cover' ? 'object-cover' : 'object-contain'}
             />
           ) : (
             // eslint-disable-next-line @next/next/no-img-element

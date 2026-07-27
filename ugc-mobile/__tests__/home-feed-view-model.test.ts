@@ -3,9 +3,14 @@ import { describe, expect, it } from 'vitest';
 import {
   HOME_FEED_CHIPS,
   buildHomeFeedCards,
+  canExpandHomeFeedBody,
+  estimateWrappedLineCount,
+  getHomeFeedBodyFontSize,
+  getHomeFeedCardOpenTarget,
   getHomeFeedChip,
   getHomeFeedMediaHeight,
   getHomeFeedSlides,
+  isFramedHomeFeedBody,
   showcaseToHomeFeedCard,
 } from '@/lib/home-feed-view-model';
 import { createShowcaseFeedQueryKey } from '@/lib/showcase-feed-query';
@@ -106,7 +111,7 @@ describe('home feed view model', () => {
       }));
 
       expect(card.previewKind).toBe('text');
-      expect(card.bodyLines).toBe(6);
+      expect(card.bodyLines).toBe(8);
     });
 
     it('never repeats the title as the body', () => {
@@ -140,6 +145,83 @@ describe('home feed view model', () => {
 
     it('opens into the shared showcase viewer source', () => {
       expect(showcaseToHomeFeedCard(item()).viewerSource).toBe('showcase-feed');
+    });
+  });
+
+  describe('text presentation', () => {
+    const textCard = () => showcaseToHomeFeedCard(item({
+      mediaUrl: null,
+      mediaKind: null,
+      category: 'text',
+      postFormat: 'text',
+      title: 'Hook framework',
+      prompt: '',
+      body: 'A reusable note for framing a launch post.',
+    }));
+
+    const mixedCard = () => showcaseToHomeFeedCard(item({
+      postFormat: 'mixed',
+      title: 'Behind the shot',
+      body: 'Here is how I lit this scene.',
+    }));
+
+    it('frames a text post and reads it at body size', () => {
+      const card = textCard();
+
+      expect(isFramedHomeFeedBody(card)).toBe(true);
+      expect(getHomeFeedBodyFontSize(card)).toBe(16);
+    });
+
+    it('leaves a captioned media post unframed and one size down', () => {
+      const card = mixedCard();
+
+      expect(isFramedHomeFeedBody(card)).toBe(false);
+      expect(getHomeFeedBodyFontSize(card)).toBe(14);
+    });
+
+    it('sends a text post to its discussion instead of the media viewer', () => {
+      expect(getHomeFeedCardOpenTarget(textCard())).toBe('comments');
+      expect(getHomeFeedCardOpenTarget(mixedCard())).toBe('viewer');
+      expect(getHomeFeedCardOpenTarget(showcaseToHomeFeedCard(item()))).toBe('viewer');
+    });
+
+    it('counts a hard newline as its own line', () => {
+      expect(estimateWrappedLineCount('one\ntwo\nthree', 400, 16)).toBe(3);
+      expect(estimateWrappedLineCount('para\n\npara', 400, 16)).toBe(3);
+    });
+
+    it('wraps long text by the available width', () => {
+      const text = 'x'.repeat(200);
+
+      expect(estimateWrappedLineCount(text, 400, 16)).toBeGreaterThan(
+        estimateWrappedLineCount(text, 800, 16)
+      );
+    });
+
+    it('reports no lines for empty text or a zero width', () => {
+      expect(estimateWrappedLineCount('', 400, 16)).toBe(0);
+      expect(estimateWrappedLineCount('words', 0, 16)).toBe(0);
+    });
+
+    it('offers Read more only when the clamp actually hides something', () => {
+      const short = showcaseToHomeFeedCard(item({
+        mediaUrl: null, mediaKind: null, category: 'text', postFormat: 'text',
+        title: 'Short note', prompt: '', body: 'One line.',
+      }));
+      const long = showcaseToHomeFeedCard(item({
+        mediaUrl: null, mediaKind: null, category: 'text', postFormat: 'text',
+        title: 'Long note', prompt: '', body: 'sentence. '.repeat(400),
+      }));
+
+      expect(canExpandHomeFeedBody(short, 360)).toBe(false);
+      expect(canExpandHomeFeedBody(long, 360)).toBe(true);
+    });
+
+    it('never offers Read more for a post with no body', () => {
+      const card = showcaseToHomeFeedCard(item({ title: 'A launch frame', prompt: '', body: '' }));
+
+      expect(card.bodyText).toBe('');
+      expect(canExpandHomeFeedBody(card, 360)).toBe(false);
     });
   });
 
