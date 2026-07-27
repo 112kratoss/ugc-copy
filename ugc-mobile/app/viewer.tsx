@@ -291,8 +291,8 @@ export default function ImmersivePreviewViewerScreen() {
     queryClient.setQueriesData<ShowcasePostResponse>({ queryKey: ['showcase-post', result.postId] }, (data) =>
       applyShowcaseSaveStateToPostResponse(data, result)
     );
-    queryClient.setQueryData<ShowcaseFeedResponse>(['profile-saved-media', user?.id], (data) =>
-      applyShowcaseSaveStateToFeedResponse(data, result, {
+    queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(['profile-saved-media', user?.id], (data) =>
+      applyShowcaseSaveStateToInfiniteFeed(data, result, {
         removeWhenUnsaved: true,
       })
     );

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { generationToProfileMediaCard, ownerPostToProfileMediaCard } from '../lib/profile-view-model';
+import { generationToProfileMediaCard, getProfileStats, ownerPostToProfileMediaCard } from '../lib/profile-view-model';
 import type { GenerationListItem, OwnerPostListItem } from '../lib/types';
 
 describe('profile view model media cards', () => {
@@ -166,5 +166,30 @@ describe('profile view model media cards', () => {
       mediaKind: 'image',
       archivedAt: '2026-06-11T00:00:00.000Z',
     }).isGridReady).toBe(false);
+  });
+});
+
+describe('profile hero stats', () => {
+  it('reports plain counts when every page is loaded', () => {
+    expect(getProfileStats({ generationsCount: 3, postsCount: 2, savedCount: 1 })).toEqual([
+      { label: 'Creations', value: '3' },
+      { label: 'Posts', value: '2' },
+      { label: 'Saved', value: '1' },
+    ]);
+  });
+
+  it('marks a count as partial while that tab has more pages', () => {
+    expect(getProfileStats({
+      generationsCount: 24,
+      generationsHasMore: true,
+      postsCount: 2,
+      postsHasMore: false,
+      savedCount: 48,
+      savedHasMore: true,
+    })).toEqual([
+      { label: 'Creations', value: '24+' },
+      { label: 'Posts', value: '2' },
+      { label: 'Saved', value: '48+' },
+    ]);
   });
 });

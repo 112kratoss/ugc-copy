@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { FlashList } from '@shopify/flash-list';
 import { useIsFocused } from '@react-navigation/native';
 import { Image } from 'expo-image';
@@ -18,7 +18,7 @@ import {
   UserRound,
   Wallet,
 } from 'lucide-react-native';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, PanResponder, Pressable, Text, useWindowDimensions, View, type PanResponderGestureState } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -44,10 +44,27 @@ import {
   type ProfileMediaSwipeDirection,
   type ProfileMediaTab,
 } from '@/lib/profile-view-model';
+import {
+  PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS,
+  PROFILE_MEDIA_MIN_FILL_COUNT,
+  PROFILE_MEDIA_PAGE_SIZE,
+  flattenProfileGenerationPages,
+  flattenProfileOwnerPostPages,
+  getNextProfileGenerationsCursor,
+  getNextProfileOwnerPostsOffset,
+  getNextProfileSavedMediaOffset,
+  truncateInfiniteDataToFirstPage,
+} from '@/lib/profile-media-query';
+import { flattenShowcaseFeedPages } from '@/lib/showcase-feed-query';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { appTheme } from '@/lib/theme';
-import type { ProfileResponse } from '@/lib/types';
+import type {
+  GenerationListResponse,
+  OwnerPostsResponse,
+  ProfileResponse,
+  ShowcaseFeedResponse,
+} from '@/lib/types';
 
 const PROFILE_GALLERY_COLUMNS = 3;
 const PROFILE_GALLERY_GAP = 8;
@@ -80,6 +97,10 @@ export function ProfileDashboard({
   const isFocused = useIsFocused();
   const [activeTab, setActiveTab] = useState<ProfileMediaTab>(initialTab);
   const [backgroundMediaReady, setBackgroundMediaReady] = useState(false);
+  const queryClient = useQueryClient();
+  const loadingMoreRef = useRef(false);
+  const lastLoadMoreAtRef = useRef(0);
+  const lastLoadMorePageCountRef = useRef(0);
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const topInset = resolvedTopInset(insets.top);
@@ -96,24 +117,43 @@ export function ProfileDashboard({
     staleTime: 1000 * 60 * 5,
   });
 
-  const generationsQuery = useQuery({
+  const generationsQuery = useInfiniteQuery({
     queryKey: ['profile-generations', user?.id],
     enabled: Boolean(user && (activeTab === 'Creations' || backgroundMediaReady)),
-    queryFn: () => api.listGenerations(false, { limit: 24 }),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => api.listGenerations(false, {
+      cursor: pageParam ?? undefined,
+      limit: PROFILE_MEDIA_PAGE_SIZE,
+    }),
+    getNextPageParam: getNextProfileGenerationsCursor,
     staleTime: 1000 * 60,
   });
 
-  const postsQuery = useQuery({
+  const postsQuery = useInfiniteQuery({
     queryKey: ['profile-owner-posts', user?.id],
     enabled: Boolean(user && (activeTab === 'Posts' || backgroundMediaReady)),
-    queryFn: () => api.listOwnerPosts({ includeArchived: false, includeSummary: true, limit: 24, visibility: 'all' }),
+    initialPageParam: 0,
+    // Only the first page pays for the sales-summary aggregate.
+    queryFn: ({ pageParam }) => api.listOwnerPosts({
+      includeArchived: false,
+      includeSummary: pageParam === 0,
+      limit: PROFILE_MEDIA_PAGE_SIZE,
+      offset: pageParam,
+      visibility: 'all',
+    }),
+    getNextPageParam: getNextProfileOwnerPostsOffset,
     staleTime: 1000 * 60,
   });
 
-  const savedQuery = useQuery({
+  const savedQuery = useInfiniteQuery({
     queryKey: ['profile-saved-media', user?.id],
     enabled: Boolean(user && (activeTab === 'Saved' || backgroundMediaReady)),
-    queryFn: () => api.getSavedMedia({ limit: 24 }),
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => api.getSavedMedia({
+      limit: PROFILE_MEDIA_PAGE_SIZE,
+      offset: pageParam,
+    }),
+    getNextPageParam: getNextProfileSavedMediaOffset,
     staleTime: 1000 * 60,
   });
 
@@ -134,6 +174,12 @@ export function ProfileDashboard({
   }, [user?.id]);
 
   useEffect(() => {
+    loadingMoreRef.current = false;
+    lastLoadMoreAtRef.current = 0;
+    lastLoadMorePageCountRef.current = 0;
+  }, [activeTab, user?.id]);
+
+  useEffect(() => {
     if (user?.id && activeMediaIsFetched) {
       setBackgroundMediaReady(true);
     }
@@ -150,45 +196,38 @@ export function ProfileDashboard({
   }, [activeMediaIsFetching, activeMediaIsStale, isFocused, refetchActiveMedia, user?.id]);
 
   const savedCards = useMemo(
-    () => savedShowcaseToProfileMediaCards(savedQuery.data?.items),
+    () => savedShowcaseToProfileMediaCards(flattenShowcaseFeedPages(savedQuery.data?.pages)),
     [savedQuery.data]
   );
-  const allCreationCards = useMemo(
-    () => (generationsQuery.data?.generations ?? []).map(generationToProfileMediaCard),
+  const creationCards = useMemo(
+    () => flattenProfileGenerationPages(generationsQuery.data?.pages)
+      .map(generationToProfileMediaCard)
+      .filter((card) => card.isGridReady),
     [generationsQuery.data]
   );
-  const readyCreationCount = useMemo(
-    () => allCreationCards.filter((card) => card.isGridReady).length,
-    [allCreationCards]
-  );
-  const creationCards = useMemo(
-    () => allCreationCards.filter((card) => card.isGridReady).slice(0, 12),
-    [allCreationCards]
-  );
-  const allPostCards = useMemo(
-    () => (postsQuery.data?.posts ?? []).map(ownerPostToProfileMediaCard),
+  const ownerPosts = useMemo(
+    () => flattenProfileOwnerPostPages(postsQuery.data?.pages),
     [postsQuery.data]
-  );
-  const readyPostCount = useMemo(
-    () => allPostCards.filter((card) => card.isGridReady).length,
-    [allPostCards]
   );
   const postCards = useMemo(
-    () => allPostCards.filter((card) => card.isGridReady).slice(0, 12),
-    [allPostCards]
+    () => ownerPosts.map(ownerPostToProfileMediaCard).filter((card) => card.isGridReady),
+    [ownerPosts]
   );
   const salesSummary = useMemo(
-    () => postsQuery.data?.summary ?? getOwnerPostSalesSummary(postsQuery.data?.posts),
-    [postsQuery.data]
+    () => postsQuery.data?.pages[0]?.summary ?? getOwnerPostSalesSummary(ownerPosts),
+    [ownerPosts, postsQuery.data]
   );
   const profile = profileQuery.data;
   const displayName = getProfileName(profile, user?.email);
   const handle = getProfileHandle(profile, user?.email);
   const initials = getProfileInitials(profile, user?.email);
   const stats = getProfileStats({
-    generationsCount: readyCreationCount,
-    postsCount: readyPostCount,
+    generationsCount: creationCards.length,
+    generationsHasMore: generationsQuery.hasNextPage,
+    postsCount: postCards.length,
+    postsHasMore: postsQuery.hasNextPage,
     savedCount: savedCards.length,
+    savedHasMore: savedQuery.hasNextPage,
   });
   const tabCards = activeTab === 'Saved' ? savedCards : activeTab === 'Creations' ? creationCards : postCards;
   const signedOutPreviewCards = FALLBACK_PROFILE_MEDIA.filter((card) => (
@@ -207,21 +246,95 @@ export function ProfileDashboard({
     : activeTab === 'Creations'
       ? generationsQuery.error
       : postsQuery.error;
+  const activeTabPaging = activeTab === 'Saved'
+    ? savedQuery
+    : activeTab === 'Creations'
+      ? generationsQuery
+      : postsQuery;
+  const activeHasNextPage = activeTabPaging.hasNextPage;
+  const activeIsFetchingNextPage = activeTabPaging.isFetchingNextPage;
+  const activePageCount = activeTabPaging.data?.pages.length ?? 0;
+
+  const requestNextPage = useCallback(() => {
+    const now = Date.now();
+    if (
+      !activeHasNextPage
+      || activeIsFetchingNextPage
+      || activeMediaIsFetching
+      || loadingMoreRef.current
+      // Guard on page count, not item count: a page can legitimately add zero tiles once the
+      // server and the isGridReady filter have had their say, and an item-count guard would
+      // then latch shut and block every later page.
+      || lastLoadMorePageCountRef.current === activePageCount
+      || now - lastLoadMoreAtRef.current < PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS
+    ) {
+      return;
+    }
+
+    loadingMoreRef.current = true;
+    lastLoadMoreAtRef.current = now;
+    lastLoadMorePageCountRef.current = activePageCount;
+
+    if (activeTab === 'Saved') {
+      void savedQuery.fetchNextPage().finally(() => { loadingMoreRef.current = false; });
+      return;
+    }
+    if (activeTab === 'Creations') {
+      void generationsQuery.fetchNextPage().finally(() => { loadingMoreRef.current = false; });
+      return;
+    }
+    void postsQuery.fetchNextPage().finally(() => { loadingMoreRef.current = false; });
+  }, [
+    activeHasNextPage,
+    activeIsFetchingNextPage,
+    activeMediaIsFetching,
+    activePageCount,
+    activeTab,
+    generationsQuery,
+    postsQuery,
+    savedQuery,
+  ]);
+
+  // A page that yields few renderable tiles can leave the grid too short to scroll, so
+  // onEndReached would never fire again. Top it up until the grid can carry itself.
+  useEffect(() => {
+    if (isMediaLoading || tabCards.length >= PROFILE_MEDIA_MIN_FILL_COUNT) return;
+    requestNextPage();
+  }, [isMediaLoading, requestNextPage, tabCards.length]);
+
   const handleMediaTabChange = useCallback((tab: ProfileMediaTab) => {
     setActiveTab(tab);
   }, []);
   const handleMediaSwipe = useCallback((direction: ProfileMediaSwipeDirection) => {
     setActiveTab((currentTab) => getProfileMediaSwipeTarget(currentTab, direction));
   }, []);
+  // Collapse back to a single page before refetching, otherwise React Query refetches every
+  // page the user has scrolled through.
   const refreshActiveMedia = () => {
+    loadingMoreRef.current = false;
+    lastLoadMoreAtRef.current = 0;
+    lastLoadMorePageCountRef.current = 0;
+
     if (activeTab === 'Saved') {
+      queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(
+        ['profile-saved-media', user?.id],
+        truncateInfiniteDataToFirstPage
+      );
       void savedQuery.refetch();
       return;
     }
     if (activeTab === 'Creations') {
+      queryClient.setQueryData<InfiniteData<GenerationListResponse>>(
+        ['profile-generations', user?.id],
+        truncateInfiniteDataToFirstPage
+      );
       void generationsQuery.refetch();
       return;
     }
+    queryClient.setQueryData<InfiniteData<OwnerPostsResponse>>(
+      ['profile-owner-posts', user?.id],
+      truncateInfiniteDataToFirstPage
+    );
     void postsQuery.refetch();
   };
 
@@ -299,8 +412,11 @@ export function ProfileDashboard({
       )}
       horizontalPadding={horizontalPadding}
       highlightedPostId={highlightedPostId}
+      isFetchingNextPage={activeIsFetchingNextPage}
       isLoading={isMediaLoading}
+      isRefreshing={activeMediaIsFetching && !activeIsFetchingNextPage}
       mediaError={mediaError}
+      onEndReached={requestNextPage}
       onRefresh={refreshActiveMedia}
       onSwipeTab={handleMediaSwipe}
       onTabChange={handleMediaTabChange}
@@ -320,8 +436,11 @@ function ProfileMediaList({
   header,
   horizontalPadding,
   highlightedPostId,
+  isFetchingNextPage,
   isLoading,
+  isRefreshing,
   mediaError,
+  onEndReached,
   onRefresh,
   onSwipeTab,
   onTabChange,
@@ -337,8 +456,11 @@ function ProfileMediaList({
   header: React.ReactNode;
   horizontalPadding: number;
   highlightedPostId?: string | null;
+  isFetchingNextPage?: boolean;
   isLoading: boolean;
+  isRefreshing?: boolean;
   mediaError?: unknown;
+  onEndReached?: () => void;
   onRefresh?: () => void;
   onSwipeTab: (direction: ProfileMediaSwipeDirection) => void;
   onTabChange: (tab: ProfileMediaTab) => void;
@@ -393,7 +515,12 @@ function ProfileMediaList({
         ) : (
           <ProfileMediaEmpty title={emptyTitle} />
         )}
+        ListFooterComponent={isFetchingNextPage ? <ProfileGridFooterLoader /> : null}
         numColumns={PROFILE_GALLERY_COLUMNS}
+        onEndReached={onEndReached}
+        onEndReachedThreshold={0.32}
+        onRefresh={onRefresh}
+        refreshing={Boolean(isRefreshing)}
         removeClippedSubviews={false}
         renderItem={({ item, index }) => (
           <View
@@ -763,6 +890,14 @@ function ProfileMediaEmpty({ title }: { title: string }) {
       <AppText variant="bodySm" color="muted" style={{ textAlign: 'center' }}>
         This section will fill as you save media, create generations, or publish posts.
       </AppText>
+    </View>
+  );
+}
+
+function ProfileGridFooterLoader() {
+  return (
+    <View style={{ minHeight: 52, alignItems: 'center', justifyContent: 'center' }}>
+      <ActivityIndicator color={PROFILE_COLORS.coral} />
     </View>
   );
 }

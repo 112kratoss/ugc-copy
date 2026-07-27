@@ -139,6 +139,59 @@ describe('immersive preview source data', () => {
     });
   });
 
+  it('reads paginated profile caches for viewer launches', () => {
+    const queryClient = new QueryClient();
+    const first = showcaseItem('post-1');
+    const second = showcaseItem('post-2');
+    queryClient.setQueryData(['profile-saved-media', 'user-1'], {
+      pages: [
+        { items: [{ ...first, isSaved: true }] },
+        { items: [{ ...second, isSaved: true }] },
+      ],
+      pageParams: [0, 24],
+    });
+
+    expect(readCachedImmersiveSourceData(queryClient, 'profile-saved', 'user-1', 'post-2')).toEqual({
+      showcaseItems: [{ ...first, isSaved: true }, { ...second, isSaved: true }],
+    });
+  });
+
+  it('merges a paginated profile cache with the single-page home cache', () => {
+    // profile-generations pages; home-generations does not.
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(['profile-generations', 'user-1'], {
+      pages: [
+        { generations: [{ id: 'gen-1', output_url: 'a.png' }] },
+        { generations: [{ id: 'gen-2', output_url: 'b.png' }] },
+      ],
+      pageParams: [null, '24'],
+    });
+    queryClient.setQueryData(['home-generations', 'user-1'], {
+      generations: [{ id: 'gen-2', output_url: 'b.png' }, { id: 'gen-3', output_url: 'c.png' }],
+    });
+
+    const data = readCachedImmersiveSourceData(queryClient, 'profile-creations', 'user-1', 'gen-3');
+    expect(data?.generations?.map((item) => item.id)).toEqual(['gen-1', 'gen-2', 'gen-3']);
+  });
+
+  it('merges paginated owner posts with the single-page sales summary cache', () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(['profile-owner-posts', 'user-1'], {
+      pages: [
+        { success: true, posts: [{ id: 'post-a', mediaUrl: 'a.png', mediaKind: 'image' }] },
+        { success: true, posts: [{ id: 'post-b', mediaUrl: 'b.png', mediaKind: 'image' }] },
+      ],
+      pageParams: [0, 24],
+    });
+    queryClient.setQueryData(['owner-posts-sales-summary', 'user-1'], {
+      success: true,
+      posts: [{ id: 'post-b', mediaUrl: 'b.png', mediaKind: 'image' }],
+    });
+
+    const data = readCachedImmersiveSourceData(queryClient, 'profile-posts', 'user-1', 'post-b');
+    expect(data?.ownerPosts?.map((item) => item.id)).toEqual(['post-a', 'post-b']);
+  });
+
   it('preserves the originating ranked feed order and session in the viewer cache', () => {
     const queryClient = new QueryClient();
     const rankedItems = [showcaseItem('post-2'), showcaseItem('post-1'), showcaseItem('post-3')];

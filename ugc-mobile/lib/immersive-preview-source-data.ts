@@ -15,6 +15,7 @@ import {
 } from '@/lib/showcase-feed-query';
 import type {
   GenerationListItem,
+  GenerationListResponse,
   CreatorProfileResponse,
   OwnerPostsResponse,
   ProfileResponse,
@@ -55,7 +56,7 @@ export interface ImmersivePreviewApi {
   listGenerations: (
     includeCompleted?: boolean,
     options?: { limit?: number }
-  ) => Promise<{ generations: GenerationListItem[] }>;
+  ) => Promise<GenerationListResponse>;
   listOwnerPosts: (params?: Record<string, QueryValue>) => Promise<OwnerPostsResponse>;
 }
 
@@ -204,8 +205,10 @@ function cachedShowcaseItems(
   feedSessionId?: string | null
 ): ImmersiveSourceData | undefined {
   if (source === 'profile-saved') {
-    const saved = queryClient.getQueryData<ShowcaseFeedResponse>(['profile-saved-media', userId]);
-    const showcaseItems = saved?.items.filter((item) => item.isSaved) ?? [];
+    const saved = queryClient.getQueryData<CachedPages<ShowcaseFeedResponse>>(['profile-saved-media', userId]);
+    const showcaseItems = readCachedPages(saved)
+      .flatMap((page) => page.items)
+      .filter((item) => item.isSaved);
     return showcaseItems.length ? { showcaseItems } : undefined;
   }
 
@@ -229,8 +232,8 @@ function cachedShowcaseItems(
     } : undefined;
   }
 
-  const saved = queryClient.getQueryData<ShowcaseFeedResponse>(['profile-saved-media', userId]);
-  const showcaseItems = dedupeById(saved?.items ?? []);
+  const saved = queryClient.getQueryData<CachedPages<ShowcaseFeedResponse>>(['profile-saved-media', userId]);
+  const showcaseItems = dedupeById(readCachedPages(saved).flatMap((page) => page.items));
   return showcaseItems.length ? { showcaseItems } : undefined;
 }
 
@@ -252,9 +255,10 @@ function cachedCreatorProfileItems(queryClient: QueryClient): ImmersiveSourceDat
 
 function cachedGenerations(queryClient: QueryClient, userId: string | undefined): ImmersiveSourceData | undefined {
   const all: GenerationListItem[] = [];
+  // `profile-generations` is paginated; `home-generations` and `generations` stay single-page.
   for (const key of [['profile-generations', userId], ['home-generations', userId], ['generations', userId]] as const) {
-    const data = queryClient.getQueryData<{ generations: GenerationListItem[] }>(key);
-    if (data?.generations.length) all.push(...data.generations);
+    const data = queryClient.getQueryData<CachedPages<GenerationListResponse>>(key);
+    all.push(...readCachedPages(data).flatMap((page) => page.generations ?? []));
   }
   const generations = dedupeById(all);
   return generations.length ? { generations } : undefined;
@@ -262,12 +266,21 @@ function cachedGenerations(queryClient: QueryClient, userId: string | undefined)
 
 function cachedOwnerPosts(queryClient: QueryClient, userId: string | undefined): ImmersiveSourceData | undefined {
   const all: OwnerPostsResponse['posts'] = [];
+  // `profile-owner-posts` is paginated; `owner-posts-sales-summary` stays single-page.
   for (const key of [['profile-owner-posts', userId], ['owner-posts-sales-summary', userId]] as const) {
-    const data = queryClient.getQueryData<OwnerPostsResponse>(key);
-    if (data?.posts.length) all.push(...data.posts);
+    const data = queryClient.getQueryData<CachedPages<OwnerPostsResponse>>(key);
+    all.push(...readCachedPages(data).flatMap((page) => page.posts ?? []));
   }
   const ownerPosts = dedupeById(all);
   return ownerPosts.length ? { ownerPosts } : undefined;
+}
+
+type CachedPages<T> = T | InfiniteData<T>;
+
+/** Reads a cache entry that may hold a single response or a paginated one. */
+function readCachedPages<T>(data: CachedPages<T> | undefined): T[] {
+  if (!data) return [];
+  return 'pages' in (data as object) ? (data as InfiniteData<T>).pages : [data as T];
 }
 
 function dedupeById<T extends { id: string }>(items: T[]) {

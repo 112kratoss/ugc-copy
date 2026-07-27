@@ -30,6 +30,7 @@ import {
   readCachedImmersiveSourceData,
   readCachedProfile,
 } from '@/lib/immersive-preview-source-data';
+import { truncateInfiniteDataToFirstPage } from '@/lib/profile-media-query';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { useReducedMotion } from '@/lib/motion';
 import {
@@ -121,6 +122,10 @@ export function ProfileMediaFeedScreen() {
   const title = source === 'profile-posts' ? 'Posts' : 'Creations';
 
   const refreshMediaSources = async () => {
+    // Collapse the paginated profile caches so invalidation refetches one page, not all of them.
+    queryClient.setQueryData(['profile-generations', user?.id], truncateInfiniteDataToFirstPage);
+    queryClient.setQueryData(['profile-owner-posts', user?.id], truncateInfiniteDataToFirstPage);
+
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
       queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
@@ -154,8 +159,8 @@ export function ProfileMediaFeedScreen() {
     queryClient.setQueriesData<ShowcasePostResponse>({ queryKey: ['showcase-post', result.postId] }, (data) =>
       applyShowcaseSaveStateToPostResponse(data, result)
     );
-    queryClient.setQueryData<ShowcaseFeedResponse>(['profile-saved-media', user?.id], (data) =>
-      applyShowcaseSaveStateToFeedResponse(data, result, {
+    queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(['profile-saved-media', user?.id], (data) =>
+      applyShowcaseSaveStateToInfiniteFeed(data, result, {
         removeWhenUnsaved: true,
       })
     );
