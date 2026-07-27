@@ -62,12 +62,34 @@ export interface HomeFeedCard {
   viewerSource: PreviewViewerSource;
 }
 
-const TEXT_BODY_LINES = 6;
+/**
+ * Where a tap on the card body should land. Text posts have no media, so the
+ * immersive viewer — a full-screen media pager — is the wrong destination for
+ * them; the discussion is the payload instead.
+ */
+export type HomeFeedCardOpenTarget = 'viewer' | 'comments';
+
+const TEXT_BODY_LINES = 8;
 const MIXED_BODY_LINES = 3;
+const MEDIA_BODY_LINES = 2;
 const MIN_MEDIA_HEIGHT = 180;
 const MAX_MEDIA_HEIGHT_RATIO = 1.25;
 const FALLBACK_MEDIA_ASPECT_RATIO = 4 / 5;
 const FALLBACK_VIDEO_ASPECT_RATIO = 16 / 9;
+
+/** Body font sizes the card renders at, mirrored here so line estimates match. */
+const TEXT_BODY_FONT_SIZE = 16;
+const COMPACT_BODY_FONT_SIZE = 14;
+/** Accent rail plus left and right padding the framed text panel adds. */
+export const TEXT_PANEL_RAIL_WIDTH = 3;
+export const TEXT_PANEL_PADDING = 14;
+const TEXT_PANEL_HORIZONTAL_CHROME = TEXT_PANEL_RAIL_WIDTH + TEXT_PANEL_PADDING * 2;
+/**
+ * Mean glyph advance as a fraction of font size for the system UI face. Only
+ * used to decide whether "Read more" is worth offering, so a rough estimate is
+ * enough — a wrong call costs an unnecessary (or missing) toggle, never layout.
+ */
+const AVERAGE_GLYPH_WIDTH_RATIO = 0.52;
 
 export function getHomeFeedChip(id: HomeFeedChipId | string | null | undefined) {
   return HOME_FEED_CHIPS.find((chip) => chip.id === id) ?? HOME_FEED_CHIPS[0];
@@ -120,7 +142,7 @@ export function showcaseToHomeFeedCard(item: ShowcaseFeedItem): HomeFeedCard {
     previewKind,
     title: homeCardTitle(item, previewKind),
     bodyText: homeCardBody(item, previewKind),
-    bodyLines: previewKind === 'text' ? TEXT_BODY_LINES : MIXED_BODY_LINES,
+    bodyLines: homeCardBodyLines(previewKind),
     creatorLabel: item.creator.username ? `@${item.creator.username}` : creatorName,
     creatorName,
     creatorAvatar: item.creator.avatar,
@@ -142,6 +164,56 @@ export function showcaseToHomeFeedCard(item: ShowcaseFeedItem): HomeFeedCard {
     isSaved: Boolean(item.isSaved),
     viewerSource: 'showcase-feed',
   };
+}
+
+function homeCardBodyLines(previewKind: HomeFeedCard['previewKind']) {
+  if (previewKind === 'text') return TEXT_BODY_LINES;
+  if (previewKind === 'mixed') return MIXED_BODY_LINES;
+  return MEDIA_BODY_LINES;
+}
+
+/**
+ * A text post is the only card whose body is the post itself, so it reads at
+ * body size inside its own panel; every other kind captions media below it.
+ */
+export function getHomeFeedBodyFontSize(card: HomeFeedCard) {
+  return card.previewKind === 'text' ? TEXT_BODY_FONT_SIZE : COMPACT_BODY_FONT_SIZE;
+}
+
+export function isFramedHomeFeedBody(card: HomeFeedCard) {
+  return card.previewKind === 'text';
+}
+
+export function getHomeFeedCardOpenTarget(card: HomeFeedCard): HomeFeedCardOpenTarget {
+  return card.previewKind === 'text' ? 'comments' : 'viewer';
+}
+
+/**
+ * Estimates how many lines `text` wraps to at `width`. React Native only
+ * reports line counts after layout, and `numberOfLines` truncates the report,
+ * so the "Read more" affordance is decided up front from the text itself.
+ */
+export function estimateWrappedLineCount(text: string, width: number, fontSize: number) {
+  if (!text.trim() || width <= 0 || fontSize <= 0) return 0;
+
+  const charactersPerLine = Math.max(1, Math.floor(width / (fontSize * AVERAGE_GLYPH_WIDTH_RATIO)));
+
+  return text.split('\n').reduce((total, paragraph) => {
+    const length = paragraph.trim().length;
+    // An empty paragraph is still a rendered blank line.
+    return total + Math.max(1, Math.ceil(length / charactersPerLine));
+  }, 0);
+}
+
+/** True when the collapsed body hides content worth a "Read more" tap. */
+export function canExpandHomeFeedBody(card: HomeFeedCard, contentWidth: number) {
+  if (!card.bodyText) return false;
+
+  const width = isFramedHomeFeedBody(card)
+    ? contentWidth - TEXT_PANEL_HORIZONTAL_CHROME
+    : contentWidth;
+
+  return estimateWrappedLineCount(card.bodyText, width, getHomeFeedBodyFontSize(card)) > card.bodyLines;
 }
 
 function resolveHomePreviewKind(

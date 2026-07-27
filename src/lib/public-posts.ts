@@ -56,6 +56,7 @@ type PublicPostRow = {
   remix_count: number | null;
   share_count: number | null;
   share_visit_count: number | null;
+  comment_count: number | null;
   source_kind: RawShowcaseSourceKind;
   source_tool: string | null;
   review_status?: string | null;
@@ -88,6 +89,7 @@ export interface PublicPostDetail {
   remixCount: number;
   shareCount: number;
   shareVisitCount: number;
+  commentCount: number;
   createdAt: string;
   sourceKind: ShowcaseSourceKind;
   sourceTool: string | null;
@@ -105,7 +107,7 @@ async function fetchPublicPostRow(
 
   const result = await adminSupabase
     .from('posts')
-    .select('id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, body, category, save_count, remix_count, share_count, share_visit_count, source_kind, source_tool, review_status, created_at, post_format')
+    .select('id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, body, category, save_count, remix_count, share_count, share_visit_count, comment_count, source_kind, source_tool, review_status, created_at, post_format')
     .eq('id', id)
     .is('archived_at', null)
     .in('visibility', ['public', 'unlisted'])
@@ -305,6 +307,8 @@ export async function getPublicPostDetail(
       remixCount: generation.remixCount,
       shareCount: generation.shareCount,
       shareVisitCount: generation.shareVisitCount,
+      // A bare generation has no post row, so it can carry no comments.
+      commentCount: 0,
       createdAt: generation.createdAt,
       sourceKind: MAGICBOOKLET_SOURCE_KIND,
       sourceTool: null,
@@ -433,6 +437,7 @@ export async function getPublicPostDetail(
     remixCount: row.remix_count ?? 0,
     shareCount: row.share_count ?? 0,
     shareVisitCount: row.share_visit_count ?? 0,
+    commentCount: row.comment_count ?? 0,
     createdAt: row.created_at,
     sourceKind: normalizeShowcaseSourceKind(row.source_kind),
     sourceTool: row.source_tool,

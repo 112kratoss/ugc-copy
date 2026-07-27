@@ -38,7 +38,7 @@ describe('production performance readiness', () => {
 
     expect(showcaseModel).toContain('SHOWCASE_INITIAL_RENDER_COUNT = 1');
     expect(showcaseModel).toContain('SHOWCASE_INITIAL_PAGE_SIZE = 2');
-    expect(showcaseClient).toContain('items.slice(0, renderedItemCount)');
+    expect(showcaseClient).toContain('tileableItems.slice(0, renderedItemCount)');
     expect(showcaseClient).toContain('requestIdleCallback(callback, { timeout })');
     expect(showcaseClient).not.toContain('hasDelayedFirstDeferredRevealRef');
     expect(showcaseClient).toContain('SHOWCASE_DEFERRED_REVEAL_FALLBACK_MS = 8_000');

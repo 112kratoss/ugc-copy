@@ -39,7 +39,6 @@ const CATEGORY_LINKS: Array<{ id: ShowcaseCategory; label: string }> = [
     { id: 'all', label: 'All posts' },
     { id: 'image', label: 'Images' },
     { id: 'video', label: 'Videos' },
-    { id: 'text', label: 'Tips' },
 ];
 
 const SORT_LINKS: Array<{ id: ShowcaseSort; label: string }> = [

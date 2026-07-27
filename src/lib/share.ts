@@ -1,6 +1,6 @@
 import { isAudioModel } from '@/lib/client-generation-models';
 
-const SHARE_SOURCE_SURFACES = [
+export const GENERATION_SHARE_SOURCE_SURFACES = [
   'create-image',
   'create-video',
   'create-motion',
@@ -8,7 +8,11 @@ const SHARE_SOURCE_SURFACES = [
   'creator-profile',
   'showcase',
   'detail-page',
+  'feed',
 ] as const;
+
+// Kept as a private alias so the rest of this module reads unchanged.
+const SHARE_SOURCE_SURFACES = GENERATION_SHARE_SOURCE_SURFACES;
 
 const SHARE_CHANNELS = ['native-share', 'copy-link'] as const;
 

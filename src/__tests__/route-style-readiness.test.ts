@@ -11,7 +11,7 @@ const PROJECT_ROOT = process.cwd();
 const SRC_ROOT = path.join(PROJECT_ROOT, 'src');
 const APP_ROOT = path.join(SRC_ROOT, 'app');
 const SUPPLEMENT_IMPORT = "import '@/app/non-public-utilities.css';";
-const PUBLIC_ROUTE_DIRECTORIES = new Set(['marketplace', 'showcase']);
+const PUBLIC_ROUTE_DIRECTORIES = new Set(['feed', 'marketplace', 'showcase']);
 const SOURCE_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
 const DYNAMIC_UTILITY_STRING = /['"`](?:[^'"`]*\s)?(?:from|via|to|bg|text|border|ring|shadow)-(?:\[[^\]]+\]|[a-z]+-\d{2,3})(?:\s+[^'"`]*)?['"`]/;
 
@@ -125,6 +125,7 @@ describe('route utility stylesheet readiness', () => {
     expect(supplementalCss).toContain('@source "../lib/models.ts";');
     expect(supplementalCss).not.toContain('@source "./showcase";');
     expect(supplementalCss).not.toContain('@source "./marketplace";');
+    expect(supplementalCss).not.toContain('@source "./feed";');
 
     for (const publicDirectory of PUBLIC_ROUTE_DIRECTORIES) {
       expect(readFileSync(path.join(APP_ROOT, publicDirectory, 'layout.tsx'), 'utf8'))

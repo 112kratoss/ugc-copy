@@ -39,6 +39,7 @@ import { env } from '@/lib/env';
 import {
   HOME_FEED_CHIPS,
   buildHomeFeedCards,
+  getHomeFeedCardOpenTarget,
   getHomeFeedSlides,
   type HomeFeedCard,
   type HomeFeedChipId,
@@ -126,6 +127,9 @@ export function HomeDashboard() {
   const [activeVideoIds, setActiveVideoIds] = useState<string[]>([]);
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsItem, setCommentsItem] = useState<ShowcaseFeedItem | null>(null);
+  // Held by the list, not the card: FlashList recycles card views, and local
+  // expansion state would follow a recycled view onto an unrelated post.
+  const [expandedBodyIds, setExpandedBodyIds] = useState<string[]>([]);
   const visibleActiveVideoIds = isFocused ? activeVideoIds : [];
 
   const activeChip = HOME_FEED_CHIPS.find((chip) => chip.id === activeChipId) ?? HOME_FEED_CHIPS[0];
@@ -348,6 +352,25 @@ export function HomeDashboard() {
     }) as never);
   };
 
+  /**
+   * The immersive viewer is a full-screen media pager, so a post with no media
+   * opens its discussion instead of an empty slide.
+   */
+  const openCard = (card: HomeFeedCard) => {
+    if (getHomeFeedCardOpenTarget(card) === 'comments') {
+      recordFeedEvent(card.item, 'open');
+      setCommentsItem(card.item);
+      return;
+    }
+    openPost(card.item);
+  };
+
+  const toggleBodyExpanded = (postId: string) => {
+    setExpandedBodyIds((current) => (current.includes(postId)
+      ? current.filter((id) => id !== postId)
+      : [...current, postId]));
+  };
+
   const openCreator = (item: ShowcaseFeedItem) => {
     const username = item.creator.username?.trim();
     if (!username) return;
@@ -530,7 +553,9 @@ export function HomeDashboard() {
         card={card}
         contentWidth={contentWidth}
         showActiveVideo={visibleActiveVideoIds.includes(card.id)}
-        onOpen={() => openPost(card.item)}
+        bodyExpanded={expandedBodyIds.includes(card.id)}
+        onOpen={() => openCard(card)}
+        onToggleBody={() => toggleBodyExpanded(card.id)}
         onFeedbackOpen={() => setFeedbackItem(card.item)}
         onCreatorOpen={() => openCreator(card.item)}
         onSave={() => toggleSave({ postId: card.id, isSaved: card.isSaved, saveCount: card.item.saveCount })}
@@ -539,7 +564,7 @@ export function HomeDashboard() {
         onShare={() => void shareItem(card.item)}
       />
     </View>
-  ), [contentWidth, horizontalPadding, visibleActiveVideoIds, toggleSave]);
+  ), [contentWidth, expandedBodyIds, horizontalPadding, visibleActiveVideoIds, toggleSave]);
 
   return (
     <View style={{ flex: 1, backgroundColor: DASHBOARD_COLORS.background, paddingTop: topInset }}>
@@ -630,6 +655,7 @@ export function HomeDashboard() {
         <CommentsSheet
           postId={commentsItem.id}
           postCreatorId={commentsItem.creator.id}
+          postTitle={commentsItem.title}
           commentCount={commentsItem.commentCount}
           onClose={() => setCommentsItem(null)}
           visible

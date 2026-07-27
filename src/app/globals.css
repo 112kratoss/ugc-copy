@@ -7,6 +7,7 @@
 @source "./layout.tsx";
 @source "./showcase";
 @source "./marketplace";
+@source "./feed";
 /* Public route import closure. Keep this list explicit so private editor and
    account utilities stay in the route-only supplemental stylesheet. */
 @source "./components/AppShell.tsx";
@@ -27,6 +28,8 @@
 @source "./components/HoverVideo.tsx";
 @source "./components/JsonLd.tsx";
 @source "./components/OptimizedPreviewImage.tsx";
+@source "./components/PostCommentAvatar.tsx";
+@source "./components/PostComments.tsx";
 @source "./components/PublicShareButton.tsx";
 @source "./components/RouteAuthBoundary.tsx";
 @source "./components/SkeletonLoader.tsx";

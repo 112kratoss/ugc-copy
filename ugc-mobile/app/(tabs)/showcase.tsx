@@ -2,7 +2,7 @@ import { FlashList, type ListRenderItem, type ViewToken } from '@shopify/flash-l
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
-import { FileText, ImageIcon, MoreVertical, Play, RefreshCw, X } from 'lucide-react-native';
+import { ImageIcon, MoreVertical, Play, RefreshCw, X } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -24,7 +24,7 @@ import { WorkspaceSideMenuGestureLayer } from '@/components/workspace-side-menu-
 import { useAuth } from '@/lib/auth';
 import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
-import { isShowcaseVideoPreviewCandidate, isTextOnlyShowcasePost, selectActiveShowcaseVideoIds } from '@/lib/showcase-display';
+import { isShowcaseVideoPreviewCandidate, selectActiveShowcaseVideoIds } from '@/lib/showcase-display';
 import {
   SHOWCASE_FEED_STALE_TIME_MS,
   createShowcaseFeedQueryKey,
@@ -231,14 +231,14 @@ export default function ShowcaseScreen() {
   };
   const showcaseItems = useMemo(() => {
     const flattened = flattenShowcaseFeedPages(showcaseQuery.data?.pages);
-    const visible = user ? flattened : filterAnonymousSessionShowcaseFeedItems(flattened);
-    // Showcase is the media grid; text-only posts live on the home feed, which
-    // renders every format. Ranked pages still include them, so they are dropped
-    // here until the feed API can exclude them server-side.
-    return visible.filter((item) => !isTextOnlyShowcasePost(item));
+    // `buildShowcaseMasonry` drops text-only posts; this list stays unfiltered so
+    // empty-state and pagination decisions still see everything the feed ranked.
+    return user ? flattened : filterAnonymousSessionShowcaseFeedItems(flattened);
   }, [showcaseQuery.data?.pages, user]);
   const cards = useMemo(() => buildShowcaseMasonry(showcaseItems), [showcaseItems]);
-  const hasItems = showcaseItems.length > 0;
+  // Keyed off the rendered cards, not the ranked items: a page that is entirely
+  // text posts renders nothing, and that has to read as empty, not as loaded.
+  const hasItems = cards.length > 0;
   const isFirstLoad = showcaseQuery.isLoading && !hasItems;
   const isRefreshing = showcaseQuery.isRefetching && !showcaseQuery.isFetchingNextPage;
 
@@ -246,12 +246,7 @@ export default function ShowcaseScreen() {
     if (typeof Image.loadAsync !== 'function') return;
 
     for (const card of cards) {
-      if (
-        card.previewKind !== 'media'
-        || card.aspectRatio
-        || !card.previewUrl
-        || resolvedAspectRatios[card.id]
-      ) {
+      if (card.aspectRatio || !card.previewUrl || resolvedAspectRatios[card.id]) {
         continue;
       }
       const requestKey = `${card.id}:${card.previewUrl}`;
@@ -535,7 +530,7 @@ export default function ShowcaseScreen() {
         data={isFirstLoad ? [] : cards}
         drawDistance={SHOWCASE_DRAW_DISTANCE}
         extraData={{ visibleActiveVideoIds, resolvedAspectRatios }}
-        getItemType={(item) => item.previewKind === 'text' ? 'text' : item.mediaKind ?? item.item.category}
+        getItemType={(item) => item.mediaKind ?? item.item.category}
         keyExtractor={(item) => item.id}
         masonry
         numColumns={2}
@@ -855,20 +850,11 @@ function MasonryPin({
           borderRadius: layout.mediaRadius,
           borderCurve: 'continuous',
           overflow: 'hidden',
-          backgroundColor: card.previewKind === 'text' ? 'transparent' : '#050506',
+          backgroundColor: '#050506',
           opacity: pressed ? 0.92 : 1,
         })}
       >
-        {card.previewKind === 'text' ? (
-          <TextPinPreview
-            accent={accent}
-            badge={card.badge}
-            height={mediaHeight}
-            prompt={card.prompt}
-            radius={layout.mediaRadius}
-            title={card.title}
-          />
-        ) : hasShowcasePreviewMedia(card.item) ? (
+        {hasShowcasePreviewMedia(card.item) ? (
           <ShowcaseMediaPreview
             item={card.item}
             height={mediaHeight}
@@ -889,10 +875,8 @@ function MasonryPin({
             <VisualFallbackPreview accent={accent} height={mediaHeight} radius={layout.mediaRadius} />
           )
         )}
-        {card.previewKind === 'media' && signal ? (
-          <PinBadge label={signal.label} accent={accentColor(signal.accent)} />
-        ) : null}
-        {card.previewKind === 'media' && isVideoCard ? <VideoCornerPlay /> : null}
+        {signal ? <PinBadge label={signal.label} accent={accentColor(signal.accent)} /> : null}
+        {isVideoCard ? <VideoCornerPlay /> : null}
       </Pressable>
 
       <View style={{ minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 2 }}>
@@ -965,68 +949,6 @@ function PinBadge({ label, accent }: { label: string; accent: string }) {
       <Text numberOfLines={1} style={{ color: accent, ...appTheme.type.caption, lineHeight: 12, fontWeight: '800' }}>
         {label}
       </Text>
-    </View>
-  );
-}
-
-function TextPinPreview({
-  accent,
-  badge,
-  height,
-  prompt,
-  radius,
-  title,
-}: {
-  accent: string;
-  badge: string;
-  height: number;
-  prompt: string;
-  radius: number;
-  title: string;
-}) {
-  return (
-    <View
-      style={{
-        height,
-        borderRadius: radius,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: appTheme.colors.borderSubtle,
-        backgroundColor: appTheme.colors.panelSoft,
-        overflow: 'hidden',
-        padding: 13,
-      }}
-    >
-      <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, backgroundColor: accent }} />
-      <View style={{ flex: 1, justifyContent: 'space-between', gap: 10 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
-          <View
-            style={{
-              width: 26,
-              height: 26,
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: 13,
-              backgroundColor: `${accent}22`,
-              borderWidth: 1,
-              borderColor: `${accent}55`,
-            }}
-          >
-            <FileText size={14} color={accent} strokeWidth={2.4} />
-          </View>
-          <Text numberOfLines={1} style={{ color: accent, flex: 1, fontSize: 10, letterSpacing: 0.4, textTransform: 'uppercase', fontWeight: '800' }}>
-            {badge}
-          </Text>
-        </View>
-        <View style={{ gap: 7 }}>
-          <Text numberOfLines={2} style={{ color: appTheme.colors.text, fontSize: 15, lineHeight: 18, fontWeight: '800' }}>
-            {title}
-          </Text>
-          <Text numberOfLines={5} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, lineHeight: 17, fontWeight: '700' }}>
-            {prompt}
-          </Text>
-        </View>
-      </View>
     </View>
   );
 }
