@@ -25,6 +25,11 @@ export interface VisualMediaDescriptor {
   id: string;
   kind: 'image' | 'video';
   url: string;
+  /**
+   * Small faststart copy for autoplaying surfaces. Null when the backend has
+   * not produced one, so callers must fall back to `url`.
+   */
+  renditionUrl?: string | null;
   previewUrl: string | null;
   thumbhash: string | null;
   cacheKey: string;
@@ -628,6 +633,7 @@ export interface ShowcaseMediaItem {
   id: string;
   mediaKey?: string;
   url: string;
+  renditionUrl?: string | null;
   previewUrl?: string | null;
   previewThumbhash?: string | null;
   previewStatus?: MediaPreviewStatus;

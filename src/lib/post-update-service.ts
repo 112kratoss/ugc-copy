@@ -28,6 +28,7 @@ import {
   type PostMediaPersistInput,
 } from '@/lib/post-media';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
+import { createPostMediaRendition, type PostMediaRenditionStatus } from '@/lib/post-media-rendition';
 import { defaultPostMediaKey, normalizePostMediaKey } from '@/lib/post-media-key';
 import { isCreatorProfileCheckError } from '@/lib/marketplace-trust';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
@@ -88,6 +89,12 @@ type ExistingPostMediaRow = {
   preview_attempt_count?: number;
   preview_error?: string | null;
   preview_generated_at?: string | null;
+  rendition_storage_path?: string | null;
+  rendition_status?: PostMediaRenditionStatus;
+  rendition_attempt_count?: number;
+  rendition_error?: string | null;
+  rendition_generated_at?: string | null;
+  rendition_bytes?: number | null;
   external_url: string | null;
   media_kind: 'image' | 'video';
   content_type: string | null;
@@ -129,6 +136,7 @@ export type PostUpdateDependencies = {
   replacePostSourceTools?: typeof replacePostSourceTools;
   replacePostMediaItems?: typeof replacePostMediaItems;
   createPostMediaPreview?: typeof createPostMediaPreview;
+  createPostMediaRendition?: typeof createPostMediaRendition;
   listSourceToolsCatalog?: typeof listSourceToolsCatalog;
 };
 
@@ -177,6 +185,7 @@ function resolveDependencies(dependencies: PostUpdateDependencies | undefined): 
     replacePostSourceTools: dependencies?.replacePostSourceTools ?? replacePostSourceTools,
     replacePostMediaItems: dependencies?.replacePostMediaItems ?? replacePostMediaItems,
     createPostMediaPreview: dependencies?.createPostMediaPreview ?? createPostMediaPreview,
+    createPostMediaRendition: dependencies?.createPostMediaRendition ?? createPostMediaRendition,
     listSourceToolsCatalog: dependencies?.listSourceToolsCatalog ?? listSourceToolsCatalog,
   };
 }
@@ -347,38 +356,40 @@ async function loadOwnedPostMedia(
   adminSupabase: SupabaseClient,
   postId: string,
 ): Promise<ExistingPostMediaRow[]> {
-  const previewResult = await adminSupabase
+  const BASE_COLUMNS = 'id, storage_path, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order';
+  const PREVIEW_COLUMNS = 'preview_storage_path, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at';
+  const RENDITION_COLUMNS = 'rendition_storage_path, rendition_status, rendition_attempt_count, rendition_error, rendition_generated_at, rendition_bytes';
+
+  const selectOwnedMedia = (columns: string) => adminSupabase
     .from('post_media')
-    .select('id, media_key, storage_path, preview_storage_path, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
+    .select(columns)
     .eq('post_id', postId)
     .order('sort_order', { ascending: true });
+
+  const isMissingColumn = (candidate: typeof previewResult.error, pattern: RegExp) => Boolean(
+    candidate
+    && (candidate.code === '42703' || candidate.code === 'PGRST204')
+    && pattern.test(candidate.message),
+  );
+
+  const previewResult = await selectOwnedMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}`);
   let data = previewResult.data as ExistingPostMediaRow[] | null;
   let error = previewResult.error;
 
-  if (
-    error
-    && (error.code === '42703' || error.code === 'PGRST204')
-    && /media_key/.test(error.message)
-  ) {
-    const keylessPreviewResult = await adminSupabase
-      .from('post_media')
-      .select('id, storage_path, preview_storage_path, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
-      .eq('post_id', postId)
-      .order('sort_order', { ascending: true });
+  if (isMissingColumn(error, /rendition_(storage_path|status|attempt_count|error|generated_at|bytes)/)) {
+    const withoutRendition = await selectOwnedMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}`);
+    data = withoutRendition.data as ExistingPostMediaRow[] | null;
+    error = withoutRendition.error;
+  }
+
+  if (isMissingColumn(error, /media_key/)) {
+    const keylessPreviewResult = await selectOwnedMedia(`${BASE_COLUMNS}, ${PREVIEW_COLUMNS}`);
     data = keylessPreviewResult.data as ExistingPostMediaRow[] | null;
     error = keylessPreviewResult.error;
   }
 
-  if (
-    error
-    && (error.code === '42703' || error.code === 'PGRST204')
-    && /preview_(storage_path|thumbhash|status|attempt_count|error|generated_at)/.test(error.message)
-  ) {
-    const legacyResult = await adminSupabase
-      .from('post_media')
-      .select('id, storage_path, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order')
-      .eq('post_id', postId)
-      .order('sort_order', { ascending: true });
+  if (isMissingColumn(error, /preview_(storage_path|thumbhash|status|attempt_count|error|generated_at)/)) {
+    const legacyResult = await selectOwnedMedia(BASE_COLUMNS);
     data = legacyResult.data as ExistingPostMediaRow[] | null;
     error = legacyResult.error;
   }
@@ -503,6 +514,7 @@ async function replaceEditedPostMedia(params: {
   postId: string;
   submittedMediaItems: SubmittedEditMediaItem[];
   createPostMediaPreview: typeof createPostMediaPreview;
+  createPostMediaRendition: typeof createPostMediaRendition;
   replacePostMediaItems: typeof replacePostMediaItems;
 }): Promise<PostUpdateRouteResult | null> {
   const existingMediaRows = await loadOwnedPostMedia(params.adminSupabase, params.postId);
@@ -522,6 +534,16 @@ async function replaceEditedPostMedia(params: {
           previewAttemptCount: item.row.preview_attempt_count ?? 0,
           previewError: item.row.preview_error ?? null,
           previewGeneratedAt: item.row.preview_generated_at ?? null,
+          // replace_post_media deletes and re-inserts, so an untouched item has
+          // to carry its rendition across or every edit would discard it and
+          // force a needless re-encode.
+          renditionStoragePath: item.row.rendition_storage_path ?? null,
+          renditionStatus: item.row.rendition_status
+            ?? (item.row.media_kind === 'video' ? 'pending' : 'skipped'),
+          renditionAttemptCount: item.row.rendition_attempt_count ?? 0,
+          renditionError: item.row.rendition_error ?? null,
+          renditionGeneratedAt: item.row.rendition_generated_at ?? null,
+          renditionBytes: item.row.rendition_bytes ?? null,
           externalUrl: item.row.external_url,
           mediaKind: item.row.media_kind,
           contentType: item.row.content_type,
@@ -571,6 +593,23 @@ async function replaceEditedPostMedia(params: {
         logBackendWarning('failed_to_create_edited_post_media_preview', { error: previewError });
       }
 
+      let rendition: Awaited<ReturnType<typeof createPostMediaRendition>> | null = null;
+      let renditionFailed = false;
+      try {
+        rendition = await params.createPostMediaRendition({
+          body: downloadedMedia.data,
+          contentType: item.contentType || downloadedMedia.data.type,
+          storagePath,
+          supabase: params.adminSupabase,
+        });
+        if (rendition.status === 'ready') {
+          newStoragePaths.push(rendition.renditionStoragePath);
+        }
+      } catch (renditionError) {
+        renditionFailed = true;
+        logBackendWarning('failed_to_create_edited_post_media_rendition', { error: renditionError });
+      }
+
       persistedMediaItems.push({
         mediaKey: item.mediaKey,
         storagePath,
@@ -580,12 +619,25 @@ async function replaceEditedPostMedia(params: {
         previewAttemptCount: 1,
         previewError: preview ? null : 'Preview generation failed.',
         previewGeneratedAt: preview ? new Date().toISOString() : null,
+        renditionStoragePath: rendition?.status === 'ready' ? rendition.renditionStoragePath : null,
+        renditionStatus: rendition?.status === 'ready'
+          ? 'ready'
+          : rendition?.status === 'skipped'
+            ? 'skipped'
+            : renditionFailed
+              ? 'failed'
+              : item.mediaKind === 'video' ? 'pending' : 'skipped',
+        renditionAttemptCount: item.mediaKind === 'video' ? 1 : 0,
+        renditionError: renditionFailed ? 'Rendition generation failed.' : null,
+        renditionGeneratedAt: rendition?.status === 'ready' ? new Date().toISOString() : null,
+        renditionBytes: rendition?.status === 'ready' ? rendition.renditionBytes : null,
         externalUrl: null,
         mediaKind: item.mediaKind,
         contentType: item.contentType,
         originalName: item.originalName,
-        width: preview?.width ?? null,
-        height: preview?.height ?? null,
+        width: preview?.width ?? (rendition?.status === 'ready' ? rendition.width : null),
+        height: preview?.height ?? (rendition?.status === 'ready' ? rendition.height : null),
+        durationSeconds: rendition?.status === 'ready' ? rendition.durationSeconds : null,
         sortOrder: index,
       });
     }
@@ -915,6 +967,7 @@ export async function updateOwnerPostForRoute({
         postId,
         submittedMediaItems,
         createPostMediaPreview: resolvedDependencies.createPostMediaPreview,
+        createPostMediaRendition: resolvedDependencies.createPostMediaRendition,
         replacePostMediaItems: resolvedDependencies.replacePostMediaItems,
       });
       if (mediaError) {

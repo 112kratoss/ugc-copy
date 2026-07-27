@@ -20,14 +20,48 @@ vi.mock('@/lib/generation-output-preview', () => ({
   createGenerationOutputPreview: vi.fn(),
 }));
 
-function createSelectChain(result: unknown) {
+const renditionMocks = vi.hoisted(() => ({
+  createPostMediaRendition: vi.fn(async () => ({
+    status: 'ready' as const,
+    renditionStoragePath: 'posts/user/clip.feed.abc123.mp4',
+    renditionBytes: 2_031_616,
+    width: 610,
+    height: 1280,
+    durationSeconds: 11.4,
+  })),
+}));
+
+vi.mock('@/lib/post-media-rendition', () => ({
+  createPostMediaRendition: renditionMocks.createPostMediaRendition,
+}));
+
+/**
+ * Applies `.eq()` filters for real. The preview and rendition sweeps both query
+ * post_media and are separated only by their filters, so a chain that ignored
+ * them would hand the same rows to both passes.
+ */
+function createSelectChain(result: { data: unknown[] | null; error: Error | null }) {
+  const equalities: Array<[string, unknown]> = [];
   const chain = {
-    eq: vi.fn(() => chain),
+    eq: vi.fn((column: string, value: unknown) => {
+      equalities.push([column, value]);
+      return chain;
+    }),
     in: vi.fn(() => chain),
     lt: vi.fn(() => chain),
     not: vi.fn(() => chain),
     order: vi.fn(() => chain),
-    limit: vi.fn(async () => result),
+    limit: vi.fn(async () => {
+      if (!result.data) return result;
+      // Filter only on columns a fixture actually models. Fixtures list just
+      // the columns their case cares about, and treating an absent one as a
+      // mismatch would drop rows the real query would have returned.
+      const data = result.data.filter((row) => equalities.every(
+        ([column, value]) => !(column in (row as Record<string, unknown>))
+          || (row as Record<string, unknown>)[column] === value,
+      ));
+      return { ...result, data };
+    }),
   };
   return chain;
 }
@@ -61,6 +95,15 @@ describe('media preview repair retries', () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     previewMocks.createPostMediaPreview.mockClear();
+    renditionMocks.createPostMediaRendition.mockClear();
+    renditionMocks.createPostMediaRendition.mockResolvedValue({
+      status: 'ready' as const,
+      renditionStoragePath: 'posts/user/clip.feed.abc123.mp4',
+      renditionBytes: 2_031_616,
+      width: 610,
+      height: 1280,
+      durationSeconds: 11.4,
+    });
   });
 
   it('retries pending work at most three times', () => {
@@ -217,5 +260,154 @@ describe('media preview repair retries', () => {
     })).resolves.toEqual({ attempted: 0, completed: 0, failed: 0 });
 
     expect(invalidateFeedCache).not.toHaveBeenCalled();
+  });
+});
+
+describe('showcase feed rendition repair', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    renditionMocks.createPostMediaRendition.mockClear();
+  });
+
+  function createRenditionClient(rows: Array<Record<string, unknown>>) {
+    const updates: Array<{ table: string; payload: Record<string, unknown> }> = [];
+    const download = vi.fn(async () => ({
+      data: new Blob(['video'], { type: 'video/mp4' }),
+      error: null,
+    }));
+    const storageFrom = vi.fn(() => ({ download }));
+    const supabase = {
+      from: vi.fn((table: string) => ({
+        select: vi.fn(() => createSelectChain({
+          data: table === 'post_media' ? rows : [],
+          error: null,
+        })),
+        update: vi.fn((payload: Record<string, unknown>) => {
+          updates.push({ table, payload });
+          return { eq: vi.fn(async () => ({ error: null })) };
+        }),
+      })),
+      storage: { from: storageFrom },
+    };
+    return { supabase, updates, download, storageFrom };
+  }
+
+  const pendingVideoRow = {
+    id: 'media-video-1',
+    storage_path: 'posts/user/clip.mp4',
+    media_kind: 'video',
+    content_type: 'video/mp4',
+    preview_status: 'ready',
+    preview_attempt_count: 1,
+    rendition_status: 'pending',
+    rendition_attempt_count: 0,
+  };
+
+  it('transcodes a pending video and records the rendition', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    const { supabase, updates, download, storageFrom } = createRenditionClient([pendingVideoRow]);
+
+    const summary = await repairPostMediaRenditions(supabase as never);
+
+    expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
+    expect(storageFrom).toHaveBeenCalledWith('showcase_media');
+    expect(download).toHaveBeenCalledWith('posts/user/clip.mp4');
+    expect(updates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        table: 'post_media',
+        payload: expect.objectContaining({
+          rendition_status: 'ready',
+          rendition_storage_path: 'posts/user/clip.feed.abc123.mp4',
+          rendition_bytes: 2_031_616,
+          // Publish never captured these; the transcode is where we learn them.
+          duration_seconds: 11.4,
+          width: 610,
+          height: 1280,
+        }),
+      }),
+    ]));
+  });
+
+  it('records a skipped rendition terminally so it is not retried', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    renditionMocks.createPostMediaRendition.mockResolvedValue({
+      status: 'skipped',
+      reason: 'not-smaller',
+    } as never);
+    const { supabase, updates } = createRenditionClient([pendingVideoRow]);
+
+    const summary = await repairPostMediaRenditions(supabase as never);
+
+    // Counted as completed: declining is the correct terminal answer here.
+    expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
+    expect(updates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        table: 'post_media',
+        payload: expect.objectContaining({ rendition_status: 'skipped' }),
+      }),
+    ]));
+    expect(updates.some((update) => update.payload.rendition_status === 'ready')).toBe(false);
+  });
+
+  it('marks the row failed when the transcode throws', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    renditionMocks.createPostMediaRendition.mockRejectedValue(new Error('ffmpeg exited with code 1'));
+    const { supabase, updates } = createRenditionClient([pendingVideoRow]);
+
+    const summary = await repairPostMediaRenditions(supabase as never);
+
+    expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+    expect(updates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        table: 'post_media',
+        payload: expect.objectContaining({
+          rendition_status: 'failed',
+          rendition_attempt_count: 1,
+          rendition_error: 'ffmpeg exited with code 1',
+        }),
+      }),
+    ]));
+  });
+
+  it('leaves image rows alone', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    const { supabase } = createRenditionClient([{
+      ...pendingVideoRow,
+      id: 'media-image-1',
+      media_kind: 'image',
+      content_type: 'image/png',
+    }]);
+
+    await expect(repairPostMediaRenditions(supabase as never))
+      .resolves.toEqual({ attempted: 0, completed: 0, failed: 0 });
+    expect(renditionMocks.createPostMediaRendition).not.toHaveBeenCalled();
+  });
+
+  it('degrades to a no-op when the rendition columns are absent', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    const supabase = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => createSelectChain({
+          data: null,
+          error: Object.assign(new Error('column post_media.rendition_status does not exist'), {
+            code: '42703',
+          }),
+        })),
+      })),
+      storage: { from: vi.fn() },
+    };
+
+    await expect(repairPostMediaRenditions(supabase as never))
+      .resolves.toEqual({ attempted: 0, completed: 0, failed: 0 });
+    expect(renditionMocks.createPostMediaRendition).not.toHaveBeenCalled();
+  });
+
+  it('stops retrying once the attempt ceiling is reached', async () => {
+    const { canRepairRendition, MAX_RENDITION_ATTEMPTS } = await import('@/lib/media-preview-repair');
+
+    expect(MAX_RENDITION_ATTEMPTS).toBe(3);
+    expect(canRepairRendition(null)).toBe(true);
+    expect(canRepairRendition(2)).toBe(true);
+    expect(canRepairRendition(3)).toBe(false);
   });
 });

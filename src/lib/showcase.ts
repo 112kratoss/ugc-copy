@@ -69,6 +69,11 @@ export interface ShowcaseMediaItem {
     /** Stable across edits/reordering; legacy clients may omit it during rollout. */
     mediaKey?: string;
     url: string;
+    /**
+     * Small faststart copy for autoplaying feed surfaces. Absent until the
+     * rendition pipeline has produced one, so clients must fall back to `url`.
+     */
+    renditionUrl?: string | null;
     previewUrl?: string | null;
     previewThumbhash?: string | null;
     previewStatus?: 'pending' | 'processing' | 'ready' | 'failed';

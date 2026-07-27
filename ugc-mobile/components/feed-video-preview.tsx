@@ -8,6 +8,7 @@ import { appTheme } from '@/lib/theme';
 
 export function FeedVideoPreview({
   url,
+  renditionUrl,
   previewUrl,
   previewCacheKey,
   previewThumbhash,
@@ -19,6 +20,12 @@ export function FeedVideoPreview({
   videoContentFit = 'contain',
 }: {
   url: string;
+  /**
+   * Small faststart copy to stream instead of `url` while scrolling. The source
+   * is typically an order of magnitude larger, and at this size and mute level
+   * the difference is invisible. Falls back to `url` when absent.
+   */
+  renditionUrl?: string | null;
   previewUrl?: string | null;
   previewCacheKey?: string;
   previewThumbhash?: string | null;
@@ -87,7 +94,7 @@ export function FeedVideoPreview({
 
   return (
     <ActiveFeedVideoPreview
-      url={url}
+      url={renditionUrl || url}
       previewUrl={usablePreviewUrl}
       previewCacheKey={previewCacheKey}
       previewThumbhash={previewThumbhash}

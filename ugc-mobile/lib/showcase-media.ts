@@ -31,6 +31,25 @@ export function getShowcaseMediaPreviewUrl(item: ShowcaseMediaItem) {
   return item.preview?.previewUrl ?? item.previewUrl ?? null;
 }
 
+/**
+ * The small feed copy, or null when the backend has not produced one. Callers
+ * that need a guaranteed URL should use getShowcaseFeedPlaybackUrl.
+ */
+export function getShowcaseMediaRenditionUrl(item: ShowcaseMediaItem): string | null {
+  return item.preview?.renditionUrl ?? item.renditionUrl ?? null;
+}
+
+/**
+ * What an autoplaying feed row should stream. Prefers the small rendition and
+ * falls back to the source, so posts published before the rendition pipeline —
+ * and ones that legitimately skipped it — still play.
+ *
+ * Only for muted, scroll-by playback. The full viewer must keep using `url`.
+ */
+export function getShowcaseFeedPlaybackUrl(item: ShowcaseMediaItem): string {
+  return getShowcaseMediaRenditionUrl(item) ?? item.url;
+}
+
 export function hasShowcaseVideoWithoutPreview(item: ShowcaseFeedItem) {
   return getShowcasePreviewMediaItems(item).some((mediaItem) =>
     mediaItem.mediaKind === 'video' && !getShowcaseMediaPreviewUrl(mediaItem)
