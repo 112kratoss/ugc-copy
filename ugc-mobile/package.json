@@ -6,7 +6,8 @@
   "expo": {
     "install": {
       "exclude": [
-        "react-native"
+        "react-native",
+        "@shopify/flash-list"
       ]
     }
   },
@@ -23,9 +24,9 @@
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
-    "@react-navigation/bottom-tabs": "^7.4.0",
-    "@react-navigation/native": "^7.1.8",
-    "@shopify/flash-list": "2.0.2",
+    "@react-navigation/bottom-tabs": "^7.15.5",
+    "@react-navigation/native": "^7.1.33",
+    "@shopify/flash-list": "2.3.2",
     "@supabase/supabase-js": "2.105.4",
     "@tanstack/react-query": "5.100.10",
     "expo": "^55.0.0",
