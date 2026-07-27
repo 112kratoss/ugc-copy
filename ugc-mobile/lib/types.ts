@@ -211,6 +211,16 @@ export interface GenerationListItem {
   archived_at?: string | null;
 }
 
+export interface GenerationListResponse {
+  generations: GenerationListItem[];
+  // Optional: contract fixtures and older callers omit it.
+  pagination?: {
+    limit: number;
+    hasMore: boolean;
+    nextCursor: string | null;
+  };
+}
+
 export interface GenerationStartResponse {
   success: boolean;
   predictionId: string;

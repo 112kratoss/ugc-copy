@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query';
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import type { ImagePickerAsset } from 'expo-image-picker';
@@ -27,6 +27,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText, ChoiceChip, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
 import { StableMediaImage } from '@/components/media-preview';
 import { useAuth } from '@/lib/auth';
+import { truncateInfiniteDataToFirstPage } from '@/lib/profile-media-query';
 import { pickMediaList, pickResourceDocument, uploadPickedMedia } from '@/lib/media';
 import {
   clearPersistedPostComposerDraft,
@@ -65,7 +66,7 @@ import {
   POST_COMPOSER_UNLOCK_OPTIONS,
   validatePostComposerDraft,
   hasGenerationReferences,
-  upsertOptimisticOwnerPostResponse,
+  upsertOptimisticOwnerPostInfiniteData,
   type PostComposerDraft,
   type PostComposerDetailErrors,
   type PostComposerDetailField,
@@ -1764,9 +1765,9 @@ export default function NewPostScreen() {
       if (!isEditMode) {
         const optimisticPost = buildOptimisticOwnerPostListItem(targetPostId, context?.submittedDraft ?? draft);
         if (optimisticPost) {
-          queryClient.setQueryData<OwnerPostsResponse>(
+          queryClient.setQueryData<InfiniteData<OwnerPostsResponse>>(
             ['profile-owner-posts', user?.id],
-            (current) => upsertOptimisticOwnerPostResponse(current, optimisticPost)
+            (current) => upsertOptimisticOwnerPostInfiniteData(current, optimisticPost)
           );
         }
       }
@@ -4333,6 +4334,11 @@ function deriveResourceSelections(bundle: any): PostComposerDraft['resource']['s
 }
 
 async function invalidatePostCaches(queryClient: QueryClient, userId: string | undefined) {
+  // Collapse the paginated profile caches first — invalidating them while several pages are
+  // loaded would refetch every one of those pages.
+  queryClient.setQueryData(['profile-generations', userId], truncateInfiniteDataToFirstPage);
+  queryClient.setQueryData(['profile-owner-posts', userId], truncateInfiniteDataToFirstPage);
+
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ['post-new-generations', userId] }),
     queryClient.invalidateQueries({ queryKey: ['profile-generations', userId] }),

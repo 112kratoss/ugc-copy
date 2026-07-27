@@ -195,13 +195,30 @@ describe('ViewerActionSheet permanent delete', () => {
       ['profile-owner-posts', 'user-123'],
       expect.any(Function)
     );
-    const profileCacheCall = queryClientState.setQueryData.mock.calls.find(([queryKey]) =>
-      Array.isArray(queryKey) && queryKey[0] === 'profile-owner-posts'
+    // The profile grid pages its posts, so its updater works over InfiniteData.
+    type OwnerPostPages = { pages: Array<{ success: boolean; posts: Array<{ id: string }> }>; pageParams: number[] };
+    const pagedUpdaters = queryClientState.setQueryData.mock.calls
+      .filter(([queryKey]) => Array.isArray(queryKey) && queryKey[0] === 'profile-owner-posts')
+      .map(([, updater]) => updater as (current: OwnerPostPages) => OwnerPostPages);
+    const pagedResults = pagedUpdaters.map((updater) => updater({
+      pages: [
+        { success: true, posts: [{ id: 'post-123' }, { id: 'keep-post' }] },
+        { success: true, posts: [{ id: 'later-page-post' }] },
+      ],
+      pageParams: [0, 24],
+    }));
+    expect(pagedResults.some((result) => (
+      result.pages[0].posts.every((post) => post.id !== 'post-123')
+    ))).toBe(true);
+
+    // The sales summary is not paginated and keeps the flat updater.
+    const summaryCall = queryClientState.setQueryData.mock.calls.find(([queryKey]) =>
+      Array.isArray(queryKey) && queryKey[0] === 'owner-posts-sales-summary'
     );
-    const updateProfilePosts = profileCacheCall?.[1] as
+    const updateSummary = summaryCall?.[1] as
       | ((current: { success: boolean; posts: Array<{ id: string }> }) => { posts: Array<{ id: string }> })
       | undefined;
-    expect(updateProfilePosts?.({
+    expect(updateSummary?.({
       success: true,
       posts: [{ id: 'post-123' }, { id: 'keep-post' }],
     }).posts).toEqual([{ id: 'keep-post' }]);

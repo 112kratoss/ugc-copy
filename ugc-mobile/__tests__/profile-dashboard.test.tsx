@@ -143,6 +143,19 @@ const queryState = vi.hoisted(() => ({
   generations: [] as Array<Record<string, unknown>>,
   ownerPosts: [] as Array<Record<string, unknown>>,
   savedItems: [] as Array<Record<string, unknown>>,
+  // Set to override the default single-page wrapping of the arrays above.
+  generationPages: null as Array<Record<string, unknown>> | null,
+  ownerPostPages: null as Array<Record<string, unknown>> | null,
+  savedPages: null as Array<Record<string, unknown>> | null,
+  generationsPageParam: undefined as unknown,
+  ownerPostsPageParam: undefined as unknown,
+  savedMediaPageParam: undefined as unknown,
+  generationsHasNextPage: false,
+  ownerPostsHasNextPage: false,
+  savedMediaHasNextPage: false,
+  generationsIsFetchingNextPage: false,
+  ownerPostsIsFetchingNextPage: false,
+  savedMediaIsFetchingNextPage: false,
   generationsIsFetched: false,
   generationsIsFetching: false,
   generationsIsStale: false,
@@ -155,6 +168,10 @@ const queryState = vi.hoisted(() => ({
   refetchGenerations: vi.fn(),
   refetchOwnerPosts: vi.fn(),
   refetchSavedMedia: vi.fn(),
+  fetchNextGenerations: vi.fn(() => Promise.resolve()),
+  fetchNextOwnerPosts: vi.fn(() => Promise.resolve()),
+  fetchNextSavedMedia: vi.fn(() => Promise.resolve()),
+  setQueryData: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -163,7 +180,7 @@ vi.mock('@/lib/auth', () => ({
 
 // react-query mock
 vi.mock('@tanstack/react-query', () => ({
-  useQuery: ({ enabled = true, queryKey, queryFn }: { enabled?: boolean; queryKey: string[]; queryFn?: () => unknown }) => {
+  useQuery: ({ queryKey }: { queryKey: string[] }) => {
     if (queryKey[0] === 'profile') {
       return {
         data: queryState.profileData,
@@ -171,12 +188,31 @@ vi.mock('@tanstack/react-query', () => ({
         isLoading: false,
       };
     }
+    return { data: null, isLoading: false };
+  },
+  useQueryClient: () => ({ setQueryData: queryState.setQueryData }),
+  useInfiniteQuery: ({ enabled = true, queryKey, queryFn, initialPageParam }: {
+    enabled?: boolean;
+    queryKey: string[];
+    queryFn?: (context: { pageParam: unknown }) => unknown;
+    initialPageParam?: unknown;
+  }) => {
     if (queryKey[0] === 'profile-generations') {
-      if (enabled) queryFn?.();
+      if (enabled) {
+        queryFn?.({
+          pageParam: queryState.generationsPageParam === undefined
+            ? initialPageParam
+            : queryState.generationsPageParam,
+        });
+      }
       return {
         data: {
-          generations: queryState.generations,
+          pages: queryState.generationPages ?? [{ generations: queryState.generations }],
+          pageParams: [initialPageParam],
         },
+        fetchNextPage: queryState.fetchNextGenerations,
+        hasNextPage: queryState.generationsHasNextPage,
+        isFetchingNextPage: queryState.generationsIsFetchingNextPage,
         isFetched: queryState.generationsIsFetched,
         isFetching: queryState.generationsIsFetching,
         isLoading: false,
@@ -185,11 +221,21 @@ vi.mock('@tanstack/react-query', () => ({
       };
     }
     if (queryKey[0] === 'profile-owner-posts') {
-      if (enabled) queryFn?.();
+      if (enabled) {
+        queryFn?.({
+          pageParam: queryState.ownerPostsPageParam === undefined
+            ? initialPageParam
+            : queryState.ownerPostsPageParam,
+        });
+      }
       return {
         data: {
-          posts: queryState.ownerPosts,
+          pages: queryState.ownerPostPages ?? [{ posts: queryState.ownerPosts }],
+          pageParams: [initialPageParam],
         },
+        fetchNextPage: queryState.fetchNextOwnerPosts,
+        hasNextPage: queryState.ownerPostsHasNextPage,
+        isFetchingNextPage: queryState.ownerPostsIsFetchingNextPage,
         isFetched: queryState.ownerPostsIsFetched,
         isFetching: queryState.ownerPostsIsFetching,
         isLoading: false,
@@ -198,10 +244,21 @@ vi.mock('@tanstack/react-query', () => ({
       };
     }
     if (queryKey[0] === 'profile-saved-media') {
+      if (enabled) {
+        queryFn?.({
+          pageParam: queryState.savedMediaPageParam === undefined
+            ? initialPageParam
+            : queryState.savedMediaPageParam,
+        });
+      }
       return {
         data: {
-          items: queryState.savedItems,
+          pages: queryState.savedPages ?? [{ items: queryState.savedItems }],
+          pageParams: [initialPageParam],
         },
+        fetchNextPage: queryState.fetchNextSavedMedia,
+        hasNextPage: queryState.savedMediaHasNextPage,
+        isFetchingNextPage: queryState.savedMediaIsFetchingNextPage,
         isFetched: queryState.savedMediaIsFetched,
         isFetching: queryState.savedMediaIsFetching,
         isLoading: false,
@@ -209,7 +266,7 @@ vi.mock('@tanstack/react-query', () => ({
         refetch: queryState.refetchSavedMedia,
       };
     }
-    return { data: null, isLoading: false };
+    return { data: undefined, isLoading: false };
   },
 }));
 
@@ -300,6 +357,23 @@ describe('ProfileDashboard media tiles routing', () => {
     queryState.refetchGenerations.mockClear();
     queryState.refetchOwnerPosts.mockClear();
     queryState.refetchSavedMedia.mockClear();
+    queryState.generationPages = null;
+    queryState.ownerPostPages = null;
+    queryState.savedPages = null;
+    queryState.generationsPageParam = undefined;
+    queryState.ownerPostsPageParam = undefined;
+    queryState.savedMediaPageParam = undefined;
+    queryState.generationsHasNextPage = false;
+    queryState.ownerPostsHasNextPage = false;
+    queryState.savedMediaHasNextPage = false;
+    queryState.generationsIsFetchingNextPage = false;
+    queryState.ownerPostsIsFetchingNextPage = false;
+    queryState.savedMediaIsFetchingNextPage = false;
+    queryState.fetchNextGenerations.mockClear();
+    queryState.fetchNextOwnerPosts.mockClear();
+    queryState.fetchNextSavedMedia.mockClear();
+    queryState.setQueryData.mockClear();
+    authState.api.getSavedMedia.mockClear();
   });
 
   it('routes to /viewer with correct source and initialId for Saved tiles', () => {
@@ -421,8 +495,169 @@ describe('ProfileDashboard media tiles routing', () => {
       includeArchived: false,
       includeSummary: true,
       limit: 24,
+      offset: 0,
       visibility: 'all',
     });
+  });
+
+  it('renders every grid-ready creation instead of capping the grid', () => {
+    queryState.generations = Array.from({ length: 20 }, (_, index) => ({
+      id: `gen-${index}`,
+      status: 'succeeded',
+      output_url: 'gen.mp4',
+      preview_url: 'gen-poster.webp',
+      previewUrl: 'gen-poster.webp',
+      category: 'video',
+      title: 'Cre',
+      prompt: 'Prompt',
+    }));
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+    });
+
+    const list = tree!.root.find((node) => String(node.type) === 'flash-list');
+    expect(list.props.data).toHaveLength(20);
+  });
+
+  it('pages each tab with the cursor or offset the previous page reported', () => {
+    queryState.generationsPageParam = '24';
+    queryState.ownerPostsPageParam = 24;
+    queryState.savedMediaPageParam = 24;
+    // Lets the two background tabs turn on so all three queryFns run.
+    queryState.generationsIsFetched = true;
+
+    renderer.act(() => {
+      renderer.create(<ProfileDashboard initialTab="Creations" />);
+    });
+
+    expect(authState.api.listGenerations).toHaveBeenCalledWith(false, { cursor: '24', limit: 24 });
+    expect(authState.api.listOwnerPosts).toHaveBeenCalledWith({
+      includeArchived: false,
+      includeSummary: false,
+      limit: 24,
+      offset: 24,
+      visibility: 'all',
+    });
+    expect(authState.api.getSavedMedia).toHaveBeenCalledWith({ limit: 24, offset: 24 });
+  });
+
+  it('asks for the next page when the grid reaches its end', () => {
+    queryState.generationsHasNextPage = true;
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+    });
+
+    const list = tree!.root.find((node) => String(node.type) === 'flash-list');
+    expect(list.props.onEndReachedThreshold).toBe(0.32);
+
+    renderer.act(() => {
+      list.props.onEndReached();
+    });
+
+    expect(queryState.fetchNextGenerations).toHaveBeenCalledTimes(1);
+  });
+
+  it('collapses repeated end-of-grid events into a single page request', () => {
+    queryState.generationsHasNextPage = true;
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+    });
+
+    const list = tree!.root.find((node) => String(node.type) === 'flash-list');
+    renderer.act(() => {
+      list.props.onEndReached();
+      list.props.onEndReached();
+      list.props.onEndReached();
+    });
+
+    expect(queryState.fetchNextGenerations).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps paging after a page that adds no grid-ready tiles', async () => {
+    // The server filters rows after cutting the page, so a page can arrive with nothing
+    // renderable. Paging must not latch shut when the tile count fails to move — guarding on
+    // item count instead of page count would deadlock here.
+    const startedAt = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
+
+    try {
+      queryState.generationsHasNextPage = true;
+      queryState.generationPages = [{ generations: [] }];
+
+      let tree: renderer.ReactTestRenderer | undefined;
+      // Async act so the in-flight guard's promise settles before the next attempt.
+      await renderer.act(async () => {
+        tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+      });
+
+      const callsAfterMount = queryState.fetchNextGenerations.mock.calls.length;
+      expect(callsAfterMount).toBeGreaterThan(0);
+
+      // A second page landed and still produced zero tiles.
+      queryState.generationPages = [{ generations: [] }, { generations: [] }];
+      nowSpy.mockReturnValue(startedAt + 5000);
+      await renderer.act(async () => {
+        tree!.update(<ProfileDashboard initialTab="Creations" />);
+      });
+
+      const list = tree!.root.find((node) => String(node.type) === 'flash-list');
+      await renderer.act(async () => {
+        list.props.onEndReached();
+      });
+
+      expect(queryState.fetchNextGenerations.mock.calls.length).toBeGreaterThan(callsAfterMount);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('shows a footer loader only while another page is in flight', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+    });
+    expect(tree!.root.find((node) => String(node.type) === 'flash-list').props.ListFooterComponent).toBeNull();
+
+    queryState.generationsIsFetchingNextPage = true;
+    renderer.act(() => {
+      tree!.update(<ProfileDashboard initialTab="Creations" />);
+    });
+    expect(tree!.root.find((node) => String(node.type) === 'flash-list').props.ListFooterComponent).not.toBeNull();
+  });
+
+  it('marks a hero stat as partial while more pages remain', () => {
+    queryState.savedMediaHasNextPage = true;
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard />);
+    });
+
+    expect(tree!.root.findAllByProps({ children: '1+' }).length).toBeGreaterThan(0);
+  });
+
+  it('collapses a tab back to one page before refreshing it', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard />);
+    });
+
+    const refresh = tree!.root.findByProps({ accessibilityLabel: 'Refresh media' });
+    renderer.act(() => {
+      refresh.props.onPress();
+    });
+
+    expect(queryState.setQueryData).toHaveBeenCalledWith(
+      ['profile-saved-media', 'user-123'],
+      expect.any(Function)
+    );
+    expect(queryState.refetchSavedMedia).toHaveBeenCalled();
   });
 
   it('does not refetch fresh Profile media just because the tab is focused', () => {

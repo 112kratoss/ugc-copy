@@ -546,6 +546,24 @@ describe('mobile api client caching', () => {
     ]);
   });
 
+  it('forwards a page cursor when asking for more generations', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      generations: [],
+      pagination: { limit: 24, hasMore: false, nextCursor: null },
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    const response = await api.listGenerations(false, { cursor: '24', limit: 24 });
+
+    const [url] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/generations?detail=summary&includeArchived=false&limit=24&cursor=24');
+    expect(response.pagination).toEqual({ limit: 24, hasMore: false, nextCursor: null });
+  });
+
   it('preserves template attribution while masking private recipe metadata', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       generations: [{

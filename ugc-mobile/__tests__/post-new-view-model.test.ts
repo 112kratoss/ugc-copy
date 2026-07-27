@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCreatePostFormData,
   buildOptimisticOwnerPostListItem,
+  upsertOptimisticOwnerPostInfiniteData,
   buildPostComposerMediaItemsPayload,
   buildPostResourceBundleInput,
   buildPublishGenerationPayload,
@@ -1166,5 +1167,39 @@ describe('post new view model', () => {
       const publishable = getPublishableGenerations(items);
       expect(publishable.map((p) => p.id)).toEqual(['succeeded-unposted']);
     });
+  });
+});
+
+describe('optimistic owner post cache updates', () => {
+  const post = { id: 'post-new' } as never;
+
+  it('seeds a first page when nothing is cached yet', () => {
+    const result = upsertOptimisticOwnerPostInfiniteData(undefined, post);
+
+    expect(result.pages).toHaveLength(1);
+    expect(result.pages[0].posts.map((item) => item.id)).toEqual(['post-new']);
+    expect(result.pageParams).toEqual([0]);
+  });
+
+  it('prepends the new post to the first page', () => {
+    const result = upsertOptimisticOwnerPostInfiniteData({
+      pages: [{ success: true, posts: [{ id: 'existing' }] } as never],
+      pageParams: [0],
+    }, post);
+
+    expect(result.pages[0].posts.map((item) => item.id)).toEqual(['post-new', 'existing']);
+  });
+
+  it('does not leave a duplicate behind when the post already sits on a later page', () => {
+    const result = upsertOptimisticOwnerPostInfiniteData({
+      pages: [
+        { success: true, posts: [{ id: 'a' }] } as never,
+        { success: true, posts: [{ id: 'post-new' }, { id: 'b' }] } as never,
+      ],
+      pageParams: [0, 24],
+    }, post);
+
+    expect(result.pages[0].posts.map((item) => item.id)).toEqual(['post-new', 'a']);
+    expect(result.pages[1].posts.map((item) => item.id)).toEqual(['b']);
   });
 });

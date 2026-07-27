@@ -1,10 +1,11 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { Alert, Linking, Modal, Pressable, ScrollView, View } from 'react-native';
 
 import { AppText } from '@/components/ui';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
+import { truncateInfiniteDataToFirstPage } from '@/lib/profile-media-query';
 import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
 import { immersiveViewerHref, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
@@ -57,6 +58,11 @@ export function ViewerActionSheet({
   ];
 
   const refreshMedia = async () => {
+    // Collapse the paginated profile caches so invalidation refetches one page, not all of them.
+    queryClient.setQueryData(['profile-saved-media', user?.id], truncateInfiniteDataToFirstPage);
+    queryClient.setQueryData(['profile-generations', user?.id], truncateInfiniteDataToFirstPage);
+    queryClient.setQueryData(['profile-owner-posts', user?.id], truncateInfiniteDataToFirstPage);
+
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
       queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
@@ -72,12 +78,20 @@ export function ViewerActionSheet({
   const removeDeletedPostFromCaches = (postId: string) => {
     const removeFromOwnerPosts = (data: OwnerPostsResponse | undefined): OwnerPostsResponse | undefined =>
       data ? { ...data, posts: data.posts.filter((post) => post.id !== postId) } : data;
+    // The profile grid pages its posts; the sales summary is still a single response.
+    const removeFromOwnerPostPages = (
+      data: InfiniteData<OwnerPostsResponse> | undefined
+    ): InfiniteData<OwnerPostsResponse> | undefined => (
+      data
+        ? { ...data, pages: data.pages.map((page) => removeFromOwnerPosts(page) ?? page) }
+        : data
+    );
     const removeFromSource = (data: ImmersiveSourceData | undefined): ImmersiveSourceData | undefined =>
       data?.ownerPosts
         ? { ...data, ownerPosts: data.ownerPosts.filter((post) => post.id !== postId) }
         : data;
 
-    queryClient.setQueryData<OwnerPostsResponse>(['profile-owner-posts', user?.id], removeFromOwnerPosts);
+    queryClient.setQueryData<InfiniteData<OwnerPostsResponse>>(['profile-owner-posts', user?.id], removeFromOwnerPostPages);
     queryClient.setQueryData<OwnerPostsResponse>(['owner-posts-sales-summary', user?.id], removeFromOwnerPosts);
     queryClient.setQueriesData<ImmersiveSourceData>({ queryKey: ['immersive-preview-source'] }, removeFromSource);
   };

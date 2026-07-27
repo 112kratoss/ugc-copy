@@ -1,3 +1,5 @@
+import type { InfiniteData } from '@tanstack/react-query';
+
 import type {
   GenerationListItem,
   OwnerPostListItem,
@@ -934,6 +936,32 @@ export function upsertOptimisticOwnerPostResponse(
       post,
       ...(current?.posts ?? []).filter((item) => item.id !== post.id),
     ],
+  };
+}
+
+/**
+ * Paginated sibling of the above. The post is prepended to the first page, and filtered out of
+ * every page so an edit to an already-loaded post cannot leave a duplicate grid key behind.
+ */
+export function upsertOptimisticOwnerPostInfiniteData(
+  current: InfiniteData<OwnerPostsResponse> | undefined,
+  post: OwnerPostListItem
+): InfiniteData<OwnerPostsResponse> {
+  if (!current?.pages.length) {
+    return {
+      pages: [{ success: true, posts: [post] }],
+      pageParams: [0],
+    };
+  }
+
+  return {
+    ...current,
+    pages: current.pages.map((page, index) => ({
+      ...page,
+      posts: index === 0
+        ? [post, ...page.posts.filter((item) => item.id !== post.id)]
+        : page.posts.filter((item) => item.id !== post.id),
+    })),
   };
 }
 

@@ -126,19 +126,34 @@ export function getProfileInitials(profile: ProfileResponse | null | undefined, 
   return words.slice(0, 2).map((word) => word[0]?.toUpperCase()).join('') || 'C';
 }
 
+/**
+ * Counts reflect what has been paged in so far, so a tab with more pages waiting reads as `24+`
+ * rather than claiming a total the server never gave us.
+ */
+function profileStatValue(count: number, hasMore?: boolean) {
+  const value = formatCompactCount(count);
+  return hasMore ? `${value}+` : value;
+}
+
 export function getProfileStats({
   generationsCount,
+  generationsHasMore,
   postsCount,
+  postsHasMore,
   savedCount,
+  savedHasMore,
 }: {
   generationsCount: number;
+  generationsHasMore?: boolean;
   postsCount: number;
+  postsHasMore?: boolean;
   savedCount: number;
+  savedHasMore?: boolean;
 }): ProfileStat[] {
   return [
-    { label: 'Creations', value: formatCompactCount(generationsCount) },
-    { label: 'Posts', value: formatCompactCount(postsCount) },
-    { label: 'Saved', value: formatCompactCount(savedCount) },
+    { label: 'Creations', value: profileStatValue(generationsCount, generationsHasMore) },
+    { label: 'Posts', value: profileStatValue(postsCount, postsHasMore) },
+    { label: 'Saved', value: profileStatValue(savedCount, savedHasMore) },
   ];
 }
 

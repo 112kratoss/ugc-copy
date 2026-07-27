@@ -3,6 +3,7 @@ import type {
   CreatePostResponse,
   CreatorProfileResponse,
   GenerationListItem,
+  GenerationListResponse,
   GenerationStartResponse,
   GenerationStatusResponse,
   ImageGenerationRequest,
@@ -158,6 +159,7 @@ export interface SaveShowcasePostOptions {
 }
 
 export interface GenerationListOptions {
+  cursor?: string | null;
   id?: string;
   limit?: number;
 }
@@ -539,11 +541,12 @@ export function createApiClient({
         body: JSON.stringify(body),
       }),
     listGenerations: async (includeArchived = true, options: GenerationListOptions = {}) => {
-      const response = await request<{ generations: GenerationListItem[] }>(`/api/generations${buildQuery({
+      const response = await request<GenerationListResponse>(`/api/generations${buildQuery({
         detail: 'summary',
         includeArchived,
         id: options.id,
         limit: options.limit,
+        cursor: options.cursor,
       })}`);
       return {
         ...response,
