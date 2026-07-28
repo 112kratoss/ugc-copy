@@ -3,7 +3,7 @@ import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@
 import { useIsFocused } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import {
   Bell,
   Crown,
@@ -108,6 +108,13 @@ const TOOL_PREVIEW_IMAGES = {
 const LOAD_MORE_COOLDOWN_MS = 800;
 
 export function HomeDashboard() {
+  const {
+    comments: requestedComments,
+    replyTo: requestedReplyTo,
+  } = useLocalSearchParams<{
+    comments?: string | string[];
+    replyTo?: string | string[];
+  }>();
   const { user, api, credits, signOut } = useAuth();
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
@@ -128,6 +135,7 @@ export function HomeDashboard() {
   const [activeVideoIds, setActiveVideoIds] = useState<string[]>([]);
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsItem, setCommentsItem] = useState<ShowcaseFeedItem | null>(null);
+  const [commentsReplyToId, setCommentsReplyToId] = useState<string | null>(null);
   // Held by the list, not the card: FlashList recycles card views, and local
   // expansion state would follow a recycled view onto an unrelated post.
   const [expandedBodyIds, setExpandedBodyIds] = useState<string[]>([]);
@@ -175,6 +183,7 @@ export function HomeDashboard() {
   const lastLoadMoreAtRef = useRef(0);
   const lastLoadMoreItemCountRef = useRef(0);
   const qualifiedImpressionsRef = useRef(new Set<string>());
+  const restoringCommentContextRef = useRef<string | null>(null);
   const feedEventRuntimeRef = useRef({
     api,
     isFocused,
@@ -277,6 +286,33 @@ export function HomeDashboard() {
     const flattened = flattenShowcaseFeedPages(feedQuery.data?.pages);
     return user ? flattened : filterAnonymousSessionShowcaseFeedItems(flattened);
   }, [feedQuery.data?.pages, user]);
+  const requestedCommentsPostId = (
+    Array.isArray(requestedComments) ? requestedComments[0] : requestedComments
+  )?.trim() || null;
+  const requestedReplyToId = (
+    Array.isArray(requestedReplyTo) ? requestedReplyTo[0] : requestedReplyTo
+  )?.trim() || null;
+
+  useEffect(() => {
+    if (!requestedCommentsPostId) return;
+    const restoreKey = `${requestedCommentsPostId}:${requestedReplyToId ?? ''}`;
+    if (restoringCommentContextRef.current === restoreKey) return;
+    restoringCommentContextRef.current = restoreKey;
+
+    void (async () => {
+      const cached = feedItems.find((item) => item.id === requestedCommentsPostId);
+      const target = cached
+        ?? (await api.getShowcasePost(requestedCommentsPostId).catch(() => null))?.item
+        ?? null;
+      if (!target) {
+        restoringCommentContextRef.current = null;
+        return;
+      }
+      setCommentsReplyToId(requestedReplyToId);
+      setCommentsItem(target);
+      router.setParams({ comments: undefined, replyTo: undefined } as never);
+    })();
+  }, [api, feedItems, requestedCommentsPostId, requestedReplyToId]);
 
   const cards = useMemo(() => buildHomeFeedCards(feedItems), [feedItems]);
   const hasItems = cards.length > 0;
@@ -360,6 +396,7 @@ export function HomeDashboard() {
   const openCard = (card: HomeFeedCard) => {
     if (getHomeFeedCardOpenTarget(card) === 'comments') {
       recordFeedEvent(card.item, 'open');
+      setCommentsReplyToId(null);
       setCommentsItem(card.item);
       return;
     }
@@ -560,7 +597,10 @@ export function HomeDashboard() {
         onFeedbackOpen={() => setFeedbackItem(card.item)}
         onCreatorOpen={() => openCreator(card.item)}
         onSave={() => toggleSave({ postId: card.id, isSaved: card.isSaved, saveCount: card.item.saveCount })}
-        onComments={() => setCommentsItem(card.item)}
+        onComments={() => {
+          setCommentsReplyToId(null);
+          setCommentsItem(card.item);
+        }}
         onRemix={() => void remixItem(card.item)}
         onShare={() => void shareItem(card.item)}
       />
@@ -667,11 +707,17 @@ export function HomeDashboard() {
 
       {commentsItem ? (
         <CommentsSheet
+          key={commentsItem.id}
+          authReturnTo="/(tabs)/index"
           postId={commentsItem.id}
           postCreatorId={commentsItem.creator.id}
           postTitle={commentsItem.title}
           commentCount={commentsItem.commentCount}
-          onClose={() => setCommentsItem(null)}
+          initialReplyToId={commentsReplyToId}
+          onClose={() => {
+            setCommentsReplyToId(null);
+            setCommentsItem(null);
+          }}
           visible
         />
       ) : null}

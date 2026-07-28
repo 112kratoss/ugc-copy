@@ -5,6 +5,8 @@ import {
   DELETED_COMMENT_LABEL,
   applyCommentCountToInfiniteFeed,
   applyCommentCountToPostResponse,
+  applyCommentCountToSourceData,
+  appendReplyToPages,
   buildCommentThreads,
   canDeleteComment,
   canRemoveComment,
@@ -12,12 +14,16 @@ import {
   createPostCommentRepliesQueryKey,
   createPostCommentsQueryKey,
   flattenCommentPages,
+  getCommentAuthReturnTo,
   getCommentDisplay,
   getCommentsPageParams,
   getNextCommentsPageOffset,
   incrementParentReplyCountInPages,
+  keepFirstCommentPage,
   markCommentRemovedInPages,
+  mergeRepliesWithPending,
   prependCommentToPages,
+  suspendCommentPagination,
 } from '@/lib/comments-view-model';
 import type { PostComment, PostCommentsResponse, ShowcaseFeedResponse } from '@/lib/types';
 
@@ -79,6 +85,31 @@ describe('comments view model', () => {
       ]);
 
       expect(comments.map((item) => item.id)).toEqual(['comment-1', 'comment-2']);
+    });
+
+    it('restores the exact comment and reply context after authentication', () => {
+      expect(getCommentAuthReturnTo('/viewer?source=showcase-feed&initialId=post-1', 'post-1', 'comment-1'))
+        .toBe('/viewer?source=showcase-feed&initialId=post-1&comments=post-1&replyTo=comment-1');
+      expect(getCommentAuthReturnTo('https://unsafe.example', 'post-2'))
+        .toBe('/(tabs)/index?comments=post-2');
+    });
+
+    it('merges optimistic replies in chronological order without duplicates', () => {
+      const serverReply = comment({
+        id: 'reply-server',
+        parentId: 'comment-1',
+        createdAt: '2026-07-27T10:01:00.000Z',
+      });
+      const pendingReply = comment({
+        id: 'reply-pending',
+        parentId: 'comment-1',
+        createdAt: '2026-07-27T10:03:00.000Z',
+      });
+      const replies = mergeRepliesWithPending([
+        page({ comments: [serverReply] }),
+      ], [pendingReply, serverReply]);
+
+      expect(replies.map((item) => item.id)).toEqual(['reply-server', 'reply-pending']);
     });
   });
 
@@ -193,8 +224,43 @@ describe('comments view model', () => {
       const next = incrementParentReplyCountInPages(data, 'comment-1', -1);
       expect(next?.pages[0].comments[0].replyCount).toBe(0);
 
-      const up = incrementParentReplyCountInPages(data, 'comment-1', 1);
+      const up = incrementParentReplyCountInPages(data, 'comment-1', 1, 2);
       expect(up?.pages[0].comments[0].replyCount).toBe(1);
+      expect(up?.pages[0].commentCount).toBe(2);
+    });
+
+    it('inserts a successful reply once and refreshes cached counts', () => {
+      const reply = comment({ id: 'reply-1', parentId: 'comment-1' });
+      const next = appendReplyToPages(data, reply, 2);
+      const duplicate = appendReplyToPages(next, reply, 2);
+
+      expect(duplicate?.pages[0].comments.map((item) => item.id))
+        .toEqual(['comment-1', 'reply-1']);
+      expect(duplicate?.pages[0].commentCount).toBe(2);
+    });
+
+    it('drops stale offset pages after a mutation', () => {
+      const paged: InfiniteData<PostCommentsResponse> = {
+        pages: [
+          page(),
+          page({
+            comments: [comment({ id: 'comment-2' })],
+            pageInfo: { hasMore: true, nextOffset: 40, limit: 20, offset: 20 },
+          }),
+        ],
+        pageParams: [0, 20],
+      };
+
+      expect(keepFirstCommentPage(paged)).toEqual({
+        pages: [paged.pages[0]],
+        pageParams: [0],
+      });
+      const suspended = suspendCommentPagination(paged);
+      expect(suspended?.pages).toHaveLength(2);
+      expect(suspended?.pages[1].pageInfo).toMatchObject({
+        hasMore: false,
+        nextOffset: null,
+      });
     });
   });
 
@@ -232,6 +298,23 @@ describe('comments view model', () => {
       );
 
       expect(next?.item.commentCount).toBe(0);
+    });
+
+    it('updates owner-post source data without refetching the viewer feed', () => {
+      const next = applyCommentCountToSourceData({
+        ownerPosts: [{
+          id: 'post-1',
+          title: 'Owner post',
+          createdAt: '2026-07-27T10:00:00.000Z',
+          visibility: 'public',
+          mediaUrl: null,
+          mediaKind: null,
+          bundle: null,
+          commentCount: 1,
+        }],
+      }, { postId: 'post-1', commentCount: 5 });
+
+      expect(next?.ownerPosts?.[0].commentCount).toBe(5);
     });
   });
 });

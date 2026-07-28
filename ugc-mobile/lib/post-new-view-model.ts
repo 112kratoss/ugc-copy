@@ -905,6 +905,7 @@ export function buildOptimisticOwnerPostListItem(
     visibility: draft.visibility,
     mediaUrl: coverMedia?.url ?? null,
     mediaKind: isTextPost ? null : coverMedia?.mediaKind ?? inferMediaKindFromDraft(draft),
+    commentCount: 0,
     ...(mediaItems.length > 0 ? { mediaItems } : {}),
     description: trimOrUndefined(draft.description) ?? trimOrUndefined(draft.caption),
     prompt: isTextPost ? trimOrUndefined(draft.contentText) : undefined,

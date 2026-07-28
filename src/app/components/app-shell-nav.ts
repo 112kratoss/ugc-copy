@@ -31,9 +31,11 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     label: 'Home',
     shortLabel: 'Home',
     href: '/',
-    description: 'Dashboard and recent creative context',
+    description: 'Community feed and your creative workspace',
     icon: Home,
-    match: (pathname) => pathname === '/',
+    // `/home` is the middleware rewrite target for signed-in `/` — match it
+    // too in case a server-rendered pathname leaks through.
+    match: (pathname) => pathname === '/' || pathname === '/home',
   },
   {
     id: 'feed',

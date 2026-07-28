@@ -11,6 +11,12 @@ import {
   evaluateMobileClientCompatibility,
   isIdentifiedMobileClient,
 } from '@/lib/mobile-client-compatibility';
+import {
+  E2E_AUTH_COOKIE_NAME,
+  hasE2EAuthCookie,
+  isE2EAuthBypassEnabled,
+} from '@/lib/e2e-auth';
+import { hasSupabaseAuthCookie } from '@/lib/supabase-auth-cookie';
 import mobileApiOperationsV1 from '../contracts/mobile-api-operations-v1.json';
 
 /**
@@ -146,6 +152,52 @@ export function isRootAuthCodeRedirect(request: NextRequest) {
   return request.nextUrl.pathname === '/' && request.nextUrl.searchParams.has('code');
 }
 
+function hasSignedInHomeHint(request: NextRequest): boolean {
+  if (hasSupabaseAuthCookie(request.headers.get('cookie') ?? '')) {
+    return true;
+  }
+
+  return isE2EAuthBypassEnabled()
+    && hasE2EAuthCookie(request.cookies.get(E2E_AUTH_COOKIE_NAME)?.value);
+}
+
+/**
+ * Splits `/` between the statically prerendered marketing page (cookie-less
+ * traffic, SEO bots) and the signed-in dashboard served from `/home`.
+ *
+ * Cookie presence is only a routing hint, never authentication: the rewritten
+ * page re-verifies with getServerAuthState() and renders the marketing
+ * experience itself when the session turns out to be invalid — a redirect
+ * back to `/` would loop through this same rewrite.
+ *
+ * `/home` is an internal rewrite target only; direct hits bounce to `/` so it
+ * never becomes a second public URL for the same content.
+ */
+export function resolveRootHomeRouting(request: NextRequest): NextResponse | null {
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    return null;
+  }
+
+  const { pathname } = request.nextUrl;
+
+  if (pathname === '/home') {
+    const url = request.nextUrl.clone();
+    url.pathname = '/';
+    return NextResponse.redirect(url);
+  }
+
+  if (pathname !== '/' || !hasSignedInHomeHint(request)) {
+    return null;
+  }
+
+  const url = request.nextUrl.clone();
+  url.pathname = '/home';
+  const response = NextResponse.rewrite(url);
+  response.headers.set('Cache-Control', 'private, no-store');
+  response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+  return response;
+}
+
 export function isMobileCorsPath(pathname: string) {
   const pathnameParts = pathname.split('/').filter(Boolean);
   return mobileCorsRouteTemplates.some((template) => {
@@ -203,6 +255,11 @@ export function proxy(request: NextRequest): NextResponse | Promise<NextResponse
     });
   }
 
+  const homeRouting = resolveRootHomeRouting(request);
+  if (homeRouting) {
+    return homeRouting;
+  }
+
   if (!isMobilePath && !isIdentifiedMobileClient(request.headers)) {
     return NextResponse.next();
   }
@@ -222,5 +279,5 @@ export function proxy(request: NextRequest): NextResponse | Promise<NextResponse
 export const config = {
   // `/admin` is listed separately from `/admin/:path*` so the bare index route
   // is gated too, regardless of how the matcher expands optional segments.
-  matcher: ['/', '/api/:path*', '/admin', '/admin/:path*'],
+  matcher: ['/', '/home', '/api/:path*', '/admin', '/admin/:path*'],
 };

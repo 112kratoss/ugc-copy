@@ -153,9 +153,13 @@ export default function AppShellClient({ children }: { children: React.ReactNode
     getServerHydratedSnapshot
   );
   // The statically rendered root route can be evaluated with an internal Next
-  // pathname in production. Keep only that route neutral for the first client
-  // render so its markup matches the server shell, then activate Home.
-  const pathname = routePathname === '/' && !hasMounted ? '' : routePathname;
+  // pathname in production, and signed-in `/` is middleware-rewritten to
+  // `/home` (src/proxy.ts), so the server sees `/home` while the hydrated
+  // browser sees `/`. Keep both neutral for the first client render so the
+  // markup matches the server shell, then activate Home.
+  const pathname = (routePathname === '/' || routePathname === '/home') && !hasMounted
+    ? ''
+    : routePathname;
   const [mobileOpen, setMobileOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);

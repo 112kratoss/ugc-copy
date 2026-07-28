@@ -21,10 +21,12 @@ import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
 import { CommentsSheet } from '@/components/comments-sheet';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { useAuth } from '@/lib/auth';
+import { applyCommentCountToSourceData } from '@/lib/comments-view-model';
 import { env } from '@/lib/env';
 import {
   getImmersiveInitialIndex,
   hasImmersiveDetailsPage,
+  immersiveViewerReturnPath,
   selectActiveImmersiveVideoId,
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
@@ -75,10 +77,12 @@ import { canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDo
 
 type ViewerParams = {
   algorithmVersion?: string | string[];
+  comments?: string | string[];
   creatorUsername?: string | string[];
   feedSessionId?: string | string[];
   source?: string | string[];
   initialId?: string | string[];
+  replyTo?: string | string[];
 };
 
 type SaveMutationVariables = {
@@ -109,6 +113,8 @@ export default function ImmersivePreviewViewerScreen() {
   const creatorUsername = normalizeParam(params.creatorUsername) || null;
   const routeFeedSessionId = normalizeParam(params.feedSessionId) || null;
   const routeAlgorithmVersion = normalizeParam(params.algorithmVersion) || null;
+  const requestedCommentsPostId = normalizeParam(params.comments) || null;
+  const requestedReplyToId = normalizeParam(params.replyTo) || null;
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
@@ -123,10 +129,12 @@ export default function ImmersivePreviewViewerScreen() {
   const [detailsSheetOpenItemId, setDetailsSheetOpenItemId] = useState<string | null>(null);
   const [actionsOpenItemId, setActionsOpenItemId] = useState<string | null>(null);
   const [commentsOpenItemId, setCommentsOpenItemId] = useState<string | null>(null);
+  const [commentsReplyToId, setCommentsReplyToId] = useState<string | null>(null);
   const [unlockRemixOpenItemId, setUnlockRemixOpenItemId] = useState<string | null>(null);
   const [isHorizontalScrolling, setIsHorizontalScrolling] = useState(false);
   const qualifiedImpressionsRef = useRef(new Set<string>());
   const skipInitialRankedFeedRefreshRef = useRef(Boolean(routeFeedSessionId));
+  const restoredCommentContextRef = useRef<string | null>(null);
 
   const profileQuery = useQuery({
     queryKey: ['profile', user?.id],
@@ -165,6 +173,7 @@ export default function ImmersivePreviewViewerScreen() {
   const ownerInfo = useMemo(() => ({
     creatorLabel: user ? getProfileHandle(profileQuery.data, user.email) : '@creator',
     creatorAvatar: profileQuery.data?.avatarUrl ?? null,
+    creatorId: user?.id ?? null,
   }), [profileQuery.data, user]);
 
   const items = useMemo(() => {
@@ -238,6 +247,26 @@ export default function ImmersivePreviewViewerScreen() {
     });
     return () => cancelAnimationFrame(frame);
   }, [initialIndex, initialPositionReady, items.length]);
+
+  useEffect(() => {
+    if (!requestedCommentsPostId || !items.length) return;
+    const restoreKey = `${requestedCommentsPostId}:${requestedReplyToId ?? ''}`;
+    if (restoredCommentContextRef.current === restoreKey) return;
+    const targetIndex = items.findIndex(
+      (item) => item.showcasePostId === requestedCommentsPostId && item.canComment
+    );
+    if (targetIndex < 0) return;
+
+    const target = items[targetIndex];
+    restoredCommentContextRef.current = restoreKey;
+    setActiveIndex(targetIndex);
+    setCommentsReplyToId(requestedReplyToId);
+    setCommentsOpenItemId(target.id);
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToIndex({ index: targetIndex, animated: false });
+    });
+    router.setParams({ comments: undefined, replyTo: undefined } as never);
+  }, [items, requestedCommentsPostId, requestedReplyToId]);
 
   useEffect(() => {
     if (!initialPositionReady || !isFocused || source !== 'showcase-feed' || !activeItem?.showcasePostId) return;
@@ -545,7 +574,10 @@ export default function ImmersivePreviewViewerScreen() {
             height={height}
             item={item}
             onActionsOpen={() => setActionsOpenItemId(item.id)}
-            onComments={item.canComment ? () => setCommentsOpenItemId(item.id) : undefined}
+            onComments={item.canComment ? () => {
+              setCommentsReplyToId(null);
+              setCommentsOpenItemId(item.id);
+            } : undefined}
             onCreatorOpen={openCreatorProfile}
             onDetailsPageOpenChange={(open) => setDetailsPageOpenItemId(open ? item.id : null)}
             onHorizontalScrollToggle={setIsHorizontalScrolling}
@@ -604,6 +636,7 @@ export default function ImmersivePreviewViewerScreen() {
           onClose={() => setActionsOpenItemId(null)}
           onComments={activeItem.canComment ? () => {
             setActionsOpenItemId(null);
+            setCommentsReplyToId(null);
             setCommentsOpenItemId(activeItem.id);
           } : undefined}
           onDetails={() => {
@@ -639,11 +672,31 @@ export default function ImmersivePreviewViewerScreen() {
       ) : null}
       {activeItem?.canComment && activeItem.showcasePostId ? (
         <CommentsSheet
+          key={activeItem.showcasePostId}
+          authReturnTo={immersiveViewerReturnPath({
+            source,
+            initialId: activeItem.id,
+            feedSessionId,
+            algorithmVersion,
+            creatorUsername,
+          })}
           postId={activeItem.showcasePostId}
           postCreatorId={activeItem.creatorId ?? null}
           commentCount={activeItem.commentCount}
-          onClose={() => setCommentsOpenItemId(null)}
-          onCommentCountChange={() => void sourceQuery.refetch()}
+          initialReplyToId={commentsReplyToId}
+          onClose={() => {
+            setCommentsReplyToId(null);
+            setCommentsOpenItemId(null);
+          }}
+          onCommentCountChange={(commentCount) => {
+            queryClient.setQueryData<ImmersiveSourceData>(
+              sourceQueryKey,
+              (current) => applyCommentCountToSourceData(current, {
+                postId: activeItem.showcasePostId!,
+                commentCount,
+              })
+            );
+          }}
           visible={commentsOpenItemId === activeItem.id}
         />
       ) : null}
@@ -884,6 +937,9 @@ function ImmersiveSlide({
           />
           {onComments ? (
             <RailActionButton
+              accessibilityLabel={item.commentCount > 0
+                ? `${item.commentCount} ${item.commentCount === 1 ? 'comment' : 'comments'}`
+                : 'Comment'}
               icon={<MessageCircle size={27} color="#ffffff" strokeWidth={2.4} />}
               label={item.commentCount > 0 ? item.commentLabel : 'Comment'}
               onPress={onComments}
@@ -2002,6 +2058,7 @@ function ViewerCreatorAvatar({
 }
 
 function RailActionButton({
+  accessibilityLabel: providedAccessibilityLabel,
   disabled,
   externalPopTrigger,
   icon,
@@ -2013,6 +2070,7 @@ function RailActionButton({
   showDisabledAsActive,
   tapAnimationSpec,
 }: {
+  accessibilityLabel?: string;
   disabled?: boolean;
   externalPopTrigger?: number;
   icon: React.ReactNode;
@@ -2031,11 +2089,11 @@ function RailActionButton({
   const [activeTapAnimationSpec, setActiveTapAnimationSpec] = useState(tapAnimationSpec);
   const animationSpec = activeTapAnimationSpec ?? tapAnimationSpec;
   const displayLabel = label === '0' ? 'Save' : label;
-  const accessibilityLabel = tapAnimationSpec && label !== 'Saved'
+  const accessibilityLabel = providedAccessibilityLabel ?? (tapAnimationSpec && label !== 'Saved'
     ? label === '0'
       ? 'Save'
       : `Save, ${label} ${label === '1' ? 'save' : 'saves'}`
-    : displayLabel;
+    : displayLabel);
   const iconScale = tapProgress.interpolate({
     inputRange: [0, 0.32, 0.66, 1],
     outputRange: [

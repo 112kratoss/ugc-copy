@@ -28,6 +28,7 @@ const ownerPostFixture = {
   sourceTool: null,
   sourceToolSlug: null,
   sourceLabel: 'Uploaded',
+  commentCount: 0,
   createdAt: '2026-06-23T10:00:00.000Z',
   updatedAt: '2026-06-23T10:00:00.000Z',
   publicPath: null,

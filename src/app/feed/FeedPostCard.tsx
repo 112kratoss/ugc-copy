@@ -12,6 +12,13 @@ import { buildShowcaseDetailPath } from '@/lib/share';
 import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
 import type { PostFeedCard } from '@/lib/post-feed-presentation';
 
+export interface FeedDetailContext {
+    from: string;
+    returnTo: string;
+}
+
+const DEFAULT_DETAIL_CONTEXT: FeedDetailContext = { from: 'community', returnTo: '/feed' };
+
 interface FeedPostCardProps {
     card: PostFeedCard;
     isSaved: boolean;
@@ -19,6 +26,11 @@ interface FeedPostCardProps {
     expanded: boolean;
     commentsOpen: boolean;
     accessToken: string | null;
+    /**
+     * Where detail links say the viewer came from (and return to). Defaults to
+     * the /feed page; the embedded home-dashboard feed passes its own.
+     */
+    detailContext?: FeedDetailContext;
     onToggleExpanded: () => void;
     onToggleComments: () => void;
     onToggleSave: () => void;
@@ -39,6 +51,7 @@ function FeedPostCardView({
     expanded,
     commentsOpen,
     accessToken,
+    detailContext = DEFAULT_DETAIL_CONTEXT,
     onToggleExpanded,
     onToggleComments,
     onToggleSave,
@@ -55,7 +68,7 @@ function FeedPostCardView({
     const coverAspectRatio = cover?.width && cover?.height
         ? cover.width / cover.height
         : 'auto';
-    const detailHref = buildShowcaseDetailPath(item.id, { from: 'community', returnTo: '/feed' });
+    const detailHref = buildShowcaseDetailPath(item.id, detailContext);
 
     return (
         <article className="overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition hover:border-[var(--ui-border-default)]">
@@ -123,7 +136,7 @@ function FeedPostCardView({
 
             {item.asset ? (
                 <Link
-                    href={buildShowcaseDetailPath(item.id, { from: 'community', returnTo: '/feed', section: 'resources' })}
+                    href={buildShowcaseDetailPath(item.id, { ...detailContext, section: 'resources' })}
                     prefetch={false}
                     className="ui-focus-ring mx-4 mt-3 flex min-h-11 items-center gap-2 rounded-2xl border border-amber-300/20 bg-amber-400/[0.08] px-3 text-xs font-bold text-amber-100 transition hover:border-amber-300/35 sm:mx-5"
                 >
@@ -153,7 +166,7 @@ function FeedPostCardView({
                     <Link
                         href={detailHref}
                         prefetch={false}
-                        className="ui-focus-ring inline-flex min-h-10 items-center gap-2 rounded-full px-3 text-xs font-bold text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
+                        className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full px-3 text-xs font-bold text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
                     >
                         <Repeat2 className="h-4 w-4" aria-hidden="true" />
                         {card.remixLabel}
@@ -166,7 +179,7 @@ function FeedPostCardView({
                     sourceSurface="feed"
                     accessToken={accessToken}
                     iconOnly
-                    className="ui-focus-ring inline-flex h-10 w-10 items-center justify-center rounded-full text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
+                    className="ui-focus-ring inline-flex h-11 w-11 items-center justify-center rounded-full text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
                 />
             </div>
 
@@ -222,7 +235,7 @@ function PostBody({
             type="button"
             onClick={onToggle}
             aria-expanded={expanded}
-            className="ui-focus-ring self-start rounded-sm text-xs font-extrabold text-[var(--ui-primary)] hover:underline"
+            className="ui-focus-ring inline-flex min-h-11 items-center self-start rounded-full px-2 text-xs font-extrabold text-[var(--ui-primary)] hover:bg-[var(--ui-surface-2)]"
         >
             {expanded ? 'Show less' : 'Read more'}
         </button>
@@ -270,7 +283,7 @@ function ActionButton({
             disabled={disabled}
             aria-label={ariaLabel}
             aria-pressed={pressed}
-            className={`ui-focus-ring inline-flex min-h-10 items-center gap-2 rounded-full px-3 text-xs font-bold transition disabled:opacity-60 ${
+            className={`ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full px-3 text-xs font-bold transition disabled:opacity-60 ${
                 pressed
                     ? 'bg-[var(--ui-surface-3)] text-[var(--ui-text-primary)]'
                     : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]'

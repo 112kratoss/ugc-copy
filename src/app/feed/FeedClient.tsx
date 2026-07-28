@@ -6,15 +6,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useAuth } from '@/app/components/AuthProvider';
 import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
-import FeedPostCard from '@/app/feed/FeedPostCard';
+import FeedPostCard, { type FeedDetailContext } from '@/app/feed/FeedPostCard';
 import { FEED_CHIPS, FEED_PAGE_SIZE, getFeedChip, type FeedChipId } from '@/lib/post-feed-chips';
 import { buildPostFeedCards } from '@/lib/post-feed-presentation';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
 
+const PAGE_DETAIL_CONTEXT: FeedDetailContext = { from: 'community', returnTo: '/feed' };
+
 interface FeedClientProps {
     initialFeed: ShowcaseFeedPage;
     initialChipId: FeedChipId;
+    /**
+     * `page` (default) renders the standalone /feed page: own header, page
+     * gutters, Share CTA. `embedded` drops the header and gutters so the feed
+     * can sit inside another page's column (the home dashboard) while keeping
+     * the lane chips and infinite scroll.
+     */
+    variant?: 'page' | 'embedded';
+    detailContext?: FeedDetailContext;
 }
 
 function toggleInSet(current: Set<string>, id: string) {
@@ -23,9 +33,15 @@ function toggleInSet(current: Set<string>, id: string) {
     return next;
 }
 
-export default function FeedClient({ initialFeed, initialChipId }: FeedClientProps) {
+export default function FeedClient({
+    initialFeed,
+    initialChipId,
+    variant = 'page',
+    detailContext = PAGE_DETAIL_CONTEXT,
+}: FeedClientProps) {
     const { session, user } = useAuth();
     const accessToken = session?.access_token ?? null;
+    const isEmbedded = variant === 'embedded';
 
     const [chipId, setChipId] = useState<FeedChipId>(initialChipId);
     const [nextOffset, setNextOffset] = useState<number | null>(
@@ -36,7 +52,9 @@ export default function FeedClient({ initialFeed, initialChipId }: FeedClientPro
     const [loadError, setLoadError] = useState<string | null>(null);
     const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
     const [commentsOpenIds, setCommentsOpenIds] = useState<Set<string>>(() => new Set());
-    const loadingRef = useRef(false);
+    const requestIdRef = useRef(0);
+    const activeRequestRef = useRef<AbortController | null>(null);
+    const pendingLoadMoreKeyRef = useRef<string | null>(null);
     const sentinelRef = useRef<HTMLDivElement | null>(null);
 
     const {
@@ -64,8 +82,15 @@ export default function FeedClient({ initialFeed, initialChipId }: FeedClientPro
     const cards = useMemo(() => buildPostFeedCards(items), [items]);
 
     const fetchPage = useCallback(async (targetChipId: FeedChipId, offset: number, replace: boolean) => {
-        if (loadingRef.current) return;
-        loadingRef.current = true;
+        const requestKey = `${targetChipId}:${offset}`;
+        if (!replace && pendingLoadMoreKeyRef.current === requestKey) return;
+
+        const requestId = ++requestIdRef.current;
+        activeRequestRef.current?.abort();
+        const controller = new AbortController();
+        activeRequestRef.current = controller;
+
+        if (!replace) pendingLoadMoreKeyRef.current = requestKey;
         if (replace) setSwitching(true); else setLoadingMore(true);
         setLoadError(null);
 
@@ -80,11 +105,16 @@ export default function FeedClient({ initialFeed, initialChipId }: FeedClientPro
 
             const response = await fetch(
                 `/api/showcase/feed?${params.toString()}`,
-                accessToken ? { headers: { Authorization: `Bearer ${accessToken}` } } : undefined
+                {
+                    ...(accessToken ? { headers: { Authorization: `Bearer ${accessToken}` } } : {}),
+                    signal: controller.signal,
+                }
             );
             if (!response.ok) throw new Error(`Feed request failed with ${response.status}`);
 
             const page = await response.json() as ShowcaseFeedPage;
+            if (requestId !== requestIdRef.current) return;
+
             setItems((current) => (replace
                 ? page.items
                 // The ranker can repeat an item across pages; the id guard keeps
@@ -92,14 +122,33 @@ export default function FeedClient({ initialFeed, initialChipId }: FeedClientPro
                 : [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))]));
             setNextOffset(page.pageInfo.hasMore ? page.pageInfo.nextOffset : null);
         } catch (error) {
+            if (error instanceof Error && error.name === 'AbortError') return;
+            if (requestId !== requestIdRef.current) return;
+
             console.error('Failed to load feed page:', error);
-            setLoadError('Could not load more posts. Scroll up — what you have is still here.');
+            if (replace) {
+                setItems([]);
+                setNextOffset(null);
+                setLoadError('Could not load this lane.');
+            } else {
+                setLoadError('Could not load more posts. What you already loaded is still here.');
+            }
         } finally {
-            loadingRef.current = false;
-            setLoadingMore(false);
-            setSwitching(false);
+            if (pendingLoadMoreKeyRef.current === requestKey) {
+                pendingLoadMoreKeyRef.current = null;
+            }
+            if (requestId === requestIdRef.current) {
+                activeRequestRef.current = null;
+                setLoadingMore(false);
+                setSwitching(false);
+            }
         }
     }, [accessToken, setItems]);
+
+    useEffect(() => () => {
+        requestIdRef.current += 1;
+        activeRequestRef.current?.abort();
+    }, []);
 
     useEffect(() => {
         const sentinel = sentinelRef.current;
@@ -120,9 +169,10 @@ export default function FeedClient({ initialFeed, initialChipId }: FeedClientPro
         setChipId(nextChipId);
         setExpandedIds(new Set());
         setCommentsOpenIds(new Set());
+        setItems([]);
         setNextOffset(null);
         void fetchPage(nextChipId, 0, true);
-    }, [chipId, fetchPage]);
+    }, [chipId, fetchPage, setItems]);
 
     const toggleExpanded = useCallback((id: string) => {
         setExpandedIds((current) => toggleInSet(current, id));
@@ -138,50 +188,70 @@ export default function FeedClient({ initialFeed, initialChipId }: FeedClientPro
             : item)));
     }, [setItems]);
 
-    return (
-        <div className="mx-auto flex w-full max-w-[680px] flex-col gap-5 px-4 pb-24 pt-6 sm:px-6">
-            <header className="flex flex-col gap-4">
-                <div className="flex flex-wrap items-end justify-between gap-3">
-                    <div>
-                        <h1 className="text-3xl font-extrabold tracking-[-0.03em] text-[var(--ui-text-primary)]">
-                            Feed
-                        </h1>
-                        <p className="mt-1 text-sm text-[var(--ui-text-muted)]">
-                            Notes, prompts, and creations from the community — newest thinking first.
-                        </p>
-                    </div>
-                    <Link
-                        href="/post/new?from=community&returnTo=%2Ffeed"
-                        className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]"
-                    >
-                        <PenLine className="h-4 w-4" aria-hidden="true" />
-                        Share a post
-                    </Link>
-                </div>
+    const chipRow = (
+        <div className="flex flex-wrap items-center gap-2">
+            {FEED_CHIPS.map((chip) => (
+                <button
+                    key={chip.id}
+                    type="button"
+                    onClick={() => selectChip(chip.id)}
+                    aria-pressed={chipId === chip.id}
+                    className={`ui-focus-ring min-h-11 rounded-full border px-4 text-sm font-bold transition ${
+                        chipId === chip.id
+                            ? 'border-[var(--ui-primary-strong)] bg-[var(--ui-primary)] text-[var(--ui-primary-on)]'
+                            : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] text-[var(--ui-text-muted)] hover:border-[var(--ui-border-default)] hover:text-[var(--ui-text-primary)]'
+                    }`}
+                >
+                    {chip.label}
+                </button>
+            ))}
+        </div>
+    );
 
-                <div className="flex flex-wrap items-center gap-2">
-                    {FEED_CHIPS.map((chip) => (
-                        <button
-                            key={chip.id}
-                            type="button"
-                            onClick={() => selectChip(chip.id)}
-                            aria-pressed={chipId === chip.id}
-                            className={`ui-focus-ring min-h-10 rounded-full border px-4 text-sm font-bold transition ${
-                                chipId === chip.id
-                                    ? 'border-[var(--ui-primary-strong)] bg-[var(--ui-primary)] text-[var(--ui-primary-on)]'
-                                    : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] text-[var(--ui-text-muted)] hover:border-[var(--ui-border-default)] hover:text-[var(--ui-text-primary)]'
-                            }`}
+    return (
+        <div
+            className={isEmbedded
+                ? 'flex w-full flex-col gap-5'
+                : 'mx-auto flex w-full max-w-[680px] flex-col gap-5 px-4 pb-24 pt-6 sm:px-6'}
+        >
+            {isEmbedded ? chipRow : (
+                <header className="flex flex-col gap-4">
+                    <div className="flex flex-wrap items-end justify-between gap-3">
+                        <div>
+                            <h1 className="text-3xl font-extrabold tracking-[-0.03em] text-[var(--ui-text-primary)]">
+                                Feed
+                            </h1>
+                            <p className="mt-1 text-sm text-[var(--ui-text-muted)]">
+                                Notes, prompts, and creations from the community — newest thinking first.
+                            </p>
+                        </div>
+                        <Link
+                            href="/post/new?from=community&returnTo=%2Ffeed"
+                            className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]"
                         >
-                            {chip.label}
-                        </button>
-                    ))}
-                </div>
-            </header>
+                            <PenLine className="h-4 w-4" aria-hidden="true" />
+                            Share a post
+                        </Link>
+                    </div>
+
+                    {chipRow}
+                </header>
+            )}
 
             {loadError ? (
-                <p role="alert" className="rounded-2xl border border-[rgba(255,124,139,0.34)] bg-[rgba(255,124,139,0.10)] px-4 py-3 text-sm text-[#ff7c8b]">
-                    {loadError}
-                </p>
+                <div
+                    role="alert"
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[rgba(255,124,139,0.34)] bg-[rgba(255,124,139,0.10)] px-4 py-3 text-sm text-[#ff7c8b]"
+                >
+                    <span>{loadError}</span>
+                    <button
+                        type="button"
+                        onClick={() => void fetchPage(chipId, nextOffset ?? 0, nextOffset === null)}
+                        className="ui-focus-ring min-h-11 rounded-full border border-current px-4 text-xs font-bold"
+                    >
+                        Retry
+                    </button>
+                </div>
             ) : null}
 
             {switching ? (
@@ -207,15 +277,13 @@ export default function FeedClient({ initialFeed, initialChipId }: FeedClientPro
                             expanded={expandedIds.has(card.id)}
                             commentsOpen={commentsOpenIds.has(card.id)}
                             accessToken={accessToken}
+                            detailContext={detailContext}
                             onToggleExpanded={() => toggleExpanded(card.id)}
                             onToggleComments={() => toggleComments(card.id)}
                             onToggleSave={() => void toggleSave(card.id)}
                             onCommentCountChange={(commentCount) => applyCommentCount(card.id, commentCount)}
                             onOpenMedia={() => {
-                                window.location.href = buildShowcaseDetailPath(card.id, {
-                                    from: 'community',
-                                    returnTo: '/feed',
-                                });
+                                window.location.href = buildShowcaseDetailPath(card.id, detailContext);
                             }}
                         />
                     ))}

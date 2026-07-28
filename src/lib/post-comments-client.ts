@@ -91,8 +91,8 @@ export function getCommentDisplay(comment: PostComment): CommentDisplay {
 
 /**
  * Flattens top-level comments plus any expanded reply sets into one render
- * list. Replies stay one level deep in the UI even though the schema allows
- * arbitrary nesting — deeper replies surface when their parent is expanded.
+ * list. The product intentionally supports one reply level, so callers only
+ * pass replies whose parent is a top-level comment.
  */
 export function buildCommentThreads({
     topLevel,
@@ -155,6 +155,27 @@ export function canReportComment(comment: PostComment, viewerUserId: string | nu
 
 export function prependComment(comments: PostComment[], comment: PostComment) {
     return [comment, ...comments.filter((existing) => existing.id !== comment.id)];
+}
+
+/**
+ * Appends a server page without trusting offset boundaries to be immutable.
+ * Creating, removing, or re-ranking a comment can move rows between offset
+ * pages while the conversation is open, so id-based de-duplication is required
+ * even when the backend returns a well-formed page.
+ */
+export function mergeCommentPage(
+    comments: PostComment[],
+    incoming: PostComment[],
+    replace = false
+) {
+    const seen = new Set<string>();
+    const source = replace ? incoming : [...comments, ...incoming];
+
+    return source.filter((comment) => {
+        if (seen.has(comment.id)) return false;
+        seen.add(comment.id);
+        return true;
+    });
 }
 
 /**

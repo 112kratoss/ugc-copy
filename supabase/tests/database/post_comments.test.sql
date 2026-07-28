@@ -10,7 +10,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(18);
+select plan(32);
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
 values
@@ -253,6 +253,159 @@ select is(
   )),
   true,
   'the post owner can remove a comment left on their post'
+);
+
+-- ─── One-level threads and account-deletion preservation ────────────────────
+
+select public.create_post_comment(
+  'd0000000-0000-4000-8000-000000000002'::uuid,
+  'c1000000-0000-4000-8000-000000000001'::uuid,
+  null,
+  'account deletion parent'
+);
+
+select public.create_post_comment(
+  'd0000000-0000-4000-8000-000000000002'::uuid,
+  'c3000000-0000-4000-8000-000000000003'::uuid,
+  (select id from public.post_comments where body = 'account deletion parent'),
+  'surviving child reply'
+);
+
+select throws_ok(
+  format(
+    $$
+      select public.create_post_comment(
+        'd0000000-0000-4000-8000-000000000002'::uuid,
+        'c2000000-0000-4000-8000-000000000002'::uuid,
+        %L::uuid,
+        'unrenderable nested reply'
+      )
+    $$,
+    (select id from public.post_comments where body = 'surviving child reply')
+  ),
+  'P0001',
+  'Replies can only target top-level comments',
+  'the database rejects replies to replies'
+);
+
+select lives_ok(
+  $$ delete from auth.users where id = 'c1000000-0000-4000-8000-000000000001'::uuid $$,
+  'deleting a commenter preserves their conversation'
+);
+
+select is(
+  (select status from public.post_comments where body = 'account deletion parent'),
+  'removed_by_author',
+  'account deletion soft-removes an active comment'
+);
+
+select is(
+  (select user_id from public.post_comments where body = 'account deletion parent'),
+  null::uuid,
+  'account deletion anonymizes the retained comment author'
+);
+
+select is(
+  (select count(*) from public.post_comments where body = 'surviving child reply'),
+  1::bigint,
+  'another user''s reply survives deletion of the parent author'
+);
+
+select is(
+  (select comment_count from public.posts
+   where id = 'd0000000-0000-4000-8000-000000000002'::uuid),
+  1,
+  'account deletion decrements the post counter only for the deleted author''s active rows'
+);
+
+select is(
+  (select reply_count from public.post_comments where body = 'account deletion parent'),
+  1,
+  'account deletion preserves the active surviving-reply counter'
+);
+
+-- ─── Actionable comment moderation ──────────────────────────────────────────
+
+insert into public.moderation_reports (
+  id,
+  reporter_user_id,
+  target_type,
+  comment_id,
+  reason,
+  source_surface
+)
+values
+  (
+    'e1000000-0000-4000-8000-000000000001'::uuid,
+    'c2000000-0000-4000-8000-000000000002'::uuid,
+    'comment',
+    (select id from public.post_comments where body = 'surviving child reply'),
+    'harassment',
+    'comments'
+  ),
+  (
+    'e2000000-0000-4000-8000-000000000002'::uuid,
+    'c2000000-0000-4000-8000-000000000002'::uuid,
+    'comment',
+    (select id from public.post_comments where body = 'surviving child reply'),
+    'harassment',
+    'comments'
+  );
+
+create temporary table comment_moderation_result as
+select public.resolve_subject_report_for_ops(
+  'e1000000-0000-4000-8000-000000000001'::uuid,
+  'c2000000-0000-4000-8000-000000000002'::uuid,
+  'resolve'
+) as result;
+
+select is(
+  (select result ->> 'status' from comment_moderation_result),
+  'resolved',
+  'comment moderation returns a resolved decision'
+);
+
+select is(
+  (select (result ->> 'comment_removed')::boolean from comment_moderation_result),
+  true,
+  'resolving a confirmed comment report removes the active comment'
+);
+
+select is(
+  (select (result ->> 'resolved_report_count')::integer from comment_moderation_result),
+  2,
+  'one enforcement action resolves duplicate reports for the same comment'
+);
+
+select is(
+  (select status from public.post_comments where body = 'surviving child reply'),
+  'removed_by_moderation',
+  'the violating comment records its moderation removal status'
+);
+
+select is(
+  (select comment_count from public.posts
+   where id = 'd0000000-0000-4000-8000-000000000002'::uuid),
+  0,
+  'comment moderation decrements the post counter'
+);
+
+select is(
+  (select reply_count from public.post_comments where body = 'account deletion parent'),
+  0,
+  'comment moderation decrements the parent reply counter'
+);
+
+select is(
+  (select count(*) from public.moderation_reports
+   where id in (
+     'e1000000-0000-4000-8000-000000000001'::uuid,
+     'e2000000-0000-4000-8000-000000000002'::uuid
+   )
+     and status = 'resolved'
+     and reviewed_by = 'c2000000-0000-4000-8000-000000000002'::uuid),
+  2::bigint,
+  'duplicate comment reports retain the moderator audit record'
 );
 
 select * from finish();

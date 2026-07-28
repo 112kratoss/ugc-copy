@@ -64,6 +64,22 @@ export function flattenCommentPages(pages: PostCommentsResponse[] | undefined) {
   return comments;
 }
 
+export function mergeRepliesWithPending(
+  pages: PostCommentsResponse[] | undefined,
+  pendingReplies: PostComment[] = []
+) {
+  const seen = new Set<string>();
+  return [...flattenCommentPages(pages), ...pendingReplies]
+    .filter((comment) => {
+      if (seen.has(comment.id)) return false;
+      seen.add(comment.id);
+      return true;
+    })
+    .sort((left, right) => (
+      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+    ));
+}
+
 export function getNextCommentsPageOffset(lastPage: PostCommentsResponse | undefined) {
   if (!lastPage?.pageInfo?.hasMore) return undefined;
   return lastPage.pageInfo.nextOffset ?? undefined;
@@ -86,6 +102,25 @@ export function getCommentsPageParams({
     sort,
     ...(parentId ? { parentId } : {}),
   };
+}
+
+export function getCommentAuthReturnTo(
+  returnTo: string | null | undefined,
+  postId: string,
+  replyToId?: string | null
+) {
+  const base = returnTo?.startsWith('/') && !returnTo.startsWith('//')
+    ? returnTo
+    : '/(tabs)/index';
+  const hashIndex = base.indexOf('#');
+  const path = hashIndex >= 0 ? base.slice(0, hashIndex) : base;
+  const hash = hashIndex >= 0 ? base.slice(hashIndex) : '';
+  const separator = path.includes('?') ? '&' : '?';
+  const params = [
+    `comments=${encodeURIComponent(postId)}`,
+    ...(replyToId ? [`replyTo=${encodeURIComponent(replyToId)}`] : []),
+  ];
+  return `${path}${separator}${params.join('&')}${hash}`;
 }
 
 export function getCommentCountLabel(count: number | null | undefined) {
@@ -112,8 +147,8 @@ export function getCommentDisplay(comment: PostComment, now = new Date()): Comme
 
 /**
  * Flattens top-level comments plus any expanded reply sets into a single render
- * list. Replies stay one level deep in the UI even though the schema allows
- * arbitrary nesting — deeper replies surface when their parent is expanded.
+ * list. The API and UI share a one-level thread contract: replies always point
+ * at a top-level parent.
  */
 export function buildCommentThreads({
   topLevel,
@@ -183,15 +218,33 @@ export function prependCommentToPages(
 
   return {
     ...data,
-    pages: data.pages.map((page, index) => (index === 0
-      ? { ...page, commentCount, comments: [comment, ...page.comments] }
-      : { ...page, commentCount })),
+    pages: data.pages.map((page, index) => {
+      if (index !== 0) return { ...page, commentCount };
+      const combined = [
+        comment,
+        ...page.comments.filter((current) => current.id !== comment.id),
+      ];
+      const limit = Math.max(1, page.pageInfo.limit || POST_COMMENTS_PAGE_SIZE);
+      const hasMore = page.pageInfo.hasMore || combined.length > limit;
+      return {
+        ...page,
+        commentCount,
+        comments: combined.slice(0, limit),
+        pageInfo: {
+          ...page.pageInfo,
+          hasMore,
+          nextOffset: hasMore ? limit : null,
+          offset: 0,
+        },
+      };
+    }),
   };
 }
 
 export function appendReplyToPages(
   data: InfiniteData<PostCommentsResponse> | undefined,
-  reply: PostComment
+  reply: PostComment,
+  commentCount?: number
 ): InfiniteData<PostCommentsResponse> | undefined {
   if (!data?.pages?.length) return data;
 
@@ -199,8 +252,49 @@ export function appendReplyToPages(
   return {
     ...data,
     pages: data.pages.map((page, index) => (index === lastIndex
-      ? { ...page, comments: [...page.comments, reply] }
-      : page)),
+      ? {
+          ...page,
+          ...(typeof commentCount === 'number' ? { commentCount } : {}),
+          comments: page.comments.some((comment) => comment.id === reply.id)
+            ? page.comments
+            : [...page.comments, reply],
+        }
+      : typeof commentCount === 'number' ? { ...page, commentCount } : page)),
+  };
+}
+
+/**
+ * Offset pagination becomes invalid after an insertion or removal. Keep the
+ * authoritative first page and let the active query rebuild subsequent pages
+ * from the server before another load-more request.
+ */
+export function keepFirstCommentPage(
+  data: InfiniteData<PostCommentsResponse> | undefined
+): InfiniteData<PostCommentsResponse> | undefined {
+  if (!data?.pages?.length) return data;
+  return {
+    pages: data.pages.slice(0, 1),
+    pageParams: data.pageParams.slice(0, 1),
+  };
+}
+
+export function suspendCommentPagination(
+  data: InfiniteData<PostCommentsResponse> | undefined
+): InfiniteData<PostCommentsResponse> | undefined {
+  if (!data?.pages?.length) return data;
+  const lastIndex = data.pages.length - 1;
+  return {
+    ...data,
+    pages: data.pages.map((page, index) => index === lastIndex
+      ? {
+          ...page,
+          pageInfo: {
+            ...page.pageInfo,
+            hasMore: false,
+            nextOffset: null,
+          },
+        }
+      : page),
   };
 }
 
@@ -230,7 +324,8 @@ export function markCommentRemovedInPages(
 export function incrementParentReplyCountInPages(
   data: InfiniteData<PostCommentsResponse> | undefined,
   parentId: string,
-  delta: number
+  delta: number,
+  commentCount?: number
 ): InfiniteData<PostCommentsResponse> | undefined {
   if (!data?.pages) return data;
 
@@ -238,6 +333,7 @@ export function incrementParentReplyCountInPages(
     ...data,
     pages: data.pages.map((page) => ({
       ...page,
+      ...(typeof commentCount === 'number' ? { commentCount } : {}),
       comments: page.comments.map((comment) => (comment.id === parentId
         ? { ...comment, replyCount: Math.max(0, comment.replyCount + delta) }
         : comment)),
@@ -250,7 +346,10 @@ export interface CommentCountResult {
   commentCount: number;
 }
 
-function updateItemCommentCount(item: ShowcaseFeedItem, result: CommentCountResult) {
+function updateItemCommentCount<T extends { id: string; commentCount: number }>(
+  item: T,
+  result: CommentCountResult
+) {
   if (item.id !== result.postId) return item;
   return { ...item, commentCount: Math.max(0, result.commentCount) };
 }
@@ -286,9 +385,14 @@ export function applyCommentCountToSourceData(
   data: ImmersiveSourceData | undefined,
   result: CommentCountResult
 ): ImmersiveSourceData | undefined {
-  if (!data?.showcaseItems) return data;
+  if (!data) return data;
   return {
     ...data,
-    showcaseItems: data.showcaseItems.map((item) => updateItemCommentCount(item, result)),
+    ...(data.showcaseItems
+      ? { showcaseItems: data.showcaseItems.map((item) => updateItemCommentCount(item, result)) }
+      : {}),
+    ...(data.ownerPosts
+      ? { ownerPosts: data.ownerPosts.map((item) => updateItemCommentCount(item, result)) }
+      : {}),
   };
 }

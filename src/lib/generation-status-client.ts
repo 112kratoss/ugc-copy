@@ -151,6 +151,55 @@ export function subscribeToGenerationStarted(callback: () => void) {
   };
 }
 
+const GENERATION_STATUS_SYNC_EVENT = 'magicbooklet:generation-status-sync';
+
+export type GenerationStatusSyncRecord = {
+  id: string;
+  status: string;
+  created_at?: string | null;
+  completed_at?: string | null;
+  category?: string | null;
+  model?: string | null;
+};
+
+function isGenerationStatusSyncRecord(value: unknown): value is GenerationStatusSyncRecord {
+  return isRecord(value) && typeof value.id === 'string' && typeof value.status === 'string';
+}
+
+/**
+ * Same-tab broadcast of the freshest owner generation statuses, fired by the
+ * app-wide poller (`GenerationNotifications`) after every successful sync so
+ * passive surfaces (the home workspace card) can update without polling
+ * `/api/generations` themselves. Cross-tab delivery is unnecessary: the
+ * poller runs in every tab.
+ */
+export function announceGenerationStatusSynced(records: GenerationStatusSyncRecord[]) {
+  if (typeof window === 'undefined') return;
+
+  window.dispatchEvent(new CustomEvent(GENERATION_STATUS_SYNC_EVENT, { detail: records }));
+}
+
+export function subscribeToGenerationStatusSynced(
+  callback: (records: GenerationStatusSyncRecord[]) => void,
+) {
+  if (typeof window === 'undefined') return () => undefined;
+
+  const handleEvent = (event: Event) => {
+    const detail = (event as CustomEvent<unknown>).detail;
+    if (!Array.isArray(detail)) return;
+
+    const records = detail.filter(isGenerationStatusSyncRecord);
+    if (records.length > 0) {
+      callback(records);
+    }
+  };
+
+  window.addEventListener(GENERATION_STATUS_SYNC_EVENT, handleEvent);
+  return () => {
+    window.removeEventListener(GENERATION_STATUS_SYNC_EVENT, handleEvent);
+  };
+}
+
 function createAbortError() {
   const error = new Error('Generation status check cancelled.');
   error.name = 'AbortError';

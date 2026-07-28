@@ -9,6 +9,7 @@ import {
   hasImmersiveDetailsPage,
   isImmersiveDetailsHorizontalPage,
   immersiveViewerHref,
+  immersiveViewerReturnPath,
   selectActiveImmersiveVideoId,
 } from '../lib/immersive-preview-view-model';
 import type { GenerationListItem, OwnerPostListItem, ShowcaseFeedItem } from '../lib/types';
@@ -61,6 +62,7 @@ function ownerPost(overrides: Partial<OwnerPostListItem>): OwnerPostListItem {
     visibility: 'public',
     mediaUrl: null,
     mediaKind: null,
+    commentCount: 0,
     description: 'Description',
     prompt: 'Prompt',
     body: 'Body copy',
@@ -318,6 +320,8 @@ describe('immersive preview view model', () => {
     expect(items[0]).toMatchObject({
       sourceType: 'owner-post',
       creatorLabel: '@batman',
+      commentCount: 0,
+      canComment: true,
       canSave: false,
       canShare: true,
       sharePath: '/showcase/body-post',
@@ -335,15 +339,32 @@ describe('immersive preview view model', () => {
     });
 
     const privateItems = buildImmersiveOwnerPostItems('profile-posts', [
-      ownerPost({ id: 'private-post', publicPath: null }),
+      ownerPost({ id: 'private-post', visibility: 'private', publicPath: null }),
     ], {
       creatorLabel: '@batman',
       creatorAvatar: null,
     });
 
     expect(privateItems[0]).toMatchObject({
+      canComment: false,
       canShare: true,
       sharePath: null,
+    });
+  });
+
+  it('exposes real comments on active public owner posts', () => {
+    const [item] = buildImmersiveOwnerPostItems('profile-posts', [
+      ownerPost({ commentCount: 27, visibility: 'public' }),
+    ], {
+      creatorLabel: '@batman',
+      creatorId: 'owner-1',
+    });
+
+    expect(item).toMatchObject({
+      creatorId: 'owner-1',
+      commentCount: 27,
+      commentLabel: '27',
+      canComment: true,
     });
   });
 
@@ -398,6 +419,11 @@ describe('immersive preview view model', () => {
         algorithmVersion: 'hybrid-v1',
       },
     });
+    expect(immersiveViewerReturnPath({
+      source: 'showcase-feed',
+      initialId: 'post 2',
+      feedSessionId: 'session/1',
+    })).toBe('/viewer?source=showcase-feed&initialId=post%202&feedSessionId=session%2F1');
   });
 
   describe('action builder available and disabled actions', () => {

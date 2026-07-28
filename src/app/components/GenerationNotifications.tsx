@@ -11,7 +11,10 @@ import {
   getGenerationNotificationCopy,
   type GenerationKind,
 } from '@/lib/generation-feedback';
-import { subscribeToGenerationStarted } from '@/lib/generation-status-client';
+import {
+  announceGenerationStatusSynced,
+  subscribeToGenerationStarted,
+} from '@/lib/generation-status-client';
 import { supabase } from '@/lib/supabase';
 
 const STATUS_CACHE_STORAGE_KEY = 'magicbooklet:generation-status-cache:v1';
@@ -259,6 +262,10 @@ export default function GenerationNotifications() {
 
         knownStatusesRef.current = nextStatuses;
         writeStatusCache(nextStatuses);
+        // Let passive listeners (home workspace card) consume this poll
+        // instead of running their own — this component stays the only
+        // status poller in the app.
+        announceGenerationStatusSynced(generations);
         hasCompletedInitialSync = true;
         activeGenerationIds = new Set(
           generations

@@ -38,6 +38,7 @@ describe('home view model', () => {
         visibility: 'public',
         mediaUrl: null,
         mediaKind: 'image',
+        commentCount: 0,
         bundle: {
           id: 'bundle-1',
           accessMode: 'paid',
@@ -55,6 +56,7 @@ describe('home view model', () => {
         visibility: 'public',
         mediaUrl: null,
         mediaKind: null,
+        commentCount: 0,
         bundle: null,
       },
     ])).toEqual({ salesCount: 2, earningsUsdCents: 2400 });

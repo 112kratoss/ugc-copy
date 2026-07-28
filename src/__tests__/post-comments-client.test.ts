@@ -11,6 +11,7 @@ import {
     getCommentCountLabel,
     getCommentDisplay,
     markCommentRemoved,
+    mergeCommentPage,
     prependComment,
     type PostComment,
 } from '@/lib/post-comments-client';
@@ -136,6 +137,16 @@ describe('post comments client', () => {
             expect(prependComment(existing, fresh).map((c) => c.id)).toEqual(['new', 'old']);
             expect(prependComment(prependComment(existing, fresh), fresh).map((c) => c.id))
                 .toEqual(['new', 'old']);
+        });
+
+        it('deduplicates rows when mutable offset pages overlap', () => {
+            const firstPage = [comment({ id: 'a' }), comment({ id: 'b' })];
+            const shiftedSecondPage = [comment({ id: 'b' }), comment({ id: 'c' })];
+
+            expect(mergeCommentPage(firstPage, shiftedSecondPage).map((item) => item.id))
+                .toEqual(['a', 'b', 'c']);
+            expect(mergeCommentPage(firstPage, shiftedSecondPage, true).map((item) => item.id))
+                .toEqual(['b', 'c']);
         });
 
         it('drops a removed comment that anchors nothing', () => {

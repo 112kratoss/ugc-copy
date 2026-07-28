@@ -55,6 +55,7 @@ type OwnerPostRow = PostMediaRow & {
   source_kind: RawShowcaseSourceKind;
   source_tool: string | null;
   source_tool_slug: string | null;
+  comment_count: number;
   created_at: string;
   updated_at: string;
 };
@@ -118,6 +119,7 @@ export interface OwnerPostListItem {
   sourceToolSlug: string | null;
   sourceTools?: SourceToolSelection[];
   sourceLabel: string;
+  commentCount: number;
   createdAt: string;
   updatedAt: string;
   publicPath: string | null;
@@ -185,7 +187,7 @@ async function fetchOwnerPostRows(
   let query = adminSupabase
     .from('posts')
     .select(
-      'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, source_tool_slug, created_at, updated_at'
+      'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, source_tool_slug, comment_count, created_at, updated_at'
     )
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
@@ -208,7 +210,7 @@ async function fetchOwnerPostRows(
     const withoutSourceToolSlugQuery = adminSupabase
       .from('posts')
       .select(
-        'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, created_at, updated_at'
+        'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, comment_count, created_at, updated_at'
       )
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
@@ -240,7 +242,7 @@ async function fetchOwnerPostRows(
     const legacyQuery = adminSupabase
       .from('posts')
       .select(
-        'id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, category, source_kind, source_tool, created_at'
+        'id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, category, source_kind, source_tool, comment_count, created_at'
       )
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
@@ -285,7 +287,7 @@ async function fetchOwnerPostRow(
   const result = await adminSupabase
     .from('posts')
     .select(
-      'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, source_tool_slug, created_at, updated_at'
+      'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, source_tool_slug, comment_count, created_at, updated_at'
     )
     .eq('id', postId)
     .eq('user_id', userId)
@@ -295,7 +297,7 @@ async function fetchOwnerPostRow(
     const withoutSourceToolSlugResult = await adminSupabase
       .from('posts')
       .select(
-        'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, created_at, updated_at'
+        'id, user_id, generation_id, visibility, archived_at, archived_by_user_id, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, comment_count, created_at, updated_at'
       )
       .eq('id', postId)
       .eq('user_id', userId)
@@ -317,7 +319,7 @@ async function fetchOwnerPostRow(
     const legacyResult = await adminSupabase
       .from('posts')
       .select(
-        'id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, category, source_kind, source_tool, created_at'
+        'id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, category, source_kind, source_tool, comment_count, created_at'
       )
       .eq('id', postId)
       .eq('user_id', userId)
@@ -493,6 +495,7 @@ async function toOwnerPostListItem(
     sourceToolSlug: row.source_tool_slug,
     sourceTools: sourceToolsMap.get(row.id),
     sourceLabel: getSourceLabel(sourceKind),
+    commentCount: Math.max(0, row.comment_count ?? 0),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     publicPath: canShare ? `/showcase/${row.id}` : null,
