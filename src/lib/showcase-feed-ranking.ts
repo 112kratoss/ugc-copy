@@ -8,6 +8,8 @@ export const SHOWCASE_FEED_ALGORITHM_VERSION = 'for-you-rules-v1';
 export const SHOWCASE_FEED_FALLBACK_ALGORITHM_VERSION = 'recent-fallback-v1';
 export const SHOWCASE_FEED_CANDIDATE_LIMIT = 300;
 export const SHOWCASE_FEED_ELIGIBLE_ITEM_LIMIT = 60;
+/** Score multiplier for an already-seen post, used only as a fallback. */
+export const DEFAULT_SEEN_REPEAT_PENALTY = 0.2;
 
 export type RankedFeedScoreWeights = {
   interestMatch: number;
@@ -18,6 +20,13 @@ export type RankedFeedScoreWeights = {
   explorationBonus: number;
   quickSkipRisk: number;
   negativeFeedbackRisk: number;
+  /** v2: format-aware watch/attention depth. */
+  engagementDepth: number;
+  attentionSecondsNorm: number;
+  /** v2: creator quality prior, capped upstream in SQL. */
+  creatorQuality: number;
+  /** v2: Bayesian UCB replacing v1's lowest-impressions exploration bonus. */
+  explorationUcb: number;
 };
 
 export type RankedFeedDiversityConfig = {
@@ -37,6 +46,13 @@ export type RankedFeedFeatureRow = {
   explorationBonus: number;
   quickSkipRisk: number;
   negativeFeedbackRisk: number;
+  engagementDepth: number;
+  attentionSecondsNorm: number;
+  creatorQuality: number;
+  explorationUcb: number;
+  /** True when this viewer already had a qualified impression of the post. */
+  seenRecently: boolean;
+  lastSeenAt: string | null;
   candidateSource: ShowcaseFeedCandidateSource;
   semanticCluster?: string | null;
 };
@@ -47,6 +63,8 @@ export type RankedShowcaseItem = {
   score: number;
 };
 
+// Defaults stay exactly at v1: a missing weight key must never silently
+// activate a v2 feature on the live algorithm.
 export const DEFAULT_RANKED_FEED_SCORE_WEIGHTS: RankedFeedScoreWeights = {
   interestMatch: 0.35,
   creatorAffinity: 0.15,
@@ -56,6 +74,10 @@ export const DEFAULT_RANKED_FEED_SCORE_WEIGHTS: RankedFeedScoreWeights = {
   explorationBonus: 0.10,
   quickSkipRisk: -0.35,
   negativeFeedbackRisk: -0.80,
+  engagementDepth: 0,
+  attentionSecondsNorm: 0,
+  creatorQuality: 0,
+  explorationUcb: 0,
 };
 
 export const DEFAULT_RANKED_FEED_DIVERSITY_CONFIG: RankedFeedDiversityConfig = {
@@ -93,6 +115,10 @@ export function normalizeRankedFeedScoreWeights(
     explorationBonus: finiteConfigNumber(weights.exploration_bonus, DEFAULT_RANKED_FEED_SCORE_WEIGHTS.explorationBonus, -10, 10),
     quickSkipRisk: finiteConfigNumber(weights.quick_skip_risk, DEFAULT_RANKED_FEED_SCORE_WEIGHTS.quickSkipRisk, -10, 10),
     negativeFeedbackRisk: finiteConfigNumber(weights.negative_feedback_risk, DEFAULT_RANKED_FEED_SCORE_WEIGHTS.negativeFeedbackRisk, -10, 10),
+    engagementDepth: finiteConfigNumber(weights.engagement_depth, DEFAULT_RANKED_FEED_SCORE_WEIGHTS.engagementDepth, -10, 10),
+    attentionSecondsNorm: finiteConfigNumber(weights.attention_seconds_norm, DEFAULT_RANKED_FEED_SCORE_WEIGHTS.attentionSecondsNorm, -10, 10),
+    creatorQuality: finiteConfigNumber(weights.creator_quality, DEFAULT_RANKED_FEED_SCORE_WEIGHTS.creatorQuality, -10, 10),
+    explorationUcb: finiteConfigNumber(weights.exploration_ucb, DEFAULT_RANKED_FEED_SCORE_WEIGHTS.explorationUcb, -10, 10),
   };
 }
 
@@ -141,6 +167,10 @@ export function scoreRankedFeedFeatures(
     + weights.explorationBonus * clampUnit(features.explorationBonus)
     + weights.quickSkipRisk * clampUnit(features.quickSkipRisk)
     + weights.negativeFeedbackRisk * clampUnit(features.negativeFeedbackRisk)
+    + weights.engagementDepth * clampUnit(features.engagementDepth)
+    + weights.attentionSecondsNorm * clampUnit(features.attentionSecondsNorm)
+    + weights.creatorQuality * clampUnit(features.creatorQuality)
+    + weights.explorationUcb * clampUnit(features.explorationUcb)
   );
 }
 
@@ -170,6 +200,16 @@ export function buildFallbackRankedFeedFeatures(
     explorationBonus: isUnderexposed ? 0.75 : 0.1,
     quickSkipRisk: 0,
     negativeFeedbackRisk: 0,
+    engagementDepth: 0.25,
+    attentionSecondsNorm: 0,
+    creatorQuality: 0,
+    // No delivery history, so the posterior is at its most uncertain — the
+    // same optimism the SQL UCB assigns an unexposed post.
+    explorationUcb: isUnderexposed ? 0.9 : 0.5,
+    // Fallback items arrive outside ranked retrieval, so no seen evidence
+    // exists; treating them as unseen keeps them ahead of known repeats.
+    seenRecently: false,
+    lastSeenAt: null,
     candidateSource: isUnderexposed ? 'exploration' : trend > 0.45 ? 'trending' : 'fresh',
   };
 }
@@ -208,6 +248,16 @@ export function normalizeRankedFeedFeatureRow(value: Record<string, unknown>): R
     explorationBonus: clampUnit(numberValue('exploration_bonus', 'explorationBonus')),
     quickSkipRisk: clampUnit(numberValue('quick_skip_risk', 'quickSkipRisk')),
     negativeFeedbackRisk: clampUnit(numberValue('negative_feedback_risk', 'negativeFeedbackRisk')),
+    engagementDepth: clampUnit(numberValue('engagement_depth', 'engagementDepth')),
+    attentionSecondsNorm: clampUnit(numberValue('attention_seconds_norm', 'attentionSecondsNorm')),
+    creatorQuality: clampUnit(numberValue('creator_quality', 'creatorQuality')),
+    explorationUcb: clampUnit(numberValue('exploration_ucb', 'explorationUcb')),
+    seenRecently: value.seen_recently === true || value.seenRecently === true,
+    lastSeenAt: typeof value.last_seen_at === 'string'
+      ? value.last_seen_at
+      : typeof value.lastSeenAt === 'string'
+        ? value.lastSeenAt
+        : null,
     candidateSource,
     semanticCluster: typeof value.semantic_cluster === 'string'
       ? value.semantic_cluster
@@ -280,6 +330,13 @@ function mustSelectExploration(
  * Greedy final-stage reranker. The constraints are intentionally soft: when
  * inventory is small, relevant posts are still returned instead of producing
  * an empty or artificially short feed.
+ *
+ * Seen posts are handled as a hard tier rather than a soft penalty. A post the
+ * viewer already saw is only ever selected once no unseen candidate remains at
+ * all — diversity fatigue is not enough of a reason to serve a repeat — and its
+ * score is multiplied by `seenPenalty` so the fallback ordering still reflects
+ * how weak a choice it is. Repeats are the fastest way to make a small-catalog
+ * feed feel dead, so the tier boundary is deliberately not negotiable.
  */
 export function rankAndDiversifyShowcaseItems({
   featureRows,
@@ -287,21 +344,31 @@ export function rankAndDiversifyShowcaseItems({
   now = new Date(),
   scoreWeights = DEFAULT_RANKED_FEED_SCORE_WEIGHTS,
   diversityConfig = DEFAULT_RANKED_FEED_DIVERSITY_CONFIG,
+  seenPenalty = DEFAULT_SEEN_REPEAT_PENALTY,
 }: {
   featureRows: RankedFeedFeatureRow[];
   items: ShowcaseFeedItem[];
   now?: Date;
   scoreWeights?: RankedFeedScoreWeights;
   diversityConfig?: RankedFeedDiversityConfig;
+  seenPenalty?: number;
 }): RankedShowcaseItem[] {
   const featuresByPostId = new Map(featureRows.map((row) => [row.postId, row]));
   const remaining = items
     .map((item) => {
       const features = featuresByPostId.get(item.id) ?? buildFallbackRankedFeedFeatures(item, now);
-      return { item, features, score: scoreRankedFeedFeatures(features, scoreWeights) };
+      const score = scoreRankedFeedFeatures(features, scoreWeights);
+      return {
+        item,
+        features,
+        score: features.seenRecently ? score * seenPenalty : score,
+      };
     })
     .sort((left, right) => (
-      right.score - left.score
+      Number(left.features.seenRecently) - Number(right.features.seenRecently)
+      || right.score - left.score
+      // Among repeats, the least recently seen is the least stale.
+      || (left.features.lastSeenAt ?? '').localeCompare(right.features.lastSeenAt ?? '')
       || right.item.createdAt.localeCompare(left.item.createdAt)
       || right.item.id.localeCompare(left.item.id)
     ));
@@ -309,15 +376,28 @@ export function rankAndDiversifyShowcaseItems({
 
   while (remaining.length > 0) {
     const requireExploration = mustSelectExploration(selected, diversityConfig);
-    let nextIndex = remaining.findIndex((candidate) => (
-      (!requireExploration || candidate.features.candidateSource === 'exploration')
-      && canSelectWithoutFatigue(candidate, selected, diversityConfig)
-    ));
-    if (nextIndex < 0 && requireExploration) {
-      nextIndex = remaining.findIndex((candidate) => (
+    const unseenRemains = remaining.some((candidate) => !candidate.features.seenRecently);
+    const withinSeenTier = (candidate: RankedShowcaseItem) => (
+      !unseenRemains || !candidate.features.seenRecently
+    );
+    const findCandidate = (predicate: (candidate: RankedShowcaseItem) => boolean) => (
+      remaining.findIndex((candidate) => withinSeenTier(candidate) && predicate(candidate))
+    );
+
+    let nextIndex = requireExploration
+      ? findCandidate((candidate) => (
+        candidate.features.candidateSource === 'exploration'
+        && canSelectWithoutFatigue(candidate, selected, diversityConfig)
+      ))
+      : -1;
+    if (nextIndex < 0) {
+      nextIndex = findCandidate((candidate) => (
         canSelectWithoutFatigue(candidate, selected, diversityConfig)
       ));
     }
+    // Relax diversity before the seen tier: a fatigued unseen post still beats
+    // a repeat.
+    if (nextIndex < 0) nextIndex = findCandidate(() => true);
     if (nextIndex < 0) nextIndex = 0;
 
     const [next] = remaining.splice(nextIndex, 1);

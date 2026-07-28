@@ -296,12 +296,17 @@ describe('showcase feed personalization candidate filling', () => {
     };
     const insertCalls: ReturnType<typeof vi.fn>[] = [];
     const eqCalls: Array<[string, unknown]> = [];
+    const isCalls: Array<[string, unknown]> = [];
     const containsCalls: Array<[string, unknown]> = [];
     const fluent = (options: { maybeSingleData?: unknown; awaitedData?: unknown }) => {
       const query: Record<string, unknown> = {};
-      for (const method of ['select', 'is', 'in', 'gt', 'gte', 'lt', 'order', 'limit', 'update', 'delete']) {
+      for (const method of ['select', 'in', 'gt', 'gte', 'lt', 'order', 'limit', 'update', 'delete']) {
         query[method] = vi.fn(() => query);
       }
+      query.is = vi.fn((field: string, value: unknown) => {
+        isCalls.push([field, value]);
+        return query;
+      });
       query.contains = vi.fn((field: string, value: unknown) => {
         containsCalls.push([field, value]);
         return query;
@@ -360,6 +365,9 @@ describe('showcase feed personalization candidate filling', () => {
           })
           : fluent({ awaitedData: [] });
       }
+      if (table === 'feed_delivery_facts') {
+        return fluent({ awaitedData: [] });
+      }
       throw new Error(`Unexpected table ${table}`);
     });
     const db = { rpc: vi.fn(), from } as unknown as SupabaseClient;
@@ -383,6 +391,7 @@ describe('showcase feed personalization candidate filling', () => {
     expect(containsCalls).toContainEqual(['filters', {
       category: 'all', toolSlug: 'video-tool', unlockFilter: 'all', resourceFilter: 'all',
     }]);
+    expect(isCalls).toContainEqual(['experiment_assignment_id', null]);
     expect(hydratePostIds).toHaveBeenCalledWith(['persisted-post']);
     expect(page.feedSessionId).toBe('session-reused');
     expect(page.algorithmVersion).toBe('for-you-rules-v7');
@@ -416,7 +425,7 @@ describe('showcase feed personalization candidate filling', () => {
       captureServedIds?: boolean;
     }) => {
       const query: Record<string, unknown> = {};
-      for (const method of ['select', 'eq', 'gte', 'order', 'limit', 'update']) {
+      for (const method of ['select', 'eq', 'gte', 'order', 'limit', 'update', 'is']) {
         query[method] = vi.fn(() => query);
       }
       query.in = vi.fn((_field: string, values: Array<string | number>) => {
@@ -472,6 +481,9 @@ describe('showcase feed personalization candidate filling', () => {
       if (table === 'feed_user_creator_feedback') {
         return fluent({ awaitedData: [{ creator_user_id: 'creator-hidden-creator' }] });
       }
+      if (table === 'feed_delivery_facts') {
+        return fluent({ awaitedData: [] });
+      }
       throw new Error(`Unexpected table ${table}`);
     });
     const hydratePostIds = vi.fn(async (ids: string[]) => (
@@ -501,5 +513,150 @@ describe('showcase feed personalization candidate filling', () => {
       position: 10,
     });
     expect(servedIds).toEqual([102, 109]);
+  });
+
+  it('keeps experiment attribution, reuse scope, and deterministic propensity on delivery facts', async () => {
+    const factInserts: Array<Record<string, unknown>> = [];
+    const sessionEqCalls: Array<[string, unknown]> = [];
+    let sessionReads = 0;
+    let factReads = 0;
+
+    const fluent = ({
+      awaitedData = null,
+      maybeSingleData = null,
+      singleData = null,
+      onInsert,
+      onEq,
+    }: {
+      awaitedData?: unknown;
+      maybeSingleData?: unknown;
+      singleData?: unknown;
+      onInsert?: (value: unknown) => void;
+      onEq?: (field: string, value: unknown) => void;
+    } = {}) => {
+      const query: Record<string, unknown> = {};
+      for (const method of ['select', 'or', 'order', 'limit', 'contains', 'gt', 'gte', 'in', 'is', 'update', 'delete']) {
+        query[method] = vi.fn(() => query);
+      }
+      query.eq = vi.fn((field: string, value: unknown) => {
+        onEq?.(field, value);
+        return query;
+      });
+      query.insert = vi.fn((value: unknown) => {
+        onInsert?.(value);
+        return query;
+      });
+      query.maybeSingle = vi.fn(async () => ({ data: maybeSingleData, error: null }));
+      query.single = vi.fn(async () => ({ data: singleData, error: null }));
+      query.then = (
+        resolve: (value: unknown) => unknown,
+        reject: (reason: unknown) => unknown,
+      ) => Promise.resolve({ data: awaitedData, error: null }).then(resolve, reject);
+      return query;
+    };
+
+    const from = vi.fn((table: string) => {
+      if (table === 'feed_experiments') {
+        return fluent({
+          maybeSingleData: {
+            id: 'experiment-1',
+            experiment_key: 'for-you-v2',
+            assignment_salt: 'salt-1',
+            traffic_basis_points: 10_000,
+            starts_at: null,
+            ends_at: null,
+            feed_experiment_variants: [{
+              id: 'variant-treatment',
+              variant_key: 'treatment',
+              algorithm_version_id: 'algorithm-v2',
+              allocation_basis_points: 10_000,
+            }],
+          },
+        });
+      }
+      if (table === 'feed_experiment_assignments') {
+        return fluent({
+          maybeSingleData: { id: 44, variant_id: 'variant-treatment' },
+        });
+      }
+      if (table === 'feed_algorithm_versions') {
+        return fluent({
+          maybeSingleData: {
+            id: 'algorithm-v2',
+            algorithm_key: 'for-you-rules',
+            version: 2,
+            weights: {},
+            retrieval_config: {
+              candidate_rpc: 'v2',
+              session_item_limit: 60,
+            },
+            diversity_config: {},
+          },
+        });
+      }
+      if (table === 'feed_sessions') {
+        sessionReads += 1;
+        return sessionReads === 1
+          ? fluent({
+            maybeSingleData: null,
+            onEq: (field, value) => sessionEqCalls.push([field, value]),
+          })
+          : fluent({ singleData: { id: 'session-v2' } });
+      }
+      if (table === 'feed_user_post_feedback' || table === 'feed_user_creator_feedback') {
+        return fluent({ awaitedData: [] });
+      }
+      if (table === 'feed_session_items') {
+        return fluent({ awaitedData: [{ id: 99, position: 0 }] });
+      }
+      if (table === 'feed_delivery_facts') {
+        factReads += 1;
+        return factReads === 1
+          ? fluent({
+            onInsert: (value) => {
+              factInserts.push(...(value as Array<Record<string, unknown>>));
+            },
+          })
+          : fluent();
+      }
+      throw new Error(`Unexpected table ${table}`);
+    });
+    const rpc = vi.fn(async () => ({
+      data: [{
+        post_id: 'exploration-post',
+        freshness: 0.8,
+        exploration_ucb: 0.9,
+        candidate_source: 'exploration',
+        seen_recently: false,
+      }],
+      error: null,
+    }));
+
+    const page = await getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: null,
+      cursor: null,
+      fallbackItems: vi.fn(async () => []),
+      filters: { category: 'all', toolSlug: null, unlockFilter: 'all', resourceFilter: 'all' },
+      hydratePostIds: vi.fn(async () => [item('exploration-post')]),
+      limit: 12,
+      offset: 0,
+      serviceClient: { from, rpc } as unknown as SupabaseClient,
+      viewerUserId: 'viewer-1',
+    });
+
+    expect(sessionEqCalls).toContainEqual(['experiment_assignment_id', 44]);
+    expect(factInserts).toHaveLength(1);
+    expect(factInserts[0]).toMatchObject({
+      delivery_id: 99,
+      algorithm_version_id: 'algorithm-v2',
+      experiment_assignment_id: 44,
+      experiment_id: 'experiment-1',
+      experiment_variant_id: 'variant-treatment',
+      candidate_source: 'exploration',
+      is_exploration: true,
+      exploration_propensity: 1,
+    });
+    expect(page.feedSessionId).toBe('session-v2');
+    expect(page.algorithmVersion).toBe('for-you-rules-v2');
   });
 });

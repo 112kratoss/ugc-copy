@@ -16,6 +16,8 @@ describe('maintainFeedPersonalization', () => {
   it('refreshes bounded stats and interests before pruning expired feed data', async () => {
     const db = createRpcClient({
       refresh_post_feed_stats: { data: 37, error: null },
+      refresh_post_feed_engagement_stats: { data: 21, error: null },
+      refresh_creator_feed_stats: { data: 9, error: null },
       refresh_user_interest_weights: { data: 12, error: null },
       prune_feed_personalization_data: {
         data: {
@@ -26,6 +28,7 @@ describe('maintainFeedPersonalization', () => {
           interests_deleted: 2,
           post_feedback_deleted: 0,
           creator_feedback_deleted: 0,
+          facts_deleted: 5,
         },
         error: null,
       },
@@ -39,6 +42,8 @@ describe('maintainFeedPersonalization', () => {
     })).resolves.toEqual({
       asOf: '2026-07-11T07:20:00.000Z',
       postStatsRefreshed: 37,
+      postEngagementStatsRefreshed: 21,
+      creatorStatsRefreshed: 9,
       userInterestProfilesRefreshed: 12,
       retention: {
         skipped: false,
@@ -48,10 +53,19 @@ describe('maintainFeedPersonalization', () => {
         interests_deleted: 2,
         post_feedback_deleted: 0,
         creator_feedback_deleted: 0,
+        facts_deleted: 5,
       },
     });
     expect(db.rpc.mock.calls).toEqual([
       ['refresh_post_feed_stats', {
+        p_as_of: '2026-07-11T07:20:00.000Z',
+        p_limit: 1000,
+      }],
+      ['refresh_post_feed_engagement_stats', {
+        p_as_of: '2026-07-11T07:20:00.000Z',
+        p_limit: 1000,
+      }],
+      ['refresh_creator_feed_stats', {
         p_as_of: '2026-07-11T07:20:00.000Z',
         p_limit: 1000,
       }],
@@ -66,6 +80,7 @@ describe('maintainFeedPersonalization', () => {
         p_event_retention_days: 90,
         p_session_retention_days: 2,
         p_limit: 5000,
+        p_fact_retention_days: 400,
       }],
     ]);
     expect(invalidateFeedCache).toHaveBeenCalledOnce();
@@ -74,6 +89,8 @@ describe('maintainFeedPersonalization', () => {
   it('stops before pruning when an aggregate refresh fails', async () => {
     const db = createRpcClient({
       refresh_post_feed_stats: { data: 4, error: null },
+      refresh_post_feed_engagement_stats: { data: 2, error: null },
+      refresh_creator_feed_stats: { data: 1, error: null },
       refresh_user_interest_weights: {
         data: null,
         error: { message: 'statement timeout' },
@@ -88,7 +105,7 @@ describe('maintainFeedPersonalization', () => {
     })).rejects.toThrow(
       'Feed maintenance RPC refresh_user_interest_weights failed: statement timeout',
     );
-    expect(db.rpc).toHaveBeenCalledTimes(2);
+    expect(db.rpc).toHaveBeenCalledTimes(4);
     expect(db.rpc).not.toHaveBeenCalledWith('prune_feed_personalization_data', expect.anything());
     expect(invalidateFeedCache).toHaveBeenCalledOnce();
   });

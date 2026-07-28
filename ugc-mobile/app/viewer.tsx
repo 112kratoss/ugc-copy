@@ -8,7 +8,7 @@ import { useVideoPlayer } from 'expo-video';
 import { ArrowLeft, Copy, FileText, Heart, ImageOff, Images, Lock, MessageCircle, MoreVertical, Play, Repeat2, Share2, X } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Alert, Animated, Easing, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
@@ -71,6 +71,11 @@ import {
   removeShowcaseFeedItemsFromInfiniteData,
   type ShowcaseFeedEventDetails,
 } from '@/lib/showcase-feed-events';
+import {
+  createShowcaseMediaProgressTracker,
+  reportShowcaseMediaProgress,
+  setShowcaseMediaProgressSink,
+} from '@/lib/showcase-media-progress';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { PostResourceKind, ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
 import { canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, type SaveHeartTapAnimationSpec } from '@/lib/viewer-actions';
@@ -293,8 +298,34 @@ export default function ImmersivePreviewViewerScreen() {
       SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY.minimumViewTime
     );
 
+    // Max playback progress for this delivery: flushed at milestone crossings,
+    // on app-background (app kills would lose an exit-only flush), and on item
+    // exit. The server upserts with GREATEST, so repeats are harmless.
+    const mediaProgressTracker = createShowcaseMediaProgressTracker();
+    const flushMediaProgress = () => {
+      const flush = mediaProgressTracker.takeFlush();
+      if (!flush) return;
+      recordViewerFeedEvent(item, 'media_progress', {
+        progress: flush.progress,
+        ...(flush.durationMs !== null ? { durationMs: flush.durationMs } : {}),
+      });
+    };
+    setShowcaseMediaProgressSink((progress, durationMs) => {
+      if (mediaProgressTracker.record(progress, durationMs)) {
+        flushMediaProgress();
+      }
+    });
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') {
+        flushMediaProgress();
+      }
+    });
+
     return () => {
       clearTimeout(timer);
+      appStateSubscription.remove();
+      setShowcaseMediaProgressSink(null);
+      flushMediaProgress();
       const durationMs = Date.now() - startedAt;
       if (durationMs >= SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY.minimumViewTime) {
         recordQualifiedImpression();
@@ -1917,6 +1948,7 @@ function ActiveVideo({
     instance.volume = 1.0;
     instance.showNowPlayingNotification = false;
     instance.staysActiveInBackground = false;
+    instance.timeUpdateEventInterval = 0.25;
   });
 
   const [isPlaying, setIsPlaying] = useState(player.playing);
@@ -1944,6 +1976,17 @@ function ActiveVideo({
   useEffect(() => {
     const subscription = player.addListener('statusChange', (event) => {
       setHasError(event.status === 'error');
+    });
+    return () => {
+      subscription.remove();
+    };
+  }, [player]);
+
+  useEffect(() => {
+    const subscription = player.addListener('timeUpdate', (event) => {
+      const durationSeconds = player.duration;
+      if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return;
+      reportShowcaseMediaProgress(event.currentTime / durationSeconds, durationSeconds * 1000);
     });
     return () => {
       subscription.remove();

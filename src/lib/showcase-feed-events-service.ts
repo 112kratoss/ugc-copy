@@ -467,6 +467,10 @@ export async function recordShowcaseFeedEvent({
       return { ok: false, status: 400, body: { error: deliveryValidation.error } };
     }
 
+    if (payload.eventType === 'media_progress' && payload.progress === null) {
+      return { ok: false, status: 400, body: { error: 'Media progress events require a progress value.' } };
+    }
+
     if (SAVE_STATE_EVENT_TYPES.has(payload.eventType) && actorUserId) {
       const saveStateValidation = await validateAuthoritativeSaveState({
         actorUserId,
@@ -482,22 +486,40 @@ export async function recordShowcaseFeedEvent({
       }
     }
 
-    const { error } = await serviceClient.from('feed_events').insert({
-      client_event_id: payload.clientEventId,
-      session_id: payload.feedSessionId,
-      session_item_id: payload.deliveryId,
-      viewer_user_id: actorUserId,
-      anonymous_key_hash: actorUserId ? null : anonymousKeyHash,
-      post_id: payload.postId,
-      creator_user_id: typedPost.user_id,
-      event_type: payload.eventType,
-      source_surface: payload.sourceSurface,
-      position: payload.position,
-      duration_ms: payload.durationMs,
-      progress: payload.progress,
-      metadata: payload.metadata,
-      occurred_at: payload.occurredAt,
-    });
+    // media_progress arrives repeatedly (milestone/background/exit flushes);
+    // the RPC upserts the single per-delivery row with GREATEST semantics.
+    const { error } = payload.eventType === 'media_progress'
+      ? await serviceClient.rpc('record_feed_media_progress_event', {
+        p_client_event_id: payload.clientEventId,
+        p_session_id: payload.feedSessionId,
+        p_session_item_id: payload.deliveryId,
+        p_viewer_user_id: actorUserId,
+        p_anonymous_key_hash: actorUserId ? null : anonymousKeyHash,
+        p_post_id: payload.postId,
+        p_creator_user_id: typedPost.user_id,
+        p_source_surface: payload.sourceSurface,
+        p_position: payload.position,
+        p_duration_ms: payload.durationMs,
+        p_progress: payload.progress,
+        p_metadata: payload.metadata,
+        p_occurred_at: payload.occurredAt,
+      })
+      : await serviceClient.from('feed_events').insert({
+        client_event_id: payload.clientEventId,
+        session_id: payload.feedSessionId,
+        session_item_id: payload.deliveryId,
+        viewer_user_id: actorUserId,
+        anonymous_key_hash: actorUserId ? null : anonymousKeyHash,
+        post_id: payload.postId,
+        creator_user_id: typedPost.user_id,
+        event_type: payload.eventType,
+        source_surface: payload.sourceSurface,
+        position: payload.position,
+        duration_ms: payload.durationMs,
+        progress: payload.progress,
+        metadata: payload.metadata,
+        occurred_at: payload.occurredAt,
+      });
 
     if (error?.code === '23505') {
       existingResult = await loadExistingFeedEvent(serviceClient, payload.clientEventId);

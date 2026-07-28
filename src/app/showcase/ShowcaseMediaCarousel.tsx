@@ -36,6 +36,8 @@ interface ShowcaseMediaCarouselProps {
   onMediaReady?: (item: ShowcaseMediaItem) => void;
   onMediaError?: (item: ShowcaseMediaItem) => void;
   onMediaRetry?: (item: ShowcaseMediaItem) => void;
+  /** Playback position samples for the active video (fraction 0..1, duration ms). */
+  onVideoProgress?: (progress: number, durationMs: number) => void;
 }
 
 const MEDIA_LOAD_TIMEOUT_MS = 15_000;
@@ -64,6 +66,7 @@ export default function ShowcaseMediaCarousel({
   onMediaReady,
   onMediaError,
   onMediaRetry,
+  onVideoProgress,
 }: ShowcaseMediaCarouselProps) {
   const items = useMemo(
     () => mediaItems.slice().sort((left, right) => left.sortOrder - right.sortOrder),
@@ -430,6 +433,11 @@ export default function ShowcaseMediaCarousel({
                 onLoadedData={(event) => reportActiveVideoReady(event.currentTarget)}
                 onCanPlay={(event) => reportActiveVideoReady(event.currentTarget)}
                 onPlaying={(event) => reportActiveVideoReady(event.currentTarget)}
+                onTimeUpdate={(event) => {
+                  const media = event.currentTarget;
+                  if (!onVideoProgress || !Number.isFinite(media.duration) || media.duration <= 0) return;
+                  onVideoProgress(media.currentTime / media.duration, media.duration * 1000);
+                }}
                 onError={reportActiveMediaError}
                 className={`h-full w-full ${frameFit === 'cover' ? 'object-cover' : 'object-contain'}`}
               />

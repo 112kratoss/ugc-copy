@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { resolveFeedExperimentAssignment } from '@/lib/feed-experiments';
 import type {
   ShowcaseCategory,
   ShowcaseFeedItem,
@@ -10,6 +11,7 @@ import type {
   ShowcaseUnlockFilter,
 } from '@/lib/showcase';
 import {
+  DEFAULT_SEEN_REPEAT_PENALTY,
   SHOWCASE_FEED_ALGORITHM_VERSION,
   SHOWCASE_FEED_CANDIDATE_LIMIT,
   SHOWCASE_FEED_ELIGIBLE_ITEM_LIMIT,
@@ -57,12 +59,26 @@ type ActiveAlgorithmRow = {
   diversity_config: Record<string, unknown>;
 };
 
+type RankedFeedRetrievalConfig = {
+  candidateRpc: 'v1' | 'v2';
+  followingLimit: number;
+  interestLimit: number;
+  trendingLimit: number;
+  recentLimit: number;
+  explorationLimit: number;
+  seenLookbackDays: number;
+  seenPenalty: number;
+  creatorPriorCap: number;
+  explorationConfidence: number;
+};
+
 type ActiveAlgorithmConfig = ActiveAlgorithmRow & {
   algorithmVersion: string;
   candidateLimit: number;
   eligibleItemLimit: number;
   scoreWeights: RankedFeedScoreWeights;
   diversityConfig: RankedFeedDiversityConfig;
+  retrieval: RankedFeedRetrievalConfig;
 };
 
 const FEED_SESSION_REUSE_TTL_MS = 2 * 60 * 1000;
@@ -86,6 +102,11 @@ function scoreComponents(features: RankedFeedFeatureRow) {
     exploration_bonus: features.explorationBonus,
     quick_skip_risk: features.quickSkipRisk,
     negative_feedback_risk: features.negativeFeedbackRisk,
+    engagement_depth: features.engagementDepth,
+    attention_seconds_norm: features.attentionSecondsNorm,
+    creator_quality: features.creatorQuality,
+    exploration_ucb: features.explorationUcb,
+    seen_recently: features.seenRecently,
     semantic_cluster: features.semanticCluster ?? null,
   };
 }
@@ -105,6 +126,12 @@ function featureRowFromSessionItem(row: FeedSessionItemRow): RankedFeedFeatureRo
     explorationBonus: 0,
     quickSkipRisk: 0,
     negativeFeedbackRisk: 0,
+    engagementDepth: 0,
+    attentionSecondsNorm: 0,
+    creatorQuality: 0,
+    explorationUcb: 0,
+    seenRecently: false,
+    lastSeenAt: null,
     candidateSource: 'fresh',
   };
 }
@@ -212,6 +239,37 @@ function boundedInteger(value: unknown, fallback: number, minimum: number, maxim
   return parsed;
 }
 
+function boundedFraction(value: unknown, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
+}
+
+/**
+ * Retrieval is configuration-driven from v2 onward. v1 hard-coded its pool
+ * sizes in SQL and ignored these values, which is why a re-weighted variant
+ * could not change what was actually retrieved.
+ */
+function normalizeRetrievalConfig(
+  config: Record<string, unknown> | null | undefined,
+): RankedFeedRetrievalConfig {
+  const retrieval = config ?? {};
+  return {
+    candidateRpc: retrieval.candidate_rpc === 'v2' ? 'v2' : 'v1',
+    followingLimit: boundedInteger(retrieval.following_limit, 100, 0, 500),
+    interestLimit: boundedInteger(retrieval.interest_limit, 150, 0, 500),
+    trendingLimit: boundedInteger(retrieval.trending_limit, 100, 0, 500),
+    recentLimit: boundedInteger(retrieval.recent_limit, 150, 0, 500),
+    explorationLimit: boundedInteger(retrieval.exploration_limit, 100, 0, 500),
+    seenLookbackDays: boundedInteger(retrieval.seen_lookback_days, 14, 0, 365),
+    seenPenalty: boundedFraction(retrieval.seen_penalty, DEFAULT_SEEN_REPEAT_PENALTY),
+    creatorPriorCap: boundedFraction(retrieval.creator_prior_cap, 0.15),
+    explorationConfidence: (() => {
+      const parsed = Number(retrieval.exploration_confidence);
+      return Number.isFinite(parsed) && parsed >= 0 && parsed <= 5 ? parsed : 1.5;
+    })(),
+  };
+}
+
 function normalizeAlgorithmConfig(row: ActiveAlgorithmRow): ActiveAlgorithmConfig {
   return {
     ...row,
@@ -230,6 +288,7 @@ function normalizeAlgorithmConfig(row: ActiveAlgorithmRow): ActiveAlgorithmConfi
     ),
     scoreWeights: normalizeRankedFeedScoreWeights(row.weights),
     diversityConfig: normalizeRankedFeedDiversityConfig(row.diversity_config),
+    retrieval: normalizeRetrievalConfig(row.retrieval_config),
   };
 }
 
@@ -246,6 +305,48 @@ async function getAlgorithmVersion(
   const { data, error } = await query.maybeSingle();
   if (error || !data) return null;
   return normalizeAlgorithmConfig(data as ActiveAlgorithmRow);
+}
+
+/**
+ * An assigned variant's algorithm outranks the active one. If the assignment
+ * points at a version that no longer loads, fall back to active rather than
+ * failing the request — but drop the assignment id with it, so no delivery is
+ * ever attributed to an arm it was not actually served.
+ */
+async function resolveAlgorithmForViewer({
+  anonymousKeyHash,
+  serviceClient,
+  viewerUserId,
+}: {
+  anonymousKeyHash: string | null;
+  serviceClient: SupabaseClient;
+  viewerUserId: string | null;
+}) {
+  const assignment = await resolveFeedExperimentAssignment({
+    anonymousKeyHash,
+    serviceClient,
+    viewerUserId,
+  }).catch(() => null);
+
+  if (assignment) {
+    const assigned = await getAlgorithmVersion(serviceClient, assignment.variant.algorithmVersionId);
+    if (assigned) {
+      return {
+        algorithm: assigned,
+        experimentAssignmentId: assignment.assignmentId,
+        experimentId: assignment.experimentId,
+        experimentVariantId: assignment.variant.id,
+      };
+    }
+  }
+
+  const active = await getAlgorithmVersion(serviceClient);
+  return {
+    algorithm: active,
+    experimentAssignmentId: null,
+    experimentId: null,
+    experimentVariantId: null,
+  };
 }
 
 async function loadPersistedPage({
@@ -356,6 +457,7 @@ async function loadPersistedPage({
       .from('feed_session_items')
       .update({ served_at: new Date().toISOString() })
       .in('id', pageRows.map(({ row }) => row.id));
+    await markDeliveryFactsServed(serviceClient, pageRows.map(({ row }) => row.id));
   }
 
   return buildPage({
@@ -382,6 +484,9 @@ async function loadPersistedPage({
 async function persistRankedSession({
   algorithmVersionId,
   anonymousKeyHash,
+  experimentAssignmentId,
+  experimentId,
+  experimentVariantId,
   filters,
   ranked,
   serviceClient,
@@ -389,6 +494,9 @@ async function persistRankedSession({
 }: {
   algorithmVersionId: string;
   anonymousKeyHash: string | null;
+  experimentAssignmentId: number | null;
+  experimentId: string | null;
+  experimentVariantId: string | null;
   filters: RankedFeedFilters;
   ranked: RankedShowcaseItem[];
   serviceClient: SupabaseClient;
@@ -407,6 +515,7 @@ async function persistRankedSession({
       mode: 'for-you',
       filters,
       algorithm_version_id: algorithmVersionId,
+      experiment_assignment_id: experimentAssignmentId,
       random_seed: Math.floor(Math.random() * 2_147_483_647),
       expires_at: new Date(now.getTime() + FEED_SESSION_EXPIRY_MS).toISOString(),
     })
@@ -433,6 +542,46 @@ async function persistRankedSession({
     return null;
   }
 
+  // Durable exposure facts mirror the session items but survive session
+  // pruning; outcome columns are filled by database triggers as events arrive.
+  const factRows = ((itemData ?? []) as Array<{ id: string | number; position: number }>)
+    .flatMap((row) => {
+      const entry = ranked[row.position];
+      if (!entry) return [];
+      return [{
+        delivery_id: row.id,
+        session_id: sessionId,
+        algorithm_version_id: algorithmVersionId,
+        experiment_assignment_id: experimentAssignmentId,
+        experiment_id: experimentId,
+        experiment_variant_id: experimentVariantId,
+        viewer_user_id: viewerUserId,
+        anonymous_key_hash: viewerUserId ? null : anonymousKeyHash,
+        post_id: entry.item.id,
+        creator_user_id: entry.item.creator.id || null,
+        position: row.position,
+        candidate_source: entry.features.candidateSource,
+        is_exploration: entry.features.candidateSource === 'exploration',
+        // UCB slot selection is deterministic in v2. Conditional on the
+        // ranking context, the logged policy propensity is therefore 1 or 0;
+        // a future stochastic policy must replace this with its draw
+        // probability before inverse-propensity training is enabled.
+        exploration_propensity: entry.features.candidateSource === 'exploration' ? 1 : 0,
+        final_score: entry.score,
+        score_components: scoreComponents(entry.features),
+        surface: 'showcase',
+        mode: 'for-you',
+        ranked_at: now.toISOString(),
+      }];
+    });
+  const { error: factError } = await serviceClient
+    .from('feed_delivery_facts')
+    .insert(factRows);
+  if (factError) {
+    await serviceClient.from('feed_sessions').delete().eq('id', sessionId);
+    return null;
+  }
+
   return {
     sessionId,
     deliveryIdsByPosition: new Map(
@@ -442,13 +591,32 @@ async function persistRankedSession({
   };
 }
 
+/**
+ * Write-once serve marker: served_at is the denominator for qualified-view
+ * rates, so it must record the first time a delivery was actually returned in
+ * a page, and never move afterwards.
+ */
+async function markDeliveryFactsServed(
+  serviceClient: SupabaseClient,
+  deliveryIds: Array<string | number>,
+) {
+  if (deliveryIds.length === 0) return;
+  await serviceClient
+    .from('feed_delivery_facts')
+    .update({ served_at: new Date().toISOString() })
+    .in('delivery_id', deliveryIds)
+    .is('served_at', null);
+}
+
 async function loadCandidateFeatures({
-  candidateLimit,
+  algorithm,
+  anonymousKeyHash,
   category,
   serviceClient,
   viewerUserId,
 }: {
-  candidateLimit: number;
+  algorithm: ActiveAlgorithmConfig;
+  anonymousKeyHash: string | null;
   category: ShowcaseCategory;
   serviceClient: SupabaseClient;
   viewerUserId: string | null;
@@ -456,12 +624,32 @@ async function loadCandidateFeatures({
   const rpcCategory = category === 'all' || category === 'image' || category === 'video' || category === 'text'
     ? null
     : category;
-  const { data, error } = await serviceClient.rpc('get_ranked_feed_candidates', {
-    p_viewer_user_id: viewerUserId,
-    p_category: rpcCategory,
-    p_limit: candidateLimit,
-    p_as_of: new Date().toISOString(),
-  });
+  const asOf = new Date().toISOString();
+  const { retrieval } = algorithm;
+  const { data, error } = retrieval.candidateRpc === 'v2'
+    ? await serviceClient.rpc('get_ranked_feed_candidates_v2', {
+      p_viewer_user_id: viewerUserId,
+      // Anonymous viewers get seen suppression too; without the hash their
+      // repeat history is invisible and the feed loops for exactly the
+      // audience least likely to tolerate it.
+      p_anonymous_key_hash: viewerUserId ? null : anonymousKeyHash,
+      p_category: rpcCategory,
+      p_following_limit: retrieval.followingLimit,
+      p_interest_limit: retrieval.interestLimit,
+      p_trending_limit: retrieval.trendingLimit,
+      p_recent_limit: retrieval.recentLimit,
+      p_exploration_limit: retrieval.explorationLimit,
+      p_seen_lookback_days: retrieval.seenLookbackDays,
+      p_creator_prior_cap: retrieval.creatorPriorCap,
+      p_exploration_confidence: retrieval.explorationConfidence,
+      p_as_of: asOf,
+    })
+    : await serviceClient.rpc('get_ranked_feed_candidates', {
+      p_viewer_user_id: viewerUserId,
+      p_category: rpcCategory,
+      p_limit: algorithm.candidateLimit,
+      p_as_of: asOf,
+    });
   if (error) return null;
   return ((data ?? []) as RankedCandidateRpcRow[])
     .map(normalizeRankedFeedFeatureRow)
@@ -503,12 +691,14 @@ async function hydrateEligibleCandidates({
 async function findReusableSession({
   algorithmVersionId,
   anonymousKeyHash,
+  experimentAssignmentId,
   filters,
   serviceClient,
   viewerUserId,
 }: {
   algorithmVersionId: string;
   anonymousKeyHash: string | null;
+  experimentAssignmentId: number | null;
   filters: RankedFeedFilters;
   serviceClient: SupabaseClient;
   viewerUserId: string | null;
@@ -525,6 +715,9 @@ async function findReusableSession({
     .contains('filters', filters)
     .gt('expires_at', now.toISOString())
     .gte('created_at', new Date(now.getTime() - FEED_SESSION_REUSE_TTL_MS).toISOString());
+  query = experimentAssignmentId === null
+    ? query.is('experiment_assignment_id', null)
+    : query.eq('experiment_assignment_id', experimentAssignmentId);
   query = viewerUserId
     ? query.eq('viewer_user_id', viewerUserId).is('anonymous_key_hash', null)
     : query.is('viewer_user_id', null).eq('anonymous_key_hash', anonymousKeyHash);
@@ -591,7 +784,16 @@ export async function getPersonalizedShowcaseFeedPage({
     });
   }
 
-  const algorithm = await getAlgorithmVersion(serviceClient);
+  const {
+    algorithm,
+    experimentAssignmentId,
+    experimentId,
+    experimentVariantId,
+  } = await resolveAlgorithmForViewer({
+    anonymousKeyHash,
+    serviceClient,
+    viewerUserId,
+  });
   if (!algorithm) {
     const fallback = await fallbackItems(Math.min(
       SHOWCASE_FEED_ELIGIBLE_ITEM_LIMIT,
@@ -612,6 +814,7 @@ export async function getPersonalizedShowcaseFeedPage({
     const reusableSessionId = await findReusableSession({
       algorithmVersionId: algorithm.id,
       anonymousKeyHash,
+      experimentAssignmentId,
       filters,
       serviceClient,
       viewerUserId,
@@ -630,14 +833,19 @@ export async function getPersonalizedShowcaseFeedPage({
   }
 
   const featureRows = await loadCandidateFeatures({
-    candidateLimit: algorithm.candidateLimit,
+    algorithm,
+    anonymousKeyHash,
     category: filters.category,
     serviceClient,
     viewerUserId,
   });
+  // Hydration is budgeted, so the pre-sort must already respect the seen tier;
+  // otherwise repeats consume the budget and never reach the reranker as the
+  // last resort they are meant to be.
   const configuredFeatureRows = featureRows
     ? [...featureRows].sort((left, right) => (
-      scoreRankedFeedFeatures(right, algorithm.scoreWeights)
+      Number(left.seenRecently) - Number(right.seenRecently)
+      || scoreRankedFeedFeatures(right, algorithm.scoreWeights)
       - scoreRankedFeedFeatures(left, algorithm.scoreWeights)
     ))
     : null;
@@ -664,10 +872,14 @@ export async function getPersonalizedShowcaseFeedPage({
     featureRows: configuredFeatureRows ?? [],
     scoreWeights: algorithm.scoreWeights,
     diversityConfig: algorithm.diversityConfig,
+    seenPenalty: algorithm.retrieval.seenPenalty,
   }).slice(0, algorithm.eligibleItemLimit);
   const persisted = await persistRankedSession({
     algorithmVersionId: algorithm.id,
     anonymousKeyHash,
+    experimentAssignmentId,
+    experimentId,
+    experimentVariantId,
     filters,
     ranked,
     serviceClient,
@@ -675,6 +887,14 @@ export async function getPersonalizedShowcaseFeedPage({
   });
   const pageEntries = ranked.slice(offset, offset + limit);
   const hasMore = Boolean(persisted && ranked.length > offset + limit);
+  if (persisted && pageEntries.length > 0) {
+    await markDeliveryFactsServed(
+      serviceClient,
+      pageEntries
+        .map((_, index) => persisted.deliveryIdsByPosition.get(offset + index))
+        .filter((id): id is string => Boolean(id)),
+    );
+  }
   const items = persisted
     ? attachRecommendations(
       pageEntries,
