@@ -31,6 +31,10 @@ import {
   type ShowcaseFeedbackAction,
 } from '@/app/showcase/ShowcaseFeedInteraction';
 import {
+  createShowcaseMediaProgressTracker,
+  type ShowcaseMediaProgressTracker,
+} from '@/lib/showcase-media-progress';
+import {
   formatPostResourceBundleCountSummary,
   getBundleAccessLabel,
   getPostResourceKindLabel,
@@ -293,6 +297,8 @@ export default function ShowcaseReelViewer({
   useEffect(() => {
     feedEventItemRef.current = item;
   }, [item]);
+  const mediaProgressTrackerRef = useRef<ShowcaseMediaProgressTracker | null>(null);
+  const flushMediaProgressRef = useRef<() => void>(() => {});
   const selectedAssetId = item?.asset?.id ?? null;
   const isPublicRecipeAsset = Boolean(selectedAssetId && isGenerationRecipeAssetId(selectedAssetId));
   const mediaItems = useMemo(() => item ? getItemMediaItems(item) : [], [item]);
@@ -508,6 +514,25 @@ export default function ShowcaseReelViewer({
       return;
     }
 
+    // One max-progress tracker per viewed item; milestone/background flushes
+    // go through the ref so listeners outside this effect stay current.
+    const mediaProgressTracker = createShowcaseMediaProgressTracker();
+    mediaProgressTrackerRef.current = mediaProgressTracker;
+    flushMediaProgressRef.current = () => {
+      const flush = mediaProgressTracker.takeFlush();
+      if (!flush) return;
+      void sendShowcaseFeedEvent({
+        item: trackedItem,
+        eventType: 'media_progress',
+        sourceSurface: 'showcase-reel',
+        accessToken,
+        feedSessionId,
+        fallbackPosition: selectedIndex,
+        progress: flush.progress,
+        ...(flush.durationMs !== null ? { durationMs: flush.durationMs } : {}),
+      }).catch(() => undefined);
+    };
+
     const startedAt = Date.now();
     let openWasSent = false;
     const sendOpenTimer = window.setTimeout(() => {
@@ -535,6 +560,7 @@ export default function ShowcaseReelViewer({
     return () => {
       window.clearTimeout(sendOpenTimer);
       window.clearTimeout(sendImpressionTimer);
+      flushMediaProgressRef.current();
       const durationMs = Date.now() - startedAt;
       if (!openWasSent || durationMs < 250) {
         return;
@@ -551,6 +577,27 @@ export default function ShowcaseReelViewer({
       }).catch(() => undefined);
     };
   }, [accessToken, feedSessionId, isOpen, selectedFeedItemId, selectedIndex]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    // App-kill and tab-switch would otherwise lose the furthest playback
+    // position; the server upserts with GREATEST so extra flushes are safe.
+    const flushWhenHidden = () => {
+      if (document.visibilityState === 'hidden') {
+        flushMediaProgressRef.current();
+      }
+    };
+    const flushOnPageHide = () => flushMediaProgressRef.current();
+    document.addEventListener('visibilitychange', flushWhenHidden);
+    window.addEventListener('pagehide', flushOnPageHide);
+    return () => {
+      document.removeEventListener('visibilitychange', flushWhenHidden);
+      window.removeEventListener('pagehide', flushOnPageHide);
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen || selectedIndex < 0 || !nextItem || !hasMoreItems || isLoadingMoreItems) {
@@ -1377,6 +1424,12 @@ export default function ShowcaseReelViewer({
           }}
           onMediaError={(failedItem) => {
             setMediaLoadState(getReelMediaLifecycleKey(item.id, failedItem), 'error');
+          }}
+          onVideoProgress={(progress, durationMs) => {
+            const tracker = mediaProgressTrackerRef.current;
+            if (tracker?.record(progress, durationMs)) {
+              flushMediaProgressRef.current();
+            }
           }}
           onMediaRetry={(retryItem) => {
             setMediaLoadState(getReelMediaLifecycleKey(item.id, retryItem), null);

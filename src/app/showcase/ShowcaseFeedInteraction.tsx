@@ -17,6 +17,7 @@ export type ShowcaseFeedEventType =
   | 'impression'
   | 'open'
   | 'dwell'
+  | 'media_progress'
   | 'quick_skip'
   | 'save'
   | 'unsave'
@@ -56,6 +57,7 @@ const DELIVERY_REQUIRED_EVENT_TYPES = new Set<ShowcaseFeedEventType>([
   'impression',
   'open',
   'dwell',
+  'media_progress',
   'quick_skip',
   'share',
   'remix_start',

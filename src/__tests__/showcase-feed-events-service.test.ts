@@ -36,10 +36,12 @@ function createServiceClient({
   existingEvents = [null],
   eventInsertError = null,
   postSaved = false,
+  rpcError = null,
 }: {
   existingEvents?: Array<ExistingEvent | null>;
   eventInsertError?: { code: string } | null;
   postSaved?: boolean;
+  rpcError?: { code: string } | null;
 } = {}) {
   const operations: string[] = [];
   const feedbackUpsert = vi.fn(async () => {
@@ -49,6 +51,10 @@ function createServiceClient({
   const eventInsert = vi.fn(async () => {
     operations.push('event-insert');
     return { error: eventInsertError };
+  });
+  const rpc = vi.fn(async () => {
+    operations.push('rpc');
+    return { error: rpcError };
   });
   let existingRead = 0;
 
@@ -132,10 +138,11 @@ function createServiceClient({
   });
 
   return {
-    client: { from } as unknown as SupabaseClient,
+    client: { from, rpc } as unknown as SupabaseClient,
     eventInsert,
     feedbackUpsert,
     operations,
+    rpc,
   };
 }
 
@@ -373,5 +380,94 @@ describe('recordShowcaseFeedEvent idempotency', () => {
 
     expect(result).toEqual({ ok: true, body: { success: true } });
     expect(service.operations).toEqual(['event-insert', 'feedback-upsert']);
+  });
+});
+
+describe('recordShowcaseFeedEvent media progress', () => {
+  it('routes media_progress through the GREATEST-upsert RPC instead of a plain insert', async () => {
+    const service = createServiceClient();
+
+    const result = await recordShowcaseFeedEvent({
+      actorUserId: 'viewer-1',
+      anonymousKeyHash: 'anon-hash',
+      payload: payload({
+        eventType: 'media_progress',
+        deliveryId: 'delivery-1',
+        feedSessionId: 'session-1',
+        progress: 0.62,
+        durationMs: 14_000,
+      }),
+      serviceClient: service.client,
+    });
+
+    expect(result).toEqual({ ok: true, body: { success: true } });
+    expect(service.eventInsert).not.toHaveBeenCalled();
+    expect(service.rpc).toHaveBeenCalledWith('record_feed_media_progress_event', {
+      p_client_event_id: 'event-1',
+      p_session_id: 'session-1',
+      p_session_item_id: 'delivery-1',
+      p_viewer_user_id: 'viewer-1',
+      p_anonymous_key_hash: null,
+      p_post_id: 'post-1',
+      p_creator_user_id: 'creator-1',
+      p_source_surface: 'showcase',
+      p_position: 0,
+      p_duration_ms: 14_000,
+      p_progress: 0.62,
+      p_metadata: {},
+      p_occurred_at: '2026-07-11T08:00:00.000Z',
+    });
+  });
+
+  it('rejects media_progress without a progress value before writing anything', async () => {
+    const service = createServiceClient();
+
+    const result = await recordShowcaseFeedEvent({
+      actorUserId: 'viewer-1',
+      anonymousKeyHash: 'anon-hash',
+      payload: payload({
+        eventType: 'media_progress',
+        deliveryId: 'delivery-1',
+        feedSessionId: 'session-1',
+        progress: null,
+      }),
+      serviceClient: service.client,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'Media progress events require a progress value.' },
+    });
+    expect(service.rpc).not.toHaveBeenCalled();
+    expect(service.eventInsert).not.toHaveBeenCalled();
+  });
+
+  it('treats a duplicate-keyed progress retry as an idempotent duplicate', async () => {
+    const service = createServiceClient({
+      rpcError: { code: '23505' },
+      existingEvents: [null, {
+        post_id: 'post-1',
+        creator_user_id: 'creator-1',
+        event_type: 'media_progress',
+        source_surface: 'showcase',
+        viewer_user_id: 'viewer-1',
+        anonymous_key_hash: null,
+      }],
+    });
+
+    const result = await recordShowcaseFeedEvent({
+      actorUserId: 'viewer-1',
+      anonymousKeyHash: 'anon-hash',
+      payload: payload({
+        eventType: 'media_progress',
+        deliveryId: 'delivery-1',
+        feedSessionId: 'session-1',
+        progress: 0.4,
+      }),
+      serviceClient: service.client,
+    });
+
+    expect(result).toEqual({ ok: true, body: { success: true, duplicate: true } });
   });
 });

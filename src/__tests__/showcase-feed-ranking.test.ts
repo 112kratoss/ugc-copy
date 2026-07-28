@@ -48,6 +48,12 @@ function features(postId: string, overrides: Partial<RankedFeedFeatureRow> = {})
     explorationBonus: 0,
     quickSkipRisk: 0,
     negativeFeedbackRisk: 0,
+    engagementDepth: 0,
+    attentionSecondsNorm: 0,
+    creatorQuality: 0,
+    explorationUcb: 0,
+    seenRecently: false,
+    lastSeenAt: null,
     candidateSource: 'fresh',
     ...overrides,
   };
