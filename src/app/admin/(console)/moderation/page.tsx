@@ -146,13 +146,6 @@ export default async function AdminModerationPage() {
                   </blockquote>
                 ) : null}
 
-                {report.comment ? (
-                  <div className="mt-3 rounded-xl bg-[var(--ui-surface-inset)] px-3 py-2">
-                    <Text as="span" variant="caption">Reported comment ({report.comment.status})</Text>
-                    <Text variant="bodySm" className="mt-1">{report.comment.body}</Text>
-                  </div>
-                ) : null}
-
                 <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   <Field label="Report id"><span className="font-mono text-xs">{shortId(report.id)}</span></Field>
                   <Field label="Surface">{report.sourceSurface}</Field>
@@ -164,6 +157,14 @@ export default async function AdminModerationPage() {
                     ) : '—'}
                   </Field>
                   <Field label="Generation">{report.generationId ? shortId(report.generationId) : '—'}</Field>
+                  {/*
+                    Comment reports show the id only. Hydrating the comment body
+                    into the queue is part of the separate post-comments work; this
+                    page deliberately depends only on the fields
+                    `SubjectModerationQueueItem` exposes today so the console does
+                    not couple to that branch.
+                  */}
+                  <Field label="Comment">{report.commentId ? shortId(report.commentId) : '—'}</Field>
                   <Field label="Reported at">{formatTimestamp(report.createdAt)}</Field>
                 </div>
 

@@ -7,10 +7,13 @@ set local search_path = public, extensions;
 
 select plan(21);
 
+-- The two ids must differ in their FIRST 8 hex characters: handle_new_user()
+-- derives a username as `creator-<left(uuid without dashes, 8)>`, so ids that
+-- share a leading block collide on profiles_username_unique_idx.
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
 values
   (
-    'a1000000-1000-4000-8000-000000000001'::uuid,
+    'a1000001-1000-4000-8000-000000000001'::uuid,
     'adjust-subject@example.invalid',
     'authenticated',
     'authenticated',
@@ -18,7 +21,7 @@ values
     '{}'::jsonb
   ),
   (
-    'a1000000-1000-4000-8000-000000000002'::uuid,
+    'a1000002-1000-4000-8000-000000000002'::uuid,
     'adjust-reviewer@example.invalid',
     'authenticated',
     'authenticated',
@@ -29,7 +32,7 @@ values
 update public.profiles
 set credits = 100,
     promotional_credits = 20
-where id = 'a1000000-1000-4000-8000-000000000001'::uuid;
+where id = 'a1000001-1000-4000-8000-000000000001'::uuid;
 
 -- Access control -----------------------------------------------------------
 
@@ -62,8 +65,8 @@ select ok(
 
 select is(
   public.apply_admin_credit_adjustment(
-    'a1000000-1000-4000-8000-000000000001'::uuid,
-    'a1000000-1000-4000-8000-000000000002'::uuid,
+    'a1000001-1000-4000-8000-000000000001'::uuid,
+    'a1000002-1000-4000-8000-000000000002'::uuid,
     0,
     500,
     'goodwill after a failed generation',
@@ -74,18 +77,18 @@ select is(
 );
 
 select is(
-  (select promotional_credits from public.profiles where id = 'a1000000-1000-4000-8000-000000000001'::uuid),
+  (select promotional_credits from public.profiles where id = 'a1000001-1000-4000-8000-000000000001'::uuid),
   520,
   'goodwill increases promotional credits'
 );
 select is(
-  (select credits from public.profiles where id = 'a1000000-1000-4000-8000-000000000001'::uuid),
+  (select credits from public.profiles where id = 'a1000001-1000-4000-8000-000000000001'::uuid),
   100,
   'goodwill leaves purchased credits untouched'
 );
 select is(
   (select reviewer_id from public.admin_credit_adjustments where idempotency_key = 'key-goodwill-1'),
-  'a1000000-1000-4000-8000-000000000002'::uuid,
+  'a1000002-1000-4000-8000-000000000002'::uuid,
   'the adjustment records the reviewer who authorised it'
 );
 select is(
@@ -98,8 +101,8 @@ select is(
 
 select is(
   public.apply_admin_credit_adjustment(
-    'a1000000-1000-4000-8000-000000000001'::uuid,
-    'a1000000-1000-4000-8000-000000000002'::uuid,
+    'a1000001-1000-4000-8000-000000000001'::uuid,
+    'a1000002-1000-4000-8000-000000000002'::uuid,
     0,
     500,
     'goodwill after a failed generation',
@@ -109,7 +112,7 @@ select is(
   'replaying an idempotency key reports already_applied'
 );
 select is(
-  (select promotional_credits from public.profiles where id = 'a1000000-1000-4000-8000-000000000001'::uuid),
+  (select promotional_credits from public.profiles where id = 'a1000001-1000-4000-8000-000000000001'::uuid),
   520,
   'a replayed adjustment does not credit a second time'
 );
@@ -123,8 +126,8 @@ select is(
 
 select is(
   public.apply_admin_credit_adjustment(
-    'a1000000-1000-4000-8000-000000000001'::uuid,
-    'a1000000-1000-4000-8000-000000000002'::uuid,
+    'a1000001-1000-4000-8000-000000000001'::uuid,
+    'a1000002-1000-4000-8000-000000000002'::uuid,
     250,
     0,
     'refund for an uncaptured purchase',
@@ -134,12 +137,12 @@ select is(
   'a refund applies'
 );
 select is(
-  (select credits from public.profiles where id = 'a1000000-1000-4000-8000-000000000001'::uuid),
+  (select credits from public.profiles where id = 'a1000001-1000-4000-8000-000000000001'::uuid),
   350,
   'a refund increases purchased credits'
 );
 select is(
-  (select promotional_credits from public.profiles where id = 'a1000000-1000-4000-8000-000000000001'::uuid),
+  (select promotional_credits from public.profiles where id = 'a1000001-1000-4000-8000-000000000001'::uuid),
   520,
   'a refund leaves promotional credits untouched'
 );
@@ -148,8 +151,8 @@ select is(
 
 select is(
   public.apply_admin_credit_adjustment(
-    'a1000000-1000-4000-8000-000000000001'::uuid,
-    'a1000000-1000-4000-8000-000000000002'::uuid,
+    'a1000001-1000-4000-8000-000000000001'::uuid,
+    'a1000002-1000-4000-8000-000000000002'::uuid,
     0,
     -600,
     'clawing back an abusive grant',
@@ -162,7 +165,7 @@ select is(
 -- 20260725231000_credit_integrity_constraints.sql: clawing back already-spent
 -- value must leave a debt rather than silently forgive it.
 select is(
-  (select promotional_credits from public.profiles where id = 'a1000000-1000-4000-8000-000000000001'::uuid),
+  (select promotional_credits from public.profiles where id = 'a1000001-1000-4000-8000-000000000001'::uuid),
   -80,
   'a clawback larger than the balance leaves the account in debt'
 );
@@ -171,8 +174,8 @@ select is(
 
 select is(
   public.apply_admin_credit_adjustment(
-    'a1000000-1000-4000-8000-000000000001'::uuid,
-    'a1000000-1000-4000-8000-000000000002'::uuid,
+    'a1000001-1000-4000-8000-000000000001'::uuid,
+    'a1000002-1000-4000-8000-000000000002'::uuid,
     0,
     0,
     'no-op',
@@ -183,8 +186,8 @@ select is(
 );
 select is(
   public.apply_admin_credit_adjustment(
-    'a1000000-1000-4000-8000-000000000001'::uuid,
-    'a1000000-1000-4000-8000-000000000002'::uuid,
+    'a1000001-1000-4000-8000-000000000001'::uuid,
+    'a1000002-1000-4000-8000-000000000002'::uuid,
     10,
     0,
     '   ',
@@ -195,8 +198,8 @@ select is(
 );
 select is(
   public.apply_admin_credit_adjustment(
-    'a1000000-1000-4000-8000-000000000001'::uuid,
-    'a1000000-1000-4000-8000-000000000002'::uuid,
+    'a1000001-1000-4000-8000-000000000001'::uuid,
+    'a1000002-1000-4000-8000-000000000002'::uuid,
     10,
     0,
     'missing idempotency key',
@@ -208,7 +211,7 @@ select is(
 select is(
   public.apply_admin_credit_adjustment(
     '00000000-0000-4000-8000-00000000dead'::uuid,
-    'a1000000-1000-4000-8000-000000000002'::uuid,
+    'a1000002-1000-4000-8000-000000000002'::uuid,
     10,
     0,
     'unknown subject',
@@ -229,7 +232,7 @@ select is(
 -- ON DELETE RESTRICT: an audit row that no longer names who authorised the
 -- change is not an audit row.
 select throws_ok(
-  $$delete from auth.users where id = 'a1000000-1000-4000-8000-000000000002'::uuid$$,
+  $$delete from auth.users where id = 'a1000002-1000-4000-8000-000000000002'::uuid$$,
   '23503',
   null,
   'a reviewer with recorded adjustments cannot be deleted'
@@ -237,7 +240,7 @@ select throws_ok(
 
 select is(
   (select count(*)::integer from public.admin_credit_adjustments
-   where user_id = 'a1000000-1000-4000-8000-000000000001'::uuid),
+   where user_id = 'a1000001-1000-4000-8000-000000000001'::uuid),
   3,
   'every applied adjustment is retained for audit'
 );
