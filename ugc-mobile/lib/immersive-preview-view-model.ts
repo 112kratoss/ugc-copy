@@ -130,6 +130,31 @@ export function immersiveViewerHref({
   };
 }
 
+export function immersiveViewerReturnPath({
+  algorithmVersion,
+  creatorUsername,
+  feedSessionId,
+  source,
+  initialId,
+}: {
+  algorithmVersion?: string | null;
+  creatorUsername?: string | null;
+  feedSessionId?: string | null;
+  source: PreviewViewerSource;
+  initialId: string;
+}) {
+  const params = [
+    ['source', source],
+    ['initialId', initialId],
+    ...(feedSessionId ? [['feedSessionId', feedSessionId]] : []),
+    ...(algorithmVersion ? [['algorithmVersion', algorithmVersion]] : []),
+    ...(creatorUsername ? [['creatorUsername', creatorUsername]] : []),
+  ];
+  return `/viewer?${params
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('&')}`;
+}
+
 export function profileMediaFeedHref({
   source,
   initialId,
@@ -162,7 +187,7 @@ export function buildImmersiveGenerationItems(
 export function buildImmersiveOwnerPostItems(
   source: PreviewViewerSource,
   items: OwnerPostListItem[],
-  owner: { creatorLabel: string; creatorAvatar?: string | null }
+  owner: { creatorLabel: string; creatorAvatar?: string | null; creatorId?: string | null }
 ) {
   return items.map((item) => ownerPostToImmersiveItem(source, item, owner));
 }
@@ -463,7 +488,7 @@ function getGenerationAvailableActions(
 function ownerPostToImmersiveItem(
   source: PreviewViewerSource,
   item: OwnerPostListItem,
-  owner: { creatorLabel: string; creatorAvatar?: string | null }
+  owner: { creatorLabel: string; creatorAvatar?: string | null; creatorId?: string | null }
 ): ImmersivePreviewItem {
   const textOnly = (item.category === 'text' || item.postFormat === 'text') && !item.mediaUrl;
   const displayText = item.body?.trim() || item.prompt?.trim() || item.title.trim() || 'Community post';
@@ -485,12 +510,13 @@ function ownerPostToImmersiveItem(
     previewKind: textOnly ? 'text' : undefined,
     creatorLabel: owner.creatorLabel,
     creatorAvatar: owner.creatorAvatar ?? null,
+    creatorId: owner.creatorId ?? null,
     badge: ownerPostBadge(item),
     saveLabel: '0',
     saveCount: 0,
-    commentLabel: '0',
-    commentCount: 0,
-    canComment: false,
+    commentLabel: formatCompactCount(item.commentCount),
+    commentCount: item.commentCount,
+    canComment: item.visibility === 'public' && !item.archivedAt,
     isSaved: false,
     canSave: false,
     canShare: true,

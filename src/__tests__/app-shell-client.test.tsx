@@ -78,6 +78,45 @@ describe('AppShellClient', () => {
     container.remove();
   });
 
+  it('hydrates the rewritten dashboard (/home on the server, / in the browser) without mismatch', async () => {
+    // Signed-in `/` is middleware-rewritten to `/home` (src/proxy.ts): the
+    // server render sees the internal pathname while the hydrated client
+    // sees the browser URL. Both must resolve to identical shell markup.
+    mockedPathname = '/home';
+    const serverHtml = renderToString(
+      <AppShellClient>
+        <div>Dashboard content</div>
+      </AppShellClient>
+    );
+    const container = document.createElement('div');
+    container.innerHTML = serverHtml;
+    document.body.appendChild(container);
+    mockedPathname = '/';
+    const onRecoverableError = vi.fn();
+
+    let root: ReturnType<typeof hydrateRoot>;
+    await act(async () => {
+      root = hydrateRoot(
+        container,
+        <AppShellClient>
+          <div>Dashboard content</div>
+        </AppShellClient>,
+        { onRecoverableError }
+      );
+    });
+
+    expect(onRecoverableError).not.toHaveBeenCalled();
+    expect(within(container).getByRole('banner')).toHaveTextContent('Home');
+    expect(
+      within(container)
+        .getAllByRole('link', { name: 'Home' })
+        .some((link) => link.getAttribute('aria-current') === 'page')
+    ).toBe(true);
+
+    await act(async () => root!.unmount());
+    container.remove();
+  });
+
   it('server-renders the current route title instead of a stale home title', () => {
     mockedPathname = '/marketplace';
 

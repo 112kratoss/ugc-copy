@@ -31,9 +31,11 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     label: 'Home',
     shortLabel: 'Home',
     href: '/',
-    description: 'Dashboard and recent creative context',
+    description: 'Community feed and your creative workspace',
     icon: Home,
-    match: (pathname) => pathname === '/',
+    // `/home` is the middleware rewrite target for signed-in `/` — match it
+    // too in case a server-rendered pathname leaks through.
+    match: (pathname) => pathname === '/' || pathname === '/home',
   },
   {
     id: 'feed',
@@ -156,6 +158,10 @@ export function isMinimalAppChromePath(pathname: string) {
     pathname.startsWith('/auth/') ||
     pathname === '/login' ||
     pathname.startsWith('/login?') ||
-    pathname.startsWith('/r/')
+    pathname.startsWith('/r/') ||
+    // The admin console renders its own operator chrome and must not show the
+    // consumer navigation, "Sign in" prompt, or mobile tab bar.
+    pathname === '/admin' ||
+    pathname.startsWith('/admin/')
   );
 }

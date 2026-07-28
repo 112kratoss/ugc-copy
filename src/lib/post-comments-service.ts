@@ -15,6 +15,7 @@ import { getCreatorDisplayName } from '@/lib/profile';
 export const POST_COMMENT_PAGE_SIZE = 20;
 export const POST_COMMENT_MAX_PAGE_SIZE = 50;
 export const POST_COMMENT_MAX_LENGTH = 2000;
+const UUID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 
 export type PostCommentSort = 'top' | 'newest';
 
@@ -57,7 +58,7 @@ export type PostCommentsPage = {
 type CommentRow = {
   id: string;
   post_id: string;
-  user_id: string;
+  user_id: string | null;
   parent_comment_id: string | null;
   body: string;
   status: PostCommentStatus;
@@ -116,8 +117,16 @@ export function normalizePostCommentBody(value: unknown) {
   return trimmed;
 }
 
+export function normalizePostCommentId(value: unknown) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return UUID_PATTERN.test(normalized) ? normalized : null;
+}
+
 function normalizeOptionalId(value: unknown) {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
+  return typeof value === 'string' && value.trim()
+    ? normalizePostCommentId(value)
+    : null;
 }
 
 function createRateLimitResult<TBody>(
@@ -140,7 +149,7 @@ function createRateLimitResult<TBody>(
 async function findCommentablePost(
   adminSupabase: SupabaseClient,
   postId: string,
-): Promise<PostReference | null> {
+): Promise<{ post: PostReference | null; error: unknown | null }> {
   const { data, error } = await adminSupabase
     .from('posts')
     .select('id, user_id, comment_count')
@@ -150,15 +159,15 @@ async function findCommentablePost(
     .eq('review_status', 'visible')
     .maybeSingle();
 
-  if (error || !data) return null;
-  return data as PostReference;
+  if (error) return { post: null, error };
+  return { post: data ? data as PostReference : null, error: null };
 }
 
 async function loadCommentAuthors(
   adminSupabase: SupabaseClient,
-  userIds: string[],
+  userIds: Array<string | null>,
 ): Promise<Map<string, ProfileRow>> {
-  const uniqueIds = Array.from(new Set(userIds.filter(Boolean)));
+  const uniqueIds = Array.from(new Set(userIds.filter((id): id is string => Boolean(id))));
   if (!uniqueIds.length) return new Map();
 
   const { data, error } = await adminSupabase
@@ -182,8 +191,8 @@ export function toPostCommentItem(
   row: CommentRow,
   profiles: Map<string, ProfileRow>,
 ): PostCommentItem {
-  const removed = row.status !== 'active';
-  const profile = removed ? undefined : profiles.get(String(row.user_id));
+  const removed = row.status !== 'active' || !row.user_id;
+  const profile = removed || !row.user_id ? undefined : profiles.get(row.user_id);
 
   return {
     id: row.id,
@@ -195,7 +204,7 @@ export function toPostCommentItem(
     author: removed
       ? null
       : {
-          id: String(row.user_id),
+          id: row.user_id as string,
           username: profile?.username ?? null,
           displayName: getCreatorDisplayName({
             displayName: profile?.display_name ?? null,
@@ -223,65 +232,121 @@ export async function listPostCommentsForRoute({
   offset?: number;
   createAdminSupabase: () => SupabaseClient;
 }): Promise<PostCommentsRouteResult<PostCommentsPage>> {
-  const adminSupabase = createAdminSupabase();
-  const post = await findCommentablePost(adminSupabase, postId);
+  const normalizedPostId = normalizePostCommentId(postId);
+  if (!normalizedPostId) {
+    return { ok: false, status: 400, body: { error: 'Choose a valid post.' } };
+  }
 
+  const normalizedParentId = normalizeOptionalId(parentId);
+  if (
+    typeof parentId === 'string'
+    && parentId.trim()
+    && !normalizedParentId
+  ) {
+    return { ok: false, status: 400, body: { error: 'Choose a valid parent comment.' } };
+  }
+
+  const adminSupabase = createAdminSupabase();
+  const postResult = await findCommentablePost(adminSupabase, normalizedPostId);
+
+  if (postResult.error) {
+    logBackendError('failed_to_load_commentable_post', { error: postResult.error });
+    return { ok: false, status: 500, body: { error: 'Failed to load comments.' } };
+  }
+
+  const post = postResult.post;
   if (!post) {
     return { ok: false, status: 404, body: { error: 'Post not found.' } };
   }
 
-  let query = adminSupabase
-    .from('post_comments')
-    .select('id, post_id, user_id, parent_comment_id, body, status, reply_count, created_at')
-    .eq('post_id', postId);
+  const buildQuery = () => {
+    let query = adminSupabase
+      .from('post_comments')
+      .select('id, post_id, user_id, parent_comment_id, body, status, reply_count, created_at')
+      .eq('post_id', normalizedPostId);
 
-  if (parentId) {
-    query = query.eq('parent_comment_id', parentId).eq('status', 'active').order('created_at', {
-      ascending: true,
-    });
-  } else {
-    // Removed top-level comments stay in the thread only while they still hold
-    // replies, so the conversation underneath them does not disappear.
-    query = query.is('parent_comment_id', null).or('status.eq.active,reply_count.gt.0');
+    if (normalizedParentId) {
+      query = query
+        .eq('parent_comment_id', normalizedParentId)
+        .eq('status', 'active')
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true });
+    } else {
+      // Removed top-level comments stay in the thread only while they still hold
+      // replies, so the conversation underneath them does not disappear.
+      query = query.is('parent_comment_id', null).or('status.eq.active,reply_count.gt.0');
 
-    if (sort === 'top') {
-      query = query.order('reply_count', { ascending: false });
+      if (sort === 'top') {
+        query = query.order('reply_count', { ascending: false });
+      }
+
+      query = query
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false });
     }
 
-    query = query.order('created_at', { ascending: false });
-  }
+    return query;
+  };
 
-  const { data, error } = await query.range(offset, offset + limit);
+  // Paging is based on visible comments, not raw rows. Otherwise a page made
+  // entirely of blocked authors can strand later safe comments behind an empty
+  // result. nextOffset remains the raw database offset so existing clients stay
+  // compatible.
+  const visibleRows: CommentRow[] = [];
+  const scanBatchSize = Math.max(limit + 1, POST_COMMENT_PAGE_SIZE);
+  let scanOffset = offset;
+  let hasMore = false;
+  let nextOffset: number | null = null;
 
-  if (error) {
-    logBackendError('failed_to_list_post_comments', { error });
-    return { ok: false, status: 500, body: { error: 'Failed to load comments.' } };
-  }
+  scan: while (true) {
+    const { data, error } = await buildQuery().range(
+      scanOffset,
+      scanOffset + scanBatchSize - 1,
+    );
 
-  const rows = (data ?? []) as CommentRow[];
-  const hasMore = rows.length > limit;
-  const pageRows = hasMore ? rows.slice(0, limit) : rows;
-
-  let visibleRows = pageRows;
-  if (viewerUserId) {
-    try {
-      const blockedIds = await loadBlockedCreatorIds({
-        adminSupabase,
-        creatorIds: pageRows.map((row) => String(row.user_id)),
-        viewerUserId,
-      });
-      visibleRows = pageRows.filter(
-        (row) => row.status !== 'active' || !blockedIds.has(String(row.user_id)),
-      );
-    } catch (blockError) {
-      logBackendError('failed_to_filter_blocked_post_comments', { error: blockError });
+    if (error) {
+      logBackendError('failed_to_list_post_comments', { error });
       return { ok: false, status: 500, body: { error: 'Failed to load comments.' } };
     }
+
+    const rows = (data ?? []) as CommentRow[];
+    let blockedIds = new Set<string>();
+    if (viewerUserId && rows.length > 0) {
+      try {
+        blockedIds = await loadBlockedCreatorIds({
+          adminSupabase,
+          creatorIds: rows
+            .map((row) => row.user_id)
+            .filter((id): id is string => Boolean(id)),
+          viewerUserId,
+        });
+      } catch (blockError) {
+        logBackendError('failed_to_filter_blocked_post_comments', { error: blockError });
+        return { ok: false, status: 500, body: { error: 'Failed to load comments.' } };
+      }
+    }
+
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      const isBlocked = row.status === 'active'
+        && Boolean(row.user_id && blockedIds.has(row.user_id));
+      if (isBlocked) continue;
+
+      if (visibleRows.length === limit) {
+        hasMore = true;
+        nextOffset = scanOffset + index;
+        break scan;
+      }
+      visibleRows.push(row);
+    }
+
+    if (rows.length < scanBatchSize) break;
+    scanOffset += rows.length;
   }
 
   const profiles = await loadCommentAuthors(
     adminSupabase,
-    visibleRows.map((row) => String(row.user_id)),
+    visibleRows.map((row) => row.user_id),
   );
 
   return {
@@ -294,7 +359,7 @@ export async function listPostCommentsForRoute({
       comments: visibleRows.map((row) => toPostCommentItem(row, profiles)),
       pageInfo: {
         hasMore,
-        nextOffset: hasMore ? offset + limit : null,
+        nextOffset,
         limit,
         offset,
       },
@@ -317,7 +382,17 @@ export async function createPostCommentForRoute({
 }): Promise<
   PostCommentsRouteResult<{ success: true; comment: PostCommentItem; commentCount: number }>
 > {
-  const raw = await readBody();
+  const normalizedPostId = normalizePostCommentId(postId);
+  if (!normalizedPostId) {
+    return { ok: false, status: 400, body: { error: 'Choose a valid post.' } };
+  }
+
+  let raw: unknown;
+  try {
+    raw = await readBody();
+  } catch {
+    return { ok: false, status: 400, body: { error: 'Request body must be valid JSON.' } };
+  }
   const payload = raw && typeof raw === 'object' && !Array.isArray(raw)
     ? (raw as { body?: unknown; parentId?: unknown })
     : {};
@@ -328,6 +403,14 @@ export async function createPostCommentForRoute({
   }
 
   const parentId = normalizeOptionalId(payload.parentId);
+  if (
+    payload.parentId !== undefined
+    && payload.parentId !== null
+    && payload.parentId !== ''
+    && !parentId
+  ) {
+    return { ok: false, status: 400, body: { error: 'Choose a valid parent comment.' } };
+  }
   const adminSupabase = createAdminSupabase();
 
   try {
@@ -344,7 +427,13 @@ export async function createPostCommentForRoute({
     return { ok: false, status: 500, body: { error: 'Failed to check comment limits.' } };
   }
 
-  const post = await findCommentablePost(adminSupabase, postId);
+  const postResult = await findCommentablePost(adminSupabase, normalizedPostId);
+  if (postResult.error) {
+    logBackendError('failed_to_load_commentable_post', { error: postResult.error });
+    return { ok: false, status: 500, body: { error: 'Failed to post comment.' } };
+  }
+
+  const post = postResult.post;
   if (!post) {
     return { ok: false, status: 404, body: { error: 'Post not found.' } };
   }
@@ -361,9 +450,9 @@ export async function createPostCommentForRoute({
   if (parentId) {
     const { data: parent, error: parentError } = await adminSupabase
       .from('post_comments')
-      .select('id, user_id, post_id, status')
+      .select('id, user_id, post_id, parent_comment_id, status')
       .eq('id', parentId)
-      .eq('post_id', postId)
+      .eq('post_id', normalizedPostId)
       .maybeSingle();
 
     if (parentError) {
@@ -375,9 +464,17 @@ export async function createPostCommentForRoute({
       return { ok: false, status: 404, body: { error: 'That comment is no longer available.' } };
     }
 
+    if (parent.parent_comment_id) {
+      return {
+        ok: false,
+        status: 400,
+        body: { error: 'Replies can only target top-level comments.' },
+      };
+    }
+
     if (await isCommentInteractionBlocked({
       actorUserId: authorUserId,
-      counterpartUserId: String(parent.user_id),
+      counterpartUserId: parent.user_id ? String(parent.user_id) : null,
       adminSupabase,
       checkRelationshipBlocked,
     })) {
@@ -386,7 +483,7 @@ export async function createPostCommentForRoute({
   }
 
   const { data, error } = await adminSupabase.rpc('create_post_comment', {
-    p_post_id: postId,
+    p_post_id: normalizedPostId,
     p_user_id: authorUserId,
     p_parent_comment_id: parentId,
     p_body: body,
@@ -420,7 +517,7 @@ export async function createPostCommentForRoute({
       comment: toPostCommentItem(
         {
           id: created.comment_id,
-          post_id: postId,
+          post_id: normalizedPostId,
           user_id: authorUserId,
           parent_comment_id: parentId,
           body,
@@ -447,6 +544,12 @@ export async function removePostCommentForRoute({
 }): Promise<
   PostCommentsRouteResult<{ success: true; status: PostCommentStatus; commentCount: number }>
 > {
+  const normalizedPostId = normalizePostCommentId(postId);
+  const normalizedCommentId = normalizePostCommentId(commentId);
+  if (!normalizedPostId || !normalizedCommentId) {
+    return { ok: false, status: 400, body: { error: 'Choose a valid comment.' } };
+  }
+
   const adminSupabase = createAdminSupabase();
 
   try {
@@ -466,8 +569,8 @@ export async function removePostCommentForRoute({
   const { data: comment, error: commentError } = await adminSupabase
     .from('post_comments')
     .select('id, post_id, user_id, posts!inner(user_id)')
-    .eq('id', commentId)
-    .eq('post_id', postId)
+    .eq('id', normalizedCommentId)
+    .eq('post_id', normalizedPostId)
     .maybeSingle();
 
   if (commentError) {
@@ -496,7 +599,7 @@ export async function removePostCommentForRoute({
   }
 
   const { data, error } = await adminSupabase.rpc('set_post_comment_status', {
-    p_comment_id: commentId,
+    p_comment_id: normalizedCommentId,
     p_actor_user_id: actorUserId,
     p_next_status: nextStatus,
   });

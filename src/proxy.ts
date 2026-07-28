@@ -1,12 +1,75 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import {
+  ADMIN_SESSION_COOKIE,
+  resolveAdminSessionSecret,
+  verifyAdminSessionToken,
+} from '@/lib/admin-session-token';
+import {
   MOBILE_CLIENT_COMPATIBILITY_POLICY,
   createMobileCompatibilityResponseHeaders,
   evaluateMobileClientCompatibility,
   isIdentifiedMobileClient,
 } from '@/lib/mobile-client-compatibility';
+import {
+  E2E_AUTH_COOKIE_NAME,
+  hasE2EAuthCookie,
+  isE2EAuthBypassEnabled,
+} from '@/lib/e2e-auth';
+import { hasSupabaseAuthCookie } from '@/lib/supabase-auth-cookie';
 import mobileApiOperationsV1 from '../contracts/mobile-api-operations-v1.json';
+
+/**
+ * Admin paths reachable without a session: the login screen itself and the
+ * endpoint that mints the session. Everything else under /admin and
+ * /api/admin is gated here *and* re-checked inside each route, because
+ * middleware is a convenience layer rather than the security boundary.
+ */
+const ADMIN_PUBLIC_PATHS = new Set(['/admin/login', '/api/admin/session']);
+
+export function isAdminPath(pathname: string) {
+  return pathname === '/admin'
+    || pathname.startsWith('/admin/')
+    || pathname === '/api/admin'
+    || pathname.startsWith('/api/admin/');
+}
+
+export function isPublicAdminPath(pathname: string) {
+  return ADMIN_PUBLIC_PATHS.has(pathname);
+}
+
+async function guardAdminRequest(request: NextRequest): Promise<NextResponse> {
+  const { pathname } = request.nextUrl;
+
+  const verification = await verifyAdminSessionToken(
+    request.cookies.get(ADMIN_SESSION_COOKIE)?.value,
+    { secret: resolveAdminSessionSecret(), now: new Date() },
+  );
+
+  if (verification.valid) {
+    const response = NextResponse.next();
+    response.headers.set('Cache-Control', 'private, no-store');
+    response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+    return response;
+  }
+
+  if (pathname.startsWith('/api/')) {
+    return NextResponse.json({ error: 'Unauthorized' }, {
+      status: 401,
+      headers: { 'Cache-Control': 'private, no-store' },
+    });
+  }
+
+  const loginUrl = request.nextUrl.clone();
+  loginUrl.pathname = '/admin/login';
+  loginUrl.search = '';
+  // Only same-site paths are echoed back, so the redirect cannot be used as an
+  // open redirect to an attacker-controlled origin.
+  if (pathname !== '/admin') {
+    loginUrl.searchParams.set('next', pathname);
+  }
+  return NextResponse.redirect(loginUrl);
+}
 
 const mobileCorsRouteTemplates = [
   ...Object.values(mobileApiOperationsV1.operations),
@@ -89,6 +152,52 @@ export function isRootAuthCodeRedirect(request: NextRequest) {
   return request.nextUrl.pathname === '/' && request.nextUrl.searchParams.has('code');
 }
 
+function hasSignedInHomeHint(request: NextRequest): boolean {
+  if (hasSupabaseAuthCookie(request.headers.get('cookie') ?? '')) {
+    return true;
+  }
+
+  return isE2EAuthBypassEnabled()
+    && hasE2EAuthCookie(request.cookies.get(E2E_AUTH_COOKIE_NAME)?.value);
+}
+
+/**
+ * Splits `/` between the statically prerendered marketing page (cookie-less
+ * traffic, SEO bots) and the signed-in dashboard served from `/home`.
+ *
+ * Cookie presence is only a routing hint, never authentication: the rewritten
+ * page re-verifies with getServerAuthState() and renders the marketing
+ * experience itself when the session turns out to be invalid — a redirect
+ * back to `/` would loop through this same rewrite.
+ *
+ * `/home` is an internal rewrite target only; direct hits bounce to `/` so it
+ * never becomes a second public URL for the same content.
+ */
+export function resolveRootHomeRouting(request: NextRequest): NextResponse | null {
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    return null;
+  }
+
+  const { pathname } = request.nextUrl;
+
+  if (pathname === '/home') {
+    const url = request.nextUrl.clone();
+    url.pathname = '/';
+    return NextResponse.redirect(url);
+  }
+
+  if (pathname !== '/' || !hasSignedInHomeHint(request)) {
+    return null;
+  }
+
+  const url = request.nextUrl.clone();
+  url.pathname = '/home';
+  const response = NextResponse.rewrite(url);
+  response.headers.set('Cache-Control', 'private, no-store');
+  response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+  return response;
+}
+
 export function isMobileCorsPath(pathname: string) {
   const pathnameParts = pathname.split('/').filter(Boolean);
   return mobileCorsRouteTemplates.some((template) => {
@@ -112,7 +221,17 @@ function applyMobileCompatibilityHeaders(response: NextResponse) {
   return response;
 }
 
-export function proxy(request: NextRequest) {
+export function proxy(request: NextRequest): NextResponse | Promise<NextResponse> {
+  // Admin traffic is resolved before the mobile compatibility gate: the admin
+  // console is a browser-only surface and must never be version-gated or
+  // CORS-exposed alongside the mobile API.
+  const { pathname } = request.nextUrl;
+  if (isAdminPath(pathname)) {
+    return isPublicAdminPath(pathname)
+      ? NextResponse.next()
+      : guardAdminRequest(request);
+  }
+
   if (isRootAuthCodeRedirect(request)) {
     const callbackUrl = request.nextUrl.clone();
     callbackUrl.pathname = '/auth/callback';
@@ -136,6 +255,11 @@ export function proxy(request: NextRequest) {
     });
   }
 
+  const homeRouting = resolveRootHomeRouting(request);
+  if (homeRouting) {
+    return homeRouting;
+  }
+
   if (!isMobilePath && !isIdentifiedMobileClient(request.headers)) {
     return NextResponse.next();
   }
@@ -153,5 +277,7 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/', '/api/:path*'],
+  // `/admin` is listed separately from `/admin/:path*` so the bare index route
+  // is gated too, regardless of how the matcher expands optional segments.
+  matcher: ['/', '/home', '/api/:path*', '/admin', '/admin/:path*'],
 };

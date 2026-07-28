@@ -42,6 +42,14 @@ export type SubjectModerationQueueItem = {
   updatedAt: string;
   reviewedAt: string | null;
   reviewedBy: string | null;
+  comment: {
+    id: string;
+    postId: string;
+    parentId: string | null;
+    authorUserId: string | null;
+    body: string;
+    status: string;
+  } | null;
 };
 
 export type ModerationQueueSnapshot = {
@@ -69,6 +77,11 @@ export type SubjectReportResolution = {
   reportId: string;
   reviewedAt: string | null;
   reviewedBy: string | null;
+  targetType: 'user' | 'generation' | 'comment';
+  commentId: string | null;
+  commentStatus: string | null;
+  commentRemoved: boolean;
+  resolvedReportCount?: number;
 };
 
 type PostReportRow = {
@@ -121,6 +134,15 @@ type SubjectReportRow = {
   updated_at: string;
   reviewed_at: string | null;
   reviewed_by: string | null;
+};
+
+type CommentModerationRow = {
+  id: string;
+  post_id: string;
+  parent_comment_id: string | null;
+  user_id: string | null;
+  body: string;
+  status: string;
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -283,7 +305,7 @@ export async function listOpenModerationReports(
     throw databaseError('Failed to list open post reports', postReportResult.error);
   }
   if (subjectReportResult.error) {
-    throw databaseError('Failed to list open user and generation reports', subjectReportResult.error);
+    throw databaseError('Failed to list open subject reports', subjectReportResult.error);
   }
 
   const postReportRows = (postReportResult.data ?? []) as PostReportRow[];
@@ -299,6 +321,25 @@ export async function listOpenModerationReports(
       throw databaseError('Failed to hydrate reported posts', postResult.error);
     }
     postsById = new Map(((postResult.data ?? []) as PostRow[]).map((row) => [row.id, row]));
+  }
+
+  const subjectReportRows = (subjectReportResult.data ?? []) as SubjectReportRow[];
+  const commentIds = [...new Set(subjectReportRows
+    .map((row) => row.comment_id)
+    .filter((id): id is string => Boolean(id)))];
+  let commentsById = new Map<string, CommentModerationRow>();
+
+  if (commentIds.length > 0) {
+    const commentResult = await supabase
+      .from('post_comments')
+      .select('id, post_id, parent_comment_id, user_id, body, status')
+      .in('id', commentIds);
+    if (commentResult.error) {
+      throw databaseError('Failed to hydrate reported comments', commentResult.error);
+    }
+    commentsById = new Map(
+      ((commentResult.data ?? []) as CommentModerationRow[]).map((row) => [row.id, row]),
+    );
   }
 
   return {
@@ -327,22 +368,35 @@ export async function listOpenModerationReports(
           : null,
       };
     }),
-    subjectReports: ((subjectReportResult.data ?? []) as SubjectReportRow[]).map((row) => ({
-      id: row.id,
-      reporterUserId: row.reporter_user_id,
-      targetType: row.target_type,
-      reportedUserId: row.reported_user_id,
-      generationId: row.generation_id,
-      commentId: row.comment_id,
-      reason: row.reason,
-      details: row.details,
-      sourceSurface: row.source_surface,
-      status: row.status as 'open' | 'reviewing',
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      reviewedAt: row.reviewed_at,
-      reviewedBy: row.reviewed_by,
-    })),
+    subjectReports: subjectReportRows.map((row) => {
+      const comment = row.comment_id ? commentsById.get(row.comment_id) ?? null : null;
+      return {
+        id: row.id,
+        reporterUserId: row.reporter_user_id,
+        targetType: row.target_type,
+        reportedUserId: row.reported_user_id,
+        generationId: row.generation_id,
+        commentId: row.comment_id,
+        reason: row.reason,
+        details: row.details,
+        sourceSurface: row.source_surface,
+        status: row.status as 'open' | 'reviewing',
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        reviewedAt: row.reviewed_at,
+        reviewedBy: row.reviewed_by,
+        comment: comment
+          ? {
+              id: comment.id,
+              postId: comment.post_id,
+              parentId: comment.parent_comment_id,
+              authorUserId: comment.user_id,
+              body: comment.body,
+              status: comment.status,
+            }
+          : null,
+      };
+    }),
   };
 }
 
@@ -414,57 +468,42 @@ export async function resolveSubjectReport(
     reportId: string;
     reviewerId: string;
     action: 'resolve' | 'dismiss';
-    now?: Date;
   },
 ): Promise<SubjectReportResolution> {
   const reportId = requireUuid(options.reportId, 'Report id');
   const reviewerId = requireUuid(options.reviewerId, 'Reviewer id');
-  const reviewedAt = (options.now ?? new Date()).toISOString();
-  const nextStatus = options.action === 'resolve' ? 'resolved' : 'dismissed';
-  const columns = 'id, status, reviewed_at, reviewed_by';
 
-  const { data, error } = await supabase
-    .from('moderation_reports')
-    .update({
-      status: nextStatus,
-      reviewed_at: reviewedAt,
-      reviewed_by: reviewerId,
-    })
-    .eq('id', reportId)
-    .in('status', ['open', 'reviewing'])
-    .select(columns)
-    .maybeSingle();
+  const { data, error } = await supabase.rpc('resolve_subject_report_for_ops', {
+    p_report_id: reportId,
+    p_reviewer_id: reviewerId,
+    p_action: options.action,
+  });
   if (error) {
-    throw databaseError('Failed to resolve user or generation report', error);
+    throw databaseError('Failed to resolve subject report', error);
   }
 
-  if (data) {
-    const row = data as Pick<SubjectReportRow, 'id' | 'status' | 'reviewed_at' | 'reviewed_by'>;
-    return {
-      status: row.status as 'resolved' | 'dismissed',
-      reportId: row.id,
-      reviewedAt: row.reviewed_at,
-      reviewedBy: row.reviewed_by,
-    };
+  const result = asRecord(data);
+  const status = result.status;
+  if (status !== 'resolved' && status !== 'dismissed' && status !== 'already_resolved') {
+    throw new Error('Subject report resolver returned an invalid response.');
   }
 
-  const current = await supabase
-    .from('moderation_reports')
-    .select(columns)
-    .eq('id', reportId)
-    .maybeSingle();
-  if (current.error) {
-    throw databaseError('Failed to inspect user or generation report', current.error);
-  }
-  if (!current.data) {
-    throw new Error('Moderation report not found.');
+  const targetType = result.target_type;
+  if (targetType !== 'user' && targetType !== 'generation' && targetType !== 'comment') {
+    throw new Error('Subject report resolver returned an invalid target type.');
   }
 
-  const currentRow = current.data as Pick<SubjectReportRow, 'id' | 'reviewed_at' | 'reviewed_by'>;
   return {
-    status: 'already_resolved',
-    reportId: currentRow.id,
-    reviewedAt: currentRow.reviewed_at,
-    reviewedBy: currentRow.reviewed_by,
+    status,
+    reportId: String(result.report_id ?? reportId),
+    reviewedAt: typeof result.reviewed_at === 'string' ? result.reviewed_at : null,
+    reviewedBy: typeof result.reviewed_by === 'string' ? result.reviewed_by : null,
+    targetType,
+    commentId: typeof result.comment_id === 'string' ? result.comment_id : null,
+    commentStatus: typeof result.comment_status === 'string' ? result.comment_status : null,
+    commentRemoved: result.comment_removed === true,
+    resolvedReportCount: typeof result.resolved_report_count === 'number'
+      ? result.resolved_report_count
+      : undefined,
   };
 }

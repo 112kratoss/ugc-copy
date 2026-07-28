@@ -4,6 +4,7 @@ import FeedClient from '@/app/feed/FeedClient';
 import { createMetadata } from '@/lib/seo';
 import { getShowcaseFeedPage } from '@/lib/showcase-feed';
 import { FEED_PAGE_SIZE, getFeedChip } from '@/lib/post-feed-chips';
+import { getServerAuthState } from '@/lib/supabase-server';
 
 type FeedPageProps = {
     searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -24,6 +25,7 @@ function getFirstValue(value: string | string[] | undefined) {
 export default async function FeedPage({ searchParams }: FeedPageProps) {
     const resolvedSearchParams = searchParams ? await searchParams : {};
     const chip = getFeedChip(getFirstValue(resolvedSearchParams.chip));
+    const auth = await getServerAuthState();
 
     const initialFeed = await getShowcaseFeedPage({
         category: 'all',
@@ -32,7 +34,7 @@ export default async function FeedPage({ searchParams }: FeedPageProps) {
         resource: 'all',
         offset: 0,
         limit: FEED_PAGE_SIZE,
-        viewerUserId: null,
+        viewerUserId: auth.session?.user?.id ?? null,
         tool: null,
         countryCode: null,
     });

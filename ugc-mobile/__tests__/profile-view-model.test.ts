@@ -131,6 +131,7 @@ describe('profile view model media cards', () => {
       visibility: 'public',
       mediaUrl: null,
       mediaKind: null,
+      commentCount: 0,
       body: '',
       prompt: '',
       description: '',

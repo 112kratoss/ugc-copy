@@ -4,7 +4,7 @@ This workflow is restricted to trusted staff using the Supabase service role. Ne
 
 ## Before first use
 
-1. Apply all pending Supabase migrations, including `20260721113000_operational_post_moderation.sql`.
+1. Apply all pending Supabase migrations, including `20260728143000_post_comments_integrity.sql`.
 2. Give each moderator a real Magicbooklet auth account. Its `auth.users.id` is the required reviewer id and becomes part of the audit record.
 3. Fill and approve the operating roster below. Placeholder values mean the launch gate is still open.
 4. Set `CHILD_SAFETY_CONTACT_EMAIL` to the staffed safety inbox. `/child-safety` falls back to general support so the page always works, but that fallback is not proof of staffed safety coverage.
@@ -67,6 +67,23 @@ npm run ops:moderation -- dismiss-post \
   --confirm
 ```
 
+## Comment reports
+
+The queue includes the comment id, post id, current status, and a short body
+preview. After confirming a violation, resolve the report:
+
+```sh
+npm run ops:moderation -- resolve-subject --report-id <report-uuid> --reviewer-id <moderator-auth-user-uuid> --confirm
+```
+
+For a comment target, this command atomically soft-removes an active comment as
+`removed_by_moderation`, repairs the post and parent-reply counters, records the
+reviewer and review time, and resolves every open duplicate report for that
+comment. It is idempotent when the comment or report was already resolved.
+
+Dismiss a non-violating comment report with `dismiss-subject`; dismissal leaves
+the comment untouched and closes only the selected report.
+
 ## User and generation reports
 
 For a user or generation report, first complete the required manual safety action. Then record the outcome:
@@ -76,7 +93,10 @@ npm run ops:moderation -- resolve-subject --report-id <report-uuid> --reviewer-i
 npm run ops:moderation -- dismiss-subject --report-id <report-uuid> --reviewer-id <moderator-auth-user-uuid> --confirm
 ```
 
-The subject-report schema records final status, reviewer, and review time. Keep detailed investigation notes in the restricted incident system until a dedicated resolution-note field is approved.
+The same subject-report command records final status, reviewer, and review time.
+For user and generation targets, complete the required manual safety action
+before resolving. Keep detailed investigation notes in the restricted incident
+system until a dedicated resolution-note field is approved.
 
 ## Safety escalation and verification
 

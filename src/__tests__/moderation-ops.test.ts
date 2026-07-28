@@ -10,6 +10,7 @@ import {
 const REPORT_ID = '10000000-0000-4000-8000-000000000001';
 const POST_ID = '20000000-0000-4000-8000-000000000002';
 const REVIEWER_ID = '30000000-0000-4000-8000-000000000003';
+const COMMENT_ID = '40000000-0000-4000-8000-000000000004';
 
 function queryResult(data: unknown, error: unknown = null) {
   const result = Promise.resolve({ data, error });
@@ -162,6 +163,54 @@ describe('moderation operations', () => {
     expect(exists).toHaveBeenCalledTimes(3);
   });
 
+  it('hydrates reported comments with enough context for an operator decision', async () => {
+    const postReports = queryResult([]);
+    const subjectReports = queryResult([{
+      id: REPORT_ID,
+      reporter_user_id: '50000000-0000-4000-8000-000000000005',
+      target_type: 'comment',
+      reported_user_id: null,
+      generation_id: null,
+      comment_id: COMMENT_ID,
+      reason: 'harassment',
+      details: 'Targeted abuse',
+      source_surface: 'comments',
+      status: 'open',
+      created_at: '2026-07-21T02:00:00.000Z',
+      updated_at: '2026-07-21T02:00:00.000Z',
+      reviewed_at: null,
+      reviewed_by: null,
+    }]);
+    const comments = queryResult([{
+      id: COMMENT_ID,
+      post_id: POST_ID,
+      parent_comment_id: null,
+      user_id: '60000000-0000-4000-8000-000000000006',
+      body: 'Reported body',
+      status: 'active',
+    }]);
+    const from = vi.fn((table: string) => {
+      if (table === 'post_reports') return postReports;
+      if (table === 'moderation_reports') return subjectReports;
+      if (table === 'post_comments') return comments;
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const snapshot = await listOpenModerationReports({ from } as unknown as SupabaseClient);
+
+    expect(comments.in).toHaveBeenCalledWith('id', [COMMENT_ID]);
+    expect(snapshot.subjectReports[0]).toMatchObject({
+      targetType: 'comment',
+      commentId: COMMENT_ID,
+      comment: {
+        id: COMMENT_ID,
+        postId: POST_ID,
+        body: 'Reported body',
+        status: 'active',
+      },
+    });
+  });
+
   it('fails closed when Storage still exposes a taken-down post object', async () => {
     const rpc = vi.fn(async () => ({
       data: {
@@ -208,31 +257,41 @@ describe('moderation operations', () => {
     expect(rpc).not.toHaveBeenCalled();
   });
 
-  it('records the reviewer and final status for user or generation reports', async () => {
-    const update = queryResult({
-      id: REPORT_ID,
-      status: 'resolved',
-      reviewed_at: '2026-07-21T04:00:00.000Z',
-      reviewed_by: REVIEWER_ID,
-    });
-    const from = vi.fn(() => update);
+  it('uses the atomic subject resolver and reports comment enforcement details', async () => {
+    const rpc = vi.fn(async () => ({
+      data: {
+        status: 'resolved',
+        report_id: REPORT_ID,
+        target_type: 'comment',
+        comment_id: COMMENT_ID,
+        comment_status: 'removed_by_moderation',
+        comment_removed: true,
+        resolved_report_count: 2,
+        reviewed_at: '2026-07-21T04:00:00.000Z',
+        reviewed_by: REVIEWER_ID,
+      },
+      error: null,
+    }));
 
-    const result = await resolveSubjectReport({ from } as unknown as SupabaseClient, {
+    const result = await resolveSubjectReport({ rpc } as unknown as SupabaseClient, {
       reportId: REPORT_ID,
       reviewerId: REVIEWER_ID,
       action: 'resolve',
-      now: new Date('2026-07-21T04:00:00.000Z'),
     });
 
-    expect(update.update).toHaveBeenCalledWith({
-      status: 'resolved',
-      reviewed_at: '2026-07-21T04:00:00.000Z',
-      reviewed_by: REVIEWER_ID,
+    expect(rpc).toHaveBeenCalledWith('resolve_subject_report_for_ops', {
+      p_report_id: REPORT_ID,
+      p_reviewer_id: REVIEWER_ID,
+      p_action: 'resolve',
     });
-    expect(update.in).toHaveBeenCalledWith('status', ['open', 'reviewing']);
     expect(result).toEqual({
       status: 'resolved',
       reportId: REPORT_ID,
+      targetType: 'comment',
+      commentId: COMMENT_ID,
+      commentStatus: 'removed_by_moderation',
+      commentRemoved: true,
+      resolvedReportCount: 2,
       reviewedAt: '2026-07-21T04:00:00.000Z',
       reviewedBy: REVIEWER_ID,
     });

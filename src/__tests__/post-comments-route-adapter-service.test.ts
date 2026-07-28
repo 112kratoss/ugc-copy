@@ -65,6 +65,8 @@ describe('getPostCommentsRouteResponse', () => {
     });
 
     expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('Vary')).toContain('Authorization');
     expect(createUserClientSpy).not.toHaveBeenCalled();
     expect(listPostCommentsForRoute.mock.calls[0][0]).toMatchObject({ viewerUserId: null });
   });

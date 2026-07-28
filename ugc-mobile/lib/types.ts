@@ -1102,6 +1102,7 @@ export interface OwnerPostListItem {
   sourceTool?: string | null;
   sourceToolSlug?: string | null;
   sourceTools?: SourceToolSelection[];
+  commentCount: number;
 }
 
 export interface OwnerPostsResponse {

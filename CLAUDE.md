@@ -52,6 +52,7 @@ Ops CLIs (service-role; read-only unless `--apply`/`--confirm` given):
 ```bash
 npm run ops:moderation -- list
 npm run ops:generation-model-catalog -- validate|diff|stage|publish|rollback ...
+npm run admin:credentials              # mint the /admin master credential (prints the password once)
 ```
 
 CI (`.github/workflows/quality.yml`) gates PRs with: web `test → lint → typecheck → typecheck:scripts → perf self-tests → build → build:verify`; mobile `expo install --check → expo-doctor → expo prebuild --clean → expo export → test → typecheck`; and a full migration replay from a clean database plus `supabase test db` (Supabase CLI pinned to 2.75.0).
@@ -96,6 +97,41 @@ Production model definitions, controls, and pricing live in Supabase, released t
 ### Web ↔ mobile contract
 
 `contracts/mobile-api-operations-v1.json` is consumed **at runtime** by `src/proxy.ts` (Next middleware) to build the mobile CORS allowlist; `proxy.ts` also enforces mobile client version gating (HTTP 426 with upgrade policy, `/api/app-version` exempt). `contracts/mobile-api-v1.json` and `generation-model-catalog-v1.json` are shared test fixtures imported by both `src/__tests__` and `ugc-mobile/__tests__`, so a breaking API change fails tests on both sides. Changing a mobile-facing route means updating the contract files and both test suites.
+
+### Admin console (`/admin`)
+
+A browser-only operator console living in the same Next.js app under the
+`src/app/admin/(console)/` route group; `/admin/login` sits outside the group so
+it renders without the console chrome. Areas: overview (reuses the
+`/api/ops/*` collectors), moderation queue, users & credits, revenue, content,
+system.
+
+- **Auth is a single master operator**, not per-person accounts: `ADMIN_USERNAME`
+  plus a scrypt `ADMIN_PASSWORD_HASH`, an HMAC session cookie signed with
+  `ADMIN_SESSION_SECRET`, and `ADMIN_REVIEWER_USER_ID` — which **must be a real
+  `auth.users` id** because moderation writes it to `reviewed_by`, a foreign key.
+  Missing or malformed values fail closed. Mint them with `npm run admin:credentials`.
+- `ADMIN_PASSWORD_HASH` is dot-delimited base64url, **never** the conventional
+  `$`-delimited MCF form — Next.js loads `.env` through dotenv-expand, which
+  would read `$16384`/`$<salt>` as variable references and silently corrupt it.
+- **Two gates, deliberately.** `src/proxy.ts` rejects unauthenticated `/admin` and
+  `/api/admin` traffic at the edge (Web Crypto only — `admin-password.ts` uses
+  `node:crypto` and must never be imported there), and every page and route
+  re-checks via `admin-auth.ts`. Middleware is convenience; the route check is
+  the boundary.
+- Identity resolution is isolated in `admin-identity.ts` so adding per-person
+  admin accounts later changes that module, not the console.
+- Moderation actions reuse `moderation-ops.ts`, so the console and
+  `npm run ops:moderation` share one transactional take-down path.
+- Credit adjustments go through `apply_admin_credit_adjustment` (idempotency
+  key, row lock, mandatory reason) with the balance policy in
+  `admin-credit-adjustment-service.ts`: goodwill → promotional, refund →
+  purchased, clawback → negative promotional. Reversing a real payment stays
+  with `reconcile_credit_purchase_adjustment`, not the console.
+- Revenue reporting must exclude `transactions.mobile_product_id IS NOT NULL`:
+  a mobile IAP writes **both** a `transactions` row and a
+  `mobile_store_transactions` row (linked by `source_record_id`), so counting
+  `transactions` wholesale double-counts every mobile purchase.
 
 ### Background jobs
 

@@ -18,6 +18,9 @@ export default function robots(): MetadataRoute.Robots {
                 '/create-motion',
                 '/create-workflow',
                 '/creations',
+                // Internal rewrite target for signed-in `/` (middleware
+                // redirects direct hits back to `/`); never index it.
+                '/home',
                 '/login',
             ],
         },

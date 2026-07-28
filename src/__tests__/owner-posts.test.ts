@@ -20,6 +20,7 @@ const postRows = vi.hoisted(() => ({
       source_kind: 'external',
       source_tool: 'Higgsfield',
       source_tool_slug: 'higgsfield',
+      comment_count: 7,
       created_at: '2026-06-01T00:00:00.000Z',
       updated_at: '2026-06-01T00:00:00.000Z',
     },
@@ -147,6 +148,7 @@ describe('owner posts', () => {
         modelSlug: 'gen-4',
       },
     ]);
+    expect(post?.commentCount).toBe(7);
   });
 
   it('reuses one admin client while loading owner post detail', async () => {

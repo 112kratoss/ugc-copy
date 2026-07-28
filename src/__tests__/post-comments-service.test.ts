@@ -5,6 +5,7 @@ import {
   createPostCommentForRoute,
   listPostCommentsForRoute,
   normalizePostCommentBody,
+  normalizePostCommentId,
   normalizePostCommentLimit,
   normalizePostCommentSort,
   removePostCommentForRoute,
@@ -153,6 +154,8 @@ describe('post comments service', () => {
       expect(normalizePostCommentSort('nonsense')).toBe('top');
       expect(normalizePostCommentLimit('500')).toBe(50);
       expect(normalizePostCommentLimit('nonsense')).toBe(20);
+      expect(normalizePostCommentId(COMMENT_ID)).toBe(COMMENT_ID);
+      expect(normalizePostCommentId('not-a-uuid')).toBeNull();
     });
 
     it('rejects blank and oversized comment bodies', () => {
@@ -163,6 +166,26 @@ describe('post comments service', () => {
   });
 
   describe('listing', () => {
+    it('rejects malformed post and parent identifiers before querying uuid columns', async () => {
+      const createAdminSupabase = vi.fn();
+
+      const invalidPost = await listPostCommentsForRoute({
+        postId: 'not-a-uuid',
+        viewerUserId: null,
+        createAdminSupabase,
+      });
+      const invalidParent = await listPostCommentsForRoute({
+        postId: POST_ID,
+        viewerUserId: null,
+        parentId: 'not-a-uuid',
+        createAdminSupabase,
+      });
+
+      expect(invalidPost).toMatchObject({ ok: false, status: 400 });
+      expect(invalidParent).toMatchObject({ ok: false, status: 400 });
+      expect(createAdminSupabase).not.toHaveBeenCalled();
+    });
+
     it('returns top-level comments with their author profile', async () => {
       const { client } = createClient();
 
@@ -223,6 +246,30 @@ describe('post comments service', () => {
       expect(result.body.comments.map((item) => item.id)).toEqual([COMMENT_ID]);
     });
 
+    it('scans past a fully blocked raw page to return later visible comments', async () => {
+      const blockedId = STRANGER_ID;
+      const blockedComments = Array.from({ length: 21 }, (_, index) => comment({
+        id: `50000000-0000-4000-8000-${String(index + 10).padStart(12, '0')}`,
+        user_id: blockedId,
+      }));
+      const visibleComment = comment({ id: COMMENT_ID, user_id: AUTHOR_ID });
+      const { client } = createClient({
+        comments: [...blockedComments, visibleComment],
+        userBlocks: [{ blocker_user_id: POST_OWNER_ID, blocked_user_id: blockedId }],
+      });
+
+      const result = await listPostCommentsForRoute({
+        postId: POST_ID,
+        viewerUserId: POST_OWNER_ID,
+        createAdminSupabase: () => client,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.body.comments.map((item) => item.id)).toEqual([COMMENT_ID]);
+      expect(result.body.pageInfo.hasMore).toBe(false);
+    });
+
     it('reports 404 for a post that is not publicly visible', async () => {
       const { client } = createClient({ posts: [{ ...PUBLIC_POST, visibility: 'private' }] });
 
@@ -280,6 +327,49 @@ describe('post comments service', () => {
       expect(state.rpcCalls).toHaveLength(0);
     });
 
+    it('maps malformed JSON to a stable 400 before touching the database', async () => {
+      const createAdminSupabase = vi.fn();
+
+      const result = await createPostCommentForRoute({
+        postId: POST_ID,
+        authorUserId: AUTHOR_ID,
+        readBody: async () => {
+          throw new SyntaxError('Unexpected end of JSON input');
+        },
+        createAdminSupabase,
+        checkRelationshipBlocked: async () => false,
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.status).toBe(400);
+      expect(result.body.error).toBe('Request body must be valid JSON.');
+      expect(createAdminSupabase).not.toHaveBeenCalled();
+    });
+
+    it('rejects malformed post and parent identifiers before querying uuid columns', async () => {
+      const createAdminSupabase = vi.fn();
+
+      const invalidPost = await createPostCommentForRoute({
+        postId: 'not-a-uuid',
+        authorUserId: AUTHOR_ID,
+        readBody: async () => ({ body: 'hello' }),
+        createAdminSupabase,
+        checkRelationshipBlocked: async () => false,
+      });
+      const invalidParent = await createPostCommentForRoute({
+        postId: POST_ID,
+        authorUserId: AUTHOR_ID,
+        readBody: async () => ({ body: 'hello', parentId: 'not-a-uuid' }),
+        createAdminSupabase,
+        checkRelationshipBlocked: async () => false,
+      });
+
+      expect(invalidPost).toMatchObject({ ok: false, status: 400 });
+      expect(invalidParent).toMatchObject({ ok: false, status: 400 });
+      expect(createAdminSupabase).not.toHaveBeenCalled();
+    });
+
     it('refuses to comment when the viewer and post creator have blocked each other', async () => {
       const { client } = createClient();
 
@@ -314,6 +404,31 @@ describe('post comments service', () => {
       expect(result.status).toBe(404);
     });
 
+    it('rejects replies to replies so every accepted comment is renderable', async () => {
+      const { client, state } = createClient({
+        comments: [comment({
+          id: REPLY_ID,
+          parent_comment_id: COMMENT_ID,
+          user_id: STRANGER_ID,
+        })],
+      });
+
+      const result = await createPostCommentForRoute({
+        postId: POST_ID,
+        authorUserId: AUTHOR_ID,
+        readBody: async () => ({ body: 'nested reply', parentId: REPLY_ID }),
+        createAdminSupabase: () => client,
+        checkRelationshipBlocked: async () => false,
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        status: 400,
+        body: { error: 'Replies can only target top-level comments.' },
+      });
+      expect(state.rpcCalls.some((call) => call.name === 'create_post_comment')).toBe(false);
+    });
+
     it('surfaces the rate limit as a 429', async () => {
       const { client } = createClient({ rateLimitAllowed: false });
 
@@ -333,6 +448,20 @@ describe('post comments service', () => {
   });
 
   describe('removing', () => {
+    it('rejects malformed identifiers before rate limiting or querying the database', async () => {
+      const createAdminSupabase = vi.fn();
+
+      const result = await removePostCommentForRoute({
+        postId: POST_ID,
+        commentId: 'not-a-uuid',
+        actorUserId: AUTHOR_ID,
+        createAdminSupabase,
+      });
+
+      expect(result).toMatchObject({ ok: false, status: 400 });
+      expect(createAdminSupabase).not.toHaveBeenCalled();
+    });
+
     it('lets the comment author soft-delete their own comment', async () => {
       const { client, state } = createClient();
 

@@ -9,6 +9,7 @@
  * by the remaining visual routes, so it can be linked from their layouts
  * without growing the home, showcase, or marketplace stylesheet graph.
  */
+@source "./admin";
 @source "./ai-image-generator";
 @source "./ai-motion-transfer";
 @source "./ai-video-generator";
@@ -26,6 +27,7 @@
 @source "./creations";
 @source "./creators";
 @source "./delete-account";
+@source "./home";
 @source "./invite";
 @source "./login";
 @source "./notifications";

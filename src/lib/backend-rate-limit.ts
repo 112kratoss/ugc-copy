@@ -150,6 +150,23 @@ export const POST_RESOURCE_ORDER_VERIFY_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+// Deliberately far tighter than the user-facing limits above: there is exactly
+// one legitimate admin, so a burst of attempts is credential stuffing rather
+// than a real operator retrying a typo.
+export const ADMIN_LOGIN_RATE_LIMIT = {
+  scope: 'admin:login',
+  limit: 8,
+  windowSeconds: 15 * 60,
+} as const;
+
+// Money-touching and bounded by how fast a human can review a case. A burst
+// here means a stuck retry loop or a compromised session, not support work.
+export const ADMIN_CREDIT_ADJUSTMENT_RATE_LIMIT = {
+  scope: 'admin:credit-adjustment',
+  limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const POST_RESOURCE_FREE_UNLOCK_RATE_LIMIT = {
   scope: 'post-resource-free-unlock:open',
   limit: 60,

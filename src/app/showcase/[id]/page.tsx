@@ -462,16 +462,18 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
           </div>
         ) : null}
 
-        <div
-          data-testid="canonical-post-comments"
-          className="mt-6 min-w-0 rounded-[24px] border border-white/8 bg-zinc-900/60 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-6"
-        >
-          <PostComments
-            postId={detail.id}
-            postCreatorId={detail.creator.id}
-            commentCount={detail.commentCount}
-          />
-        </div>
+        {detail.visibility === 'public' ? (
+          <div
+            data-testid="canonical-post-comments"
+            className="mt-6 min-w-0 rounded-[24px] border border-white/8 bg-zinc-900/60 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-6"
+          >
+            <PostComments
+              postId={detail.id}
+              postCreatorId={detail.creator.id}
+              commentCount={detail.commentCount}
+            />
+          </div>
+        ) : null}
       </div>
 
       {bundle && lockedViewer ? (

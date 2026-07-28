@@ -2,11 +2,7 @@ import 'server-only';
 
 import { NextResponse } from 'next/server';
 
-import {
-  applyPrivateNoStoreApiResponseHeaders,
-  createApiResponseHeaders,
-  getViewerAwareApiCacheControl,
-} from '@/lib/api-cache';
+import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
 import {
   createPostCommentForRoute,
@@ -85,7 +81,6 @@ async function handlePostCommentsGET(
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
   const { postId } = await context.params;
-  const hasAuthorizationHeader = Boolean(request.headers.get('Authorization'));
   const viewerUserId = await getViewerUserId(request, dependencies);
   const searchParams = new URL(request.url).searchParams;
 
@@ -103,13 +98,7 @@ async function handlePostCommentsGET(
     return toJsonResponse(result);
   }
 
-  return NextResponse.json(result.body, {
-    headers: createApiResponseHeaders(
-      request,
-      getViewerAwareApiCacheControl(hasAuthorizationHeader),
-      { vary: ['Authorization'] },
-    ),
-  });
+  return NextResponse.json(result.body);
 }
 
 async function handlePostCommentsPOST(
@@ -165,7 +154,11 @@ export async function getPostCommentsRouteResponse({
   dependencies?: PostCommentsRouteDependencies;
   request: Request;
 }) {
-  return handlePostCommentsGET(request, context, resolveDependencies(dependencies));
+  return applyPrivateNoStoreApiResponseHeaders(
+    await handlePostCommentsGET(request, context, resolveDependencies(dependencies)),
+    request,
+    { vary: ['Authorization'] },
+  );
 }
 
 export async function createPostCommentRouteResponse({

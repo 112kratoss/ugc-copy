@@ -55,6 +55,10 @@ vi.mock('@/app/showcase/[id]/PostResourceBundlePanel', () => ({
   ),
 }));
 
+vi.mock('@/app/components/PostComments', () => ({
+  default: () => <div data-testid="post-comments-component">Comments</div>,
+}));
+
 describe('Showcase detail page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -115,6 +119,22 @@ describe('Showcase detail page', () => {
       eventType: 'share_visit',
       sourceSurface: 'detail-page',
     });
+    expect(screen.getByTestId('canonical-post-comments')).toBeInTheDocument();
+  });
+
+  it('does not mount public-only comments on an unlisted detail page', async () => {
+    const detail = await getPublicPostDetailMock('post-1');
+    getPublicPostDetailMock.mockResolvedValueOnce({
+      ...detail,
+      visibility: 'unlisted',
+    });
+
+    render(await ShowcaseDetailPage({
+      params: Promise.resolve({ id: 'post-1' }),
+    }));
+
+    expect(screen.queryByTestId('canonical-post-comments')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('post-comments-component')).not.toBeInTheDocument();
   });
 
   it('keeps media posts in the media frame and preserves public notes', async () => {

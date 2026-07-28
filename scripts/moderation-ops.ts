@@ -25,6 +25,7 @@ Environment:
 Notes:
   - Apply all pending Supabase migrations before using mutation commands.
   - reviewer-id must identify the staff member's real auth.users row.
+  - Resolving a comment report atomically removes the comment and resolves duplicate reports.
   - Resolve a user/generation report only after completing the required manual safety action.
 `.trim();
 
@@ -100,12 +101,15 @@ function printQueue(snapshot: Awaited<ReturnType<typeof listOpenModerationReport
     })));
   }
 
-  console.log(`Open/reviewing user and generation reports: ${snapshot.subjectReports.length}`);
+  console.log(`Open/reviewing subject reports: ${snapshot.subjectReports.length}`);
   if (snapshot.subjectReports.length > 0) {
     console.table(snapshot.subjectReports.map((report) => ({
       report_id: report.id,
       target_type: report.targetType,
-      target_id: report.reportedUserId ?? report.generationId,
+      target_id: report.reportedUserId ?? report.generationId ?? report.commentId,
+      comment_post_id: report.comment?.postId ?? '',
+      comment_status: report.comment?.status ?? '',
+      comment_body: summarizeDetails(report.comment?.body ?? null),
       reason: report.reason,
       details: summarizeDetails(report.details),
       status: report.status,

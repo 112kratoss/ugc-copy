@@ -72,7 +72,7 @@ export function normalizeParam(value: string | string[] | undefined) {
 export function buildViewerItems(
   source: PreviewViewerSource,
   data: ImmersiveSourceData | undefined,
-  owner: { creatorLabel: string; creatorAvatar?: string | null }
+  owner: { creatorLabel: string; creatorAvatar?: string | null; creatorId?: string | null }
 ): ImmersivePreviewItem[] {
   if (isGenerationSource(source)) {
     return buildImmersiveGenerationItems(source, data?.generations ?? [], owner, data?.ownerPosts ?? []);
