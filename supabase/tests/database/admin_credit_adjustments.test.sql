@@ -5,7 +5,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(21);
+select plan(24);
 
 -- The two ids must differ in their FIRST 8 hex characters: handle_new_user()
 -- derives a username as `creator-<left(uuid without dashes, 8)>`, so ids that
