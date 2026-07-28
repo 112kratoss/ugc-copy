@@ -63,11 +63,16 @@ export async function loadHomeWhatsNewModels(): Promise<HomeWhatsNewModel[]> {
   }
 }
 
+/**
+ * `viewerUserId` is null for the signed-out home, which is also the
+ * `unstable_cache`-eligible path inside `getShowcaseFeedPage` — so the static
+ * `/` render shares one cached feed across all anonymous visitors.
+ */
 export async function loadHomeFeed({
   viewerUserId,
   chip,
 }: {
-  viewerUserId: string;
+  viewerUserId: string | null;
   chip: FeedChip;
 }): Promise<ShowcaseFeedPage | null> {
   try {

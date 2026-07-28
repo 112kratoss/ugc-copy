@@ -1,21 +1,11 @@
 import type { ComponentPropsWithoutRef, ReactNode } from 'react';
-import { act, render, screen, within } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateHubPage from '@/app/create/page';
-import Home from '@/app/page';
 
 const getServerAuthStateMock = vi.fn();
 const getShowcaseFeedPageMock = vi.fn();
-const homeShowcasePreviewGridMock = vi.fn(({
-  items,
-}: {
-  items: unknown[];
-  initialSession?: unknown;
-  initialCredits?: unknown;
-}) => (
-  <div data-testid="home-showcase-preview-grid" data-count={items.length} />
-));
 
 vi.mock('@/app/components/AuthProvider', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -30,18 +20,10 @@ vi.mock('next/link', () => ({
   ),
 }));
 
-vi.mock('@/app/components/DeferredHomeShowcasePreviewGrid', () => ({
-  default: (props: { items: unknown[] }) => homeShowcasePreviewGridMock(props),
-}));
-
 vi.mock('@/app/components/HoverVideo', () => ({
   HoverVideo: ({ src, className }: { src: string; className?: string }) => (
     <video data-testid="hover-video" src={src} className={className} />
   ),
-}));
-
-vi.mock('@/app/components/JsonLd', () => ({
-  JsonLd: () => null,
 }));
 
 vi.mock('@/lib/showcase-feed', () => ({
@@ -52,6 +34,14 @@ vi.mock('@/lib/supabase-server', () => ({
   getServerAuthState: () => getServerAuthStateMock(),
 }));
 
+/**
+ * The creator tool card is one link wrapping the whole card — title, summary,
+ * and call to action — so a keyboard user lands on a single stop and assistive
+ * tech announces one target instead of three nested ones. The launchpad
+ * (`/create`) is the surface that renders these cards; the home page now
+ * renders the community feed with a compact quick-starts rail instead
+ * (see anonymous-home-page-cache.test.tsx).
+ */
 function expectCardToUseSingleLink({
   title,
   summary,
@@ -76,7 +66,6 @@ function expectCardToUseSingleLink({
 
 describe('creator tool card links', () => {
   beforeEach(() => {
-    homeShowcasePreviewGridMock.mockClear();
     const imageItem = {
       id: 'image-1',
       mediaUrl: 'https://example.com/image.jpg',
@@ -104,220 +93,45 @@ describe('creator tool card links', () => {
       canRemix: true,
     };
     const videoItem = {
+      ...imageItem,
       id: 'video-1',
       mediaUrl: 'https://example.com/video.mp4',
       mediaKind: 'video' as const,
       model: 'kling-3.0-video',
       title: 'Video Preview',
       prompt: 'Video prompt',
-      body: '',
       category: 'video' as const,
-      postFormat: 'media' as const,
-      saveCount: 5,
-      remixCount: 1,
-      createdAt: '2026-04-01T00:00:00.000Z',
-      creator: {
-        id: 'creator-2',
-        username: 'creator-two',
-        name: 'Creator Two',
-        avatar: null,
-      },
-      isSaved: false,
-      sourceKind: 'magicbooklet' as const,
-      sourceTool: null,
       generationId: 'video-1',
-      asset: null,
-      canRemix: true,
     };
     const motionItem = {
+      ...videoItem,
       id: 'motion-1',
       mediaUrl: 'https://example.com/motion.mp4',
-      mediaKind: 'video' as const,
       model: 'kling-3.0',
       title: 'Motion Preview',
       prompt: 'Motion prompt',
-      body: '',
       category: 'motion' as const,
-      postFormat: 'media' as const,
-      saveCount: 4,
-      remixCount: 1,
-      createdAt: '2026-04-01T00:00:00.000Z',
-      creator: {
-        id: 'creator-3',
-        username: 'creator-three',
-        name: 'Creator Three',
-        avatar: null,
-      },
-      isSaved: false,
-      sourceKind: 'magicbooklet' as const,
-      sourceTool: null,
       generationId: 'motion-1',
-      asset: null,
-      canRemix: true,
     };
 
     getServerAuthStateMock.mockResolvedValue({
-      session: {
-        user: { id: 'user-1' },
-      },
+      session: { user: { id: 'user-1' } },
       credits: 12,
     });
 
     getShowcaseFeedPageMock.mockImplementation(async (options?: { category?: string }) => {
       const category = options?.category ?? 'all';
 
-      if (category === 'image') {
-        return { items: [imageItem] };
-      }
+      if (category === 'image') return { items: [imageItem] };
+      if (category === 'video') return { items: [videoItem] };
+      if (category === 'motion') return { items: [motionItem] };
 
-      if (category === 'video') {
-        return { items: [videoItem] };
-      }
-
-      if (category === 'motion') {
-        return { items: [motionItem] };
-      }
-
-      return {
-        items: [imageItem, videoItem, motionItem],
-      };
+      return { items: [imageItem, videoItem, motionItem] };
     });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  it('uses one full-card link for each creator path on the home page', async () => {
-    await act(async () => {
-      render(Home());
-    });
-
-    expectCardToUseSingleLink({
-      title: 'Create Image',
-      summary: 'Polished stills, hooks, and product frames in minutes.',
-      cta: 'Start with image',
-      href: '/create-image',
-    });
-    expectCardToUseSingleLink({
-      title: 'Create Video',
-      summary: 'Prompt-to-clip scenes for launches, explainers, and teasers.',
-      cta: 'Start with video',
-      href: '/create-video',
-    });
-    expectCardToUseSingleLink({
-      title: 'Create Motion',
-      summary: 'Animate still talent into UGC-style movement and delivery.',
-      cta: 'Start with motion',
-      href: '/create-motion',
-    });
-    expectCardToUseSingleLink({
-      title: 'Workflow Canvas',
-      summary: 'Turn one-off prompting into a repeatable creative system.',
-      cta: 'Open workflow canvas',
-      href: '/create-workflow',
-    });
-
-    await screen.findByTestId('hover-video');
-    const videoCardLink = screen.getByText('Create Video').closest('a');
-    expect(within(videoCardLink as HTMLAnchorElement).getByTestId('hover-video')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /launchpad/i })).toHaveAttribute('href', '/create');
-  });
-
-  it('passes text-only showcase posts into the home inspiration grid', async () => {
-    const textItem = {
-      id: 'text-1',
-      mediaUrl: null,
-      mediaKind: null,
-      model: 'manual',
-      title: 'Prompt strategy note',
-      prompt: '',
-      body: 'Lead with the product benefit before adding cinematic style words.',
-      category: 'text' as const,
-      postFormat: 'text' as const,
-      saveCount: 6,
-      remixCount: 0,
-      createdAt: '2026-04-01T00:00:00.000Z',
-      creator: {
-        id: 'creator-4',
-        username: 'creator-four',
-        name: 'Creator Four',
-        avatar: null,
-      },
-      isSaved: false,
-      sourceKind: 'manual' as const,
-      sourceTool: null,
-      generationId: null,
-      asset: null,
-      canRemix: false,
-    };
-
-    getShowcaseFeedPageMock.mockImplementation(async (options?: { category?: string }) => {
-      const category = options?.category ?? 'all';
-      return category === 'all' ? { items: [textItem] } : { items: [] };
-    });
-
-    await act(async () => {
-      render(Home());
-    });
-
-    expect(await screen.findByTestId('home-showcase-preview-grid')).toHaveAttribute('data-count', '1');
-    expect(homeShowcasePreviewGridMock.mock.calls[0]?.[0]).toMatchObject({
-      items: [textItem],
-    });
-  });
-
-  it('loads homepage showcase content without blocking on server auth', async () => {
-    getServerAuthStateMock.mockImplementation(() => {
-      throw new Error('Home should not read server auth for cacheable public content');
-    });
-
-    await act(async () => {
-      render(Home());
-    });
-
-    expect(getServerAuthStateMock).not.toHaveBeenCalled();
-    expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
-      viewerUserId: null,
-      countryCode: null,
-    }));
-    expect(homeShowcasePreviewGridMock.mock.calls[0]?.[0]).toMatchObject({
-      initialSession: null,
-      initialCredits: null,
-    });
-  });
-
-  it('only prefetches the primary homepage action during first paint', async () => {
-    await act(async () => {
-      render(Home());
-    });
-    expect(screen.getByRole('link', { name: 'Start creating' })).not.toHaveAttribute('data-prefetch');
-    expect(screen.getByRole('link', { name: 'Browse Showcase' })).toHaveAttribute(
-      'data-prefetch',
-      'false'
-    );
-    expect(screen.getByText('Create Image').closest('a')).toHaveAttribute(
-      'data-prefetch',
-      'false'
-    );
-  });
-
-  it('keeps the cacheable homepage renderable when showcase content is unavailable', async () => {
-    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    getShowcaseFeedPageMock.mockRejectedValue(new Error('Supabase host unavailable during build'));
-
-    await act(async () => {
-      render(Home());
-    });
-
-    expect(screen.getByText(/What will you create/i)).toBeInTheDocument();
-    expect(await screen.findByText(/Could not load the Showcase/i)).toBeInTheDocument();
-    expect(screen.queryByTestId('home-showcase-preview-grid')).not.toBeInTheDocument();
-    expect(homeShowcasePreviewGridMock).not.toHaveBeenCalled();
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      'Failed to load homepage showcase content:',
-      expect.any(Error)
-    );
   });
 
   it('uses one full-card link for each creator path on the launchpad page', async () => {

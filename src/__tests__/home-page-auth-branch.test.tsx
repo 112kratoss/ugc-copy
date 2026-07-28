@@ -20,8 +20,8 @@ vi.mock('@/lib/home-dashboard-service', () => ({
   loadHomeWhatsNewModels: () => loadHomeWhatsNewModelsMock(),
 }));
 
-vi.mock('@/app/components/MarketingHome', () => ({
-  default: () => <div data-testid="marketing-home" />,
+vi.mock('@/app/components/AnonymousHome', () => ({
+  default: () => <div data-testid="anonymous-home" />,
 }));
 
 vi.mock('@/app/home/StaleSessionRecovery', () => ({
@@ -77,7 +77,7 @@ describe('HomeDashboardPage auth branch', () => {
     loadHomeWhatsNewModelsMock.mockResolvedValue([]);
   });
 
-  it('falls back to the marketing page with recovery when the session is stale', async () => {
+  it('falls back to the signed-out home with recovery when the session is stale', async () => {
     getServerAuthStateMock.mockResolvedValue({ session: null, credits: null });
     const { default: HomeDashboardPage } = await import('@/app/home/page');
 
@@ -85,7 +85,7 @@ describe('HomeDashboardPage auth branch', () => {
       await HomeDashboardPage({ searchParams: Promise.resolve({}) }),
     );
 
-    expect(html).toContain('marketing-home');
+    expect(html).toContain('anonymous-home');
     expect(html).toContain('stale-session-recovery');
     expect(loadHomeFeedMock).not.toHaveBeenCalled();
     expect(loadHomeWorkspaceGenerationsMock).not.toHaveBeenCalled();
@@ -105,7 +105,7 @@ describe('HomeDashboardPage auth branch', () => {
 
     expect(html).toContain('feed-client');
     expect(html).toContain('workspace-card');
-    expect(html).not.toContain('marketing-home');
+    expect(html).not.toContain('anonymous-home');
     expect(loadHomeFeedMock).toHaveBeenCalledWith(expect.objectContaining({
       viewerUserId: 'user-1',
       chip: expect.objectContaining({ id: 'for-you' }),

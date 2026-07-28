@@ -1,12 +1,13 @@
 import Link from 'next/link';
 import { Suspense, use } from 'react';
 
+import AnonymousHome from '@/app/components/AnonymousHome';
 import { StatusCallout } from '@/app/components/DesignSystem';
-import MarketingHome from '@/app/components/MarketingHome';
+import HomeExperience from '@/app/components/HomeExperience';
+import QuickStartsCard from '@/app/components/QuickStartsCard';
+import WhatsNewModelsCard from '@/app/components/WhatsNewModelsCard';
 import FeedClient from '@/app/feed/FeedClient';
-import QuickStartsCard from '@/app/home/QuickStartsCard';
 import StaleSessionRecovery from '@/app/home/StaleSessionRecovery';
-import WhatsNewModelsCard from '@/app/home/WhatsNewModelsCard';
 import WorkspaceCard from '@/app/home/WorkspaceCard';
 import type { HomeWhatsNewModel, HomeWorkspaceGenerationView } from '@/lib/home-dashboard';
 import {
@@ -111,11 +112,14 @@ function WorkspaceRailFallback() {
 }
 
 /**
- * The signed-in home: a feed-first dashboard on `/` (served via the
- * middleware rewrite — see src/proxy.ts). Community feed in the center,
- * workspace context in a sticky rail. A hinted-but-invalid session falls back
- * to the marketing page in place; StaleSessionRecovery then either refreshes
- * into the dashboard or lets the dead cookie clear.
+ * The signed-in home: the same feed-first shell the signed-out `/` renders,
+ * with the rail's sign-in card swapped for live workspace context. Served on
+ * `/` via the middleware rewrite (see src/proxy.ts).
+ *
+ * A hinted-but-invalid session falls back to the signed-out page in place —
+ * a redirect back to `/` would loop through the same rewrite — and
+ * StaleSessionRecovery then either refreshes into the dashboard or lets the
+ * dead cookie clear.
  */
 export default async function HomeDashboardPage({ searchParams }: HomeDashboardPageProps) {
   const resolvedSearchParams = searchParams ? await searchParams : {};
@@ -125,7 +129,7 @@ export default async function HomeDashboardPage({ searchParams }: HomeDashboardP
     return (
       <>
         <StaleSessionRecovery />
-        <MarketingHome />
+        <AnonymousHome />
       </>
     );
   }
@@ -140,35 +144,28 @@ export default async function HomeDashboardPage({ searchParams }: HomeDashboardP
   const modelsPromise = loadHomeWhatsNewModels();
 
   return (
-    <div className="ui-page relative">
-      <div className="mx-auto w-full max-w-[1200px] px-4 pb-24 pt-6 sm:px-6">
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_336px]">
-          <div className="mx-auto w-full max-w-[680px] xl:mx-0">
-            <div className="xl:hidden">
-              <Suspense fallback={null}>
-                <HomeWorkspaceSection data={workspacePromise} credits={auth.credits} variant="inline" />
-              </Suspense>
-            </div>
-
-            <Suspense fallback={<HomeFeedSkeleton />}>
-              <HomeFeedSection data={feedPromise} initialChipId={chip.id} />
-            </Suspense>
-          </div>
-
-          <aside
-            aria-label="Workspace sidebar"
-            className="hidden xl:sticky xl:top-6 xl:flex xl:flex-col xl:gap-4 xl:self-start"
-          >
-            <Suspense fallback={<WorkspaceRailFallback />}>
-              <HomeWorkspaceSection data={workspacePromise} credits={auth.credits} variant="rail" />
-            </Suspense>
-            <QuickStartsCard />
-            <Suspense fallback={null}>
-              <HomeModelsSection data={modelsPromise} />
-            </Suspense>
-          </aside>
-        </div>
-      </div>
-    </div>
+    <HomeExperience
+      inlineStrip={(
+        <Suspense fallback={null}>
+          <HomeWorkspaceSection data={workspacePromise} credits={auth.credits} variant="inline" />
+        </Suspense>
+      )}
+      feed={(
+        <Suspense fallback={<HomeFeedSkeleton />}>
+          <HomeFeedSection data={feedPromise} initialChipId={chip.id} />
+        </Suspense>
+      )}
+      rail={(
+        <>
+          <Suspense fallback={<WorkspaceRailFallback />}>
+            <HomeWorkspaceSection data={workspacePromise} credits={auth.credits} variant="rail" />
+          </Suspense>
+          <QuickStartsCard />
+          <Suspense fallback={null}>
+            <HomeModelsSection data={modelsPromise} />
+          </Suspense>
+        </>
+      )}
+    />
   );
 }
