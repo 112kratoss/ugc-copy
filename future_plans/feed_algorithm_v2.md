@@ -92,14 +92,14 @@ From the platforms' own disclosures plus research literature. Claims below are h
 ### Phase 0A — Measurement contract (prerequisite for everything)
 
 > **Implementation status (2026-07-28):** items 1–3 are built and verified —
-> migration `20260728100000_feed_delivery_facts.sql`, serve-path fact writes in
+> migration `20260728180500_feed_delivery_facts.sql`, serve-path fact writes in
 > `showcase-feed-personalization.ts`, media_progress GREATEST upsert in
 > `showcase-feed-events-service.ts`, and milestone/background/exit completion
 > telemetry in both reel viewers (`showcase-media-progress.ts` on each
 > platform). Item 4 (daily scorecard + `/admin` panel) is the remaining 0A work.
 >
 > **Phases 0B / 1A / 1B / 1C / 1E are also built** in migration
-> `20260728170000_feed_ranking_v2.sql` plus `feed-experiments.ts` and the v2
+> `20260728181000_feed_ranking_v2.sql` plus `feed-experiments.ts` and the v2
 > feature/weight/reranker changes. `for-you-rules` v2 exists as a **shadow**
 > version: nothing serves it until it is activated or referenced by an
 > experiment variant, so the live feed is unchanged by the deploy. What remains

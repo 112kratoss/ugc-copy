@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 const migration = fs.readFileSync(path.resolve(
   process.cwd(),
-  'supabase/migrations/20260728100000_feed_delivery_facts.sql',
+  'supabase/migrations/20260728180500_feed_delivery_facts.sql',
 ), 'utf8');
 
 describe('feed delivery facts migration', () => {
