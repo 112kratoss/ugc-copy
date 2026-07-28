@@ -21,6 +21,7 @@ import {
   ActivityIndicator,
   Alert,
   Pressable,
+  RefreshControl,
   Share,
   Text,
   useWindowDimensions,
@@ -577,8 +578,15 @@ export function HomeDashboard() {
         drawDistance={SHOWCASE_DRAW_DISTANCE}
         onEndReached={requestNextPage}
         onEndReachedThreshold={0.32}
-        onRefresh={handleRefresh}
-        refreshing={isRefreshing}
+        refreshControl={(
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={handleRefresh}
+            tintColor={DASHBOARD_COLORS.faint}
+            colors={[DASHBOARD_COLORS.coral]}
+            progressBackgroundColor={DASHBOARD_COLORS.surfaceRaised}
+          />
+        )}
         showsVerticalScrollIndicator={false}
         viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
         contentContainerStyle={{ paddingBottom: tabBarMetrics.contentBottomOverlapPadding + 24 }}
@@ -622,11 +630,17 @@ export function HomeDashboard() {
                 <SecondaryButton label="Retry" onPress={() => void feedQuery.refetch()} />
               </View>
             ) : (
-              <StatusBlock
-                tone="info"
-                title="Nothing here yet"
-                body="New community posts will appear here as creators publish them."
-              />
+              <View style={{ gap: 12 }}>
+                <StatusBlock
+                  tone="info"
+                  title="Nothing here yet"
+                  body="New community posts will appear here as creators publish them."
+                />
+                <SecondaryButton
+                  label="Share the first post"
+                  onPress={() => router.push('/post/new' as never)}
+                />
+              </View>
             )}
           </View>
         )}
@@ -732,7 +746,7 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
 
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Open notifications"
+          accessibilityLabel="Open studio activity"
           onPress={() => router.push('/studio' as never)}
           style={({ pressed }) => ({
             width: 48,

@@ -2,16 +2,15 @@
 
 import dynamic from 'next/dynamic';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, ShoppingBag } from 'lucide-react';
 
 import { useAuth } from '@/app/components/AuthProvider';
 import { HoverVideo } from '@/app/components/HoverVideo';
 import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
-import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
 import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
-import { getBundleAccessLabel, isPostResourceKind, type PostResourceKind } from '@/lib/post-resource-bundles';
-import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
+import { isTextOnlyPost } from '@/lib/post-feed-presentation';
+import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 import { buildShowcaseDetailPath } from '@/lib/share';
 
@@ -56,43 +55,14 @@ function getCoverAspectRatio(coverMedia: ReturnType<typeof getCoverMedia>): stri
   return '4 / 5';
 }
 
-function getItemSummary(item: ShowcaseFeedItem) {
-  const publicText = item.body?.trim() || item.prompt?.trim();
-  if (publicText) {
-    return publicText;
-  }
-
-  const source = item.sourceTool || item.model;
-  const unlock = item.asset ? 'Recipe attached.' : 'Public community post.';
-  return [source ? `Made with ${source}` : null, `${item.category} post`, unlock].filter(Boolean).join(' / ');
-}
-
-function getItemResourceKinds(item: ShowcaseFeedItem): PostResourceKind[] {
-  return (item.asset?.resourceKinds ?? []).filter(isPostResourceKind);
-}
-
-function getAssetAccessLabel(asset: NonNullable<ShowcaseFeedItem['asset']>): string {
-  if (asset.priceQuote) {
-    return formatBundleAccessLabel({
-      accessMode: asset.accessMode,
-      priceQuote: asset.priceQuote,
-    }).replace(/\s+unlock$/i, ' recipe');
-  }
-
-  return getBundleAccessLabel(asset.accessMode, asset.priceUsdCents).replace(/\s+unlock$/i, ' recipe');
-}
-
-function formatHomeDate(value: string) {
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    timeZone: 'UTC',
-  }).format(new Date(value));
-}
-
 export default function HomeShowcasePreviewGrid({
   items,
 }: HomeShowcasePreviewGridProps) {
+  // This grid is media tiles; a written post has nothing to put in one, so it
+  // surfaces through the homepage notes strip and /feed instead. Memoized
+  // because the save hook resets its optimistic state when `initialItems`
+  // changes identity.
+  const mediaItems = useMemo(() => items.filter((item) => !isTextOnlyPost(item)), [items]);
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -103,7 +73,7 @@ export default function HomeShowcasePreviewGrid({
     savingItemIds,
     toggleSave,
   } = useOptimisticPostSave({
-    initialItems: items,
+    initialItems: mediaItems,
     accessToken: session?.access_token ?? null,
     isSignedIn: Boolean(user && session?.access_token),
     onAuthRequired: () => router.push('/login?returnUrl=/'),
@@ -217,19 +187,7 @@ export default function HomeShowcasePreviewGrid({
               onClick={() => openViewer(item)}
               className="group relative block w-full break-inside-avoid overflow-hidden rounded-[24px] border border-white/8 bg-[#111215] text-left"
             >
-              {item.postFormat === 'text' ? (
-                <TextPostPreviewCard
-                  title={item.title}
-                  summary={getItemSummary(item)}
-                  sourceLabel={item.sourceTool || item.model}
-                  dateLabel={formatHomeDate(item.createdAt)}
-                  saveCount={item.saveCount}
-                  remixCount={item.remixCount}
-                  unlockLabel={item.asset ? getAssetAccessLabel(item.asset) : null}
-                  resourceKinds={getItemResourceKinds(item)}
-                  className="rounded-none border-0 shadow-none"
-                />
-              ) : mediaKind === 'video' && mediaUrl ? (
+              {mediaKind === 'video' && mediaUrl ? (
                 <div className="relative w-full" style={{ aspectRatio: getCoverAspectRatio(coverMedia) }}>
                   <HoverVideo
                     src={mediaUrl}
@@ -252,17 +210,15 @@ export default function HomeShowcasePreviewGrid({
                   No media preview
                 </div>
               )}
-              {item.postFormat !== 'text' ? (
-                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/70 to-transparent p-4">
-                  <p className="line-clamp-2 text-sm font-medium text-white">{item.title}</p>
-                  {item.asset ? (
-                    <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-100">
-                      <ShoppingBag className="h-3.5 w-3.5" />
-                      {getAssetAccessLabel(item.asset)}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
+              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/70 to-transparent p-4">
+                <p className="line-clamp-2 text-sm font-medium text-white">{item.title}</p>
+                {item.asset ? (
+                  <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-100">
+                    <ShoppingBag className="h-3.5 w-3.5" />
+                    {getAssetAccessLabel(item.asset)}
+                  </div>
+                ) : null}
+              </div>
             </button>
           );
         })}

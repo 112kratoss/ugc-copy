@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { ArrowRight, Sparkles } from 'lucide-react';
+import { ArrowRight, Image as ImageIcon, MessageCircle, Play, Rocket, Sparkles } from 'lucide-react';
 import { Suspense, use } from 'react';
 
 import { CreatorToolPreview } from '@/app/components/CreatorToolPreview';
@@ -22,6 +22,14 @@ import {
   siteConfig,
 } from '@/lib/seo';
 import { getShowcaseFeedPage } from '@/lib/showcase-feed';
+import {
+  formatCompactCount,
+  formatRelativeTime,
+  getPostFeedBody,
+  getPostFeedTitle,
+  isTextOnlyPost,
+} from '@/lib/post-feed-presentation';
+import { buildShowcaseDetailPath } from '@/lib/share';
 import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
 
 export const metadata: Metadata = createMetadata({
@@ -34,42 +42,50 @@ export const metadata: Metadata = createMetadata({
 
 export const revalidate = 60;
 
+// Icons mirror the mobile tool shortcuts (image / play / rocket) so the same
+// format reads the same across clients.
 const LATEST_MODELS = [
   {
     name: IMAGE_MODELS['seedream-5-pro'].displayName,
     description: 'Production-ready stills and edits',
     href: '/create-image?model=seedream-5-pro',
     accent: 'border-sky-300/15 bg-sky-400/[0.07] text-sky-100',
+    icon: ImageIcon,
   },
   {
     name: VIDEO_MODELS['grok-imagine-video'].displayName,
     description: 'xAI prompt and image-to-video',
     href: '/create-video?model=grok-imagine-video',
     accent: 'border-rose-300/15 bg-rose-400/[0.07] text-rose-100',
+    icon: Play,
   },
   {
     name: IMAGE_MODELS['nano-banana-2-lite'].displayName,
     description: 'Fast, affordable 1K image runs',
     href: '/create-image?model=nano-banana-2-lite',
     accent: 'border-cyan-300/15 bg-cyan-400/[0.07] text-cyan-100',
+    icon: ImageIcon,
   },
   {
     name: IMAGE_MODELS['flux-2-pro'].displayName,
     description: 'Photoreal multi-reference product work',
     href: '/create-image?model=flux-2-pro',
     accent: 'border-sky-300/15 bg-sky-400/[0.07] text-sky-100',
+    icon: ImageIcon,
   },
   {
     name: VIDEO_MODELS['kling-3.0-video'].displayName,
     description: 'Cinematic video scenes',
     href: '/create-video?model=kling-3.0-video',
     accent: 'border-rose-300/15 bg-rose-400/[0.07] text-rose-100',
+    icon: Play,
   },
   {
     name: MOTION_MODELS['kling-3.0'].displayName,
     description: 'Motion-led UGC output',
     href: '/create-motion?model=kling-3.0',
     accent: 'border-white/10 bg-white/[0.04] text-[var(--ui-accent-motion)]',
+    icon: Rocket,
   },
 ] as const;
 
@@ -111,6 +127,29 @@ async function loadHomeShowcaseFeed(): Promise<{
   }
 }
 
+/**
+ * Recent written posts for the community strip. Text posts are excluded from
+ * the media grids, so this is where they surface on the homepage. Failure or
+ * emptiness hides the strip rather than breaking the page.
+ */
+async function loadHomeCreatorNotes(): Promise<ShowcaseFeedItem[]> {
+  try {
+    const feed = await getShowcaseFeedPage({
+      category: 'text',
+      sort: 'recent',
+      offset: 0,
+      limit: 6,
+      viewerUserId: null,
+      countryCode: null,
+    });
+
+    return feed.items.filter(isTextOnlyPost).slice(0, 3);
+  } catch (error) {
+    console.error('Failed to load homepage creator notes:', error);
+    return [];
+  }
+}
+
 async function loadHomeCreatorToolPreviewMap({
   seedItems,
   skipRemoteFallback,
@@ -137,19 +176,25 @@ type HomePageData = {
   showcaseFeed: ShowcaseFeedPage;
   usedFallback: boolean;
   previewByTool: Awaited<ReturnType<typeof loadHomeCreatorToolPreviewMap>>;
+  creatorNotes: ShowcaseFeedItem[];
 };
 
 async function loadHomePageData(): Promise<HomePageData> {
   const { feed: showcaseFeed, usedFallback } = await loadHomeShowcaseFeed();
-  const previewByTool = await loadHomeCreatorToolPreviewMap({
-    seedItems: showcaseFeed.items,
-    skipRemoteFallback: usedFallback,
-  });
+  const [previewByTool, creatorNotes] = await Promise.all([
+    loadHomeCreatorToolPreviewMap({
+      seedItems: showcaseFeed.items,
+      skipRemoteFallback: usedFallback,
+    }),
+    // Skipped when the main feed already failed — one outage, one callout.
+    usedFallback ? Promise.resolve([]) : loadHomeCreatorNotes(),
+  ]);
 
   return {
     showcaseFeed,
     usedFallback,
     previewByTool,
+    creatorNotes,
   };
 }
 
@@ -194,6 +239,76 @@ function HomeCreatorSuite({ data }: { data: Promise<HomePageData> }) {
         />
       ))}
     </div>
+  );
+}
+
+/**
+ * Written posts get the feed's language — accent rail, title-first, clamped
+ * body — never a media tile. Renders nothing while there are no notes, so the
+ * homepage carries no empty section in a young community.
+ */
+function HomeCreatorNotes({ data }: { data: Promise<HomePageData> }) {
+  const { creatorNotes } = use(data);
+
+  if (creatorNotes.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="mt-12 w-full">
+      <SectionHeading
+        eyebrow="Community feed"
+        title="Notes and prompts from creators."
+        actionHref="/feed"
+        actionLabel="Open feed"
+        variant="minimal"
+      />
+
+      <div className="ui-stagger grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {creatorNotes.map((item) => {
+          const kind = 'text' as const;
+          const title = getPostFeedTitle(item, kind);
+          const body = getPostFeedBody(item, kind);
+          const creatorLabel = item.creator.username
+            ? `@${item.creator.username}`
+            : item.creator.name || 'Creator';
+
+          return (
+            <Link
+              key={item.id}
+              href={buildShowcaseDetailPath(item.id, { from: 'home', returnTo: '/' })}
+              prefetch={false}
+              className="ui-card ui-card-interactive ui-focus-ring group flex h-full flex-col gap-3 p-5"
+            >
+              <div className="flex items-center gap-2 text-xs">
+                <span className="truncate font-bold text-[var(--ui-text-secondary)]">{creatorLabel}</span>
+                <span className="shrink-0 text-[var(--ui-text-faint)]">{`· ${formatRelativeTime(item.createdAt)}`}</span>
+              </div>
+
+              <Text as="h3" variant="cardTitle" className="line-clamp-2 text-lg leading-6">
+                {title}
+              </Text>
+
+              {body ? (
+                <div className="flex flex-1 overflow-hidden rounded-2xl bg-[var(--ui-surface-2)]">
+                  <span aria-hidden className="w-[3px] shrink-0 bg-[var(--ui-primary)]" />
+                  <p className="line-clamp-4 whitespace-pre-wrap px-4 py-3 text-sm leading-6 text-[var(--ui-text-muted)]">
+                    {body}
+                  </p>
+                </div>
+              ) : null}
+
+              <span className="mt-auto inline-flex items-center gap-1.5 text-xs font-bold text-[var(--ui-text-faint)] transition group-hover:text-[var(--ui-text-secondary)]">
+                <MessageCircle className="h-3.5 w-3.5" aria-hidden />
+                {item.commentCount > 0
+                  ? `${formatCompactCount(item.commentCount)} ${item.commentCount === 1 ? 'comment' : 'comments'}`
+                  : 'Join the discussion'}
+              </span>
+            </Link>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -264,7 +379,7 @@ export default function Home() {
       <main className="studio-shell relative z-10 flex flex-1 flex-col pb-24 pt-7 sm:pt-10">
         <section className="grid gap-8 border-b border-[var(--ui-border-subtle)] pb-10 lg:grid-cols-[minmax(0,1fr)_minmax(420px,0.78fr)] lg:items-end">
           <div className="max-w-3xl">
-            <Kicker icon={Sparkles}>Obsidian creator studio</Kicker>
+            <Kicker icon={Sparkles}>AI creator studio</Kicker>
             <Text as="h1" variant="display" className="mt-4 max-w-[13ch]">
               What will you create <span className="text-[var(--ui-primary)]">today?</span>
             </Text>
@@ -277,6 +392,9 @@ export default function Home() {
               </Button>
               <Button href="/showcase" prefetch={false} variant="secondary">
                 Browse Showcase
+              </Button>
+              <Button href="/feed" prefetch={false} variant="secondary">
+                Community feed
               </Button>
             </div>
           </div>
@@ -329,7 +447,10 @@ export default function Home() {
           />
 
           <div className="ui-stagger grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {LATEST_MODELS.map((model) => (
+            {LATEST_MODELS.map((model) => {
+              const ModelIcon = model.icon;
+
+              return (
               <Link
                 key={model.name}
                 href={model.href}
@@ -339,7 +460,7 @@ export default function Home() {
                 <div
                   className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border ${model.accent}`}
                 >
-                  <Sparkles className="h-5 w-5" aria-hidden />
+                  <ModelIcon className="h-5 w-5" aria-hidden />
                 </div>
                 <div className="min-w-0 flex-1">
                   <Text as="h3" variant="cardTitle" className="truncate text-lg">{model.name}</Text>
@@ -347,9 +468,14 @@ export default function Home() {
                 </div>
                 <ArrowRight className="h-4 w-4 shrink-0 text-[var(--ui-text-faint)] transition group-hover:translate-x-0.5 group-hover:text-[var(--ui-primary)]" aria-hidden />
               </Link>
-            ))}
+              );
+            })}
           </div>
         </section>
+
+        <Suspense fallback={null}>
+          <HomeCreatorNotes data={homePageData} />
+        </Suspense>
 
         <section className="mt-12 w-full">
           <SectionHeading

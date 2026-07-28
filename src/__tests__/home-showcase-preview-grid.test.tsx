@@ -210,52 +210,28 @@ describe('HomeShowcasePreviewGrid', () => {
     });
   });
 
-  it('renders text posts as compact note previews instead of missing media', () => {
+  it('leaves text-only posts to the feed instead of faking a media tile', () => {
     const items: ShowcaseFeedItem[] = [
+      createShowcaseItem(),
       {
+        ...createShowcaseItem({ title: 'Prompt pacing tip' }),
         id: 'tip-1',
         mediaUrl: null,
         mediaKind: null,
-        model: 'manual',
-        title: 'Prompt pacing tip',
+        mediaItems: undefined,
         prompt: '',
         body: 'Lead with the product benefit before adding cinematic style words.',
         category: 'text',
         postFormat: 'text',
-        saveCount: 2,
-        remixCount: 1,
-        commentCount: 0,
-        createdAt: '2026-04-25T10:00:00.000Z',
-        creator: {
-          id: 'creator-1',
-          username: 'creator-name',
-          name: 'Creator Name',
-          avatar: null,
-        },
-        isSaved: false,
-        sourceKind: 'manual',
-        sourceTool: null,
         generationId: null,
-        asset: {
-          id: 'bundle-1',
-          postId: 'tip-1',
-          title: 'Prompt pacing unlock',
-          accessMode: 'free',
-          priceUsdCents: 0,
-          previewText: 'Prompt included.',
-          allowRemix: false,
-          resourceKinds: ['prompt'],
-        },
-        canRemix: false,
       },
     ];
 
     render(<HomeShowcasePreviewGrid items={items} />);
 
-    expect(screen.getByText('Tip / note')).toBeInTheDocument();
-    expect(screen.getByText('Prompt pacing tip')).toBeInTheDocument();
-    expect(screen.getByText('Lead with the product benefit before adding cinematic style words.')).toBeInTheDocument();
-    expect(screen.getByText('Free recipe')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /preview campaign frame/i })).toBeInTheDocument();
+    expect(screen.queryByText('Prompt pacing tip')).not.toBeInTheDocument();
+    expect(screen.queryByText('Tip / note')).not.toBeInTheDocument();
     expect(screen.queryByText('No media preview')).not.toBeInTheDocument();
   });
 
