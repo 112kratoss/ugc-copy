@@ -61,8 +61,10 @@ describe('admin revenue report', () => {
     const mobile = report.rails.find((rail) => rail.key === 'mobile-iap');
 
     expect(filterLog.transactions).toContain('is:mobile_product_id=null');
-    expect(web?.grossSubunits).toBe(0);
-    expect(mobile?.grossSubunits).toBe(830000);
+    expect(web?.totalsByCurrency).toEqual([]);
+    expect(mobile?.totalsByCurrency).toEqual([
+      { currency: 'INR', grossSubunits: 830000, succeededCount: 1 },
+    ]);
     expect(report.recentOrders).toHaveLength(1);
   });
 
@@ -84,7 +86,9 @@ describe('admin revenue report', () => {
 
     // A `created` intent routinely never completes; counting it would inflate
     // gross with money that was never captured.
-    expect(web?.grossSubunits).toBe(41500);
+    expect(web?.totalsByCurrency).toEqual([
+      { currency: 'INR', grossSubunits: 41500, succeededCount: 1 },
+    ]);
     expect(web?.creditsIssued).toBe(500);
     expect(web?.succeededCount).toBe(1);
     expect(web?.pendingCount).toBe(1);
@@ -103,12 +107,63 @@ describe('admin revenue report', () => {
     const report = await collectAdminRevenueReport(client, { now: NOW });
 
     expect(report.rails).toHaveLength(4);
-    expect(report.rails.map((rail) => rail.grossSubunits)).toEqual([10000, 0, 5000, 0]);
+    expect(report.rails.map((rail) => rail.totalsByCurrency)).toEqual([
+      [{ currency: 'INR', grossSubunits: 10000, succeededCount: 1 }],
+      [],
+      [{ currency: 'USD', grossSubunits: 5000, succeededCount: 1 }],
+      [],
+    ]);
     expect(report.creatorPayouts).toEqual({
       walletCount: 1,
       availableTokenSubunits: 700,
       lifetimeEarnedTokenSubunits: 900,
     });
+  });
+
+  it('never sums across currencies within a rail', async () => {
+    // Not hypothetical: post_resource_bundle_orders already carries both INR
+    // and USD in production, so a single blended total would be meaningless.
+    const client = createClient({
+      transactions: [],
+      mobile_store_transactions: [],
+      marketplace_orders: [],
+      post_resource_bundle_orders: [
+        { id: 'b1', status: 'paid', amount_subunits: 30000, currency: 'INR', created_at: '2026-07-20T00:00:00.000Z' },
+        { id: 'b2', status: 'paid', amount_subunits: 1000, currency: 'USD', created_at: '2026-07-21T00:00:00.000Z' },
+        { id: 'b3', status: 'paid', amount_subunits: 20000, currency: 'INR', created_at: '2026-07-22T00:00:00.000Z' },
+        { id: 'b4', status: 'failed', amount_subunits: 99999, currency: 'USD', created_at: '2026-07-23T00:00:00.000Z' },
+      ],
+      creator_resource_wallets: [],
+    });
+
+    const report = await collectAdminRevenueReport(client, { now: NOW });
+    const bundles = report.rails.find((rail) => rail.key === 'resource-bundles');
+
+    // Largest first, and the failed USD order contributes to neither total.
+    expect(bundles?.totalsByCurrency).toEqual([
+      { currency: 'INR', grossSubunits: 50000, succeededCount: 2 },
+      { currency: 'USD', grossSubunits: 1000, succeededCount: 1 },
+    ]);
+    expect(bundles?.succeededCount).toBe(3);
+    expect(bundles?.failedCount).toBe(1);
+  });
+
+  it('falls back to INR only when a row carries no currency', async () => {
+    const client = createClient({
+      transactions: [],
+      mobile_store_transactions: [
+        { id: 'm1', status: 'active', amount_subunits: 500, created_at: '2026-07-20T00:00:00.000Z' },
+      ],
+      marketplace_orders: [],
+      post_resource_bundle_orders: [],
+      creator_resource_wallets: [],
+    });
+
+    const report = await collectAdminRevenueReport(client, { now: NOW });
+
+    expect(report.rails.find((rail) => rail.key === 'mobile-iap')?.totalsByCurrency).toEqual([
+      { currency: 'INR', grossSubunits: 500, succeededCount: 1 },
+    ]);
   });
 
   it('leaves creditsIssued null on rails that do not issue credits', async () => {

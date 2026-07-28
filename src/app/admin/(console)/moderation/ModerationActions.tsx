@@ -3,11 +3,61 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Check, ShieldOff } from 'lucide-react';
+import clsx from 'clsx';
 
 import { Text } from '@/app/components/DesignSystem';
 
 type PostAction = 'take_down' | 'dismiss';
 type SubjectAction = 'resolve' | 'dismiss';
+
+type Outcome = {
+  status?: string;
+  resolvedReportCount?: number;
+  revokedMediaCount?: number;
+  mediaRevocationVerified?: boolean;
+  externalMediaRevocationRequired?: boolean;
+  commentRemoved?: boolean;
+};
+
+/**
+ * Raw JSON was unreadable under time pressure and buried the one line that
+ * matters: `externalMediaRevocationRequired` means the incident is NOT closed —
+ * a provider-hosted copy still needs revoking by hand.
+ */
+function describeOutcome(payload: Outcome): string {
+  const parts: string[] = [];
+
+  switch (payload.status) {
+    case 'taken_down': parts.push('Post taken down and hidden from public surfaces.'); break;
+    case 'dismissed': parts.push('Report dismissed. The content was left untouched.'); break;
+    case 'resolved': parts.push('Report resolved.'); break;
+    case 'already_resolved': parts.push('This report had already been resolved — nothing changed.'); break;
+    default: parts.push('Decision recorded.');
+  }
+
+  if (payload.commentRemoved) {
+    parts.push('The comment was soft-removed and reply counts repaired.');
+  }
+  if ((payload.resolvedReportCount ?? 0) > 1) {
+    parts.push(`${payload.resolvedReportCount} duplicate reports for the same target were closed too.`);
+  }
+  if (payload.mediaRevocationVerified) {
+    const count = payload.revokedMediaCount ?? 0;
+    parts.push(
+      count > 0
+        ? `${count} stored media object${count === 1 ? '' : 's'} deleted and verified gone.`
+        : 'No stored media needed deleting.',
+    );
+  }
+  if (payload.externalMediaRevocationRequired) {
+    parts.push(
+      'ACTION STILL REQUIRED: this post also references provider-hosted media that '
+      + 'this tool cannot delete. Revoke it at the provider and record that before closing the case.',
+    );
+  }
+
+  return parts.join(' ');
+}
 
 function useDecision(endpoint: string) {
   const router = useRouter();
@@ -33,9 +83,7 @@ function useDecision(endpoint: string) {
         return;
       }
 
-      // Surfaced verbatim: `externalMediaRevocationRequired` means the operator
-      // still has provider-side work to do before the incident can be closed.
-      setResult(JSON.stringify(payload));
+      setResult(describeOutcome(payload));
       router.refresh();
     } catch {
       setError('Action failed. Check your connection and try again.');
@@ -97,9 +145,17 @@ export function PostReportActions({ reportId }: { reportId: string }) {
         <p role="alert" className="mt-2 text-sm font-semibold text-[var(--ui-accent-danger)]">{error}</p>
       ) : null}
       {result ? (
-        <pre className="mt-2 overflow-x-auto rounded-xl bg-[var(--ui-surface-inset)] p-3 font-mono text-[11px] text-[var(--ui-text-muted)]">
+        <p
+          role="status"
+          className={clsx(
+            'mt-2 rounded-xl px-3 py-2 text-sm font-semibold',
+            result.includes('ACTION STILL REQUIRED')
+              ? 'bg-[rgba(255,196,107,0.12)] text-[#ffc46b]'
+              : 'bg-[rgba(94,233,164,0.10)] text-[#5ee9a4]',
+          )}
+        >
           {result}
-        </pre>
+        </p>
       ) : null}
     </div>
   );
@@ -142,9 +198,17 @@ export function SubjectReportActions({ reportId }: { reportId: string }) {
         <p role="alert" className="mt-2 text-sm font-semibold text-[var(--ui-accent-danger)]">{error}</p>
       ) : null}
       {result ? (
-        <pre className="mt-2 overflow-x-auto rounded-xl bg-[var(--ui-surface-inset)] p-3 font-mono text-[11px] text-[var(--ui-text-muted)]">
+        <p
+          role="status"
+          className={clsx(
+            'mt-2 rounded-xl px-3 py-2 text-sm font-semibold',
+            result.includes('ACTION STILL REQUIRED')
+              ? 'bg-[rgba(255,196,107,0.12)] text-[#ffc46b]'
+              : 'bg-[rgba(94,233,164,0.10)] text-[#5ee9a4]',
+          )}
+        >
           {result}
-        </pre>
+        </p>
       ) : null}
     </div>
   );
