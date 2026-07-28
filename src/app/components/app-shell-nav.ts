@@ -156,6 +156,10 @@ export function isMinimalAppChromePath(pathname: string) {
     pathname.startsWith('/auth/') ||
     pathname === '/login' ||
     pathname.startsWith('/login?') ||
-    pathname.startsWith('/r/')
+    pathname.startsWith('/r/') ||
+    // The admin console renders its own operator chrome and must not show the
+    // consumer navigation, "Sign in" prompt, or mobile tab bar.
+    pathname === '/admin' ||
+    pathname.startsWith('/admin/')
   );
 }
