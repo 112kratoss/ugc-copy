@@ -75,8 +75,15 @@ export const metadata: Metadata = {
 
 export default function RootLayout({
   children,
+  modal,
 }: Readonly<{
   children: React.ReactNode;
+  /**
+   * Parallel slot for intercepted routes (see `src/app/@modal`). Rendered as a
+   * body-level sibling of the shell so an overlay is not confined by the app
+   * shell's stacking context or content padding.
+   */
+  modal: React.ReactNode;
 }>) {
   const gaMeasurementId = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
   const speedInsightsEnabled = process.env.NEXT_PUBLIC_SPEED_INSIGHTS_ENABLED === '1';
@@ -97,6 +104,7 @@ export default function RootLayout({
           Skip to content
         </a>
         <AppShell>{children}</AppShell>
+        {modal}
         <DeferredGenerationNotifications />
         {speedInsightsEnabled ? (
           <SpeedInsights sampleRate={getSpeedInsightsSampleRate()} />

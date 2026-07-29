@@ -714,6 +714,12 @@ export default function ShowcaseReelViewer({
           return;
         }
 
+        // The post-detail overlay (opened from "Post details") sits above this
+        // viewer and listens on the window too. Let the top layer close first.
+        if (document.body.dataset.showcaseOverlayOpen === 'true') {
+          return;
+        }
+
         handleClose();
         return;
       }
