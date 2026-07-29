@@ -49,6 +49,12 @@ export type AdminUserDetail = {
     kind: 'razorpay' | 'mobile-iap';
     status: string;
     amountSubunits: number | null;
+    /**
+     * Carried per row rather than assumed. Mobile store transactions record
+     * their own currency, so rendering every amount as INR misstates any
+     * non-INR purchase.
+     */
+    currency: string;
     credits: number | null;
     createdAt: string;
     reference: string | null;
@@ -186,21 +192,24 @@ export async function getAdminUserDetail(
       .select('id', { count: 'exact', head: true })
       .eq('user_id', userId)
       .gte('created_at', thirtyDaysAgo),
-    client
-      .from('ai_usage_events')
-      .select('cost')
-      .eq('user_id', userId)
-      .eq('refunded', false)
-      .limit(10000),
+    // Aggregated in Postgres. Selecting rows and summing them in JS silently
+    // truncated past the row cap, producing a wrong spend figure with no
+    // indication — see 20260729090100_user_ai_usage_cost_total.sql.
+    client.rpc('get_user_ai_usage_cost_total', { p_user_id: userId }),
     client
       .from('transactions')
-      .select('id, status, amount, credits, created_at, razorpay_payment_id, mobile_product_id')
+      .select('id, status, amount, credits, created_at, razorpay_payment_id')
       .eq('user_id', userId)
+      // A mobile IAP writes BOTH a mobile_store_transactions row and a
+      // mirrored transactions ledger row (linked by source_record_id). Without
+      // this filter the same purchase appears twice in a user's history, and
+      // the ledger copy is mislabelled as a web Razorpay payment.
+      .is('mobile_product_id', null)
       .order('created_at', { ascending: false })
       .limit(25),
     client
       .from('mobile_store_transactions')
-      .select('id, status, amount_subunits, credits, created_at, product_id, provider')
+      .select('id, status, amount_subunits, currency, credits, created_at, product_id, provider')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(25),
@@ -223,8 +232,8 @@ export async function getAdminUserDetail(
       .limit(15),
   ]);
 
-  const lifetimeCreditsSpent = ((spendResult.data ?? []) as Array<{ cost: number | null }>)
-    .reduce((total, row) => total + (row.cost ?? 0), 0);
+  const spendTotals = (spendResult.data ?? {}) as Record<string, unknown>;
+  const lifetimeCreditsSpent = Number(spendTotals.total_cost ?? 0);
 
   const purchases: AdminUserDetail['purchases'] = [
     ...((transactionsResult.data ?? []) as Array<Record<string, unknown>>).map((row) => ({
@@ -232,15 +241,18 @@ export async function getAdminUserDetail(
       kind: 'razorpay' as const,
       status: String(row.status ?? ''),
       amountSubunits: typeof row.amount === 'number' ? row.amount : null,
+      // Web credit purchases are Razorpay, which this product bills in INR.
+      currency: 'INR',
       credits: typeof row.credits === 'number' ? row.credits : null,
       createdAt: String(row.created_at ?? ''),
-      reference: (row.razorpay_payment_id as string | null) ?? (row.mobile_product_id as string | null) ?? null,
+      reference: (row.razorpay_payment_id as string | null) ?? null,
     })),
     ...((mobileTransactionsResult.data ?? []) as Array<Record<string, unknown>>).map((row) => ({
       id: String(row.id),
       kind: 'mobile-iap' as const,
       status: String(row.status ?? ''),
       amountSubunits: typeof row.amount_subunits === 'number' ? row.amount_subunits : null,
+      currency: typeof row.currency === 'string' && row.currency ? row.currency : 'INR',
       credits: typeof row.credits === 'number' ? row.credits : null,
       createdAt: String(row.created_at ?? ''),
       reference: (row.product_id as string | null) ?? null,

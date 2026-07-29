@@ -21,13 +21,25 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 export type AdminRevenueWindow = 7 | 30 | 90;
 
+export type AdminRevenueCurrencyTotal = {
+  currency: string;
+  grossSubunits: number;
+  succeededCount: number;
+};
+
 export type AdminRevenueRail = {
   key: 'razorpay-credits' | 'mobile-iap' | 'marketplace' | 'resource-bundles';
   label: string;
   succeededCount: number;
   pendingCount: number;
   failedCount: number;
-  grossSubunits: number;
+  /**
+   * Deliberately a per-currency breakdown rather than a single `grossSubunits`.
+   * `post_resource_bundle_orders` already carries both INR and USD in
+   * production, so one summed figure would add rupees to dollars and report a
+   * number that means nothing.
+   */
+  totalsByCurrency: AdminRevenueCurrencyTotal[];
   creditsIssued: number | null;
 };
 
@@ -67,22 +79,34 @@ function classify(status: string): 'succeeded' | 'failed' | 'pending' {
 function summarizeRail(
   key: AdminRevenueRail['key'],
   label: string,
-  rows: Array<{ status: string; amountSubunits: number | null; credits?: number | null }>,
+  rows: Array<{
+    status: string;
+    amountSubunits: number | null;
+    currency: string;
+    credits?: number | null;
+  }>,
 ): AdminRevenueRail {
   let succeededCount = 0;
   let pendingCount = 0;
   let failedCount = 0;
-  let grossSubunits = 0;
   let creditsIssued = 0;
   let sawCredits = false;
+  const byCurrency = new Map<string, AdminRevenueCurrencyTotal>();
 
   for (const row of rows) {
     const outcome = classify(row.status);
     if (outcome === 'succeeded') {
       succeededCount += 1;
+
       // Only settled money counts toward gross; pending intents routinely never
       // complete and would inflate the figure.
-      grossSubunits += row.amountSubunits ?? 0;
+      const currency = row.currency || 'INR';
+      const existing = byCurrency.get(currency)
+        ?? { currency, grossSubunits: 0, succeededCount: 0 };
+      existing.grossSubunits += row.amountSubunits ?? 0;
+      existing.succeededCount += 1;
+      byCurrency.set(currency, existing);
+
       if (typeof row.credits === 'number') {
         creditsIssued += row.credits;
         sawCredits = true;
@@ -100,7 +124,10 @@ function summarizeRail(
     succeededCount,
     pendingCount,
     failedCount,
-    grossSubunits,
+    // Sorted largest-first so the dominant currency leads the card.
+    totalsByCurrency: [...byCurrency.values()].sort(
+      (left, right) => right.grossSubunits - left.grossSubunits,
+    ),
     creditsIssued: sawCredits ? creditsIssued : null,
   };
 }
@@ -167,20 +194,25 @@ export async function collectAdminRevenueReport(
     summarizeRail('razorpay-credits', 'Credit purchases (web)', creditRows.map((row) => ({
       status: String(row.status ?? ''),
       amountSubunits: typeof row.amount === 'number' ? row.amount : null,
+      // `transactions` has no currency column; web Razorpay billing is INR.
+      currency: 'INR',
       credits: typeof row.credits === 'number' ? row.credits : null,
     }))),
     summarizeRail('mobile-iap', 'Mobile in-app purchases', mobileRows.map((row) => ({
       status: String(row.status ?? ''),
       amountSubunits: typeof row.amount_subunits === 'number' ? row.amount_subunits : null,
+      currency: String(row.currency ?? 'INR'),
       credits: typeof row.credits === 'number' ? row.credits : null,
     }))),
     summarizeRail('marketplace', 'Marketplace assets', marketplaceRows.map((row) => ({
       status: String(row.status ?? ''),
       amountSubunits: typeof row.amount_subunits === 'number' ? row.amount_subunits : null,
+      currency: String(row.currency ?? 'INR'),
     }))),
     summarizeRail('resource-bundles', 'Post resource bundles', bundleRows.map((row) => ({
       status: String(row.status ?? ''),
       amountSubunits: typeof row.amount_subunits === 'number' ? row.amount_subunits : null,
+      currency: String(row.currency ?? 'INR'),
     }))),
   ];
 

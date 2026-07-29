@@ -87,6 +87,7 @@ export async function postAdminSubjectReportDecision(request: Request): Promise<
     const body = (await request.json().catch(() => ({}))) as DecisionBody;
     const reportId = typeof body.reportId === 'string' ? body.reportId : '';
     const action = body.action === 'resolve' || body.action === 'dismiss' ? body.action : null;
+    const note = typeof body.note === 'string' ? body.note : '';
 
     if (!reportId || !action) {
       return NextResponse.json({ error: 'reportId and action are required.' }, { status: 400, headers });
@@ -96,6 +97,7 @@ export async function postAdminSubjectReportDecision(request: Request): Promise<
       reportId,
       reviewerId,
       action,
+      resolutionNote: note,
     });
 
     return NextResponse.json(resolution, { status: 200, headers });

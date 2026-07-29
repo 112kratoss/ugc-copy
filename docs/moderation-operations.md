@@ -73,8 +73,16 @@ The queue includes the comment id, post id, current status, and a short body
 preview. After confirming a violation, resolve the report:
 
 ```sh
-npm run ops:moderation -- resolve-subject --report-id <report-uuid> --reviewer-id <moderator-auth-user-uuid> --confirm
+npm run ops:moderation -- resolve-subject \
+  --report-id <report-uuid> \
+  --reviewer-id <moderator-auth-user-uuid> \
+  --note "Policy section and concise evidence summary" \
+  --confirm
 ```
+
+`--note` is required. Subject decisions now persist a rationale to
+`moderation_reports.resolution_note`, matching post takedowns; the resolver
+rejects a decision that would leave the audit record unexplained.
 
 For a comment target, this command atomically soft-removes an active comment as
 `removed_by_moderation`, repairs the post and parent-reply counters, records the
@@ -89,14 +97,15 @@ the comment untouched and closes only the selected report.
 For a user or generation report, first complete the required manual safety action. Then record the outcome:
 
 ```sh
-npm run ops:moderation -- resolve-subject --report-id <report-uuid> --reviewer-id <moderator-auth-user-uuid> --confirm
-npm run ops:moderation -- dismiss-subject --report-id <report-uuid> --reviewer-id <moderator-auth-user-uuid> --confirm
+npm run ops:moderation -- resolve-subject --report-id <report-uuid> --reviewer-id <moderator-auth-user-uuid> --note "<rationale>" --confirm
+npm run ops:moderation -- dismiss-subject --report-id <report-uuid> --reviewer-id <moderator-auth-user-uuid> --note "<rationale>" --confirm
 ```
 
-The same subject-report command records final status, reviewer, and review time.
-For user and generation targets, complete the required manual safety action
-before resolving. Keep detailed investigation notes in the restricted incident
-system until a dedicated resolution-note field is approved.
+The same subject-report command records final status, reviewer, review time,
+and the rationale supplied via `--note`. For user and generation targets,
+complete the required manual safety action before resolving. Keep any material
+beyond a concise rationale — full investigation detail, personal data, external
+report identifiers — in the restricted incident system rather than in the note.
 
 ## Safety escalation and verification
 

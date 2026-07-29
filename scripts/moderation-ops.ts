@@ -172,6 +172,9 @@ export async function runModerationOps(
       reportId,
       reviewerId,
       action: command === 'resolve-subject' ? 'resolve' : 'dismiss',
+      // Now mandatory, matching take-down-post. The resolver rejects a decision
+      // that would leave no rationale in the audit record.
+      resolutionNote: requireFlag(flags, '--note'),
     });
     console.log(JSON.stringify(result, null, 2));
     return;

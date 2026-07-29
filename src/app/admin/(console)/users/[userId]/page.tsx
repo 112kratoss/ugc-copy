@@ -119,9 +119,9 @@ export default async function AdminUserDetailPage({
             {detail.purchases.map((purchase) => (
               <tr key={`${purchase.kind}-${purchase.id}`}>
                 <Td>{formatTimestamp(purchase.createdAt)}</Td>
-                <Td>{purchase.kind === 'razorpay' ? 'Razorpay' : 'Mobile IAP'}</Td>
+                <Td>{purchase.kind === 'razorpay' ? 'Razorpay (web)' : 'Mobile IAP'}</Td>
                 <Td><StatusBadge status={purchase.status} /></Td>
-                <Td>{formatSubunits(purchase.amountSubunits)}</Td>
+                <Td>{formatSubunits(purchase.amountSubunits, purchase.currency)}</Td>
                 <Td>{purchase.credits?.toLocaleString() ?? '—'}</Td>
                 <Td mono>{purchase.reference ?? '—'}</Td>
               </tr>
@@ -131,7 +131,11 @@ export default async function AdminUserDetailPage({
       </section>
 
       <section className="mt-8">
-        <CreditAdjustmentForm userId={detail.profile.id} />
+        <CreditAdjustmentForm
+          userId={detail.profile.id}
+          credits={detail.profile.credits}
+          promotionalCredits={detail.profile.promotionalCredits}
+        />
       </section>
 
       <section className="mt-8">

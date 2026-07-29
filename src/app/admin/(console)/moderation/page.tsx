@@ -146,6 +146,36 @@ export default async function AdminModerationPage() {
                   </blockquote>
                 ) : null}
 
+                {/*
+                  The queue already hydrates the comment body, so showing only an
+                  id forced the operator to go find the evidence elsewhere before
+                  they could decide. Render it inline.
+                */}
+                {report.comment ? (
+                  <div className="mt-3 rounded-xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] px-3 py-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Text as="span" variant="caption" className="uppercase tracking-[0.08em]">
+                        Reported comment
+                      </Text>
+                      <StatusBadge status={report.comment.status} />
+                      <Link
+                        href={`/post/${report.comment.postId}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs underline"
+                      >
+                        Open post
+                      </Link>
+                    </div>
+                    <Text variant="bodySm" className="mt-1.5 whitespace-pre-wrap text-[var(--ui-text-secondary)]">
+                      {report.comment.body}
+                    </Text>
+                    {report.comment.parentId ? (
+                      <Text variant="caption" className="mt-1">Reply to {shortId(report.comment.parentId)}</Text>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   <Field label="Report id"><span className="font-mono text-xs">{shortId(report.id)}</span></Field>
                   <Field label="Surface">{report.sourceSurface}</Field>
@@ -156,15 +186,14 @@ export default async function AdminModerationPage() {
                       </Link>
                     ) : '—'}
                   </Field>
+                  <Field label="Comment author">
+                    {report.comment?.authorUserId ? (
+                      <Link href={`/admin/users/${report.comment.authorUserId}`} className="font-mono text-xs underline">
+                        {shortId(report.comment.authorUserId)}
+                      </Link>
+                    ) : '—'}
+                  </Field>
                   <Field label="Generation">{report.generationId ? shortId(report.generationId) : '—'}</Field>
-                  {/*
-                    Comment reports show the id only. Hydrating the comment body
-                    into the queue is part of the separate post-comments work; this
-                    page deliberately depends only on the fields
-                    `SubjectModerationQueueItem` exposes today so the console does
-                    not couple to that branch.
-                  */}
-                  <Field label="Comment">{report.commentId ? shortId(report.commentId) : '—'}</Field>
                   <Field label="Reported at">{formatTimestamp(report.createdAt)}</Field>
                 </div>
 
