@@ -192,12 +192,10 @@ export async function getAdminUserDetail(
       .select('id', { count: 'exact', head: true })
       .eq('user_id', userId)
       .gte('created_at', thirtyDaysAgo),
-    client
-      .from('ai_usage_events')
-      .select('cost')
-      .eq('user_id', userId)
-      .eq('refunded', false)
-      .limit(10000),
+    // Aggregated in Postgres. Selecting rows and summing them in JS silently
+    // truncated past the row cap, producing a wrong spend figure with no
+    // indication — see 20260729090100_user_ai_usage_cost_total.sql.
+    client.rpc('get_user_ai_usage_cost_total', { p_user_id: userId }),
     client
       .from('transactions')
       .select('id, status, amount, credits, created_at, razorpay_payment_id')
@@ -234,8 +232,8 @@ export async function getAdminUserDetail(
       .limit(15),
   ]);
 
-  const lifetimeCreditsSpent = ((spendResult.data ?? []) as Array<{ cost: number | null }>)
-    .reduce((total, row) => total + (row.cost ?? 0), 0);
+  const spendTotals = (spendResult.data ?? {}) as Record<string, unknown>;
+  const lifetimeCreditsSpent = Number(spendTotals.total_cost ?? 0);
 
   const purchases: AdminUserDetail['purchases'] = [
     ...((transactionsResult.data ?? []) as Array<Record<string, unknown>>).map((row) => ({

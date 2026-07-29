@@ -90,7 +90,15 @@ export async function applyAdminSubjectReportDecision(
     reportId: string;
     reviewerId: string;
     action: 'resolve' | 'dismiss';
+    resolutionNote: string;
   },
 ): Promise<SubjectReportResolution> {
-  return resolveSubjectReport(client, options);
+  // Same standard the post-report path already enforces: the audit record is
+  // the only durable explanation of why a decision was made.
+  const note = options.resolutionNote.trim();
+  if (!note) {
+    throw new Error('A resolution note is required.');
+  }
+
+  return resolveSubjectReport(client, { ...options, resolutionNote: note });
 }

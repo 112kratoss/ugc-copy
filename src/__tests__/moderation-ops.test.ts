@@ -257,6 +257,23 @@ describe('moderation operations', () => {
     expect(rpc).not.toHaveBeenCalled();
   });
 
+  it('refuses a subject decision that would leave no rationale', async () => {
+    // A status change alone cannot answer an appeal, so the resolver rejects
+    // an empty rationale before it reaches the database.
+    const rpc = vi.fn();
+
+    for (const note of ['', '   ', 'ab', 'x'.repeat(1001)]) {
+      await expect(resolveSubjectReport({ rpc } as unknown as SupabaseClient, {
+        reportId: REPORT_ID,
+        reviewerId: REVIEWER_ID,
+        action: 'resolve',
+        resolutionNote: note,
+      })).rejects.toThrow(/resolution note/i);
+    }
+
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
   it('uses the atomic subject resolver and reports comment enforcement details', async () => {
     const rpc = vi.fn(async () => ({
       data: {
@@ -277,12 +294,14 @@ describe('moderation operations', () => {
       reportId: REPORT_ID,
       reviewerId: REVIEWER_ID,
       action: 'resolve',
+      resolutionNote: '  Confirmed policy 4.2 violation.  ',
     });
 
     expect(rpc).toHaveBeenCalledWith('resolve_subject_report_for_ops', {
       p_report_id: REPORT_ID,
       p_reviewer_id: REVIEWER_ID,
       p_action: 'resolve',
+      p_resolution_note: 'Confirmed policy 4.2 violation.',
     });
     expect(result).toEqual({
       status: 'resolved',

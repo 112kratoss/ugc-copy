@@ -38,6 +38,12 @@ function createClient(rows: TableRows, filterLog: Record<string, string[]> = {})
       });
       return builder;
     },
+    // Lifetime spend is a database aggregate, not a row scan.
+    rpc: (fn: string) => Promise.resolve(
+      fn === 'get_user_ai_usage_cost_total'
+        ? { data: { total_cost: 4242, event_count: 12, refunded_count: 1 }, error: null }
+        : { data: null, error: null },
+    ),
     auth: { admin: { getUserById: () => Promise.resolve({ data: { user: null } }) } },
   } as unknown as SupabaseClient;
 }
@@ -133,6 +139,23 @@ describe('admin user purchase history', () => {
       currency: 'INR',
       reference: 'pay_abc123',
     });
+  });
+
+  it('takes lifetime spend from the database aggregate, not a capped row scan', async () => {
+    // Summing rows in JS silently truncated past the 10,000-row cap, so the
+    // figure an operator uses to judge a refund could simply be wrong.
+    const client = createClient({
+      profiles: [PROFILE],
+      transactions: [],
+      mobile_store_transactions: [],
+      credit_grants: [],
+      creator_resource_wallets: null,
+      generations: [],
+    });
+
+    const detail = await getAdminUserDetail(client, USER_ID);
+
+    expect(detail?.spend.lifetimeCreditsSpent).toBe(4242);
   });
 
   it('rejects a non-UUID user id rather than issuing a broad query', async () => {
