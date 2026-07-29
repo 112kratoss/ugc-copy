@@ -5,6 +5,7 @@ import { CircleAlert, ChevronLeft, ChevronRight, Images, Maximize2, Play, Rotate
 
 import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
 import { useMediaLoadingPreferences } from '@/app/components/useMediaLoadingPreferences';
+import { resolveFeedPlaybackUrl } from '@/lib/media-descriptor';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import type { ShowcaseMediaItem } from '@/lib/showcase';
 
@@ -99,10 +100,23 @@ export default function ShowcaseMediaCarousel({
     && (isInteracting || (requestedAutoPlay && isInViewport))
   );
   const activeItem = items[activeIndex] ?? items[0] ?? null;
-  const activeSourceKey = activeItem ? JSON.stringify([activeItem.id, activeItem.url]) : '';
+  // Feed surfaces autoplay muted on scroll, so they stream the small rendition
+  // when one exists. Detail and reel are the full viewer and keep the source.
+  // Keying on the played URL matters: a rendition can appear mid-session, and
+  // reusing the source key would leave the element's terminal error state
+  // attached to what is now a different source.
+  const activePlaybackUrl = activeItem
+    ? mode === 'feed'
+      ? resolveFeedPlaybackUrl({
+        url: activeItem.url,
+        renditionUrl: activeItem.preview?.renditionUrl ?? activeItem.renditionUrl ?? null,
+      })
+      : activeItem.url
+    : '';
+  const activeSourceKey = activeItem ? JSON.stringify([activeItem.id, activePlaybackUrl]) : '';
   const activeLoadAttempt = activeSourceKey ? loadAttempts[activeSourceKey] ?? 0 : 0;
   const activeLoadKey = activeItem
-    ? JSON.stringify([activeItem.id, activeItem.url, activeLoadAttempt])
+    ? JSON.stringify([activeItem.id, activePlaybackUrl, activeLoadAttempt])
     : '';
   const hasActiveMediaError = Boolean(activeLoadKey && failedLoadKeys.has(activeLoadKey));
   const shouldActuallyPlayVideo = shouldPlayVideo && !hasActiveMediaError;
@@ -416,7 +430,7 @@ export default function ShowcaseMediaCarousel({
               <video
                 ref={activeVideoRef}
                 key={activeLoadKey}
-                src={shouldAttachVideo ? renderedActiveItem.url : undefined}
+                src={shouldAttachVideo ? activePlaybackUrl : undefined}
                 poster={shouldLoadPoster ? posterUrl ?? undefined : undefined}
                 muted={!showControls || hasActiveMediaError}
                 controls={showControls && !hasActiveMediaError}

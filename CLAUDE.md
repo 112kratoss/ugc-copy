@@ -19,7 +19,7 @@ Web app (repo root):
 ```bash
 npm run dev                # dev server on :3000 (webpack; `npm run dev:turbo` for Turbopack)
 npm run build              # production build
-npm run build:verify       # assert ffmpeg-static actually got bundled into media routes
+npm run build:verify       # assert ffmpeg is resolvable at runtime in the media routes
 npm run lint               # eslint (ugc-mobile is ignored)
 npm run typecheck          # app only — excludes scripts/, src/__tests__/, ugc-mobile/
 npm run typecheck:scripts  # separate project for scripts/ (tsconfig.scripts.json)

@@ -536,4 +536,117 @@ describe('ShowcaseMediaCarousel', () => {
       vi.useRealTimers();
     }
   });
+
+  describe('feed renditions', () => {
+    const RENDITION = 'https://example.com/clip.feed.abc123.mp4';
+
+    function playInFeed(item: ShowcaseMediaItem) {
+      const { container } = render(
+        <ShowcaseMediaCarousel title="Campaign clip" autoPlayVideo mediaItems={[item]} />
+      );
+      act(() => {
+        getPlaybackObserver()?.callback([
+          { isIntersecting: true, intersectionRatio: 0.7 } as IntersectionObserverEntry,
+        ], {} as IntersectionObserver);
+      });
+      return container.querySelector('video');
+    }
+
+    it('streams the small rendition instead of the source', () => {
+      // The whole point of the pipeline: scroll-by playback is muted, so it does
+      // not need the full-quality source, and the source is what costs egress.
+      expect(playInFeed(createVideoItem({ renditionUrl: RENDITION })))
+        .toHaveAttribute('src', RENDITION);
+    });
+
+    it('falls back to the source when no rendition exists yet', () => {
+      expect(playInFeed(createVideoItem()))
+        .toHaveAttribute('src', 'https://example.com/clip.mp4');
+    });
+
+    it('falls back to the source when the rendition is explicitly null', () => {
+      expect(playInFeed(createVideoItem({ renditionUrl: null })))
+        .toHaveAttribute('src', 'https://example.com/clip.mp4');
+    });
+
+    it('reads the rendition off the media descriptor too', () => {
+      // post-media.ts populates both the top-level field and the descriptor;
+      // mobile prefers the descriptor, so web must resolve it the same way.
+      const item = createVideoItem({
+        preview: {
+          id: 'video-1',
+          kind: 'video',
+          url: 'https://example.com/clip.mp4',
+          renditionUrl: RENDITION,
+          previewUrl: null,
+          thumbhash: null,
+          cacheKey: 'video-1',
+          expiresAt: null,
+          width: 1080,
+          height: 1350,
+          durationSeconds: 8,
+          status: 'ready',
+          gridReady: false,
+        },
+      });
+      expect(playInFeed(item)).toHaveAttribute('src', RENDITION);
+    });
+
+    it('keeps the full viewer on the source in reel and detail modes', () => {
+      // These play unmuted at full size, where the rendition's lower bitrate
+      // would be visible. `url` stays the source of record.
+      for (const mode of ['reel', 'detail'] as const) {
+        const { container, unmount } = render(
+          <ShowcaseMediaCarousel
+            title="Campaign clip"
+            mode={mode}
+            mediaItems={[createVideoItem({ renditionUrl: RENDITION })]}
+          />
+        );
+        expect(container.querySelector('video'))
+          .toHaveAttribute('src', 'https://example.com/clip.mp4');
+        unmount();
+      }
+    });
+
+    it('still attaches nothing until the card is on screen', () => {
+      const { container } = render(
+        <ShowcaseMediaCarousel
+          title="Campaign clip"
+          autoPlayVideo
+          mediaItems={[createVideoItem({ renditionUrl: RENDITION })]}
+        />
+      );
+      expect(container.querySelector('video')).not.toHaveAttribute('src');
+    });
+
+    it('remounts cleanly when a rendition backfills mid-session', () => {
+      // The load key is derived from the played URL. Keying on the source alone
+      // would leave a terminal error from the old element attached to what is
+      // now a different source, sticking the error overlay open.
+      const { container, rerender } = render(
+        <ShowcaseMediaCarousel
+          title="Campaign clip"
+          autoPlayVideo
+          mediaItems={[createVideoItem()]}
+        />
+      );
+      act(() => {
+        getPlaybackObserver()?.callback([
+          { isIntersecting: true, intersectionRatio: 0.7 } as IntersectionObserverEntry,
+        ], {} as IntersectionObserver);
+      });
+      expect(container.querySelector('video'))
+        .toHaveAttribute('src', 'https://example.com/clip.mp4');
+
+      rerender(
+        <ShowcaseMediaCarousel
+          title="Campaign clip"
+          autoPlayVideo
+          mediaItems={[createVideoItem({ renditionUrl: RENDITION })]}
+        />
+      );
+      expect(container.querySelector('video')).toHaveAttribute('src', RENDITION);
+    });
+  });
 });
