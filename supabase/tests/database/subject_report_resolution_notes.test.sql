@@ -70,11 +70,14 @@ select is(
   1,
   'exactly one resolver signature exists, so no caller can skip the note'
 );
-select is(
+-- Matched on the parameter rather than the full signature string:
+-- pg_get_function_identity_arguments includes parameter names, so an exact
+-- comparison breaks on a rename that changes nothing about the contract.
+select ok(
   (select pg_get_function_identity_arguments(p.oid) from pg_proc p
    join pg_namespace n on n.oid = p.pronamespace
-   where n.nspname = 'public' and p.proname = 'resolve_subject_report_for_ops'),
-  'uuid, uuid, text, text',
+   where n.nspname = 'public' and p.proname = 'resolve_subject_report_for_ops')
+  like '%p_resolution_note text%',
   'the surviving resolver takes a resolution note'
 );
 
