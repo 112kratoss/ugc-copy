@@ -2,6 +2,7 @@
 
 import { Loader2, PenLine } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useAuth } from '@/app/components/AuthProvider';
@@ -39,6 +40,7 @@ export default function FeedClient({
     variant = 'page',
     detailContext = PAGE_DETAIL_CONTEXT,
 }: FeedClientProps) {
+    const router = useRouter();
     const { session, user } = useAuth();
     const accessToken = session?.access_token ?? null;
     const isEmbedded = variant === 'embedded';
@@ -267,7 +269,7 @@ export default function FeedClient({
                     </p>
                 </div>
             ) : (
-                <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-3">
                     {cards.map((card) => (
                         <FeedPostCard
                             key={card.id}
@@ -283,7 +285,10 @@ export default function FeedClient({
                             onToggleSave={() => void toggleSave(card.id)}
                             onCommentCountChange={(commentCount) => applyCommentCount(card.id, commentCount)}
                             onOpenMedia={() => {
-                                window.location.href = buildShowcaseDetailPath(card.id, detailContext);
+                                // Client-side navigation keeps the shell alive; a full
+                                // document load here made every media click pay for a
+                                // cold reload out and another one back.
+                                router.push(buildShowcaseDetailPath(card.id, detailContext));
                             }}
                         />
                     ))}

@@ -8,6 +8,10 @@ vi.mock('@/app/components/AuthProvider', () => ({
     useAuth: () => ({ session: null, user: null }),
 }));
 
+vi.mock('next/navigation', () => ({
+    useRouter: () => ({ push: vi.fn() }),
+}));
+
 vi.mock('@/app/feed/FeedPostCard', () => ({
     default: ({ card }: { card: { title: string } }) => <article>{card.title}</article>,
 }));

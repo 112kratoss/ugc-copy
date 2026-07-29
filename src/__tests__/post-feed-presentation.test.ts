@@ -168,6 +168,30 @@ describe('post feed presentation', () => {
             expect(card.timeLabel).toBe('3h');
         });
 
+        // Mirrored on mobile in home-feed-view-model.test.ts — the two clients
+        // duplicate these rules on purpose.
+        it('reads action labels as verbs until there is social proof', () => {
+            const quiet = buildPostFeedCard(item({ saveCount: 0, commentCount: 0, remixCount: 0 }));
+
+            expect(quiet.saveLabel).toBe('Save');
+            expect(quiet.commentLabel).toBe('Comment');
+            expect(quiet.remixLabel).toBe('Remix');
+
+            const busy = buildPostFeedCard(item({ remixCount: 8 }));
+            expect(busy.remixLabel).toBe('Remix · 8');
+        });
+
+        it('builds a creation metadata line for media posts only', () => {
+            const known = buildPostFeedCard(item({ model: 'gpt-image-2', canRemix: true }));
+            expect(known.metadataLabel).toBe('Image · GPT Image 2 · Remixable');
+
+            // Unknown model slugs are omitted rather than leaked.
+            const unknown = buildPostFeedCard(item({ model: 'mystery-model-9', canRemix: false }));
+            expect(unknown.metadataLabel).toBe('Image');
+
+            expect(buildPostFeedCard(textItem()).metadataLabel).toBeNull();
+        });
+
         it('keeps the original item available for actions and media', () => {
             const source = item();
 
