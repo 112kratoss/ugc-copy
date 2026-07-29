@@ -93,17 +93,25 @@ function FeedPostCardView({
                     </div>
                 )}
                 <span className="text-xs text-[var(--ui-text-faint)]">{`· ${card.timeLabel}`}</span>
-                <span className="ml-auto shrink-0 rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-2.5 py-0.5 text-[11px] font-bold text-[var(--ui-text-muted)]">
-                    {card.categoryLabel}
-                </span>
+                {card.kind === 'text' ? (
+                    <span className="ml-auto shrink-0 rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-2.5 py-0.5 text-[11px] font-bold text-[var(--ui-text-muted)]">
+                        {card.categoryLabel}
+                    </span>
+                ) : null}
             </div>
 
-            <div className="flex flex-col gap-3 px-4 pt-2 sm:px-5">
+            <div className="flex flex-col gap-2 px-4 pt-2 sm:px-5">
                 <h2 className="text-lg font-extrabold leading-snug tracking-[-0.01em] text-[var(--ui-text-primary)] sm:text-xl">
                     <Link href={detailHref} prefetch={false} className="ui-focus-ring rounded-sm hover:text-white">
                         {card.title}
                     </Link>
                 </h2>
+
+                {card.metadataLabel ? (
+                    <p className="text-xs font-bold tracking-wide text-[var(--ui-text-faint)]">
+                        {card.metadataLabel}
+                    </p>
+                ) : null}
 
                 {card.body ? (
                     <PostBody
@@ -128,7 +136,13 @@ function FeedPostCardView({
                         aspectRatio={coverAspectRatio}
                         fit="contain"
                         sizes="(min-width: 768px) 640px, 100vw"
-                        viewportClassName="max-h-[70vh] rounded-2xl border border-[var(--ui-border-subtle)]"
+                        // `w-full` is load-bearing: with `width: auto`, CSS
+                        // aspect-ratio transfers the max-height back into width,
+                        // shrinking the frame to a left-aligned column. Full width
+                        // turns the frame into a bounded stage — landscape media
+                        // fills it edge to edge, tall portraits sit centered — and
+                        // the tighter cap keeps the next post within reach.
+                        viewportClassName="w-full max-h-[min(60vh,35rem)] rounded-2xl border border-[var(--ui-border-subtle)]"
                         onOpen={onOpenMedia}
                     />
                 </div>
@@ -147,6 +161,18 @@ function FeedPostCardView({
             ) : null}
 
             <div className="mt-2 flex flex-wrap items-center gap-1 px-2 pb-2 sm:px-3">
+                {item.canRemix ? (
+                    // The product's differentiated verb leads the row as a labeled
+                    // pill; save/comment/share are universal socials and follow.
+                    <Link
+                        href={detailHref}
+                        prefetch={false}
+                        className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-[var(--ui-primary-strong)]/40 bg-[var(--ui-primary)]/10 px-4 text-xs font-extrabold text-[var(--ui-primary)] transition hover:bg-[var(--ui-primary)]/20"
+                    >
+                        <Repeat2 className="h-4 w-4" aria-hidden="true" />
+                        {card.remixLabel}
+                    </Link>
+                ) : null}
                 <ActionButton
                     label={card.saveLabel}
                     ariaLabel={`${isSaved ? 'Remove save from' : 'Save'} ${card.title}`}
@@ -162,16 +188,6 @@ function FeedPostCardView({
                     onClick={onToggleComments}
                     icon={<MessageCircle className="h-4 w-4" />}
                 />
-                {item.canRemix ? (
-                    <Link
-                        href={detailHref}
-                        prefetch={false}
-                        className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full px-3 text-xs font-bold text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
-                    >
-                        <Repeat2 className="h-4 w-4" aria-hidden="true" />
-                        {card.remixLabel}
-                    </Link>
-                ) : null}
                 <PublicShareButton
                     generationId={item.id}
                     title={card.title}

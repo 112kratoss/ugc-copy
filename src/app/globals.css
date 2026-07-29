@@ -68,6 +68,9 @@
 }
 
 :root {
+  /* The sticky app-shell topbar height; anything else that pins
+     below the topbar (e.g. .home-rail) must offset by this. */
+  --app-shell-topbar-height: 64px;
   --background: #101012;
   --foreground: #fff8ed;
   --ui-bg-app: #0c0c0e;
@@ -148,6 +151,25 @@ input,
 textarea,
 select {
   -webkit-tap-highlight-color: transparent;
+}
+
+/*
+ * Browsers give <button> the arrow cursor by default, so only links read as
+ * clickable from the pointer alone. Every interactive control should carry
+ * the affordance — chips, feed actions, carousel arrows, menu triggers.
+ * Disabled controls drop back to the arrow so "not right now" is legible too.
+ */
+button:not(:disabled),
+[role='button']:not([aria-disabled='true']),
+select:not(:disabled),
+summary,
+label[for] {
+  cursor: pointer;
+}
+
+button:disabled,
+[role='button'][aria-disabled='true'] {
+  cursor: default;
 }
 
 @keyframes skeleton-shimmer {
@@ -462,10 +484,17 @@ select {
   .home-rail {
     display: flex;
     position: sticky;
-    top: 1.5rem;
+    /* The topbar is sticky at the same scroll root; pinning at 1.5rem put the
+       rail's first card underneath it. */
+    top: calc(var(--app-shell-topbar-height) + 1rem);
     flex-direction: column;
     gap: 1rem;
     align-self: start;
+    /* On short viewports the stacked cards exceed the screen; let the rail
+       scroll internally instead of hiding its tail below the fold. */
+    max-height: calc(100dvh - var(--app-shell-topbar-height) - 2rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 }
 
@@ -477,6 +506,27 @@ select {
 .canonical-post-shell {
   container-name: canonical-post;
   container-type: inline-size;
+}
+
+/*
+ * The same post body rendered inside the intercepting-route overlay. The
+ * layout itself is container-query driven, so it reflows to the panel width on
+ * its own; only the page-level padding and the sticky column's topbar offset
+ * need correcting, because inside the panel there is no app topbar to clear.
+ */
+.canonical-post-shell-overlay {
+  width: 100%;
+  padding: 1.25rem 1rem 1.5rem;
+}
+
+@media (min-width: 40rem) {
+  .canonical-post-shell-overlay {
+    padding: 1.5rem;
+  }
+}
+
+.canonical-post-shell-overlay .canonical-post-actions {
+  top: 1rem;
 }
 
 .canonical-post-layout {
@@ -614,7 +664,7 @@ select {
   top: 0;
   z-index: 50;
   display: flex;
-  min-height: 64px;
+  min-height: var(--app-shell-topbar-height);
   align-items: center;
   gap: 1rem;
   border-bottom: 1px solid var(--ui-border-subtle);
@@ -624,7 +674,7 @@ select {
 }
 
 .app-shell-content {
-  min-height: calc(100dvh - 64px);
+  min-height: calc(100dvh - var(--app-shell-topbar-height));
   padding-bottom: calc(6.25rem + env(safe-area-inset-bottom));
 }
 
@@ -715,12 +765,12 @@ select {
   }
 
   .app-shell-header {
-    min-height: 64px;
+    min-height: var(--app-shell-topbar-height);
     padding-inline: 1.7rem;
   }
 
   .app-shell-content {
-    min-height: calc(100dvh - 64px);
+    min-height: calc(100dvh - var(--app-shell-topbar-height));
     padding-bottom: 0;
   }
 

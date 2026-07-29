@@ -108,6 +108,12 @@ describe('route utility stylesheet readiness', () => {
       .filter((entry) => entry.isDirectory())
       .filter((entry) => walkFiles(path.join(APP_ROOT, entry.name)).some((file) => file.endsWith('/page.tsx')))
       .map((entry) => entry.name)
+      // Parallel-route slots (`@modal`) are not route boundaries: they render
+      // inside whichever route is already on screen, public or not, so they
+      // cannot own a stylesheet. Requiring the private supplement here would
+      // load authenticated-only CSS on public routes and invert the split.
+      // Slot markup therefore lives under an already-scanned directory.
+      .filter((directory) => !directory.startsWith('@'))
       .filter((directory) => !PUBLIC_ROUTE_DIRECTORIES.has(directory))
       .sort();
 
@@ -133,6 +139,23 @@ describe('route utility stylesheet readiness', () => {
     }
     expect(readFileSync(path.join(APP_ROOT, 'layout.tsx'), 'utf8'))
       .not.toContain('non-public-utilities.css');
+  });
+
+  it('keeps parallel-route slots free of styled markup so an unscanned file cannot ship classes', () => {
+    const slotDirectories = readdirSync(APP_ROOT, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith('@'))
+      .map((entry) => entry.name);
+
+    for (const slot of slotDirectories) {
+      for (const file of walkFiles(path.join(APP_ROOT, slot))) {
+        if (!/\.(?:tsx|jsx)$/.test(file)) continue;
+
+        expect(
+          readFileSync(file, 'utf8'),
+          `${path.relative(APP_ROOT, file)} must delegate markup to a scanned directory`,
+        ).not.toMatch(/className=/);
+      }
+    }
   });
 
   it('keeps globals.css aligned with the exact public component import closure', () => {

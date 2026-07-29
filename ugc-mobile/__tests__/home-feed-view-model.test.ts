@@ -135,6 +135,18 @@ describe('home feed view model', () => {
       expect(card.creatorLabel).toBe('@batman');
     });
 
+    // Mirrored on web in post-feed-presentation.test.ts — the two clients
+    // duplicate these rules on purpose.
+    it('reads action labels as verbs until there is social proof', () => {
+      const quiet = showcaseToHomeFeedCard(item({ saveCount: 0, commentCount: 0, remixCount: 0 }));
+
+      expect(quiet.saveLabel).toBe('Save');
+      expect(quiet.commentLabel).toBe('Comment');
+      expect(quiet.remixLabel).toBe('Remix');
+
+      expect(showcaseToHomeFeedCard(item({ remixCount: 8 })).remixLabel).toBe('Remix · 8');
+    });
+
     it('accents video and text posts differently', () => {
       expect(showcaseToHomeFeedCard(item({ category: 'video', mediaKind: 'video' })).accent).toBe('video');
       expect(showcaseToHomeFeedCard(item({ creationMode: 'motion' })).accent).toBe('motion');

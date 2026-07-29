@@ -20,6 +20,9 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Expo has its own TypeScript/test gates; the root config is Next.js-specific.
     "ugc-mobile/**",
+    // Agent worktrees are full repo copies (including a nested ugc-mobile that
+    // escapes the ignore above); they lint inside their own checkout.
+    ".claude/worktrees/**",
   ]),
   {
     // Backend modules log through the structured logger so production lines are

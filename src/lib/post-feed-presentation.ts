@@ -1,3 +1,4 @@
+import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
 /**
@@ -138,6 +139,12 @@ export interface PostFeedCard {
     clampLines: number;
     framedBody: boolean;
     categoryLabel: string;
+    /**
+     * Creation context for media posts — `Image · GPT Image 2 · Remixable` —
+     * shown under the title instead of the old type chip. Null for text posts,
+     * which keep the chip (they have no model or remix story).
+     */
+    metadataLabel: string | null;
     creatorLabel: string;
     timeLabel: string;
     saveLabel: string;
@@ -155,6 +162,45 @@ export function getPostBodyFontSize(kind: PostPreviewKind) {
     return kind === 'text' ? TEXT_BODY_FONT_SIZE : COMPACT_BODY_FONT_SIZE;
 }
 
+/**
+ * Model ids are internal slugs (`gpt-image-2`); creators should read the
+ * product name. Unknown or manual sources return null so the metadata line
+ * simply omits the model instead of leaking a slug.
+ */
+export function getPostModelDisplayName(model: string | null | undefined): string | null {
+    if (!model) return null;
+
+    const catalogEntry = (IMAGE_MODELS as Record<string, { displayName: string }>)[model]
+        ?? (VIDEO_MODELS as Record<string, { displayName: string }>)[model]
+        ?? (MOTION_MODELS as Record<string, { displayName: string }>)[model];
+
+    return catalogEntry?.displayName ?? null;
+}
+
+/**
+ * The creation-context line for media posts. Text posts return null — their
+ * type chip stays, and they carry no model or remix affordance.
+ */
+export function getPostFeedMetadataLabel(item: ShowcaseFeedItem, kind: PostPreviewKind): string | null {
+    if (kind === 'text') return null;
+
+    const parts = [
+        getPostCategoryLabel(item),
+        getPostModelDisplayName(item.model),
+        item.canRemix ? 'Remixable' : null,
+    ].filter((part): part is string => Boolean(part));
+
+    return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+/**
+ * Count labels read as verbs until there is real social proof: a young feed
+ * full of zeros looks abandoned, while "Save" reads as an invitation.
+ */
+function formatActionLabel(count: number | null | undefined, verb: string) {
+    return (count ?? 0) > 0 ? formatCompactCount(count) : verb;
+}
+
 export function buildPostFeedCard(item: ShowcaseFeedItem, now = new Date()): PostFeedCard {
     const kind = resolvePostPreviewKind(item);
     const body = getPostFeedBody(item, kind);
@@ -170,11 +216,12 @@ export function buildPostFeedCard(item: ShowcaseFeedItem, now = new Date()): Pos
         clampLines,
         framedBody: isFramedPostBody(kind),
         categoryLabel: getPostCategoryLabel(item),
+        metadataLabel: getPostFeedMetadataLabel(item, kind),
         creatorLabel: item.creator.username ? `@${item.creator.username}` : creatorName,
         timeLabel: formatRelativeTime(item.createdAt, now),
-        saveLabel: formatCompactCount(item.saveCount),
-        commentLabel: formatCompactCount(item.commentCount),
-        remixLabel: formatCompactCount(item.remixCount),
+        saveLabel: formatActionLabel(item.saveCount, 'Save'),
+        commentLabel: formatActionLabel(item.commentCount, 'Comment'),
+        remixLabel: item.remixCount > 0 ? `Remix · ${formatCompactCount(item.remixCount)}` : 'Remix',
         canExpandBody: estimateWrappedLineCount(body, FEED_BODY_WIDTH, getPostBodyFontSize(kind)) > clampLines,
     };
 }

@@ -158,12 +158,21 @@ export function showcaseToHomeFeedCard(item: ShowcaseFeedItem): HomeFeedCard {
     aspectRatio: getHomeCardAspectRatio(item),
     unlock: cardUnlock(item),
     canRemix: canRecreateShowcaseItem(item),
-    saveLabel: formatCompactCount(item.saveCount),
-    commentLabel: formatCompactCount(item.commentCount),
-    remixLabel: formatCompactCount(item.remixCount),
+    saveLabel: formatFeedActionLabel(item.saveCount, 'Save'),
+    commentLabel: formatFeedActionLabel(item.commentCount, 'Comment'),
+    remixLabel: item.remixCount > 0 ? `Remix · ${formatCompactCount(item.remixCount)}` : 'Remix',
     isSaved: Boolean(item.isSaved),
     viewerSource: 'showcase-feed',
   };
+}
+
+/**
+ * Mirrors web's `formatActionLabel` (src/lib/post-feed-presentation.ts): count
+ * labels read as verbs until there is real social proof, so a young feed does
+ * not present a wall of zeros.
+ */
+function formatFeedActionLabel(count: number | null | undefined, verb: string) {
+  return (count ?? 0) > 0 ? formatCompactCount(count) : verb;
 }
 
 function homeCardBodyLines(previewKind: HomeFeedCard['previewKind']) {

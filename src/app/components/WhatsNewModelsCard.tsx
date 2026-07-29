@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Image as ImageIcon, Play, Rocket } from 'lucide-react';
+import { ArrowRight, Image as ImageIcon, Play, Rocket } from 'lucide-react';
 
 import { getAccentClasses, Kicker, Pill, Text } from '@/app/components/DesignSystem';
 import type { HomeWhatsNewModel } from '@/lib/home-dashboard';
@@ -12,21 +12,29 @@ const KIND_ICONS = {
 } as const;
 
 /**
- * Dynamic replacement for the marketing page's hardcoded LATEST_MODELS on the
- * signed-in surface: the list comes from the published catalog (`New` badges,
- * falling back to catalog order), so a model release shows up here without a
- * code change. Renders nothing when the catalog is unavailable.
+ * Two most recent rows keep the card a headline, not a catalog — model
+ * browsing belongs in the create flow, which "See all models" opens.
+ */
+const VISIBLE_MODEL_ROWS = 2;
+
+/**
+ * The home rail's model news: the list comes from the published catalog
+ * (`New` badges, falling back to catalog order), so a model release shows up
+ * here without a code change. Renders nothing when the catalog is
+ * unavailable.
  */
 export default function WhatsNewModelsCard({ models }: { models: HomeWhatsNewModel[] }) {
   if (models.length === 0) {
     return null;
   }
 
+  const visibleModels = models.slice(0, VISIBLE_MODEL_ROWS);
+
   return (
     <section aria-label="What's new in models" className="ui-card flex flex-col gap-3 p-5">
       <Kicker>What&apos;s new</Kicker>
       <ul className="flex flex-col gap-1">
-        {models.map((model) => {
+        {visibleModels.map((model) => {
           const Icon = KIND_ICONS[model.kind];
           const theme = getAccentClasses(model.accent);
 
@@ -56,6 +64,14 @@ export default function WhatsNewModelsCard({ models }: { models: HomeWhatsNewMod
           );
         })}
       </ul>
+      <Link
+        href="/create"
+        prefetch={false}
+        className="ui-focus-ring inline-flex min-h-9 items-center gap-1.5 self-start rounded-full px-2.5 text-xs font-bold text-[var(--ui-text-muted)] transition hover:text-[var(--ui-text-primary)]"
+      >
+        See all models
+        <ArrowRight className="h-3 w-3" aria-hidden />
+      </Link>
     </section>
   );
 }
