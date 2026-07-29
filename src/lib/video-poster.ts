@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { createWriteStream } from 'node:fs';
+import { accessSync, constants as fsConstants, createWriteStream } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import path from 'path';
@@ -90,14 +90,42 @@ async function runFfmpeg(inputPath: string, framePath: string, seekTime: string)
   });
 }
 
+let resolvedFfmpegPath: string | null = null;
+
+/**
+ * Locate an ffmpeg binary that is actually executable here.
+ *
+ * `ffmpeg-static` derives its path from `__dirname`, which a bundler can
+ * rewrite to a build-time virtual root that does not exist at runtime. Probing
+ * the candidates turns that into an error naming what was tried, rather than an
+ * opaque ENOENT surfacing from a spawn deep inside a transcode. `process.cwd()`
+ * is the function root on Vercel, where the traced copy lives.
+ */
 export function getFfmpegPath() {
   if (process.env.FFMPEG_PATH) {
     return process.env.FFMPEG_PATH;
   }
 
-  if (!ffmpegStaticPath) {
-    throw new Error('ffmpeg-static does not provide a binary for this platform. Configure FFMPEG_PATH.');
+  if (resolvedFfmpegPath) {
+    return resolvedFfmpegPath;
   }
 
-  return ffmpegStaticPath;
+  const candidates = [
+    ffmpegStaticPath,
+    path.join(process.cwd(), 'node_modules', 'ffmpeg-static', 'ffmpeg'),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  for (const candidate of candidates) {
+    try {
+      accessSync(candidate, fsConstants.X_OK);
+      resolvedFfmpegPath = candidate;
+      return candidate;
+    } catch {
+      // Fall through to the next candidate.
+    }
+  }
+
+  throw new Error(
+    `No executable ffmpeg binary found. Tried: ${candidates.join(', ') || '(none — ffmpeg-static ships no binary for this platform)'}. Set FFMPEG_PATH to override.`,
+  );
 }

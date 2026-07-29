@@ -107,15 +107,24 @@ const nextConfig: NextConfig = {
   experimental: {
     inlineCss: true,
   },
+  // ffmpeg-static resolves its binary from `__dirname`. Bundled, Turbopack
+  // inlines that as its virtual root ("/ROOT/node_modules/ffmpeg-static") — a
+  // path that does not exist in a lambda — so every spawn failed with ENOENT
+  // and no rendition or video poster could be produced in production. Keeping
+  // it external preserves a real runtime require, so `__dirname` points at the
+  // node_modules directory outputFileTracingIncludes already ships.
+  // sharp needs no entry; Next externalizes it by default.
+  serverExternalPackages: ["ffmpeg-static"],
+  // Keys are matched as globs, so a literal "[id]" reads as a character class
+  // and never matches its route. Use "*" for dynamic segments.
   outputFileTracingIncludes: {
     "/api/cron/backend-jobs": ["./node_modules/ffmpeg-static/**"],
     "/api/cron/generation-completions": ["./node_modules/ffmpeg-static/**"],
     "/api/cron/media-preview-repair": ["./node_modules/ffmpeg-static/**"],
     "/api/generate": ["./node_modules/ffmpeg-static/**"],
     "/api/generate-video": ["./node_modules/ffmpeg-static/**"],
-    "/api/generations/[id]/restore-media": ["./node_modules/ffmpeg-static/**"],
     "/api/posts": ["./node_modules/ffmpeg-static/**"],
-    "/api/posts/[postId]": ["./node_modules/ffmpeg-static/**"],
+    "/api/posts/*": ["./node_modules/ffmpeg-static/**"],
     "/api/showcase/publish": ["./node_modules/ffmpeg-static/**"],
   },
   outputFileTracingExcludes: {

@@ -87,6 +87,11 @@ function createClient(results: Record<string, QueryResult | QueryResult[]>) {
       { error: null, data: [] },
     ],
     generation_completion_jobs: { error: null, data: [] },
+    // Two reads: unresolved video renditions, then unresolved previews.
+    post_media: [
+      { error: null, data: [] },
+      { error: null, data: [] },
+    ],
     provider_dependency_events: { error: null, data: [] },
     ...results,
     ...(backendJobRuns
@@ -1336,5 +1341,141 @@ describe('collectBackendHealth', () => {
         severity: 'warning',
       }),
     ]));
+  });
+
+  describe('media pipeline', () => {
+    const NOW = new Date('2026-07-29T10:00:00.000Z');
+
+    function createMediaClient(postMedia: [unknown[], unknown[]]) {
+      return createClient({
+        backend_job_runs: { error: null, data: [] },
+        generations: [
+          { error: null, data: [] },
+          { error: null, data: [] },
+          { error: null, data: [] },
+        ],
+        post_media: [
+          { error: null, data: postMedia[0] },
+          { error: null, data: postMedia[1] },
+        ],
+      });
+    }
+
+    it('degrades when rows exhausted their attempts', async () => {
+      // The silent-green state: the repair sweep filters these out, so it
+      // reports "no work" every hour while no rendition will ever exist.
+      const db = createMediaClient([
+        [
+          { rendition_status: 'failed', rendition_attempt_count: 3, created_at: '2026-07-29T09:50:00.000Z' },
+        ],
+        [],
+      ]);
+
+      const health = await collectBackendHealth(db.client as never, NOW);
+
+      expect(health.status).toBe('degraded');
+      expect(health.mediaPipeline).toMatchObject({
+        status: 'degraded',
+        renditionFailedCount: 1,
+        renditionExhaustedCount: 1,
+      });
+      expect(health.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          severity: 'degraded',
+          code: 'MEDIA_RENDITION_ATTEMPTS_EXHAUSTED',
+        }),
+      ]));
+    });
+
+    it('only warns while retries remain', async () => {
+      const db = createMediaClient([
+        [
+          { rendition_status: 'failed', rendition_attempt_count: 1, created_at: '2026-07-29T09:50:00.000Z' },
+        ],
+        [],
+      ]);
+
+      const health = await collectBackendHealth(db.client as never, NOW);
+
+      expect(health.mediaPipeline).toMatchObject({
+        status: 'warning',
+        renditionFailedCount: 1,
+        renditionExhaustedCount: 0,
+      });
+      expect(health.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ severity: 'warning', code: 'MEDIA_RENDITION_FAILURES' }),
+      ]));
+    });
+
+    it('flags an exhausted preview backlog separately', async () => {
+      const db = createMediaClient([
+        [],
+        [
+          { preview_status: 'failed', preview_attempt_count: 3, created_at: '2026-07-29T09:50:00.000Z' },
+        ],
+      ]);
+
+      const health = await collectBackendHealth(db.client as never, NOW);
+
+      expect(health.mediaPipeline).toMatchObject({
+        status: 'degraded',
+        previewExhaustedCount: 1,
+      });
+      expect(health.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'MEDIA_PREVIEW_ATTEMPTS_EXHAUSTED' }),
+      ]));
+    });
+
+    it('warns when the backlog has outlived several repair windows', async () => {
+      const db = createMediaClient([
+        [
+          { rendition_status: 'pending', rendition_attempt_count: 0, created_at: '2026-07-28T10:00:00.000Z' },
+        ],
+        [],
+      ]);
+
+      const health = await collectBackendHealth(db.client as never, NOW);
+
+      expect(health.mediaPipeline).toMatchObject({
+        status: 'warning',
+        renditionPendingCount: 1,
+        oldestUnresolvedRenditionAt: '2026-07-28T10:00:00.000Z',
+      });
+      expect(health.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'MEDIA_RENDITION_BACKLOG_STALE' }),
+      ]));
+    });
+
+    it('stays ok on a freshly requeued backlog', async () => {
+      // The state the reset migration leaves behind. It must not block the
+      // release gate, which rejects anything worse than warning.
+      const db = createMediaClient([
+        [
+          { rendition_status: 'pending', rendition_attempt_count: 0, created_at: '2026-07-29T09:55:00.000Z' },
+        ],
+        [],
+      ]);
+
+      const health = await collectBackendHealth(db.client as never, NOW);
+
+      expect(health.mediaPipeline).toMatchObject({ status: 'ok', renditionPendingCount: 1 });
+      expect(health.issues.filter((issue) => issue.code.startsWith('MEDIA_'))).toEqual([]);
+    });
+
+    it('reads only unresolved rows so failures cannot be crowded out', async () => {
+      const db = createMediaClient([[], []]);
+
+      await collectBackendHealth(db.client as never, NOW);
+
+      expect(db.builders.post_media[0].eq).toHaveBeenCalledWith('media_kind', 'video');
+      expect(db.builders.post_media[0].in).toHaveBeenCalledWith(
+        'rendition_status',
+        ['pending', 'processing', 'failed'],
+      );
+      expect(db.builders.post_media[1].in).toHaveBeenCalledWith(
+        'preview_status',
+        ['pending', 'processing', 'failed'],
+      );
+    });
   });
 });

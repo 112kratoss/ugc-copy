@@ -51,6 +51,18 @@ type GenerationCompletionQueueRow = {
   locked_at: string | null;
 };
 
+type MediaRenditionRow = {
+  rendition_status: string | null;
+  rendition_attempt_count: number | null;
+  created_at: string | null;
+};
+
+type MediaPreviewRow = {
+  preview_status: string | null;
+  preview_attempt_count: number | null;
+  created_at: string | null;
+};
+
 type AiUsageEventRow = {
   feature: string | null;
   status: string | null;
@@ -148,6 +160,25 @@ export type BackendCompletionQueueHealth = {
   oldestFailedCreatedAt: string | null;
 };
 
+/**
+ * Derivative media that has not resolved yet. The repair sweep skips rows that
+ * exhausted their attempts, so an all-exhausted backlog reports "no work" and
+ * the job looks healthy forever — this counts the rows instead of the runs.
+ */
+export type BackendMediaPipelineHealth = {
+  status: BackendHealthStatus;
+  staleAfterMinutes: number;
+  renditionPendingCount: number;
+  renditionFailedCount: number;
+  renditionExhaustedCount: number;
+  previewPendingCount: number;
+  previewFailedCount: number;
+  previewExhaustedCount: number;
+  oldestUnresolvedRenditionAt: string | null;
+  oldestUnresolvedPreviewAt: string | null;
+  sampleTruncated: boolean;
+};
+
 export type BackendAiUsageHealth = {
   status: BackendHealthStatus;
   recentWindowMinutes: number;
@@ -213,6 +244,7 @@ export type BackendHealth = {
   jobs: BackendJobHealth[];
   generations: BackendGenerationHealth;
   completionQueue: BackendCompletionQueueHealth;
+  mediaPipeline: BackendMediaPipelineHealth;
   aiUsage: BackendAiUsageHealth;
   providerDependencies: BackendProviderDependencyHealth;
   issues: BackendHealthIssue[];
@@ -233,6 +265,14 @@ const PROVIDER_DEPENDENCY_TIMEOUT_DEGRADED_COUNT = 3;
 const PROVIDER_DEPENDENCY_SLOW_DEGRADED_COUNT = 5;
 const PAYMENT_WEBHOOK_PROCESSING_FAILURE_DEGRADED_COUNT = 1;
 const JOB_RECENT_FAILURE_WARNING_COUNT = 3;
+// Mirrors MAX_PREVIEW_ATTEMPTS / MAX_RENDITION_ATTEMPTS in media-preview-repair.ts.
+// Duplicated rather than imported so this ops route does not pull ffmpeg and
+// sharp into its bundle; media-pipeline-health.test.ts asserts they stay equal.
+const MEDIA_PREVIEW_MAX_ATTEMPTS = 3;
+const MEDIA_RENDITION_MAX_ATTEMPTS = 3;
+// Several hourly repair windows. Anything older is not "waiting its turn".
+const MEDIA_PIPELINE_STALE_AFTER_MINUTES = 360;
+const MEDIA_PIPELINE_SAMPLE_LIMIT = 500;
 
 function minutesSince(timestamp: string, now: Date): number {
   const ms = now.getTime() - new Date(timestamp).getTime();
@@ -584,6 +624,81 @@ function buildCompletionQueueHealth(
   };
 }
 
+function buildMediaPipelineHealth(
+  renditionRows: MediaRenditionRow[],
+  previewRows: MediaPreviewRow[],
+  now: Date,
+): { health: BackendMediaPipelineHealth; issues: BackendHealthIssue[] } {
+  const renditionFailed = renditionRows.filter((row) => row.rendition_status === 'failed');
+  const renditionExhausted = renditionFailed.filter(
+    (row) => (row.rendition_attempt_count ?? 0) >= MEDIA_RENDITION_MAX_ATTEMPTS,
+  );
+  const previewFailed = previewRows.filter((row) => row.preview_status === 'failed');
+  const previewExhausted = previewFailed.filter(
+    (row) => (row.preview_attempt_count ?? 0) >= MEDIA_PREVIEW_MAX_ATTEMPTS,
+  );
+  const renditionPending = renditionRows.length - renditionFailed.length;
+  const previewPending = previewRows.length - previewFailed.length;
+  const oldestRendition = sortByTimestamp(renditionRows, (row) => row.created_at)[0] ?? null;
+  const oldestPreview = sortByTimestamp(previewRows, (row) => row.created_at)[0] ?? null;
+  const issues: BackendHealthIssue[] = [];
+
+  // Exhausted rows are invisible to the repair sweep, so nothing will fix them
+  // without an operator. This is the state that reads as green everywhere else.
+  if (renditionExhausted.length > 0) {
+    issues.push({
+      severity: 'degraded',
+      code: 'MEDIA_RENDITION_ATTEMPTS_EXHAUSTED',
+      message: `${renditionExhausted.length} video(s) used all ${MEDIA_RENDITION_MAX_ATTEMPTS} rendition attempts and will never retry; the feed streams full-size source video for them.`,
+    });
+  }
+
+  if (previewExhausted.length > 0) {
+    issues.push({
+      severity: 'degraded',
+      code: 'MEDIA_PREVIEW_ATTEMPTS_EXHAUSTED',
+      message: `${previewExhausted.length} media row(s) used all ${MEDIA_PREVIEW_MAX_ATTEMPTS} preview attempts and will never retry.`,
+    });
+  }
+
+  const renditionRetryable = renditionFailed.length - renditionExhausted.length;
+  if (renditionRetryable > 0) {
+    issues.push({
+      severity: 'warning',
+      code: 'MEDIA_RENDITION_FAILURES',
+      message: `${renditionRetryable} video rendition(s) failed and are awaiting retry.`,
+    });
+  }
+
+  const staleRendition = oldestRendition?.created_at
+    && minutesSince(oldestRendition.created_at, now) > MEDIA_PIPELINE_STALE_AFTER_MINUTES;
+  if (staleRendition) {
+    issues.push({
+      severity: 'warning',
+      code: 'MEDIA_RENDITION_BACKLOG_STALE',
+      message: `The oldest unresolved video rendition has waited over ${MEDIA_PIPELINE_STALE_AFTER_MINUTES} minutes.`,
+    });
+  }
+
+  return {
+    health: {
+      status: maxStatus(issues.map((issue) => issue.severity)),
+      staleAfterMinutes: MEDIA_PIPELINE_STALE_AFTER_MINUTES,
+      renditionPendingCount: renditionPending,
+      renditionFailedCount: renditionFailed.length,
+      renditionExhaustedCount: renditionExhausted.length,
+      previewPendingCount: previewPending,
+      previewFailedCount: previewFailed.length,
+      previewExhaustedCount: previewExhausted.length,
+      oldestUnresolvedRenditionAt: oldestRendition?.created_at ?? null,
+      oldestUnresolvedPreviewAt: oldestPreview?.created_at ?? null,
+      sampleTruncated: renditionRows.length >= MEDIA_PIPELINE_SAMPLE_LIMIT
+        || previewRows.length >= MEDIA_PIPELINE_SAMPLE_LIMIT,
+    },
+    issues,
+  };
+}
+
 function buildAiUsageHealth(
   recentRows: AiUsageEventRow[],
   stalePendingRows: AiUsageEventRow[],
@@ -815,6 +930,8 @@ export async function collectBackendHealth(
     stalledGenerationsResult,
     pendingWithoutProviderTaskResult,
     completionQueueResult,
+    unresolvedRenditionResult,
+    unresolvedPreviewResult,
     recentAiUsageResult,
     stalePendingAiUsageResult,
     recentProviderDependencyResult,
@@ -851,6 +968,22 @@ export async function collectBackendHealth(
       .in('status', ['pending', 'processing', 'failed'])
       .order('created_at', { ascending: true })
       .limit(200),
+    // Only unresolved rows: a backlog that cannot clear is the signal, and
+    // filtering to it keeps failures from being pushed out of the sample by
+    // however many derivatives have already succeeded.
+    client
+      .from('post_media')
+      .select('rendition_status,rendition_attempt_count,created_at')
+      .eq('media_kind', 'video')
+      .in('rendition_status', ['pending', 'processing', 'failed'])
+      .order('created_at', { ascending: true })
+      .limit(MEDIA_PIPELINE_SAMPLE_LIMIT),
+    client
+      .from('post_media')
+      .select('preview_status,preview_attempt_count,created_at')
+      .in('preview_status', ['pending', 'processing', 'failed'])
+      .order('created_at', { ascending: true })
+      .limit(MEDIA_PIPELINE_SAMPLE_LIMIT),
     client
       .from('ai_usage_events')
       .select('feature,status,medium,cost,created_at')
@@ -876,6 +1009,8 @@ export async function collectBackendHealth(
   if (stalledGenerationsResult.error) throw stalledGenerationsResult.error;
   if (pendingWithoutProviderTaskResult.error) throw pendingWithoutProviderTaskResult.error;
   if (completionQueueResult.error) throw completionQueueResult.error;
+  if (unresolvedRenditionResult.error) throw unresolvedRenditionResult.error;
+  if (unresolvedPreviewResult.error) throw unresolvedPreviewResult.error;
   if (recentAiUsageResult.error) throw recentAiUsageResult.error;
   if (stalePendingAiUsageResult.error) throw stalePendingAiUsageResult.error;
   if (recentProviderDependencyResult.error) throw recentProviderDependencyResult.error;
@@ -890,6 +1025,11 @@ export async function collectBackendHealth(
   );
   const completionQueueResultHealth = buildCompletionQueueHealth(
     (completionQueueResult.data ?? []) as GenerationCompletionQueueRow[],
+    now,
+  );
+  const mediaPipelineResult = buildMediaPipelineHealth(
+    (unresolvedRenditionResult.data ?? []) as MediaRenditionRow[],
+    (unresolvedPreviewResult.data ?? []) as MediaPreviewRow[],
     now,
   );
   const aiUsageResult = buildAiUsageHealth(
@@ -932,6 +1072,7 @@ export async function collectBackendHealth(
     ...jobResults.flatMap((result) => result.issues),
     ...generationResult.issues,
     ...completionQueueResultHealth.issues,
+    ...mediaPipelineResult.issues,
     ...aiUsageResult.issues,
     ...providerDependencyResult.issues,
     ...environmentIssues,
@@ -941,6 +1082,7 @@ export async function collectBackendHealth(
     ...jobResults.map((result) => result.health.status),
     generationResult.health.status,
     completionQueueResultHealth.health.status,
+    mediaPipelineResult.health.status,
     aiUsageResult.health.status,
     providerDependencyResult.health.status,
     ...(environment ? [environment.status] : []),
@@ -962,6 +1104,7 @@ export async function collectBackendHealth(
     jobs: jobResults.map((result) => result.health),
     generations: generationResult.health,
     completionQueue: completionQueueResultHealth.health,
+    mediaPipeline: mediaPipelineResult.health,
     aiUsage: aiUsageResult.health,
     providerDependencies: providerDependencyResult.health,
     issues,
