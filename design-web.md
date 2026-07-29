@@ -1,4 +1,4 @@
-# UGC Copy Web UI/UX Guide
+# Magicbooklet Web UI/UX Guide
 
 Audience: AI agents and engineers working in the Next.js web app.
 
@@ -6,7 +6,7 @@ Read this before editing `src/app/**` UI. The long research source is [docs/ui-c
 
 ## Product North Star
 
-UGC Copy web is a premium dark AI creator studio. The first impression should be media-led, dense enough for serious creative work, and fast to move from idea to output. It should borrow Pinterest-level consistency and feed discipline without copying Pinterest's brand.
+Magicbooklet web is a premium dark AI creator studio. The first impression should be media-led, dense enough for serious creative work, and fast to move from idea to output. It should borrow Pinterest-level consistency and feed discipline without copying Pinterest's brand.
 
 Use shared tokens and primitives first:
 

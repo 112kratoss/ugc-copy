@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Magicbooklet — an AI UGC creation platform: image/video/motion generation (provider: Kie.ai), a public showcase feed, a creator marketplace with paid resource bundles, templates, and a node-based workflow builder.
+Magicbooklet — an AI UGC creation platform: image/video/motion generation (provider: Kie.ai), a public showcase feed with a social layer (threaded comments, text posts, follows, saves, post overlay), a creator marketplace with paid resource bundles, templates, and a node-based workflow builder. Product direction: a community around AI media creation, expanding later into the broader marketing space.
 
 - **Web + API**: Next.js 16 App Router (React 19, Tailwind v4) on Vercel, region `bom1`, production domain `magicbooklet.com`, branch `main`.
 - **Backend of record**: Supabase (Postgres 17, Auth, Storage, RLS, atomic RPCs). Exactly one Deno edge function: `supabase/functions/kie-webhook`.
@@ -23,9 +23,11 @@ npm run build:verify       # assert ffmpeg-static actually got bundled into medi
 npm run lint               # eslint (ugc-mobile is ignored)
 npm run typecheck          # app only — excludes scripts/, src/__tests__/, ugc-mobile/
 npm run typecheck:scripts  # separate project for scripts/ (tsconfig.scripts.json)
+npm run typecheck:tests    # separate project for src/__tests__/ (tsconfig.tests.json)
 npm test                   # vitest run — all unit/integration tests in src/__tests__/
 npx vitest run src/__tests__/<file>.test.ts   # single test file
 npm run test:e2e           # Playwright, tests/e2e/ — boots its own dev server on :3100 with E2E auth bypass
+# also available: backfill:* (media/preview backfills) and perf:load / perf:lighthouse harnesses
 ```
 
 Mobile app:
@@ -53,9 +55,10 @@ Ops CLIs (service-role; read-only unless `--apply`/`--confirm` given):
 npm run ops:moderation -- list
 npm run ops:generation-model-catalog -- validate|diff|stage|publish|rollback ...
 npm run admin:credentials              # mint the /admin master credential (prints the password once)
+npm run ops:external-gates             # verify prod external config (Supabase auth lints, RevenueCat webhook)
 ```
 
-CI (`.github/workflows/quality.yml`) gates PRs with: web `test → lint → typecheck → typecheck:scripts → perf self-tests → build → build:verify`; mobile `expo install --check → expo-doctor → expo prebuild --clean → expo export → test → typecheck`; and a full migration replay from a clean database plus `supabase test db` (Supabase CLI pinned to 2.75.0).
+CI (`.github/workflows/quality.yml`) gates PRs with: web `test → lint → typecheck → typecheck:scripts → perf self-tests → build → build:verify`; mobile `expo install --check → expo-doctor → expo prebuild --clean → expo export → test → typecheck`; and a full migration replay from a clean database plus `supabase test db` (Supabase CLI pinned to 2.75.0). Quality also runs a Playwright E2E smoke job. Sibling workflows: `production-release.yml` (production deploys — see Deploys), `performance.yml`, `backend-alert-watchdog.yml`, `mobile-store-release.yml`.
 
 ## Local environment
 
@@ -69,7 +72,7 @@ Vercel API routes are the business-logic boundary for both web and mobile. Supab
 
 ### Route → adapter → service layering
 
-`src/lib` is flat (~290 files); naming is the organization, with three layers:
+`src/lib` is flat (~360 files); naming is the organization, with three layers:
 
 1. `src/app/api/**/route.ts` — 2–8 line shells, e.g. `export const { GET, POST } = createPostsRouteHandlers();`
 2. `src/lib/*-route-adapter-service.ts` — HTTP concerns: parsing, auth, rate limits, responses.
@@ -139,13 +142,13 @@ One Vercel cron (`/api/cron/backend-jobs`, every 10 min, `CRON_SECRET` bearer au
 
 ### Tests
 
-All web unit/integration tests live flat in `src/__tests__/` (~480 files) — never colocated. Notable conventions: `*-migration.test.ts` files assert the SQL content of migrations (add one when you add a migration); contract fixture tests pin the mobile API. E2E lives in `tests/e2e/` and uses an auth bypass (`src/lib/e2e-auth.ts`) that is build-blocked in production. Mobile logic is factored into `ugc-mobile/lib/*-view-model.ts` modules precisely so it can be vitest-tested without rendering.
+All web unit/integration tests live flat in `src/__tests__/` (~540 files) — never colocated. Notable conventions: `*-migration.test.ts` files assert the SQL content of migrations (add one when you add a migration); contract fixture tests pin the mobile API. E2E lives in `tests/e2e/` and uses an auth bypass (`src/lib/e2e-auth.ts`) that is build-blocked in production. Mobile logic is factored into `ugc-mobile/lib/*-view-model.ts` modules precisely so it can be vitest-tested without rendering.
 
 ## Conventions and cautions
 
 - **Migrations**: `supabase/migrations/YYYYMMDDHHMMSS_description.sql`. Capture changes with `supabase db diff --local --schema public,storage,auth -f name`, verify with `db reset --local`, preview prod with `db push --dry-run --linked`. Never edit an applied migration. Workflow: `docs/supabase-local-prod-workflow.md`.
 - **Deploys**: `.github/workflows/production-release.yml` owns production releases after the exact `main` SHA passes Quality. It applies Supabase migrations and the Edge Function, stages a production-configured Vercel deployment without domains, verifies public and authenticated health, rejects stale SHAs, then promotes and verifies the live SHA. Vercel Git integration may create previews but must not auto-promote production. Manual `vercel --prod` is recovery-only. Pre-deploy gates and env contract: `docs/production-deployment-runbook.md`.
-- **Stale docs**: `.agent/workflows/integrate-model.md` describes the old per-page model registries — superseded by the database catalog workflow above. The root `README.md` is untouched create-next-app boilerplate.
+- **Stale docs**: `.agent/workflows/integrate-model.md` describes the old per-page model registries — superseded by the database catalog workflow above. `.agent/workflows/publish.md` is superseded by the production-release workflow; its body now just redirects there. The root `README.md` is untouched create-next-app boilerplate. `design-web.md` and `design-mobile.md` predate the 2026-07 feed/comments/text-posts overhaul — trust tokens and primitives, but verify page patterns against current code (see the note in `design.md`).
 - **Design**: start at `design.md`, which indexes `design-web.md` (web) and `design-mobile.md` (mobile). North star: premium dark AI creator studio — shared tokens, Lucide icons, strict spacing, reusable primitives. Shared web UI lives in `src/app/components/` (not a route).
 - **Path aliases differ**: web `@/*` → `src/*`; mobile `@/*` → `ugc-mobile/*` root.
 - **CSS split**: `globals.css` is public-route CSS; authenticated surfaces add `non-public-utilities.css` via their route layouts (CSS is inlined via `experimental.inlineCss`).
@@ -154,4 +157,4 @@ All web unit/integration tests live flat in `src/__tests__/` (~480 files) — ne
 
 ## Operational runbooks (`docs/`)
 
-`production-deployment-runbook.md` (topology, env contract, gates), `supabase-local-prod-workflow.md`, `generation-model-catalog-operations.md`, `moderation-operations.md` (staffed queue, service-role CLI), `mobile-store-product-catalog.md` (IAP tier provisioning), and `post-resource-bundle-v1.md`.
+`production-deployment-runbook.md` (topology, env contract, gates), `supabase-local-prod-workflow.md`, `generation-model-catalog-operations.md`, `moderation-operations.md` (staffed queue, service-role CLI), `mobile-store-product-catalog.md` (IAP tier provisioning), and `post-resource-bundle-v1.md`. Dated research snapshots (`performance-audit-2026-07-16.md`, `ui-consistency-research-2026-06-14.md`) and agent plans/specs (`docs/superpowers/`) sit alongside the runbooks.
