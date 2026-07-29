@@ -79,10 +79,28 @@ export default async function AdminRevenuePage({
           {report.rails.map((rail) => (
             <Surface key={rail.key} variant="card" padding="md">
               <Text as="h3" variant="label">{rail.label}</Text>
-              <p className="mt-2 text-2xl font-extrabold leading-8 text-[var(--ui-text-primary)]">
-                {formatSubunits(rail.grossSubunits)}
-              </p>
-              <Text variant="caption" className="mt-1">Settled gross</Text>
+
+              {/*
+                One figure per currency. Summing across currencies would add
+                rupees to dollars — post resource bundles already carry both.
+              */}
+              {rail.totalsByCurrency.length === 0 ? (
+                <p className="mt-2 text-2xl font-extrabold leading-8 text-[var(--ui-text-primary)]">—</p>
+              ) : (
+                <div className="mt-2 flex flex-col gap-0.5">
+                  {rail.totalsByCurrency.map((total) => (
+                    <p
+                      key={total.currency}
+                      className="text-2xl font-extrabold leading-8 text-[var(--ui-text-primary)]"
+                    >
+                      {formatSubunits(total.grossSubunits, total.currency)}
+                    </p>
+                  ))}
+                </div>
+              )}
+              <Text variant="caption" className="mt-1">
+                {rail.totalsByCurrency.length > 1 ? 'Settled gross, per currency' : 'Settled gross'}
+              </Text>
 
               <dl className="mt-3 flex flex-col gap-1">
                 <div className="flex justify-between gap-2">

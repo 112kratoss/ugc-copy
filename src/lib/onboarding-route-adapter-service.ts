@@ -257,6 +257,21 @@ export async function patchOnboardingStateRouteResponse({
       .single();
     if (error) throw error;
 
+    // Cold-start seed: the goal already tells us which medium this account came
+    // for, so the first feed should not have to guess. Best-effort — onboarding
+    // must never fail because feed personalization did.
+    if (body.goal) {
+      await admin.rpc('seed_user_interest_from_onboarding_goal', {
+        p_user_id: user.id,
+        p_goal: body.goal as string,
+      }).then(
+        ({ error: seedError }) => {
+          if (seedError) resolved.logError('Onboarding interest seed failed:', seedError);
+        },
+        (seedError: unknown) => resolved.logError('Onboarding interest seed failed:', seedError),
+      );
+    }
+
     return privateJson(request, { state: serializeState(data as OnboardingStateRow) });
   } catch (error) {
     resolved.logError('Onboarding state PATCH failed:', error);

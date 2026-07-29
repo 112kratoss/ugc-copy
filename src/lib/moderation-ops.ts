@@ -468,15 +468,25 @@ export async function resolveSubjectReport(
     reportId: string;
     reviewerId: string;
     action: 'resolve' | 'dismiss';
+    /**
+     * Mandatory. A status change alone cannot answer an appeal, so the resolver
+     * refuses a decision that leaves no rationale behind.
+     */
+    resolutionNote: string;
   },
 ): Promise<SubjectReportResolution> {
   const reportId = requireUuid(options.reportId, 'Report id');
   const reviewerId = requireUuid(options.reviewerId, 'Reviewer id');
+  const resolutionNote = options.resolutionNote?.trim() ?? '';
+  if (resolutionNote.length < 3 || resolutionNote.length > 1000) {
+    throw new Error('A resolution note of 3 to 1000 characters is required.');
+  }
 
   const { data, error } = await supabase.rpc('resolve_subject_report_for_ops', {
     p_report_id: reportId,
     p_reviewer_id: reviewerId,
     p_action: options.action,
+    p_resolution_note: resolutionNote,
   });
   if (error) {
     throw databaseError('Failed to resolve subject report', error);

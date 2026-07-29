@@ -356,7 +356,9 @@ create temporary table comment_moderation_result as
 select public.resolve_subject_report_for_ops(
   'e1000000-0000-4000-8000-000000000001'::uuid,
   'c2000000-0000-4000-8000-000000000002'::uuid,
-  'resolve'
+  'resolve',
+  -- Mandatory since 20260729090000_subject_report_resolution_notes.sql.
+  'Confirmed abusive comment under policy 4.2.'
 ) as result;
 
 select is(

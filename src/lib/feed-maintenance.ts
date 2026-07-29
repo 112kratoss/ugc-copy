@@ -3,11 +3,13 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 const POST_STATS_REFRESH_LIMIT = 1000;
+const CREATOR_STATS_REFRESH_LIMIT = 1000;
 const USER_INTEREST_REFRESH_LIMIT = 1000;
 const USER_INTEREST_LOOKBACK_DAYS = 90;
 const USER_INTEREST_HALF_LIFE_DAYS = 30;
 const FEED_EVENT_RETENTION_DAYS = 90;
 const FEED_SESSION_RETENTION_DAYS = 2;
+const FEED_FACT_RETENTION_DAYS = 400;
 const FEED_RETENTION_PRUNE_LIMIT = 5000;
 
 type FeedRetentionSummary = {
@@ -19,11 +21,14 @@ type FeedRetentionSummary = {
   interests_deleted?: number;
   post_feedback_deleted?: number;
   creator_feedback_deleted?: number;
+  facts_deleted?: number;
 };
 
 export type FeedMaintenanceSummary = {
   asOf: string;
   postStatsRefreshed: number;
+  postEngagementStatsRefreshed: number;
+  creatorStatsRefreshed: number;
   userInterestProfilesRefreshed: number;
   retention: FeedRetentionSummary;
 };
@@ -90,6 +95,24 @@ export async function maintainFeedPersonalization(
     statsResult.data,
     'refresh_post_feed_stats',
   );
+
+  // Fact-derived aggregates are refreshed separately from the v1 event rollup
+  // so a failure in the newer path cannot stall v1's inputs.
+  const engagementStatsResult = await client.rpc('refresh_post_feed_engagement_stats', {
+    p_as_of: asOf,
+    p_limit: POST_STATS_REFRESH_LIMIT,
+  });
+  if (engagementStatsResult.error) {
+    throw rpcError('refresh_post_feed_engagement_stats', engagementStatsResult.error);
+  }
+
+  const creatorStatsResult = await client.rpc('refresh_creator_feed_stats', {
+    p_as_of: asOf,
+    p_limit: CREATOR_STATS_REFRESH_LIMIT,
+  });
+  if (creatorStatsResult.error) {
+    throw rpcError('refresh_creator_feed_stats', creatorStatsResult.error);
+  }
   (options.invalidateFeedCache ?? invalidateShowcaseFeedCache)();
 
   const interestsResult = await client.rpc('refresh_user_interest_weights', {
@@ -107,6 +130,7 @@ export async function maintainFeedPersonalization(
     p_event_retention_days: FEED_EVENT_RETENTION_DAYS,
     p_session_retention_days: FEED_SESSION_RETENTION_DAYS,
     p_limit: FEED_RETENTION_PRUNE_LIMIT,
+    p_fact_retention_days: FEED_FACT_RETENTION_DAYS,
   });
   if (pruneResult.error) {
     throw rpcError('prune_feed_personalization_data', pruneResult.error);
@@ -115,6 +139,14 @@ export async function maintainFeedPersonalization(
   return {
     asOf,
     postStatsRefreshed,
+    postEngagementStatsRefreshed: nonNegativeInteger(
+      engagementStatsResult.data,
+      'refresh_post_feed_engagement_stats',
+    ),
+    creatorStatsRefreshed: nonNegativeInteger(
+      creatorStatsResult.data,
+      'refresh_creator_feed_stats',
+    ),
     userInterestProfilesRefreshed: nonNegativeInteger(
       interestsResult.data,
       'refresh_user_interest_weights',
