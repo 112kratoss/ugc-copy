@@ -66,6 +66,28 @@ const sourceToolCatalog = vi.hoisted(() => [
 function createServiceClientTestDouble() {
   return {
     from(table: string) {
+      if (table === 'generations') {
+        // The publish read deliberately goes through the service client: the
+        // authenticated Data API grant on `generations` is column-scoped and
+        // cannot see the publish columns.
+        return {
+          select() {
+            return {
+              eq(_column: string, value: unknown) {
+                return {
+                  async single() {
+                    return {
+                      data: generationState?.id === value ? generationState : null,
+                      error: generationState?.id === value ? null : { message: 'not found' },
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      }
+
       if (table === 'profiles') {
         const query = {
           select() {
@@ -253,33 +275,13 @@ describe('/api/showcase/publish route', () => {
       },
       from(table: string) {
         if (table === 'generations') {
-          return {
-            select() {
-              return {
-                eq(_column: string, value: unknown) {
-                  return {
-                    async single() {
-                      return {
-                        data: generationState?.id === value ? generationState : null,
-                        error: generationState?.id === value ? null : { message: 'not found' },
-                      };
-                    },
-                  };
-                },
-              };
-            },
-            update(payload: Record<string, unknown>) {
-              generationUpdates.push(payload);
-
-              return {
-                async eq() {
-                  return {
-                    error: null,
-                  };
-                },
-              };
-            },
-          };
+          // Production reality since 20260726071722: the authenticated Data
+          // API grant on `generations` is column-scoped, so a user-scoped read
+          // of the publish columns fails outright. Throwing here pins the fix —
+          // any code path that reads generations through the user client again
+          // fails every publish test with this message instead of shipping a
+          // silent "Generation not found".
+          throw new Error('permission denied for table generations (authenticated Data API grant is column-scoped; read via the service client)');
         }
 
         if (table === 'posts') {

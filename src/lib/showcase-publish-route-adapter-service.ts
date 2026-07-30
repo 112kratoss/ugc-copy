@@ -94,7 +94,6 @@ async function handleShowcasePublishPOST(
       dependencies: {
         fetchWithProviderTimeout: dependencies.fetchWithProviderTimeout,
       },
-      supabase: auth.supabase,
       userId: auth.userId,
     });
 

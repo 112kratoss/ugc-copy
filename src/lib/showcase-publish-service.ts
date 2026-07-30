@@ -51,7 +51,10 @@ type ShowcaseCategory = Exclude<ShowcaseItemCategory, 'text'>;
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 const MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR =
   'Posts are working, but atomic unlock publishing is not enabled on the connected Supabase project yet. Apply the post resource bundle migrations, including 20260508120000_post_system_marketplace_reliability.sql, and try again.';
-const GENERATION_SELECT_WITH_SHOWCASE_ASSET = 'id, user_id, status, model, category, creation_mode, output_url, showcase_asset_path, title, description, prompt';
+const GENERATION_SELECT_WITH_SHOWCASE_ASSET = 'id, user_id, status, model, category, creation_mode, output_url, showcase_asset_path, title, description, prompt, template_run_id, template_run_step_id';
+// The legacy variant serves schemas that predate `showcase_asset_path`, which
+// also predate the template system — so it omits the template columns too and
+// such rows publish as ordinary generations.
 const GENERATION_SELECT_WITHOUT_SHOWCASE_ASSET = 'id, user_id, status, model, category, output_url, title, description, prompt';
 
 function isExistingStorageObjectError(error: { message?: string; statusCode?: string } | null) {
@@ -71,6 +74,8 @@ type GenerationRow = {
   title?: string | null;
   description?: string | null;
   prompt?: string | null;
+  template_run_id?: string | null;
+  template_run_step_id?: string | null;
 };
 
 export type ShowcasePublishRequestBody = {
@@ -328,7 +333,13 @@ async function loadOwnedGeneration({
   };
 }
 
-async function loadCanonicalTemplateResultGeneration({
+/**
+ * Whether the generation is the canonical deliverable of the viewer's own
+ * successful, non-test template run. Anything else that is template-linked —
+ * intermediate step outputs, creator test runs, someone else's run — is
+ * backend-private and must not be publishable at all.
+ */
+async function hasCanonicalConsumerRun({
   adminSupabase,
   generationId,
   userId,
@@ -336,24 +347,7 @@ async function loadCanonicalTemplateResultGeneration({
   adminSupabase: SupabaseClient;
   generationId: string;
   userId: string;
-}): Promise<{
-  generation: GenerationRow | null;
-  hasShowcaseAssetColumn: boolean;
-}> {
-  const adminGenerationResult = await loadOwnedGeneration({
-    generationId,
-    supabase: adminSupabase,
-  });
-
-  if (
-    adminGenerationResult.error
-    || !adminGenerationResult.generation
-    || adminGenerationResult.generation.user_id !== userId
-    || adminGenerationResult.generation.status !== 'succeeded'
-  ) {
-    return { generation: null, hasShowcaseAssetColumn: adminGenerationResult.hasShowcaseAssetColumn };
-  }
-
+}): Promise<boolean> {
   const { data: canonicalRun, error: canonicalRunError } = await adminSupabase
     .from('template_runs')
     .select('id')
@@ -363,27 +357,23 @@ async function loadCanonicalTemplateResultGeneration({
     .eq('result_generation_id', generationId)
     .maybeSingle();
 
-  if (canonicalRunError || !canonicalRun) {
-    return { generation: null, hasShowcaseAssetColumn: adminGenerationResult.hasShowcaseAssetColumn };
+  if (canonicalRunError) {
+    logBackendError('failed_to_check_canonical_template_run_for_publish', { error: canonicalRunError });
+    return false;
   }
 
-  return {
-    generation: adminGenerationResult.generation,
-    hasShowcaseAssetColumn: adminGenerationResult.hasShowcaseAssetColumn,
-  };
+  return Boolean(canonicalRun);
 }
 
 export async function publishGenerationToShowcaseForRoute({
   adminSupabase,
   body: requestBody,
   dependencies,
-  supabase,
   userId,
 }: {
   adminSupabase: SupabaseClient;
   body: ShowcasePublishRequestBody;
   dependencies?: Partial<ShowcasePublishServiceDependencies>;
-  supabase: SupabaseClient;
   userId: string;
 }): Promise<ShowcasePublishServiceResult> {
   const resolvedDependencies = resolveDependencies(dependencies);
@@ -398,28 +388,45 @@ export async function publishGenerationToShowcaseForRoute({
     workflowSettings: requestedWorkflowSettings,
   } = requestBody;
 
-  const ordinaryGenerationResult = await loadOwnedGeneration({
+  // Read with the service client on purpose. The authenticated Data API
+  // surface for `generations` is deliberately column-scoped
+  // (20260726071722_harden_data_api_and_storage_contract.sql), so a
+  // user-scoped read of the publish columns (prompt, output_url, title, …) is
+  // rejected outright — the viewer's own creation would report "not found".
+  // Authorization is the explicit ownership check below, the same boundary
+  // the template path has always used.
+  const generationResult = await loadOwnedGeneration({
     generationId,
-    supabase,
+    supabase: adminSupabase,
   });
 
-  let generation = ordinaryGenerationResult.generation;
-  let hasShowcaseAssetColumn = ordinaryGenerationResult.hasShowcaseAssetColumn;
-  let isCanonicalTemplateResult = false;
-
-  if (ordinaryGenerationResult.error || !generation) {
-    const templateResult = await loadCanonicalTemplateResultGeneration({
-      adminSupabase,
-      generationId,
-      userId,
-    });
-    generation = templateResult.generation;
-    hasShowcaseAssetColumn = templateResult.hasShowcaseAssetColumn;
-    isCanonicalTemplateResult = Boolean(generation);
+  if (generationResult.error && !generationResult.generation) {
+    logBackendError('failed_to_load_generation_for_publish', { error: generationResult.error });
   }
+
+  const generation = generationResult.generation;
+  const hasShowcaseAssetColumn = generationResult.hasShowcaseAssetColumn;
 
   if (!generation) {
     return { ok: false, status: 404, body: { error: 'Generation not found' } };
+  }
+
+  // A template-linked generation is backend-private: only the canonical
+  // deliverable of the viewer's own successful consumer run may publish, and
+  // every other outcome reports plain "not found" rather than disclosing
+  // anything about the row (matching the row-level invisibility these
+  // generations had under 20260711154500_private_template_generations.sql).
+  const isTemplateLinked = Boolean(generation.template_run_id || generation.template_run_step_id);
+  let isCanonicalTemplateResult = false;
+
+  if (isTemplateLinked) {
+    isCanonicalTemplateResult = generation.user_id === userId
+      && generation.status === 'succeeded'
+      && await hasCanonicalConsumerRun({ adminSupabase, generationId, userId });
+
+    if (!isCanonicalTemplateResult) {
+      return { ok: false, status: 404, body: { error: 'Generation not found' } };
+    }
   }
 
   if (generation.user_id !== userId) {

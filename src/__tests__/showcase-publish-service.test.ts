@@ -6,49 +6,18 @@ const cacheMocks = vi.hoisted(() => ({
   invalidateShowcaseFeedCache: vi.fn(),
 }));
 
+const logBackendErrorMock = vi.hoisted(() => vi.fn());
+
 vi.mock('@/lib/showcase-feed-cache', () => cacheMocks);
+vi.mock('@/lib/backend-logger', () => ({
+  logBackendError: logBackendErrorMock,
+}));
 
 import {
   publishGenerationToShowcaseForRoute,
   type ShowcasePublishServiceDependencies,
 } from '@/lib/showcase-publish-service';
 import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
-
-function createUserClientMock(generation: Record<string, unknown> | null) {
-  const selects: string[] = [];
-  const eqs: Array<{ column: string; value: unknown }> = [];
-
-  return {
-    client: {
-      from(table: string) {
-        if (table !== 'generations') {
-          throw new Error(`Unexpected user table: ${table}`);
-        }
-
-        return {
-          select(columns = '') {
-            selects.push(columns);
-            return {
-              eq(column: string, value: unknown) {
-                eqs.push({ column, value });
-                return {
-                  single() {
-                    return Promise.resolve({
-                      data: generation?.id === value ? generation : null,
-                      error: generation?.id === value ? null : { message: 'not found' },
-                    });
-                  },
-                };
-              },
-            };
-          },
-        };
-      },
-    } as unknown as SupabaseClient,
-    eqs,
-    selects,
-  };
-}
 
 function createCanonicalTemplateAdminClientMock({
   generation,
@@ -103,24 +72,84 @@ function createCanonicalTemplateAdminClientMock({
   return { client, removeMock, runFilters };
 }
 
-function createAdminClientMock() {
+/**
+ * Admin client for ordinary (non-template) publishes. Serves the generation
+ * read — the service reads with the service client on purpose, because the
+ * authenticated Data API grant on `generations` is column-scoped and cannot
+ * see the publish columns — and deliberately throws on `template_runs`:
+ * an unlinked row must never pay for the canonical-run lookup.
+ */
+function createAdminClientMock(generation: Record<string, unknown> | null = null, loadError: { message: string; code?: string } | null = null) {
   const removeMock = vi.fn(async () => ({ data: null, error: null }));
+  const selects: string[] = [];
+  const eqs: Array<{ column: string; value: unknown }> = [];
 
   return {
     client: {
+      from(table: string) {
+        if (table !== 'generations') {
+          throw new Error(`Unexpected admin table: ${table}`);
+        }
+
+        return {
+          select(columns = '') {
+            selects.push(columns);
+            return {
+              eq(column: string, value: unknown) {
+                eqs.push({ column, value });
+                return {
+                  single() {
+                    if (loadError) {
+                      return Promise.resolve({ data: null, error: loadError });
+                    }
+                    return Promise.resolve({
+                      data: generation?.id === value ? generation : null,
+                      error: generation?.id === value ? null : { message: 'not found' },
+                    });
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
       storage: {
         from: vi.fn(() => ({
           remove: removeMock,
         })),
       },
     } as unknown as SupabaseClient,
+    eqs,
     removeMock,
+    selects,
   };
 }
 
 describe('publishGenerationToShowcaseForRoute', () => {
   beforeEach(() => {
     cacheMocks.invalidateShowcaseFeedCache.mockClear();
+    logBackendErrorMock.mockClear();
+  });
+
+  it('logs a failed generation load instead of silently reporting not found', async () => {
+    // The four days this path was broken in production, a permission error on
+    // the read surfaced as a bare "Generation not found" with no trace. The
+    // 404 stays (the caller cannot use a half-loaded row), but the failure
+    // must be observable.
+    const loadError = { message: 'permission denied for table generations', code: '42501' };
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: createAdminClientMock(null, loadError).client,
+      body: { generationId: 'gen-1', visibility: 'public' },
+      userId: 'user-1',
+      dependencies: {},
+    });
+
+    expect(result).toEqual({ ok: false, status: 404, body: { error: 'Generation not found' } });
+    expect(logBackendErrorMock).toHaveBeenCalledWith(
+      'failed_to_load_generation_for_publish',
+      { error: loadError },
+    );
   });
 
   it('publishes a backend-private generation only when it is the canonical result of the owner\'s successful consumer run', async () => {
@@ -136,8 +165,9 @@ describe('publishGenerationToShowcaseForRoute', () => {
       title: 'Template result',
       description: null,
       prompt: null,
+      template_run_id: 'run-1',
+      template_run_step_id: null,
     };
-    const userClient = createUserClientMock(null);
     const adminClient = createCanonicalTemplateAdminClientMock({ generation });
     const publishGenerationPostWithResourceBundleAtomically = vi.fn(async () => ({
       postId: 'post-template-1',
@@ -156,7 +186,6 @@ describe('publishGenerationToShowcaseForRoute', () => {
         workflowSettings: { secret: 'recipe' },
         resourceBundle: { accessMode: 'none' },
       },
-      supabase: userClient.client,
       userId: 'user-1',
       dependencies: {
         ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
@@ -205,11 +234,11 @@ describe('publishGenerationToShowcaseForRoute', () => {
   });
 
   it.each([
-    ['an intermediate generation', { user_id: 'user-1', status: 'succeeded' }, false],
-    ['a creator test result', { user_id: 'user-1', status: 'succeeded' }, false],
-    ['another user\'s result', { user_id: 'user-2', status: 'succeeded' }, true],
-    ['a failed result', { user_id: 'user-1', status: 'failed' }, true],
-  ])('rejects %s when the ordinary owner query cannot see it', async (_label, overrides, canonicalRun) => {
+    ['an intermediate step generation', { user_id: 'user-1', status: 'succeeded', template_run_id: null, template_run_step_id: 'step-1' }, false],
+    ['a creator test result', { user_id: 'user-1', status: 'succeeded', template_run_id: 'run-test', template_run_step_id: null }, false],
+    ['another user\'s result', { user_id: 'user-2', status: 'succeeded', template_run_id: 'run-1', template_run_step_id: null }, true],
+    ['a failed result', { user_id: 'user-1', status: 'failed', template_run_id: 'run-1', template_run_step_id: null }, true],
+  ])('reports a backend-private template generation as not found for %s', async (_label, overrides, canonicalRun) => {
     const generation = {
       id: 'hidden-generation-1',
       model: 'nano-banana-2',
@@ -227,11 +256,13 @@ describe('publishGenerationToShowcaseForRoute', () => {
     const result = await publishGenerationToShowcaseForRoute({
       adminSupabase: createCanonicalTemplateAdminClientMock({ generation, canonicalRun }).client,
       body: { generationId: 'hidden-generation-1', visibility: 'public' },
-      supabase: createUserClientMock(null).client,
       userId: 'user-1',
       dependencies: { publishGenerationPostWithResourceBundleAtomically },
     });
 
+    // Template-linked rows reveal nothing — not ownership, not status —
+    // preserving the row-level invisibility they had under
+    // 20260711154500_private_template_generations.sql.
     expect(result).toEqual({ ok: false, status: 404, body: { error: 'Generation not found' } });
     expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
   });
@@ -249,6 +280,8 @@ describe('publishGenerationToShowcaseForRoute', () => {
       title: null,
       description: null,
       prompt: null,
+      template_run_id: 'run-1',
+      template_run_step_id: null,
     };
     const publishGenerationPostWithResourceBundleAtomically = vi.fn();
 
@@ -262,7 +295,6 @@ describe('publishGenerationToShowcaseForRoute', () => {
         exposePromptPublic: true,
         resourceBundle: { accessMode: 'paid', priceUsdCents: 900 },
       },
-      supabase: createUserClientMock(null).client,
       userId: 'user-1',
       dependencies: { publishGenerationPostWithResourceBundleAtomically },
     });
@@ -289,8 +321,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
       description: 'Original description',
       prompt: 'Original prompt',
     };
-    const userClient = createUserClientMock(generation);
-    const adminClient = createAdminClientMock();
+    const adminClient = createAdminClientMock(generation);
     const publishGenerationPostWithResourceBundleAtomically = vi.fn(async () => ({
       postId: 'post-1',
       visibility: 'private' as const,
@@ -319,7 +350,6 @@ describe('publishGenerationToShowcaseForRoute', () => {
         generationId: 'gen-1',
         visibility: 'private',
       },
-      supabase: userClient.client,
       userId: 'user-1',
       dependencies,
     });
@@ -338,8 +368,12 @@ describe('publishGenerationToShowcaseForRoute', () => {
         message: 'Saved as a private post',
       },
     });
-    expect(userClient.selects[0]).toContain('showcase_asset_path');
-    expect(userClient.eqs).toEqual([{ column: 'id', value: 'gen-1' }]);
+    // The read goes through the service client — the authenticated Data API
+    // grant is column-scoped and cannot see the publish columns — and asks for
+    // the template linkage so backend-private rows are recognized from the row.
+    expect(adminClient.selects[0]).toContain('showcase_asset_path');
+    expect(adminClient.selects[0]).toContain('template_run_id');
+    expect(adminClient.eqs).toEqual([{ column: 'id', value: 'gen-1' }]);
     expect(publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
       generationId: 'gen-1',
       ownerUserId: 'user-1',
@@ -374,8 +408,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
       description: 'Original description',
       prompt: 'Original prompt',
     };
-    const userClient = createUserClientMock(generation);
-    const adminClient = createAdminClientMock();
+    const adminClient = createAdminClientMock(generation);
     const publishGenerationPostWithResourceBundleAtomically = vi.fn();
 
     const result = await publishGenerationToShowcaseForRoute({
@@ -384,7 +417,6 @@ describe('publishGenerationToShowcaseForRoute', () => {
         generationId: 'gen-1',
         visibility: 'public',
       },
-      supabase: userClient.client,
       userId: 'user-1',
       dependencies: {
         getMarketplaceQualityErrorForPostBundle: vi.fn(async () => (
@@ -426,13 +458,12 @@ describe('publishGenerationToShowcaseForRoute', () => {
     const marketplaceCheck = vi.fn();
 
     const result = await publishGenerationToShowcaseForRoute({
-      adminSupabase: createAdminClientMock().client,
+      adminSupabase: createAdminClientMock(generation).client,
       body: {
         generationId: 'gen-unsafe',
         visibility: 'public',
         exposePromptPublic: false,
       },
-      supabase: createUserClientMock(generation).client,
       userId: 'user-1',
       dependencies: {
         getMarketplaceQualityErrorForPostBundle: marketplaceCheck,
@@ -463,13 +494,11 @@ describe('publishGenerationToShowcaseForRoute', () => {
       description: 'Original description',
       prompt: 'Original prompt',
     };
-    const userClient = createUserClientMock(generation);
-    const adminClient = createAdminClientMock();
+    const adminClient = createAdminClientMock(generation);
 
     const result = await publishGenerationToShowcaseForRoute({
       adminSupabase: adminClient.client,
       body: { generationId: 'gen-1', visibility: 'public' },
-      supabase: userClient.client,
       userId: 'user-1',
       dependencies: {
         getMarketplaceQualityErrorForPostBundle: vi.fn(async () => (
