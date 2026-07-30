@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ArrowLeft, BarChart3, BookText, Eye, Heart, Share2, ShoppingBag, Tag, Wand2 } from 'lucide-react';
+import { BarChart3, BookText, Eye, Heart, Share2, ShoppingBag, Tag, Wand2 } from 'lucide-react';
 
 import CreatorIdentity from '@/app/components/CreatorIdentity';
 import PostComments from '@/app/components/PostComments';
@@ -12,6 +12,7 @@ import { isGenerationRecipeAssetId } from '@/lib/showcase';
 import PostResourceBundlePanel from './PostResourceBundlePanel';
 import ReportPostButton from './ReportPostButton';
 import ShowcaseDetailActions from './ShowcaseDetailActions';
+import ShowcaseDetailBackLink from './ShowcaseDetailBackLink';
 
 /**
  * The post detail, rendered identically by the full page (`/showcase/[id]`)
@@ -175,13 +176,7 @@ export default function ShowcaseDetailBody({
       >
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           {isOverlay || !returnContext ? null : (
-            <Link
-              href={returnContext.href}
-              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              {returnContext.label}
-            </Link>
+            <ShowcaseDetailBackLink href={returnContext.href} label={returnContext.label} />
           )}
           <div className="flex flex-wrap items-center gap-2">
             {sourceToolLabel ? (

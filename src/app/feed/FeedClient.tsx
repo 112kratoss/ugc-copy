@@ -7,13 +7,27 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useAuth } from '@/app/components/AuthProvider';
 import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
+import { publishNavigationStart } from '@/app/components/navigation-progress-state';
+import FeedMediaLightbox from '@/app/feed/FeedMediaLightbox';
 import FeedPostCard, { type FeedDetailContext } from '@/app/feed/FeedPostCard';
 import { FEED_CHIPS, FEED_PAGE_SIZE, getFeedChip, type FeedChipId } from '@/lib/post-feed-chips';
 import { buildPostFeedCards } from '@/lib/post-feed-presentation';
 import { buildShowcaseDetailPath } from '@/lib/share';
-import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
+import type { ShowcaseFeedItem, ShowcaseFeedPage, ShowcaseMediaItem } from '@/lib/showcase';
 
 const PAGE_DETAIL_CONTEXT: FeedDetailContext = { from: 'community', returnTo: '/feed' };
+
+/**
+ * The open lightbox, held as a snapshot rather than a lookup by id: switching
+ * lanes clears `items` and paging replaces them, either of which would leave a
+ * derived lookup resolving to nothing while the viewer is still looking at it.
+ */
+type FeedLightboxState = {
+    postId: string;
+    title: string;
+    mediaItems: ShowcaseMediaItem[];
+    index: number;
+} | null;
 
 interface FeedClientProps {
     initialFeed: ShowcaseFeedPage;
@@ -54,6 +68,12 @@ export default function FeedClient({
     const [loadError, setLoadError] = useState<string | null>(null);
     const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
     const [commentsOpenIds, setCommentsOpenIds] = useState<Set<string>>(() => new Set());
+    // One lightbox for the whole feed, not one per card: a paginated feed
+    // accumulates 50+ cards, and each would otherwise carry its own Escape
+    // listener, scroll lock and focus trap.
+    const [lightbox, setLightbox] = useState<FeedLightboxState>(null);
+    // Hovering the same card repeatedly must not re-issue the prefetch.
+    const prefetchedIdsRef = useRef<Set<string>>(new Set());
     const requestIdRef = useRef(0);
     const activeRequestRef = useRef<AbortController | null>(null);
     const pendingLoadMoreKeyRef = useRef<string | null>(null);
@@ -171,6 +191,7 @@ export default function FeedClient({
         setChipId(nextChipId);
         setExpandedIds(new Set());
         setCommentsOpenIds(new Set());
+        setLightbox(null);
         setItems([]);
         setNextOffset(null);
         void fetchPage(nextChipId, 0, true);
@@ -284,11 +305,29 @@ export default function FeedClient({
                             onToggleComments={() => toggleComments(card.id)}
                             onToggleSave={() => void toggleSave(card.id)}
                             onCommentCountChange={(commentCount) => applyCommentCount(card.id, commentCount)}
-                            onOpenMedia={() => {
+                            onOpenMedia={(mediaIndex) => setLightbox({
+                                postId: card.id,
+                                title: card.title,
+                                // Sorted to match the card's own carousel, so the
+                                // index refers to the slide that was clicked.
+                                mediaItems: (card.item.mediaItems ?? [])
+                                    .slice()
+                                    .sort((left, right) => left.sortOrder - right.sortOrder),
+                                index: mediaIndex,
+                            })}
+                            onOpenPost={() => {
+                                // An imperative push raises no link status, so the
+                                // progress bar has to be told the click happened.
+                                publishNavigationStart();
                                 // Client-side navigation keeps the shell alive; a full
-                                // document load here made every media click pay for a
+                                // document load here made every post click pay for a
                                 // cold reload out and another one back.
                                 router.push(buildShowcaseDetailPath(card.id, detailContext));
+                            }}
+                            onPrefetchPost={() => {
+                                if (prefetchedIdsRef.current.has(card.id)) return;
+                                prefetchedIdsRef.current.add(card.id);
+                                router.prefetch(buildShowcaseDetailPath(card.id, detailContext));
                             }}
                         />
                     ))}
@@ -302,6 +341,18 @@ export default function FeedClient({
                     <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                     Loading more posts…
                 </p>
+            ) : null}
+
+            {lightbox ? (
+                // Keyed so reopening on another post — or another slide of the
+                // same one — remounts and reseeds the carousel's initial index.
+                <FeedMediaLightbox
+                    key={`${lightbox.postId}:${lightbox.index}`}
+                    title={lightbox.title}
+                    mediaItems={lightbox.mediaItems}
+                    initialIndex={lightbox.index}
+                    onClose={() => setLightbox(null)}
+                />
             ) : null}
         </div>
     );

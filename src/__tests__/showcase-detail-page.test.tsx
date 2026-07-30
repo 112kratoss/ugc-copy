@@ -20,9 +20,23 @@ vi.mock('next/headers', () => ({
   headers: () => mockHeaders(),
 }));
 
+const routerBackMock = vi.fn();
+
 vi.mock('next/navigation', () => ({
   notFound: () => mockNotFound(),
   redirect: (target: string) => mockRedirect(target),
+  // The back affordance is a client component that pops history when the viewer
+  // arrived from inside the app.
+  useRouter: () => ({ back: routerBackMock, push: vi.fn(), replace: vi.fn() }),
+}));
+
+// The page defers its share-visit write with `after`, which throws outside a
+// real request scope. Run the work immediately so the assertions below still
+// observe it.
+vi.mock('next/server', () => ({
+  after: (work: unknown) => {
+    if (typeof work === 'function') void (work as () => unknown)();
+  },
 }));
 
 vi.mock('@/lib/public-posts', () => ({
@@ -120,6 +134,19 @@ describe('Showcase detail page', () => {
       sourceSurface: 'detail-page',
     });
     expect(screen.getByTestId('canonical-post-comments')).toBeInTheDocument();
+  });
+
+  it('does not count an in-app open as a share visit', async () => {
+    // Every in-app link carries `from`; a shared URL never does, because
+    // buildShowcaseDetailUrl is called without options. So the presence of that
+    // param is the exact test for "did not arrive from outside".
+    render(await ShowcaseDetailPage({
+      params: Promise.resolve({ id: 'post-1' }),
+      searchParams: Promise.resolve({ from: 'community', returnTo: '/feed' }),
+    }));
+
+    expect(screen.getByRole('heading', { name: /shared creation/i })).toBeInTheDocument();
+    expect(recordPostShareEventMock).not.toHaveBeenCalled();
   });
 
   it('does not mount public-only comments on an unlisted detail page', async () => {

@@ -24,6 +24,7 @@
 @source "./components/HomeExperience.tsx";
 @source "./components/HoverVideo.tsx";
 @source "./components/JsonLd.tsx";
+@source "./components/NavigationProgress.tsx";
 @source "./components/OptimizedPreviewImage.tsx";
 @source "./components/PostCommentAvatar.tsx";
 @source "./components/PostComments.tsx";
@@ -37,6 +38,7 @@
 @source "./components/WhatsNewModelsCard.tsx";
 @source "./components/app-shell-auth-state.ts";
 @source "./components/app-shell-nav.ts";
+@source "./components/navigation-progress-state.ts";
 @source "./components/useMediaLoadingPreferences.ts";
 @source "./components/useOptimisticPostSave.ts";
 @source "./components/useShareAction.ts";
@@ -141,9 +143,14 @@ body {
   color: var(--foreground);
 }
 
-html {
-  scroll-behavior: smooth;
-}
+/*
+ * Deliberately NOT `scroll-behavior: smooth`. Next restores scroll on a back
+ * navigation with `window.scrollTo`, which obeys this property — so a smooth
+ * value animated the feed past the viewer for ~750ms instead of returning them
+ * to where they were. Instant restoration is what makes leaving and re-entering
+ * a post feel like the page never changed. In-page anchors (`#recipe`) jump
+ * rather than glide as a result, which is the intended trade.
+ */
 
 button,
 a,

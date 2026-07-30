@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { headers } from 'next/headers';
 import { notFound, redirect } from 'next/navigation';
+import { after } from 'next/server';
 
 import { recordPostShareEvent } from '@/lib/post-share-events';
 import {
@@ -60,10 +61,11 @@ export async function generateMetadata({ params }: ShowcaseDetailPageProps): Pro
 }
 
 /**
- * The canonical post page: a direct visit, a refresh, or a shared link. Soft
- * navigations from inside the app are intercepted by `src/app/@modal` and
- * render the same body as an overlay instead — this route stays the surface
- * of record, so it keeps the share-visit tracking and the legacy-id redirect.
+ * The one and only post surface — a direct visit, a refresh, a shared link, or
+ * a click from the feed all land here. Opening a post used to be intercepted
+ * into an overlay; that slot is gone, so every route in the app now arrives at
+ * this page and gets the share-visit tracking, the legacy-id redirect, and
+ * `notFound()` alike.
  */
 export default async function ShowcaseDetailPage({ params, searchParams }: ShowcaseDetailPageProps) {
   const { id } = await params;
@@ -87,8 +89,8 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
     }));
   }
 
-  const auth = await getServerAuthState();
-  const headerStore = await headers();
+  // Independent of each other, so pay for one round trip rather than two.
+  const [auth, headerStore] = await Promise.all([getServerAuthState(), headers()]);
   const detail = await getPublicPostDetail(reference.id, {
     viewerUserId: auth.session?.user?.id ?? null,
     countryCode: headerStore.get('x-vercel-ip-country'),
@@ -98,12 +100,19 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
     notFound();
   }
 
-  if (detail.visibility === 'public' && shouldTrackShareVisit(headerStore)) {
-    await recordPostShareEvent({
+  // A share visit means someone arrived from outside. An in-app open always
+  // carries `from`, and a shared URL never does (buildShowcaseDetailUrl passes
+  // no options), so the absence of that param is the exact test.
+  //
+  // Deferred with `after` so an analytics write never sits between the click and
+  // the post appearing — nothing in this render depends on its result, and the
+  // recorder swallows its own failures.
+  if (detail.visibility === 'public' && !returnFrom && shouldTrackShareVisit(headerStore)) {
+    after(recordPostShareEvent({
       postId: detail.id,
       eventType: 'share_visit',
       sourceSurface: 'detail-page',
-    });
+    }));
   }
 
   return (

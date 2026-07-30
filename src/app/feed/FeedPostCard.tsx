@@ -19,6 +19,28 @@ export interface FeedDetailContext {
 
 const DEFAULT_DETAIL_CONTEXT: FeedDetailContext = { from: 'community', returnTo: '/feed' };
 
+/**
+ * Everything on the card that owns its own click. The card-level handler below
+ * defers to all of it, so adding an interactive element needs no change here
+ * unless it is neither a link nor a button — in which case mark it
+ * `data-feed-card-inert`.
+ */
+const INTERACTIVE_SELECTOR = [
+  'a[href]',
+  'button',
+  'input',
+  'textarea',
+  'select',
+  'label',
+  'video',
+  'audio',
+  'summary',
+  '[role="dialog"]',
+  '[role="menu"]',
+  '[contenteditable="true"]',
+  '[data-feed-card-inert]',
+].join(', ');
+
 interface FeedPostCardProps {
     card: PostFeedCard;
     isSaved: boolean;
@@ -36,6 +58,13 @@ interface FeedPostCardProps {
     onToggleSave: () => void;
     onCommentCountChange: (commentCount: number) => void;
     onOpenMedia: (mediaIndex: number) => void;
+    /** Opens the post page. Fired by a click on the card outside any control. */
+    onOpenPost: () => void;
+    /**
+     * Warms the post page on hover or focus, so the click that follows is a
+     * cache hit rather than a cold round trip. Safe to call repeatedly.
+     */
+    onPrefetchPost: () => void;
 }
 
 /**
@@ -57,6 +86,8 @@ function FeedPostCardView({
     onToggleSave,
     onCommentCountChange,
     onOpenMedia,
+    onOpenPost,
+    onPrefetchPost,
 }: FeedPostCardProps) {
     const { item } = card;
     const mediaItems = (item.mediaItems ?? []).slice().sort((left, right) => left.sortOrder - right.sortOrder);
@@ -70,8 +101,49 @@ function FeedPostCardView({
         : 'auto';
     const detailHref = buildShowcaseDetailPath(item.id, detailContext);
 
+    // Reddit's rule: the media expands in place, and everywhere else on the card
+    // opens the post. The title stays a real <Link> — it is the one focusable
+    // permalink, so keyboard and screen-reader users get exactly one link, and
+    // hover/right-click still show the URL. This handler is pointer convenience
+    // layered on top of it, with no role and no tab stop of its own.
+    const isOwnClick = (target: EventTarget | null) =>
+        !(target instanceof HTMLElement) || !target.closest(INTERACTIVE_SELECTOR);
+
+    const openInNewTab = () => window.open(detailHref, '_blank', 'noopener,noreferrer');
+
     return (
-        <article className="overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition hover:border-[var(--ui-border-default)]">
+        <article
+            className="cursor-pointer overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition hover:border-[var(--ui-border-default)]"
+            // Pointing at a card is the earliest honest signal that it is about
+            // to be opened. Warming here is why the click feels instant; the
+            // post links stay `prefetch={false}` so nothing is fetched for
+            // cards the viewer merely scrolled past.
+            onPointerEnter={onPrefetchPost}
+            onFocus={onPrefetchPost}
+            onClick={(event) => {
+                if (event.defaultPrevented) return;
+                // A double or triple click is selecting text, not navigating.
+                if (event.detail >= 2) return;
+                if (!isOwnClick(event.target)) return;
+                // A click that ends a drag-select lands here too; navigating
+                // would throw away the selection the reader just made.
+                const selection = window.getSelection();
+                if (selection && !selection.isCollapsed) return;
+                if (event.metaKey || event.ctrlKey) {
+                    openInNewTab();
+                    return;
+                }
+                // Shift (new window) and Alt (download) are the browser's.
+                if (event.shiftKey || event.altKey) return;
+                onOpenPost();
+            }}
+            onAuxClick={(event) => {
+                if (event.button !== 1) return;
+                if (!isOwnClick(event.target)) return;
+                event.preventDefault(); // suppress middle-click autoscroll
+                openInNewTab();
+            }}
+        >
             <div className="flex items-center gap-2 px-4 pt-4 sm:px-5">
                 {item.creator.username ? (
                     <Link
@@ -126,7 +198,11 @@ function FeedPostCardView({
             </div>
 
             {showMedia ? (
-                <div className="mt-3 px-4 sm:px-5">
+                // Inert to the card handler: the carousel's viewport has its own
+                // click handler on a bare <div>, which `closest('button')` would
+                // not match — without this a media click could both open the
+                // lightbox and navigate to the post.
+                <div data-feed-card-inert className="mt-3 px-4 sm:px-5">
                     <ShowcaseMediaCarousel
                         mediaItems={mediaItems}
                         title={card.title}
@@ -200,7 +276,9 @@ function FeedPostCardView({
             </div>
 
             {commentsOpen ? (
-                <div className="border-t border-[var(--ui-border-subtle)] px-4 py-4 sm:px-5">
+                // Composer and reply threads are for reading and typing in, not
+                // a click target for the post.
+                <div data-feed-card-inert className="border-t border-[var(--ui-border-subtle)] px-4 py-4 sm:px-5">
                     <PostComments
                         postId={item.id}
                         postCreatorId={item.creator.id}
@@ -230,7 +308,9 @@ function PostBody({
 }) {
     const text = (
         <p
-            className={`whitespace-pre-wrap ${
+            // `cursor-auto` restores the I-beam the card's pointer cursor would
+            // otherwise hide, so the body still reads as selectable text.
+            className={`cursor-auto whitespace-pre-wrap ${
                 framed
                     ? 'text-base leading-7 text-[var(--ui-text-secondary)]'
                     : 'text-sm leading-6 text-[var(--ui-text-muted)]'

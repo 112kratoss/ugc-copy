@@ -17,15 +17,6 @@ export const metadata: Metadata = createNoIndexMetadata(
   'Your magicbooklet workspace: community feed, active generations, and quick starts.'
 );
 
-/**
- * Note: post links from this route do NOT open the overlay that
- * `src/app/@modal` provides elsewhere. Interception is matched against the
- * `Next-Url` header, which carries the browser path `/`, while this segment is
- * what the middleware rewrote to — so no slot's rule matches. Signed-in home
- * navigates to the full post page instead (client-side, so the shell stays).
- * Removing the rewrite would restore the overlay here; see
- * `resolveRootHomeRouting` in src/proxy.ts.
- */
 export default function HomeDashboardLayout({ children }: { children: React.ReactNode }) {
   return <RequestHintedOptionalAuth>{children}</RequestHintedOptionalAuth>;
 }

@@ -567,6 +567,9 @@ export default function ShowcaseMediaCarousel({
           <>
             <button
               type="button"
+              // Marked so a surrounding dialog can bind arrow keys to the
+              // carousel without owning its index (see FeedMediaLightbox).
+              data-carousel-prev="true"
               onClick={(event) => {
                 event.stopPropagation();
                 selectIndex(activeIndex - 1);
@@ -579,6 +582,7 @@ export default function ShowcaseMediaCarousel({
             </button>
             <button
               type="button"
+              data-carousel-next="true"
               onClick={(event) => {
                 event.stopPropagation();
                 selectIndex(activeIndex + 1);

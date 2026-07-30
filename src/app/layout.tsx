@@ -8,6 +8,7 @@ import { siteConfig } from "@/lib/seo";
 import "./globals.css";
 import AppShell from "./components/AppShell";
 import DeferredGenerationNotifications from "./components/DeferredGenerationNotifications";
+import NavigationProgress from "./components/NavigationProgress";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -75,15 +76,8 @@ export const metadata: Metadata = {
 
 export default function RootLayout({
   children,
-  modal,
 }: Readonly<{
   children: React.ReactNode;
-  /**
-   * Parallel slot for intercepted routes (see `src/app/@modal`). Rendered as a
-   * body-level sibling of the shell so an overlay is not confined by the app
-   * shell's stacking context or content padding.
-   */
-  modal: React.ReactNode;
 }>) {
   const gaMeasurementId = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
   const speedInsightsEnabled = process.env.NEXT_PUBLIC_SPEED_INSIGHTS_ENABLED === '1';
@@ -103,8 +97,13 @@ export default function RootLayout({
         >
           Skip to content
         </a>
+        {/*
+          Outside <AppShell> so it also covers the routes that render without
+          the shell, and so the shell's hydration-pinned tree stays untouched.
+          It is `fixed`, so its position here does not matter to layout.
+        */}
+        <NavigationProgress />
         <AppShell>{children}</AppShell>
-        {modal}
         <DeferredGenerationNotifications />
         {speedInsightsEnabled ? (
           <SpeedInsights sampleRate={getSpeedInsightsSampleRate()} />
