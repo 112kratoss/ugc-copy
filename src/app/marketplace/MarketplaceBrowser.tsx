@@ -14,6 +14,7 @@ import {
   X,
 } from 'lucide-react';
 
+import MarketplaceToolFilter from '@/app/marketplace/MarketplaceToolFilter';
 import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
 import {
   describePostResourceKinds,
@@ -190,7 +191,11 @@ export default function MarketplaceBrowser({
 
   return (
     <>
-      <div className="mt-8 rounded-[28px] border border-white/8 bg-zinc-950/70 p-4 backdrop-blur-sm sm:p-5">
+      {/* `relative z-20` is load-bearing: `backdrop-blur-sm` makes this panel a
+          stacking context, so the tool dropdown's own z-index is scoped inside
+          it and the card grid below would otherwise paint straight over the
+          open menu. */}
+      <div className="relative z-20 mt-8 rounded-[28px] border border-white/8 bg-zinc-950/70 p-4 backdrop-blur-sm sm:p-5">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <div className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
@@ -245,7 +250,7 @@ export default function MarketplaceBrowser({
         </div>
 
         <div className={`${filtersOpen ? 'block' : 'hidden'} mt-5 lg:block`}>
-          <div className="grid gap-4 lg:grid-cols-[0.75fr_1fr_1fr]">
+          <div className="grid gap-4 lg:grid-cols-[auto_1fr_15rem]">
             <FilterGroup
               label="Access"
               links={[
@@ -262,9 +267,8 @@ export default function MarketplaceBrowser({
                 active: initialFilters.resource === item.value,
               }))}
             />
-            <FilterGroup
-              label="Tool"
-              links={[
+            <MarketplaceToolFilter
+              options={[
                 { label: 'All tools', href: buildMarketplacePath({ ...initialFilters, tool: '' }), active: !initialFilters.tool },
                 ...sourceToolOptions.map((sourceTool) => ({
                   label: sourceTool.label,
@@ -281,7 +285,7 @@ export default function MarketplaceBrowser({
                 href={buildMarketplacePath({ ...initialFilters, sort: link.value })}
                 className={`rounded-full px-4 py-2 text-sm transition ${
                   initialFilters.sort === link.value
-                    ? 'border border-sky-300/30 bg-sky-400/15 text-sky-50'
+                    ? 'border border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary-soft)] font-semibold text-[var(--ui-text-primary)]'
                     : 'border border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
                 }`}
               >
@@ -362,9 +366,13 @@ function FilterGroup({
           <Link
             key={link.label}
             href={link.href}
+            // Selected controls speak the shell's language (coral), not a
+            // content accent. Emerald here meant "Workflow" to anyone reading
+            // the design system, on a chip that has nothing to do with
+            // workflows — colour carrying meaning that isn't there.
             className={`shrink-0 rounded-full px-3 py-1.5 text-sm transition ${
               link.active
-                ? 'border border-emerald-300/30 bg-emerald-400/15 text-emerald-50'
+                ? 'border border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary-soft)] font-semibold text-[var(--ui-text-primary)]'
                 : 'border border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
             }`}
           >
@@ -439,7 +447,9 @@ function MarketplaceCard({
             className="rounded-none border-0 shadow-none"
           />
         ) : (
-          <div className="flex h-64 items-center justify-center bg-[radial-gradient(circle_at_top,rgba(52,211,153,0.25),transparent_45%),linear-gradient(180deg,rgba(24,24,30,1),rgba(10,10,12,1))] text-zinc-500">
+          // A missing preview is not a workflow; the emerald wash here was
+          // decoration reading as a content-type signal.
+          <div className="flex h-64 items-center justify-center bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.06),transparent_45%),linear-gradient(180deg,rgba(24,24,30,1),rgba(10,10,12,1))] text-zinc-500">
             <ShoppingBag className="h-9 w-9" />
           </div>
         )}
@@ -468,7 +478,11 @@ function MarketplaceCard({
               <div className="mt-1 line-clamp-1 text-xs font-medium text-zinc-500">Recipe: {asset.title}</div>
             ) : null}
           </div>
-          <div className="shrink-0 rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1.5 text-sm font-semibold text-emerald-50">
+          {/* Amber is the design system's Commerce accent. This is the one
+              genuinely commercial element on the card, so it is the one thing
+              that has earned an accent — everything around it stays neutral so
+              the price is what the eye lands on. */}
+          <div className="shrink-0 rounded-full border border-amber-300/25 bg-amber-400/10 px-3 py-1.5 text-sm font-semibold text-amber-50">
             {asset.priceQuote.formatted}
           </div>
         </div>

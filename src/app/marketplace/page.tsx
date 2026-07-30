@@ -120,23 +120,24 @@ export default function MarketplacePage({ searchParams }: MarketplacePageProps) 
 
   return (
     <div className="min-h-screen bg-black text-white">
-      <div className="fixed inset-0 pointer-events-none">
-        <div className="absolute left-[-8%] top-[-12%] h-[36%] w-[28%] rounded-full bg-emerald-500/10 blur-[140px]" />
-        <div className="absolute bottom-[-14%] right-[-8%] h-[34%] w-[26%] rounded-full bg-sky-500/10 blur-[160px]" />
-      </div>
-
-      <div className="studio-shell relative z-10 py-12 sm:py-16">
+      {/* The emerald and sky bokeh blobs that used to sit here are gone:
+          design-web.md rules out purely atmospheric backgrounds, and they were
+          spending two of the system's content-type accents on decoration. */}
+      <div className="studio-shell relative z-10 py-8 sm:py-10">
         <div className="rounded-[34px] border border-white/8 bg-[linear-gradient(135deg,rgba(5,8,12,0.98),rgba(16,18,25,0.92))] p-6 shadow-[0_28px_90px_rgba(0,0,0,0.5)] sm:p-8">
           <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
             <div className="max-w-3xl">
-              <div className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100">
+              <div className="inline-flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-amber-100">
                 <ShoppingBag className="h-3.5 w-3.5" />
                 Recipes
               </div>
-              <h1 className="mt-4 text-4xl font-semibold tracking-tight text-white sm:text-5xl">
+              {/* A step down from 4xl/5xl. This is a storefront: the headline
+                  should introduce the page, not compete with the goods for the
+                  first screen. */}
+              <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
                 Buy the reusable parts behind community posts
               </h1>
-              <p className="mt-4 max-w-2xl text-sm leading-7 text-zinc-300 sm:text-base">
+              <p className="mt-3 max-w-2xl text-sm leading-7 text-zinc-300 sm:text-base">
                 Browse free and paid recipes attached to public posts. Check the post first, then unlock its prompt, workflow, files, notes, or remix access.
               </p>
             </div>

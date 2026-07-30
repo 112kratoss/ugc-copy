@@ -11,6 +11,7 @@ import {
 } from 'react';
 
 import type MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
+import MarketplaceToolFilter from '@/app/marketplace/MarketplaceToolFilter';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
 export type MarketplaceBootstrapProps = ComponentProps<typeof MarketplaceBrowser>;
@@ -147,7 +148,9 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
     <div data-marketplace-bootstrap-shell>
       <section
         aria-labelledby="marketplace-filter-heading"
-        className="mt-8 rounded-[28px] border border-white/8 bg-zinc-950/70 p-4 backdrop-blur-sm sm:p-5"
+        // `relative z-20`: backdrop-blur makes this a stacking context, so the
+        // tool dropdown would paint under the card grid without it.
+        className="relative z-20 mt-8 rounded-[28px] border border-white/8 bg-zinc-950/70 p-4 backdrop-blur-sm sm:p-5"
       >
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
@@ -194,7 +197,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
           </form>
         </div>
 
-        <div className="mt-5 grid gap-4 lg:grid-cols-[0.75fr_1fr_1fr]">
+        <div className="mt-5 grid gap-4 lg:grid-cols-[auto_1fr_15rem]">
           <BootstrapFilterGroup
             label="Access"
             links={ACCESS_FILTERS.map((item) => ({
@@ -213,9 +216,10 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
             }))}
             onIntent={warmInteractiveBrowser}
           />
-          <BootstrapFilterGroup
-            label="Tool"
-            links={[
+          {/* Shares the hydrated browser's control so the strip does not swap
+              shape under the viewer when the real browser takes over. */}
+          <MarketplaceToolFilter
+            options={[
               {
                 label: 'All tools',
                 href: buildMarketplacePath({ ...initialFilters, tool: '' }),
@@ -227,7 +231,6 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
                 active: initialFilters.tool === tool.slug,
               })),
             ]}
-            onIntent={warmInteractiveBrowser}
           />
         </div>
 
@@ -239,7 +242,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
               href={buildMarketplacePath({ ...initialFilters, sort: item.value })}
               active={initialFilters.sort === item.value}
               onIntent={warmInteractiveBrowser}
-              activeClassName="border-sky-300/30 bg-sky-400/15 text-sky-50"
+              activeClassName="border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary-soft)] font-semibold text-[var(--ui-text-primary)]"
             />
           ))}
           {hasActiveFilters ? (
@@ -346,7 +349,9 @@ function BootstrapFilterLink({
   href,
   active,
   onIntent,
-  activeClassName = 'border-emerald-300/30 bg-emerald-400/15 text-emerald-50',
+  // Must stay in step with MarketplaceBrowser's active pill, or hydration
+  // swaps one selected style for another in front of the viewer.
+  activeClassName = 'border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary-soft)] font-semibold text-[var(--ui-text-primary)]',
 }: {
   label: string;
   href: string;
@@ -410,7 +415,7 @@ function BootstrapMarketplaceCard({
               <div className="mt-1 truncate text-xs font-medium text-zinc-500">Recipe: {asset.title}</div>
             ) : null}
           </div>
-          <span className="shrink-0 rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1.5 text-sm font-semibold text-emerald-50">
+          <span className="shrink-0 rounded-full border border-amber-300/25 bg-amber-400/10 px-3 py-1.5 text-sm font-semibold text-amber-50">
             {asset.priceQuote.formatted}
           </span>
         </div>
@@ -492,7 +497,7 @@ function BootstrapMediaPreview({
   }
 
   return (
-    <div className="relative flex h-44 items-center justify-center border-b border-white/8 bg-[radial-gradient(circle_at_top,rgba(52,211,153,0.2),transparent_48%),rgba(10,10,14,1)] text-sm font-medium text-zinc-400">
+    <div className="relative flex h-44 items-center justify-center border-b border-white/8 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.06),transparent_48%),rgba(10,10,14,1)] text-sm font-medium text-zinc-400">
       Reusable creator recipe
       <PreviewAccessBadge label={accessLabel} />
     </div>

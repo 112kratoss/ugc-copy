@@ -411,6 +411,16 @@ button:disabled,
   animation: ui-rise var(--ui-duration-reveal) var(--ui-ease-standard) both;
 }
 
+/*
+ * For popovers anchored to a trigger. Shorter than `ui-enter` because a control
+ * the viewer just clicked should answer immediately, and it scales from 0.96
+ * rather than 0 — nothing in the real world grows out of nothing. Pair with an
+ * `origin-*` utility so it grows from its trigger rather than its own centre.
+ */
+.ui-enter-pop {
+  animation: ui-pop var(--ui-duration-base) var(--ui-ease-standard) both;
+}
+
 .ui-stagger > * {
   animation: ui-rise var(--ui-duration-reveal) var(--ui-ease-standard) both;
 }
@@ -429,6 +439,18 @@ button:disabled,
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes ui-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
   }
 }
 
