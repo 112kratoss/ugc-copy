@@ -66,7 +66,7 @@ describe('ShowcasePage cacheability', () => {
   });
 
   it('renders the initial feed without request-time auth or header dependencies', async () => {
-    const { default: ShowcasePage } = await import('@/app/showcase/page');
+    const { default: ShowcasePage } = await import('@/app/showcase/(feed)/page');
 
     render(await ShowcasePage({ searchParams: Promise.resolve({}) }));
 
@@ -81,7 +81,7 @@ describe('ShowcasePage cacheability', () => {
   });
 
   it('keeps nonzero offset pages at the normal continuation size', async () => {
-    const { default: ShowcasePage } = await import('@/app/showcase/page');
+    const { default: ShowcasePage } = await import('@/app/showcase/(feed)/page');
 
     render(await ShowcasePage({ searchParams: Promise.resolve({ offset: '12' }) }));
 
@@ -117,7 +117,7 @@ describe('ShowcasePage cacheability', () => {
         offset: 0,
       },
     });
-    const { default: ShowcasePage } = await import('@/app/showcase/page');
+    const { default: ShowcasePage } = await import('@/app/showcase/(feed)/page');
 
     render(await ShowcasePage({ searchParams: Promise.resolve({ category: 'video' }) }));
 
@@ -152,7 +152,7 @@ describe('ShowcasePage cacheability', () => {
         offset: 0,
       },
     });
-    const { default: ShowcasePage } = await import('@/app/showcase/page');
+    const { default: ShowcasePage } = await import('@/app/showcase/(feed)/page');
 
     render(await ShowcasePage({ searchParams: Promise.resolve({}) }));
 
@@ -191,7 +191,7 @@ describe('ShowcasePage cacheability', () => {
         offset: 0,
       },
     });
-    const { default: ShowcasePage } = await import('@/app/showcase/page');
+    const { default: ShowcasePage } = await import('@/app/showcase/(feed)/page');
 
     render(await ShowcasePage({ searchParams: Promise.resolve({}) }));
 
