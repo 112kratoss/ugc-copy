@@ -25,6 +25,29 @@ export interface AppNavItem {
 const isExactOrChild = (pathname: string, href: string) =>
   pathname === href || pathname.startsWith(`${href}/`);
 
+/**
+ * A single-segment child of `href` — `/showcase/abc` but not `/showcase` and
+ * not `/showcase/abc/def`. Query strings and hashes are ignored so a filtered
+ * feed still reads as the section itself.
+ */
+const isDetailChildOf = (pathname: string, href: string) => {
+  const path = pathname.split(/[?#]/)[0];
+  if (!path.startsWith(`${href}/`)) return false;
+
+  const segment = path.slice(href.length + 1);
+  return segment.length > 0 && !segment.includes('/');
+};
+
+/**
+ * A post and a creator profile are their own surfaces, not sub-pages of the
+ * Showcase feed they happen to sit under in the path. Either can be reached
+ * from Home, `/feed`, Marketplace, Studio, or a shared link, so claiming the
+ * Showcase nav item would tell the viewer they are somewhere they are not.
+ * Both get their own title below instead.
+ */
+const isPostDetailPath = (pathname: string) => isDetailChildOf(pathname, '/showcase');
+const isCreatorProfilePath = (pathname: string) => isDetailChildOf(pathname, '/creators');
+
 export const APP_NAV_ITEMS: AppNavItem[] = [
   {
     id: 'home',
@@ -78,8 +101,9 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     description: 'Community inspiration and remixable posts',
     icon: Users,
     match: (pathname) =>
-      isExactOrChild(pathname, '/showcase') ||
-      isExactOrChild(pathname, '/creators'),
+      !isPostDetailPath(pathname) &&
+      !isCreatorProfilePath(pathname) &&
+      (isExactOrChild(pathname, '/showcase') || isExactOrChild(pathname, '/creators')),
   },
   {
     id: 'marketplace',
@@ -147,6 +171,10 @@ export function getAppShellTitle(pathname: string) {
   if (pathname.startsWith('/templates/new')) return 'Create Template';
   if (pathname.startsWith('/template-runs')) return 'Create From Template';
   if (pathname.startsWith('/templates')) return 'Templates';
+  // Required, not decoration: no nav item claims these paths, so without an
+  // override the fallback below would read "Workspace".
+  if (isPostDetailPath(pathname)) return 'Post';
+  if (isCreatorProfilePath(pathname)) return 'Creator';
 
   return getActiveAppNavItem(pathname)?.label ?? 'Workspace';
 }

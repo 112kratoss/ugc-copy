@@ -8,9 +8,30 @@ describe('app shell navigation', () => {
     expect(getActiveAppNavItem('/post/post-1/edit')?.id).toBe('studio');
   });
 
-  it('keeps community routes in the Feed section', () => {
+  it('keeps the community feed itself in the Showcase section', () => {
     expect(getActiveAppNavItem('/showcase')?.id).toBe('showcase');
-    expect(getActiveAppNavItem('/creators/sassy23bh')?.id).toBe('showcase');
+    expect(getAppShellTitle('/showcase')).toBe('Showcase');
+    expect(getActiveAppNavItem('/creators')?.id).toBe('showcase');
+  });
+
+  it('never mistakes a filtered feed for a post', () => {
+    // usePathname() strips query and hash, so the shell only ever sees the bare
+    // pathname. These guard the detail predicate itself: a filtered feed must
+    // not slip into the post branch and start reporting itself as "Post".
+    expect(getAppShellTitle('/showcase?category=video')).not.toBe('Post');
+    expect(getAppShellTitle('/showcase#top')).not.toBe('Post');
+  });
+
+  it('treats a post as its own surface rather than part of Showcase', () => {
+    // Reachable from Home, /feed, Marketplace, Studio or a shared link, so
+    // highlighting Showcase would claim a section the viewer is not in.
+    expect(getActiveAppNavItem('/showcase/post-1')).toBeNull();
+    expect(getAppShellTitle('/showcase/post-1')).toBe('Post');
+  });
+
+  it('treats a creator profile as its own surface', () => {
+    expect(getActiveAppNavItem('/creators/sassy23bh')).toBeNull();
+    expect(getAppShellTitle('/creators/sassy23bh')).toBe('Creator');
   });
 
   it('keeps template discovery and runs in the Create section', () => {

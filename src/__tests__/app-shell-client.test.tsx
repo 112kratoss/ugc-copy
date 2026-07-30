@@ -143,6 +143,25 @@ describe('AppShellClient', () => {
     expect(screen.getAllByRole('link', { name: 'Marketplace' }).some((link) => link.getAttribute('aria-current') === 'page')).toBe(true);
   });
 
+  it('presents a post as its own surface rather than part of Showcase', () => {
+    mockedPathname = '/showcase/post-1';
+
+    render(
+      <AppShellClient>
+        <div>Post content</div>
+      </AppShellClient>
+    );
+
+    const banner = screen.getByRole('banner');
+    expect(within(banner).getByText('Post')).toBeInTheDocument();
+    // The section subtitle would otherwise compete with the post's own <h1>.
+    expect(within(banner).queryByText('Community inspiration and remixable posts')).not.toBeInTheDocument();
+    // A post belongs to no section, so nothing in the shell claims it.
+    expect(
+      screen.getAllByRole('link').some((link) => link.getAttribute('aria-current') === 'page')
+    ).toBe(false);
+  });
+
   it('exposes Invite & Earn under Account without adding a mobile bottom tab', () => {
     mockedPathname = '/invite';
 
