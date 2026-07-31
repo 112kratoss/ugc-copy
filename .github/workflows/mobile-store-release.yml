@@ -120,6 +120,12 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: ugc-mobile/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ugc-mobile
+        run: npm ci
 
       - name: Authenticate EAS
         working-directory: ugc-mobile
