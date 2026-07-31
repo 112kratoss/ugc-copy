@@ -71,6 +71,18 @@ type AiUsageEventRow = {
   created_at: string | null;
 };
 
+type RemixablePostRow = {
+  id: string;
+  user_id: string | null;
+  generation_id: string | null;
+};
+
+type RemixSourceProjectionRow = {
+  id: string;
+  user_id: string | null;
+  is_public: boolean | null;
+};
+
 type ProviderDependencyEventRow = {
   service_name: string | null;
   model_id?: string | null;
@@ -228,6 +240,34 @@ export type BackendProviderDependencyHealth = {
   oldestRecentEventAt: string | null;
 };
 
+/**
+ * Proves the privileged read behind remix still resolves.
+ *
+ * The 2026-07-26 grant hardening narrowed the `authenticated` SELECT on
+ * `generations` to a resume projection, and every reader that still went
+ * through a user-scoped client started returning nothing — remix, publishing,
+ * and workflow-run hydration each broke silently and were only found once
+ * users reported dead buttons. Column privileges are evaluated before row
+ * policies, so this class of break is invisible to any check that only counts
+ * rows in a table the service role can still read.
+ *
+ * This check therefore performs the real read: it takes live public,
+ * generation-backed posts and resolves each one's source through the same
+ * projection and the same gate the remix service applies. If that stops
+ * resolving, the release fails before promotion instead of after.
+ */
+export type BackendDataAccessHealth = {
+  status: BackendHealthStatus;
+  /** Public, visible, generation-backed posts examined this run. */
+  remixSourcesSampled: number;
+  /** Sources that were readable and satisfied the remix gate. */
+  remixSourcesResolved: number;
+  /** Readable but gate-failing sources — data drift, not a broken contract. */
+  remixSourcesGateBlocked: number;
+  /** Set when the projection itself could not be read (the grant regression). */
+  projectionReadError: string | null;
+};
+
 export type BackendHealth = {
   status: BackendHealthStatus;
   checkedAt: string;
@@ -247,6 +287,7 @@ export type BackendHealth = {
   mediaPipeline: BackendMediaPipelineHealth;
   aiUsage: BackendAiUsageHealth;
   providerDependencies: BackendProviderDependencyHealth;
+  dataAccess: BackendDataAccessHealth;
   issues: BackendHealthIssue[];
 };
 
@@ -273,6 +314,7 @@ const MEDIA_RENDITION_MAX_ATTEMPTS = 3;
 // Several hourly repair windows. Anything older is not "waiting its turn".
 const MEDIA_PIPELINE_STALE_AFTER_MINUTES = 360;
 const MEDIA_PIPELINE_SAMPLE_LIMIT = 500;
+const DATA_ACCESS_REMIX_SAMPLE_LIMIT = 25;
 
 function minutesSince(timestamp: string, now: Date): number {
   const ms = now.getTime() - new Date(timestamp).getTime();
@@ -899,6 +941,119 @@ function buildProviderDependencyHealth(
   };
 }
 
+function buildDataAccessHealth(
+  posts: RemixablePostRow[],
+  sources: RemixSourceProjectionRow[],
+  projectionError: { message?: string } | null,
+): { health: BackendDataAccessHealth; issues: BackendHealthIssue[] } {
+  const sampled = posts.length;
+
+  // A read error here is the regression itself: the privileged projection is
+  // the one the remix service depends on, so it can never be a warning.
+  if (projectionError) {
+    return {
+      health: {
+        status: 'degraded',
+        remixSourcesSampled: sampled,
+        remixSourcesResolved: 0,
+        remixSourcesGateBlocked: 0,
+        projectionReadError: projectionError.message ?? 'unknown error',
+      },
+      issues: [{
+        severity: 'degraded',
+        code: 'DATA_ACCESS_REMIX_PROJECTION_UNREADABLE',
+        message:
+          'The privileged generations projection behind remix could not be read: '
+          + `${projectionError.message ?? 'unknown error'}. Check grants and policies on public.generations.`,
+      }],
+    };
+  }
+
+  // Nothing to prove on an empty environment. Reporting ok with a zero sample
+  // is honest; failing here would just make fresh projects unreleasable.
+  if (sampled === 0) {
+    return {
+      health: {
+        status: 'ok',
+        remixSourcesSampled: 0,
+        remixSourcesResolved: 0,
+        remixSourcesGateBlocked: 0,
+        projectionReadError: null,
+      },
+      issues: [],
+    };
+  }
+
+  const sourcesById = new Map(sources.map((source) => [source.id, source]));
+  let resolved = 0;
+  let gateBlocked = 0;
+  for (const post of posts) {
+    const source = post.generation_id ? sourcesById.get(post.generation_id) : undefined;
+    if (!source) continue;
+    // Mirrors the gate in showcase-remix-service: still public, and owned by
+    // the post's creator.
+    if (source.is_public === true && source.user_id && source.user_id === post.user_id) {
+      resolved += 1;
+    } else {
+      gateBlocked += 1;
+    }
+  }
+
+  const unreadable = sampled - resolved - gateBlocked;
+
+  // Every sampled post failing to resolve is the silent-breakage signature:
+  // the rows exist and are public, but the source read comes back empty.
+  if (resolved === 0) {
+    return {
+      health: {
+        status: 'degraded',
+        remixSourcesSampled: sampled,
+        remixSourcesResolved: 0,
+        remixSourcesGateBlocked: gateBlocked,
+        projectionReadError: null,
+      },
+      issues: [{
+        severity: 'degraded',
+        code: 'DATA_ACCESS_REMIX_SOURCE_UNRESOLVABLE',
+        message:
+          `None of ${sampled} public generation-backed post(s) could resolve a remixable source. `
+          + 'Remix is broken for every viewer.',
+      }],
+    };
+  }
+
+  // Some resolving and some not is data drift (an unpublished or relinked
+  // generation), not a contract break — surface it without blocking a release.
+  if (unreadable > 0) {
+    return {
+      health: {
+        status: 'warning',
+        remixSourcesSampled: sampled,
+        remixSourcesResolved: resolved,
+        remixSourcesGateBlocked: gateBlocked,
+        projectionReadError: null,
+      },
+      issues: [{
+        severity: 'warning',
+        code: 'DATA_ACCESS_REMIX_SOURCE_MISSING',
+        message:
+          `${unreadable} of ${sampled} public generation-backed post(s) have no readable source generation.`,
+      }],
+    };
+  }
+
+  return {
+    health: {
+      status: 'ok',
+      remixSourcesSampled: sampled,
+      remixSourcesResolved: resolved,
+      remixSourcesGateBlocked: gateBlocked,
+      projectionReadError: null,
+    },
+    issues: [],
+  };
+}
+
 export async function collectBackendHealth(
   client: SupabaseClient,
   now = new Date(),
@@ -935,6 +1090,7 @@ export async function collectBackendHealth(
     recentAiUsageResult,
     stalePendingAiUsageResult,
     recentProviderDependencyResult,
+    remixablePostsResult,
   ] = await Promise.all([
     client
       .from('backend_job_runs')
@@ -1002,6 +1158,17 @@ export async function collectBackendHealth(
       .gte('created_at', recentProviderDependencySince)
       .order('created_at', { ascending: true })
       .limit(1000),
+    // Same filter findPublicPostReferenceByIdOrGenerationId applies, so the
+    // sample is exactly the set a viewer could press Remix on.
+    client
+      .from('posts')
+      .select('id,user_id,generation_id')
+      .eq('visibility', 'public')
+      .eq('review_status', 'visible')
+      .is('archived_at', null)
+      .not('generation_id', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(DATA_ACCESS_REMIX_SAMPLE_LIMIT),
   ]);
 
   if (jobRunsResult.error) throw jobRunsResult.error;
@@ -1039,6 +1206,38 @@ export async function collectBackendHealth(
   const providerDependencyResult = buildProviderDependencyHealth(
     (recentProviderDependencyResult.data ?? []) as ProviderDependencyEventRow[],
   );
+
+  // Deliberately not thrown like its siblings: a failure to read this
+  // projection is the exact regression being watched for, so it has to be
+  // reported as degraded health rather than collapse the endpoint into a 500
+  // that says nothing about which contract broke.
+  const remixablePosts = (remixablePostsResult.data ?? []) as RemixablePostRow[];
+  const remixSourceIds = remixablePosts
+    .map((post) => post.generation_id)
+    .filter((id): id is string => Boolean(id));
+  let remixProjectionError: { message?: string } | null = remixablePostsResult.error
+    ? { message: `public posts could not be listed (${remixablePostsResult.error.message})` }
+    : null;
+  let remixSources: RemixSourceProjectionRow[] = [];
+  if (!remixProjectionError && remixSourceIds.length > 0) {
+    // The full remix projection, not just the gate columns: prompt and
+    // workflow_settings are the ones the hardening revoked, so naming them
+    // here is what makes this probe fail if they are ever revoked again.
+    const remixSourceResult = await client
+      .from('generations')
+      .select('id, user_id, is_public, share_input_media_for_remix, category, prompt, workflow_settings')
+      .in('id', remixSourceIds);
+    if (remixSourceResult.error) {
+      remixProjectionError = remixSourceResult.error;
+    } else {
+      remixSources = (remixSourceResult.data ?? []) as RemixSourceProjectionRow[];
+    }
+  }
+  const dataAccessResult = buildDataAccessHealth(
+    remixablePosts,
+    remixSources,
+    remixProjectionError,
+  );
   const environment = environmentVariables
     ? collectBackendEnvironmentHealth(environmentVariables)
     : null;
@@ -1075,6 +1274,7 @@ export async function collectBackendHealth(
     ...mediaPipelineResult.issues,
     ...aiUsageResult.issues,
     ...providerDependencyResult.issues,
+    ...dataAccessResult.issues,
     ...environmentIssues,
   ];
   const componentStatuses = [
@@ -1085,6 +1285,7 @@ export async function collectBackendHealth(
     mediaPipelineResult.health.status,
     aiUsageResult.health.status,
     providerDependencyResult.health.status,
+    dataAccessResult.health.status,
     ...(environment ? [environment.status] : []),
   ];
 
@@ -1107,6 +1308,7 @@ export async function collectBackendHealth(
     mediaPipeline: mediaPipelineResult.health,
     aiUsage: aiUsageResult.health,
     providerDependencies: providerDependencyResult.health,
+    dataAccess: dataAccessResult.health,
     issues,
   };
 }

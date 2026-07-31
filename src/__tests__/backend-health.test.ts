@@ -17,6 +17,7 @@ class FakeQueryBuilder {
   limit = vi.fn(() => this);
   in = vi.fn(() => this);
   lt = vi.fn(() => this);
+  not = vi.fn(() => this);
 
   constructor(private readonly result: QueryResult) {}
 
@@ -93,6 +94,10 @@ function createClient(results: Record<string, QueryResult | QueryResult[]>) {
       { error: null, data: [] },
     ],
     provider_dependency_events: { error: null, data: [] },
+    // Remix-source sample for the data-access probe. Empty by default: with no
+    // remixable posts the probe reports ok without issuing its follow-up
+    // generations read, so tests that do not care about it stay untouched.
+    posts: { error: null, data: [] },
     ...results,
     ...(backendJobRuns
       ? {
@@ -1476,6 +1481,189 @@ describe('collectBackendHealth', () => {
         'preview_status',
         ['pending', 'processing', 'failed'],
       );
+    });
+  });
+
+  describe('data access contract', () => {
+    const now = new Date('2026-06-21T10:00:00.000Z');
+    // Three generations reads happen before the remix-source probe: recent,
+    // stalled, and pending-without-provider-task.
+    const GENERATION_READS_BEFORE_PROBE = [
+      { error: null, data: [] },
+      { error: null, data: [] },
+      { error: null, data: [] },
+    ];
+    const remixablePost = {
+      id: 'post-1',
+      user_id: 'creator-1',
+      generation_id: 'gen-1',
+    };
+    const readableSource = {
+      id: 'gen-1',
+      user_id: 'creator-1',
+      is_public: true,
+    };
+
+    function dataAccessIssues(health: Awaited<ReturnType<typeof collectBackendHealth>>) {
+      return health.issues.filter((issue) => issue.code.startsWith('DATA_ACCESS_'));
+    }
+
+    it('degrades when the privileged remix projection cannot be read', async () => {
+      // The exact production regression: the 2026-07-26 hardening revoked the
+      // columns this projection names, so the read fails with 42501.
+      const db = createClient({
+        backend_job_runs: { error: null, data: [] },
+        posts: { error: null, data: [remixablePost] },
+        generations: [
+          ...GENERATION_READS_BEFORE_PROBE,
+          { error: new Error('permission denied for table generations'), data: null },
+        ],
+      });
+
+      const health = await collectBackendHealth(db.client as never, now, COMPLETE_BACKEND_ENVIRONMENT);
+
+      expect(health.dataAccess).toEqual({
+        status: 'degraded',
+        remixSourcesSampled: 1,
+        remixSourcesResolved: 0,
+        remixSourcesGateBlocked: 0,
+        projectionReadError: 'permission denied for table generations',
+      });
+      expect(dataAccessIssues(health)).toEqual([{
+        severity: 'degraded',
+        code: 'DATA_ACCESS_REMIX_PROJECTION_UNREADABLE',
+        message:
+          'The privileged generations projection behind remix could not be read: '
+          + 'permission denied for table generations. Check grants and policies on public.generations.',
+      }]);
+      // Degraded is what production-release refuses to promote on.
+      expect(health.status).toBe('degraded');
+    });
+
+    it('degrades when public posts exist but no source resolves', async () => {
+      // The five-day silent break: rows are public and present, the read simply
+      // returns nothing, and every Remix button 404s.
+      const db = createClient({
+        backend_job_runs: { error: null, data: [] },
+        posts: { error: null, data: [remixablePost, { ...remixablePost, id: 'post-2', generation_id: 'gen-2' }] },
+        generations: [...GENERATION_READS_BEFORE_PROBE, { error: null, data: [] }],
+      });
+
+      const health = await collectBackendHealth(db.client as never, now, COMPLETE_BACKEND_ENVIRONMENT);
+
+      expect(health.dataAccess).toMatchObject({
+        status: 'degraded',
+        remixSourcesSampled: 2,
+        remixSourcesResolved: 0,
+      });
+      expect(dataAccessIssues(health)[0]).toMatchObject({
+        severity: 'degraded',
+        code: 'DATA_ACCESS_REMIX_SOURCE_UNRESOLVABLE',
+      });
+      expect(health.status).toBe('degraded');
+    });
+
+    it('names the full remix projection so a future revoke is caught', async () => {
+      const db = createClient({
+        backend_job_runs: { error: null, data: [] },
+        posts: { error: null, data: [remixablePost] },
+        generations: [...GENERATION_READS_BEFORE_PROBE, { error: null, data: [readableSource] }],
+      });
+
+      await collectBackendHealth(db.client as never, now, COMPLETE_BACKEND_ENVIRONMENT);
+
+      expect(db.builders.generations[3].select).toHaveBeenCalledWith(
+        'id, user_id, is_public, share_input_media_for_remix, category, prompt, workflow_settings',
+      );
+      expect(db.builders.generations[3].in).toHaveBeenCalledWith('id', ['gen-1']);
+      // Only the posts a viewer could actually press Remix on.
+      expect(db.builders.posts[0].eq).toHaveBeenCalledWith('visibility', 'public');
+      expect(db.builders.posts[0].eq).toHaveBeenCalledWith('review_status', 'visible');
+      expect(db.builders.posts[0].is).toHaveBeenCalledWith('archived_at', null);
+    });
+
+    it('stays ok when sources resolve through the remix gate', async () => {
+      const db = createClient({
+        backend_job_runs: { error: null, data: [] },
+        posts: { error: null, data: [remixablePost] },
+        generations: [...GENERATION_READS_BEFORE_PROBE, { error: null, data: [readableSource] }],
+      });
+
+      const health = await collectBackendHealth(db.client as never, now, COMPLETE_BACKEND_ENVIRONMENT);
+
+      expect(health.dataAccess).toEqual({
+        status: 'ok',
+        remixSourcesSampled: 1,
+        remixSourcesResolved: 1,
+        remixSourcesGateBlocked: 0,
+        projectionReadError: null,
+      });
+      expect(dataAccessIssues(health)).toEqual([]);
+    });
+
+    it('warns rather than degrades when only some sources are missing', async () => {
+      const db = createClient({
+        backend_job_runs: { error: null, data: [] },
+        posts: {
+          error: null,
+          data: [remixablePost, { id: 'post-2', user_id: 'creator-1', generation_id: 'gen-2' }],
+        },
+        generations: [...GENERATION_READS_BEFORE_PROBE, { error: null, data: [readableSource] }],
+      });
+
+      const health = await collectBackendHealth(db.client as never, now, COMPLETE_BACKEND_ENVIRONMENT);
+
+      expect(health.dataAccess).toMatchObject({
+        status: 'warning',
+        remixSourcesSampled: 2,
+        remixSourcesResolved: 1,
+      });
+      expect(dataAccessIssues(health)[0]).toMatchObject({
+        severity: 'warning',
+        code: 'DATA_ACCESS_REMIX_SOURCE_MISSING',
+      });
+      // A warning must not block a release the way degraded does.
+      expect(health.status).not.toBe('degraded');
+    });
+
+    it('counts a source that fails the gate separately from one that cannot be read', async () => {
+      const db = createClient({
+        backend_job_runs: { error: null, data: [] },
+        posts: { error: null, data: [remixablePost] },
+        generations: [
+          ...GENERATION_READS_BEFORE_PROBE,
+          { error: null, data: [{ ...readableSource, is_public: false }] },
+        ],
+      });
+
+      const health = await collectBackendHealth(db.client as never, now, COMPLETE_BACKEND_ENVIRONMENT);
+
+      expect(health.dataAccess).toMatchObject({
+        remixSourcesSampled: 1,
+        remixSourcesResolved: 0,
+        remixSourcesGateBlocked: 1,
+      });
+    });
+
+    it('reports ok with an empty sample rather than failing a fresh environment', async () => {
+      const db = createClient({
+        backend_job_runs: { error: null, data: [] },
+        posts: { error: null, data: [] },
+        generations: GENERATION_READS_BEFORE_PROBE,
+      });
+
+      const health = await collectBackendHealth(db.client as never, now, COMPLETE_BACKEND_ENVIRONMENT);
+
+      expect(health.dataAccess).toEqual({
+        status: 'ok',
+        remixSourcesSampled: 0,
+        remixSourcesResolved: 0,
+        remixSourcesGateBlocked: 0,
+        projectionReadError: null,
+      });
+      // No remixable posts means no follow-up read at all.
+      expect(db.builders.generations).toHaveLength(3);
+      expect(dataAccessIssues(health)).toEqual([]);
     });
   });
 });

@@ -8,7 +8,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(10);
+select plan(15);
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
 values
@@ -100,6 +100,84 @@ select throws_ok(
   '42501',
   null,
   'an authenticated user cannot insert transactions directly'
+);
+
+-- ─── Column grants on generations (row owner) ────────────────────────────────
+
+-- The authenticated role holds a column-scoped SELECT on generations: enough
+-- to resume your own work, and nothing more. Anything richer — prompts,
+-- settings, media, visibility — is service-role only, behind an explicit
+-- authorization check in the service layer.
+--
+-- Both directions are pinned on purpose. Column privileges are evaluated
+-- before row policies, so an ungranted column fails the whole statement even
+-- for the row's own owner; narrowing this projection on 2026-07-26 silently
+-- broke remix, publishing, and workflow-run hydration in production, and each
+-- was found only when users reported dead buttons. Widening it would hand back
+-- the data that hardening removed. Either direction should be a deliberate
+-- change that updates this test and the readers that depend on it.
+--
+-- production_data_contract.test.sql also pins `prompt`, but against another
+-- user's row, where row policies would hide it anyway. These run against the
+-- caller's own row on purpose: that is the only way to show the denial comes
+-- from the column grant rather than from RLS, which is precisely the
+-- distinction that made the 2026-07-26 breakage so hard to see.
+
+reset role;
+set local role authenticated;
+select set_config(
+  'request.jwt.claims',
+  '{"sub": "0000000b-0000-4000-8000-0000000000b1", "role": "authenticated"}',
+  true
+);
+
+select lives_ok(
+  $$
+    select id, user_id, prediction_id, status, created_at, duration, category, creation_mode
+    from public.generations
+    where id = 'a0000000-0000-4000-8000-000000000002'::uuid
+  $$,
+  'the resume projection stays readable for the row owner'
+);
+
+select throws_ok(
+  $$
+    select prompt from public.generations
+    where id = 'a0000000-0000-4000-8000-000000000002'::uuid
+  $$,
+  '42501',
+  null,
+  'prompt is not granted to authenticated, even on the caller''s own row'
+);
+
+select throws_ok(
+  $$
+    select workflow_settings from public.generations
+    where id = 'a0000000-0000-4000-8000-000000000002'::uuid
+  $$,
+  '42501',
+  null,
+  'workflow_settings is not granted to authenticated (remix reads it service-role)'
+);
+
+select throws_ok(
+  $$
+    select is_public from public.generations
+    where id = 'a0000000-0000-4000-8000-000000000002'::uuid
+  $$,
+  '42501',
+  null,
+  'is_public is not granted to authenticated (source validation reads it service-role)'
+);
+
+select throws_ok(
+  $$
+    select output_url from public.generations
+    where id = 'a0000000-0000-4000-8000-000000000002'::uuid
+  $$,
+  '42501',
+  null,
+  'output_url is not granted to authenticated (run hydration reads it service-role)'
 );
 
 -- ─── Anonymous client ────────────────────────────────────────────────────────

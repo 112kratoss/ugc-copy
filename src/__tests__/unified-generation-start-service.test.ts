@@ -219,7 +219,11 @@ describe('unified generation start service', () => {
       releaseId: 'release-v2',
       releaseSchemaVersion: 2,
     };
-    const resolveSource = vi.fn(async (_client: unknown, _userId: string, _raw: unknown) => null);
+    // Typed as a tuple so the argument assertions below can index it.
+    const resolveSource = vi.fn(async (..._args: [unknown, string, unknown]) => {
+      void _args;
+      return null;
+    });
 
     await expect(startUnifiedGenerationForRoute(
       {
