@@ -290,6 +290,12 @@ export default function PostResourceBundlePanel({
     const bundle = data.bundle as BundleRefreshPayload;
     setHasAccess(bundle.viewerCanAccess || bundle.viewerIsOwner);
     setResources(bundle.resources);
+
+    // The page's remix button is rendered from server-computed props
+    // (canRemix), which just changed with this unlock. Re-fetch the RSC
+    // payload so it appears without a hard reload; client state set above
+    // survives a soft refresh.
+    router.refresh();
   };
 
   const ensureAuthenticated = () => {

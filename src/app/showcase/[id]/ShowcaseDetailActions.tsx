@@ -8,6 +8,7 @@ import { Archive, Globe2, Loader2, Lock, PencilLine, Sparkles, Trash2, Wand2 } f
 import { useAuth } from '@/app/components/AuthProvider';
 import PublicShareButton from '@/app/components/PublicShareButton';
 import { getCurrentInternalPath } from '@/lib/share';
+import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 
 interface ShowcaseDetailActionsProps {
   postId: string;
@@ -35,6 +36,7 @@ export default function ShowcaseDetailActions({
   const router = useRouter();
   const { session, user } = useAuth();
   const [isWorking, setIsWorking] = useState<string | null>(null);
+  const [remixError, setRemixError] = useState<string | null>(null);
 
   const handleRemix = async () => {
     if (!user || !session?.access_token) {
@@ -42,22 +44,24 @@ export default function ShowcaseDetailActions({
       return;
     }
 
-    try {
-      const response = await fetch('/api/showcase/remix', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({ postId }),
-      });
+    setRemixError(null);
+    setIsWorking('remix');
 
-      const data = await response.json();
-      if (data.success && data.redirectTo) {
-        router.push(data.redirectTo);
-      }
+    try {
+      const { redirectTo } = await requestShowcaseRemix({
+        accessToken: session.access_token,
+        postId,
+      });
+      router.push(redirectTo);
     } catch (error) {
       console.error('Failed to remix shared creation:', error);
+      setRemixError(
+        error instanceof Error && error.message
+          ? error.message
+          : 'Could not start the remix. Please try again.',
+      );
+    } finally {
+      setIsWorking(null);
     }
   };
 
@@ -221,10 +225,11 @@ export default function ShowcaseDetailActions({
           <button
             type="button"
             onClick={handleRemix}
-            className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 py-2 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]"
+            disabled={isWorking === 'remix'}
+            className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 py-2 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <Wand2 className="h-4 w-4" />
-            Remix
+            {isWorking === 'remix' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+            {isWorking === 'remix' ? 'Starting…' : 'Remix'}
           </button>
         ) : null}
 
@@ -245,6 +250,12 @@ export default function ShowcaseDetailActions({
           Create your own
         </Link>
       </div>
+
+      {remixError ? (
+        <div role="alert" className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+          {remixError}
+        </div>
+      ) : null}
 
       {viewerIsOwner ? (
         <details className="group rounded-[22px] border border-white/8 bg-black/25">

@@ -127,14 +127,16 @@ describe('startMotionGenerationForRoute', () => {
       remainingCredits: 88,
       cost: 12,
     });
-    const userClient = createClientMock({
+    const userClient = createClientMock();
+    // The source-generation row is readable only service-role since the
+    // 2026-07-26 grant hardening, so the fixture lives on the admin client.
+    const adminClient = createClientMock({
       sourceGeneration: {
         id: '3f8f0c70-9a54-4f6e-8f5a-1c2d3e4f5a6b',
         user_id: 'creator-1',
         is_public: true,
       },
     });
-    const adminClient = createClientMock();
 
     const result = await startMotionGenerationForRoute({
       request: new Request('http://localhost/api/generate', {

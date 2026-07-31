@@ -9,21 +9,36 @@ import {
 type GenerationQueryOptions = {
   generation?: Record<string, unknown> | null;
   generationError?: unknown;
+  rpcError?: unknown;
 };
 
-function createUserClientMock({
-  generation = {
-    id: 'gen-1',
-    prompt: 'Create a clean UGC product reveal.',
-    workflow_settings: { model: 'nano-banana-2' },
-  },
+const PUBLIC_CREATOR_GENERATION = {
+  id: 'gen-1',
+  user_id: 'creator-1',
+  is_public: true,
+  share_input_media_for_remix: true,
+  category: 'image',
+  prompt: 'Create a clean UGC product reveal.',
+  workflow_settings: { model: 'nano-banana-2' },
+};
+
+/**
+ * The generations read runs through the SERVICE client on purpose:
+ * authenticated clients hold no read grant on prompt/workflow_settings since
+ * the 2026-07-26 hardening migration, which is exactly the drift that broke
+ * remix in production. This mock models rpc + the generations read on one
+ * client so the tests fail if the read ever moves back to a user client.
+ */
+function createServiceClientMock({
+  generation = PUBLIC_CREATOR_GENERATION,
   generationError = null,
+  rpcError = null,
 }: GenerationQueryOptions = {}) {
-  const singleMock = vi.fn(async () => ({
+  const maybeSingleMock = vi.fn(async () => ({
     data: generation,
     error: generationError,
   }));
-  const eqMock = vi.fn(() => ({ single: singleMock }));
+  const eqMock = vi.fn(() => ({ maybeSingle: maybeSingleMock }));
   const selectMock = vi.fn(() => ({ eq: eqMock }));
   const fromMock = vi.fn((table: string) => {
     if (table !== 'generations') {
@@ -32,25 +47,18 @@ function createUserClientMock({
 
     return { select: selectMock };
   });
-
-  return {
-    client: { from: fromMock } as unknown as SupabaseClient,
-    eqMock,
-    fromMock,
-    selectMock,
-    singleMock,
-  };
-}
-
-function createServiceClientMock({ rpcError = null }: { rpcError?: unknown } = {}) {
   const rpcMock = vi.fn(async () => ({
     data: true,
     error: rpcError,
   }));
 
   return {
-    client: { rpc: rpcMock } as unknown as SupabaseClient,
+    client: { from: fromMock, rpc: rpcMock } as unknown as SupabaseClient,
+    eqMock,
+    fromMock,
+    maybeSingleMock,
     rpcMock,
+    selectMock,
   };
 }
 
@@ -67,10 +75,6 @@ type RemixPostReference = Awaited<
 type RemixPostCategory = NonNullable<RemixPostReference>['category'];
 
 function createDependencies(
-  // The previous fixture omitted visibility, prompt, and source_kind. Those are
-  // required on PostReferenceRow, and the service reads visibility to decide
-  // whether a post may be remixed at all — so the fixture was not merely
-  // incomplete, it was under-specifying the field the behaviour turns on.
   post: RemixPostReference = {
     id: 'post-1',
     generation_id: 'gen-1',
@@ -91,15 +95,13 @@ function createDependencies(
 }
 
 describe('remixShowcasePostForRoute', () => {
-  it('increments the public post remix count and returns generation prefill data', async () => {
-    const userClient = createUserClientMock();
+  it('reads the linked generation service-role, increments the count, and returns prefill data', async () => {
     const serviceClient = createServiceClientMock();
     const dependencies = createDependencies();
 
     const result = await remixShowcasePostForRoute({
       actorUserId: 'user-1',
       referenceId: 'post-1',
-      userClient: userClient.client,
       serviceClient: serviceClient.client,
       dependencies,
     });
@@ -119,12 +121,19 @@ describe('remixShowcasePostForRoute', () => {
       'post-1',
       serviceClient.client,
     );
+    expect(serviceClient.fromMock).toHaveBeenCalledWith('generations');
+    expect(serviceClient.selectMock).toHaveBeenCalledWith(
+      'id, user_id, is_public, share_input_media_for_remix, category, prompt, workflow_settings',
+    );
+    expect(serviceClient.eqMock).toHaveBeenCalledWith('id', 'gen-1');
     expect(serviceClient.rpcMock).toHaveBeenCalledWith('increment_post_remix_count', {
       p_post_id: 'post-1',
     });
-    expect(userClient.fromMock).toHaveBeenCalledWith('generations');
-    expect(userClient.selectMock).toHaveBeenCalledWith('id, prompt, workflow_settings');
-    expect(userClient.eqMock).toHaveBeenCalledWith('id', 'gen-1');
+    // The counter must only move after the generation is confirmed remixable —
+    // incrementing first was how failed taps inflated remix counts.
+    expect(serviceClient.maybeSingleMock.mock.invocationCallOrder[0]).toBeLessThan(
+      serviceClient.rpcMock.mock.invocationCallOrder[0],
+    );
     expect(dependencies.notifyPostSocialActivity).toHaveBeenCalledWith(serviceClient.client, {
       type: 'post_remixed',
       recipientUserId: 'creator-1',
@@ -137,12 +146,13 @@ describe('remixShowcasePostForRoute', () => {
     ['video', '/create-video'],
     ['ugc-ad', '/create-video'],
     ['motion', '/create-motion'],
-    ['unknown', '/create'],
-    [null, '/create'],
+    ['unknown', '/create-image'],
+    [null, '/create-image'],
   ] as Array<[RemixPostCategory, string]>)(
-    'maps %s posts to the expected remix creator path', async (category, expectedPath) => {
-    const userClient = createUserClientMock();
-    const serviceClient = createServiceClientMock();
+    'maps %s generations to the expected remix creator path', async (category, expectedPath) => {
+    const serviceClient = createServiceClientMock({
+      generation: { ...PUBLIC_CREATOR_GENERATION, category },
+    });
     const dependencies = createDependencies({
       id: 'post-1',
       generation_id: 'gen-1',
@@ -156,7 +166,6 @@ describe('remixShowcasePostForRoute', () => {
     const result = await remixShowcasePostForRoute({
       actorUserId: 'user-1',
       referenceId: 'post-1',
-      userClient: userClient.client,
       serviceClient: serviceClient.client,
       dependencies,
     });
@@ -165,15 +174,37 @@ describe('remixShowcasePostForRoute', () => {
     expect(result.ok ? result.body.redirectTo : null).toBe(`${expectedPath}?remix=gen-1&remixPost=post-1`);
   });
 
+  it('falls back to the post category when the generation row has none', async () => {
+    const serviceClient = createServiceClientMock({
+      generation: { ...PUBLIC_CREATOR_GENERATION, category: null },
+    });
+    const dependencies = createDependencies({
+      id: 'post-1',
+      generation_id: 'gen-1',
+      user_id: 'creator-1',
+      category: 'video',
+      visibility: 'public',
+      prompt: 'a prompt',
+      source_kind: 'magicbooklet',
+    });
+
+    const result = await remixShowcasePostForRoute({
+      actorUserId: 'user-1',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies,
+    });
+
+    expect(result.ok ? result.body.redirectTo : null).toBe('/create-video?remix=gen-1&remixPost=post-1');
+  });
+
   it('rejects private or missing post references before remix mutation work', async () => {
-    const userClient = createUserClientMock();
     const serviceClient = createServiceClientMock();
     const dependencies = createDependencies(null);
 
     const result = await remixShowcasePostForRoute({
       actorUserId: 'user-1',
       referenceId: 'missing-post',
-      userClient: userClient.client,
       serviceClient: serviceClient.client,
       dependencies,
     });
@@ -184,12 +215,11 @@ describe('remixShowcasePostForRoute', () => {
       body: { error: 'Creation is private or not found' },
     });
     expect(serviceClient.rpcMock).not.toHaveBeenCalled();
-    expect(userClient.fromMock).not.toHaveBeenCalled();
+    expect(serviceClient.fromMock).not.toHaveBeenCalled();
     expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
   });
 
   it('rejects blocked creator interactions before remix counters, media reads, or notifications', async () => {
-    const userClient = createUserClientMock();
     const serviceClient = createServiceClientMock();
     const dependencies = createDependencies();
     dependencies.isUserRelationshipBlocked.mockResolvedValue(true);
@@ -197,7 +227,6 @@ describe('remixShowcasePostForRoute', () => {
     const result = await remixShowcasePostForRoute({
       actorUserId: 'user-1',
       referenceId: 'post-1',
-      userClient: userClient.client,
       serviceClient: serviceClient.client,
       dependencies,
     });
@@ -208,12 +237,11 @@ describe('remixShowcasePostForRoute', () => {
       body: { error: 'Creation is private or not found' },
     });
     expect(serviceClient.rpcMock).not.toHaveBeenCalled();
-    expect(userClient.fromMock).not.toHaveBeenCalled();
+    expect(serviceClient.fromMock).not.toHaveBeenCalled();
     expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
   });
 
   it('rejects posts that are not backed by a generation before incrementing remix count', async () => {
-    const userClient = createUserClientMock();
     const serviceClient = createServiceClientMock();
     const dependencies = createDependencies({
       id: 'post-1',
@@ -228,7 +256,6 @@ describe('remixShowcasePostForRoute', () => {
     const result = await remixShowcasePostForRoute({
       actorUserId: 'user-1',
       referenceId: 'post-1',
-      userClient: userClient.client,
       serviceClient: serviceClient.client,
       dependencies,
     });
@@ -239,13 +266,12 @@ describe('remixShowcasePostForRoute', () => {
       body: { error: 'Only generation-backed posts can be remixed' },
     });
     expect(serviceClient.rpcMock).not.toHaveBeenCalled();
-    expect(userClient.fromMock).not.toHaveBeenCalled();
+    expect(serviceClient.fromMock).not.toHaveBeenCalled();
     expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
   });
 
   it('keeps remix available when the best-effort remix counter fails', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const userClient = createUserClientMock();
     const serviceClient = createServiceClientMock({
       rpcError: { message: 'rpc unavailable' },
     });
@@ -254,7 +280,6 @@ describe('remixShowcasePostForRoute', () => {
     const result = await remixShowcasePostForRoute({
       actorUserId: 'user-1',
       referenceId: 'post-1',
-      userClient: userClient.client,
       serviceClient: serviceClient.client,
       dependencies,
     });
@@ -267,18 +292,17 @@ describe('remixShowcasePostForRoute', () => {
     consoleError.mockRestore();
   });
 
-  it('rejects missing linked generations before notifying the creator', async () => {
-    const userClient = createUserClientMock({
+  it('rejects missing linked generations without touching the counter or notifying', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const serviceClient = createServiceClientMock({
       generation: null,
       generationError: { message: 'not found' },
     });
-    const serviceClient = createServiceClientMock();
     const dependencies = createDependencies();
 
     const result = await remixShowcasePostForRoute({
       actorUserId: 'user-1',
       referenceId: 'post-1',
-      userClient: userClient.client,
       serviceClient: serviceClient.client,
       dependencies,
     });
@@ -288,9 +312,129 @@ describe('remixShowcasePostForRoute', () => {
       status: 404,
       body: { error: 'Linked generation not found' },
     });
-    expect(serviceClient.rpcMock).toHaveBeenCalledWith('increment_post_remix_count', {
-      p_post_id: 'post-1',
-    });
+    expect(serviceClient.rpcMock).not.toHaveBeenCalled();
     expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
+
+    consoleError.mockRestore();
+  });
+
+  it('allows a cross-user remix of a public generation', async () => {
+    const serviceClient = createServiceClientMock();
+    const dependencies = createDependencies();
+
+    const result = await remixShowcasePostForRoute({
+      actorUserId: 'someone-else',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(serviceClient.rpcMock).toHaveBeenCalled();
+  });
+
+  it('rejects a cross-user remix once the generation is no longer public', async () => {
+    const serviceClient = createServiceClientMock({
+      generation: { ...PUBLIC_CREATOR_GENERATION, is_public: false },
+    });
+    const dependencies = createDependencies();
+
+    const result = await remixShowcasePostForRoute({
+      actorUserId: 'someone-else',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 404,
+      body: { error: 'Linked generation not found' },
+    });
+    expect(serviceClient.rpcMock).not.toHaveBeenCalled();
+    expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
+  });
+
+  it('lets the owner remix their own generation even when it is private', async () => {
+    const serviceClient = createServiceClientMock({
+      generation: { ...PUBLIC_CREATOR_GENERATION, is_public: false },
+    });
+    const dependencies = createDependencies();
+
+    const result = await remixShowcasePostForRoute({
+      actorUserId: 'creator-1',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects generations that do not belong to the post creator', async () => {
+    const serviceClient = createServiceClientMock({
+      generation: { ...PUBLIC_CREATOR_GENERATION, user_id: 'unrelated-user' },
+    });
+    const dependencies = createDependencies();
+
+    const result = await remixShowcasePostForRoute({
+      actorUserId: 'someone-else',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 404,
+      body: { error: 'Linked generation not found' },
+    });
+  });
+
+  it('strips input-media settings for remixers when the creator has not shared them', async () => {
+    const serviceClient = createServiceClientMock({
+      generation: {
+        ...PUBLIC_CREATOR_GENERATION,
+        share_input_media_for_remix: false,
+        workflow_settings: {
+          model: 'nano-banana-2',
+          referenceImageUrls: ['https://cdn.example/private-face.png'],
+        },
+      },
+    });
+    const dependencies = createDependencies();
+
+    const result = await remixShowcasePostForRoute({
+      actorUserId: 'someone-else',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies,
+    });
+
+    expect(result.ok ? result.body.prefill.settings : null).toEqual({ model: 'nano-banana-2' });
+  });
+
+  it('keeps input-media settings when the owner remixes their own generation', async () => {
+    const settings = {
+      model: 'nano-banana-2',
+      referenceImageUrls: ['https://cdn.example/private-face.png'],
+    };
+    const serviceClient = createServiceClientMock({
+      generation: {
+        ...PUBLIC_CREATOR_GENERATION,
+        share_input_media_for_remix: false,
+        workflow_settings: settings,
+      },
+    });
+    const dependencies = createDependencies();
+
+    const result = await remixShowcasePostForRoute({
+      actorUserId: 'creator-1',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies,
+    });
+
+    expect(result.ok ? result.body.prefill.settings : null).toEqual(settings);
   });
 });

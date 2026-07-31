@@ -242,6 +242,20 @@ export default function ImmersivePreviewViewerScreen() {
     () => items.find((item) => item.id === unlockRemixOpenItemId) ?? null,
     [items, unlockRemixOpenItemId]
   );
+  // A feed refetch can drop the item from `items` while the sheet is open,
+  // which would blank the sheet mid-interaction. Keep the last resolved item
+  // so an open sheet always has content to render.
+  const lastUnlockRemixItemRef = useRef<ImmersivePreviewItem | null>(null);
+  useEffect(() => {
+    if (unlockRemixItem) {
+      lastUnlockRemixItemRef.current = unlockRemixItem;
+    } else if (!unlockRemixOpenItemId) {
+      lastUnlockRemixItemRef.current = null;
+    }
+  }, [unlockRemixItem, unlockRemixOpenItemId]);
+  const unlockRemixSheetItem = unlockRemixOpenItemId
+    ? unlockRemixItem ?? lastUnlockRemixItemRef.current
+    : null;
 
   useEffect(() => {
     if (!items.length || initialPositionReady) return;
@@ -450,21 +464,26 @@ export default function ImmersivePreviewViewerScreen() {
     }
 
     if (item.sourceType === 'showcase' && item.showcasePostId) {
-      const response = await api.remixShowcasePost(item.showcasePostId);
-      if (source === 'showcase-feed') {
-        recordViewerFeedEvent(item, 'remix_start');
-      }
-      const nativeHref = getNativeRemixCreateHref({
-        redirectTo: response.redirectTo,
-        recreateTool: item.recreateTool,
-        prompt: response.prefill?.prompt ?? item.recreatePrompt,
-      });
-      if (nativeHref) {
-        router.push(nativeHref as never);
-        return;
-      }
-      if (response.redirectTo) {
-        await Linking.openURL(`${env.siteUrl}${response.redirectTo}`);
+      try {
+        const response = await api.remixShowcasePost(item.showcasePostId);
+        if (source === 'showcase-feed') {
+          recordViewerFeedEvent(item, 'remix_start');
+        }
+        const nativeHref = getNativeRemixCreateHref({
+          redirectTo: response.redirectTo,
+          recreateTool: item.recreateTool,
+          prompt: response.prefill?.prompt ?? item.recreatePrompt,
+        });
+        if (nativeHref) {
+          router.push(nativeHref as never);
+          return;
+        }
+        if (response.redirectTo) {
+          await Linking.openURL(`${env.siteUrl}${response.redirectTo}`);
+          return;
+        }
+      } catch (error) {
+        Alert.alert('Could not start remix', error instanceof Error ? error.message : 'Please try again.');
         return;
       }
     }
@@ -733,7 +752,7 @@ export default function ImmersivePreviewViewerScreen() {
       ) : null}
       <UnlockRemixPrompt
         bottomInset={bottomInset}
-        item={unlockRemixItem}
+        item={unlockRemixSheetItem}
         onClose={() => setUnlockRemixOpenItemId(null)}
         onUnlocked={(item) => recreateItem(item)}
         visible={Boolean(unlockRemixOpenItemId)}

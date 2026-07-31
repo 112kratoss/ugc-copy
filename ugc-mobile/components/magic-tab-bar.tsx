@@ -2,7 +2,7 @@ import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { BlurView } from 'expo-blur';
 import { router } from 'expo-router';
 import { Bell, Home, Plus, Users, User } from 'lucide-react-native';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -29,6 +29,13 @@ export function MagicTabBar({ state, navigation }: BottomTabBarProps) {
   const { width } = useWindowDimensions();
   const [createMenuVisible, setCreateMenuVisible] = useState(false);
   const pendingCreateAction = useRef<CreateMenuActionId | null>(null);
+  const pendingActionFallback = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    // Unmounting mid-window (e.g. a root redirect) drops the pending action
+    // on purpose — navigating after an unrelated redirect would fight it.
+    if (pendingActionFallback.current) clearTimeout(pendingActionFallback.current);
+  }, []);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const metrics = getMagicTabBarMetrics(width, bottomInset);
   const activeRoute = state.routes[state.index]?.name;
@@ -64,12 +71,12 @@ export function MagicTabBar({ state, navigation }: BottomTabBarProps) {
     }
   };
 
-  const handleCreateMenuAction = (actionId: CreateMenuActionId) => {
-    pendingCreateAction.current = actionId;
-    setCreateMenuVisible(false);
-  };
-
   const completeCreateMenuAction = () => {
+    if (pendingActionFallback.current) {
+      clearTimeout(pendingActionFallback.current);
+      pendingActionFallback.current = null;
+    }
+
     const actionId = pendingCreateAction.current;
     if (!actionId) return;
     pendingCreateAction.current = null;
@@ -80,6 +87,16 @@ export function MagicTabBar({ state, navigation }: BottomTabBarProps) {
     }
 
     router.push(getCreateMenuActionHref('post') as never);
+  };
+
+  const handleCreateMenuAction = (actionId: CreateMenuActionId) => {
+    pendingCreateAction.current = actionId;
+    setCreateMenuVisible(false);
+    // Normally the menu's exit animation calls onExited, which delivers the
+    // action. An interrupted animation (backgrounding, reduce-motion flip)
+    // never completes, so back it up with a timer; delivery is idempotent.
+    if (pendingActionFallback.current) clearTimeout(pendingActionFallback.current);
+    pendingActionFallback.current = setTimeout(completeCreateMenuAction, 400);
   };
 
   return (

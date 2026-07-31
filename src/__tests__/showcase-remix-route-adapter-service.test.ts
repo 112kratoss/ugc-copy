@@ -135,7 +135,6 @@ describe('showcase remix route adapter service', () => {
       actorUserId: 'user-1',
       referenceId: 'post-1',
       serviceClient: adminSupabase,
-      userClient: userSupabase,
     });
   });
 });

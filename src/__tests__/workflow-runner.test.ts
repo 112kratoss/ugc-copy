@@ -13,7 +13,11 @@ import {
   type WorkflowCanvasRunStepRecord,
 } from '@/lib/workflow-canvas';
 
-const createServiceClientMock = vi.fn(() => ({ role: 'service' }));
+// The runner reads generations service-role (authenticated grants stop at the
+// resume projection), so the service client must serve the same state-backed
+// tables as the user client. Capture the latest built mock and hand it out.
+const lastSupabaseMockRef: { current: unknown } = { current: null };
+const createServiceClientMock = vi.fn(() => lastSupabaseMockRef.current ?? { role: 'service' });
 const resolveStoredMediaUrlMock = vi.fn(
   async (_adminClient: unknown, outputUrl: string) =>
     `https://signed.example.com/${encodeURIComponent(outputUrl)}`
@@ -270,7 +274,7 @@ function createAwaitingApprovalState(): RunnerTestState & {
 }
 
 function createSupabaseMock(state: RunnerTestState) {
-  return {
+  const mock = {
     from(table: string) {
       if (table === 'workflow_canvas_runs') {
         return {
@@ -405,6 +409,9 @@ function createSupabaseMock(state: RunnerTestState) {
       throw new Error(`Unexpected table access: ${table}`);
     },
   };
+
+  lastSupabaseMockRef.current = mock;
+  return mock;
 }
 
 describe('workflow-runner recovery', () => {

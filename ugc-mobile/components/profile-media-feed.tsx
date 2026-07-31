@@ -244,18 +244,23 @@ export function ProfileMediaFeedScreen() {
     }
 
     if (item.sourceType === 'showcase' && item.showcasePostId) {
-      const response = await api.remixShowcasePost(item.showcasePostId);
-      const nativeHref = getNativeRemixCreateHref({
-        redirectTo: response.redirectTo,
-        recreateTool: item.recreateTool,
-        prompt: response.prefill?.prompt ?? item.recreatePrompt,
-      });
-      if (nativeHref) {
-        router.push(nativeHref as never);
-        return;
-      }
-      if (response.redirectTo) {
-        await Linking.openURL(`${env.siteUrl}${response.redirectTo}`);
+      try {
+        const response = await api.remixShowcasePost(item.showcasePostId);
+        const nativeHref = getNativeRemixCreateHref({
+          redirectTo: response.redirectTo,
+          recreateTool: item.recreateTool,
+          prompt: response.prefill?.prompt ?? item.recreatePrompt,
+        });
+        if (nativeHref) {
+          router.push(nativeHref as never);
+          return;
+        }
+        if (response.redirectTo) {
+          await Linking.openURL(`${env.siteUrl}${response.redirectTo}`);
+          return;
+        }
+      } catch (error) {
+        Alert.alert('Could not start remix', error instanceof Error ? error.message : 'Please try again.');
         return;
       }
     }

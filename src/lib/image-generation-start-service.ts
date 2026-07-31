@@ -88,7 +88,7 @@ export async function startImageGenerationForRoute({
   }, { platform: request.headers.get('x-magicbooklet-client') === 'mobile' ? 'mobile' : 'web' });
 
   const sourceGenerationId = await resolveSourceGenerationId(
-    supabase,
+    adminSupabase,
     userId,
     readOptionalString(body.sourceGenerationId)
   );

@@ -68,7 +68,6 @@ async function handleShowcaseRemixPOST(
       actorUserId: user.id,
       referenceId,
       serviceClient: adminSupabase,
-      userClient: supabase,
     });
 
     if (!result.ok) {

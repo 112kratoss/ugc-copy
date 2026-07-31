@@ -601,7 +601,7 @@ export async function startUnifiedGenerationForRoute(
 
   const resolveSource = dependencies.resolveSource ?? resolveSourceGenerationId;
   const sourceGenerationId = await resolveSource(
-    supabase,
+    adminSupabase,
     userId,
     parsed.sourceGenerationId,
   );

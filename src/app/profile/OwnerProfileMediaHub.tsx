@@ -37,6 +37,7 @@ import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import { getBundleAccessLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
 import { buildShowcaseDetailPath } from '@/lib/share';
+import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import type {
   ShowcaseCreator,
   ShowcaseFeedItem,
@@ -911,13 +912,8 @@ export default function OwnerProfileMediaHub({
           onToggleSave={activeSaveState.toggleSave}
           onRemix={async (id) => {
             if (!accessToken) return authRequired();
-            const response = await fetch('/api/showcase/remix', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-              body: JSON.stringify({ generationId: id }),
-            });
-            const payload = await response.json();
-            if (response.ok && payload.redirectTo) router.push(payload.redirectTo);
+            const { redirectTo } = await requestShowcaseRemix({ accessToken, generationId: id });
+            router.push(redirectTo);
           }}
           buildDetailPath={(id, section) => buildShowcaseDetailPath(id, {
             from: 'profile',

@@ -13,7 +13,7 @@ export class SourceGenerationValidationError extends Error {
 }
 
 export async function resolveSourceGenerationId(
-  supabase: SupabaseClient,
+  adminSupabase: SupabaseClient,
   userId: string,
   rawSourceGenerationId: unknown
 ): Promise<string | null> {
@@ -29,11 +29,12 @@ export async function resolveSourceGenerationId(
     throw new SourceGenerationValidationError('Source generation not found or inaccessible.');
   }
 
-  // Visibility is enforced by the ownership/public check below (and by RLS for
-  // user-scoped clients). Keeping the filter out of the query avoids
-  // interpolating values into a PostgREST `.or()` expression, which
-  // postgrest-js does not escape.
-  const { data, error } = await supabase
+  // Callers MUST pass a service-role client: authenticated clients hold no
+  // read grant on `is_public`, so a user-scoped read errors for every row.
+  // The ownership/public check below is therefore the sole visibility gate.
+  // Keeping the filter out of the query also avoids interpolating values into
+  // a PostgREST `.or()` expression, which postgrest-js does not escape.
+  const { data, error } = await adminSupabase
     .from('generations')
     .select('id, user_id, is_public')
     .eq('id', sourceGenerationId)

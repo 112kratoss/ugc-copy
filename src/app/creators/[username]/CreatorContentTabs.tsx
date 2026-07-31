@@ -24,6 +24,7 @@ import type { CreatorProfilePageData } from '@/lib/creator-profile';
 import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { getBundleAccessLabel } from '@/lib/post-resource-bundles';
 import { buildShowcaseDetailPath } from '@/lib/share';
+import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
 
 function ShowcaseReelLoadingFallback() {
@@ -333,18 +334,15 @@ export function CreatorContentTabs({
       return;
     }
     try {
-      const response = await fetch('/api/showcase/remix', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ generationId: id }),
+      const { redirectTo } = await requestShowcaseRemix({
+        accessToken: session.access_token,
+        generationId: id,
       });
-      const payload = await response.json();
-      if (response.ok && payload.redirectTo) router.push(payload.redirectTo);
+      router.push(redirectTo);
     } catch (error) {
       console.error('Creator profile remix failed:', error);
+      // Rethrow so the reel viewer surfaces the reason to the user.
+      throw error;
     }
   };
 

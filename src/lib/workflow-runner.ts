@@ -483,28 +483,32 @@ async function loadWorkflowRunState(params: {
 }
 
 async function hydrateRunSteps(params: {
-  supabase: SupabaseClient;
   steps: HydratedRunStep[];
   syncGenerationState?: boolean;
 }) {
-  const { supabase, steps, syncGenerationState = false } = params;
+  const { steps, syncGenerationState = false } = params;
   const generationIds = steps.map((step) => step.generation_id).filter(Boolean) as string[];
 
   if (generationIds.length === 0) {
     return steps;
   }
 
+  // The ids come from run steps the caller already loaded through the
+  // user-scoped client, so ownership is established. The reads below need
+  // columns (output_url, workflow_settings) that authenticated clients hold no
+  // grant for, so they must run service-role.
+  const adminSupabase = createServiceClient();
+
   if (syncGenerationState) {
     await syncGenerationStatuses({
-      supabase,
-      creditSupabase: createServiceClient(),
+      supabase: adminSupabase,
+      creditSupabase: adminSupabase,
       generationIds,
     });
   }
 
-  const adminSupabase = createServiceClient();
   const generationMap = new Map<string, GenerationStatusSnapshot>();
-  const { data: generations } = await supabase
+  const { data: generations } = await adminSupabase
     .from('generations')
     .select('id, status, output_url')
     .in('id', generationIds);
@@ -1062,7 +1066,6 @@ async function advanceWorkflowRunProgress(params: {
     runId,
   });
   const hydratedSteps = await hydrateRunSteps({
-    supabase,
     steps: originalSteps,
     syncGenerationState: true,
   });
@@ -1308,7 +1311,6 @@ export async function getWorkflowRunDetails(params: {
   }
 
   const hydratedSteps = await hydrateRunSteps({
-    supabase,
     steps,
     syncGenerationState: false,
   });

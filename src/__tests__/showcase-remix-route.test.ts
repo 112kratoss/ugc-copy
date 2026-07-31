@@ -62,30 +62,10 @@ describe('/api/showcase/remix route', () => {
     });
     userFromMock.mockReset();
     userFromMock.mockImplementation((table: string) => {
-      if (table !== 'generations') {
-        throw new Error(`Unexpected table: ${table}`);
-      }
-
-      return {
-        select() {
-          return {
-            eq() {
-              return {
-                async single() {
-                  return {
-                    data: {
-                      id: 'gen-1',
-                      prompt: 'Create a clean UGC product reveal.',
-                      workflow_settings: { model: 'nano-banana-2' },
-                    },
-                    error: null,
-                  };
-                },
-              };
-            },
-          };
-        },
-      };
+      // The hardened grants leave authenticated clients without read access to
+      // generation prompts/settings, so the route must never reach the user
+      // client for table reads. This mock throwing is the regression guard.
+      throw new Error(`Unexpected user-client table read: ${table}`);
     });
     const userClient = {
       auth: { getUser: getUserMock },
@@ -114,7 +94,39 @@ describe('/api/showcase/remix route', () => {
       return Promise.resolve({ data: true, error: null });
     });
     createServiceClientMock.mockReset();
-    createServiceClientMock.mockReturnValue({ rpc: serviceRpcMock });
+    createServiceClientMock.mockReturnValue({
+      rpc: serviceRpcMock,
+      from: (table: string) => {
+        if (table !== 'generations') {
+          throw new Error(`Unexpected table: ${table}`);
+        }
+
+        return {
+          select() {
+            return {
+              eq() {
+                return {
+                  async maybeSingle() {
+                    return {
+                      data: {
+                        id: 'gen-1',
+                        user_id: 'creator-1',
+                        is_public: true,
+                        share_input_media_for_remix: true,
+                        category: 'image',
+                        prompt: 'Create a clean UGC product reveal.',
+                        workflow_settings: { model: 'nano-banana-2' },
+                      },
+                      error: null,
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+    });
     findPublicPostReferenceByIdOrGenerationIdMock.mockReset();
     findPublicPostReferenceByIdOrGenerationIdMock.mockResolvedValue({
       id: 'post-1',
@@ -129,7 +141,7 @@ describe('/api/showcase/remix route', () => {
     vi.restoreAllMocks();
   });
 
-  it('remixes public generation-backed posts through the shared user client', async () => {
+  it('remixes public generation-backed posts through the service client', async () => {
     const response = await postRemix({ postId: 'post-1' });
 
     await expect(response.json()).resolves.toEqual({
@@ -144,6 +156,7 @@ describe('/api/showcase/remix route', () => {
     expectPrivateNoStoreTraceHeaders(response, 'showcase-remix-success-1');
     expect(createUserClientMock).toHaveBeenCalledTimes(1);
     expect(rawCreateClientMock).not.toHaveBeenCalled();
+    expect(userFromMock).not.toHaveBeenCalled();
     expect(serviceRpcMock).toHaveBeenCalledWith('increment_post_remix_count', {
       p_post_id: 'post-1',
     });

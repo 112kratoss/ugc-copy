@@ -276,6 +276,8 @@ export default function ShowcaseReelViewer({
   const [unlockWorkingAction, setUnlockWorkingAction] = useState<ReelUnlockAction>(null);
   const [unlockError, setUnlockError] = useState<string | null>(null);
   const [unlockNotice, setUnlockNotice] = useState<string | null>(null);
+  const [remixWorkingItemId, setRemixWorkingItemId] = useState<string | null>(null);
+  const [remixError, setRemixError] = useState<string | null>(null);
   const [unlockSuccessItemId, setUnlockSuccessItemId] = useState<string | null>(null);
   const [unlockedResources, setUnlockedResources] = useState<ReelBundleResources | null>(null);
   const [showUnlockedDetails, setShowUnlockedDetails] = useState(false);
@@ -309,6 +311,7 @@ export default function ShowcaseReelViewer({
     setUnlockWorkingAction(null);
     setUnlockError(null);
     setUnlockNotice(null);
+    setRemixError(null);
     setShowUnlockedDetails(false);
     setActiveMediaIndex(0);
     setTransitionDirection(direction);
@@ -1719,11 +1722,27 @@ export default function ShowcaseReelViewer({
           {item.canRemix ? (
             <button
               type="button"
-              onClick={() => void onRemix(item.id)}
-              className="ui-focus-ring inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary)] text-xs font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
+              onClick={() => {
+                if (remixWorkingItemId) return;
+                setRemixError(null);
+                setRemixWorkingItemId(item.id);
+                void Promise.resolve(onRemix(item.id))
+                  .catch((error: unknown) => {
+                    setRemixError(
+                      error instanceof Error && error.message
+                        ? error.message
+                        : 'Could not start the remix. Please try again.',
+                    );
+                  })
+                  .finally(() => setRemixWorkingItemId(null));
+              }}
+              disabled={remixWorkingItemId !== null}
+              className="ui-focus-ring inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary)] text-xs font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-60 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
             >
-              <Wand2 size={20} className="h-5 w-5 shrink-0" />
-              <span>Remix</span>
+              {remixWorkingItemId === item.id
+                ? <Loader2 size={20} className="h-5 w-5 shrink-0 animate-spin" />
+                : <Wand2 size={20} className="h-5 w-5 shrink-0" />}
+              <span>{remixWorkingItemId === item.id ? 'Starting…' : 'Remix'}</span>
             </button>
           ) : null}
         </aside>
@@ -1746,6 +1765,11 @@ export default function ShowcaseReelViewer({
             ref={detailsScrollerRef}
             className="app-scrollbar min-h-0 flex-1 overflow-y-auto p-5 pb-6"
           >
+            {remixError ? (
+              <div role="alert" className="mb-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                {remixError}
+              </div>
+            ) : null}
             <AnimatePresence mode="wait" custom={transitionDirection}>
               <motion.div
                 key={item.id}

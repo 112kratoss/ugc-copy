@@ -41,6 +41,7 @@ import {
     type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 import { buildShowcaseDetailPath } from '@/lib/share';
+import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
 import { isTextOnlyPost } from '@/lib/post-feed-presentation';
 import type { SourceToolOption } from '@/lib/source-tools';
@@ -1098,37 +1099,33 @@ export default function ShowcaseClient({
         }
 
         try {
-            const response = await fetch('/api/showcase/remix', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${session.access_token}`,
-                },
-                body: JSON.stringify({ generationId: id }),
+            const { redirectTo } = await requestShowcaseRemix({
+                accessToken: session.access_token,
+                generationId: id,
             });
-            const data = await response.json();
 
-            if (data.success && data.redirectTo) {
-                const remixedItem = feedItemsForEventsRef.current.find((candidate) => candidate.id === id);
-                if (remixedItem) {
-                    void sendShowcaseFeedEvent({
-                        item: remixedItem,
-                        eventType: 'remix_start',
-                        sourceSurface,
-                        accessToken: session.access_token,
-                        feedSessionId: feedSessionIdForEventsRef.current,
-                        fallbackPosition: feedItemsForEventsRef.current.findIndex(
-                            (candidate) => candidate.id === id
-                        ),
-                        metadata: {
-                            redirectTo: data.redirectTo,
-                        },
-                    }).catch(() => undefined);
-                }
-                router.push(data.redirectTo);
+            const remixedItem = feedItemsForEventsRef.current.find((candidate) => candidate.id === id);
+            if (remixedItem) {
+                void sendShowcaseFeedEvent({
+                    item: remixedItem,
+                    eventType: 'remix_start',
+                    sourceSurface,
+                    accessToken: session.access_token,
+                    feedSessionId: feedSessionIdForEventsRef.current,
+                    fallbackPosition: feedItemsForEventsRef.current.findIndex(
+                        (candidate) => candidate.id === id
+                    ),
+                    metadata: {
+                        redirectTo,
+                    },
+                }).catch(() => undefined);
             }
+            router.push(redirectTo);
         } catch (error) {
             console.error('Remix failed:', error);
+            // Rethrow so the reel viewer surfaces the reason instead of the
+            // tap silently doing nothing.
+            throw error;
         }
     };
 

@@ -8,6 +8,7 @@ import {
   dispatchCatalogGenerationAdapter,
   loadUnifiedGenerationCatalog,
   parseUnifiedGenerationRequest,
+  startUnifiedGenerationForRoute,
 } from '@/lib/unified-generation-start-service';
 
 describe('unified generation start service', () => {
@@ -185,5 +186,74 @@ describe('unified generation start service', () => {
     expect(startImage).not.toHaveBeenCalled();
     expect(startVideo).not.toHaveBeenCalled();
     expect(startMotion).not.toHaveBeenCalled();
+  });
+
+  it('resolves the remix source with the service-role client', async () => {
+    // Grants on generations only allow service-role reads of is_public, so the
+    // route must hand resolveSource the admin client — passing the user client
+    // is the regression that broke every remix-sourced start in production.
+    const userSupabase = { label: 'user-client' };
+    const adminSupabase = { label: 'admin-client' };
+    const rateLimitStop = new Error('stop-before-idempotency');
+
+    const snapshot = {
+      catalog: {
+        schemaVersion: 2,
+        revision: 'catalog-v2',
+        defaults: { image: null, video: 'catalog-only-video', motion: null },
+        models: [],
+      },
+      operations: new Map([['catalog-only-video', {
+        modelId: 'catalog-only-video',
+        kind: 'video',
+        adapterKey: 'kie-task-v1',
+        providerModelMap: { default: 'provider/catalog-only-video' },
+        adapterConfig: {},
+        pricingStrategy: 'flat',
+        pricingConfig: { credits: 10 },
+        validationStrategy: 'descriptor-rules-v1',
+        validationConfig: {},
+        verificationConfig: {},
+      }]]),
+      source: 'database' as const,
+      releaseId: 'release-v2',
+      releaseSchemaVersion: 2,
+    };
+    const resolveSource = vi.fn(async (_client: unknown, _userId: string, _raw: unknown) => null);
+
+    await expect(startUnifiedGenerationForRoute(
+      {
+        request: new Request('http://localhost/api/generations'),
+        body: {
+          kind: 'video',
+          modelId: 'catalog-only-video',
+          catalogRevision: 'catalog-v2',
+          prompt: 'A lighthouse in a storm',
+          settings: { duration: 5 },
+          sourceGenerationId: '3f8f0c70-9a54-4f6e-8f5a-1c2d3e4f5a6b',
+        },
+        userId: 'user-1',
+        supabase: userSupabase as never,
+        adminSupabase: adminSupabase as never,
+      },
+      {
+        loadCatalog: vi.fn(async () => snapshot) as never,
+        quoteModel: vi.fn(() => ({
+          modelId: 'catalog-only-video',
+          catalogRevision: 'catalog-v2',
+          normalizedSettings: { duration: 5 },
+          costCredits: 10,
+        })) as never,
+        resolveSource,
+        enforceRateLimit: vi.fn(async () => {
+          throw rateLimitStop;
+        }) as never,
+      },
+    )).rejects.toBe(rateLimitStop);
+
+    expect(resolveSource).toHaveBeenCalledTimes(1);
+    expect(resolveSource.mock.calls[0][0]).toBe(adminSupabase);
+    expect(resolveSource.mock.calls[0][1]).toBe('user-1');
+    expect(resolveSource.mock.calls[0][2]).toBe('3f8f0c70-9a54-4f6e-8f5a-1c2d3e4f5a6b');
   });
 });
