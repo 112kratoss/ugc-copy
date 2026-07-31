@@ -170,8 +170,7 @@ jobs:
           set -euo pipefail
           view="$RUNNER_TEMP/eas-build-view-${{ matrix.platform }}.json"
           npx --yes eas-cli@21.2.0 build:view "$BUILD_ID" \
-            --json \
-            --non-interactive > "$view"
+            --json > "$view"
           VIEW_PATH="$view" node - <<'NODE'
           const fs = require('node:fs');
           const build = JSON.parse(fs.readFileSync(process.env.VIEW_PATH, 'utf8'));

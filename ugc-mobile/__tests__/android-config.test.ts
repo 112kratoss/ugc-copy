@@ -45,6 +45,11 @@ describe('Android native network config', () => {
       key: 'android.enableShrinkResourcesInReleaseBuilds',
       value: 'false',
     });
+    expect(properties).toContainEqual({
+      type: 'property',
+      key: 'org.gradle.jvmargs',
+      value: '-Xmx3072m -XX:MaxMetaspaceSize=1536m',
+    });
 
     const optimizedBuildGradle = `release {
       proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"

@@ -9,6 +9,7 @@ const PLUGIN_VERSION = '1.0.0';
 const RELEASE_PROPERTIES = {
   'android.enableMinifyInReleaseBuilds': 'false',
   'android.enableShrinkResourcesInReleaseBuilds': 'false',
+  'org.gradle.jvmargs': '-Xmx3072m -XX:MaxMetaspaceSize=1536m',
 };
 
 function withAndroidReleaseSafety(config) {
