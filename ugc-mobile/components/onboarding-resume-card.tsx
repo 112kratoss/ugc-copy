@@ -45,6 +45,9 @@ export function OnboardingResumeCard({ compact = false }: { compact?: boolean })
       ? 'Choose a goal and open a focused starter workspace. You can skip at any time.'
       : 'Resume where you stopped without losing your selected creation goal.';
 
+  const iconSize = compact ? 34 : 48;
+  const glyphSize = compact ? 17 : 23;
+
   const open = async () => {
     const lastStep = rewardPending ? 5 : showOptionalIntro ? 0 : state.lastStep;
     await update({ status: 'in_progress', lastStep });
@@ -58,16 +61,16 @@ export function OnboardingResumeCard({ compact = false }: { compact?: boolean })
       onPress={() => void open()}
       style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
     >
-      <Card accent="primary" padding={compact ? 'sm' : 'md'} style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-        <View style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.selectedStrong }}>
-          {rewardPending ? <Gift size={23} color={appTheme.colors.primary} /> : <Sparkles size={23} color={appTheme.colors.primary} />}
+      <Card accent="primary" padding={compact ? 'sm' : 'md'} style={{ flexDirection: 'row', alignItems: 'center', gap: compact ? 11 : 14 }}>
+        <View style={{ width: iconSize, height: iconSize, borderRadius: iconSize / 2, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.selectedStrong }}>
+          {rewardPending ? <Gift size={glyphSize} color={appTheme.colors.primary} /> : <Sparkles size={glyphSize} color={appTheme.colors.primary} />}
         </View>
-        <View style={{ flex: 1, gap: 4 }}>
-          <Kicker color="primary">Creator setup</Kicker>
-          <AppText variant="cardTitle">{title}</AppText>
-          <AppText variant="caption" color="muted">{body}</AppText>
+        <View style={{ flex: 1, gap: compact ? 2 : 4 }}>
+          {compact ? null : <Kicker color="primary">Creator setup</Kicker>}
+          <AppText variant={compact ? 'button' : 'cardTitle'}>{title}</AppText>
+          <AppText variant="caption" color="muted" numberOfLines={compact ? 1 : undefined}>{body}</AppText>
         </View>
-        <ArrowRight size={20} color={appTheme.colors.primary} />
+        <ArrowRight size={compact ? 18 : 20} color={appTheme.colors.primary} />
       </Card>
     </Pressable>
   );

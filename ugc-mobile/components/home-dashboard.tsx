@@ -106,6 +106,7 @@ const TOOL_PREVIEW_IMAGES = {
 } as const;
 
 const LOAD_MORE_COOLDOWN_MS = 800;
+const TOP_SLIDE_HEIGHT = 170;
 
 export function HomeDashboard() {
   const {
@@ -128,7 +129,7 @@ export function HomeDashboard() {
   const reduceMotion = useReducedMotion();
   const horizontalPadding = isCompact ? 15 : 18;
   const contentWidth = pageWidth - horizontalPadding * 2;
-  const slideWidth = Math.round(contentWidth * 0.78);
+  const slideWidth = Math.round(contentWidth * 0.82);
 
   const [menuVisible, setMenuVisible] = useState(false);
   const [activeChipId, setActiveChipId] = useState<HomeFeedChipId>('for-you');
@@ -441,7 +442,11 @@ export function HomeDashboard() {
         recreateTool: item.category === 'video' ? 'video' : 'image',
         prompt: item.prompt || item.body,
       });
-      if (href) router.push(href as never);
+      if (href) {
+        router.push(href as never);
+      } else {
+        Alert.alert('Could not start remix', 'This post cannot be opened in the creator tools right now.');
+      }
     } catch (error) {
       Alert.alert('Could not start remix', error instanceof Error ? error.message : 'Please try again.');
     }
@@ -646,7 +651,7 @@ export function HomeDashboard() {
             />
 
             <View style={{ paddingHorizontal: horizontalPadding }}>
-              <OnboardingResumeCard />
+              <OnboardingResumeCard compact />
             </View>
 
             <FeedChips
@@ -845,7 +850,7 @@ function TopSlider({
       snapToAlignment="start"
       disableIntervalMomentum
       decelerationRate="fast"
-      style={{ height: 150 }}
+      style={{ height: TOP_SLIDE_HEIGHT }}
       contentContainerStyle={{ paddingHorizontal: horizontalPadding }}
       renderItem={({ item: slide }) => (
         <View style={{ marginRight: gap }}>
@@ -885,7 +890,7 @@ function TopSlide({
       <View
         style={{
           width,
-          height: 150,
+          height: TOP_SLIDE_HEIGHT,
           borderRadius: 20,
           borderCurve: 'continuous',
           borderWidth: 1,
@@ -904,7 +909,7 @@ function TopSlide({
                 : 'Creator workspace'}
             </Text>
           </View>
-          <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82} style={{ color: DASHBOARD_COLORS.text, fontSize: 19, lineHeight: 24, fontWeight: '800', letterSpacing: -0.4 }}>
+          <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82} style={{ color: DASHBOARD_COLORS.text, fontSize: 22, lineHeight: 27, fontWeight: '800', letterSpacing: -0.45 }}>
             {title}
           </Text>
         </View>
@@ -943,7 +948,7 @@ function TopSlide({
       >
         <View
           style={{
-            height: 150,
+            height: TOP_SLIDE_HEIGHT,
             borderRadius: 20,
             borderCurve: 'continuous',
             borderWidth: 1,
@@ -982,7 +987,7 @@ function TopSlide({
     >
       <View
         style={{
-          height: 150,
+          height: TOP_SLIDE_HEIGHT,
           borderRadius: 20,
           borderCurve: 'continuous',
           borderWidth: 1,
