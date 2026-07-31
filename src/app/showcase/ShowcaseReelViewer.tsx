@@ -1176,7 +1176,7 @@ export default function ShowcaseReelViewer({
                 Copy
               </button>
             </div>
-            <p className="mt-3 max-h-40 overflow-y-auto whitespace-pre-wrap pr-2 text-sm leading-7 text-zinc-200 [overflow-wrap:anywhere] app-scrollbar">
+            <p className="mt-3 max-h-56 overflow-y-auto whitespace-pre-wrap pr-2 text-sm leading-7 text-zinc-200 [overflow-wrap:anywhere] app-scrollbar">
               {promptText}
             </p>
           </div>
@@ -1546,7 +1546,12 @@ export default function ShowcaseReelViewer({
         </div>
       </header>
 
-      <div className="relative z-10 grid h-[calc(100dvh-3.5rem)] min-h-0 grid-rows-[minmax(0,1fr)_auto_minmax(180px,0.45fr)] gap-3 px-3 pb-3 pt-3 lg:grid-cols-[minmax(0,1fr)_78px_390px] lg:grid-rows-none lg:px-5">
+      {/*
+        The media column caps at max-w-5xl, so past ~1400px it just accumulates
+        dead space. Let the details rail take that slack instead of staying
+        pinned at 390px — below xl it keeps the original fixed width.
+      */}
+      <div className="relative z-10 grid h-[calc(100dvh-3.5rem)] min-h-0 grid-rows-[minmax(0,1fr)_auto_minmax(180px,0.45fr)] gap-3 px-3 pb-3 pt-3 lg:grid-cols-[minmax(0,1fr)_78px_390px] lg:grid-rows-none lg:px-5 xl:grid-cols-[minmax(0,1fr)_78px_clamp(390px,27vw,520px)]">
         <section className="relative min-h-0 overflow-hidden rounded-[28px] border border-white/10 bg-black shadow-[0_26px_90px_rgba(0,0,0,0.5)]">
           <div className="absolute left-4 top-4 z-10 flex flex-wrap items-center gap-2">
             <span className="rounded-full border border-white/10 bg-black/55 px-3 py-1.5 text-xs font-semibold text-zinc-100 backdrop-blur-md">
