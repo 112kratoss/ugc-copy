@@ -69,6 +69,7 @@ import type {
   PostResourceRemixUse,
   PostResourceKind,
 } from '@/lib/post-resource-bundles';
+import { buildGenerationRecipeResourceItems } from '@/lib/generation-paywall';
 import {
   buildLegacyGenerationInputMedia,
   loadGenerationInputMediaMap,
@@ -190,6 +191,9 @@ interface GenerationRecipePostRow extends LinkedPostRow {
 
 interface GenerationRecipeRow {
   id: string;
+  user_id: string | null;
+  is_public: boolean | null;
+  share_input_media_for_remix: boolean | null;
   model: string | null;
   category: string | null;
   prompt: string | null;
@@ -715,7 +719,7 @@ async function loadGenerationRecipeRow(
 ): Promise<GenerationRecipeRow | null> {
   const { data, error } = await adminSupabase
     .from('generations')
-    .select('id, model, category, prompt, workflow_settings')
+    .select('id, user_id, is_public, share_input_media_for_remix, model, category, prompt, workflow_settings')
     .eq('id', generationId)
     .maybeSingle();
 
@@ -725,6 +729,51 @@ async function loadGenerationRecipeRow(
   }
 
   return (data as GenerationRecipeRow | null) ?? null;
+}
+
+async function loadEligibleGenerationRecipeInputMedia(params: {
+  adminSupabase: SupabaseClient;
+  postId: string;
+  generationId: string;
+  urlMode: 'signed' | 'none';
+}): Promise<{ generation: GenerationRecipeRow; inputMedia: GenerationInputMediaItem[] } | null> {
+  const { adminSupabase } = params;
+  const post = await loadGenerationRecipePostRow(adminSupabase, params.postId);
+  if (!post || !isGenerationRecipePostEligible(post) || !post.user_id || post.generation_id !== params.generationId) {
+    return null;
+  }
+
+  const generation = await loadGenerationRecipeRow(adminSupabase, params.generationId);
+  if (!generation) {
+    return null;
+  }
+
+  // A post must not surface a third party's inputs: the linked generation has
+  // to belong to the post creator.
+  if (generation.user_id && generation.user_id !== post.user_id) {
+    return null;
+  }
+
+  const inputMediaMap = await loadGenerationInputMediaMap({
+    supabase: adminSupabase,
+    generationIds: [params.generationId],
+    urlMode: params.urlMode,
+  });
+  const durableInputMedia = inputMediaMap.get(params.generationId) ?? [];
+
+  if (durableInputMedia.length > 0) {
+    return { generation, inputMedia: durableInputMedia };
+  }
+
+  const legacyInputMedia = await buildLegacyGenerationInputMedia({
+    supabase: adminSupabase,
+    generationId: generation.id,
+    ownerUserId: post.user_id,
+    category: generation.category ?? post.category,
+    workflowSettings: normalizeWorkflowSettings(generation.workflow_settings) ?? {},
+  });
+
+  return { generation, inputMedia: legacyInputMedia };
 }
 
 export async function loadGenerationRecipeRemixInputMediaByPostId(params: {
@@ -747,34 +796,14 @@ export async function loadGenerationRecipeRemixInputMediaByPostId(params: {
     return [];
   }
 
-  const post = await loadGenerationRecipePostRow(adminSupabase, params.postId);
-  if (!post || !isGenerationRecipePostEligible(post) || !post.user_id || post.generation_id !== params.generationId) {
-    return [];
-  }
-
-  const generation = await loadGenerationRecipeRow(adminSupabase, params.generationId);
-  if (!generation) {
-    return [];
-  }
-
-  const inputMediaMap = await loadGenerationInputMediaMap({
-    supabase: adminSupabase,
-    generationIds: [params.generationId],
+  const eligible = await loadEligibleGenerationRecipeInputMedia({
+    adminSupabase,
+    postId: params.postId,
+    generationId: params.generationId,
     urlMode: 'signed',
   });
-  const durableInputMedia = inputMediaMap.get(params.generationId) ?? [];
 
-  if (durableInputMedia.length > 0) {
-    return durableInputMedia;
-  }
-
-  return buildLegacyGenerationInputMedia({
-    supabase: adminSupabase,
-    generationId: generation.id,
-    ownerUserId: post.user_id,
-    category: generation.category ?? post.category,
-    workflowSettings: normalizeWorkflowSettings(generation.workflow_settings) ?? {},
-  });
+  return eligible?.inputMedia ?? [];
 }
 
 async function buildPriceQuote(
@@ -1858,6 +1887,46 @@ export async function getPostResourceBundleDetailByPostId(
     return null;
   }
   const normalizedResources = normalizeResources(row);
+
+  // Bundles do not persist the creation's reference media as items; the saved
+  // references live in generation_input_media and are surfaced here at read
+  // time, as the recipe layer did before it was folded into stored bundles.
+  // The gate is entitlement (viewerCanAccess covers owner, free unlock, and
+  // paid purchase) plus the creator's remix opt-in on the bundle; for
+  // non-owners the generation must also still be public, which is how a
+  // moderation take-down retracts it. share_input_media_for_remix is
+  // deliberately not consulted here — it governs restoring these files into a
+  // viewer's own remix (/api/remix-source), not seeing them inside an unlock
+  // they are entitled to. Failing to load references must degrade to the
+  // bundle without them, never take the whole unlock down.
+  if (viewerCanAccess && row.allow_remix && hydrated.post?.generationId) {
+    try {
+      const eligible = await loadEligibleGenerationRecipeInputMedia({
+        adminSupabase,
+        postId,
+        generationId: hydrated.post.generationId,
+        urlMode: 'none',
+      });
+      const generation = eligible?.generation ?? null;
+      const canViewReferences = Boolean(
+        generation && (viewerIsOwner || generation.is_public === true),
+      );
+      if (eligible && canViewReferences && eligible.inputMedia.length > 0) {
+        const referenceItems = buildGenerationRecipeResourceItems({
+          promptText: null,
+          notesMarkdown: null,
+          allowRemix: false,
+          inputMedia: eligible.inputMedia,
+        });
+        normalizedResources.items = mergeResourceItems(
+          normalizedResources.items ?? [],
+          referenceItems,
+        );
+      }
+    } catch (error) {
+      logBackendError('post_resource_recipe_reference_load_failed', { error: error });
+    }
+  }
   const remix = resolvePostRemixCapability({
     generationId: hydrated.post?.generationId ?? null,
     postFormat: hydrated.post?.postFormat ?? null,

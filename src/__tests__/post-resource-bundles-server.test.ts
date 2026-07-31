@@ -28,6 +28,9 @@ type BundleRow = {
 let bundleRow: BundleRow | null;
 let generationRow: {
   id: string;
+  user_id: string | null;
+  is_public: boolean | null;
+  share_input_media_for_remix: boolean | null;
   model: string | null;
   category: string | null;
   prompt: string | null;
@@ -310,6 +313,9 @@ describe('post resource bundle server access', () => {
     };
     generationRow = {
       id: 'gen-1',
+      user_id: 'owner-1',
+      is_public: true,
+      share_input_media_for_remix: true,
       model: 'nano-banana-2',
       category: 'image',
       prompt: 'Public generated prompt',
@@ -440,6 +446,171 @@ describe('post resource bundle server access', () => {
       generationId: 'gen-1',
       viewerUserId: 'viewer-1',
     })).resolves.toEqual([]);
+  });
+
+  it('surfaces saved references in the unlocked bundle after purchase', async () => {
+    bundleRow = {
+      ...(bundleRow as BundleRow),
+      access_mode: 'paid',
+      price_usd_cents: 900,
+      allow_remix: true,
+    };
+    viewerHasPurchased = true;
+    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+    const detail = await getPostResourceBundleDetailByPostId('post-1', {
+      viewerUserId: 'viewer-1',
+    });
+
+    expect(detail?.viewerCanAccess).toBe(true);
+    expect(detail?.resources?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'reference_image',
+        storagePath: 'generation_inputs/owner-1/gen-1/00-reference-image.png',
+      }),
+    ]));
+  });
+
+  it('shows buyers the references even when remix restoration is not shared', async () => {
+    // share_input_media_for_remix gates restoring the files into a remix, not
+    // seeing them in an unlock the viewer paid for — no product surface sets
+    // the flag today, so gating display on it would hide references from
+    // every buyer.
+    bundleRow = {
+      ...(bundleRow as BundleRow),
+      access_mode: 'paid',
+      price_usd_cents: 900,
+      allow_remix: true,
+    };
+    generationRow = {
+      ...(generationRow as NonNullable<typeof generationRow>),
+      share_input_media_for_remix: false,
+    };
+    viewerHasPurchased = true;
+    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+    const detail = await getPostResourceBundleDetailByPostId('post-1', {
+      viewerUserId: 'viewer-1',
+    });
+
+    expect(detail?.viewerCanAccess).toBe(true);
+    expect(detail?.resources?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'reference_image',
+        storagePath: 'generation_inputs/owner-1/gen-1/00-reference-image.png',
+      }),
+    ]));
+  });
+
+  it('withholds live references from non-owners once the generation is no longer public', async () => {
+    bundleRow = {
+      ...(bundleRow as BundleRow),
+      access_mode: 'paid',
+      price_usd_cents: 900,
+      allow_remix: true,
+    };
+    generationRow = {
+      ...(generationRow as NonNullable<typeof generationRow>),
+      is_public: false,
+    };
+    viewerHasPurchased = true;
+    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+    const detail = await getPostResourceBundleDetailByPostId('post-1', {
+      viewerUserId: 'viewer-1',
+    });
+
+    expect(detail?.viewerCanAccess).toBe(true);
+    expect(detail?.resources?.items?.some(
+      (item) => item.storagePath === 'generation_inputs/owner-1/gen-1/00-reference-image.png',
+    )).toBe(false);
+  });
+
+  it('always shows the owner their own saved references', async () => {
+    bundleRow = {
+      ...(bundleRow as BundleRow),
+      allow_remix: true,
+    };
+    generationRow = {
+      ...(generationRow as NonNullable<typeof generationRow>),
+      is_public: false,
+      share_input_media_for_remix: false,
+    };
+    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+    const detail = await getPostResourceBundleDetailByPostId('post-1', {
+      viewerUserId: 'owner-1',
+    });
+
+    expect(detail?.viewerIsOwner).toBe(true);
+    expect(detail?.resources?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'reference_image',
+        storagePath: 'generation_inputs/owner-1/gen-1/00-reference-image.png',
+      }),
+    ]));
+  });
+
+  it('keeps references out of bundles whose creator disabled remixing', async () => {
+    viewerHasPurchased = true;
+    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+    // allow_remix stays false from the fixture.
+    const detail = await getPostResourceBundleDetailByPostId('post-1', {
+      viewerUserId: 'viewer-1',
+    });
+
+    expect(detail?.viewerCanAccess).toBe(true);
+    expect(detail?.resources?.items?.some(
+      (item) => item.storagePath === 'generation_inputs/owner-1/gen-1/00-reference-image.png',
+    )).toBe(false);
+  });
+
+  it('refuses to attach references from a generation the post creator does not own', async () => {
+    bundleRow = {
+      ...(bundleRow as BundleRow),
+      allow_remix: true,
+    };
+    generationRow = {
+      ...(generationRow as NonNullable<typeof generationRow>),
+      user_id: 'someone-else',
+    };
+    viewerHasPurchased = true;
+    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+    const detail = await getPostResourceBundleDetailByPostId('post-1', {
+      viewerUserId: 'viewer-1',
+    });
+
+    expect(detail?.resources?.items?.some(
+      (item) => item.storagePath === 'generation_inputs/owner-1/gen-1/00-reference-image.png',
+    )).toBe(false);
+  });
+
+  it('does not duplicate a reference the bundle already stores', async () => {
+    bundleRow = {
+      ...(bundleRow as BundleRow),
+      allow_remix: true,
+      resource_items: [
+        {
+          type: 'reference_image',
+          title: 'Reference image',
+          storagePath: 'generation_inputs/owner-1/gen-1/00-reference-image.png',
+          contentType: 'image/png',
+        },
+      ],
+    };
+    viewerHasPurchased = true;
+    const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+    const detail = await getPostResourceBundleDetailByPostId('post-1', {
+      viewerUserId: 'viewer-1',
+    });
+
+    const matches = (detail?.resources?.items ?? []).filter(
+      (item) => item.storagePath === 'generation_inputs/owner-1/gen-1/00-reference-image.png',
+    );
+    expect(matches).toHaveLength(1);
   });
 
   it('does not infer a public recipe when no saved bundle exists', async () => {
