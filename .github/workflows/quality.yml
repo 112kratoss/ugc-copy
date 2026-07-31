@@ -43,6 +43,9 @@ jobs:
       - name: Typecheck operational scripts
         run: npm run typecheck:scripts
 
+      - name: Typecheck test suite
+        run: npm run typecheck:tests
+
       - name: Validate production performance budgets
         run: npm run perf:load:self-test && npm run perf:lighthouse:self-test
 

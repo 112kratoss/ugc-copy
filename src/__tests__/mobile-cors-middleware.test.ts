@@ -43,14 +43,14 @@ describe('mobile API CORS proxy', () => {
     expect(routes.every((route) => isMobileCorsPath(materializeRouteTemplate(route.path)))).toBe(true);
   });
 
-  it('answers a valid preflight for every registered mobile route', () => {
+  it('answers a valid preflight for every registered mobile route', async () => {
     const paths = new Set([
       ...Object.values(mobileApiOperationsV1.operations),
       ...mobileApiOperationsV1.fallbackRoutes,
     ].map((route) => materializeRouteTemplate(route.path)));
 
     for (const pathname of paths) {
-      const response = proxy(new NextRequest(`http://localhost${pathname}`, {
+      const response = await proxy(new NextRequest(`http://localhost${pathname}`, {
         headers: {
           'Access-Control-Request-Headers': 'Authorization',
           'Access-Control-Request-Method': 'POST',
@@ -66,8 +66,8 @@ describe('mobile API CORS proxy', () => {
     }
   });
 
-  it('answers mobile API preflight requests', () => {
-    const response = proxy(
+  it('answers mobile API preflight requests', async () => {
+    const response = await proxy(
       new NextRequest('http://localhost/api/marketplace/resources', {
         headers: {
           'Access-Control-Request-Headers': 'Authorization',
@@ -86,8 +86,8 @@ describe('mobile API CORS proxy', () => {
     expect(response.headers.get('Access-Control-Expose-Headers')).toContain('X-Magicbooklet-Min-App-Version');
   });
 
-  it('adds CORS headers to mobile API responses', () => {
-    const response = proxy(new NextRequest('http://localhost/api/showcase/feed?limit=4'));
+  it('adds CORS headers to mobile API responses', async () => {
+    const response = await proxy(new NextRequest('http://localhost/api/showcase/feed?limit=4'));
 
     // A native client sends no Origin, so no grant is issued — and none is
     // needed, because CORS only constrains browsers.
@@ -99,12 +99,12 @@ describe('mobile API CORS proxy', () => {
     expect(response.headers.get('x-magicbooklet-catalog-schema-version')).toBe('2');
   });
 
-  it('refuses a CORS grant to foreign browser origins', () => {
+  it('refuses a CORS grant to foreign browser origins', async () => {
     // The mobile path allowlist governs *which routes* answer CORS; it must not
     // hand every website on the internet a grant to drive them from a victim's
     // browser and IP.
     for (const origin of ['https://evil.example', 'http://magicbooklet.com.evil.example']) {
-      const preflight = proxy(new NextRequest('http://localhost/api/marketplace/resources', {
+      const preflight = await proxy(new NextRequest('http://localhost/api/marketplace/resources', {
         headers: {
           'Access-Control-Request-Headers': 'Authorization',
           'Access-Control-Request-Method': 'GET',
@@ -114,7 +114,7 @@ describe('mobile API CORS proxy', () => {
       }));
       expect(preflight.headers.get('Access-Control-Allow-Origin'), origin).toBeNull();
 
-      const response = proxy(new NextRequest('http://localhost/api/showcase/feed', {
+      const response = await proxy(new NextRequest('http://localhost/api/showcase/feed', {
         headers: { Origin: origin },
       }));
       expect(response.headers.get('Access-Control-Allow-Origin'), origin).toBeNull();
@@ -123,15 +123,15 @@ describe('mobile API CORS proxy', () => {
     }
   });
 
-  it('keeps unversioned released clients on the legacy v1 contract', () => {
-    const response = proxy(new NextRequest('http://localhost/api/profile'));
+  it('keeps unversioned released clients on the legacy v1 contract', async () => {
+    const response = await proxy(new NextRequest('http://localhost/api/profile'));
 
     expect(response.status).toBe(200);
     expect(response.headers.get('x-magicbooklet-api-version')).toBe('1');
   });
 
-  it('allows the submitted 0.0.1 mobile client on the current contract', () => {
-    const response = proxy(new NextRequest('http://localhost/api/profile', {
+  it('allows the submitted 0.0.1 mobile client on the current contract', async () => {
+    const response = await proxy(new NextRequest('http://localhost/api/profile', {
       headers: {
         'x-magicbooklet-client': 'mobile',
         'x-magicbooklet-api-version': '1',
@@ -145,7 +145,7 @@ describe('mobile API CORS proxy', () => {
   });
 
   it('requires an update when an identified mobile client is below policy', async () => {
-    const response = proxy(new NextRequest('http://localhost/api/profile', {
+    const response = await proxy(new NextRequest('http://localhost/api/profile', {
       headers: {
         'x-magicbooklet-client': 'mobile',
         'x-magicbooklet-api-version': '1',
@@ -167,8 +167,8 @@ describe('mobile API CORS proxy', () => {
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
   });
 
-  it('allows the transition mobile client to request catalog schema v2', () => {
-    const response = proxy(new NextRequest('http://localhost/api/profile', {
+  it('allows the transition mobile client to request catalog schema v2', async () => {
+    const response = await proxy(new NextRequest('http://localhost/api/profile', {
       headers: {
         'x-magicbooklet-client': 'mobile',
         'x-magicbooklet-api-version': '1',
@@ -182,7 +182,7 @@ describe('mobile API CORS proxy', () => {
   });
 
   it('asks a future mobile client to retry after the backend catches up', async () => {
-    const response = proxy(new NextRequest('http://localhost/api/profile', {
+    const response = await proxy(new NextRequest('http://localhost/api/profile', {
       headers: {
         'x-magicbooklet-client': 'mobile',
         'x-magicbooklet-api-version': '2',
@@ -197,11 +197,11 @@ describe('mobile API CORS proxy', () => {
     });
   });
 
-  it('recovers Supabase OAuth callbacks that land on the root URL', () => {
+  it('recovers Supabase OAuth callbacks that land on the root URL', async () => {
     const request = new NextRequest(
       'https://magicbooklet.com/?code=auth-code&next=%2Fprofile%3Fwelcome%3D1'
     );
-    const response = proxy(request);
+    const response = await proxy(request);
 
     expect(isRootAuthCodeRedirect(request)).toBe(true);
     expect(response.status).toBe(307);

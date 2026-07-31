@@ -58,7 +58,7 @@ npm run admin:credentials              # mint the /admin master credential (prin
 npm run ops:external-gates             # verify prod external config (Supabase auth lints, RevenueCat webhook)
 ```
 
-CI (`.github/workflows/quality.yml`) gates PRs with: web `test → lint → typecheck → typecheck:scripts → perf self-tests → build → build:verify`; mobile `expo install --check → expo-doctor → expo prebuild --clean → expo export → test → typecheck`; and a full migration replay from a clean database plus `supabase test db` (Supabase CLI pinned to 2.75.0). Quality also runs a Playwright E2E smoke job. Sibling workflows: `production-release.yml` (production deploys — see Deploys), `performance.yml`, `backend-alert-watchdog.yml`, `mobile-store-release.yml`.
+CI (`.github/workflows/quality.yml`) gates PRs with: web `test → lint → typecheck → typecheck:scripts → typecheck:tests → perf self-tests → build → build:verify`; mobile `expo install --check → expo-doctor → expo prebuild --clean → expo export → test → typecheck`; and a full migration replay from a clean database plus `supabase test db` (Supabase CLI pinned to 2.75.0). Quality also runs a Playwright E2E smoke job. Sibling workflows: `production-release.yml` (production deploys — see Deploys), `performance.yml`, `backend-alert-watchdog.yml`, `mobile-store-release.yml`.
 
 ## Local environment
 

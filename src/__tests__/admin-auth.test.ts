@@ -19,7 +19,9 @@ function environment(overrides: Record<string, string | undefined> = {}): NodeJS
     ADMIN_SESSION_SECRET: SECRET,
     ADMIN_REVIEWER_USER_ID: REVIEWER_ID,
     ...overrides,
-  } as NodeJS.ProcessEnv;
+    // Through `unknown` because ProcessEnv's index signature does not overlap
+    // a literal with named keys; the double cast is the documented escape.
+  } as unknown as NodeJS.ProcessEnv;
 }
 
 describe('admin password hashing', () => {
@@ -122,8 +124,8 @@ describe('admin session tokens', () => {
   });
 
   it('treats a short secret as unconfigured rather than weak-but-accepted', () => {
-    expect(resolveAdminSessionSecret({ ADMIN_SESSION_SECRET: 'too-short' } as NodeJS.ProcessEnv)).toBeNull();
-    expect(resolveAdminSessionSecret({ ADMIN_SESSION_SECRET: SECRET } as NodeJS.ProcessEnv)).toBe(SECRET);
+    expect(resolveAdminSessionSecret({ ADMIN_SESSION_SECRET: 'too-short' } as unknown as NodeJS.ProcessEnv)).toBeNull();
+    expect(resolveAdminSessionSecret({ ADMIN_SESSION_SECRET: SECRET } as unknown as NodeJS.ProcessEnv)).toBe(SECRET);
     expect(resolveAdminSessionSecret({} as NodeJS.ProcessEnv)).toBeNull();
   });
 
