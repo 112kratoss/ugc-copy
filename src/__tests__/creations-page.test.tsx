@@ -468,7 +468,7 @@ describe('CreationsPage', () => {
       headers: { Authorization: 'Bearer layout-session-token' },
     });
     await waitFor(() => {
-      expect(screen.getByRole('checkbox', { name: /sell the prompt and setup/i })).toBeChecked();
+      expect(screen.getByRole('radio', { name: 'Paid' })).toBeChecked();
     });
     expect(navigationState.push).not.toHaveBeenCalled();
   });
@@ -575,14 +575,13 @@ describe('CreationsPage', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/generations?includeArchived=true&id=gen-bundled&limit=1', {
       headers: { Authorization: 'Bearer layout-session-token' },
     });
-    const sellPackageCheckbox = screen.getByRole('checkbox', { name: /sell the prompt and setup/i });
     await waitFor(() => {
-      expect(sellPackageCheckbox).toBeChecked();
+      expect(screen.getByRole('radio', { name: 'Paid' })).toBeChecked();
     });
     expect(navigationState.push).not.toHaveBeenCalled();
 
-    fireEvent.click(sellPackageCheckbox);
-    expect(sellPackageCheckbox).not.toBeChecked();
+    fireEvent.click(screen.getByRole('radio', { name: 'Off' }));
+    expect(screen.getByRole('radio', { name: 'Paid' })).not.toBeChecked();
     fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
 
     await waitFor(() => {

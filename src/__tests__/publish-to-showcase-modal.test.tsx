@@ -310,7 +310,8 @@ describe('PublishToShowcaseModal', () => {
 
     expect(screen.getByText(/share it to Showcase or keep it private/i)).toBeInTheDocument();
     expect(screen.queryByText(/saved system package/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/sell the prompt/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/share the prompt and setup/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Paid' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
 
@@ -374,7 +375,7 @@ describe('PublishToShowcaseModal', () => {
 
     expect(screen.queryByRole('button', { name: /advanced edit/i })).toBeNull();
 
-    fireEvent.click(screen.getByRole('checkbox', { name: /sell the prompt and setup/i }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Paid' }));
     fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
 
     await waitFor(() => {
@@ -399,6 +400,142 @@ describe('PublishToShowcaseModal', () => {
         },
       },
     });
+  });
+
+  it('publishes a free recipe without asking for a price', async () => {
+    render(
+      <PublishToShowcaseModal
+        isOpen
+        onClose={vi.fn()}
+        generationId="gen-1"
+        defaultTitle="Moody portrait setup"
+        accessToken="layout-session-token"
+        paywallPrefill={{
+          resourceKinds: ['prompt', 'notes', 'remix'],
+          promptText: 'Create a moody editorial portrait with soft bathroom light and natural pose.',
+          notesMarkdown: 'Saved generation setup\nModel: Nano Banana 2.0\nAspect ratio: 4:5',
+          allowRemix: true,
+        }}
+      />
+    );
+
+    expect(screen.getByRole('radio', { name: 'Off' })).toBeChecked();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Free' }));
+
+    expect(screen.getByRole('radio', { name: 'Free' })).toBeChecked();
+    expect(screen.queryByRole('textbox', { name: /recipe price/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/free recipe/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith('/api/showcase/publish', expect.objectContaining({
+        body: expect.any(String),
+      }));
+    });
+
+    const body = JSON.parse(String(getPublishRequest().body));
+
+    expect(body).toMatchObject({
+      generationId: 'gen-1',
+      visibility: 'public',
+      resourceBundle: {
+        accessMode: 'free',
+        priceUsdCents: 0,
+        resources: {
+          promptText: 'Create a moody editorial portrait with soft bathroom light and natural pose.',
+          notesMarkdown: 'Saved generation setup\nModel: Nano Banana 2.0\nAspect ratio: 4:5',
+          allowRemix: true,
+        },
+      },
+    });
+  });
+
+  it('does not require a seller avatar to publish a free recipe', async () => {
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => new Response(
+      JSON.stringify(String(url) === '/api/profile'
+        ? {
+            id: 'user-1',
+            username: 'launchmaker',
+            suggestedUsername: 'creator-a1b2c3d4',
+            displayName: 'Launch Maker',
+            avatarUrl: null,
+          }
+        : { success: true }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    ));
+
+    render(
+      <PublishToShowcaseModal
+        isOpen
+        onClose={vi.fn()}
+        generationId="gen-1"
+        defaultTitle="Moody portrait setup"
+        paywallPrefill={{
+          resourceKinds: ['prompt', 'notes'],
+          promptText: 'Create a moody editorial portrait.',
+          notesMarkdown: 'Saved generation setup',
+          allowRemix: false,
+        }}
+      />
+    );
+
+    await screen.findByText(/ready for public publishing/i);
+    fireEvent.click(screen.getByRole('radio', { name: 'Free' }));
+
+    // A free recipe stays on the public-publish gate, so the avatar-less
+    // profile is still considered ready.
+    expect(screen.getByText(/ready for public publishing/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(fetch).mock.calls.some(([url]) => url === '/api/showcase/publish')).toBe(true);
+    });
+
+    expect(JSON.parse(String(getPublishRequest().body))).toMatchObject({
+      resourceBundle: { accessMode: 'free' },
+    });
+  });
+
+  it('escalates to the seller profile gate only when the recipe is paid', async () => {
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => new Response(
+      JSON.stringify(String(url) === '/api/profile'
+        ? {
+            id: 'user-1',
+            username: 'launchmaker',
+            suggestedUsername: 'creator-a1b2c3d4',
+            displayName: 'Launch Maker',
+            avatarUrl: null,
+          }
+        : { success: true }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    ));
+
+    render(
+      <PublishToShowcaseModal
+        isOpen
+        onClose={vi.fn()}
+        generationId="gen-1"
+        defaultTitle="Moody portrait setup"
+        paywallPrefill={{
+          resourceKinds: ['prompt', 'notes'],
+          promptText: 'Create a moody editorial portrait.',
+          notesMarkdown: 'Saved generation setup',
+          allowRemix: false,
+        }}
+      />
+    );
+
+    await screen.findByText(/ready for public publishing/i);
+    fireEvent.click(screen.getByRole('radio', { name: 'Paid' }));
+
+    expect(await screen.findByText(/seller profile needs attention/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/profile photo/i);
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => url === '/api/showcase/publish')).toBe(false);
   });
 
   it('keeps saved generation references private for media-only publishing', async () => {
@@ -502,7 +639,7 @@ describe('PublishToShowcaseModal', () => {
       />
     );
 
-    expect(screen.getByRole('checkbox', { name: /sell the prompt and setup/i })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Paid' })).toBeChecked();
 
     fireEvent.click(screen.getByRole('button', { name: /^private post$/i }));
 
@@ -543,11 +680,10 @@ describe('PublishToShowcaseModal', () => {
       />
     );
 
-    const sellPackageCheckbox = screen.getByRole('checkbox', { name: /sell the prompt and setup/i });
-    expect(sellPackageCheckbox).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Paid' })).toBeChecked();
 
-    fireEvent.click(sellPackageCheckbox);
-    expect(sellPackageCheckbox).not.toBeChecked();
+    fireEvent.click(screen.getByRole('radio', { name: 'Off' }));
+    expect(screen.getByRole('radio', { name: 'Paid' })).not.toBeChecked();
     fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
 
     await waitFor(() => {

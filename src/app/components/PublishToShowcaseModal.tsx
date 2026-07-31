@@ -2,14 +2,17 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { BadgeDollarSign, Check, CircleAlert, Globe, Loader2, LockKeyhole, Share2, UserRound, X } from 'lucide-react';
+import { BadgeDollarSign, BookOpen, Check, CircleAlert, Globe, Loader2, LockKeyhole, Share2, UserRound, X } from 'lucide-react';
 
 import { sharePublicGeneration } from '@/lib/share-client';
 import type { GenerationShareSourceSurface } from '@/lib/share';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { getCreatorProfileReadiness, type ProfileApiResponse } from '@/lib/profile';
 import {
+  formatUsdCents,
   getPostResourceKindLabel,
+  type PersistedPostResourceBundleAccessMode,
+  type PostResourceBundleAccessMode,
   type PostResourceBundleInput,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
@@ -18,6 +21,33 @@ type PostVisibility = 'public' | 'unlisted' | 'private';
 type ProfileLoadState = 'idle' | 'loading' | 'ready' | 'error';
 
 const RESOURCE_KIND_ORDER: PostResourceKind[] = ['prompt', 'workflow', 'files', 'notes', 'remix'];
+
+/**
+ * The three access modes are shown side by side on purpose. Collapsing them
+ * into a single "sell this" checkbox hid `free` entirely: unchecking it
+ * published no recipe at all rather than a free one.
+ */
+const RECIPE_ACCESS_OPTIONS: ReadonlyArray<{
+  value: PostResourceBundleAccessMode;
+  label: string;
+  hint: string;
+}> = [
+  {
+    value: 'none',
+    label: 'Off',
+    hint: 'Only the media is published. Your prompt, files, and notes stay private.',
+  },
+  {
+    value: 'free',
+    label: 'Free',
+    hint: 'Anyone can add this recipe to their library with one tap. Great for building a following.',
+  },
+  {
+    value: 'paid',
+    label: 'Paid',
+    hint: 'Buyers see the price before paying. Until then only the summary and resource types are public.',
+  },
+];
 
 function normalizeOptionalText(value: string): string | undefined {
   const trimmed = value.trim();
@@ -90,15 +120,17 @@ function buildAutoUnlockPreview(kinds: PostResourceKind[]): string {
 
 function buildAutoResourceBundle({
   prefill,
+  accessMode,
   priceUsdCents,
 }: {
   prefill: GenerationPaywallPrefill;
+  accessMode: PersistedPostResourceBundleAccessMode;
   priceUsdCents: number;
 }): PostResourceBundleInput {
   const kinds = getAutoUnlockKinds(prefill);
 
   return {
-    accessMode: 'paid',
+    accessMode,
     summary: buildAutoUnlockSummary(kinds),
     previewText: buildAutoUnlockPreview(kinds),
     priceUsdCents,
@@ -158,7 +190,7 @@ export default function PublishToShowcaseModal({
   const [publishDescription, setPublishDescription] = useState(() =>
     getDefaultPublishDescription(defaultDescription, paywallPrefill)
   );
-  const [sellAutoUnlock, setSellAutoUnlock] = useState(false);
+  const [recipeAccess, setRecipeAccess] = useState<PostResourceBundleAccessMode>('none');
   const [priceUsd, setPriceUsd] = useState('9');
   const [publishingVisibility, setPublishingVisibility] = useState<PostVisibility | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -176,13 +208,27 @@ export default function PublishToShowcaseModal({
   const hasAutoUnlock = showPaidShortcut && Boolean(paywallPrefill) && autoUnlockKinds.length > 0;
   const generationReferenceCount = Math.max(0, Math.round(paywallPrefill?.referenceCount ?? 0));
   const hasGenerationReferences = generationReferenceCount > 0;
-  const willPublishUnlock = sellAutoUnlock;
+  const isPaidRecipe = recipeAccess === 'paid';
+  const activeAccessIndex = Math.max(
+    0,
+    RECIPE_ACCESS_OPTIONS.findIndex((option) => option.value === recipeAccess)
+  );
   const parsedPriceUsdCents = parsePriceUsdToCents(priceUsd);
   const isPublishing = publishingVisibility !== null;
   const profileReadiness = getCreatorProfileReadiness(profile);
-  const isProfileReadyForPublish = willPublishUnlock
+  // Only a paid recipe requires the stricter seller profile. A free recipe is a
+  // public post that happens to carry its setup, so it uses the public gate.
+  const willSellRecipe = isPaidRecipe;
+  const isProfileReadyForPublish = willSellRecipe
     ? profileReadiness.sellerReady
     : profileReadiness.publicPublishReady;
+  const recipeAccessBadgeLabel = recipeAccess === 'none'
+    ? 'No recipe'
+    : recipeAccess === 'free'
+      ? 'Free recipe'
+      : parsedPriceUsdCents !== null && parsedPriceUsdCents >= 100
+        ? `${formatUsdCents(parsedPriceUsdCents)} recipe`
+        : 'Paid recipe';
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -200,7 +246,9 @@ export default function PublishToShowcaseModal({
     // Opening a generation starts a fresh publish draft from its supplied defaults.
     setPublishTitle(defaultTitle);
     setPublishDescription(getDefaultPublishDescription(defaultDescription, paywallPrefill));
-    setSellAutoUnlock(Boolean(initialSellAutoUnlock && hasAutoUnlock));
+    // Callers that open this modal from a "sell" action land on paid; everyone
+    // else starts with no recipe attached and opts in.
+    setRecipeAccess(initialSellAutoUnlock && hasAutoUnlock ? 'paid' : 'none');
     setPriceUsd('9');
     setPublishingVisibility(null);
     setFormError(null);
@@ -342,28 +390,34 @@ export default function PublishToShowcaseModal({
     if (nextVisibility === 'public' && profileLoadState === 'ready' && !isProfileReadyForPublish) {
       setNeedsProfileRepair(true);
       setFormError(
-        willPublishUnlock
-          ? 'Complete your profile before publishing a recipe: choose a custom handle, add your display name, and upload a profile photo.'
+        willSellRecipe
+          ? 'Complete your profile before selling a recipe: choose a custom handle, add your display name, and upload a profile photo.'
           : 'Complete your profile before publishing publicly: choose a custom handle and add your display name.'
       );
       return;
     }
 
     let resourceBundle: PostResourceBundleInput | null = mediaOnly ? null : { accessMode: 'none' };
-    if (sellAutoUnlock) {
+    if (recipeAccess !== 'none') {
       if (!paywallPrefill || autoUnlockKinds.length === 0) {
         setFormError('This creation does not have enough saved setup data to package automatically yet.');
         return;
       }
 
-      if (parsedPriceUsdCents === null || parsedPriceUsdCents < 100) {
-        setFormError('Paid recipes must be priced at $1.00 or above.');
-        return;
+      // Free recipes carry no price; only the paid mode has a floor to enforce.
+      let priceUsdCents = 0;
+      if (recipeAccess === 'paid') {
+        if (parsedPriceUsdCents === null || parsedPriceUsdCents < 100) {
+          setFormError('Paid recipes must be priced at $1.00 or above.');
+          return;
+        }
+        priceUsdCents = parsedPriceUsdCents;
       }
 
       resourceBundle = buildAutoResourceBundle({
         prefill: paywallPrefill,
-        priceUsdCents: parsedPriceUsdCents,
+        accessMode: recipeAccess,
+        priceUsdCents,
       });
     }
 
@@ -539,11 +593,11 @@ export default function PublishToShowcaseModal({
                   : profileLoadState === 'error'
                     ? 'Profile check unavailable'
                     : isProfileReadyForPublish
-                      ? willPublishUnlock ? 'Seller profile ready' : 'Ready for public publishing'
-                      : willPublishUnlock ? 'Seller profile needs attention' : 'Public profile needs attention'}
+                      ? willSellRecipe ? 'Seller profile ready' : 'Ready for public publishing'
+                      : willSellRecipe ? 'Seller profile needs attention' : 'Public profile needs attention'}
               </p>
               <p className="mt-1 text-xs leading-5 text-zinc-400">
-                {willPublishUnlock
+                {willSellRecipe
                   ? 'Selling a recipe requires a custom handle, display name, and profile photo.'
                   : 'Public posts require a custom handle and display name.'}
               </p>
@@ -573,17 +627,21 @@ export default function PublishToShowcaseModal({
             />
           </div>
 
-          {!mediaOnly ? <div className={`rounded-[24px] border p-4 transition ${
-            sellAutoUnlock
+          {!mediaOnly ? <div className={`rounded-[24px] border p-4 transition-colors duration-200 ease-[var(--ui-ease-standard)] ${
+            recipeAccess !== 'none'
               ? 'border-emerald-300/30 bg-emerald-500/10'
               : 'border-white/10 bg-black/35'
           }`}>
             <div className="flex items-start gap-3">
-              <div className="rounded-2xl border border-emerald-300/20 bg-emerald-400/10 p-2 text-emerald-100">
-                <LockKeyhole className="h-4 w-4" />
+              <div className={`rounded-2xl border p-2 transition-colors duration-200 ease-[var(--ui-ease-standard)] ${
+                recipeAccess === 'none'
+                  ? 'border-white/10 bg-white/[0.04] text-zinc-400'
+                  : 'border-emerald-300/20 bg-emerald-400/10 text-emerald-100'
+              }`}>
+                {recipeAccess === 'none' ? <LockKeyhole className="h-4 w-4" /> : <BookOpen className="h-4 w-4" />}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
                   <div>
                     <div className="text-sm font-semibold text-white">Saved system package</div>
                     {hasGenerationReferences ? (
@@ -597,6 +655,18 @@ export default function PublishToShowcaseModal({
                       </p>
                     ) : null}
                   </div>
+                  {hasAutoUnlock ? (
+                    <span
+                      aria-live="polite"
+                      className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-colors duration-200 ease-[var(--ui-ease-standard)] ${
+                        recipeAccess === 'none'
+                          ? 'border-white/10 bg-black/30 text-zinc-400'
+                          : 'border-emerald-300/25 bg-emerald-400/10 text-emerald-50'
+                      }`}
+                    >
+                      {recipeAccessBadgeLabel}
+                    </span>
+                  ) : null}
                 </div>
 
                 {hasAutoUnlock ? (
@@ -615,31 +685,54 @@ export default function PublishToShowcaseModal({
 
                 {hasAutoUnlock ? (
                   <div className="mt-4 border-t border-white/8 pt-4">
-                    <label className="flex cursor-pointer items-start gap-3">
-                      <input
-                        type="checkbox"
-                        checked={sellAutoUnlock}
-                        onChange={(event) => {
-                          setSellAutoUnlock(event.target.checked);
-                          setFormError(null);
-                        }}
-                        className="mt-1 h-4 w-4 rounded border-white/20 bg-black text-emerald-400 focus:ring-emerald-400"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="flex flex-wrap items-center justify-between gap-3">
-                          <span className="text-sm font-semibold text-white">Sell the prompt and setup</span>
-                          <span className="rounded-full border border-emerald-300/20 bg-black/25 px-2.5 py-1 text-xs font-semibold text-emerald-50">
-                            Optional
-                          </span>
-                        </span>
-                        <span className="mt-1 block text-sm leading-6 text-zinc-400">
-                          Turn on pricing when this reusable setup is valuable enough to sell as a recipe.
-                        </span>
-                      </span>
-                    </label>
+                    <fieldset>
+                      <legend className="mb-2 text-sm font-semibold text-white">
+                        Share the prompt and setup?
+                      </legend>
 
-                    {sellAutoUnlock ? (
-                      <div className="mt-4 flex flex-col gap-3 rounded-[20px] border border-emerald-300/20 bg-black/30 p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="relative grid grid-cols-3 rounded-full border border-white/10 bg-black/40 p-1">
+                        <span
+                          aria-hidden="true"
+                          style={{ transform: `translateX(${activeAccessIndex * 100}%)` }}
+                          className={`pointer-events-none absolute inset-y-1 left-1 w-[calc((100%-0.5rem)/3)] rounded-full transition-[transform,background-color] duration-200 ease-[var(--ui-ease-standard)] ${
+                            recipeAccess === 'none' ? 'bg-white/10' : 'bg-emerald-300'
+                          }`}
+                        />
+                        {RECIPE_ACCESS_OPTIONS.map((option) => {
+                          const isActive = option.value === recipeAccess;
+                          return (
+                            <label
+                              key={option.value}
+                              className={`relative z-10 flex cursor-pointer items-center justify-center rounded-full px-3 py-2 text-xs font-semibold transition-[color,transform] duration-150 ease-[var(--ui-ease-standard)] active:scale-[0.97] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-[var(--ui-primary)] ${
+                                isActive
+                                  ? recipeAccess === 'none' ? 'text-white' : 'text-emerald-950'
+                                  : 'text-zinc-400 hover:text-white'
+                              }`}
+                            >
+                              <input
+                                type="radio"
+                                name="publish-recipe-access"
+                                value={option.value}
+                                checked={isActive}
+                                onChange={() => {
+                                  setRecipeAccess(option.value);
+                                  setFormError(null);
+                                }}
+                                className="sr-only"
+                              />
+                              {option.label}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </fieldset>
+
+                    <p aria-live="polite" className="mt-3 text-sm leading-6 text-zinc-400">
+                      {RECIPE_ACCESS_OPTIONS[activeAccessIndex].hint}
+                    </p>
+
+                    {isPaidRecipe ? (
+                      <div className="ui-enter-pop mt-4 flex origin-top flex-col gap-3 rounded-[20px] border border-emerald-300/20 bg-black/30 p-3 sm:flex-row sm:items-center sm:justify-between">
                         <div>
                           <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200">Price</div>
                           <p className="mt-1 text-xs text-zinc-400">Minimum $1.00.</p>
@@ -655,7 +748,7 @@ export default function PublishToShowcaseModal({
                               setFormError(null);
                             }}
                             aria-label="Recipe price"
-                            className="w-full rounded-full border border-white/10 bg-white/[0.04] py-2 pl-8 pr-3 text-center text-sm font-semibold text-white outline-none transition focus:border-emerald-300/50"
+                            className="w-full rounded-full border border-white/10 bg-white/[0.04] py-2 pl-8 pr-3 text-center text-sm font-semibold text-white outline-none transition-colors duration-150 focus:border-emerald-300/50"
                           />
                         </div>
                       </div>
@@ -700,7 +793,7 @@ export default function PublishToShowcaseModal({
               type="button"
               disabled={isPublishing}
               onClick={() => void handleQuickPublish('private')}
-              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-70"
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-zinc-100 transition-[background-color,border-color,transform] duration-150 ease-[var(--ui-ease-standard)] hover:border-white/20 hover:bg-white/[0.08] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-70"
             >
               {publishingVisibility === 'private' ? <Loader2 className="h-4 w-4 animate-spin" /> : <LockKeyhole className="h-4 w-4" />}
               Private post
@@ -708,9 +801,9 @@ export default function PublishToShowcaseModal({
             <button
               type="submit"
               disabled={isPublishing}
-              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-white px-4 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-70"
+              className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-white px-4 py-3 text-sm font-semibold text-black transition-[background-color,transform] duration-150 ease-[var(--ui-ease-standard)] hover:bg-zinc-200 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-70"
             >
-              {publishingVisibility === 'public' ? <Loader2 className="h-4 w-4 animate-spin" /> : sellAutoUnlock ? <BadgeDollarSign className="h-4 w-4" /> : <Globe className="h-4 w-4" />}
+              {publishingVisibility === 'public' ? <Loader2 className="h-4 w-4 animate-spin" /> : isPaidRecipe ? <BadgeDollarSign className="h-4 w-4" /> : <Globe className="h-4 w-4" />}
               Public post
             </button>
           </div>
