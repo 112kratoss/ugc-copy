@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { createHash } from 'node:crypto';
+
 const REQUIRED_PRODUCTION_ENV = [
   'EAS_BUILD_GIT_COMMIT_HASH',
   'MAGICBOOKLET_INCLUDE_DEV_CLIENT',
@@ -18,6 +20,16 @@ const PUBLIC_URL_ENV = [
   'EXPO_PUBLIC_WEB_API_BASE_URL',
   'EXPO_PUBLIC_SUPABASE_URL',
 ];
+
+// RevenueCat public SDK keys are safe to embed in the client, but a stale key
+// still passes a prefix-only check and makes every store request fail at
+// runtime. Pin the App Store app's immutable public key by fingerprint so a
+// release cannot silently ship with a key from an old/deleted RevenueCat app.
+const REVENUECAT_IOS_KEY_SHA256 = '9939d78095068c14825c15ff2ee28b26bf463d5d5542867cd94f351f4831b685';
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
 
 function isPlaceholder(value) {
   return /(?:change[-_ ]?me|example|placeholder|localhost|127\.0\.0\.1|10\.0\.2\.2)/i.test(value);
@@ -70,6 +82,8 @@ export function validateProductionBuildEnv(env) {
   const iosRevenueCatKey = env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY?.trim();
   if (iosRevenueCatKey && !iosRevenueCatKey.startsWith('appl_')) {
     errors.push('EXPO_PUBLIC_REVENUECAT_IOS_API_KEY must be an iOS public SDK key');
+  } else if (iosRevenueCatKey && sha256(iosRevenueCatKey) !== REVENUECAT_IOS_KEY_SHA256) {
+    errors.push('EXPO_PUBLIC_REVENUECAT_IOS_API_KEY does not match the Magic Booklet App Store app');
   }
 
   const androidRevenueCatKey = env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY?.trim();
@@ -89,7 +103,7 @@ function runSelfTest() {
     EXPO_PUBLIC_WEB_API_BASE_URL: 'https://magicbooklet.com',
     EXPO_PUBLIC_SUPABASE_URL: 'https://project.supabase.co',
     EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_1234567890',
-    EXPO_PUBLIC_REVENUECAT_IOS_API_KEY: 'appl_public_key',
+    EXPO_PUBLIC_REVENUECAT_IOS_API_KEY: 'appl_vNDLmBJKtiZcLTFJZYTvWhXVIXC',
     EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY: 'goog_public_key',
   };
 
@@ -102,6 +116,7 @@ function runSelfTest() {
     EAS_BUILD_GIT_COMMIT_HASH: 'short',
     MAGICBOOKLET_INCLUDE_DEV_CLIENT: 'true',
     EXPO_PUBLIC_API_BASE_URL: 'http://localhost:3000',
+    EXPO_PUBLIC_REVENUECAT_IOS_API_KEY: 'appl_stale_key_from_another_app',
     EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY: 'appl_wrong_platform',
   });
   const expectedFragments = [
@@ -109,6 +124,7 @@ function runSelfTest() {
     'must be exactly false',
     'development or placeholder value',
     'must use HTTPS',
+    'does not match the Magic Booklet App Store app',
     'Android public SDK key',
   ];
   for (const fragment of expectedFragments) {

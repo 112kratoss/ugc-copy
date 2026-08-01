@@ -148,6 +148,7 @@ jobs:
           npx --yes eas-cli@21.2.0 build \
             --profile production \
             --platform "${{ matrix.platform }}" \
+            --clear-cache \
             --non-interactive \
             --wait \
             --json \
