@@ -5,7 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer } from 'expo-video';
-import { ArrowLeft, Copy, FileText, Heart, ImageOff, Images, Lock, MessageCircle, MoreVertical, Play, Repeat2, Share2, X } from 'lucide-react-native';
+import { ArrowLeft, Copy, FileText, Globe, Heart, ImageOff, Images, Lock, LockKeyhole, MessageCircle, MoreVertical, Play, Repeat2, Share2, Wand2, X } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
@@ -78,7 +78,8 @@ import {
 } from '@/lib/showcase-media-progress';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { PostResourceKind, ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
-import { canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, type SaveHeartTapAnimationSpec } from '@/lib/viewer-actions';
+import { canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, getViewerActionSlots, getViewerStateChip, type SaveHeartTapAnimationSpec, type ViewerStateTone } from '@/lib/viewer-actions';
+import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
 
 type ViewerParams = {
   algorithmVersion?: string | string[];
@@ -136,6 +137,7 @@ export default function ImmersivePreviewViewerScreen() {
   const [commentsOpenItemId, setCommentsOpenItemId] = useState<string | null>(null);
   const [commentsReplyToId, setCommentsReplyToId] = useState<string | null>(null);
   const [unlockRemixOpenItemId, setUnlockRemixOpenItemId] = useState<string | null>(null);
+  const [ownerActionPending, setOwnerActionPending] = useState<string | null>(null);
   const [isHorizontalScrolling, setIsHorizontalScrolling] = useState(false);
   const qualifiedImpressionsRef = useRef(new Set<string>());
   const skipInitialRankedFeedRefreshRef = useRef(Boolean(routeFeedSessionId));
@@ -495,6 +497,74 @@ export default function ImmersivePreviewViewerScreen() {
     router.push((fallbackHref ?? `/create/${item.recreateTool}`) as never);
   };
 
+  const applyPostVisibility = async (
+    postId: string,
+    visibility: 'public' | 'unlisted' | 'private',
+    action: string
+  ) => {
+    setOwnerActionPending(action);
+    try {
+      await api.updatePost(postId, { visibility });
+      await refreshViewerMediaCaches(queryClient, user?.id);
+      await sourceQuery.refetch();
+      void AccessibilityInfo.announceForAccessibility(`This post is now ${visibility}.`);
+    } catch {
+      Alert.alert('Could not update visibility', 'Please try again.');
+    } finally {
+      setOwnerActionPending(null);
+    }
+  };
+
+  /**
+   * The rail's ownership slots reuse the same action ids the More sheet dispatches,
+   * so publishing from the rail and publishing from the sheet take one code path.
+   */
+  const runOwnerAction = (action: string, item: ImmersivePreviewItem) => {
+    if (!user) {
+      router.push('/auth');
+      return;
+    }
+
+    if (action === 'publish') {
+      router.push({ pathname: '/post/new', params: { generationId: item.id } } as never);
+      return;
+    }
+
+    if (action === 'edit-linked-resources' && item.linkedPostId) {
+      router.push({
+        pathname: '/post/new',
+        params: { postId: item.linkedPostId, focus: 'resources' },
+      } as never);
+      return;
+    }
+
+    if (action === 'change-visibility') {
+      Alert.alert('Change visibility', 'Choose who can see this post.', [
+        { text: 'Public', onPress: () => void applyPostVisibility(item.id, 'public', action) },
+        { text: 'Unlisted', onPress: () => void applyPostVisibility(item.id, 'unlisted', action) },
+        { text: 'Private', onPress: () => void applyPostVisibility(item.id, 'private', action) },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+      return;
+    }
+
+    if ((action === 'make-private' || action === 'make-public') && item.linkedPostId) {
+      const linkedPostId = item.linkedPostId;
+      const nextVisibility = action === 'make-private' ? 'private' : 'public';
+      const label = action === 'make-private' ? 'Make private' : 'Make public';
+      Alert.alert(
+        `${label}?`,
+        action === 'make-private'
+          ? 'This linked post will leave public surfaces until you make it public again.'
+          : 'This linked post will return to public surfaces.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: label, onPress: () => void applyPostVisibility(linkedPostId, nextVisibility, action) },
+        ]
+      );
+    }
+  };
+
   const dismissRecommendation = (
     item: ImmersivePreviewItem,
     eventType: 'not_interested' | 'hide_creator'
@@ -631,10 +701,12 @@ export default function ImmersivePreviewViewerScreen() {
             onCreatorOpen={openCreatorProfile}
             onDetailsPageOpenChange={(open) => setDetailsPageOpenItemId(open ? item.id : null)}
             onHorizontalScrollToggle={setIsHorizontalScrolling}
+            onOwnerAction={(action) => runOwnerAction(action, item)}
             onRecreate={recreateItem}
             onSave={saveItem}
             onShare={shareItem}
             onUnlockRemix={(nextItem) => setUnlockRemixOpenItemId(nextItem.id)}
+            ownerActionPending={index === activeIndex ? ownerActionPending : null}
             saveLoading={saveMutation.isPending && saveMutation.variables?.postId === item.showcasePostId}
             topInset={topInset}
             width={width}
@@ -800,10 +872,12 @@ function ImmersiveSlide({
   onComments,
   onCreatorOpen,
   onDetailsPageOpenChange,
+  onOwnerAction,
   onRecreate,
   onSave,
   onShare,
   onUnlockRemix,
+  ownerActionPending,
   saveLoading,
   topInset,
   width,
@@ -818,10 +892,12 @@ function ImmersiveSlide({
   onComments?: () => void;
   onCreatorOpen: (item: ImmersivePreviewItem) => void;
   onDetailsPageOpenChange: (open: boolean) => void;
+  onOwnerAction?: (action: string) => void;
   onRecreate: (item: ImmersivePreviewItem) => void;
   onSave: SaveItemHandler;
   onShare: (item: ImmersivePreviewItem) => void;
   onUnlockRemix: (item: ImmersivePreviewItem) => void;
+  ownerActionPending?: string | null;
   saveLoading: boolean;
   topInset: number;
   width: number;
@@ -870,8 +946,8 @@ function ImmersiveSlide({
 
   const mediaCount = item.mediaItems?.length ?? 0;
   const isTextPost = item.previewKind === 'text';
-  const canRecreate = item.availableActions.includes('recreate');
-  const canUnlockRemix = item.availableActions.includes('unlock-remix');
+  const railSlots = useMemo(() => getViewerActionSlots(item), [item]);
+  const stateChip = useMemo(() => getViewerStateChip(item), [item]);
   const videoPlaybackActive = active && activeVideoId === item.id && !currentPageIsDetails;
   const saveFromDoubleTap = useCallback((position: DoubleTapSavePosition) => {
     doubleTapHeart.play(position);
@@ -974,47 +1050,90 @@ function ImmersiveSlide({
             label="More"
             onPress={onActionsOpen}
           />
-          <RailActionButton
-            disabled={!item.canSave}
-            icon={<Heart size={27} {...getSaveHeartIconProps({ isSaved: item.isSaved, enabled: item.canSave })} />}
-            label={item.isSaved ? 'Saved' : item.saveLabel}
-            loading={saveLoading}
-            onPress={() => onSave(item)}
-            preserveIconWhileLoading
-            showDisabledAsActive={item.isSaved && !item.canSave}
-            tapAnimationSpec={getSaveHeartTapAnimationSpec({ willSave: !item.isSaved, enabled: item.canSave })}
-            externalPopTrigger={saveHeartPopTrigger}
-          />
-          {onComments ? (
-            <RailActionButton
-              accessibilityLabel={item.commentCount > 0
-                ? `${item.commentCount} ${item.commentCount === 1 ? 'comment' : 'comments'}`
-                : 'Comment'}
-              icon={<MessageCircle size={27} color="#ffffff" strokeWidth={2.4} />}
-              label={item.commentCount > 0 ? item.commentLabel : 'Comment'}
-              onPress={onComments}
-            />
-          ) : null}
-          <RailActionButton
-            icon={<Share2 size={27} color="#ffffff" strokeWidth={2.4} />}
-            label="Share"
-            onPress={() => void onShare(item)}
-          />
-          {hasImmersiveDetailsPage(item) ? (
-            <RailActionButton
-              icon={<FileText size={27} color="#ffffff" strokeWidth={2.4} />}
-              label="Details"
-              onPress={openDetailsPage}
-            />
-          ) : null}
-          {canRecreate || canUnlockRemix ? (
-            <RailActionButton
-              primary
-              icon={<Repeat2 size={27} color="#050505" strokeWidth={2.8} />}
-              label={canUnlockRemix ? 'Remix' : 'Create'}
-              onPress={canUnlockRemix ? () => onUnlockRemix(item) : () => void onRecreate(item)}
-            />
-          ) : null}
+          {railSlots.map((slot) => {
+            if (slot.id === 'save') {
+              return (
+                <RailActionButton
+                  key={slot.id}
+                  disabled={!item.canSave}
+                  icon={<Heart size={27} {...getSaveHeartIconProps({ isSaved: item.isSaved, enabled: item.canSave })} />}
+                  label={slot.label}
+                  loading={saveLoading}
+                  onPress={() => onSave(item)}
+                  preserveIconWhileLoading
+                  showDisabledAsActive={item.isSaved && !item.canSave}
+                  tapAnimationSpec={getSaveHeartTapAnimationSpec({ willSave: !item.isSaved, enabled: item.canSave })}
+                  externalPopTrigger={saveHeartPopTrigger}
+                />
+              );
+            }
+            if (slot.id === 'comment') {
+              return onComments ? (
+                <RailActionButton
+                  key={slot.id}
+                  accessibilityLabel={item.commentCount > 0
+                    ? `${item.commentCount} ${item.commentCount === 1 ? 'comment' : 'comments'}`
+                    : 'Comment'}
+                  icon={<MessageCircle size={27} color="#ffffff" strokeWidth={2.4} />}
+                  label={slot.label}
+                  onPress={onComments}
+                />
+              ) : null;
+            }
+            if (slot.id === 'share') {
+              return (
+                <RailActionButton
+                  key={slot.id}
+                  icon={<Share2 size={27} color="#ffffff" strokeWidth={2.4} />}
+                  label={slot.label}
+                  onPress={() => void onShare(item)}
+                />
+              );
+            }
+            if (slot.id === 'details') {
+              return hasImmersiveDetailsPage(item) ? (
+                <RailActionButton
+                  key={slot.id}
+                  icon={<FileText size={27} color="#ffffff" strokeWidth={2.4} />}
+                  label={slot.label}
+                  onPress={openDetailsPage}
+                />
+              ) : null;
+            }
+            if (slot.id === 'create') {
+              return (
+                <RailActionButton
+                  key={slot.id}
+                  primary
+                  icon={<Repeat2 size={27} color="#050505" strokeWidth={2.8} />}
+                  label={slot.label}
+                  onPress={slot.action === 'unlock-remix' ? () => onUnlockRemix(item) : () => void onRecreate(item)}
+                />
+              );
+            }
+
+            // Ownership slots — publish, visibility, unlock — all delegate to the
+            // same action ids the More sheet uses, so there is one code path per action.
+            const ownerIcon = slot.id === 'publish'
+              ? <Globe size={27} color="#050505" strokeWidth={2.6} />
+              : slot.id === 'unlock'
+                ? <Wand2 size={27} color={appTheme.colors.success} strokeWidth={2.5} />
+                : slot.action === 'make-private' || item.visibility === 'private' || item.visibility === 'unlisted'
+                  ? <LockKeyhole size={27} color={appTheme.colors.warning} strokeWidth={2.5} />
+                  : <Globe size={27} color="#ffffff" strokeWidth={2.4} />;
+
+            return (
+              <RailActionButton
+                key={slot.id}
+                accessibilityLabel={slot.a11yLabel ?? slot.label}
+                icon={ownerIcon}
+                label={slot.label}
+                loading={ownerActionPending === slot.action}
+                primary={slot.tone === 'primary'}
+                onPress={() => slot.action && onOwnerAction?.(slot.action)}
+              />
+            );
+          })}
         </View>
 
         {/* Bottom text descriptions */}
@@ -1028,10 +1147,30 @@ function ImmersiveSlide({
             gap: 8,
           }}
         >
-          <View pointerEvents="none" style={{ alignSelf: 'flex-start', borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 10, paddingVertical: 6 }}>
-            <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
-              {item.badge}
-            </Text>
+          <View pointerEvents="none" style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+            <View style={{ borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 10, paddingVertical: 6 }}>
+              <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
+                {item.badge}
+              </Text>
+            </View>
+            {/* Owned media leads with its publish state — for a creation that is the
+                single most important fact on the slide. */}
+            {stateChip ? (
+              <View
+                style={{
+                  borderRadius: 999,
+                  borderWidth: 1,
+                  borderColor: viewerStateChipStyle(stateChip.tone).border,
+                  backgroundColor: viewerStateChipStyle(stateChip.tone).background,
+                  paddingHorizontal: 10,
+                  paddingVertical: 6,
+                }}
+              >
+                <Text numberOfLines={1} style={{ color: viewerStateChipStyle(stateChip.tone).foreground, fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
+                  {stateChip.label}
+                </Text>
+              </View>
+            ) : null}
           </View>
           <Pressable
             accessibilityRole="button"
@@ -1579,13 +1718,16 @@ function PostDetailsPage({
   const unlockPriceLabel = unlock ? bundle?.priceQuote?.formatted ?? unlock.priceLabel : null;
   const canRecreate = item.availableActions.includes('recreate');
   const canUnlockRemix = item.availableActions.includes('unlock-remix');
+  const generationInfo = details?.generationInfo ?? null;
 
   return (
     <View style={{ width, height, backgroundColor: appTheme.colors.app }}>
       <ScrollView
         contentContainerStyle={{
           paddingTop: sheet ? 20 : topInset + 80,
-          paddingBottom: bottomInset + 36,
+          // The swipe page pins a "Swipe right for media" pill over the bottom-left
+          // corner; the sheet has no such overlay, so only the page reserves room.
+          paddingBottom: sheet ? bottomInset + 36 : bottomInset + 84,
           paddingHorizontal: 22,
           gap: appTheme.spacing.panel,
         }}
@@ -1593,7 +1735,7 @@ function PostDetailsPage({
       >
         <View style={{ gap: 8 }}>
           <Text style={{ color: appTheme.colors.faint, ...appTheme.type.label, textTransform: 'uppercase' }}>
-            Post details
+            {generationInfo ? 'Creation details' : 'Post details'}
           </Text>
           <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.pageTitle, fontWeight: '800' }}>
             {details.title}
@@ -1603,11 +1745,26 @@ function PostDetailsPage({
           </Text>
         </View>
 
-        <View style={{ flexDirection: 'row', gap: 10 }}>
-          <DetailStat label="Saves" value={formatCount(details.saveCount)} />
-          <DetailStat label="Remixes" value={formatCount(details.remixCount)} />
-          <DetailStat label="Source" value={details.sourceLabel} />
-        </View>
+        {/* A creation has no saves or remixes of its own, so the stat row carries
+            its production facts instead of zeroes. */}
+        {generationInfo ? (
+          <View style={{ flexDirection: 'row', gap: 10 }}>
+            <DetailStat label="Model" value={generationInfo.model} />
+            <DetailStat label="Created" value={formatGenerationDate(generationInfo.createdAt)} />
+            <DetailStat
+              label={generationInfo.duration ? 'Duration' : 'Cost'}
+              value={generationInfo.duration
+                ? `${generationInfo.duration}s`
+                : generationInfo.cost != null ? `${generationInfo.cost}` : '—'}
+            />
+          </View>
+        ) : (
+          <View style={{ flexDirection: 'row', gap: 10 }}>
+            <DetailStat label="Saves" value={formatCount(details.saveCount)} />
+            <DetailStat label="Remixes" value={formatCount(details.remixCount)} />
+            <DetailStat label="Source" value={details.sourceLabel} />
+          </View>
+        )}
 
         <DetailSection title="Prompt" emptyLabel="No prompt provided">
           {details.prompt ? (
@@ -1815,6 +1972,23 @@ function formatCount(value: number) {
   if (value >= 1000000) return `${(value / 1000000).toFixed(value >= 10000000 ? 0 : 1)}M`;
   if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}K`;
   return String(value);
+}
+
+function viewerStateChipStyle(tone: ViewerStateTone) {
+  const semantic = tone === 'neutral' ? appTheme.semantic.neutral : appTheme.semantic[tone];
+  return {
+    foreground: semantic.foreground,
+    // The semantic tints are tuned for app surfaces and wash out over media, so the
+    // chip keeps a dark fill and lets the semantic border carry the signal.
+    background: 'rgba(8,8,10,0.62)',
+    border: semantic.border,
+  };
+}
+
+function formatGenerationDate(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '—';
+  return parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function ImmersiveMedia({
@@ -2256,6 +2430,9 @@ function RailActionButton({
           showAsActive: showDisabledAsActive || (Boolean(loading) && Boolean(preserveIconWhileLoading)),
         }),
         minWidth: 64,
+        // Without a ceiling a long label widens the button and drags the whole rail
+        // out of its column, so labels truncate inside a fixed-width lane instead.
+        maxWidth: 76,
       })}
     >
       <View

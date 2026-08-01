@@ -14,6 +14,11 @@ import { FEED_CHIPS, FEED_PAGE_SIZE, getFeedChip, type FeedChipId } from '@/lib/
 import { buildPostFeedCards } from '@/lib/post-feed-presentation';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { ShowcaseFeedItem, ShowcaseFeedPage, ShowcaseMediaItem } from '@/lib/showcase';
+import {
+    buildShowcaseClientCacheKey,
+    readShowcaseClientSnapshot,
+    writeShowcaseClientSnapshot,
+} from '@/lib/showcase-client-cache';
 
 const PAGE_DETAIL_CONTEXT: FeedDetailContext = { from: 'community', returnTo: '/feed' };
 
@@ -60,8 +65,45 @@ export default function FeedClient({
     const isEmbedded = variant === 'embedded';
 
     const [chipId, setChipId] = useState<FeedChipId>(initialChipId);
+
+    // Opening a post unmounts this feed, so everything paged in after the server's
+    // first page lives only in React state and dies on the way out. Coming back
+    // then re-renders page one and immediately re-fetches, losing the reader's
+    // place. A session snapshot — the same one the showcase grid keeps — restores
+    // what was already loaded instead.
+    const cacheKey = useMemo(() => {
+        const chip = getFeedChip(initialChipId);
+        return buildShowcaseClientCacheKey({
+            surface: 'home-feed',
+            viewerId: user?.id ?? null,
+            category: 'all',
+            sort: chip.sort,
+            tool: null,
+            unlock: chip.unlock,
+            resource: 'all',
+        });
+    }, [initialChipId, user?.id]);
+    // Read once: a later read could pick up a snapshot this component just wrote
+    // and clobber live state with a stale copy of itself.
+    const [restoredFeed] = useState(() => {
+        const snapshot = readShowcaseClientSnapshot(cacheKey);
+        if (!snapshot || snapshot.feed.items.length <= initialFeed.items.length) return null;
+
+        // `isSaved` rides on the item, so a save made before navigating away would
+        // come back undone unless the snapshot's save set is reapplied.
+        const restoredSavedItemIds = new Set(snapshot.savedItemIds);
+        return {
+            ...snapshot.feed,
+            items: snapshot.feed.items.map((item) => ({
+                ...item,
+                isSaved: restoredSavedItemIds.has(item.id),
+            })),
+        };
+    });
+    const seedFeed = restoredFeed ?? initialFeed;
+
     const [nextOffset, setNextOffset] = useState<number | null>(
-        initialFeed.pageInfo.hasMore ? initialFeed.pageInfo.nextOffset : null
+        seedFeed.pageInfo.hasMore ? seedFeed.pageInfo.nextOffset : null
     );
     const [loadingMore, setLoadingMore] = useState(false);
     const [switching, setSwitching] = useState(false);
@@ -86,11 +128,11 @@ export default function FeedClient({
         savingItemIds,
         toggleSave,
     } = useOptimisticPostSave<ShowcaseFeedItem>({
-        // The server page only, and it never changes identity. The hook resets its
+        // The seed page only, and it never changes identity. The hook resets its
         // optimistic save state whenever `initialItems` does, so later pages go
         // through `setItems` — otherwise loading page 2 would roll back a save the
         // viewer just made on page 1.
-        initialItems: initialFeed.items,
+        initialItems: seedFeed.items,
         accessToken,
         isSignedIn: Boolean(user),
         onAuthRequired: () => { window.location.href = '/login'; },
@@ -171,6 +213,27 @@ export default function FeedClient({
         requestIdRef.current += 1;
         activeRequestRef.current?.abort();
     }, []);
+
+    useEffect(() => {
+        // Only the mount-time chip is restorable, so only it is worth storing;
+        // and an empty list is the transient state mid chip-switch, never a
+        // snapshot worth coming back to.
+        if (chipId !== initialChipId || items.length === 0) return;
+
+        writeShowcaseClientSnapshot(cacheKey, {
+            feed: {
+                ...seedFeed,
+                items,
+                pageInfo: {
+                    ...seedFeed.pageInfo,
+                    hasMore: nextOffset !== null,
+                    nextOffset,
+                },
+            },
+            renderedItemCount: items.length,
+            savedItemIds: [...savedItemIds],
+        });
+    }, [cacheKey, chipId, initialChipId, items, nextOffset, savedItemIds, seedFeed]);
 
     useEffect(() => {
         const sentinel = sentinelRef.current;

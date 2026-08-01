@@ -8,12 +8,19 @@ import type {
   ShowcaseUnlockFilter,
 } from '@/lib/showcase';
 
-const SHOWCASE_CLIENT_CACHE_VERSION = 'v1';
+// v2 added `surface` to the key. The home feed and the showcase grid both cache
+// here and their filter tuples overlap, so without it a home-feed snapshot could
+// be restored into the showcase grid and vice versa.
+const SHOWCASE_CLIENT_CACHE_VERSION = 'v2';
 const SHOWCASE_CLIENT_CACHE_STORAGE_PREFIX = `magicbooklet:showcase:${SHOWCASE_CLIENT_CACHE_VERSION}:`;
 const SHOWCASE_CLIENT_CACHE_TTL_MS = 10 * 60 * 1_000;
 const SHOWCASE_CLIENT_CACHE_MAX_ENTRIES = 8;
 
+/** Which paginated surface a snapshot belongs to. */
+export type ShowcaseClientCacheSurface = 'showcase' | 'home-feed';
+
 export interface ShowcaseClientCacheKeyInput {
+  surface?: ShowcaseClientCacheSurface;
   viewerId?: string | null;
   category: ShowcaseCategory;
   sort: ShowcaseSort;
@@ -81,6 +88,7 @@ function pruneMemoryCache() {
 
 export function buildShowcaseClientCacheKey(input: ShowcaseClientCacheKeyInput): string {
   return [
+    input.surface ?? 'showcase',
     input.viewerId?.trim() || 'anonymous',
     input.category,
     input.sort,

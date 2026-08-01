@@ -273,7 +273,9 @@ describe('immersive preview view model', () => {
     });
     expect(items[0].details).toBeDefined();
     expect(items[0].details?.generationInfo).toBeDefined();
-    expect(hasImmersiveDetailsPage(items[0])).toBe(false);
+    // Generations render in the reel now, so their details page carries the
+    // generationInfo block the old card screen used to show inline.
+    expect(hasImmersiveDetailsPage(items[0])).toBe(true);
     expect(items[1]).toMatchObject({
       previewKind: 'text',
       displayText: 'Write three captions',

@@ -11,8 +11,128 @@ import {
   getSaveHeartTapAnimationSpec,
   getViewerActionGroupLabel,
   getViewerActionLabel,
+  getViewerActionSlots,
+  getViewerStateChip,
   isDestructiveViewerAction,
 } from '../lib/viewer-actions';
+import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
+
+function railItem(overrides: Partial<ImmersivePreviewItem> = {}): ImmersivePreviewItem {
+  return {
+    id: 'item-1',
+    source: 'profile-creations',
+    sourceType: 'generation',
+    title: 'Item',
+    displayText: 'Item',
+    mediaUrl: 'https://cdn.test/a.png',
+    mediaKind: 'image',
+    mediaItems: [],
+    creatorLabel: '@creator',
+    creatorAvatar: null,
+    badge: 'Image',
+    saveLabel: '0',
+    saveCount: 0,
+    commentLabel: '0',
+    commentCount: 0,
+    canComment: false,
+    isSaved: false,
+    canSave: false,
+    canShare: true,
+    sharePath: null,
+    recreateTool: 'image',
+    recreatePrompt: 'prompt',
+    showcasePostId: null,
+    generationId: 'gen-1',
+    ownerPostId: null,
+    availableActions: [],
+    disabledActions: {},
+    ...overrides,
+  };
+}
+
+describe('viewer rail slots', () => {
+  it('leads an unpublished creation with Publish and never renders a dead save slot', () => {
+    const slots = getViewerActionSlots(railItem({
+      availableActions: ['publish', 'recreate', 'archive', 'share', 'view-details'],
+    }));
+
+    expect(slots.map((slot) => slot.id)).toEqual(['publish', 'share', 'details', 'create']);
+    expect(slots.find((slot) => slot.id === 'publish')).toMatchObject({
+      action: 'publish',
+      label: 'Publish',
+      tone: 'primary',
+    });
+    expect(slots.some((slot) => slot.id === 'save')).toBe(false);
+    expect(slots.some((slot) => slot.id === 'comment')).toBe(false);
+  });
+
+  it('swaps a published creation to visibility and unlock controls', () => {
+    const slots = getViewerActionSlots(railItem({
+      linkedPostId: 'post-1',
+      linkedPostVisibility: 'public',
+      availableActions: ['edit-linked-resources', 'make-private', 'view-linked', 'recreate', 'share', 'view-details'],
+    }));
+
+    expect(slots.map((slot) => slot.id)).toEqual(['visibility', 'unlock', 'share', 'details', 'create']);
+    expect(slots.find((slot) => slot.id === 'visibility')).toMatchObject({
+      action: 'make-private',
+      label: 'Private',
+      a11yLabel: 'Make linked post private',
+    });
+    // No bundle attached yet, so the unlock slot invites creating one — the rail label
+    // stays short and the full phrasing lives on the accessibility label.
+    expect(slots.find((slot) => slot.id === 'unlock')).toMatchObject({
+      label: 'Unlock',
+      a11yLabel: 'Add an unlock bundle',
+    });
+  });
+
+  it('keeps save and comment for saved showcase media', () => {
+    const slots = getViewerActionSlots(railItem({
+      source: 'profile-saved',
+      sourceType: 'showcase',
+      showcasePostId: 'post-1',
+      generationId: null,
+      canSave: true,
+      canComment: true,
+      isSaved: true,
+      commentCount: 4,
+      commentLabel: '4',
+      availableActions: ['unsave', 'comment', 'share', 'recreate', 'view-details'],
+    }));
+
+    expect(slots.map((slot) => slot.id)).toEqual(['save', 'comment', 'share', 'details', 'create']);
+    expect(slots.find((slot) => slot.id === 'save')?.label).toBe('Saved');
+    expect(slots.find((slot) => slot.id === 'comment')?.label).toBe('4');
+  });
+
+  it('drops ownership slots for an archived creation', () => {
+    const slots = getViewerActionSlots(railItem({
+      archivedAt: '2026-01-01T00:00:00.000Z',
+      availableActions: ['restore', 'view-details'],
+    }));
+
+    expect(slots.map((slot) => slot.id)).toEqual(['share', 'details']);
+  });
+});
+
+describe('viewer state chip', () => {
+  it('reports creation publish state', () => {
+    expect(getViewerStateChip(railItem())).toEqual({ label: 'Not posted', tone: 'neutral' });
+    expect(getViewerStateChip(railItem({ linkedPostId: 'p1', linkedPostVisibility: 'public' })))
+      .toEqual({ label: 'Public post', tone: 'success' });
+    expect(getViewerStateChip(railItem({ linkedPostId: 'p1', linkedPostVisibility: 'private' })))
+      .toEqual({ label: 'Private post', tone: 'warning' });
+    expect(getViewerStateChip(railItem({ archivedAt: '2026-01-01T00:00:00.000Z' })))
+      .toEqual({ label: 'Archived', tone: 'danger' });
+  });
+
+  it('reports owner post visibility and stays silent for showcase media', () => {
+    expect(getViewerStateChip(railItem({ sourceType: 'owner-post', visibility: 'private' })))
+      .toEqual({ label: 'Private post', tone: 'warning' });
+    expect(getViewerStateChip(railItem({ sourceType: 'showcase' }))).toBeNull();
+  });
+});
 
 describe('immersive viewer actions', () => {
   it('uses clear source-aware labels for owner and creation commands', () => {

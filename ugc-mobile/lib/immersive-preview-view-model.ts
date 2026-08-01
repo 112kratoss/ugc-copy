@@ -73,6 +73,8 @@ export interface ImmersivePreviewItem {
   creatorAvatar: string | null;
   creatorId?: string | null;
   creatorUsername?: string | null;
+  /** Source timestamp, used by the profile card feed's relative time label. */
+  createdAt?: string | null;
   badge: string;
   saveLabel: string;
   saveCount: number;
@@ -155,6 +157,10 @@ export function immersiveViewerReturnPath({
     .join('&')}`;
 }
 
+/**
+ * Owned media (Creations, Posts) opens the card feed rather than the reel — it is
+ * managed, not consumed. Saved media still goes straight to `/viewer`.
+ */
 export function profileMediaFeedHref({
   source,
   initialId,
@@ -215,7 +221,10 @@ export function isImmersiveVideoItem(item: ImmersivePreviewItem) {
 }
 
 export function hasImmersiveDetailsPage(item: ImmersivePreviewItem) {
-  return Boolean(item.details) && item.sourceType !== 'generation';
+  // Generations were excluded while they rendered in the separate card screen, which
+  // showed their model/cost metadata inline. Now that every source opens the reel,
+  // the details page is the only place that metadata can live.
+  return Boolean(item.details);
 }
 
 export function getImmersiveHorizontalPageIndex(detailsOpen: boolean) {
@@ -312,6 +321,7 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
     creatorAvatar: item.creator.avatar,
     creatorId: item.creator.id,
     creatorUsername: item.creator.username?.trim() || null,
+    createdAt: item.createdAt ?? null,
     badge: showcaseBadge(item),
     saveLabel: formatCompactCount(item.saveCount),
     saveCount: item.saveCount,
@@ -401,6 +411,7 @@ function generationToImmersiveItem(
     previewKind: kind === 'text' ? 'text' : undefined,
     creatorLabel: owner.creatorLabel,
     creatorAvatar: owner.creatorAvatar ?? null,
+    createdAt: item.created_at ?? null,
     badge: getGenerationLabel(kind),
     saveLabel: 'Saved',
     saveCount: 0,
@@ -511,6 +522,7 @@ function ownerPostToImmersiveItem(
     creatorLabel: owner.creatorLabel,
     creatorAvatar: owner.creatorAvatar ?? null,
     creatorId: owner.creatorId ?? null,
+    createdAt: item.createdAt ?? null,
     badge: ownerPostBadge(item),
     saveLabel: '0',
     saveCount: 0,
