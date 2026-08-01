@@ -61,8 +61,8 @@ const DRAG_CLICK_THRESHOLD_PX = 5;
  */
 const DRAG_VELOCITY_STALE_MS = 90;
 
-export default function HomeSlider() {
-  const slides = useMemo(() => getHomeSlides(), []);
+export default function HomeSlider({ displayName }: { displayName?: string | null } = {}) {
+  const slides = useMemo(() => getHomeSlides(displayName), [displayName]);
   const loopedSlides = useMemo(() => buildLoopedHomeSlides(slides), [slides]);
   const initialIndex = getInitialHomeSlideIndex(slides.length);
 

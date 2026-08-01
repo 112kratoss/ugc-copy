@@ -4,6 +4,7 @@ import { Suspense, use } from 'react';
 import AnonymousHome from '@/app/components/AnonymousHome';
 import { StatusCallout } from '@/app/components/DesignSystem';
 import HomeExperience from '@/app/components/HomeExperience';
+import HomeSlider from '@/app/components/HomeSlider';
 import QuickStartsCard from '@/app/components/QuickStartsCard';
 import WhatsNewModelsCard from '@/app/components/WhatsNewModelsCard';
 import FeedClient from '@/app/feed/FeedClient';
@@ -25,6 +26,20 @@ type HomeDashboardPageProps = {
 
 function getFirstValue(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
+}
+
+/**
+ * Mirrors the mobile rail's greeting chain, minus its profile lookup: the
+ * session already carries these, so the rail costs this page no extra query.
+ * A creator who set a custom `display_name` therefore sees their sign-in name
+ * here and their profile name on mobile.
+ */
+function resolveDisplayName(user: { user_metadata?: Record<string, unknown>; email?: string }) {
+  const fullName = typeof user.user_metadata?.full_name === 'string'
+    ? user.user_metadata.full_name.trim()
+    : '';
+
+  return fullName || user.email?.split('@')[0] || 'Creator';
 }
 
 const FEED_DETAIL_CONTEXT = { from: 'home', returnTo: '/' };
@@ -145,6 +160,7 @@ export default async function HomeDashboardPage({ searchParams }: HomeDashboardP
 
   return (
     <HomeExperience
+      hero={<HomeSlider displayName={resolveDisplayName(auth.session.user)} />}
       inlineStrip={(
         <Suspense fallback={null}>
           <HomeWorkspaceSection data={workspacePromise} credits={auth.credits} variant="inline" />

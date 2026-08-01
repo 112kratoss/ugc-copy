@@ -118,6 +118,37 @@ describe('HomeDashboardPage auth branch', () => {
     }));
   });
 
+  it('shows the create rail to signed-in creators too, greeted by name', async () => {
+    getServerAuthStateMock.mockResolvedValue({
+      session: { user: { id: 'user-1', email: 'sassy@example.test', user_metadata: { full_name: 'Sassy Manjeri' } } },
+      credits: 88,
+    });
+    const { default: HomeDashboardPage } = await import('@/app/home/page');
+
+    const html = await renderPageToHtml(
+      await HomeDashboardPage({ searchParams: Promise.resolve({}) }),
+    );
+
+    // The rail shipped signed-out only at first, so signing in swapped it for
+    // the workspace strip — mobile shows it either way, and so should this.
+    expect(html).toContain('home-slider-track');
+    expect(html).toContain('Ready when you are, Sassy Manjeri');
+  });
+
+  it('greets from the email when the account carries no name', async () => {
+    getServerAuthStateMock.mockResolvedValue({
+      session: { user: { id: 'user-1', email: 'sassy@example.test' } },
+      credits: 88,
+    });
+    const { default: HomeDashboardPage } = await import('@/app/home/page');
+
+    const html = await renderPageToHtml(
+      await HomeDashboardPage({ searchParams: Promise.resolve({}) }),
+    );
+
+    expect(html).toContain('Ready when you are, sassy');
+  });
+
   it('maps the chip query onto the feed lane', async () => {
     getServerAuthStateMock.mockResolvedValue({
       session: { user: { id: 'user-1' } },
