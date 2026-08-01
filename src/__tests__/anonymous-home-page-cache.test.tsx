@@ -4,6 +4,7 @@ import type { ComponentPropsWithoutRef, ReactElement } from 'react';
 import { renderToPipeableStream } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { HOME_SLIDE_LOOP_PASSES, getHomeSlides } from '@/lib/home-slider';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
 const getServerAuthStateMock = vi.fn();
@@ -167,16 +168,67 @@ describe('Anonymous home cacheability', () => {
     }));
   });
 
-  it('keeps the hero, sign-in rail, quick starts, and legal footer', async () => {
+  it('keeps the create rail, sign-in rail, quick starts, and legal footer', async () => {
     const { default: Home } = await import('@/app/page');
 
     const html = await renderPageToHtml(<Home />);
 
-    expect(html).toContain('What will you create');
+    expect(html).toContain('Creator workspace');
+    expect(html).toContain('Create new');
     expect(html).toContain('Sign in');
     expect(html).toContain('Quick starts');
     expect(html).toContain('application/ld+json');
     expect(html).toContain('Child safety');
+  });
+
+  it('keeps exactly one h1 after the marketing hero was replaced by the rail', async () => {
+    const { default: Home } = await import('@/app/page');
+
+    const html = await renderPageToHtml(<Home />);
+    const container = document.createElement('div');
+    container.innerHTML = html;
+
+    // The rail carries no heading of its own, so the h1 the document outline
+    // and the search snippet both rely on is now visually hidden. Losing it
+    // would be invisible in the design and costly everywhere else.
+    const headings = container.querySelectorAll('h1');
+
+    expect(headings).toHaveLength(1);
+    expect(headings[0].textContent).toContain('What will you create');
+    expect(headings[0].className).toContain('sr-only');
+  });
+
+  it('renders the rail server-side, repeated for the loop', async () => {
+    const { default: Home } = await import('@/app/page');
+
+    const html = await renderPageToHtml(<Home />);
+    const container = document.createElement('div');
+    container.innerHTML = html;
+
+    // Three passes is what lets the rail wrap in both directions without a
+    // seam; server-rendering them keeps the rail from popping in on hydration.
+    expect(container.querySelectorAll('.home-slider-slide')).toHaveLength(
+      HOME_SLIDE_LOOP_PASSES * getHomeSlides().length
+    );
+  });
+
+  it('exposes only one copy of each rail link to assistive tech', async () => {
+    const { default: Home } = await import('@/app/page');
+
+    const html = await renderPageToHtml(<Home />);
+    const container = document.createElement('div');
+    container.innerHTML = html;
+
+    // The repeated passes are scenery. Left exposed they would announce every
+    // destination three times and put three tab stops on each.
+    const exposed = [...container.querySelectorAll('.home-slider-slide')]
+      .filter((slide) => slide.getAttribute('aria-hidden') !== 'true');
+
+    expect(exposed).toHaveLength(getHomeSlides().length);
+    expect(
+      [...container.querySelectorAll('.home-slider-slide[aria-hidden="true"] a')]
+        .every((link) => link.getAttribute('tabindex') === '-1')
+    ).toBe(true);
   });
 
   it('renders the dynamic models card from the published catalog', async () => {
@@ -195,18 +247,20 @@ describe('Anonymous home cacheability', () => {
     const container = document.createElement('div');
     container.innerHTML = html;
 
-    const startCreating = [...container.querySelectorAll('a')]
-      .find((link) => link.textContent?.includes('Start creating'));
-    const browseShowcase = [...container.querySelectorAll('a')]
-      .find((link) => link.textContent?.includes('Browse Showcase'));
+    const createNew = [...container.querySelectorAll('a')]
+      .find((link) => link.textContent?.includes('Create new'));
+    const railTool = container.querySelector('.home-slider-slide a[href="/create-image"]');
     const quickStartImage = [...container.querySelectorAll('a')]
-      .find((link) => link.getAttribute('href') === '/create-image');
+      .find((link) => (
+        link.getAttribute('href') === '/create-image' && !link.closest('.home-slider-slide')
+      ));
 
     // The primary action keeps Next's default prefetch; everything else opts
-    // out so the signed-out landing does not warm routes nobody asked for.
-    expect(startCreating).toBeDefined();
-    expect(startCreating).not.toHaveAttribute('data-prefetch');
-    expect(browseShowcase).toHaveAttribute('data-prefetch', 'false');
+    // out so the signed-out landing does not warm routes nobody asked for —
+    // the rail especially, which renders every tool three times over.
+    expect(createNew).toBeDefined();
+    expect(createNew).not.toHaveAttribute('data-prefetch');
+    expect(railTool).toHaveAttribute('data-prefetch', 'false');
     expect(quickStartImage).toHaveAttribute('data-prefetch', 'false');
   });
 
