@@ -166,6 +166,16 @@ export default function PricingScreen() {
     const entries = (packageQuery.data ?? []).map((item) => [packageProductId(item), item] as const);
     return new Map(entries);
   }, [packageQuery.data]);
+  const storeReady = isConfigured
+    && packageQuery.isSuccess
+    && packagesByProductId.size > 0;
+  const storeStatus = packageQuery.isLoading
+    ? 'Connecting'
+    : packageQuery.error
+      ? 'Needs setup'
+      : storeReady
+        ? 'Ready'
+        : 'Unavailable';
 
   const selectedPlan = resolveSelectedPricingPlan(selectedPlanId);
   const selectedNativePackage = packagesByProductId.get(selectedPlan.productId);
@@ -287,8 +297,8 @@ export default function PricingScreen() {
             </AppText>
           </View>
           <Pill
-            label={`${storeLabel} · ${isConfigured ? 'Ready' : 'Unavailable'}`}
-            accent={isConfigured ? 'workflow' : 'amber'}
+            label={`${storeLabel} · ${storeStatus}`}
+            accent={storeReady ? 'workflow' : 'amber'}
           />
         </View>
       </Card>
@@ -313,7 +323,11 @@ export default function PricingScreen() {
       ) : null}
       {packageQuery.error ? (
         <View style={{ gap: appTheme.spacing.gap }}>
-          <StatusBlock tone="danger" title="Could not load credit packs" body="Check your connection, then try again." />
+          <StatusBlock
+            tone="danger"
+            title="Credit packs are not available"
+            body="The App Store could not return this build's credit packs. Retry once; if this continues, the purchase setup needs an app update."
+          />
           <SecondaryButton label="Retry credit packs" onPress={() => void packageQuery.refetch()} />
         </View>
       ) : null}
