@@ -1,4 +1,4 @@
-import { FlashList, type ListRenderItem, type ViewToken } from '@shopify/flash-list';
+import { FlashList, type FlashListRef, type ListRenderItem, type ViewToken } from '@shopify/flash-list';
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { useIsFocused } from '@react-navigation/native';
 import { Image } from 'expo-image';
@@ -39,12 +39,23 @@ import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import {
   HOME_FEED_CHIPS,
+  HOME_SLIDE_INTERVAL_MS,
+  HOME_SLIDE_RESUME_DELAY_MS,
+  advanceHomeSlide,
   buildHomeFeedCards,
+  buildLoopedHomeSlides,
+  foldHomeSlideOffset,
   getHomeFeedCardOpenTarget,
   getHomeFeedSlides,
+  getHomeSlideIndexFromOffset,
+  getHomeSlideOffset,
+  getHomeSlidePassWidth,
+  getInitialHomeSlideIndex,
+  shouldAutoAdvanceHomeSlides,
   type HomeFeedCard,
   type HomeFeedChipId,
   type HomeFeedSlide,
+  type HomeLoopedSlide,
 } from '@/lib/home-feed-view-model';
 import { getOwnerPostSalesSummary } from '@/lib/home-view-model';
 import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
@@ -645,6 +656,7 @@ export function HomeDashboard() {
               activeGenerationCount={activeGenerationCount}
               displayName={displayName}
               horizontalPadding={horizontalPadding}
+              isFocused={isFocused}
               reduceMotion={reduceMotion}
               signedIn={Boolean(user)}
               slideWidth={slideWidth}
@@ -826,6 +838,7 @@ function TopSlider({
   activeGenerationCount,
   displayName,
   horizontalPadding,
+  isFocused,
   reduceMotion,
   signedIn,
   slideWidth,
@@ -833,33 +846,158 @@ function TopSlider({
   activeGenerationCount: number;
   displayName: string;
   horizontalPadding: number;
+  isFocused: boolean;
   reduceMotion: boolean;
   signedIn: boolean;
   slideWidth: number;
 }) {
   const slides = useMemo(() => getHomeFeedSlides(), []);
   const gap = 10;
+  // Laid out three times, with the carousel parked in the middle pass, so it
+  // can travel off either end into more of the same rail rather than reversing.
+  const loopedSlides = useMemo(() => buildLoopedHomeSlides(slides), [slides]);
+  const initialIndex = getInitialHomeSlideIndex(slides.length);
+  const listRef = useRef<FlashListRef<HomeLoopedSlide>>(null);
+  // The timer's own position. Held in a ref so re-arming it on every tick
+  // would not restart the interval mid-cycle. It starts at 0 — the list's
+  // actual resting place — and only claims the middle pass once the scroll
+  // that gets it there has actually been issued.
+  const slideIndexRef = useRef(0);
+  const resumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const centerFrameRef = useRef<number | null>(null);
+  const [isInteracting, setIsInteracting] = useState(false);
+
+  const autoAdvance = shouldAutoAdvanceHomeSlides({
+    slideCount: slides.length,
+    isFocused,
+    isInteracting,
+    reduceMotion,
+  });
+
+  useEffect(() => {
+    if (!autoAdvance) return;
+
+    const timer = setInterval(() => {
+      const nextIndex = advanceHomeSlide(slideIndexRef.current, slides.length);
+      slideIndexRef.current = nextIndex;
+      listRef.current?.scrollToOffset({
+        offset: getHomeSlideOffset(nextIndex, slideWidth, gap),
+        animated: true,
+      });
+    }, HOME_SLIDE_INTERVAL_MS);
+
+    return () => clearInterval(timer);
+  }, [autoAdvance, gap, slideWidth, slides.length]);
+
+  // Pending work must not outlive the slider: the resume would call setState on
+  // an unmounted component after a tab switch, and the centering frame would
+  // scroll a list that is gone.
+  useEffect(() => () => {
+    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
+    if (centerFrameRef.current !== null) cancelAnimationFrame(centerFrameRef.current);
+  }, []);
+
+  /**
+   * Slides the rail to the middle pass as soon as the list has drawn, so a
+   * backward swipe has somewhere to go from the very first card.
+   * `initialScrollIndex` is not used for this: FlashList ignored it here, which
+   * left the ref claiming the middle pass while the list sat at 0 — the next
+   * tick would then have lurched several slides at once. The index is only
+   * updated alongside the scroll that moves it, so if this never runs the
+   * rotation still starts from a truthful 0 and the first settle recenters it.
+   */
+  const centerOnLoad = useCallback(() => {
+    if (initialIndex === 0) return;
+
+    // Deferred a frame: at `onLoad` the rows have drawn but the scroll metrics
+    // have not settled, and a scroll issued synchronously here is dropped.
+    centerFrameRef.current = requestAnimationFrame(() => {
+      listRef.current?.scrollToOffset({
+        offset: getHomeSlideOffset(initialIndex, slideWidth, gap),
+        animated: false,
+      });
+      slideIndexRef.current = initialIndex;
+    });
+  }, [gap, initialIndex, slideWidth]);
+
+  const scheduleResume = useCallback(() => {
+    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
+    resumeTimerRef.current = setTimeout(() => setIsInteracting(false), HOME_SLIDE_RESUME_DELAY_MS);
+  }, []);
+
+  const holdRotation = useCallback(() => {
+    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
+    setIsInteracting(true);
+  }, []);
+
+  /**
+   * Runs once the scroll has come to rest — the timer's own scrolls included.
+   * Whatever pass it landed in, the offset is translated back into the middle
+   * pass by whole pass-widths, which maps every visible pixel onto its own
+   * copy. Nothing moves on screen; it just restores the runway needed to keep
+   * going in either direction.
+   */
+  const settleRotation = useCallback((offset: number) => {
+    const passWidth = getHomeSlidePassWidth(slides.length, slideWidth, gap);
+    const foldedOffset = foldHomeSlideOffset(offset, passWidth);
+
+    if (foldedOffset !== offset) {
+      listRef.current?.scrollToOffset({ offset: foldedOffset, animated: false });
+    }
+
+    slideIndexRef.current = getHomeSlideIndexFromOffset(foldedOffset, slideWidth, gap, loopedSlides.length);
+    scheduleResume();
+  }, [gap, loopedSlides.length, scheduleResume, slideWidth, slides.length]);
 
   return (
     <FlashList
-      data={slides}
+      ref={listRef}
+      data={loopedSlides}
       horizontal
-      keyExtractor={(slide) => slide.id}
+      keyExtractor={(item) => item.key}
+      // Recentering jumps a full pass, so the list re-renders its window on
+      // arrival. Typing the rows lets it reuse the view it already had for the
+      // same kind of slide instead of rebuilding a different one mid-jump.
+      getItemType={(item) => item.slide.kind}
+      // Keeps a full pass mounted beyond each edge, so the window a recentering
+      // teleport lands on is always already drawn. One slide of headroom is not
+      // enough: the teleport moves a whole pass, and any card it reveals that
+      // was not mounted flashes in a frame late — a visible jerk. The rail is
+      // a dozen lightweight cards, so mounting it all costs nothing.
+      drawDistance={getHomeSlidePassWidth(slides.length, slideWidth, gap)}
+      // The default anchoring re-adjusts the offset when content shifts — on a
+      // deliberate instant teleport that correction fights the jump and tugs
+      // the rail a frame later. The rail's data never changes at runtime, so
+      // anchoring buys nothing here.
+      maintainVisibleContentPosition={{ disabled: true }}
+      onLoad={centerOnLoad}
       showsHorizontalScrollIndicator={false}
       snapToInterval={slideWidth + gap}
       snapToAlignment="start"
       disableIntervalMomentum
       decelerationRate="fast"
+      onScrollBeginDrag={holdRotation}
+      // Only momentum end reports a settled offset — `onScrollEndDrag` fires at
+      // finger-lift with the scroll still in flight, so reading the index there
+      // could trigger a visible correction to the wrong slide. It re-arms the
+      // resume timer only, as the safety net for a drag that never coasts.
+      onScrollEndDrag={scheduleResume}
+      onMomentumScrollEnd={(event) => settleRotation(event.nativeEvent.contentOffset.x)}
+      // The rail presents as endless, so its real ends must never be felt: a
+      // hard fling that reaches the layout edge would otherwise stretch
+      // (Android) or rubber-band (iOS) before the fold teleports it home.
+      overScrollMode="never"
+      bounces={false}
       style={{ height: TOP_SLIDE_HEIGHT }}
       contentContainerStyle={{ paddingHorizontal: horizontalPadding }}
-      renderItem={({ item: slide }) => (
+      renderItem={({ item }) => (
         <View style={{ marginRight: gap }}>
           <TopSlide
             activeGenerationCount={activeGenerationCount}
             displayName={displayName}
             reduceMotion={reduceMotion}
             signedIn={signedIn}
-            slide={slide}
+            slide={item.slide}
             width={slideWidth}
           />
         </View>
