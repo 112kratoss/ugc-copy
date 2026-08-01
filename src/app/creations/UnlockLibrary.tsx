@@ -8,7 +8,8 @@ import { formatUsdCents } from '@/lib/post-resource-bundles';
 import { supabase } from '@/lib/supabase';
 
 type UnlockItem = {
-  bundleId: string;
+  unlockId: string;
+  bundleId: string | null;
   postId: string | null;
   title: string;
   previewText: string;
@@ -195,7 +196,7 @@ export default function UnlockLibrary() {
           // delisted purchases this library exists to keep reachable. The
           // /unlocks route checks entitlement and bounces back to the public
           // page when the post is still publicly readable.
-          const href = item.postId ? `/unlocks/${item.postId}` : null;
+          const href = `/unlocks/${item.unlockId}`;
           const card = (
             <div className="flex h-full flex-col gap-3 rounded-2xl border border-white/8 bg-zinc-900/50 p-4 transition hover:border-white/16 hover:bg-zinc-900/70">
               <div className="flex items-start gap-3">
@@ -239,8 +240,8 @@ export default function UnlockLibrary() {
           );
 
           return (
-            <li key={item.bundleId}>
-              {href ? <Link href={href} className="block h-full">{card}</Link> : card}
+            <li key={item.unlockId}>
+              <Link href={href} className="block h-full">{card}</Link>
             </li>
           );
         })}

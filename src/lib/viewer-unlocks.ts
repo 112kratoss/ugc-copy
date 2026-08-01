@@ -18,7 +18,9 @@ export const VIEWER_UNLOCKS_DEFAULT_PAGE_SIZE = 24;
 export const VIEWER_UNLOCKS_MAX_PAGE_SIZE = 48;
 
 export interface ViewerUnlockItem {
-  bundleId: string;
+  /** Permanent entitlement identity. Bundle and post are only live context. */
+  unlockId: string;
+  bundleId: string | null;
   postId: string | null;
   title: string;
   previewText: string;
@@ -58,7 +60,8 @@ export interface ViewerUnlocksPage {
 }
 
 type UnlockRow = {
-  bundle_id: string;
+  purchase_id: string;
+  bundle_id: string | null;
   post_id: string | null;
   bundle_title: string | null;
   preview_text: string | null;
@@ -154,6 +157,7 @@ export async function listViewerUnlocks({
       : null;
 
     return {
+      unlockId: row.purchase_id,
       bundleId: row.bundle_id,
       postId: row.post_id,
       title: row.bundle_title?.trim() || 'Unlock',

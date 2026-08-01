@@ -386,6 +386,16 @@
       "path": "/api/me/unlocks",
       "auth": "required"
     },
+    "getViewerUnlock": {
+      "method": "GET",
+      "path": "/api/me/unlocks/:unlockId",
+      "auth": "required"
+    },
+    "getViewerUnlockFileUrl": {
+      "method": "POST",
+      "path": "/api/me/unlocks/:unlockId/file-url",
+      "auth": "required"
+    },
     "getPostResourceFileUrl": {
       "method": "POST",
       "path": "/api/posts/:postId/resource-bundle/file-url",

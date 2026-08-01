@@ -7,7 +7,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(9);
+select plan(18);
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
 values
@@ -35,7 +35,9 @@ select
   ('31000000-0000-4000-8000-00000000000' || suffix)::uuid,
   ('21000000-0000-4000-8000-00000000000' || suffix)::uuid,
   '11000000-0000-4000-8000-000000000001'::uuid,
-  'paid', 'published', 'Recipe ' || suffix, 'Summary', 'Preview', 'Prompt', 500
+  case when suffix = 2 then 'free' else 'paid' end,
+  'published', 'Recipe ' || suffix, 'Summary', 'Preview', 'Prompt',
+  case when suffix = 2 then 0 else 500 end
 from generate_series(1, 3) AS suffix;
 
 insert into public.post_resource_bundle_orders (
@@ -46,7 +48,8 @@ select
   ('41000000-0000-4000-8000-00000000000' || suffix)::uuid,
   ('31000000-0000-4000-8000-00000000000' || suffix)::uuid,
   '12000000-0000-4000-8000-000000000002'::uuid,
-  'order_lib_' || suffix, 'pay_lib_' || suffix, 500, 'USD', 'created'
+  'order_lib_' || suffix, 'pay_lib_' || suffix,
+  case when suffix = 2 then 0 else 500 end, 'USD', 'created'
 from generate_series(1, 3) AS suffix;
 
 insert into public.post_resource_bundle_purchases (
@@ -56,7 +59,9 @@ select
   ('31000000-0000-4000-8000-00000000000' || suffix)::uuid,
   '12000000-0000-4000-8000-000000000002'::uuid,
   ('41000000-0000-4000-8000-00000000000' || suffix)::uuid,
-  500, 500, 'USD'
+  case when suffix = 2 then 0 else 500 end,
+  case when suffix = 2 then 0 else 500 end,
+  'USD'
 from generate_series(1, 3) AS suffix;
 
 select is(
@@ -64,6 +69,13 @@ select is(
     '12000000-0000-4000-8000-000000000002'::uuid, 24, 0)),
   3,
   'the buyer sees every unlock they bought'
+);
+
+select is(
+  (select count(purchase_id)::int from public.list_viewer_post_resource_unlocks(
+    '12000000-0000-4000-8000-000000000002'::uuid, 24, 0)),
+  3,
+  'every library row exposes its permanent purchase UUID'
 );
 
 select is(
@@ -124,6 +136,39 @@ select is(
   'a moderation take-down drops the unlock out of the library'
 );
 
+select isnt(
+  (select moderation_retracted_at
+   from public.post_resource_bundle_purchases
+   where bundle_id = '31000000-0000-4000-8000-000000000003'::uuid),
+  null,
+  'the moderation retraction is persisted on the purchase'
+);
+
+update public.posts
+set review_status = 'visible'
+where id = '21000000-0000-4000-8000-000000000003'::uuid;
+
+select is(
+  (select count(*)::int from public.list_viewer_post_resource_unlocks(
+    '12000000-0000-4000-8000-000000000002'::uuid, 24, 0)),
+  3,
+  'restoring the post restores the buyer entitlement'
+);
+
+select is(
+  (select moderation_retracted_at
+   from public.post_resource_bundle_purchases
+   where bundle_id = '31000000-0000-4000-8000-000000000003'::uuid),
+  null,
+  'restoration clears the purchase-level retraction'
+);
+
+-- Hide it again so deleting the seller proves the moderation decision cannot
+-- disappear with the post that carried it.
+update public.posts
+set review_status = 'hidden'
+where id = '21000000-0000-4000-8000-000000000003'::uuid;
+
 -- A newer revision is surfaced so the buyer can tell something changed.
 update public.post_resource_bundles
 set prompt_text = 'Rewritten prompt'
@@ -141,6 +186,58 @@ select is(
     '12000000-0000-4000-8000-000000000002'::uuid, 1, 0)),
   1,
   'the projection honours the page limit'
+);
+
+delete from auth.users
+where id = '11000000-0000-4000-8000-000000000001'::uuid;
+
+select is(
+  (select count(*)::int from public.post_resource_bundle_purchases
+   where buyer_user_id = '12000000-0000-4000-8000-000000000002'::uuid),
+  3,
+  'paid and free purchases survive seller deletion'
+);
+
+select is(
+  (select count(*)::int from public.post_resource_bundle_purchases
+   where buyer_user_id = '12000000-0000-4000-8000-000000000002'::uuid
+     and bundle_id is null),
+  3,
+  'all purchases detach from bundle and post context'
+);
+
+select is(
+  (select count(*)::int from public.list_viewer_post_resource_unlocks(
+    '12000000-0000-4000-8000-000000000002'::uuid, 24, 0)),
+  2,
+  'the hidden purchase remains retracted after seller deletion'
+);
+
+select is(
+  (select count(*)::int
+   from public.post_resource_bundle_purchases purchases
+   where purchases.buyer_user_id = '12000000-0000-4000-8000-000000000002'::uuid
+     and purchases.moderation_retracted_at is null
+     and exists (
+       select 1
+       from public.get_viewer_post_resource_unlock(
+         purchases.id,
+         '12000000-0000-4000-8000-000000000002'::uuid
+       )
+     )),
+  2,
+  'multiple detached purchases resolve independently by purchase UUID'
+);
+
+select is(
+  (select count(*)::int
+   from public.get_viewer_post_resource_unlock(
+     (select id from public.post_resource_bundle_purchases
+      where post_title = 'Hidden post' limit 1),
+     '12000000-0000-4000-8000-000000000002'::uuid
+   )),
+  0,
+  'the buyer-scoped detail projection also rejects the moderated purchase'
 );
 
 select finish();

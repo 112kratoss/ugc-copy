@@ -58,13 +58,8 @@ export function formatUnlockDate(value: string): string {
  * getMarketplaceResourceDetail, which falls back to the entitlement-aware
  * bundle endpoint and therefore still opens for a delisted or tombstoned post.
  */
-export function getUnlockDestination(item: ViewerUnlockItem): string | null {
-  if (!item.bundleId) {
-    return null;
-  }
-
-  const postParam = item.postId ? `?postId=${encodeURIComponent(item.postId)}` : '';
-  return `/marketplace/${encodeURIComponent(item.bundleId)}${postParam}`;
+export function getUnlockDestination(item: ViewerUnlockItem): string {
+  return `/unlock/${encodeURIComponent(item.unlockId)}`;
 }
 
 export function summarizeUnlockCount(total: number): string {

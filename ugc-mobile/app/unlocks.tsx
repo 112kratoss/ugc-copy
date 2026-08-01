@@ -87,12 +87,9 @@ export default function UnlocksScreen() {
 
         return (
           <Pressable
-            key={item.bundleId}
-            disabled={!destination}
+            key={item.unlockId}
             onPress={() => {
-              if (destination) {
-                router.push(destination as never);
-              }
+              router.push(destination as never);
             }}
           >
             <Card style={{ marginBottom: 12 }}>

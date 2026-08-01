@@ -56,6 +56,7 @@ import type {
   TemplateRunResponse,
   VideoGenerationRequest,
   ViewerUnlocksResponse,
+  ViewerUnlockDetailResponse,
 } from './types';
 import {
   GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
@@ -923,6 +924,13 @@ export function createApiClient({
       const suffix = query.size > 0 ? `?${query.toString()}` : '';
       return request<ViewerUnlocksResponse>(`/api/me/unlocks${suffix}`);
     },
+    getViewerUnlock: (unlockId: string) =>
+      request<ViewerUnlockDetailResponse>(`/api/me/unlocks/${encodeURIComponent(unlockId)}`),
+    getViewerUnlockFileUrl: (unlockId: string, storagePath: string) =>
+      request<{ success: boolean; signedUrl: string }>(`/api/me/unlocks/${encodeURIComponent(unlockId)}/file-url`, {
+        method: 'POST',
+        body: JSON.stringify({ storagePath }),
+      }),
     getPostResourceFileUrl: (postId: string, storagePath: string) =>
       request<{ success: boolean; signedUrl: string }>(`/api/posts/${postId}/resource-bundle/file-url`, {
         method: 'POST',

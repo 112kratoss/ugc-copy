@@ -11,6 +11,7 @@ import {
 
 function createUnlock(overrides: Partial<ViewerUnlockItem> = {}): ViewerUnlockItem {
   return {
+    unlockId: '11111111-1111-4111-8111-111111111111',
     bundleId: 'bundle-1',
     postId: 'post-1',
     title: 'Launch hook recipe',
@@ -81,11 +82,11 @@ describe('unlock library view model', () => {
     // The immersive viewer reads initialId and silently falls back to the
     // showcase feed for an unknown source, so the old
     // /viewer?postId=…&source=unlocks link dropped every buyer into the feed.
-    expect(getUnlockDestination(createUnlock())).toBe('/marketplace/bundle-1?postId=post-1');
+    expect(getUnlockDestination(createUnlock())).toBe('/unlock/11111111-1111-4111-8111-111111111111');
   });
 
   it('still opens when the post is gone, since the unlock is what was bought', () => {
-    expect(getUnlockDestination(createUnlock({ postId: null }))).toBe('/marketplace/bundle-1');
+    expect(getUnlockDestination(createUnlock({ bundleId: null, postId: null }))).toBe('/unlock/11111111-1111-4111-8111-111111111111');
   });
 
   it('pluralizes the count', () => {

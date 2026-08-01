@@ -1202,7 +1202,8 @@ export interface MobileNotificationPreferences {
  * whole post, which the buyer keeps regardless.
  */
 export interface ViewerUnlockItem {
-  bundleId: string;
+  unlockId: string;
+  bundleId: string | null;
   postId: string | null;
   title: string;
   previewText: string;
@@ -1237,4 +1238,44 @@ export interface ViewerUnlocksResponse {
     limit: number;
     offset: number;
   };
+}
+
+export interface ViewerUnlockRevision {
+  revisionId: string;
+  revisionNumber: number;
+  createdAt: string;
+  title: string;
+  summary: string;
+  previewText: string;
+  accessMode: 'free' | 'paid';
+  priceUsdCents: number;
+  resources: PostResourceBundleResources;
+}
+
+export interface ViewerUnlockDetail {
+  unlockId: string;
+  bundleId: string | null;
+  postId: string | null;
+  title: string;
+  summary: string;
+  previewText: string;
+  accessMode: 'free' | 'paid';
+  priceUsdCents: number;
+  purchasePriceUsdCents: number;
+  purchasedAt: string;
+  creatorDisplayName: string;
+  resourceKinds: PostResourceKind[];
+  currentResources: PostResourceBundleResources | null;
+  purchasedRevision: ViewerUnlockRevision;
+  hasNewerRevision: boolean;
+  detached: boolean;
+  retired: boolean;
+  tombstoned: boolean;
+  postVisibility: string | null;
+  post: MarketplaceResource['post'] | null;
+}
+
+export interface ViewerUnlockDetailResponse {
+  success: boolean;
+  unlock: ViewerUnlockDetail;
 }

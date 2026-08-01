@@ -12,6 +12,7 @@ import { listViewerUnlocks, normalizeViewerUnlocksPageParams } from '@/lib/viewe
 
 function createRow(overrides: Record<string, unknown> = {}) {
   return {
+    purchase_id: '11111111-1111-4111-8111-111111111111',
     bundle_id: 'bundle-1',
     post_id: 'post-1',
     bundle_title: 'Launch hook recipe',
@@ -64,6 +65,7 @@ describe('listViewerUnlocks', () => {
     const page = await listViewerUnlocks({ adminSupabase: client, viewerUserId: 'buyer-1' });
 
     expect(page.items[0]).toMatchObject({
+      unlockId: '11111111-1111-4111-8111-111111111111',
       bundleId: 'bundle-1',
       postId: 'post-1',
       title: 'Launch hook recipe',
@@ -73,6 +75,23 @@ describe('listViewerUnlocks', () => {
       creator: { displayName: 'Creator', username: 'creator' },
     });
     expect(page.items[0].post?.mediaUrl).toBe('https://media.example.com/posts/post-1/cover.jpg');
+  });
+
+  it('keeps detached purchases addressable by purchase UUID', async () => {
+    const { client } = createSupabaseMock([createRow({
+      bundle_id: null,
+      post_id: null,
+      post_tombstoned: true,
+      bundle_retired: true,
+    })]);
+
+    const page = await listViewerUnlocks({ adminSupabase: client, viewerUserId: 'buyer-1' });
+
+    expect(page.items[0]).toMatchObject({
+      unlockId: '11111111-1111-4111-8111-111111111111',
+      bundleId: null,
+      postId: null,
+    });
   });
 
   it('keeps a tombstoned unlock and flags it', async () => {

@@ -86,6 +86,9 @@ describe('account deletion cleanup service', () => {
             error: null,
           };
         }
+        if (name === 'list_creator_purchased_revisions_for_retention') {
+          return { data: [], error: null };
+        }
         if (name === 'mark_account_deletion_stage' && args.p_status === 'completed') {
           return { data: { status: 'resweep_pending' }, error: null };
         }
@@ -96,6 +99,10 @@ describe('account deletion cleanup service', () => {
     await expect(executeInitialAccountDeletion({
       admin: admin as never,
       userId: USER_ID,
+      retainPurchasedFiles: vi.fn(async () => {
+        calls.push('retain-purchased-files');
+        return { revisionsRetained: 1, filesRetained: 2 };
+      }),
     })).resolves.toMatchObject({
       alreadyCompleted: false,
       authUserAlreadyMissing: false,
@@ -104,11 +111,42 @@ describe('account deletion cleanup service', () => {
     expect(calls).toEqual([
       'prepare_account_deletion:',
       'mark_account_deletion_stage:storage_deleting',
+      'retain-purchased-files',
       'mark_account_deletion_stage:storage_deleted',
       'mark_account_deletion_stage:auth_deleting',
       `delete:${USER_ID}`,
       'mark_account_deletion_stage:completed',
     ]);
+  });
+
+  it('does not sweep source storage or delete Auth when purchased-file retention fails', async () => {
+    const mockStorage = storageMock();
+    const deleteUser = vi.fn();
+    const admin = {
+      storage: mockStorage.storage,
+      auth: { admin: { deleteUser } },
+      rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+        if (name === 'prepare_account_deletion') {
+          return { data: { status: 'prepared', storage_manifest: storageManifest }, error: null };
+        }
+        return { data: { status: args.p_status }, error: null };
+      }),
+    };
+
+    await expect(executeInitialAccountDeletion({
+      admin: admin as never,
+      userId: USER_ID,
+      retainPurchasedFiles: vi.fn(async () => {
+        throw new Error('copy failed');
+      }),
+    })).rejects.toThrow('copy failed');
+
+    expect(mockStorage.removed).toEqual([]);
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(admin.rpc).not.toHaveBeenCalledWith(
+      'mark_account_deletion_stage',
+      expect.objectContaining({ p_status: 'storage_deleted' }),
+    );
   });
 
   it('only treats stale or failed initial jobs with an available lease as due', async () => {
@@ -168,6 +206,9 @@ describe('account deletion cleanup service', () => {
               }
             : { data: { status: 'no_work' }, error: null };
         }
+        if (name === 'list_creator_purchased_revisions_for_retention') {
+          return { data: [], error: null };
+        }
         if (name === 'transition_account_deletion_initial') {
           transitions.push(String(args.p_status));
           return {
@@ -223,6 +264,9 @@ describe('account deletion cleanup service', () => {
                 error: null,
               }
             : { data: { status: 'no_work' }, error: null };
+        }
+        if (name === 'list_creator_purchased_revisions_for_retention') {
+          return { data: [], error: null };
         }
         if (name === 'transition_account_deletion_initial') {
           expect(args.p_status).toBe('failed');

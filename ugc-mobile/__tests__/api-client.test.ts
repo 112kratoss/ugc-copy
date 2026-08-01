@@ -639,6 +639,25 @@ describe('mobile api client caching', () => {
     expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
   });
 
+  it('requests buyer unlock details and files by purchase UUID', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      success: true,
+      signedUrl: 'https://cdn.magicbooklet.test/retained.zip',
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.getViewerUnlockFileUrl('unlock-1', 'creator/resource.zip');
+
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/me/unlocks/unlock-1/file-url');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({ storagePath: 'creator/resource.zip' });
+  });
+
   it('requests server-issued temporary media upload intents with JSON metadata', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       success: true,

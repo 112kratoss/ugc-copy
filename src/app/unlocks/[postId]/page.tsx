@@ -1,8 +1,9 @@
 import { redirect } from 'next/navigation';
 
-import { getPostResourceBundleDetailByPostId } from '@/lib/post-resource-bundles-server';
+import { createServiceClient } from '@/lib/server-helpers';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { getServerAuthState } from '@/lib/supabase-server';
+import { getViewerUnlockDetail } from '@/lib/viewer-unlock-detail';
 
 import UnlockDetail from './UnlockDetail';
 
@@ -24,25 +25,27 @@ interface UnlockDetailPageProps {
  * canonical URL for everything that has not been removed.
  */
 export default async function UnlockDetailPage({ params }: UnlockDetailPageProps) {
-  const { postId } = await params;
+  const { postId: unlockId } = await params;
   const auth = await getServerAuthState();
 
   if (!auth.session?.user) {
-    redirect(`/login?returnUrl=/unlocks/${postId}`);
+    redirect(`/login?returnUrl=/unlocks/${unlockId}`);
   }
 
-  const detail = await getPostResourceBundleDetailByPostId(postId, {
+  const detail = await getViewerUnlockDetail({
+    adminSupabase: createServiceClient(),
+    unlockId,
     viewerUserId: auth.session.user.id,
   });
 
-  if (!detail || !detail.viewerCanAccess) {
+  if (!detail) {
     redirect('/creations?view=unlocks');
   }
 
   const post = detail.post;
   const isPubliclyReadable = Boolean(
     post
-    && post.visibility === 'public'
+    && (post.visibility === 'public' || post.visibility === 'unlisted')
     && !post.archivedAt
     && !post.tombstoned,
   );

@@ -49,6 +49,10 @@ declare global {
 
 interface PostResourceBundlePanelProps {
   postId: string;
+  /** Buyer-library screens resolve files by purchase UUID, including after detachment. */
+  fileUrlEndpoint?: string;
+  /** Detached unlocks have no live version, so their pinned revision is the default. */
+  defaultToPurchasedRevision?: boolean;
   title: string;
   summary: string;
   previewText: string;
@@ -189,6 +193,8 @@ function formatResourceScopeLabel(scope: PostResourceItemScope | null | undefine
 
 export default function PostResourceBundlePanel({
   postId,
+  fileUrlEndpoint,
+  defaultToPurchasedRevision = false,
   title,
   summary,
   previewText,
@@ -209,7 +215,7 @@ export default function PostResourceBundlePanel({
   const { session, credits, updateCredits } = useAuth();
   const [hasAccess, setHasAccess] = useState(viewerCanAccess || viewerIsOwner);
   const [resources, setResources] = useState(initialResources);
-  const [showPurchasedRevision, setShowPurchasedRevision] = useState(false);
+  const [showPurchasedRevision, setShowPurchasedRevision] = useState(defaultToPurchasedRevision);
   // The buyer sees the creator's latest by default -- honest improvements reach
   // them for free -- but never loses the version they paid for.
   const activeResources = showPurchasedRevision && purchasedRevision
@@ -506,7 +512,7 @@ export default function PostResourceBundlePanel({
   };
 
   const fetchResourceFileUrl = useCallback(async (storagePath: string): Promise<string> => {
-    const response = await fetch(`/api/posts/${postId}/resource-bundle/file-url`, {
+    const response = await fetch(fileUrlEndpoint ?? `/api/posts/${postId}/resource-bundle/file-url`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -525,7 +531,7 @@ export default function PostResourceBundlePanel({
     }
 
     return data.signedUrl as string;
-  }, [postId, session]);
+  }, [fileUrlEndpoint, postId, session]);
 
   const resolveResourceFileUrl = async (storagePath: string): Promise<string | null> => {
     if (!isFree && !ensureAuthenticated()) {

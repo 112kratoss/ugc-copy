@@ -1,7 +1,11 @@
 import Link from 'next/link';
 import { Archive, ArrowLeft } from 'lucide-react';
 
-import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
+import {
+  buildPostResourceBundleLockedPreview,
+  formatUsdCents,
+} from '@/lib/post-resource-bundles';
+import type { ViewerUnlockDetail as ViewerUnlockDetailModel } from '@/lib/viewer-unlock-detail';
 
 import PostResourceBundlePanel from '../../showcase/[id]/PostResourceBundlePanel';
 
@@ -10,12 +14,15 @@ import PostResourceBundlePanel from '../../showcase/[id]/PostResourceBundlePanel
  * is reused verbatim so a retained purchase looks and behaves exactly like a
  * live one; only the surrounding explanation differs.
  */
-export default function UnlockDetail({ detail }: { detail: PostResourceBundleDetail }) {
-  const reason = detail.tombstoned
+export default function UnlockDetail({ detail }: { detail: ViewerUnlockDetailModel }) {
+  const reason = detail.detached
+    ? 'The creator deleted their account. Your purchased version and its files are retained here.'
+    : detail.tombstoned
     ? 'The creator removed this post. Your unlock is kept here permanently.'
-    : detail.retiredAt
+    : detail.retired
       ? 'This unlock is no longer sold. Yours stays available here.'
       : 'This post is no longer public. Your unlock stays available here.';
+  const initialResources = detail.currentResources ?? detail.purchasedRevision.resources;
 
   return (
     <div className="min-h-screen bg-[#050506] py-6 text-white">
@@ -35,45 +42,28 @@ export default function UnlockDetail({ detail }: { detail: PostResourceBundleDet
 
         <div className="mt-5">
           <PostResourceBundlePanel
-            postId={detail.postId}
+            postId={detail.postId ?? detail.unlockId}
+            fileUrlEndpoint={`/api/me/unlocks/${detail.unlockId}/file-url`}
             title={detail.title}
             summary={detail.summary}
             previewText={detail.previewText}
-            priceLabel={detail.priceQuote.formatted}
+            priceLabel={formatUsdCents(detail.priceUsdCents)}
             priceUsdCents={detail.priceUsdCents}
-            priceNote={detail.priceQuote.note}
+            priceNote={null}
             isFree={detail.accessMode === 'free'}
             isPublic={false}
-            viewerCanAccess={detail.viewerCanAccess}
-            viewerIsOwner={detail.viewerIsOwner}
+            viewerCanAccess
+            viewerIsOwner={false}
             resourceKinds={detail.resourceKinds}
-            lockedPreview={detail.lockedPreview}
-            salesCount={detail.salesCount}
-            initialResources={detail.resources
-              ? {
-                  promptText: detail.resources.promptText,
-                  notesMarkdown: detail.resources.notesMarkdown,
-                  workflowShareUrl: detail.resources.workflowShareUrl,
-                  attachments: detail.resources.attachments,
-                  allowRemix: detail.resources.allowRemix,
-                  sections: detail.resources.sections,
-                  items: detail.resources.items,
-                }
-              : null}
-            purchasedRevision={detail.purchasedRevision
+            lockedPreview={buildPostResourceBundleLockedPreview(initialResources)}
+            salesCount={0}
+            initialResources={initialResources}
+            purchasedRevision={detail.hasNewerRevision && detail.currentResources
               ? {
                   revisionNumber: detail.purchasedRevision.revisionNumber,
-                  purchasedAt: detail.purchasedRevision.purchasedAt,
+                  purchasedAt: detail.purchasedAt,
                   title: detail.purchasedRevision.title,
-                  resources: {
-                    promptText: detail.purchasedRevision.resources.promptText,
-                    notesMarkdown: detail.purchasedRevision.resources.notesMarkdown,
-                    workflowShareUrl: detail.purchasedRevision.resources.workflowShareUrl,
-                    attachments: detail.purchasedRevision.resources.attachments,
-                    allowRemix: detail.purchasedRevision.resources.allowRemix,
-                    sections: detail.purchasedRevision.resources.sections,
-                    items: detail.purchasedRevision.resources.items,
-                  },
+                  resources: detail.purchasedRevision.resources,
                 }
               : null}
           />
