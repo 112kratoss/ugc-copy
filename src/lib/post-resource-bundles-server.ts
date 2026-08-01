@@ -20,6 +20,8 @@ import {
   isMissingMarketplaceSchemaError,
   isMissingPostResourceBundlesSchemaError,
   isMissingPostResourceItemsColumnError,
+  isMissingPostResourceRetirementColumnError,
+  isMissingPostTombstoneColumnError,
   isMissingPostReviewStatusColumnError,
   isMissingPostTextColumnsError,
   isMissingPostsSchemaError,
@@ -85,7 +87,6 @@ import {
 import { MARKETPLACE_RESOURCE_LIST_CACHE_TAG } from '@/lib/marketplace-resource-list-cache';
 import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 import {
-  isGenerationRecipeAssetId,
   MAGICBOOKLET_SOURCE_KIND,
   normalizeShowcaseSourceKind,
   type RawShowcaseSourceKind,
@@ -101,10 +102,22 @@ import {
   type WorkflowCanvasGraph,
 } from '@/lib/workflow-canvas';
 
-type LinkedPostScope = 'public' | 'owner';
+/**
+ * 'public'  — anyone: the post must be public, unarchived and moderation-clean.
+ * 'entitled'— a buyer reading an unlock they paid for. Private, archived and
+ *             tombstoned posts resolve, because a creator delisting or deleting
+ *             their post must not retract what someone bought. Moderation state
+ *             is still enforced: a hidden post stops resolving for everyone.
+ * 'owner'   — the creator: no filtering at all.
+ */
+type LinkedPostScope = 'public' | 'entitled' | 'owner';
 
 const BUNDLE_ROW_SELECT =
-  'id, post_id, owner_user_id, legacy_asset_id, access_mode, status, title, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, resource_sections, resource_items, price_usd_cents, sales_count, earnings_usd_cents, created_at, updated_at';
+  'id, post_id, owner_user_id, legacy_asset_id, access_mode, status, title, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, resource_sections, resource_items, price_usd_cents, sales_count, earnings_usd_cents, retired_at, created_at, updated_at';
+// Same projection minus `retired_at`, for a database that predates the
+// bundle-revisions migration. Without it, one unknown column 500s every bundle
+// read instead of degrading to a bundle that simply is not retired.
+const BUNDLE_ROW_SELECT_WITHOUT_RETIREMENT = BUNDLE_ROW_SELECT.replace(', retired_at', '');
 const BUNDLE_ROW_SELECT_LEGACY =
   'id, post_id, owner_user_id, legacy_asset_id, access_mode, status, title, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, sales_count, earnings_usd_cents, created_at, updated_at';
 const POST_RESOURCE_FILES_BUCKET = 'post_resource_files';
@@ -148,6 +161,7 @@ interface BundleRow {
   price_usd_cents: number;
   sales_count: number;
   earnings_usd_cents: number;
+  retired_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -174,6 +188,7 @@ interface LinkedPostRow extends PostMediaRow {
   post_format: ShowcasePostFormat;
   visibility: ShowcaseVisibility;
   archived_at: string | null;
+  tombstoned_at?: string | null;
   review_status?: 'visible' | 'flagged' | 'hidden' | null;
   source_kind: RawShowcaseSourceKind;
   source_tool: string | null;
@@ -227,6 +242,8 @@ interface PostResourceBundleLinkedPost {
   postFormat: ShowcasePostFormat;
   visibility: ShowcaseVisibility;
   archivedAt: string | null;
+  /** The owner deleted this post; only entitled buyers can still resolve it. */
+  tombstoned: boolean;
   reviewStatus: 'visible' | 'flagged' | 'hidden';
   sourceKind: ShowcaseSourceKind;
   sourceTool: string | null;
@@ -249,7 +266,12 @@ export interface MarketplaceResourceListItem {
   accessMode: PersistedPostResourceBundleAccessMode;
   priceUsdCents: number;
   salesCount: number;
-  earningsUsdCents: number;
+  /**
+   * Owner-scope only. Public marketplace responses are edge-cached and
+   * unauthenticated, so a creator's revenue must never ride along with them;
+   * `salesCount` stays public as social proof.
+   */
+  earningsUsdCents?: number;
   allowRemix: boolean;
   resourceKinds: PostResourceKind[];
   lockedPreview: PostResourceBundleLockedPreview;
@@ -272,18 +294,41 @@ type MarketplaceResourceListPage = {
   };
 };
 
+/**
+ * The exact state of a bundle at the moment a buyer paid for it. Present only
+ * when the current bundle has since been edited, so the UI can offer "the
+ * version you unlocked" without cluttering the common case where nothing
+ * changed.
+ */
+export interface PurchasedPostResourceBundleRevision {
+  revisionNumber: number;
+  purchasedAt: string;
+  title: string;
+  previewText: string;
+  priceUsdCents: number;
+  resources: PostResourceBundleResources;
+}
+
 export interface PostResourceBundleDetail extends MarketplaceResourceListItem {
   status: PostResourceBundleStatus;
   resources: PostResourceBundleResources | null;
   viewerIsOwner: boolean;
   viewerHasPurchased: boolean;
   viewerCanAccess: boolean;
+  /** Set when the bundle changed after this viewer bought it. */
+  purchasedRevision: PurchasedPostResourceBundleRevision | null;
+  /** The creator removed the unlock after it had buyers; it can no longer be sold. */
+  retiredAt: string | null;
+  /** The creator deleted the post; buyers keep access, the public does not. */
+  tombstoned: boolean;
 }
 
 interface SellerResourceDashboardBundle extends MarketplaceResourceListItem {
   status: PostResourceBundleStatus;
   post: PostResourceBundleLinkedPost | null;
   quality: MarketplaceQualityAssessment;
+  // Hydrated at 'owner' scope, so the seller always sees their own earnings.
+  earningsUsdCents: number;
 }
 
 export interface PostResourceBundleMutationResult {
@@ -661,12 +706,25 @@ function normalizeWorkflowSettings(value: unknown): Record<string, unknown> | nu
   return value && typeof value === 'object' ? value as Record<string, unknown> : null;
 }
 
-function isGenerationRecipePostEligible(row: GenerationRecipePostRow): boolean {
+/**
+ * `entitled` relaxes the public-surface checks for someone who already bought
+ * the unlock, so a tombstoned post keeps serving them the reference media they
+ * paid for. Moderation state is never relaxed: a hidden post retracts for
+ * everyone. Callers that restore files into a viewer's own remix must leave
+ * this false -- entitlement to read is not entitlement to reuse.
+ */
+function isGenerationRecipePostEligible(
+  row: GenerationRecipePostRow,
+  options: { entitled?: boolean } = {},
+): boolean {
+  const publicSurfaceOk = options.entitled
+    ? true
+    : (row.visibility === 'public' || row.visibility === 'unlisted') && row.archived_at === null;
+
   return Boolean(
     row.user_id &&
     row.generation_id &&
-    (row.visibility === 'public' || row.visibility === 'unlisted') &&
-    row.archived_at === null &&
+    publicSurfaceOk &&
     row.review_status === 'visible' &&
     normalizeShowcaseSourceKind(row.source_kind) === MAGICBOOKLET_SOURCE_KIND
   );
@@ -736,10 +794,16 @@ async function loadEligibleGenerationRecipeInputMedia(params: {
   postId: string;
   generationId: string;
   urlMode: 'signed' | 'none';
+  entitled?: boolean;
 }): Promise<{ generation: GenerationRecipeRow; inputMedia: GenerationInputMediaItem[] } | null> {
   const { adminSupabase } = params;
   const post = await loadGenerationRecipePostRow(adminSupabase, params.postId);
-  if (!post || !isGenerationRecipePostEligible(post) || !post.user_id || post.generation_id !== params.generationId) {
+  if (
+    !post
+    || !isGenerationRecipePostEligible(post, { entitled: params.entitled })
+    || !post.user_id
+    || post.generation_id !== params.generationId
+  ) {
     return null;
   }
 
@@ -894,17 +958,51 @@ async function loadLinkedPostMap(
   }
 
   const adminSupabase = createServiceClient();
-  let resultQuery = adminSupabase
-    .from('posts')
-    .select('id, generation_id, title, body, category, post_format, visibility, archived_at, review_status, showcase_asset_path, output_url, source_kind, source_tool, source_tool_slug, save_count, remix_count, share_visit_count')
-    .in('id', uniquePostIds);
+  const buildPostQuery = (includeTombstone: boolean) => {
+    let query = adminSupabase
+      .from('posts')
+      .select(
+        [
+          'id',
+          'generation_id',
+          'title',
+          'body',
+          'category',
+          'post_format',
+          'visibility',
+          'archived_at',
+          includeTombstone ? 'tombstoned_at' : null,
+          'review_status',
+          'showcase_asset_path',
+          'output_url',
+          'source_kind',
+          'source_tool',
+          'source_tool_slug',
+          'save_count',
+          'remix_count',
+          'share_visit_count',
+        ].filter(Boolean).join(', '),
+      )
+      .in('id', uniquePostIds);
 
-  if (scope === 'public') {
-    resultQuery = resultQuery.eq('visibility', 'public').is('archived_at', null).eq('review_status', 'visible');
+    if (scope === 'public') {
+      query = query.eq('visibility', 'public').is('archived_at', null).eq('review_status', 'visible');
+    } else if (scope === 'entitled') {
+      query = query.eq('review_status', 'visible');
+    }
+
+    return query;
+  };
+
+  let result: LinkedPostQueryResult = await buildPostQuery(true);
+
+  // tombstoned_at ships with the bundle-revisions migration. On a database that
+  // predates it, asking for the column fails the whole lookup, which would make
+  // every linked post look missing and 404 healthy public bundles.
+  if (isMissingPostTombstoneColumnError(result.error)) {
+    result = await buildPostQuery(false);
   }
-
-  let result: LinkedPostQueryResult = await resultQuery;
-  if (scope === 'public' && isMissingPostReviewStatusColumnError(result.error)) {
+  if (scope !== 'owner' && isMissingPostReviewStatusColumnError(result.error)) {
     logBackendError('marketplace_moderation_boundary_unenforceable', { error: result.error });
     return new Map();
   }
@@ -941,10 +1039,12 @@ async function loadLinkedPostMap(
       if (includeReviewStatus) {
         fallbackQuery = fallbackQuery.eq('review_status', 'visible');
       }
+    } else if (scope === 'entitled' && includeReviewStatus) {
+      fallbackQuery = fallbackQuery.eq('review_status', 'visible');
     }
 
     result = await fallbackQuery;
-    if (scope === 'public' && isMissingPostReviewStatusColumnError(result.error)) {
+    if (scope !== 'owner' && isMissingPostReviewStatusColumnError(result.error)) {
       logBackendError('marketplace_moderation_boundary_unenforceable', { error: result.error });
       return new Map();
     }
@@ -1049,6 +1149,7 @@ async function loadLinkedPostMap(
         postFormat: row.post_format,
         visibility: row.visibility,
         archivedAt: row.archived_at,
+        tombstoned: Boolean(row.tombstoned_at),
         reviewStatus: row.review_status ?? 'visible',
         sourceKind: normalizeShowcaseSourceKind(row.source_kind),
         sourceTool: row.source_tool,
@@ -1071,10 +1172,14 @@ async function hydrateBundleRows(
   countryCode?: string | null,
   scope: LinkedPostScope = 'public',
   includeMediaPreviews = false,
+  // Presentation scope and post-visibility scope usually agree, but a buyer
+  // reading a delisted or tombstoned unlock needs the wider post lookup while
+  // still getting the public presentation.
+  postScope: LinkedPostScope = scope,
 ): Promise<MarketplaceResourceListItem[]> {
   const [profilesMap, postMap] = await Promise.all([
     loadProfileMap(rows.map((row) => row.owner_user_id)),
-    loadLinkedPostMap(rows.map((row) => row.post_id), scope, includeMediaPreviews),
+    loadLinkedPostMap(rows.map((row) => row.post_id), postScope, includeMediaPreviews),
   ]);
 
   return Promise.all(
@@ -1107,7 +1212,7 @@ async function hydrateBundleRows(
         accessMode: row.access_mode,
         priceUsdCents: row.price_usd_cents,
         salesCount: row.sales_count,
-        earningsUsdCents: row.earnings_usd_cents,
+        ...(scope === 'owner' ? { earningsUsdCents: row.earnings_usd_cents } : {}),
         allowRemix: row.allow_remix,
         resourceKinds: lockedPreview.resourceKinds,
         lockedPreview,
@@ -1364,12 +1469,13 @@ function isBundlePublishedForMarketplace(row: BundleRow): boolean {
   return row.status === 'published';
 }
 
+/**
+ * The entitlement predicate for a stored bundle: owner, or a recorded purchase.
+ * Anything wider belongs in the caller, never here — every paid payload in the
+ * product is withheld on the strength of this returning false.
+ */
 function canViewerAccessBundle(row: BundleRow, viewerUserId?: string | null, viewerHasPurchased = false): boolean {
-  return (
-    Boolean(viewerUserId && viewerUserId === row.owner_user_id) ||
-    viewerHasPurchased ||
-    (row.status === 'published' && isGenerationRecipeAssetId(row.id))
-  );
+  return Boolean(viewerUserId && viewerUserId === row.owner_user_id) || viewerHasPurchased;
 }
 
 export async function savePostResourceBundle(params: {
@@ -1535,7 +1641,13 @@ async function getMarketplaceResourceListFallback(options: {
     let { data, error } = await buildQuery(selectColumns)
       .range(scanOffset, rangeEnd);
 
-    if (selectColumns === BUNDLE_ROW_SELECT && isMissingPostResourceItemsColumnError(error)) {
+    if (selectColumns === BUNDLE_ROW_SELECT && isMissingPostResourceRetirementColumnError(error)) {
+      selectColumns = BUNDLE_ROW_SELECT_WITHOUT_RETIREMENT;
+      ({ data, error } = await buildQuery(selectColumns)
+        .range(scanOffset, rangeEnd));
+    }
+
+    if (selectColumns !== BUNDLE_ROW_SELECT_LEGACY && isMissingPostResourceItemsColumnError(error)) {
       selectColumns = BUNDLE_ROW_SELECT_LEGACY;
       ({ data, error } = await buildQuery(selectColumns)
         .range(scanOffset, rangeEnd));
@@ -1822,6 +1934,83 @@ export async function getMarketplaceResourceList(
   return localizeMarketplaceResourceListPage(page, countryCode);
 }
 
+type PurchasedRevisionRow = {
+  revision_number: number;
+  is_latest: boolean;
+  title: string;
+  preview_text: string;
+  price_usd_cents: number;
+  prompt_text: string | null;
+  notes_markdown: string | null;
+  workflow_share_url: string | null;
+  workflow_snapshot: unknown;
+  attachments: unknown;
+  allow_remix: boolean;
+  resource_sections: unknown;
+  resource_items: unknown;
+  created_at: string;
+  content_fingerprint: string;
+};
+
+/**
+ * Reads the revision this buyer pinned at checkout. Degrades to null rather
+ * than throwing: a missing revision must never take down an unlock the buyer
+ * is otherwise entitled to read.
+ */
+async function loadPurchasedBundleRevision(
+  adminSupabase: SupabaseClient,
+  bundleId: string,
+  buyerUserId: string,
+): Promise<PurchasedRevisionRow | null> {
+  const { data, error } = await adminSupabase.rpc('get_purchased_post_resource_bundle_revision', {
+    p_bundle_id: bundleId,
+    p_buyer_user_id: buyerUserId,
+  });
+
+  if (error) {
+    if (!isMissingPostResourceBundlesSchemaError(error)) {
+      logBackendError('post_resource_purchased_revision_load_failed', { error: error });
+    }
+    return null;
+  }
+
+  const [row] = (data ?? []) as PurchasedRevisionRow[];
+  return row ?? null;
+}
+
+function toPurchasedRevision(
+  row: PurchasedRevisionRow | null,
+): PurchasedPostResourceBundleRevision | null {
+  // Nothing to offer when the buyer's revision is still the current one.
+  if (!row || row.is_latest) {
+    return null;
+  }
+
+  const legacyResources: PostResourceBundleResources = {
+    promptText: normalizeText(row.prompt_text),
+    notesMarkdown: normalizeText(row.notes_markdown),
+    workflowShareUrl: normalizeText(row.workflow_share_url),
+    workflowSnapshot: row.workflow_snapshot
+      ? serializeWorkflowGraph(normalizeWorkflowGraph(row.workflow_snapshot))
+      : null,
+    attachments: normalizeAttachments(row.attachments),
+    allowRemix: Boolean(row.allow_remix),
+    sections: normalizePostResourceSections(row.resource_sections),
+  };
+
+  return {
+    revisionNumber: row.revision_number,
+    purchasedAt: row.created_at,
+    title: normalizeBundleDisplayTitle(row.title),
+    previewText: row.preview_text,
+    priceUsdCents: row.price_usd_cents,
+    resources: {
+      ...legacyResources,
+      items: normalizePostResourceItems(row.resource_items, legacyResources),
+    },
+  };
+}
+
 export async function getPostResourceBundleDetailByPostId(
   postId: string,
   options?: {
@@ -1842,6 +2031,9 @@ export async function getPostResourceBundleDetailByPostId(
       .eq('post_id', postId)
       .maybeSingle();
   let { data, error } = await selectBundle(BUNDLE_ROW_SELECT);
+  if (isMissingPostResourceRetirementColumnError(error)) {
+    ({ data, error } = await selectBundle(BUNDLE_ROW_SELECT_WITHOUT_RETIREMENT));
+  }
   if (isMissingPostResourceItemsColumnError(error)) {
     ({ data, error } = await selectBundle(BUNDLE_ROW_SELECT_LEGACY));
   }
@@ -1860,10 +2052,9 @@ export async function getPostResourceBundleDetailByPostId(
     return null;
   }
 
-  if (!isBundlePublishedForMarketplace(row) && row.owner_user_id !== viewerUserId) {
-    return null;
-  }
-
+  // Entitlement is resolved before the publish gate, because a delisted or
+  // retired bundle must still open for the people who bought it -- that is the
+  // whole promise of a purchase surviving the creator removing the unlock.
   let viewerHasPurchased = false;
   if (viewerUserId && viewerUserId !== row.owner_user_id) {
     const { data: purchaseData, error: purchaseError } = await adminSupabase
@@ -1880,13 +2071,42 @@ export async function getPostResourceBundleDetailByPostId(
     }
   }
 
+  if (
+    !isBundlePublishedForMarketplace(row)
+    && row.owner_user_id !== viewerUserId
+    && !viewerHasPurchased
+  ) {
+    return null;
+  }
+
   const viewerIsOwner = Boolean(viewerUserId && viewerUserId === row.owner_user_id);
   const viewerCanAccess = canViewerAccessBundle(row, viewerUserId, viewerHasPurchased);
-  const [hydrated] = await hydrateBundleRows([row], countryCode, viewerIsOwner ? 'owner' : 'public');
+  // A buyer keeps reading through a delisting, an archive and a tombstone; the
+  // 'entitled' scope still enforces moderation state, so a take-down retracts
+  // the unlock for everyone.
+  const postScope: LinkedPostScope = viewerIsOwner
+    ? 'owner'
+    : viewerHasPurchased
+      ? 'entitled'
+      : 'public';
+  const [hydrated] = await hydrateBundleRows(
+    [row],
+    countryCode,
+    viewerIsOwner ? 'owner' : 'public',
+    false,
+    postScope,
+  );
   if (!viewerIsOwner && !hydrated.post) {
     return null;
   }
   const normalizedResources = normalizeResources(row);
+
+  // What the buyer actually paid for. Later edits reach them as improvements,
+  // but the revision pinned at checkout stays available so a creator cannot
+  // hollow out a sold unlock.
+  const purchasedRevision = viewerHasPurchased && viewerUserId
+    ? await loadPurchasedBundleRevision(adminSupabase, row.id, viewerUserId)
+    : null;
 
   // Bundles do not persist the creation's reference media as items; the saved
   // references live in generation_input_media and are surfaced here at read
@@ -1906,10 +2126,25 @@ export async function getPostResourceBundleDetailByPostId(
         postId,
         generationId: hydrated.post.generationId,
         urlMode: 'none',
+        // A buyer keeps reading through a tombstone; everyone else still needs
+        // the post to be on a public surface.
+        entitled: viewerHasPurchased && hydrated.post.tombstoned === true,
       });
       const generation = eligible?.generation ?? null;
+      // is_public stays the gate for a live post: a creator who deliberately
+      // un-publishes a generation retracts its live references, buyers included.
+      // Tombstoning is different -- it flips is_public=false as a side effect of
+      // deleting the post, so keying off the flag alone would strip references
+      // out from under buyers at exactly the moment we promised to retain them.
+      // Moderation still retracts everything, because a hidden post stops
+      // resolving into `hydrated.post` before this point.
       const canViewReferences = Boolean(
-        generation && (viewerIsOwner || generation.is_public === true),
+        generation
+        && (
+          viewerIsOwner
+          || generation.is_public === true
+          || (viewerHasPurchased && hydrated.post?.tombstoned === true)
+        ),
       );
       if (eligible && canViewReferences && eligible.inputMedia.length > 0) {
         const referenceItems = buildGenerationRecipeResourceItems({
@@ -1946,6 +2181,9 @@ export async function getPostResourceBundleDetailByPostId(
     viewerHasPurchased,
     viewerIsOwner,
     viewerCanAccess,
+    purchasedRevision: viewerCanAccess ? toPurchasedRevision(purchasedRevision) : null,
+    retiredAt: row.retired_at ?? null,
+    tombstoned: Boolean(hydrated.post?.tombstoned),
     remixCapability: remix.capability,
     remixTarget: remix.target,
   };
@@ -1991,6 +2229,7 @@ export async function getSellerPostResourceBundleDashboard(
   const bundles = hydratedBundles.map((bundle, index) => ({
     ...bundle,
     status: rows[index]?.status ?? 'draft',
+    earningsUsdCents: rows[index]?.earnings_usd_cents ?? 0,
     quality: assessMarketplaceListingQuality({
       title: bundle.title,
       summary: bundle.summary,

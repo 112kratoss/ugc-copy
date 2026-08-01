@@ -50,9 +50,21 @@ let generationInputRows: Array<{
 }>;
 let viewerHasPurchased: boolean;
 let bundlePresenceError: unknown;
+let postRow: Record<string, unknown> | null;
+let purchasedRevisionRow: Record<string, unknown> | null;
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({
+    async rpc(name: string, args: Record<string, unknown>) {
+      if (name === 'get_purchased_post_resource_bundle_revision') {
+        // The projection is buyer-scoped; returning nothing for anyone else is
+        // what the SQL does too.
+        const isBuyer = args.p_buyer_user_id === 'buyer-1';
+        return { data: isBuyer && purchasedRevisionRow ? [purchasedRevisionRow] : [], error: null };
+      }
+
+      throw new Error(`Unexpected rpc: ${name}`);
+    },
     storage: {
       from: vi.fn(() => ({
         createSignedUrl: vi.fn(async (filePath: string) => ({
@@ -143,6 +155,17 @@ vi.mock('@/lib/server-helpers', () => ({
 
       if (table === 'posts') {
         let eqId: string | null = null;
+        const equalityFilters: Record<string, unknown> = {};
+        const nullFilters: string[] = [];
+
+        // The service narrows post visibility per viewer scope; the mock has to
+        // honour those filters or an entitlement test proves nothing.
+        const matchesFilters = () => {
+          if (!postRow) return false;
+          if (nullFilters.some((column) => postRow?.[column] != null)) return false;
+          return Object.entries(equalityFilters).every(([column, value]) => postRow?.[column] === value);
+        };
+
         const query = {
           select() {
             return query;
@@ -153,10 +176,15 @@ vi.mock('@/lib/server-helpers', () => ({
           eq(column?: string, value?: unknown) {
             if (column === 'id' && typeof value === 'string') {
               eqId = value;
+            } else if (column) {
+              equalityFilters[column] = value;
             }
             return query;
           },
-          is() {
+          is(column?: string) {
+            if (column) {
+              nullFilters.push(column);
+            }
             return query;
           },
           neq() {
@@ -164,54 +192,13 @@ vi.mock('@/lib/server-helpers', () => ({
           },
           async maybeSingle() {
             return {
-              data: eqId === 'post-1'
-                ? {
-                    id: 'post-1',
-                    user_id: 'owner-1',
-                    generation_id: 'gen-1',
-                    title: 'Public recipe post',
-                    body: 'A visible result.',
-                    prompt: 'Post prompt fallback',
-                    category: 'image',
-                    post_format: 'media',
-                    visibility: 'public',
-                    archived_at: null,
-                    review_status: 'visible',
-                    showcase_asset_path: null,
-                    output_url: null,
-                    source_kind: 'magicbooklet',
-                    source_tool: 'magicbooklet',
-                    source_tool_slug: 'magicbooklet',
-                    save_count: 0,
-                    remix_count: 0,
-                    share_visit_count: 0,
-                    created_at: '2026-06-05T00:00:00.000Z',
-                  }
-                : null,
+              data: eqId === 'post-1' && matchesFilters() ? postRow : null,
               error: null,
             };
           },
           then(resolve: (value: { data: unknown[]; error: null }) => void) {
             resolve({
-              data: [{
-                id: 'post-1',
-                generation_id: 'gen-1',
-                title: 'Public recipe post',
-                body: 'A visible result.',
-                category: 'image',
-                post_format: 'media',
-                visibility: 'public',
-                archived_at: null,
-                review_status: 'visible',
-                showcase_asset_path: null,
-                output_url: null,
-                source_kind: 'magicbooklet',
-                source_tool: 'magicbooklet',
-                source_tool_slug: 'magicbooklet',
-                save_count: 0,
-                remix_count: 0,
-                share_visit_count: 0,
-              }],
+              data: matchesFilters() && postRow ? [postRow] : [],
               error: null,
             });
           },
@@ -338,6 +325,30 @@ describe('post resource bundle server access', () => {
     }];
     viewerHasPurchased = false;
     bundlePresenceError = null;
+    postRow = {
+      id: 'post-1',
+      user_id: 'owner-1',
+      generation_id: 'gen-1',
+      title: 'Public recipe post',
+      body: 'A visible result.',
+      prompt: 'Post prompt fallback',
+      category: 'image',
+      post_format: 'media',
+      visibility: 'public',
+      archived_at: null,
+      tombstoned_at: null,
+      review_status: 'visible',
+      showcase_asset_path: null,
+      output_url: null,
+      source_kind: 'magicbooklet',
+      source_tool: 'magicbooklet',
+      source_tool_slug: 'magicbooklet',
+      save_count: 0,
+      remix_count: 0,
+      share_visit_count: 0,
+      created_at: '2026-06-05T00:00:00.000Z',
+    };
+    purchasedRevisionRow = null;
   });
 
   it('keeps a published free recipe gated until the viewer adds it', async () => {
@@ -351,7 +362,13 @@ describe('post resource bundle server access', () => {
     expect(detail?.resources).toBeNull();
   });
 
-  it('reveals a public generation recipe without requiring a claim', async () => {
+  it('grants access on entitlement alone, never on the shape of the bundle id', async () => {
+    // A legacy branch granted access to any published bundle whose id started
+    // with 'generation-recipe:'. post_resource_bundles.id is a uuid column, so
+    // no such row can exist, and nothing in the app constructs that id any more
+    // -- synthetic feed recipes are resolved in showcase-feed, never here. The
+    // clause was unreachable, but "grant access if the id looks special" has no
+    // business inside an entitlement predicate, so it is gone. This pins that.
     bundleRow = {
       ...(bundleRow as BundleRow),
       id: 'generation-recipe:post-1',
@@ -362,8 +379,8 @@ describe('post resource bundle server access', () => {
       viewerUserId: null,
     });
 
-    expect(detail?.viewerCanAccess).toBe(true);
-    expect(detail?.resources?.promptText).toBe('Public prompt text');
+    expect(detail?.viewerCanAccess).toBe(false);
+    expect(detail?.resources).toBeNull();
   });
 
   it('keeps published paid recipe resources locked before purchase', async () => {
@@ -740,4 +757,166 @@ describe('post resource bundle server access', () => {
     expect(consoleError).toHaveBeenCalled();
     consoleError.mockRestore();
   });
+
+  describe('what a buyer keeps', () => {
+    const editedRevision = {
+      revision_number: 2,
+      is_latest: false,
+      content_fingerprint: 'fingerprint-of-what-they-bought',
+      title: 'Launch hook recipe',
+      preview_text: 'The version you unlocked.',
+      price_usd_cents: 500,
+      prompt_text: 'THE PROMPT THEY PAID FOR',
+      notes_markdown: 'Notes they paid for',
+      workflow_share_url: null,
+      workflow_snapshot: null,
+      attachments: [],
+      allow_remix: false,
+      resource_sections: [],
+      resource_items: [
+        { id: 'item-1', type: 'prompt', title: 'Prompt', textContent: 'THE PROMPT THEY PAID FOR', sortOrder: 0 },
+      ],
+      created_at: '2026-07-01T00:00:00.000Z',
+    };
+
+    it('offers the purchased revision once the creator edits a sold bundle', async () => {
+      viewerHasPurchased = true;
+      purchasedRevisionRow = editedRevision;
+      bundleRow = { ...(bundleRow as BundleRow), prompt_text: 'Rewritten to something useless' };
+
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'buyer-1' });
+
+      expect(detail?.viewerCanAccess).toBe(true);
+      // Current content is still served -- honest edits reach buyers for free.
+      expect(detail?.resources?.promptText).toBe('Rewritten to something useless');
+      // ...but what they actually paid for stays retrievable.
+      expect(detail?.purchasedRevision?.revisionNumber).toBe(2);
+      expect(detail?.purchasedRevision?.resources.promptText).toBe('THE PROMPT THEY PAID FOR');
+    });
+
+    it('omits the purchased revision while the bundle is unchanged', async () => {
+      viewerHasPurchased = true;
+      purchasedRevisionRow = { ...editedRevision, is_latest: true };
+
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'buyer-1' });
+
+      expect(detail?.purchasedRevision).toBeNull();
+    });
+
+    it('never hands a purchased revision to someone who has not bought it', async () => {
+      viewerHasPurchased = false;
+      purchasedRevisionRow = editedRevision;
+
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'stranger-1' });
+
+      expect(detail?.viewerCanAccess).toBe(false);
+      expect(detail?.resources).toBeNull();
+      expect(detail?.purchasedRevision).toBeNull();
+    });
+
+    it('keeps a buyer reading after the creator deletes the post', async () => {
+      // Tombstoned: private and archived, so every public surface drops it.
+      postRow = {
+        ...(postRow as Record<string, unknown>),
+        visibility: 'private',
+        archived_at: '2026-07-02T00:00:00.000Z',
+        tombstoned_at: '2026-07-02T00:00:00.000Z',
+      };
+      viewerHasPurchased = true;
+
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'buyer-1' });
+
+      expect(detail).not.toBeNull();
+      expect(detail?.viewerCanAccess).toBe(true);
+      expect(detail?.tombstoned).toBe(true);
+      expect(detail?.resources?.promptText).toBe('Public prompt text');
+    });
+
+    it('opens a retired bundle for its buyer after the creator removes the unlock', async () => {
+      // Caught in live verification: the publish gate ran before the purchase
+      // lookup, so a retired bundle (status 'draft') 404'd for the very buyers
+      // whose entitlement it was supposed to preserve. The library listed the
+      // unlock and opening it failed.
+      bundleRow = { ...(bundleRow as BundleRow), status: 'draft' as BundleRow['status'] };
+      postRow = {
+        ...(postRow as Record<string, unknown>),
+        visibility: 'private',
+        archived_at: '2026-07-02T00:00:00.000Z',
+        tombstoned_at: '2026-07-02T00:00:00.000Z',
+      };
+      viewerHasPurchased = true;
+
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'buyer-1' });
+
+      expect(detail).not.toBeNull();
+      expect(detail?.viewerCanAccess).toBe(true);
+      expect(detail?.tombstoned).toBe(true);
+    });
+
+    it('still hides a retired bundle from someone who never bought it', async () => {
+      bundleRow = { ...(bundleRow as BundleRow), status: 'draft' as BundleRow['status'] };
+      viewerHasPurchased = false;
+
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'stranger-1' });
+
+      expect(detail).toBeNull();
+    });
+
+    it('keeps reference media for a buyer once the post is tombstoned', async () => {
+      // Deleting a post flips its generation to is_public=false, so a gate that
+      // reads only that flag silently strips the references a buyer paid for at
+      // the exact moment the tombstone promises to retain them.
+      bundleRow = { ...(bundleRow as BundleRow), access_mode: 'paid', price_usd_cents: 900, allow_remix: true };
+      generationRow = { ...(generationRow as NonNullable<typeof generationRow>), is_public: false };
+      postRow = {
+        ...(postRow as Record<string, unknown>),
+        visibility: 'private',
+        archived_at: '2026-07-02T00:00:00.000Z',
+        tombstoned_at: '2026-07-02T00:00:00.000Z',
+      };
+      viewerHasPurchased = true;
+
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'buyer-1' });
+
+      expect(detail?.viewerCanAccess).toBe(true);
+      expect(detail?.resources?.items?.some(
+        (item) => item.storagePath === 'generation_inputs/owner-1/gen-1/00-reference-image.png',
+      )).toBe(true);
+    });
+
+    it('hides a tombstoned post from everyone who did not buy it', async () => {
+      postRow = {
+        ...(postRow as Record<string, unknown>),
+        visibility: 'private',
+        archived_at: '2026-07-02T00:00:00.000Z',
+        tombstoned_at: '2026-07-02T00:00:00.000Z',
+      };
+      viewerHasPurchased = false;
+
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'stranger-1' });
+
+      expect(detail).toBeNull();
+    });
+
+    it('retracts a buyer\'s access when moderation hides the post', async () => {
+      // The one case where entitlement does not survive: violating content must
+      // stop being served to everyone, buyers included.
+      postRow = { ...(postRow as Record<string, unknown>), review_status: 'hidden' };
+      viewerHasPurchased = true;
+
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'buyer-1' });
+
+      expect(detail).toBeNull();
+    });
+  });
+
 });

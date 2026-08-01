@@ -95,6 +95,9 @@ describe('account deletion route', () => {
                 error: null,
               };
             }
+            if (name === 'list_creator_purchased_revisions_for_retention') {
+              return { data: [], error: null };
+            }
             return { data: { status: args.p_status }, error: null };
           }),
           storage: {
@@ -248,6 +251,9 @@ describe('account deletion route', () => {
                 },
                 error: null,
               };
+            }
+            if (name === 'list_creator_purchased_revisions_for_retention') {
+              return { data: [], error: null };
             }
             return { data: { status: args.p_status }, error: null };
           }),

@@ -2,6 +2,8 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { retainPurchasedUnlockFiles } from '@/lib/account-deletion-resource-retention';
+
 const USER_PREFIX_BUCKETS = [
   'profiles',
   'uploads',
@@ -74,6 +76,7 @@ type ExecuteInitialAccountDeletionOptions = {
   admin: SupabaseClient;
   userId: string;
   onNonFatalError?: (message: string, error: unknown) => void;
+  retainPurchasedFiles?: typeof retainPurchasedUnlockFiles;
 };
 
 type ProcessAccountDeletionResweepsOptions = {
@@ -83,7 +86,9 @@ type ProcessAccountDeletionResweepsOptions = {
   leaseSeconds?: number;
 };
 
-type ProcessAccountDeletionInitialRetriesOptions = ProcessAccountDeletionResweepsOptions;
+type ProcessAccountDeletionInitialRetriesOptions = ProcessAccountDeletionResweepsOptions & {
+  retainPurchasedFiles?: typeof retainPurchasedUnlockFiles;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -301,6 +306,7 @@ export async function executeInitialAccountDeletion({
   admin,
   userId,
   onNonFatalError,
+  retainPurchasedFiles = retainPurchasedUnlockFiles,
 }: ExecuteInitialAccountDeletionOptions): Promise<InitialAccountDeletionResult> {
   const preparation = await prepareAccountDeletion(admin, userId);
   if (preparation.alreadyCompleted) {
@@ -341,6 +347,9 @@ export async function executeInitialAccountDeletion({
     }
   }
 
+  // Retention is a hard gate: never sweep creator-prefixed storage or delete
+  // Auth until every purchased revision has a durable neutral copy.
+  await retainPurchasedFiles(admin, userId);
   const storage = await removeAccountStorage(admin, userId, preparation.manifest);
   const storageDeletedStatus = await markAccountDeletionStage(
     admin,
@@ -604,6 +613,7 @@ export async function processAccountDeletionInitialRetries({
   workerId,
   limit = ACCOUNT_DELETION_RESWEEP_BATCH_LIMIT,
   leaseSeconds = ACCOUNT_DELETION_RESWEEP_LEASE_SECONDS,
+  retainPurchasedFiles = retainPurchasedUnlockFiles,
 }: ProcessAccountDeletionInitialRetriesOptions): Promise<AccountDeletionInitialRetrySummary> {
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
     throw new Error('Account deletion retry limit must be between 1 and 100.');
@@ -640,6 +650,7 @@ export async function processAccountDeletionInitialRetries({
           throw new Error('Account deletion storage manifest is invalid.');
         }
 
+        await retainPurchasedFiles(admin, claim.userId);
         const storage = await removeAccountStorage(admin, claim.userId, claim.manifest);
         summary.storageSwept += 1;
         summary.objectsRemoved += storage.objectsRemoved;

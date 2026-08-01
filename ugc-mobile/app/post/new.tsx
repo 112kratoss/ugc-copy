@@ -56,6 +56,7 @@ import {
   getExplicitPublishGeneration,
   getPublishGenerationMediaKind,
   getPublishGenerationTitle,
+  BODY_MAX_LENGTH,
   hydratePostComposerResourceCards,
   isTemplateGeneration,
   isPostComposerResourceCardReady,
@@ -266,7 +267,7 @@ function PostDetailsPage({
         accessibilityLabel="Post text, required"
         accessibilityHint="Write the main text people will read in this post."
         value={draft.contentText}
-        onChangeText={(contentText) => onChange({ contentText: contentText.slice(0, 1000) })}
+        onChangeText={(contentText) => onChange({ contentText: contentText.slice(0, BODY_MAX_LENGTH) })}
         placeholder="Share a prompt, idea, breakdown, or useful note..."
         multiline
         minHeight={170}
@@ -358,7 +359,7 @@ function PostDetailsPage({
           accessibilityLabel="Story, optional"
           accessibilityHint="Share the idea, process, or story behind this post. Maximum 1000 characters."
           value={draft.caption}
-          onChangeText={(caption) => onChange({ caption: caption.slice(0, 1000), description: caption.slice(0, 1000) })}
+          onChangeText={(caption) => onChange({ caption: caption.slice(0, BODY_MAX_LENGTH), description: caption.slice(0, BODY_MAX_LENGTH) })}
           placeholder="Share the idea, process, or story behind it..."
           multiline
           minHeight={150}

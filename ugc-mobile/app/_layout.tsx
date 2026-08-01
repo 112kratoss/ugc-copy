@@ -113,8 +113,10 @@ function RootLayoutNav() {
                 <Stack.Screen name="showcase" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
                 <Stack.Screen name="creators/[username]" options={{ title: 'Creator' }} />
                 <Stack.Screen name="marketplace/[assetId]" options={{ title: 'Unlock' }} />
+                <Stack.Screen name="unlock/[unlockId]" options={{ title: 'Your Unlock' }} />
                 <Stack.Screen name="edit-profile" options={{ headerShown: false, presentation: 'modal', animation: reducedMotion ? 'none' : 'slide_from_bottom' }} />
                 <Stack.Screen name="seller-dashboard" options={{ title: 'Seller Dashboard' }} />
+                <Stack.Screen name="unlocks" options={{ title: 'Your Unlocks' }} />
                 <Stack.Screen name="invite" options={{ title: 'Invite & Earn' }} />
                 <Stack.Screen name="r/[code]" options={{ title: 'Magicbooklet invite' }} />
                 <Stack.Screen name="settings" options={{ title: 'Settings' }} />

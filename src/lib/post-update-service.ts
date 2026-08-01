@@ -835,6 +835,8 @@ export async function updateOwnerPostForRoute({
           description: nextDescription,
           body: nextBody,
           prompt: post.prompt,
+          resourcePrompt: resourceBundle?.resources?.promptText ?? null,
+          resourceNotes: resourceBundle?.resources?.notesMarkdown ?? null,
         })
       : null;
     if (safetyViolation) {

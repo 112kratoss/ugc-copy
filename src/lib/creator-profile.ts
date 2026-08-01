@@ -19,6 +19,7 @@ import {
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 import {
   MAGICBOOKLET_SOURCE_KIND,
+  sanitizeShowcaseFeedItem,
   type RawShowcaseSourceKind,
   type ShowcaseFeedItem,
   type ShowcaseItemCategory,
@@ -600,7 +601,14 @@ export const getCreatorProfilePageData = cache(async (
 
   const hasMore = pageRows.length > limit;
   const visibleRows = pageRows.slice(0, limit);
-  const items = await resolvePostRowsToFeedItems(visibleRows, adminSupabase);
+  // A creator profile is a public surface, so it owes viewers the same
+  // redaction the showcase feed applies: locked bundle metadata (real filenames,
+  // item titles, sizes) and paid recipe text never leave the server.
+  // A creator profile is a public surface, so it owes viewers the same
+  // redaction the showcase feed applies: locked bundle metadata (real filenames,
+  // item titles, sizes) and paid recipe text never leave the server.
+  const items = (await resolvePostRowsToFeedItems(visibleRows, adminSupabase))
+    .map(sanitizeShowcaseFeedItem);
   const stats = aggregateStats ?? await summarizeCreatorPosts(
     await loadAllCreatorPostMetricRows(adminSupabase, profile.id) ?? visibleRows,
     adminSupabase

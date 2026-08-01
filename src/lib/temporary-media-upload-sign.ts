@@ -55,11 +55,29 @@ type CreateTemporaryMediaUploadIntentInput = {
 
 const TEMPORARY_UPLOADS_BUCKET = 'uploads';
 const SIGNED_UPLOAD_EXPIRES_IN_SECONDS = 2 * 60 * 60;
-const MAX_UPLOAD_BYTES_BY_KIND = {
+export const MAX_UPLOAD_BYTES_BY_KIND = {
   image: 25 * 1024 * 1024,
   video: 250 * 1024 * 1024,
   audio: 50 * 1024 * 1024,
 } as const;
+
+/**
+ * The sign step can only validate the size the client *claims*, because the
+ * object does not exist yet. The publish step re-checks the bytes it actually
+ * received against this same table -- otherwise the only real ceiling is the
+ * bucket's 250 MB, and a 25 MB image cap is a suggestion.
+ */
+export function getMaxUploadBytesForContentType(contentType: string | null | undefined): number | null {
+  const normalized = (contentType ?? '').toLowerCase();
+  if (normalized.startsWith('image/')) return MAX_UPLOAD_BYTES_BY_KIND.image;
+  if (normalized.startsWith('video/')) return MAX_UPLOAD_BYTES_BY_KIND.video;
+  if (normalized.startsWith('audio/')) return MAX_UPLOAD_BYTES_BY_KIND.audio;
+  return null;
+}
+
+export function formatUploadByteLimit(bytes: number): string {
+  return `${Math.round(bytes / (1024 * 1024))} MB`;
+}
 const BLOCKED_UPLOAD_EXTENSIONS = new Set([
   '.app',
   '.bat',

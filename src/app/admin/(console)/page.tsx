@@ -143,6 +143,7 @@ export default async function AdminOverviewPage() {
             { href: '/admin/moderation', label: 'Moderation queue' },
             { href: '/admin/users', label: 'Users & credits' },
             { href: '/admin/revenue', label: 'Revenue' },
+            { href: '/admin/payouts', label: 'Creator payouts' },
             { href: '/admin/content', label: 'Content' },
             { href: '/admin/system', label: 'System' },
           ].map((link) => (

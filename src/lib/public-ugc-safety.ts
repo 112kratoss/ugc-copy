@@ -1,7 +1,7 @@
 export const PUBLIC_UGC_SAFETY_ERROR =
   'This content cannot be shared publicly because it may violate the community safety rules. Revise it or keep the post private.';
 
-export type PublicUgcTextField = 'title' | 'description' | 'body' | 'prompt';
+export type PublicUgcTextField = 'title' | 'description' | 'body' | 'prompt' | 'resourcePrompt' | 'resourceNotes';
 
 export type PublicUgcSafetyCategory =
   | 'child_sexual_exploitation'
@@ -80,7 +80,10 @@ export function getPublicUgcSafetyViolation(
 ): PublicUgcSafetyViolation | null {
   // Prefer the fields a creator directly edited before derived metadata such
   // as a text post title, so the response points at the actionable input.
-  for (const field of ['body', 'prompt', 'title', 'description'] as const) {
+  // Bundle text is included because a paid unlock's prompt and notes are
+  // distributed to buyers just like the public caption is -- being behind a
+  // paywall is not a reason to skip the check.
+  for (const field of ['body', 'prompt', 'resourcePrompt', 'resourceNotes', 'title', 'description'] as const) {
     const value = fields[field];
     if (!value?.trim()) continue;
 

@@ -154,6 +154,22 @@ export default function ShowcaseDetailBody({
             items: bundle.resources.items,
           }
         : null}
+      purchasedRevision={bundle.purchasedRevision
+        ? {
+            revisionNumber: bundle.purchasedRevision.revisionNumber,
+            purchasedAt: bundle.purchasedRevision.purchasedAt,
+            title: bundle.purchasedRevision.title,
+            resources: {
+              promptText: bundle.purchasedRevision.resources.promptText,
+              notesMarkdown: bundle.purchasedRevision.resources.notesMarkdown,
+              workflowShareUrl: bundle.purchasedRevision.resources.workflowShareUrl,
+              attachments: bundle.purchasedRevision.resources.attachments,
+              allowRemix: bundle.purchasedRevision.resources.allowRemix,
+              sections: bundle.purchasedRevision.resources.sections,
+              items: bundle.purchasedRevision.resources.items,
+            },
+          }
+        : null}
     />
   ) : null;
 

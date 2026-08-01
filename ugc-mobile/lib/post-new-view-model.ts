@@ -500,7 +500,9 @@ const DEFAULT_RESOURCE_SELECTIONS: PostComposerResourceSelections = {
 };
 
 const TITLE_MAX_LENGTH = 100;
-const BODY_MAX_LENGTH = 1000;
+// Matches the server's limit in post-creation-submission-service.ts. A lower
+// value here silently truncated half of what a creator was allowed to write.
+export const BODY_MAX_LENGTH = 2000;
 const MIN_RESOURCE_PRICE_TOKENS = 10;
 const MAX_MEDIA_ITEMS = 5;
 const MAX_MADE_WITH_ROWS = 5;

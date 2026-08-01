@@ -43,11 +43,13 @@ function createSupabaseMock({
   bundle,
   generation,
   bundleError = null,
+  purchases = [],
 }: {
   post: MockPost | null;
   bundle: MockBundle | null;
   generation?: { id: string; showcase_asset_path: string | null } | null;
   bundleError?: { message: string } | null;
+  purchases?: Array<{ bundle_id: string }>;
 }) {
   const calls = {
     rpc: [] as Array<{ name: string; args: Record<string, unknown> }>,
@@ -82,6 +84,13 @@ function createSupabaseMock({
       eq(column: string, value: unknown) {
         filters[column] = value;
         return query;
+      },
+      limit() {
+        if (table === 'post_resource_bundle_purchases') {
+          return Promise.resolve({ data: purchases, error: null });
+        }
+
+        return Promise.resolve({ data: [], error: null });
       },
       maybeSingle() {
         if (table === 'posts') {
@@ -155,8 +164,9 @@ describe('deleteOwnerPostForRoute', () => {
     cacheMocks.invalidateShowcaseFeedCache.mockClear();
   });
 
-  it('blocks paid posts with sales unless force delete is explicitly requested', async () => {
+  it('blocks posts with unlocks unless force delete is explicitly requested', async () => {
     const { client, calls } = createSupabaseMock({
+      purchases: [{ bundle_id: 'bundle-1' }],
       post: {
         id: 'post-1',
         user_id: 'user-1',
@@ -193,7 +203,7 @@ describe('deleteOwnerPostForRoute', () => {
       ok: false,
       status: 409,
       body: {
-        error: 'This post already has paid unlocks. Archive is recommended, but you can still force delete it if you want to remove it permanently.',
+        error: 'People have already unlocked this post. Deleting it removes it from your profile and every public surface, but buyers keep the version they unlocked. Archiving does the same and is reversible.',
         requiresForceDelete: true,
       },
     });
@@ -214,8 +224,9 @@ describe('deleteOwnerPostForRoute', () => {
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
-  it('force deletes a paid post after auditing, unpublishing its generation, and removing the showcase asset', async () => {
+  it('tombstones a sold post instead of destroying buyer entitlements', async () => {
     const { client, calls } = createSupabaseMock({
+      purchases: [{ bundle_id: 'bundle-1' }],
       post: {
         id: 'post-1',
         user_id: 'user-1',
@@ -257,6 +268,7 @@ describe('deleteOwnerPostForRoute', () => {
       body: {
         success: true,
         deleted: true,
+        tombstoned: true,
       },
     });
     expect(calls.audits).toEqual([
@@ -274,18 +286,74 @@ describe('deleteOwnerPostForRoute', () => {
         had_paid_orders: true,
       }),
     ]);
-    expect(calls.updates).toEqual([
-      {
-        table: 'generations',
-        patch: {
-          is_public: false,
-          showcase_asset_path: null,
-        },
-        filters: {
-          id: 'generation-1',
-        },
+
+    // The post row survives, private and archived, so the buyer's library keeps
+    // the title and cover that give their purchase context.
+    const tombstone = calls.updates.find((update) => update.table === 'posts');
+    expect(tombstone?.patch).toMatchObject({
+      visibility: 'private',
+      archived_by_user_id: 'user-1',
+    });
+    expect(tombstone?.patch.tombstoned_at).toEqual(expect.any(String));
+    expect(tombstone?.patch.archived_at).toEqual(expect.any(String));
+
+    // The unlock is delisted so it can never be sold again.
+    const retirement = calls.updates.find((update) => update.table === 'post_resource_bundles');
+    expect(retirement?.patch).toMatchObject({ status: 'draft' });
+    expect(retirement?.filters).toEqual({ id: 'bundle-1' });
+
+    // Nothing is destroyed: no delete, and the media buyers paid for stays.
+    expect(calls.deletes).toHaveLength(0);
+    expect(calls.removals).toHaveLength(0);
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('hard deletes a post whose unlock was never bought', async () => {
+    const { client, calls } = createSupabaseMock({
+      purchases: [],
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: 'generation-1',
+        visibility: 'public',
+        title: ' Launch prompt ',
+        source_kind: 'generation',
+        showcase_asset_path: 'posts/post-1/cover.jpg',
       },
-    ]);
+      bundle: {
+        id: 'bundle-1',
+        access_mode: 'paid',
+        status: 'published',
+        price_usd_cents: 500,
+        sales_count: 0,
+        earnings_usd_cents: 0,
+        prompt_text: 'Reusable launch prompt',
+        notes_markdown: null,
+        workflow_share_url: null,
+        workflow_snapshot: null,
+        attachments: [],
+        allow_remix: false,
+      },
+      generation: {
+        id: 'generation-1',
+        showcase_asset_path: 'posts/post-1/cover.jpg',
+      },
+    });
+
+    const result = await deleteOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      forceDelete: false,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      body: {
+        success: true,
+        deleted: true,
+      },
+    });
     expect(calls.deletes).toEqual([
       {
         table: 'posts',
@@ -301,7 +369,6 @@ describe('deleteOwnerPostForRoute', () => {
         paths: ['posts/post-1/cover.jpg'],
       },
     ]);
-    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
   it('does not delete the post when bundle state cannot be loaded for the audit decision', async () => {

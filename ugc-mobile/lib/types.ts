@@ -1195,3 +1195,87 @@ export interface MobileNotificationPreferences {
   commerceEnabled: boolean;
   socialEnabled: boolean;
 }
+
+/**
+ * An item in the buyer's unlock library. Mirrors ViewerUnlockItem on the web
+ * side; `retired` and `tombstoned` mean the creator removed the unlock or the
+ * whole post, which the buyer keeps regardless.
+ */
+export interface ViewerUnlockItem {
+  unlockId: string;
+  bundleId: string | null;
+  postId: string | null;
+  title: string;
+  previewText: string;
+  accessMode: 'free' | 'paid';
+  priceUsdCents: number;
+  purchasedAt: string;
+  purchasePriceUsdCents: number;
+  hasNewerRevision: boolean;
+  retired: boolean;
+  tombstoned: boolean;
+  post: {
+    title: string;
+    category: string;
+    postFormat: string;
+    mediaUrl: string | null;
+    mediaKind: string | null;
+  } | null;
+  creator: {
+    username: string | null;
+    displayName: string;
+    avatarUrl: string | null;
+  };
+}
+
+export interface ViewerUnlocksResponse {
+  success: boolean;
+  items: ViewerUnlockItem[];
+  pageInfo: {
+    total: number;
+    hasMore: boolean;
+    nextOffset: number | null;
+    limit: number;
+    offset: number;
+  };
+}
+
+export interface ViewerUnlockRevision {
+  revisionId: string;
+  revisionNumber: number;
+  createdAt: string;
+  title: string;
+  summary: string;
+  previewText: string;
+  accessMode: 'free' | 'paid';
+  priceUsdCents: number;
+  resources: PostResourceBundleResources;
+}
+
+export interface ViewerUnlockDetail {
+  unlockId: string;
+  bundleId: string | null;
+  postId: string | null;
+  title: string;
+  summary: string;
+  previewText: string;
+  accessMode: 'free' | 'paid';
+  priceUsdCents: number;
+  purchasePriceUsdCents: number;
+  purchasedAt: string;
+  creatorDisplayName: string;
+  resourceKinds: PostResourceKind[];
+  currentResources: PostResourceBundleResources | null;
+  purchasedRevision: ViewerUnlockRevision;
+  hasNewerRevision: boolean;
+  detached: boolean;
+  retired: boolean;
+  tombstoned: boolean;
+  postVisibility: string | null;
+  post: MarketplaceResource['post'] | null;
+}
+
+export interface ViewerUnlockDetailResponse {
+  success: boolean;
+  unlock: ViewerUnlockDetail;
+}
