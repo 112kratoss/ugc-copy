@@ -39,6 +39,7 @@
 @source "./template-runs";
 @source "./templates";
 @source "./terms";
+@source "./unlocks";
 @source "./welcome-reward";
 
 /* Shared components that are reachable only from the route set above. Keep

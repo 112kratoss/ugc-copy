@@ -190,7 +190,12 @@ export default function UnlockLibrary() {
 
       <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {items.map((item) => {
-          const href = item.postId ? `/showcase/${item.postId}` : null;
+          // Not /showcase/:id -- that route only serves public, unarchived,
+          // moderation-clean posts, so it 404s exactly the tombstoned and
+          // delisted purchases this library exists to keep reachable. The
+          // /unlocks route checks entitlement and bounces back to the public
+          // page when the post is still publicly readable.
+          const href = item.postId ? `/unlocks/${item.postId}` : null;
           const card = (
             <div className="flex h-full flex-col gap-3 rounded-2xl border border-white/8 bg-zinc-900/50 p-4 transition hover:border-white/16 hover:bg-zinc-900/70">
               <div className="flex items-start gap-3">

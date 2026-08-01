@@ -71,6 +71,26 @@ interface PostResourceBundlePanelProps {
     sections?: PostResourceSection[];
     items?: PostResourceItem[];
   } | null;
+  /**
+   * Set only when the creator edited the bundle after this viewer bought it.
+   * Snapshotting the purchase is pointless unless the buyer can actually reach
+   * it, so the panel offers an explicit switch between the current version and
+   * the one they paid for.
+   */
+  purchasedRevision?: {
+    revisionNumber: number;
+    purchasedAt: string;
+    title: string;
+    resources: {
+      promptText: string | null;
+      notesMarkdown: string | null;
+      workflowShareUrl: string | null;
+      attachments: PostResourceAttachment[];
+      allowRemix: boolean;
+      sections?: PostResourceSection[];
+      items?: PostResourceItem[];
+    };
+  } | null;
 }
 
 interface BundleRefreshPayload {
@@ -183,11 +203,18 @@ export default function PostResourceBundlePanel({
   lockedPreview,
   salesCount,
   initialResources,
+  purchasedRevision = null,
 }: PostResourceBundlePanelProps) {
   const router = useRouter();
   const { session, credits, updateCredits } = useAuth();
   const [hasAccess, setHasAccess] = useState(viewerCanAccess || viewerIsOwner);
   const [resources, setResources] = useState(initialResources);
+  const [showPurchasedRevision, setShowPurchasedRevision] = useState(false);
+  // The buyer sees the creator's latest by default -- honest improvements reach
+  // them for free -- but never loses the version they paid for.
+  const activeResources = showPurchasedRevision && purchasedRevision
+    ? purchasedRevision.resources
+    : resources;
   const [workingAction, setWorkingAction] = useState<'free' | 'razorpay' | 'credits' | 'file' | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -226,14 +253,14 @@ export default function PostResourceBundlePanel({
     [preview]
   );
   const groupedResourceItems = useMemo(
-    () => groupResourceItems(resources?.items ?? []),
-    [resources?.items]
+    () => groupResourceItems(activeResources?.items ?? []),
+    [activeResources?.items]
   );
   const groupedSectionResources = useMemo(
-    () => groupResourceItemsBySection(resources?.items ?? [], resources?.sections ?? []),
-    [resources?.items, resources?.sections]
+    () => groupResourceItemsBySection(activeResources?.items ?? [], activeResources?.sections ?? []),
+    [activeResources?.items, activeResources?.sections]
   );
-  const hasSectionedResourceItems = (resources?.sections?.length ?? 0) > 0 && groupedSectionResources.length > 0;
+  const hasSectionedResourceItems = (activeResources?.sections?.length ?? 0) > 0 && groupedSectionResources.length > 0;
   const hasStructuredResourceItems = groupedResourceItems.length > 0;
   const isRecipeVisible = isPublic || hasAccess || viewerIsOwner;
   const creditCost = Math.max(0, Math.round(priceUsdCents));
@@ -526,11 +553,11 @@ export default function PostResourceBundlePanel({
   };
 
   useEffect(() => {
-    if (!isRecipeVisible || !resources?.items?.length) {
+    if (!isRecipeVisible || !activeResources?.items?.length) {
       return;
     }
 
-    const previewItems = resources.items.filter((item) => {
+    const previewItems = activeResources.items.filter((item) => {
       if (!item.storagePath || resourceFileUrls[item.storagePath]) {
         return false;
       }
@@ -576,7 +603,7 @@ export default function PostResourceBundlePanel({
     return () => {
       cancelled = true;
     };
-  }, [fetchResourceFileUrl, isRecipeVisible, resourceFileUrls, resources?.items]);
+  }, [fetchResourceFileUrl, isRecipeVisible, resourceFileUrls, activeResources?.items]);
 
   const downloadResourceFile = async (storagePath: string, filename: string) => {
     try {
@@ -930,6 +957,40 @@ export default function PostResourceBundlePanel({
 
       {hasAccess || viewerIsOwner ? (
         <div className="mt-6 space-y-5">
+          {purchasedRevision ? (
+            <div className="rounded-[20px] border border-amber-300/20 bg-amber-300/[0.06] px-4 py-3">
+              <p className="text-xs leading-5 text-amber-100/90">
+                The creator has updated this unlock since you bought it. You can read either version.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPurchasedRevision(false)}
+                  aria-pressed={!showPurchasedRevision}
+                  className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold transition ${
+                    showPurchasedRevision
+                      ? 'border-white/10 bg-white/[0.03] text-zinc-400 hover:text-zinc-200'
+                      : 'border-emerald-300/40 bg-emerald-300/10 text-emerald-200'
+                  }`}
+                >
+                  Latest version
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPurchasedRevision(true)}
+                  aria-pressed={showPurchasedRevision}
+                  className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold transition ${
+                    showPurchasedRevision
+                      ? 'border-amber-300/40 bg-amber-300/10 text-amber-100'
+                      : 'border-white/10 bg-white/[0.03] text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  The version you unlocked
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           {hasStructuredResourceItems ? (
             hasSectionedResourceItems ? (
               <>
@@ -1125,13 +1186,13 @@ export default function PostResourceBundlePanel({
             )
           ) : null}
 
-          {!hasStructuredResourceItems && resources?.promptText ? (
+          {!hasStructuredResourceItems && activeResources?.promptText ? (
             <div className="rounded-[24px] border border-white/8 bg-black/30 p-5">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Prompt</div>
                 <button
                   type="button"
-                  onClick={() => void copyText(resources.promptText ?? '', 'Prompt copied to clipboard.')}
+                  onClick={() => void copyText(activeResources.promptText ?? '', 'Prompt copied to clipboard.')}
                   className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
                 >
                   <Copy className="h-3.5 w-3.5" />
@@ -1139,7 +1200,7 @@ export default function PostResourceBundlePanel({
                 </button>
               </div>
               <pre className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-100">
-                {resources.promptText}
+                {activeResources.promptText}
               </pre>
               {viewerIsOwner ? (
                 <p className="mt-3 rounded-2xl border border-emerald-300/15 bg-emerald-500/10 px-4 py-3 text-sm leading-6 text-emerald-50/85">
@@ -1149,13 +1210,13 @@ export default function PostResourceBundlePanel({
             </div>
           ) : null}
 
-          {!hasStructuredResourceItems && resources?.notesMarkdown ? (
+          {!hasStructuredResourceItems && activeResources?.notesMarkdown ? (
             <div className="rounded-[24px] border border-white/8 bg-black/30 p-5">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Notes</div>
                 <button
                   type="button"
-                  onClick={() => void copyText(resources.notesMarkdown ?? '', 'Notes copied to clipboard.')}
+                  onClick={() => void copyText(activeResources.notesMarkdown ?? '', 'Notes copied to clipboard.')}
                   className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
                 >
                   <Copy className="h-3.5 w-3.5" />
@@ -1163,19 +1224,19 @@ export default function PostResourceBundlePanel({
                 </button>
               </div>
               <article className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-100">
-                {resources.notesMarkdown}
+                {activeResources.notesMarkdown}
               </article>
             </div>
           ) : null}
 
-          {!hasStructuredResourceItems && resources?.workflowShareUrl ? (
+          {!hasStructuredResourceItems && activeResources?.workflowShareUrl ? (
             <div className="rounded-[24px] border border-white/8 bg-black/30 p-5">
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
                 <Link2 className="h-4 w-4" />
                 Workflow
               </div>
               <a
-                href={resources.workflowShareUrl}
+                href={activeResources.workflowShareUrl}
                 target="_blank"
                 rel="noreferrer"
                 className="mt-3 inline-flex items-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-50 transition hover:border-emerald-400/35 hover:bg-emerald-500/15"

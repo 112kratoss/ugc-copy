@@ -77,9 +77,15 @@ describe('unlock library view model', () => {
     expect(formatUnlockPrice(0)).toBe('Free');
   });
 
-  it('offers no destination when the post is gone', () => {
-    expect(getUnlockDestination(createUnlock({ postId: null }))).toBeNull();
-    expect(getUnlockDestination(createUnlock())).toBe('/viewer?postId=post-1&source=unlocks');
+  it('opens the resource screen, not the generic feed', () => {
+    // The immersive viewer reads initialId and silently falls back to the
+    // showcase feed for an unknown source, so the old
+    // /viewer?postId=…&source=unlocks link dropped every buyer into the feed.
+    expect(getUnlockDestination(createUnlock())).toBe('/marketplace/bundle-1?postId=post-1');
+  });
+
+  it('still opens when the post is gone, since the unlock is what was bought', () => {
+    expect(getUnlockDestination(createUnlock({ postId: null }))).toBe('/marketplace/bundle-1');
   });
 
   it('pluralizes the count', () => {

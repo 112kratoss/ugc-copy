@@ -74,13 +74,29 @@ function resolveClient(client: CreatePostResourceFileReadUrlParams['client']) {
   return typeof client === 'function' ? client() : client;
 }
 
+/**
+ * A file counts as part of this unlock if it appears in the current bundle OR in
+ * the revision this buyer paid for. Matching only the current version meant a
+ * creator could edit a file out and silently break downloads for people who had
+ * already bought it -- the exact hollowing-out the revision snapshot exists to
+ * prevent.
+ */
 function findRequestedResource(detail: PostResourceBundleDetail, requestedPath: string) {
-  const attachment = detail.resources?.attachments.find(
-    (item) => item.kind === 'file' && item.storagePath === requestedPath,
-  ) ?? null;
-  const resourceItem = detail.resources?.items?.find((item) => item.storagePath === requestedPath) ?? null;
+  const candidateResources = [detail.resources, detail.purchasedRevision?.resources]
+    .filter((resources): resources is NonNullable<typeof resources> => Boolean(resources));
 
-  return { attachment, resourceItem };
+  for (const resources of candidateResources) {
+    const attachment = resources.attachments.find(
+      (item) => item.kind === 'file' && item.storagePath === requestedPath,
+    ) ?? null;
+    const resourceItem = resources.items?.find((item) => item.storagePath === requestedPath) ?? null;
+
+    if (attachment || resourceItem) {
+      return { attachment, resourceItem };
+    }
+  }
+
+  return { attachment: null, resourceItem: null };
 }
 
 function resolveStorageLocation(requestedPath: string) {

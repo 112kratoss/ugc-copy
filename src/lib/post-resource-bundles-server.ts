@@ -706,12 +706,25 @@ function normalizeWorkflowSettings(value: unknown): Record<string, unknown> | nu
   return value && typeof value === 'object' ? value as Record<string, unknown> : null;
 }
 
-function isGenerationRecipePostEligible(row: GenerationRecipePostRow): boolean {
+/**
+ * `entitled` relaxes the public-surface checks for someone who already bought
+ * the unlock, so a tombstoned post keeps serving them the reference media they
+ * paid for. Moderation state is never relaxed: a hidden post retracts for
+ * everyone. Callers that restore files into a viewer's own remix must leave
+ * this false -- entitlement to read is not entitlement to reuse.
+ */
+function isGenerationRecipePostEligible(
+  row: GenerationRecipePostRow,
+  options: { entitled?: boolean } = {},
+): boolean {
+  const publicSurfaceOk = options.entitled
+    ? true
+    : (row.visibility === 'public' || row.visibility === 'unlisted') && row.archived_at === null;
+
   return Boolean(
     row.user_id &&
     row.generation_id &&
-    (row.visibility === 'public' || row.visibility === 'unlisted') &&
-    row.archived_at === null &&
+    publicSurfaceOk &&
     row.review_status === 'visible' &&
     normalizeShowcaseSourceKind(row.source_kind) === MAGICBOOKLET_SOURCE_KIND
   );
@@ -781,10 +794,16 @@ async function loadEligibleGenerationRecipeInputMedia(params: {
   postId: string;
   generationId: string;
   urlMode: 'signed' | 'none';
+  entitled?: boolean;
 }): Promise<{ generation: GenerationRecipeRow; inputMedia: GenerationInputMediaItem[] } | null> {
   const { adminSupabase } = params;
   const post = await loadGenerationRecipePostRow(adminSupabase, params.postId);
-  if (!post || !isGenerationRecipePostEligible(post) || !post.user_id || post.generation_id !== params.generationId) {
+  if (
+    !post
+    || !isGenerationRecipePostEligible(post, { entitled: params.entitled })
+    || !post.user_id
+    || post.generation_id !== params.generationId
+  ) {
     return null;
   }
 
@@ -2107,10 +2126,25 @@ export async function getPostResourceBundleDetailByPostId(
         postId,
         generationId: hydrated.post.generationId,
         urlMode: 'none',
+        // A buyer keeps reading through a tombstone; everyone else still needs
+        // the post to be on a public surface.
+        entitled: viewerHasPurchased && hydrated.post.tombstoned === true,
       });
       const generation = eligible?.generation ?? null;
+      // is_public stays the gate for a live post: a creator who deliberately
+      // un-publishes a generation retracts its live references, buyers included.
+      // Tombstoning is different -- it flips is_public=false as a side effect of
+      // deleting the post, so keying off the flag alone would strip references
+      // out from under buyers at exactly the moment we promised to retain them.
+      // Moderation still retracts everything, because a hidden post stops
+      // resolving into `hydrated.post` before this point.
       const canViewReferences = Boolean(
-        generation && (viewerIsOwner || generation.is_public === true),
+        generation
+        && (
+          viewerIsOwner
+          || generation.is_public === true
+          || (viewerHasPurchased && hydrated.post?.tombstoned === true)
+        ),
       );
       if (eligible && canViewReferences && eligible.inputMedia.length > 0) {
         const referenceItems = buildGenerationRecipeResourceItems({

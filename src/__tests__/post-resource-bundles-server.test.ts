@@ -868,6 +868,29 @@ describe('post resource bundle server access', () => {
       expect(detail).toBeNull();
     });
 
+    it('keeps reference media for a buyer once the post is tombstoned', async () => {
+      // Deleting a post flips its generation to is_public=false, so a gate that
+      // reads only that flag silently strips the references a buyer paid for at
+      // the exact moment the tombstone promises to retain them.
+      bundleRow = { ...(bundleRow as BundleRow), access_mode: 'paid', price_usd_cents: 900, allow_remix: true };
+      generationRow = { ...(generationRow as NonNullable<typeof generationRow>), is_public: false };
+      postRow = {
+        ...(postRow as Record<string, unknown>),
+        visibility: 'private',
+        archived_at: '2026-07-02T00:00:00.000Z',
+        tombstoned_at: '2026-07-02T00:00:00.000Z',
+      };
+      viewerHasPurchased = true;
+
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'buyer-1' });
+
+      expect(detail?.viewerCanAccess).toBe(true);
+      expect(detail?.resources?.items?.some(
+        (item) => item.storagePath === 'generation_inputs/owner-1/gen-1/00-reference-image.png',
+      )).toBe(true);
+    });
+
     it('hides a tombstoned post from everyone who did not buy it', async () => {
       postRow = {
         ...(postRow as Record<string, unknown>),

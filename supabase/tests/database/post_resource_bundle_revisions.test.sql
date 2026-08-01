@@ -13,7 +13,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(21);
+select plan(25);
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
 values
@@ -261,6 +261,38 @@ select is(
    where id = 'c0000000-0000-4000-8000-000000000001'::uuid),
   0,
   'the bundle goes with the deleted account rather than being retired forever'
+);
+
+-- 12. ...but what the buyer paid for outlives the creator's account entirely.
+select is(
+  (select count(*)::int from public.post_resource_bundle_purchases
+   where buyer_user_id = 'a2000000-0000-4000-8000-000000000002'::uuid),
+  1,
+  'the purchase survives the creator deleting their account'
+);
+
+select is(
+  (select revisions.prompt_text
+   from public.post_resource_bundle_purchases purchases
+   join public.post_resource_bundle_revisions revisions on revisions.id = purchases.revision_id
+   where purchases.buyer_user_id = 'a2000000-0000-4000-8000-000000000002'::uuid),
+  'ORIGINAL PROMPT',
+  'the buyer can still read the revision they paid for'
+);
+
+select is(
+  (select bundle_id from public.post_resource_bundle_purchases
+   where buyer_user_id = 'a2000000-0000-4000-8000-000000000002'::uuid),
+  null,
+  'the purchase detaches from the deleted bundle instead of cascading away'
+);
+
+select is(
+  (select seller_display_name is not null or post_title is not null
+   from public.post_resource_bundle_purchases
+   where buyer_user_id = 'a2000000-0000-4000-8000-000000000002'::uuid),
+  true,
+  'the purchase kept enough context to render without the creator or post'
 );
 
 select finish();
