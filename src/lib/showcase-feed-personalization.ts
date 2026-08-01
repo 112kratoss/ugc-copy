@@ -886,7 +886,15 @@ export async function getPersonalizedShowcaseFeedPage({
     viewerUserId,
   });
   const pageEntries = ranked.slice(offset, offset + limit);
-  const hasMore = Boolean(persisted && ranked.length > offset + limit);
+  // Whether more content exists is a fact about the ranked pool, not about whether
+  // we managed to persist a session. Only `nextCursor` needs a session, because only
+  // a cursor promises to resume *this* ranking; `nextOffset` paging does not.
+  //
+  // Coupling the two dead-ended the signed-out home feed at exactly one page: it is
+  // rendered without request headers so the page stays statically cacheable, which
+  // leaves it with no anonymous key, which skips persistence — and that silently
+  // turned "we could not open a session" into "there is nothing more to show".
+  const hasMore = ranked.length > offset + limit;
   if (persisted && pageEntries.length > 0) {
     await markDeliveryFactsServed(
       serviceClient,

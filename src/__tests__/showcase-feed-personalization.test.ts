@@ -129,8 +129,62 @@ describe('showcase feed personalization candidate filling', () => {
     expect(hydratePostIds.mock.calls[0]?.[0]).toHaveLength(60);
     expect(fallbackItems).not.toHaveBeenCalled();
     expect(page.items).toHaveLength(12);
-    expect(page.pageInfo.hasMore).toBe(false);
+    // 60 ranked candidates against a 12-item page: there is more, and saying so does
+    // not depend on having opened a session.
+    expect(page.pageInfo.hasMore).toBe(true);
+    expect(page.pageInfo.nextOffset).toBe(12);
     expect(page.pageInfo.nextCursor).toBeNull();
+  });
+
+  it('still reports more pages when no session could be persisted', async () => {
+    // The signed-out home page renders without request headers so it stays
+    // statically cacheable, which leaves it with no anonymous key and therefore no
+    // persisted session. It must still be able to page, or the feed dead-ends at
+    // one page for every logged-out visitor.
+    const postIds = Array.from({ length: 40 }, (_, index) => `candidate-${index}`);
+    const hydratePostIds = vi.fn(async (ids: string[]) => ids.map((id) => item(id)));
+    const fallbackItems = vi.fn(async () => [] as ShowcaseFeedItem[]);
+
+    const page = await getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: null,
+      cursor: null,
+      fallbackItems,
+      filters: { category: 'all', toolSlug: null, unlockFilter: 'all', resourceFilter: 'all' },
+      hydratePostIds,
+      limit: 12,
+      offset: 0,
+      serviceClient: serviceClient(postIds),
+      viewerUserId: null,
+    });
+
+    expect(page.feedSessionId).toBeNull();
+    expect(page.pageInfo.hasMore).toBe(true);
+    expect(page.pageInfo.nextOffset).toBe(12);
+    // A cursor would promise to resume this exact ranking, which an unpersisted
+    // session cannot do — so it stays null and the client pages by offset.
+    expect(page.pageInfo.nextCursor).toBeNull();
+  });
+
+  it('reports no more pages once the ranked pool is exhausted', async () => {
+    const postIds = Array.from({ length: 8 }, (_, index) => `candidate-${index}`);
+    const hydratePostIds = vi.fn(async (ids: string[]) => ids.map((id) => item(id)));
+    const fallbackItems = vi.fn(async () => [] as ShowcaseFeedItem[]);
+
+    const page = await getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: null,
+      cursor: null,
+      fallbackItems,
+      filters: { category: 'all', toolSlug: null, unlockFilter: 'all', resourceFilter: 'all' },
+      hydratePostIds,
+      limit: 12,
+      offset: 0,
+      serviceClient: serviceClient(postIds),
+      viewerUserId: null,
+    });
+
+    expect(page.items).toHaveLength(8);
+    expect(page.pageInfo.hasMore).toBe(false);
+    expect(page.pageInfo.nextOffset).toBeNull();
   });
 
   it('uses active retrieval limits and weights before deciding which candidates to hydrate', async () => {
