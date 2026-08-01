@@ -119,6 +119,137 @@ export function getHomeFeedSlides(shortcuts: HomeToolShortcut[] = HOME_TOOL_SHOR
   ];
 }
 
+/** How long a slide rests on screen before the rotation advances. */
+export const HOME_SLIDE_INTERVAL_MS = 4600;
+/**
+ * Grace period after a manual swipe before the timer takes back over. Long
+ * enough that a slide someone deliberately scrolled to is never yanked away
+ * mid-read.
+ */
+export const HOME_SLIDE_RESUME_DELAY_MS = 7000;
+
+/**
+ * How many times the slides are laid out end to end.
+ *
+ * Three, so the carousel can live in the middle pass with a full copy of the
+ * rail on either side. That is what makes the loop seamless in both
+ * directions: every position the rotation is corrected to has the same
+ * neighbours — including the sliver of the previous card showing at the left
+ * edge — as the position it was corrected from, so the correction moves no
+ * pixels. Two passes cannot do this; the first slide of pass one has nothing
+ * to its left, which both blocks a backward swipe and makes the wrap visibly
+ * pop as that sliver appears and disappears.
+ */
+export const HOME_SLIDE_LOOP_PASSES = 3;
+
+export interface HomeLoopedSlide {
+  key: string;
+  slide: HomeFeedSlide;
+}
+
+/**
+ * Repeats the slides so the rail extends past both ends of what is on screen.
+ * A lone slide has nothing to rotate through, so it is laid out once.
+ */
+export function buildLoopedHomeSlides(slides: HomeFeedSlide[]): HomeLoopedSlide[] {
+  const passes = slides.length > 1 ? HOME_SLIDE_LOOP_PASSES : 1;
+
+  return Array.from({ length: passes }, (_, pass) =>
+    slides.map((slide) => ({ key: `${slide.id}-${pass}`, slide }))
+  ).flat();
+}
+
+/**
+ * Where the carousel sits at rest: the first slide of the middle pass. Landing
+ * here rather than at 0 means a backward swipe has real cards to travel onto,
+ * so the first slide continues from the last instead of hitting a dead end.
+ */
+export function getInitialHomeSlideIndex(slideCount: number) {
+  return slideCount > 1 ? slideCount : 0;
+}
+
+/**
+ * Next position in the rotation.
+ *
+ * The index is free to leave the middle pass in either direction — that is how
+ * the carousel keeps travelling the way it was already going instead of
+ * sweeping back through everything it just showed. `foldHomeSlideOffset`
+ * brings it home once the scroll settles.
+ */
+export function advanceHomeSlide(currentIndex: number, slideCount: number) {
+  if (slideCount <= 1) return 0;
+
+  return currentIndex + 1;
+}
+
+/** Width of one full pass of slides — the period of the repeated rail. */
+export function getHomeSlidePassWidth(slideCount: number, slideWidth: number, gap: number) {
+  return slideCount * (slideWidth + gap);
+}
+
+/**
+ * Translates a settled scroll offset into the middle pass by whole passes.
+ *
+ * This is the recentering step, done in offset space rather than index space
+ * on purpose: shifting by an exact multiple of the pass width maps every
+ * on-screen pixel onto its copy one pass over, so the correction is invisible
+ * even when the scroll rested a few pixels off a snap point. Snapping to a
+ * slide's canonical offset instead would fold that fractional error into the
+ * jump and show up as a flick.
+ */
+export function foldHomeSlideOffset(offset: number, passWidth: number) {
+  if (passWidth <= 0) return offset;
+
+  let folded = offset;
+  while (folded < passWidth) folded += passWidth;
+  while (folded >= passWidth * 2) folded -= passWidth;
+
+  return folded;
+}
+
+/** Left edge of `index`, matching the list's `snapToInterval`. */
+export function getHomeSlideOffset(index: number, slideWidth: number, gap: number) {
+  return Math.max(0, index) * (slideWidth + gap);
+}
+
+/**
+ * Which laid-out position a scroll offset landed on. `itemCount` is the length
+ * of the repeated list, not the slide count — a swipe can legitimately settle
+ * inside the second pass.
+ */
+export function getHomeSlideIndexFromOffset(
+  offset: number,
+  slideWidth: number,
+  gap: number,
+  itemCount: number
+) {
+  const interval = slideWidth + gap;
+  if (interval <= 0 || itemCount <= 0) return 0;
+
+  return Math.min(itemCount - 1, Math.max(0, Math.round(offset / interval)));
+}
+
+/**
+ * Motion that starts on its own has to be able to stop on its own too: it
+ * pauses off-screen (a timer scrolling an unmounted-from-view list is wasted
+ * work), while a finger is on it, and entirely under Reduce Motion — an
+ * unattended carousel is exactly the auto-updating content that setting exists
+ * to silence.
+ */
+export function shouldAutoAdvanceHomeSlides({
+  slideCount,
+  isFocused,
+  isInteracting,
+  reduceMotion,
+}: {
+  slideCount: number;
+  isFocused: boolean;
+  isInteracting: boolean;
+  reduceMotion: boolean;
+}) {
+  return slideCount > 1 && isFocused && !isInteracting && !reduceMotion;
+}
+
 /**
  * Sibling of `buildShowcaseMasonry`. Home renders every post format in one
  * column, so — unlike the grid — it keeps text posts and never drops an item
