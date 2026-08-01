@@ -22,6 +22,7 @@
 @source "./components/DesignSystem.tsx";
 @source "./components/GenerationNotifications.tsx";
 @source "./components/HomeExperience.tsx";
+@source "./components/HomeSlider.tsx";
 @source "./components/HoverVideo.tsx";
 @source "./components/JsonLd.tsx";
 @source "./components/NavigationProgress.tsx";
@@ -491,6 +492,165 @@ button:disabled,
 
 .home-inline-strip {
   display: block;
+}
+
+/*
+ * The looping create rail at the top of the home column. Laid out here rather
+ * than with utilities for the same reason as the grid above: it renders on
+ * authenticated routes too, and a re-emitted utility from the second sheet
+ * would win over anything responsive declared in the component.
+ *
+ * The track is bled to the viewport edges on narrow screens so a card can sit
+ * flush against the gutter the way it does on mobile, then pulled back in once
+ * the column has its own margins.
+ */
+.home-slider-track {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  /* The fold teleports by a whole pass at the scroll's true end; an overscroll
+     bounce there would be felt as the rail hitting a wall it claims not to have. */
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  margin-inline: -1rem;
+  padding-inline: 1rem;
+  /* Snapping aligns a slide to the scrollport edge, which ignores the padding
+     above — without this a snapped card sits flush against the screen instead
+     of on the gutter, and its resting offset disagrees with the one the
+     rotation scrolls to. */
+  scroll-padding-inline: 1rem;
+}
+
+/* Touch pans this rail natively; a mouse only does because of the drag handler,
+   so the cursor is what advertises that the rail can be pushed at all. */
+@media (hover: hover) and (pointer: fine) {
+  .home-slider-track {
+    cursor: grab;
+  }
+
+  .home-slider-track:active {
+    cursor: grabbing;
+  }
+}
+
+.home-slider-track::-webkit-scrollbar {
+  display: none;
+}
+
+.home-slider-slide {
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+  /* Margin, not `gap`: it makes every slide occupy exactly one interval, so a
+     pass width is a clean multiple and the fold lands pixel-perfect. */
+  margin-right: 0.625rem;
+  width: 17.5rem;
+}
+
+/*
+ * One ratio at every size, so widening a card takes its height with it and the
+ * art keeps its shape. Height is never declared — `aspect-ratio` derives it.
+ */
+.home-slider-card {
+  display: flex;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 1.25rem;
+  border-width: 1px;
+}
+
+.home-slider-preview {
+  position: relative;
+  display: block;
+  /* Takes whatever height the caption leaves, so a taller card grows its art
+     rather than its empty space. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--ui-surface-raised);
+}
+
+.home-slider-eyebrow {
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+}
+
+.home-slider-headline {
+  font-size: 1.375rem;
+  line-height: 1.22;
+}
+
+/* Short card: headline at the top, action at the foot, as on mobile. */
+.home-slider-workspace-body {
+  padding: 0.875rem;
+  justify-content: space-between;
+}
+
+.home-slider-tool-title {
+  font-size: 1rem;
+}
+
+.home-slider-tool-summary {
+  font-size: 0.75rem;
+  line-height: 1.42;
+}
+
+.home-slider-tool-body {
+  padding: 0.625rem 0.75rem 0.6875rem;
+}
+
+@media (min-width: 40rem) {
+  .home-slider-track {
+    margin-inline: 0;
+    padding-inline: 0;
+    scroll-padding-inline: 0;
+  }
+
+  /*
+   * Sized against the feed card below rather than a fixed width, so the rail
+   * reads as the page's opening block. Short of the full measure on purpose:
+   * the sliver of the next card is what tells you the rail scrolls at all.
+   */
+  .home-slider-slide {
+    width: 88%;
+  }
+
+  /* Type does not scale with the box — a 2x card with 2x text would just be
+     the same card. It steps up once, enough to carry the larger surface. */
+  .home-slider-card {
+    border-radius: 1.5rem;
+  }
+
+  .home-slider-eyebrow {
+    font-size: 0.75rem;
+  }
+
+  .home-slider-headline {
+    font-size: 2rem;
+    line-height: 1.16;
+  }
+
+  /*
+   * Once the card is hero-sized, pinning the action to the foot leaves a hollow
+   * middle — there is no supporting copy to fill it. Centring keeps the two
+   * elements as one deliberate block.
+   */
+  .home-slider-workspace-body {
+    padding: 1.5rem 2rem;
+    justify-content: center;
+    gap: 1.5rem;
+  }
+
+  .home-slider-tool-title {
+    font-size: 1.25rem;
+  }
+
+  .home-slider-tool-summary {
+    font-size: 0.875rem;
+  }
+
+  .home-slider-tool-body {
+    padding: 0.875rem 1.25rem 1.125rem;
+  }
 }
 
 .home-rail {

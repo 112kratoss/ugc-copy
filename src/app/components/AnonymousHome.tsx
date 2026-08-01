@@ -1,9 +1,9 @@
 import Link from 'next/link';
-import { ArrowRight, Sparkles } from 'lucide-react';
 import { Suspense, use } from 'react';
 
-import { Button, Kicker, StatusCallout, Text } from '@/app/components/DesignSystem';
+import { StatusCallout, Text } from '@/app/components/DesignSystem';
 import HomeExperience from '@/app/components/HomeExperience';
+import HomeSlider from '@/app/components/HomeSlider';
 import { JsonLd } from '@/app/components/JsonLd';
 import QuickStartsCard from '@/app/components/QuickStartsCard';
 import SignInWorkspaceCard from '@/app/components/SignInWorkspaceCard';
@@ -85,23 +85,18 @@ function AnonymousHero() {
   // A plain div, not <header>: inside <main> the browser maps <header> to a
   // second `banner` landmark, which competes with the app shell's real one.
   return (
-    <div className="mb-6 border-b border-[var(--ui-border-subtle)] pb-6">
-      <Kicker icon={Sparkles}>AI creator studio</Kicker>
-      <Text as="h1" variant="display" className="mt-3 max-w-[15ch] text-4xl sm:text-5xl">
-        What will you create <span className="text-[var(--ui-primary)]">today?</span>
+    <div>
+      {/*
+        The rail replaced the marketing copy that used to carry this heading,
+        but the page still needs exactly one h1 — for the document outline
+        screen-reader users navigate by, and for the search result this
+        statically prerendered page exists to win. Kept in the DOM, out of the
+        design.
+      */}
+      <Text as="h1" variant="display" className="sr-only">
+        What will you create today?
       </Text>
-      <Text variant="bodySm" className="mt-3 max-w-xl sm:text-base">
-        Generate AI images, videos, and motion-transfer UGC ads — then publish the recipe so
-        other creators can run it. Below is what the community is making right now.
-      </Text>
-      <div className="mt-5 flex flex-wrap gap-3">
-        <Button href="/create" variant="primary" icon={ArrowRight}>
-          Start creating
-        </Button>
-        <Button href="/showcase" prefetch={false} variant="secondary">
-          Browse Showcase
-        </Button>
-      </div>
+      <HomeSlider />
     </div>
   );
 }
