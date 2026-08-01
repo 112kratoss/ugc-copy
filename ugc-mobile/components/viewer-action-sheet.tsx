@@ -5,7 +5,7 @@ import { Alert, Linking, Modal, Pressable, ScrollView, View } from 'react-native
 import { AppText } from '@/components/ui';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
-import { truncateInfiniteDataToFirstPage } from '@/lib/profile-media-query';
+import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
 import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
 import { immersiveViewerHref, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
@@ -58,20 +58,7 @@ export function ViewerActionSheet({
   ];
 
   const refreshMedia = async () => {
-    // Collapse the paginated profile caches so invalidation refetches one page, not all of them.
-    queryClient.setQueryData(['profile-saved-media', user?.id], truncateInfiniteDataToFirstPage);
-    queryClient.setQueryData(['profile-generations', user?.id], truncateInfiniteDataToFirstPage);
-    queryClient.setQueryData(['profile-owner-posts', user?.id], truncateInfiniteDataToFirstPage);
-
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
-      queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
-      queryClient.invalidateQueries({ queryKey: ['profile-saved-media', user?.id] }),
-      queryClient.invalidateQueries({ queryKey: ['profile-generations', user?.id] }),
-      queryClient.invalidateQueries({ queryKey: ['profile-owner-posts', user?.id] }),
-      queryClient.invalidateQueries({ queryKey: ['home-generations', user?.id] }),
-      queryClient.invalidateQueries({ queryKey: ['owner-posts-sales-summary', user?.id] }),
-    ]);
+    await refreshViewerMediaCaches(queryClient, user?.id);
     onSourceRefresh();
   };
 

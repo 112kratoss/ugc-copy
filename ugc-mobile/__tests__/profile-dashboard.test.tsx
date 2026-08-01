@@ -448,7 +448,7 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(routerState.push).toHaveBeenCalledWith('/seller-dashboard');
   });
 
-  it('routes to the profile media feed with correct source and initialId for Creations tiles', () => {
+  it('routes to the profile card feed with correct source and initialId for Creations tiles', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<ProfileDashboard />);
@@ -1041,7 +1041,7 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(tree!.root.findAllByProps({ children: 'Public' })).toHaveLength(0);
   });
 
-  it('routes to the profile media feed with correct source and initialId for Posts tiles', () => {
+  it('routes to the profile card feed with correct source and initialId for Posts tiles', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<ProfileDashboard />);

@@ -61,7 +61,7 @@ import {
 } from '@/lib/showcase-feed-view-model';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { SHOWCASE_DRAW_DISTANCE, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS } from '@/lib/media-performance';
-import { hasShowcasePreviewMedia } from '@/lib/showcase-media';
+import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia } from '@/lib/showcase-media';
 import { accentColor, appTheme } from '@/lib/theme';
 import type { ShowcaseFeedEventType, ShowcaseFeedItem, ShowcaseFeedResponse, ShowcasePostResponse } from '@/lib/types';
 
@@ -856,7 +856,7 @@ function MasonryPin({
       >
         {hasShowcasePreviewMedia(card.item) ? (
           <ShowcaseMediaPreview
-            item={card.item}
+            mediaItems={getShowcasePreviewMediaItems(card.item)}
             height={mediaHeight}
             accent={accent}
             width={columnWidth}

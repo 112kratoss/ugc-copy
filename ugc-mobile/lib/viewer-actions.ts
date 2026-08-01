@@ -1,3 +1,4 @@
+import type { ImmersivePreviewItem } from './immersive-preview-view-model';
 import type { CreatorToolId } from './types';
 
 export const SAVE_HEART_COLOR = '#ff3b64';
@@ -277,4 +278,153 @@ export function getViewerActionGroupLabel(action: string) {
   }
 
   return 'Media actions';
+}
+
+/**
+ * Which actions a viewer surface offers for an item. The reel renders these as a
+ * right rail and the profile card feed renders them as an action row, but the
+ * policy is one function so the two surfaces can never disagree about what a
+ * creation or post can do.
+ *
+ * The contextual positions vary by what the item actually is:
+ * contextual ones depends on what the item actually is. Saved showcase media leads
+ * with save/comment; owned media leads with the ownership action that matters for
+ * its current state, so publishing or flipping visibility stays one tap away
+ * instead of being buried in the More sheet.
+ *
+ * A slot is only emitted when its action is genuinely available, so the rail never
+ * renders a dead button — an absent slot collapses and the rail closes up.
+ */
+export type ViewerActionSlotId =
+  | 'save'
+  | 'comment'
+  | 'share'
+  | 'details'
+  | 'create'
+  | 'publish'
+  | 'visibility'
+  | 'unlock';
+
+export interface ViewerActionSlot {
+  id: ViewerActionSlotId;
+  /** The `ViewerActionSheet` action this slot delegates to, when it maps to one. */
+  action?: string;
+  /**
+   * Rail labels sit in a ~64pt column, so they stay to a single short word and let
+   * the icon and the state chip carry the rest. `a11yLabel` keeps the full phrasing
+   * for screen readers, where nothing is truncated.
+   */
+  label: string;
+  a11yLabel?: string;
+  tone?: 'default' | 'primary' | 'success' | 'warning';
+}
+
+export function getViewerActionSlots(item: ImmersivePreviewItem): ViewerActionSlot[] {
+  const available = new Set(item.availableActions);
+  const slots: ViewerActionSlot[] = [];
+
+  if (item.sourceType === 'generation') {
+    // A creation's headline question is "is this published, and where?".
+    if (available.has('publish')) {
+      slots.push({
+        id: 'publish',
+        action: 'publish',
+        label: 'Publish',
+        a11yLabel: 'Publish this creation',
+        tone: 'primary',
+      });
+    }
+    if (available.has('make-private')) {
+      slots.push({
+        id: 'visibility',
+        action: 'make-private',
+        label: 'Private',
+        a11yLabel: 'Make linked post private',
+        tone: 'warning',
+      });
+    } else if (available.has('make-public')) {
+      slots.push({
+        id: 'visibility',
+        action: 'make-public',
+        label: 'Public',
+        a11yLabel: 'Make linked post public',
+        tone: 'success',
+      });
+    }
+    if (available.has('edit-linked-resources')) {
+      slots.push({
+        id: 'unlock',
+        action: 'edit-linked-resources',
+        label: 'Unlock',
+        a11yLabel: item.linkedPostBundle ? 'Manage unlock bundle' : 'Add an unlock bundle',
+        tone: 'success',
+      });
+    }
+  } else if (item.sourceType === 'owner-post') {
+    // An owned post is already published, so visibility is the lead control. The state
+    // chip reports where it currently sits, so the button names the action instead.
+    if (available.has('change-visibility')) {
+      slots.push({
+        id: 'visibility',
+        action: 'change-visibility',
+        label: 'Visibility',
+        a11yLabel: 'Change who can see this post',
+        tone: item.visibility === 'public' ? 'success' : 'warning',
+      });
+    }
+  } else if (item.canSave) {
+    slots.push({ id: 'save', action: item.isSaved ? 'unsave' : 'save', label: item.isSaved ? 'Saved' : item.saveLabel });
+  }
+
+  if (item.canComment) {
+    slots.push({
+      id: 'comment',
+      action: 'comment',
+      label: item.commentCount > 0 ? item.commentLabel : 'Comment',
+    });
+  }
+  if (item.canShare) {
+    slots.push({ id: 'share', action: 'share', label: 'Share' });
+  }
+  slots.push({ id: 'details', action: 'view-details', label: 'Details' });
+
+  if (available.has('unlock-remix')) {
+    slots.push({ id: 'create', action: 'unlock-remix', label: 'Remix', tone: 'primary' });
+  } else if (available.has('recreate')) {
+    slots.push({ id: 'create', action: 'recreate', label: 'Create', tone: 'primary' });
+  }
+
+  return slots;
+}
+
+export type ViewerStateTone = 'neutral' | 'success' | 'warning' | 'danger';
+
+/**
+ * The publish/visibility state of owned media, surfaced next to the badge pill.
+ * Showcase items return null — their badge already says everything the viewer
+ * needs, and a second pill would just be noise.
+ */
+export function getViewerStateChip(
+  item: ImmersivePreviewItem
+): { label: string; tone: ViewerStateTone } | null {
+  if (item.archivedAt) {
+    return { label: 'Archived', tone: 'danger' };
+  }
+
+  if (item.sourceType === 'generation') {
+    if (!item.linkedPostId) return { label: 'Not posted', tone: 'neutral' };
+    if (item.linkedPostVisibility === 'public') return { label: 'Public post', tone: 'success' };
+    if (item.linkedPostVisibility === 'private') return { label: 'Private post', tone: 'warning' };
+    if (item.linkedPostVisibility === 'unlisted') return { label: 'Unlisted post', tone: 'warning' };
+    return { label: 'Linked post', tone: 'neutral' };
+  }
+
+  if (item.sourceType === 'owner-post') {
+    if (item.visibility === 'public') return { label: 'Public post', tone: 'success' };
+    if (item.visibility === 'private') return { label: 'Private post', tone: 'warning' };
+    if (item.visibility === 'unlisted') return { label: 'Unlisted post', tone: 'warning' };
+    return { label: 'Published post', tone: 'neutral' };
+  }
+
+  return null;
 }

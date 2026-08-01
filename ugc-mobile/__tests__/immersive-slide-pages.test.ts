@@ -97,7 +97,9 @@ describe('immersive slide pages', () => {
     expect(buildImmersiveSlidePages(post).map((page) => page.type)).toEqual(['text', 'details']);
   });
 
-  it('does not add details for creation-only generation items', () => {
+  it('adds a details page for creation-only generation items', () => {
+    // Creations open in the reel like everything else, so the swipe-left details page
+    // is the only place their model/cost metadata can be shown.
     const generation = item({
       source: 'profile-creations',
       sourceType: 'generation',
@@ -105,7 +107,7 @@ describe('immersive slide pages', () => {
       generationId: 'gen-1',
     });
 
-    expect(buildImmersiveSlidePages(generation).map((page) => page.type)).toEqual(['media']);
+    expect(buildImmersiveSlidePages(generation).map((page) => page.type)).toEqual(['media', 'details']);
   });
 
   it('blocks active video playback while details page, details sheet, or action sheet is open', () => {

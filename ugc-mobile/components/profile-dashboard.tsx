@@ -992,6 +992,8 @@ function ProfileMediaTile({
           router.push(item.href as never);
           return;
         }
+        // Saved media is for looking at, so it opens the reel. Creations and Posts
+        // are for managing, so they open the card feed with their controls inline.
         router.push(
           (isSavedTile ? immersiveViewerHref : profileMediaFeedHref)({
             source: item.viewerSource,

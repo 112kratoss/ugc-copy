@@ -53,7 +53,7 @@ import { env } from '@/lib/env';
 import { formatCompactCount } from '@/lib/home-view-model';
 import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset } from '@/lib/safe-area';
-import { hasShowcasePreviewMedia, hasShowcaseVideoWithoutPreview } from '@/lib/showcase-media';
+import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia, hasShowcaseVideoWithoutPreview } from '@/lib/showcase-media';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from '@/lib/showcase-display';
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
 import { accentColor, appTheme } from '@/lib/theme';
@@ -579,7 +579,7 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
               <Text numberOfLines={7} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>{displayText}</Text>
             </View>
           ) : hasShowcasePreviewMedia(item) ? (
-            <ShowcaseMediaPreview accent={accent} height={height} item={item} onPress={onPress} radius={0} recyclingKey={`creator-profile:${item.id}`} videoActivation={activeVideoPreview ? 'when-poster-missing' : 'never'} width={width} />
+            <ShowcaseMediaPreview accent={accent} height={height} mediaItems={getShowcasePreviewMediaItems(item)} onPress={onPress} radius={0} recyclingKey={`creator-profile:${item.id}`} videoActivation={activeVideoPreview ? 'when-poster-missing' : 'never'} width={width} />
           ) : (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><ImageIcon size={30} color={appTheme.colors.faint} /></View>
           )}

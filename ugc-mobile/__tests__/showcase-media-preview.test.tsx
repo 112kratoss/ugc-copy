@@ -108,7 +108,7 @@ describe('ShowcaseMediaPreview', () => {
       <ShowcaseMediaPreview
         accent="#60a5fa"
         height={180}
-        item={item({ mediaItems: [media({ previewUrl: null })] })}
+        mediaItems={[media({ previewUrl: null })]}
         radius={12}
         recyclingKey="creator-profile:post-1"
         width={160}
@@ -125,7 +125,7 @@ describe('ShowcaseMediaPreview', () => {
       <ShowcaseMediaPreview
         accent="#60a5fa"
         height={180}
-        item={item({ mediaItems: [media({ previewUrl: 'https://cdn.example.com/preview.webp' })] })}
+        mediaItems={[media({ previewUrl: 'https://cdn.example.com/preview.webp' })]}
         radius={12}
         recyclingKey="creator-profile:post-1"
         width={160}
@@ -144,17 +144,13 @@ describe('ShowcaseMediaPreview', () => {
       <ShowcaseMediaPreview
         accent="#fb7185"
         height={180}
-        item={item({
-          category: 'video',
+        mediaItems={[media({
+          id: 'video-1',
+          url: 'https://cdn.example.com/original.mp4',
+          previewUrl: 'https://cdn.example.com/poster.webp',
           mediaKind: 'video',
-          mediaItems: [media({
-            id: 'video-1',
-            url: 'https://cdn.example.com/original.mp4',
-            previewUrl: 'https://cdn.example.com/poster.webp',
-            mediaKind: 'video',
-            contentType: 'video/mp4',
-          })],
-        })}
+          contentType: 'video/mp4',
+        })]}
         radius={12}
         recyclingKey="creator-profile:video-1"
         videoActivation="never"
@@ -177,16 +173,12 @@ describe('ShowcaseMediaPreview', () => {
       <ShowcaseMediaPreview
         accent="#fb7185"
         height={180}
-        item={item({
-          category: 'video',
+        mediaItems={[media({
+          id: 'video-without-poster',
+          url: 'https://cdn.example.com/original.mp4',
           mediaKind: 'video',
-          mediaItems: [media({
-            id: 'video-without-poster',
-            url: 'https://cdn.example.com/original.mp4',
-            mediaKind: 'video',
-            contentType: 'video/mp4',
-          })],
-        })}
+          contentType: 'video/mp4',
+        })]}
         radius={12}
         recyclingKey="creator-profile:video-without-poster"
         videoActivation="when-poster-missing"
@@ -203,12 +195,10 @@ describe('ShowcaseMediaPreview', () => {
       <ShowcaseMediaPreview
         accent="#60a5fa"
         height={180}
-        item={item({
-          mediaItems: [
-            media({ id: 'image-1' }),
-            media({ id: 'video-1', mediaKind: 'video', url: 'https://cdn.example.com/original.mp4' }),
-          ],
-        })}
+        mediaItems={[
+          media({ id: 'image-1' }),
+          media({ id: 'video-1', mediaKind: 'video', url: 'https://cdn.example.com/original.mp4' }),
+        ]}
         radius={12}
         recyclingKey="creator-profile:post-1"
         width={160}

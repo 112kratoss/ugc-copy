@@ -15,7 +15,12 @@ import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/types';
 type ShowcaseMediaPreviewProps = {
   accent: string;
   height: number;
-  item: ShowcaseFeedItem;
+  /**
+   * Normalized media, not the feed item — creations and owner posts render through
+   * this component too, and they are not `ShowcaseFeedItem`s. Showcase callers pass
+   * `getShowcasePreviewMediaItems(item)`.
+   */
+  mediaItems: ShowcaseMediaItem[];
   onPress?: () => void;
   onScrollToggle?: (scrolling: boolean) => void;
   radius: number;
@@ -31,7 +36,7 @@ type VideoActivation = 'never' | 'visible' | 'when-poster-missing';
 export function ShowcaseMediaPreview({
   accent,
   height,
-  item,
+  mediaItems,
   onPress,
   onScrollToggle,
   radius,
@@ -41,7 +46,6 @@ export function ShowcaseMediaPreview({
   videoContentFit = 'contain',
   width,
 }: ShowcaseMediaPreviewProps) {
-  const mediaItems = getShowcasePreviewMediaItems(item);
   const reduceMotionEnabled = useReduceMotionEnabled();
   const resolvedVideoActivation = reduceMotionEnabled ? 'never' : videoActivation;
 
@@ -92,7 +96,7 @@ function ShowcaseMediaCarousel({
   videoBackdrop = 'blurred',
   videoContentFit = 'contain',
   width,
-}: Omit<ShowcaseMediaPreviewProps, 'item'> & { mediaItems: ShowcaseMediaItem[] }) {
+}: ShowcaseMediaPreviewProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
 
   return (
