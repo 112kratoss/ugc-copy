@@ -32,6 +32,27 @@ describe('home slider', () => {
 
       expect(hrefs).toEqual(['/create-image', '/create-video', '/create-motion']);
     });
+
+    it('greets a signed-in creator, matching the mobile rail', () => {
+      const [workspace] = getHomeSlides('Sassy');
+
+      expect(workspace).toMatchObject({ kind: 'workspace', title: 'Ready when you are, Sassy' });
+    });
+
+    it('falls back to the signed-out line when there is no one to greet', () => {
+      // The signed-out home is statically prerendered and cannot read auth, so
+      // this is the copy every anonymous visitor gets.
+      for (const name of [undefined, null, '', '   ']) {
+        expect(getHomeSlides(name)[0]).toMatchObject({ title: 'Create something worth sharing' });
+      }
+    });
+
+    it('offers the same tools either way', () => {
+      const anonymous = getHomeSlides().map((slide) => slide.id);
+      const signedIn = getHomeSlides('Sassy').map((slide) => slide.id);
+
+      expect(signedIn).toEqual(anonymous);
+    });
   });
 
   describe('rotation', () => {

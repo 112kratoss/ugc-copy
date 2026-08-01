@@ -81,8 +81,12 @@ const SLIDE_TOOL_PREVIEWS: Partial<Record<CreatorToolId, string>> = {
  * The rail's contents: the workspace card, then one card per creator tool that
  * has preview art. Tools come from `CREATOR_TOOLS`, so the rail follows the
  * same catalogue as `/create` and the quick-starts card.
+ *
+ * `displayName` greets a signed-in viewer, matching the mobile rail. Left out
+ * on the signed-out home, which must stay statically prerenderable and has no
+ * one to greet.
  */
-export function getHomeSlides(): HomeSlide[] {
+export function getHomeSlides(displayName?: string | null): HomeSlide[] {
   const tools = CREATOR_TOOLS.flatMap((tool): HomeSlide[] => {
     const preview = SLIDE_TOOL_PREVIEWS[tool.id];
     if (!preview) return [];
@@ -98,12 +102,16 @@ export function getHomeSlides(): HomeSlide[] {
     }];
   });
 
+  const greeted = displayName?.trim();
+
   return [
     {
       kind: 'workspace',
       id: 'workspace',
       eyebrow: 'Creator workspace',
-      title: 'Create something worth sharing',
+      // Same two lines the mobile rail uses, so a creator meets the same card
+      // on either client.
+      title: greeted ? `Ready when you are, ${greeted}` : 'Create something worth sharing',
       ctaLabel: 'Create new',
       href: '/create',
     },
