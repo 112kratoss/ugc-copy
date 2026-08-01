@@ -250,11 +250,21 @@ function ShowcaseMediaSlide({
     );
   }
 
+  // The fallback source gets its own cache key: reusing the preview's key
+  // would file the original's bytes under the preview's disk-cache entry, and
+  // for legacy items (previewUrl === url) the key change is what releases
+  // StableMediaImage's failure latch so the fallback attempt happens at all.
+  const frameCacheKey = usablePreviewUrl
+    ? previewCacheKey
+    : previewCacheKey
+      ? `${previewCacheKey}:source`
+      : undefined;
+
   return (
     <FeedMediaFrame
       kind="image"
       url={usablePreviewUrl ?? item.url}
-      cacheKey={previewCacheKey}
+      cacheKey={frameCacheKey}
       thumbhash={previewThumbhash}
       imageBackdrop="none"
       imageContentFit="cover"

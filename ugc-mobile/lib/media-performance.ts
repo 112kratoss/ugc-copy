@@ -15,3 +15,35 @@ export const IMMERSIVE_HORIZONTAL_LIST_TUNING = {
 export const SHOWCASE_DRAW_DISTANCE = 500;
 export const SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS = 1;
 export const HOME_RAIL_DRAW_DISTANCE = 400;
+
+/**
+ * Auto-retry policy for a failed image load in StableMediaImage.
+ *
+ * Given the number of attempts that have already failed for the current
+ * source (0 = the first load just failed), return how many milliseconds to
+ * wait before retrying, or null to stop. On null the component latches the
+ * failure UI (thumbhash tile + tap to retry) and notifies its parent, which
+ * may fall back to another URL.
+ *
+ * Constraints to weigh:
+ * - A feed screen can hold many failed tiles at once during an outage; every
+ *   retry is a network request against the same CDN.
+ * - Most real-world failures are sub-second blips or brief connectivity
+ *   drops; retries past ~2 attempts rarely succeed and cost battery/data.
+ * - Identical delays synchronize retries across tiles (thundering herd);
+ *   jitter desynchronizes them.
+ */
+const IMAGE_RETRY_MAX_ATTEMPTS = 2;
+const IMAGE_RETRY_BASE_DELAY_MS = 900;
+
+export function imageRetryDelayMs(attempt: number): number | null {
+  if (attempt >= IMAGE_RETRY_MAX_ATTEMPTS) return null;
+  // ~0.9s then ~2.7s: the first retry catches sub-second blips, the second
+  // brief connectivity drops. Giving up after two hands recovery to the next
+  // layer (URL fallback, then the thumbhash tile with tap-to-retry) instead
+  // of hammering a dead network.
+  const backoff = IMAGE_RETRY_BASE_DELAY_MS * 3 ** attempt;
+  // Up to +50% jitter so tiles that failed together (one outage, many cards)
+  // don't stampede the CDN in sync when they come back.
+  return backoff + Math.random() * backoff * 0.5;
+}
