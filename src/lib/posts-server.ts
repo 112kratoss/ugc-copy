@@ -197,6 +197,27 @@ export function isMissingPostResourceItemsColumnError(error: unknown): boolean {
   return code === '42703' && (message.includes('resource_items') || message.includes('resource_sections'));
 }
 
+/**
+ * The retirement columns ship with the bundle-revisions migration. Code can run
+ * ahead of schema -- a rollback, or a developer pointing a local server at an
+ * unmigrated database -- and asking for a column that does not exist fails the
+ * whole select, which would take every bundle read down rather than degrade.
+ */
+export function isMissingPostResourceRetirementColumnError(error: unknown): boolean {
+  const message = getErrorMessage(error);
+  const code = typeof error === 'object' && error ? (error as SupabaseSchemaError).code : undefined;
+
+  return code === '42703' && message.includes('retired_at');
+}
+
+/** See isMissingPostResourceRetirementColumnError -- same migration, same risk. */
+export function isMissingPostTombstoneColumnError(error: unknown): boolean {
+  const message = getErrorMessage(error);
+  const code = typeof error === 'object' && error ? (error as SupabaseSchemaError).code : undefined;
+
+  return code === '42703' && message.includes('tombstoned_at');
+}
+
 export function isMissingMarketplaceSchemaError(error: unknown): boolean {
   const message = getErrorMessage(error);
   const code = typeof error === 'object' && error ? (error as SupabaseSchemaError).code : undefined;

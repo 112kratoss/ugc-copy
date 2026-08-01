@@ -29,8 +29,11 @@ import {
 import { getCurrentInternalPath, getSafeInternalReturnPath } from '@/lib/share';
 import { trackProductEvent } from '@/lib/product-analytics';
 import {
+  formatUsdCents,
   getPostResourceKindLabel,
   normalizePostResourceBundleAccessMode,
+  POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS,
+  POST_RESOURCE_PRICE_INCREMENT_USD_CENTS,
   type PostResourceAttachment,
   type PostResourceBundleInput,
   type PostResourceBundleAccessMode,
@@ -42,6 +45,9 @@ import {
   type PostResourceSection,
   type PostResourceSectionKind,
 } from '@/lib/post-resource-bundles';
+import {
+  POST_RESOURCE_WEB_CASH_MIN_TOKENS,
+} from '@/lib/post-resource-commerce';
 import { slugifySourceTool, type SourceToolOption } from '@/lib/source-tools';
 import { supabase } from '@/lib/supabase';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
@@ -775,14 +781,19 @@ async function uploadResourceFile(file: File, accessToken: string): Promise<Post
   return finalized.attachment;
 }
 
-function getInitialPriceUsd(bundle: PostResourceBundleInput | null | undefined): string {
+const DEFAULT_PRICE_TOKENS = 900;
+
+/**
+ * Prices are denominated in tokens, and `price_usd_cents` stores the token
+ * count directly -- at the fixed 100-token/$1 rate the two numbers are equal.
+ */
+function getInitialPriceTokens(bundle: PostResourceBundleInput | null | undefined): string {
   if (bundle?.accessMode !== 'paid') {
-    return '9';
+    return String(DEFAULT_PRICE_TOKENS);
   }
 
-  const cents = typeof bundle.priceUsdCents === 'number' ? bundle.priceUsdCents : 0;
-  const dollars = cents / 100;
-  return Number.isInteger(dollars) ? String(dollars) : dollars.toFixed(2);
+  const tokens = typeof bundle.priceUsdCents === 'number' ? bundle.priceUsdCents : 0;
+  return tokens > 0 ? String(Math.round(tokens)) : String(DEFAULT_PRICE_TOKENS);
 }
 
 function getInitialProofMode(initialPost: EditablePostDraft | null | undefined): ProofMode {
@@ -945,7 +956,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [organizeResourceSections, setOrganizeResourceSections] = useState(() =>
     (initialBundle.resources?.sections?.length ?? 0) > 0
   );
-  const [resourcePriceUsd, setResourcePriceUsd] = useState(() => getInitialPriceUsd(initialBundle));
+  const [resourcePriceTokens, setResourcePriceTokens] = useState(() => getInitialPriceTokens(initialBundle));
   const [resourceSelectionsTouched, setResourceSelectionsTouched] = useState(false);
   const [resourcePromptTouched, setResourcePromptTouched] = useState(false);
   const [resourceNotesTouched, setResourceNotesTouched] = useState(false);
@@ -1010,9 +1021,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     resourceSelections.remix ||
     (organizeResourceSections && resourceSectionRows.some(sectionHasContent))
   );
-  const parsedResourcePriceUsd = Number.parseFloat(resourcePriceUsd.trim() || '0');
-  const resourcePriceUsdCents = resourceAccessMode === 'paid' && Number.isFinite(parsedResourcePriceUsd)
-    ? Math.round(parsedResourcePriceUsd * 100)
+  const parsedResourcePriceTokens = Number.parseInt(resourcePriceTokens.trim() || '0', 10);
+  const resourcePriceUsdCents = resourceAccessMode === 'paid' && Number.isFinite(parsedResourcePriceTokens)
+    ? Math.round(parsedResourcePriceTokens)
     : 0;
   const defaultResourceSummary = useMemo(
     () => buildDefaultResourceSummary(selectedResourceKinds, resourceAccessMode),
@@ -1859,8 +1870,18 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         return;
       }
 
-      if (resourceAccessMode === 'paid' && (!Number.isFinite(parsedResourcePriceUsd) || parsedResourcePriceUsd < 1)) {
-        stopWithError('Paid recipes must be priced at $1.00 or above.', 'resources');
+      if (
+        resourceAccessMode === 'paid'
+        && (
+          !Number.isFinite(parsedResourcePriceTokens)
+          || parsedResourcePriceTokens < POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS
+          || parsedResourcePriceTokens % POST_RESOURCE_PRICE_INCREMENT_USD_CENTS !== 0
+        )
+      ) {
+        stopWithError(
+          `Paid unlocks start at ${POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS} tokens and go up in ${POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}-token steps.`,
+          'resources',
+        );
         return;
       }
 
@@ -2864,23 +2885,31 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                         </div>
 
                         {resourceAccessMode === 'paid' ? (
-                          <div className="flex items-center gap-3">
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                             <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Price:</span>
                             <div className="relative inline-flex items-center">
-                              <span className="absolute left-3 text-xs text-zinc-500">$</span>
                               <input
                                 ref={priceInputRef}
-                                type="text"
-                                aria-label="Price"
-                                placeholder="9"
-                                value={resourcePriceUsd}
+                                type="number"
+                                inputMode="numeric"
+                                min={POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS}
+                                step={POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}
+                                aria-label="Price in tokens"
+                                placeholder={String(DEFAULT_PRICE_TOKENS)}
+                                value={resourcePriceTokens}
                                 onChange={(event) => {
-                                  setResourcePriceUsd(event.target.value);
+                                  setResourcePriceTokens(event.target.value);
                                   resetFeedback();
                                 }}
-                                className="w-20 rounded-full border border-white/10 bg-white/[0.03] pl-6 pr-3 py-1 text-center text-xs font-semibold text-white outline-none focus:border-emerald-300/40"
+                                className="w-24 rounded-full border border-white/10 bg-white/[0.03] pl-3 pr-14 py-1 text-center text-xs font-semibold text-white outline-none focus:border-emerald-300/40 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                               />
+                              <span className="pointer-events-none absolute right-3 text-xs text-zinc-500">tokens</span>
                             </div>
+                            {Number.isFinite(parsedResourcePriceTokens) && parsedResourcePriceTokens > 0 ? (
+                              <span className="text-xs text-zinc-500">
+                                ≈ {formatUsdCents(parsedResourcePriceTokens)}
+                              </span>
+                            ) : null}
                           </div>
                         ) : null}
                       </div>
@@ -2891,6 +2920,14 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                             Buyers see the full price before payment. Your sales appear in Seller Dashboard;
                             payment processing may affect the final payout. Before purchase, only the recipe
                             summary and included resource types are visible.
+                            {Number.isFinite(parsedResourcePriceTokens)
+                              && parsedResourcePriceTokens > 0
+                              && parsedResourcePriceTokens < POST_RESOURCE_WEB_CASH_MIN_TOKENS ? (
+                                <>
+                                  {' '}Under {POST_RESOURCE_WEB_CASH_MIN_TOKENS} tokens, buyers unlock with
+                                  credits rather than a card checkout.
+                                </>
+                              ) : null}
                           </>
                         ) : (
                           <>People can add a free recipe to their library with one click.</>

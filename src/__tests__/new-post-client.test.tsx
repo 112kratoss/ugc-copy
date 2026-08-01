@@ -507,8 +507,10 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByPlaceholderText(/https:\/\//i), {
       target: { value: 'https://ugc.example.com/doc' },
     });
-    fireEvent.change(screen.getByDisplayValue('9'), {
-      target: { value: '12' },
+    // Prices are entered in tokens now, and price_usd_cents stores the token
+    // count directly, so 1200 tokens is what the payload should carry.
+    fireEvent.change(screen.getByRole('spinbutton', { name: /price in tokens/i }), {
+      target: { value: '1200' },
     });
     fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
 
@@ -737,7 +739,7 @@ describe('NewPostClient', () => {
     expect(screen.getByText(/saved prompt, reusable setup notes, and remix access are ready/i)).toBeInTheDocument();
     expect(screen.getByText(/remix access is included in this recipe/i)).toBeInTheDocument();
 
-    const priceInput = screen.getByRole('textbox', { name: /price/i });
+    const priceInput = screen.getByRole('spinbutton', { name: /price in tokens/i });
     await waitFor(() => {
       expect(priceInput).toHaveFocus();
     });
@@ -833,7 +835,7 @@ describe('NewPostClient', () => {
     expect(screen.getAllByText(/you came from my studio/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/this recipe will save as a draft/i).length).toBeGreaterThan(0);
 
-    const priceInput = screen.getByRole('textbox', { name: /price/i });
+    const priceInput = screen.getByRole('spinbutton', { name: /price in tokens/i });
     await waitFor(() => {
       expect(priceInput).toHaveFocus();
     });

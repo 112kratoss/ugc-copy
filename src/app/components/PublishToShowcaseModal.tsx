@@ -11,6 +11,8 @@ import { getCreatorProfileReadiness, type ProfileApiResponse } from '@/lib/profi
 import {
   formatUsdCents,
   getPostResourceKindLabel,
+  POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS,
+  POST_RESOURCE_PRICE_INCREMENT_USD_CENTS,
   type PersistedPostResourceBundleAccessMode,
   type PostResourceBundleAccessMode,
   type PostResourceBundleInput,
@@ -61,13 +63,15 @@ function getDefaultPublishDescription(
   return defaultDescription.trim() || paywallPrefill?.notesMarkdown?.trim() || '';
 }
 
-function parsePriceUsdToCents(value: string): number | null {
-  const normalized = Number.parseFloat(value.trim());
-  if (!Number.isFinite(normalized)) {
-    return null;
-  }
+const DEFAULT_PRICE_TOKENS = 900;
 
-  return Math.round(normalized * 100);
+/**
+ * Prices are token counts. `price_usd_cents` stores the token value directly --
+ * at the fixed 100-token/$1 rate the two numbers are the same.
+ */
+function parsePriceTokens(value: string): number | null {
+  const normalized = Number.parseInt(value.trim(), 10);
+  return Number.isFinite(normalized) ? normalized : null;
 }
 
 function getAutoUnlockKinds(prefill: GenerationPaywallPrefill | null | undefined): PostResourceKind[] {
@@ -191,7 +195,7 @@ export default function PublishToShowcaseModal({
     getDefaultPublishDescription(defaultDescription, paywallPrefill)
   );
   const [recipeAccess, setRecipeAccess] = useState<PostResourceBundleAccessMode>('none');
-  const [priceUsd, setPriceUsd] = useState('9');
+  const [priceTokens, setPriceTokens] = useState(String(DEFAULT_PRICE_TOKENS));
   const [publishingVisibility, setPublishingVisibility] = useState<PostVisibility | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [needsProfileRepair, setNeedsProfileRepair] = useState(false);
@@ -213,7 +217,7 @@ export default function PublishToShowcaseModal({
     0,
     RECIPE_ACCESS_OPTIONS.findIndex((option) => option.value === recipeAccess)
   );
-  const parsedPriceUsdCents = parsePriceUsdToCents(priceUsd);
+  const parsedPriceTokens = parsePriceTokens(priceTokens);
   const isPublishing = publishingVisibility !== null;
   const profileReadiness = getCreatorProfileReadiness(profile);
   // Only a paid recipe requires the stricter seller profile. A free recipe is a
@@ -226,8 +230,8 @@ export default function PublishToShowcaseModal({
     ? 'No recipe'
     : recipeAccess === 'free'
       ? 'Free recipe'
-      : parsedPriceUsdCents !== null && parsedPriceUsdCents >= 100
-        ? `${formatUsdCents(parsedPriceUsdCents)} recipe`
+      : parsedPriceTokens !== null && parsedPriceTokens >= POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS
+        ? `${parsedPriceTokens} token recipe`
         : 'Paid recipe';
 
   useEffect(() => {
@@ -249,7 +253,7 @@ export default function PublishToShowcaseModal({
     // Callers that open this modal from a "sell" action land on paid; everyone
     // else starts with no recipe attached and opts in.
     setRecipeAccess(initialSellAutoUnlock && hasAutoUnlock ? 'paid' : 'none');
-    setPriceUsd('9');
+    setPriceTokens(String(DEFAULT_PRICE_TOKENS));
     setPublishingVisibility(null);
     setFormError(null);
     setNeedsProfileRepair(false);
@@ -407,11 +411,17 @@ export default function PublishToShowcaseModal({
       // Free recipes carry no price; only the paid mode has a floor to enforce.
       let priceUsdCents = 0;
       if (recipeAccess === 'paid') {
-        if (parsedPriceUsdCents === null || parsedPriceUsdCents < 100) {
-          setFormError('Paid recipes must be priced at $1.00 or above.');
+        if (
+          parsedPriceTokens === null
+          || parsedPriceTokens < POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS
+          || parsedPriceTokens % POST_RESOURCE_PRICE_INCREMENT_USD_CENTS !== 0
+        ) {
+          setFormError(
+            `Paid unlocks start at ${POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS} tokens and go up in ${POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}-token steps.`,
+          );
           return;
         }
-        priceUsdCents = parsedPriceUsdCents;
+        priceUsdCents = parsedPriceTokens;
       }
 
       resourceBundle = buildAutoResourceBundle({
@@ -735,21 +745,28 @@ export default function PublishToShowcaseModal({
                       <div className="ui-enter-pop mt-4 flex origin-top flex-col gap-3 rounded-[20px] border border-emerald-300/20 bg-black/30 p-3 sm:flex-row sm:items-center sm:justify-between">
                         <div>
                           <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200">Price</div>
-                          <p className="mt-1 text-xs text-zinc-400">Minimum $1.00.</p>
+                          <p className="mt-1 text-xs text-zinc-400">
+                            From {POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS} tokens, in steps of {POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}.
+                            {parsedPriceTokens !== null && parsedPriceTokens > 0
+                              ? ` ≈ ${formatUsdCents(parsedPriceTokens)}`
+                              : ''}
+                          </p>
                         </div>
-                        <div className="relative w-full sm:w-28">
-                          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-semibold text-zinc-500">$</span>
+                        <div className="relative w-full sm:w-36">
                           <input
-                            type="text"
-                            inputMode="decimal"
-                            value={priceUsd}
+                            type="number"
+                            inputMode="numeric"
+                            min={POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS}
+                            step={POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}
+                            value={priceTokens}
                             onChange={(event) => {
-                              setPriceUsd(event.target.value);
+                              setPriceTokens(event.target.value);
                               setFormError(null);
                             }}
-                            aria-label="Recipe price"
-                            className="w-full rounded-full border border-white/10 bg-white/[0.04] py-2 pl-8 pr-3 text-center text-sm font-semibold text-white outline-none transition-colors duration-150 focus:border-emerald-300/50"
+                            aria-label="Recipe price in tokens"
+                            className="w-full rounded-full border border-white/10 bg-white/[0.04] py-2 pl-4 pr-16 text-center text-sm font-semibold text-white outline-none transition-colors duration-150 focus:border-emerald-300/50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                           />
+                          <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-xs text-zinc-500">tokens</span>
                         </div>
                       </div>
                     ) : null}

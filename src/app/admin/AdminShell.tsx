@@ -11,6 +11,7 @@ import {
   LogOut,
   ShieldAlert,
   Users,
+  Wallet,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -25,6 +26,7 @@ const NAV_ITEMS = [
   { href: '/admin/moderation', label: 'Moderation', icon: ShieldAlert, badgeKey: 'moderation' as const },
   { href: '/admin/users', label: 'Users & credits', icon: Users },
   { href: '/admin/revenue', label: 'Revenue', icon: BadgeIndianRupee },
+  { href: '/admin/payouts', label: 'Payouts', icon: Wallet },
   { href: '/admin/content', label: 'Content', icon: Images },
   { href: '/admin/system', label: 'System', icon: Activity },
 ];

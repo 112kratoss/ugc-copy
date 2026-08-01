@@ -5,7 +5,12 @@ import { pruneOperationalBackendData } from '@/lib/operational-data-retention';
 
 type RpcCall = { fn: string; args: Record<string, unknown> };
 
-function createClient(result: { data?: unknown; error?: unknown }) {
+function createClient(result: {
+  data?: unknown;
+  error?: unknown;
+  shareEvents?: { data?: unknown; error?: unknown };
+  freeUnlockOrders?: { data?: unknown; error?: unknown };
+}) {
   const calls: RpcCall[] = [];
   return {
     calls,
@@ -15,6 +20,18 @@ function createClient(result: { data?: unknown; error?: unknown }) {
     client: {
       rpc: async (fn: string, args: Record<string, unknown>) => {
         calls.push({ fn, args });
+        if (fn === 'prune_post_share_events') {
+          return {
+            data: result.shareEvents?.data ?? 0,
+            error: result.shareEvents?.error ?? null,
+          };
+        }
+        if (fn === 'prune_abandoned_free_unlock_orders') {
+          return {
+            data: result.freeUnlockOrders?.data ?? 0,
+            error: result.freeUnlockOrders?.error ?? null,
+          };
+        }
         return { data: result.data ?? null, error: result.error ?? null };
       },
     } as unknown as Pick<SupabaseClient, 'rpc'>,
@@ -34,6 +51,8 @@ describe('operational data retention', () => {
         batch_limit_reached: false,
         pruned_at: '2026-07-25T00:50:00.000Z',
       },
+      shareEvents: { data: 18 },
+      freeUnlockOrders: { data: 2 },
     });
 
     const summary = await pruneOperationalBackendData(client);
@@ -47,7 +66,45 @@ describe('operational data retention', () => {
       providerChecksDeleted: 7,
       totalDeleted: 4312,
       batchLimitReached: false,
+      shareEventsDeleted: 18,
+      abandonedFreeUnlockOrdersDeleted: 2,
     });
+  });
+
+  it('sweeps the two post-system tables the main retention function misses', async () => {
+    // post_share_events is append-only telemetry with no retention policy, and
+    // a retried free unlock leaves a synthetic $0 order behind.
+    const { client, calls } = createClient({
+      data: { total_deleted: 0 },
+      shareEvents: { data: 40 },
+      freeUnlockOrders: { data: 5 },
+    });
+
+    const summary = await pruneOperationalBackendData(client);
+
+    expect(calls.map((call) => call.fn)).toEqual([
+      'prune_operational_backend_data',
+      'prune_post_share_events',
+      'prune_abandoned_free_unlock_orders',
+    ]);
+    expect(summary.shareEventsDeleted).toBe(40);
+    expect(summary.abandonedFreeUnlockOrdersDeleted).toBe(5);
+  });
+
+  it('keeps the main sweep result when a supplementary prune fails', async () => {
+    // These are best-effort: a missing function on an older database must not
+    // fail the retention run that did succeed.
+    const { client } = createClient({
+      data: { total_deleted: 12, job_runs_deleted: 12 },
+      shareEvents: { error: { message: 'function does not exist' } },
+      freeUnlockOrders: { error: { message: 'function does not exist' } },
+    });
+
+    const summary = await pruneOperationalBackendData(client);
+
+    expect(summary.jobRunsDeleted).toBe(12);
+    expect(summary.shareEventsDeleted).toBe(0);
+    expect(summary.abandonedFreeUnlockOrdersDeleted).toBe(0);
   });
 
   it('passes an explicit sweep time so the job run and the deletes agree', async () => {

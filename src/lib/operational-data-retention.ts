@@ -16,6 +16,8 @@ export type OperationalRetentionSummary = {
   providerChecksDeleted: number;
   totalDeleted: number;
   batchLimitReached: boolean;
+  shareEventsDeleted: number;
+  abandonedFreeUnlockOrdersDeleted: number;
 };
 
 function toCount(value: unknown): number {
@@ -37,7 +39,26 @@ export async function pruneOperationalBackendData(
 
   const summary = (data ?? {}) as Record<string, unknown>;
 
+  // Two post-system tables that the main retention function does not cover:
+  // share telemetry, which is append-only and unbounded, and the synthetic $0
+  // orders a retried free unlock leaves behind. Both are best-effort -- a
+  // failure here must not fail the whole retention run.
+  let shareEventsDeleted = 0;
+  let abandonedFreeUnlockOrdersDeleted = 0;
+
+  const shareResult = await client.rpc('prune_post_share_events', {});
+  if (!shareResult.error) {
+    shareEventsDeleted = toCount(shareResult.data);
+  }
+
+  const freeUnlockResult = await client.rpc('prune_abandoned_free_unlock_orders', {});
+  if (!freeUnlockResult.error) {
+    abandonedFreeUnlockOrdersDeleted = toCount(freeUnlockResult.data);
+  }
+
   return {
+    shareEventsDeleted,
+    abandonedFreeUnlockOrdersDeleted,
     jobRunsDeleted: toCount(summary.job_runs_deleted),
     rateLimitsDeleted: toCount(summary.rate_limits_deleted),
     completionJobsDeleted: toCount(summary.completion_jobs_deleted),

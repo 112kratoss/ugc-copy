@@ -12,6 +12,7 @@ import {
   type MarketplacePriceQuote,
 } from '@/lib/post-resource-bundles';
 import { buildShowcaseDetailPath } from '@/lib/share';
+import PayoutPanel from './PayoutPanel';
 
 interface SellerBundle {
   id: string;
@@ -178,6 +179,10 @@ export default function MarketplaceSellClient({
               </Link>
             </div>
           </div>
+        </div>
+
+        <div className="mt-8">
+          <PayoutPanel />
         </div>
 
         <div className="mt-8 grid gap-4 md:grid-cols-3">

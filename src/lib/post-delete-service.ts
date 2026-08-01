@@ -61,6 +61,12 @@ export type PostDeleteRouteResult =
       body: {
         success: true;
         deleted: true;
+        /**
+         * True when the post had buyers and was tombstoned instead of removed:
+         * gone from every public surface, still resolvable for the people who
+         * paid for its unlock.
+         */
+        tombstoned?: true;
       };
     }
   | {
@@ -105,6 +111,34 @@ async function loadOwnedPost(
   }
 
   return (data as DeletablePostRow | null) ?? null;
+}
+
+/**
+ * Entitlements, not revenue: a free unlock is as much a purchase as a paid one,
+ * and both must survive the creator removing the post. This deliberately reads
+ * the purchase rows rather than trusting `sales_count`, which the refund path
+ * decrements.
+ */
+async function countBundlePurchases(
+  adminSupabase: SupabaseClient,
+  bundleId: string,
+): Promise<boolean> {
+  const { data, error } = await adminSupabase
+    .from('post_resource_bundle_purchases')
+    .select('bundle_id')
+    .eq('bundle_id', bundleId)
+    .limit(1);
+
+  if (error) {
+    if (isMissingPostResourceBundlesSchemaError(error)) {
+      return false;
+    }
+
+    logBackendError('failed_to_check_bundle_purchases_before_delete', { error: error });
+    throw error;
+  }
+
+  return (data ?? []).length > 0;
 }
 
 async function loadPostBundleForDelete(
@@ -199,19 +233,21 @@ export async function deleteOwnerPostForRoute({
   }
 
   let bundle: DeletableBundleRow | null;
+  let hasPurchases = false;
   try {
     bundle = await loadPostBundleForDelete(adminSupabase, postId);
+    hasPurchases = bundle ? await countBundlePurchases(adminSupabase, bundle.id) : false;
   } catch {
     return { ok: false, status: 500, body: { error: 'Failed to delete post.' } };
   }
   const hasPaidOrders = Boolean(bundle && bundle.access_mode === 'paid' && bundle.sales_count > 0);
 
-  if (hasPaidOrders && !forceDelete) {
+  if (hasPurchases && !forceDelete) {
     return {
       ok: false,
       status: 409,
       body: {
-        error: 'This post already has paid unlocks. Archive is recommended, but you can still force delete it if you want to remove it permanently.',
+        error: 'People have already unlocked this post. Deleting it removes it from your profile and every public surface, but buyers keep the version they unlocked. Archiving does the same and is reversible.',
         requiresForceDelete: true,
       },
     };
@@ -259,6 +295,54 @@ export async function deleteOwnerPostForRoute({
         })
         .eq('id', post.generation_id);
     }
+  }
+
+  // A post with buyers is tombstoned, never removed. The row keeps the title
+  // and cover that give a buyer's library entry its context, while private +
+  // archived takes it off every public read path (all of which already filter
+  // on both). The database refuses the hard delete too, so this is the
+  // agreeing half of an invariant rather than the only guard.
+  if (hasPurchases) {
+    const tombstonedAt = new Date().toISOString();
+    const { error: tombstoneError } = await adminSupabase
+      .from('posts')
+      .update({
+        tombstoned_at: tombstonedAt,
+        archived_at: tombstonedAt,
+        archived_by_user_id: ownerUserId,
+        visibility: 'private',
+      })
+      .eq('id', postId)
+      .eq('user_id', ownerUserId);
+
+    if (tombstoneError) {
+      logBackendError('failed_to_tombstone_post', { error: tombstoneError });
+      return { ok: false, status: 500, body: { error: 'Failed to delete post.' } };
+    }
+
+    if (bundle) {
+      const { error: retireError } = await adminSupabase
+        .from('post_resource_bundles')
+        .update({ status: 'draft', retired_at: tombstonedAt })
+        .eq('id', bundle.id);
+
+      if (retireError && !isMissingPostResourceBundlesSchemaError(retireError)) {
+        logBackendError('failed_to_retire_bundle_on_tombstone', { error: retireError });
+      }
+    }
+
+    invalidateShowcaseFeedCache();
+
+    // Media and resource files are deliberately retained: they are what the
+    // buyer paid to keep.
+    return {
+      ok: true,
+      body: {
+        success: true,
+        deleted: true,
+        tombstoned: true,
+      },
+    };
   }
 
   const { error: deleteError } = await adminSupabase

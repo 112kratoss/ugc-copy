@@ -1,0 +1,268 @@
+-- Behavioural coverage for "buyers keep what they bought".
+--
+-- Three invariants, each enforced by a trigger rather than by its callers:
+--   * every content change to a bundle mints an immutable revision, and a sale
+--     does not
+--   * a purchase pins the revision that was live at checkout, whichever rail
+--     inserted it
+--   * a bundle or post that has been bought can no longer be destroyed -- the
+--     bundle retires, the post must be tombstoned
+
+begin;
+
+create extension if not exists pgtap with schema extensions;
+set local search_path = public, extensions;
+
+select plan(21);
+
+insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
+values
+  ('a1000000-0000-4000-8000-000000000001'::uuid, 'rev-author@example.invalid',
+   'authenticated', 'authenticated', '{}'::jsonb, '{}'::jsonb),
+  ('a2000000-0000-4000-8000-000000000002'::uuid, 'rev-buyer@example.invalid',
+   'authenticated', 'authenticated', '{}'::jsonb, '{}'::jsonb);
+
+insert into public.posts (id, user_id, visibility, category, source_kind, post_format, body)
+values
+  ('b0000000-0000-4000-8000-000000000001'::uuid, 'a1000000-0000-4000-8000-000000000001'::uuid,
+   'public', 'text', 'external', 'text', 'sold post'),
+  ('b0000000-0000-4000-8000-000000000002'::uuid, 'a1000000-0000-4000-8000-000000000001'::uuid,
+   'public', 'text', 'external', 'text', 'unsold post');
+
+insert into public.post_resource_bundles (
+  id, post_id, owner_user_id, access_mode, status, title, summary, preview_text,
+  prompt_text, price_usd_cents
+)
+values
+  ('c0000000-0000-4000-8000-000000000001'::uuid,
+   'b0000000-0000-4000-8000-000000000001'::uuid,
+   'a1000000-0000-4000-8000-000000000001'::uuid,
+   'paid', 'published', 'Sold recipe', 'A recipe people bought.',
+   'Preview of the sold recipe.', 'ORIGINAL PROMPT', 500),
+  ('c0000000-0000-4000-8000-000000000002'::uuid,
+   'b0000000-0000-4000-8000-000000000002'::uuid,
+   'a1000000-0000-4000-8000-000000000001'::uuid,
+   'paid', 'published', 'Unsold recipe', 'Nobody bought this one.',
+   'Preview of the unsold recipe.', 'UNSOLD PROMPT', 500);
+
+-- 1. Inserting a bundle mints revision 1.
+select is(
+  (select count(*)::int from public.post_resource_bundle_revisions
+   where bundle_id = 'c0000000-0000-4000-8000-000000000001'::uuid),
+  1,
+  'creating a bundle captures its first revision'
+);
+
+select is(
+  (select prompt_text from public.post_resource_bundle_revisions
+   where bundle_id = 'c0000000-0000-4000-8000-000000000001'::uuid and revision_number = 1),
+  'ORIGINAL PROMPT',
+  'revision 1 holds the content as published'
+);
+
+-- 2. A purchase pins the current revision.
+insert into public.post_resource_bundle_orders (
+  id, bundle_id, buyer_user_id, razorpay_order_id, razorpay_payment_id,
+  amount_subunits, currency, status
+)
+values (
+  'd0000000-0000-4000-8000-000000000001'::uuid,
+  'c0000000-0000-4000-8000-000000000001'::uuid,
+  'a2000000-0000-4000-8000-000000000002'::uuid,
+  'order_rev_1', 'pay_rev_1', 500, 'USD', 'created'
+);
+
+insert into public.post_resource_bundle_purchases (
+  bundle_id, buyer_user_id, order_id, price_usd_cents, amount_subunits, currency
+)
+values (
+  'c0000000-0000-4000-8000-000000000001'::uuid,
+  'a2000000-0000-4000-8000-000000000002'::uuid,
+  'd0000000-0000-4000-8000-000000000001'::uuid,
+  500, 500, 'USD'
+);
+
+select isnt(
+  (select revision_id from public.post_resource_bundle_purchases
+   where bundle_id = 'c0000000-0000-4000-8000-000000000001'::uuid),
+  null,
+  'a purchase pins a revision without the caller supplying one'
+);
+
+select is(
+  (select revisions.revision_number
+   from public.post_resource_bundle_purchases purchases
+   join public.post_resource_bundle_revisions revisions on revisions.id = purchases.revision_id
+   where purchases.bundle_id = 'c0000000-0000-4000-8000-000000000001'::uuid),
+  1,
+  'the pinned revision is the one that was live at checkout'
+);
+
+-- 3. A sale must not mint a revision: sales_count is outside the fingerprint.
+update public.post_resource_bundles
+set sales_count = sales_count + 1,
+    earnings_usd_cents = earnings_usd_cents + 500
+where id = 'c0000000-0000-4000-8000-000000000001'::uuid;
+
+select is(
+  (select count(*)::int from public.post_resource_bundle_revisions
+   where bundle_id = 'c0000000-0000-4000-8000-000000000001'::uuid),
+  1,
+  'recording a sale does not mint a revision'
+);
+
+-- 4. Editing the content does mint one, and the buyer keeps the old one.
+update public.post_resource_bundles
+set prompt_text = 'GUTTED PROMPT'
+where id = 'c0000000-0000-4000-8000-000000000001'::uuid;
+
+select is(
+  (select count(*)::int from public.post_resource_bundle_revisions
+   where bundle_id = 'c0000000-0000-4000-8000-000000000001'::uuid),
+  2,
+  'editing bundle content captures a new revision'
+);
+
+select is(
+  (select revisions.prompt_text
+   from public.post_resource_bundle_purchases purchases
+   join public.post_resource_bundle_revisions revisions on revisions.id = purchases.revision_id
+   where purchases.bundle_id = 'c0000000-0000-4000-8000-000000000001'::uuid),
+  'ORIGINAL PROMPT',
+  'the buyer still points at what they paid for after the creator guts it'
+);
+
+-- 5. Repricing is also content: a sold bundle cannot be silently relabelled.
+update public.post_resource_bundles
+set price_usd_cents = 5000, title = 'Renamed recipe'
+where id = 'c0000000-0000-4000-8000-000000000001'::uuid;
+
+select is(
+  (select count(*)::int from public.post_resource_bundle_revisions
+   where bundle_id = 'c0000000-0000-4000-8000-000000000001'::uuid),
+  3,
+  'repricing and retitling capture a revision'
+);
+
+select is(
+  (select revisions.title
+   from public.post_resource_bundle_purchases purchases
+   join public.post_resource_bundle_revisions revisions on revisions.id = purchases.revision_id
+   where purchases.bundle_id = 'c0000000-0000-4000-8000-000000000001'::uuid),
+  'Sold recipe',
+  'the buyer keeps the title they bought'
+);
+
+-- 6. Revisions are immutable.
+select throws_ok(
+  $$update public.post_resource_bundle_revisions
+    set prompt_text = 'rewritten history'
+    where revision_number = 1
+      and bundle_id = 'c0000000-0000-4000-8000-000000000001'::uuid$$,
+  'Post resource bundle revisions are immutable',
+  'a revision cannot be rewritten'
+);
+
+-- 7. The buyer-scoped projection.
+select is(
+  (select revision_number
+   from public.get_purchased_post_resource_bundle_revision(
+     'c0000000-0000-4000-8000-000000000001'::uuid,
+     'a2000000-0000-4000-8000-000000000002'::uuid
+   )),
+  1,
+  'the projection returns the revision the buyer pinned'
+);
+
+select ok(
+  not (select is_latest
+       from public.get_purchased_post_resource_bundle_revision(
+         'c0000000-0000-4000-8000-000000000001'::uuid,
+         'a2000000-0000-4000-8000-000000000002'::uuid
+       )),
+  'the projection reports the purchased revision as stale once edited'
+);
+
+select is(
+  (select count(*)::int
+   from public.get_purchased_post_resource_bundle_revision(
+     'c0000000-0000-4000-8000-000000000001'::uuid,
+     'a1000000-0000-4000-8000-000000000001'::uuid
+   )),
+  0,
+  'the projection returns nothing for someone who did not buy'
+);
+
+-- 8. A sold bundle retires instead of deleting.
+delete from public.post_resource_bundles
+where id = 'c0000000-0000-4000-8000-000000000001'::uuid;
+
+select is(
+  (select status from public.post_resource_bundles
+   where id = 'c0000000-0000-4000-8000-000000000001'::uuid),
+  'draft',
+  'deleting a sold bundle delists it instead'
+);
+
+select isnt(
+  (select retired_at from public.post_resource_bundles
+   where id = 'c0000000-0000-4000-8000-000000000001'::uuid),
+  null,
+  'the retired bundle is marked as such'
+);
+
+select is(
+  (select count(*)::int from public.post_resource_bundle_purchases
+   where bundle_id = 'c0000000-0000-4000-8000-000000000001'::uuid),
+  1,
+  'the buyer entitlement survives the creator removing the unlock'
+);
+
+-- 9. An unsold bundle still deletes normally.
+delete from public.post_resource_bundles
+where id = 'c0000000-0000-4000-8000-000000000002'::uuid;
+
+select is(
+  (select count(*)::int from public.post_resource_bundles
+   where id = 'c0000000-0000-4000-8000-000000000002'::uuid),
+  0,
+  'a bundle nobody bought deletes normally'
+);
+
+-- 10. A sold post cannot be hard-deleted.
+select throws_ok(
+  $$delete from public.posts where id = 'b0000000-0000-4000-8000-000000000001'::uuid$$,
+  '23001',
+  null,
+  'a post with purchased unlocks refuses to be deleted'
+);
+
+select is(
+  (select count(*)::int from public.posts
+   where id = 'b0000000-0000-4000-8000-000000000001'::uuid),
+  1,
+  'the sold post is still there after the refused delete'
+);
+
+-- 11. The guard must not trap a creator inside their own account.
+--     posts.user_id cascades from auth.users, so account deletion issues the
+--     same DELETE the guard refuses for an ordinary post removal.
+delete from auth.users where id = 'a1000000-0000-4000-8000-000000000001'::uuid;
+
+select is(
+  (select count(*)::int from public.posts
+   where id = 'b0000000-0000-4000-8000-000000000001'::uuid),
+  0,
+  'deleting the account removes the sold post the guard would otherwise protect'
+);
+
+select is(
+  (select count(*)::int from public.post_resource_bundles
+   where id = 'c0000000-0000-4000-8000-000000000001'::uuid),
+  0,
+  'the bundle goes with the deleted account rather than being retired forever'
+);
+
+select finish();
+
+rollback;

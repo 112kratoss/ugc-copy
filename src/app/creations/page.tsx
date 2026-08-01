@@ -22,6 +22,7 @@ import { getStoredMediaLocation } from '@/lib/media-urls';
 import { isAudioModel, isImageModel } from '@/lib/client-generation-models';
 import { getCreatorProfileReadiness, type ProfileApiResponse } from '@/lib/profile';
 import { formatUsdCents, getPostResourceKindLabel } from '@/lib/post-resource-bundles';
+import UnlockLibrary from './UnlockLibrary';
 import { buildShowcaseDetailPath, supportsPublicCreationSharing } from '@/lib/share';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
 
@@ -57,7 +58,7 @@ interface Generation {
 }
 
 type FilterType = 'all' | 'images' | 'videos' | 'audio';
-type WorkspaceView = 'creations' | 'posts';
+type WorkspaceView = 'creations' | 'posts' | 'unlocks';
 type OwnerPostVisibilityFilter = 'all' | 'public' | 'unlisted' | 'private' | 'archived';
 
 interface OwnerPost {
@@ -1596,6 +1597,7 @@ export default function CreationsPage() {
                     {([
                         { key: 'creations', label: 'Creations', description: 'Private outputs and publishing' },
                         { key: 'posts', label: 'Post Library', description: 'Manage posts and recipes' },
+                        { key: 'unlocks', label: 'Unlocks', description: 'Everything you have unlocked' },
                     ] as Array<{ key: WorkspaceView; label: string; description: string }>).map((tab) => (
                         <button
                             key={tab.key}
@@ -1613,7 +1615,9 @@ export default function CreationsPage() {
                     <div className="text-sm text-zinc-500">
                         {activeView === 'creations'
                             ? 'Preview private outputs, then turn the strongest ones into posts.'
-                            : 'Use Post Library for full post edits, archive state, and cleanup after publishing.'}
+                            : activeView === 'unlocks'
+                                ? 'Everything you have unlocked from other creators, yours to keep.'
+                                : 'Use Post Library for full post edits, archive state, and cleanup after publishing.'}
                     </div>
                 </div>
 
@@ -1622,6 +1626,8 @@ export default function CreationsPage() {
                         {generationDetailError}
                     </div>
                 ) : null}
+
+                {activeView === 'unlocks' ? <UnlockLibrary /> : null}
 
                 {shouldShowPortfolioStarter ? (
                     <section className="mb-8 rounded-[28px] border border-[rgba(255,122,89,0.2)] bg-[var(--ui-surface-1)] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6">

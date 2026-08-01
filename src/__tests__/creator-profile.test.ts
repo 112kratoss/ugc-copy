@@ -72,6 +72,13 @@ type ResourceBundleRow = {
   preview_text: string;
   allow_remix: boolean;
   status: 'published' | 'draft';
+  prompt_text?: string | null;
+  notes_markdown?: string | null;
+  attachments?: unknown;
+  resource_items?: unknown;
+  resource_sections?: unknown;
+  sales_count?: number;
+  earnings_usd_cents?: number;
 };
 
 let profilesState: ProfileRow[] = [];
@@ -508,6 +515,54 @@ describe('creator profile data loader', () => {
     expect(bundleSummaryRpcCalls).toBe(1);
     expect(tableAccesses).not.toContain('post_resource_bundles');
     expect(tableAccesses).not.toContain('generation_input_media');
+  });
+
+  it('redacts locked bundle metadata and paid recipe text on public creator pages', async () => {
+    // A creator profile is as public as the showcase feed, so it owes viewers
+    // the same redaction: real attachment filenames, item titles and paid
+    // prompt text must never ship to a non-buyer.
+    resourceBundlesState = [{
+      id: 'paid-bundle-1',
+      post_id: 'post-1',
+      title: 'Launch hook recipe',
+      access_mode: 'paid',
+      price_usd_cents: 500,
+      preview_text: 'Buy to unlock the full prompt.',
+      allow_remix: false,
+      status: 'published',
+      prompt_text: 'SECRET PROMPT BODY that only buyers may read.',
+      attachments: [
+        { label: 'hook_prompt_v3_final.txt', kind: 'file', storagePath: 'seller-1/secret.txt' },
+      ],
+      resource_items: [
+        {
+          id: 'item-1',
+          type: 'prompt',
+          title: 'The exact 4-line hook that converted at 8%',
+          textContent: 'SECRET PROMPT BODY that only buyers may read.',
+          sortOrder: 0,
+        },
+      ],
+      sales_count: 3,
+      earnings_usd_cents: 1275,
+    }];
+
+    const { getCreatorProfilePageData } = await import('@/lib/creator-profile');
+    const data = await getCreatorProfilePageData('Creator-Name');
+
+    const asset = data?.items[0].asset;
+    expect(asset).not.toBeNull();
+    // Public-safe fields survive.
+    expect(asset?.accessMode).toBe('paid');
+    expect(asset?.priceUsdCents).toBe(500);
+    expect(asset?.salesCount).toBe(3);
+
+    // Nothing that identifies the locked payload does.
+    const serialized = JSON.stringify(data);
+    expect(serialized).not.toContain('SECRET PROMPT BODY');
+    expect(serialized).not.toContain('hook_prompt_v3_final.txt');
+    expect(serialized).not.toContain('The exact 4-line hook');
+    expect(serialized).not.toContain('1275');
   });
 
   it('returns stable offset pages while keeping full-profile statistics', async () => {

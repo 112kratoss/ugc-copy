@@ -42,6 +42,7 @@ import {
   type PostCreationSubmission,
 } from '@/lib/post-creation-submission-service';
 import type { ShowcaseVisibility } from '@/lib/showcase';
+import { formatUploadByteLimit, getMaxUploadBytesForContentType } from '@/lib/temporary-media-upload-sign';
 
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 const UPLOADS_BUCKET = 'uploads';
@@ -133,6 +134,8 @@ export async function publishPreparedPost({
         title: submission.title,
         description: submission.description,
         body: submission.body,
+        resourcePrompt: submission.resourceBundle?.resources?.promptText ?? null,
+        resourceNotes: submission.resourceBundle?.resources?.notesMarkdown ?? null,
       })
     : null;
 
@@ -225,6 +228,8 @@ export async function publishPreparedPost({
     }
   };
 
+  let mediaRejection: string | null = null;
+
   try {
     for (const [index, mediaItem] of submission.submittedMediaItems.entries()) {
       const extension = inferExtension(mediaItem.originalName, mediaItem.contentType);
@@ -241,6 +246,15 @@ export async function publishPreparedPost({
             temporaryUploadPathsToCleanup.push(mediaItem.temporaryStoragePath);
             return downloadedMedia.data;
           })();
+
+      // The signed-upload step could only trust a client-declared size. These
+      // are the bytes we actually received, checked before anything reaches the
+      // public bucket, where it would be world-readable and billed as egress.
+      const maxBytes = getMaxUploadBytesForContentType(mediaItem.contentType || mediaBody.type);
+      if (maxBytes !== null && typeof mediaBody.size === 'number' && mediaBody.size > maxBytes) {
+        mediaRejection = `${mediaItem.originalName || 'That file'} is larger than the ${formatUploadByteLimit(maxBytes)} limit for this media type.`;
+        throw new Error('post_media_exceeds_size_limit');
+      }
 
       const showcaseUpload = await adminSupabase.storage
         .from(SHOWCASE_MEDIA_BUCKET)
@@ -322,8 +336,12 @@ export async function publishPreparedPost({
       });
     }
   } catch (mediaUploadError) {
-    logBackendError('failed_to_prepare_uploaded_post_media', { error: mediaUploadError });
     await cleanupUploadedMedia();
+    if (mediaRejection) {
+      return { ok: false, status: 400, body: { error: mediaRejection } };
+    }
+
+    logBackendError('failed_to_prepare_uploaded_post_media', { error: mediaUploadError });
     return { ok: false, status: 500, body: { error: 'Failed to prepare uploaded media.' } };
   }
 

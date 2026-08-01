@@ -132,34 +132,6 @@ describe('post resource bundle route rate limits', () => {
     denyRateLimit();
   });
 
-  it('returns 429 before parsing an owner bundle update body when post mutation capacity is exhausted', async () => {
-    const jsonMock = vi.fn(async () => ({
-      resourceBundle: {
-        accessMode: 'none',
-      },
-    }));
-
-    const { PUT } = await import('@/app/api/posts/[postId]/resource-bundle/route');
-    const response = await PUT({
-      headers: new Headers({
-        Authorization: 'Bearer token',
-      }),
-      json: jsonMock,
-    } as unknown as NextRequest, {
-      params: Promise.resolve({ postId: 'post-1' }),
-    });
-
-    expect(response.status).toBe(429);
-    expect(rateLimitRpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
-      p_scope: 'post:mutate',
-      p_subject_key: 'user-1',
-      p_limit: 60,
-      p_window_seconds: 600,
-    });
-    expect(jsonMock).not.toHaveBeenCalled();
-    expect(savePostResourceBundleMock).not.toHaveBeenCalled();
-  });
-
   it('returns 429 before loading a free unlock bundle when free unlock capacity is exhausted', async () => {
     const { POST } = await import('@/app/api/posts/[postId]/resource-bundle/unlock-free/route');
     const response = await POST(

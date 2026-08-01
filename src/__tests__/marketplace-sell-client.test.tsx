@@ -1,5 +1,27 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// The payout panel on this page reads the browser Supabase singleton, which
+// needs real env vars to construct. The dashboard assertions below are about
+// bundle rendering, so stub the client rather than the whole panel.
+vi.mock('@/lib/supabase', () => ({
+  supabase: {
+    auth: {
+      getSession: vi.fn(async () => ({ data: { session: null } })),
+    },
+  },
+}));
+
+vi.stubGlobal('fetch', vi.fn(async () => new Response(
+  JSON.stringify({
+    availableUsd: '$0.00',
+    minimumUsd: '$100.00',
+    canRequest: false,
+    pendingRequest: null,
+    history: [],
+  }),
+  { status: 200, headers: { 'Content-Type': 'application/json' } },
+)));
 
 import MarketplaceSellClient from '@/app/marketplace/sell/MarketplaceSellClient';
 

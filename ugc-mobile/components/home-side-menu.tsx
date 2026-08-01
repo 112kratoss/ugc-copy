@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   LogIn,
   LogOut,
+  PackageOpen,
   Settings,
   Sparkles,
   Wallet,
@@ -325,6 +326,7 @@ export function HomeSideMenu({
               <MenuRow icon={<Layers3 size={21} color={appTheme.colors.text} />} label="Templates" onPress={() => navigateAndClose('/templates')} />
               <MenuRow icon={<Gift size={21} color={appTheme.colors.commerce} />} label="Invite & Earn" onPress={() => navigateAndClose('/invite')} />
               <MenuRow icon={<LayoutDashboard size={21} color={appTheme.colors.text} />} label="Seller Dashboard" onPress={() => navigateAndClose('/seller-dashboard')} />
+              <MenuRow icon={<PackageOpen size={21} color={appTheme.colors.text} />} label="Your Unlocks" onPress={() => navigateAndClose('/unlocks')} />
               <View style={{ height: 1, backgroundColor: appTheme.colors.borderSubtle, marginVertical: 4 }} />
               <MenuRow icon={<Settings size={21} color={appTheme.colors.text} />} label="Settings" onPress={() => navigateAndClose('/settings')} />
               <MenuRow icon={<CircleHelp size={21} color={appTheme.colors.text} />} label="Help & Support" onPress={() => navigateAndClose('/help')} />

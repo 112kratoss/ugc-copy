@@ -219,26 +219,35 @@ export function sanitizeShowcaseAssetSummary(
     return sanitized;
 }
 
+/**
+ * Strips locked bundle metadata and paid recipe text from a single feed item.
+ * Every public surface that serves posts must map its items through this —
+ * the showcase feed and creator profiles both do. Sanitizing returns fresh
+ * objects, so callers may localize prices on the result without mutating rows
+ * shared with a cache.
+ */
+export function sanitizeShowcaseFeedItem(item: ShowcaseFeedItem): ShowcaseFeedItem {
+    const asset = sanitizeShowcaseAssetSummary(item.asset);
+    const publicContent = sanitizePublicPostContent({
+        prompt: item.prompt,
+        body: item.body,
+        description: '',
+        hasRecipe: Boolean(asset),
+        isPaidRecipe: asset?.accessMode === 'paid',
+    });
+
+    return {
+        ...item,
+        prompt: publicContent.prompt,
+        body: publicContent.body,
+        asset,
+    };
+}
+
 export function sanitizeShowcaseFeedPage(feed: ShowcaseFeedPage): ShowcaseFeedPage {
     return {
         ...feed,
-        items: feed.items.map((item) => {
-            const asset = sanitizeShowcaseAssetSummary(item.asset);
-            const publicContent = sanitizePublicPostContent({
-                prompt: item.prompt,
-                body: item.body,
-                description: '',
-                hasRecipe: Boolean(asset),
-                isPaidRecipe: asset?.accessMode === 'paid',
-            });
-
-            return {
-                ...item,
-                prompt: publicContent.prompt,
-                body: publicContent.body,
-                asset,
-            };
-        }),
+        items: feed.items.map(sanitizeShowcaseFeedItem),
     };
 }
 

@@ -179,6 +179,7 @@ const extendedOperationCases: Array<{
     }) ?? Promise.reject(new Error('Catalog v2 start operation is unavailable.')),
   },
   { key: 'validateProfile', call: (api) => api.validateProfile({ displayName: 'Creator One' }) },
+  { key: 'listViewerUnlocks', call: (api) => api.listViewerUnlocks({ limit: 24, offset: 0 }) },
   { key: 'getOnboardingState', call: (api) => api.getOnboardingState() },
   { key: 'updateOnboardingState', call: (api) => api.updateOnboardingState({ status: 'in_progress' }) },
   { key: 'getWelcomeCredits', call: (api) => api.getWelcomeCredits() },

@@ -1195,3 +1195,46 @@ export interface MobileNotificationPreferences {
   commerceEnabled: boolean;
   socialEnabled: boolean;
 }
+
+/**
+ * An item in the buyer's unlock library. Mirrors ViewerUnlockItem on the web
+ * side; `retired` and `tombstoned` mean the creator removed the unlock or the
+ * whole post, which the buyer keeps regardless.
+ */
+export interface ViewerUnlockItem {
+  bundleId: string;
+  postId: string | null;
+  title: string;
+  previewText: string;
+  accessMode: 'free' | 'paid';
+  priceUsdCents: number;
+  purchasedAt: string;
+  purchasePriceUsdCents: number;
+  hasNewerRevision: boolean;
+  retired: boolean;
+  tombstoned: boolean;
+  post: {
+    title: string;
+    category: string;
+    postFormat: string;
+    mediaUrl: string | null;
+    mediaKind: string | null;
+  } | null;
+  creator: {
+    username: string | null;
+    displayName: string;
+    avatarUrl: string | null;
+  };
+}
+
+export interface ViewerUnlocksResponse {
+  success: boolean;
+  items: ViewerUnlockItem[];
+  pageInfo: {
+    total: number;
+    hasMore: boolean;
+    nextOffset: number | null;
+    limit: number;
+    offset: number;
+  };
+}
