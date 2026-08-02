@@ -10,6 +10,7 @@ import AppShellClient from '@/app/components/AppShellClient';
 let mockedPathname = '/';
 let mockedScrollY = 0;
 let mockedReducedMotion = false;
+let animationFrameCallbacks: FrameRequestCallback[] = [];
 const scrollToMock = vi.fn((options: ScrollToOptions | number) => {
   mockedScrollY = typeof options === 'number' ? options : options.top ?? 0;
 });
@@ -43,6 +44,7 @@ describe('AppShellClient', () => {
     mockedPathname = '/';
     mockedScrollY = 0;
     mockedReducedMotion = false;
+    animationFrameCallbacks = [];
     scrollToMock.mockClear();
     document.body.style.overflow = '';
     window.sessionStorage.clear();
@@ -56,7 +58,10 @@ describe('AppShellClient', () => {
     });
     Object.defineProperty(window, 'requestAnimationFrame', {
       configurable: true,
-      value: vi.fn(() => 1),
+      value: vi.fn((callback: FrameRequestCallback) => {
+        animationFrameCallbacks.push(callback);
+        return animationFrameCallbacks.length;
+      }),
     });
     Object.defineProperty(window, 'cancelAnimationFrame', {
       configurable: true,
@@ -309,6 +314,31 @@ describe('AppShellClient', () => {
     );
 
     expect(scrollToMock).toHaveBeenLastCalledWith({ top: 0, behavior: 'auto' });
+  });
+
+  it('keeps restoring through late route settling and yields to user scroll intent', () => {
+    window.sessionStorage.setItem('magicbooklet:app-tab-scroll:home', '640');
+    window.sessionStorage.setItem('magicbooklet:pending-app-tab-restore', 'home');
+
+    render(
+      <AppShellClient>
+        <div>Home content</div>
+      </AppShellClient>
+    );
+
+    expect(scrollToMock).toHaveBeenLastCalledWith({ top: 640, behavior: 'auto' });
+
+    mockedScrollY = 299;
+    fireEvent.scroll(window);
+    const lateRestore = animationFrameCallbacks.at(-1);
+    expect(lateRestore).toBeTypeOf('function');
+    act(() => lateRestore!(16));
+    expect(scrollToMock).toHaveBeenLastCalledWith({ top: 640, behavior: 'auto' });
+
+    fireEvent.wheel(window);
+    mockedScrollY = 500;
+    fireEvent.scroll(window);
+    expect(window.sessionStorage.getItem('magicbooklet:app-tab-scroll:home')).toBe('500');
   });
 
   it('opens an accessible mobile drawer and closes it with Escape', () => {
