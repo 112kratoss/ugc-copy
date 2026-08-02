@@ -1,3 +1,4 @@
+import { estimateWrappedLineCount } from './home-feed-view-model';
 import type { ImmersivePreviewItem } from './immersive-preview-view-model';
 import { formatRelativeTime } from './home-view-model';
 import type { ToolAccent } from './theme';
@@ -8,7 +9,9 @@ const MAX_MEDIA_HEIGHT_RATIO = 1.25;
 const FALLBACK_MEDIA_ASPECT_RATIO = 4 / 5;
 const FALLBACK_VIDEO_ASPECT_RATIO = 16 / 9;
 const BODY_LINES = 2;
-const TEXT_BODY_LINES = 8;
+const TEXT_BODY_LINES = 6;
+/** Matches the single size PostTextBlock renders every body at. */
+const BODY_FONT_SIZE = 14;
 
 export interface ProfileFeedCard {
   id: string;
@@ -59,6 +62,16 @@ export function toProfileFeedCard(item: ImmersivePreviewItem, now?: Date): Profi
     unlockSummary: profileCardUnlockSummary(item),
     state: getViewerStateChip(item),
   };
+}
+
+/**
+ * Mirrors `canExpandHomeFeedBody`: only a caption expands in place. A text
+ * post's card opens the post instead, so its clamp just ends in an ellipsis.
+ */
+export function canExpandProfileFeedBody(card: ProfileFeedCard, contentWidth: number) {
+  if (!card.bodyText || card.isTextOnly) return false;
+
+  return estimateWrappedLineCount(card.bodyText, contentWidth, BODY_FONT_SIZE) > card.bodyLines;
 }
 
 /**

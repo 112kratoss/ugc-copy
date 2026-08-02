@@ -6,6 +6,7 @@ import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
 import { PostTextBlock } from '@/components/post-text-block';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import {
+  canExpandProfileFeedBody,
   getProfileFeedMediaHeight,
   type ProfileFeedCard,
 } from '@/lib/profile-feed-card-view-model';
@@ -49,19 +50,17 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
       creatorName={card.creatorName}
       onMorePress={onActionsOpen}
       moreAccessibilityLabel={`More options for ${card.title}`}
-      onOpen={card.hasMedia ? onOpen : undefined}
+      onOpen={onOpen}
       openAccessibilityLabel={`Open ${card.title}`}
       statusChip={card.state ? <ProfileStateChip label={card.state.label} tone={card.state.tone} /> : null}
       timeLabel={card.timeLabel}
       title={card.title}
       body={card.bodyText ? (
         <PostTextBlock
-          accent={accent}
           text={card.bodyText}
           clampLines={card.bodyLines}
-          canExpand={card.bodyText.length > 120}
+          canExpand={canExpandProfileFeedBody(card, contentWidth - appTheme.spacing.card * 2)}
           expanded={bodyExpanded}
-          framed={card.isTextOnly}
           onToggle={onToggleBody}
         />
       ) : null}

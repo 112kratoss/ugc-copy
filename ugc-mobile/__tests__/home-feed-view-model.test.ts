@@ -7,7 +7,6 @@ import {
   buildLoopedHomeSlides,
   canExpandHomeFeedBody,
   estimateWrappedLineCount,
-  getHomeFeedBodyFontSize,
   getHomeFeedCardOpenTarget,
   getHomeFeedChip,
   getHomeFeedMediaHeight,
@@ -17,7 +16,6 @@ import {
   getHomeSlidePassWidth,
   getInitialHomeSlideIndex,
   foldHomeSlideOffset,
-  isFramedHomeFeedBody,
   shouldAutoAdvanceHomeSlides,
   showcaseToHomeFeedCard,
 } from '@/lib/home-feed-view-model';
@@ -119,7 +117,7 @@ describe('home feed view model', () => {
       }));
 
       expect(card.previewKind).toBe('text');
-      expect(card.bodyLines).toBe(8);
+      expect(card.bodyLines).toBe(6);
     });
 
     it('never repeats the title as the body', () => {
@@ -168,7 +166,7 @@ describe('home feed view model', () => {
     });
   });
 
-  describe('text presentation', () => {
+  describe('body clamping', () => {
     const textCard = () => showcaseToHomeFeedCard(item({
       mediaUrl: null,
       mediaKind: null,
@@ -185,22 +183,14 @@ describe('home feed view model', () => {
       body: 'Here is how I lit this scene.',
     }));
 
-    it('frames a text post and reads it at body size', () => {
-      const card = textCard();
-
-      expect(isFramedHomeFeedBody(card)).toBe(true);
-      expect(getHomeFeedBodyFontSize(card)).toBe(16);
+    it('gives a text post the most room and a caption the least', () => {
+      expect(textCard().bodyLines).toBe(6);
+      expect(mixedCard().bodyLines).toBe(3);
+      expect(showcaseToHomeFeedCard(item()).bodyLines).toBe(2);
     });
 
-    it('leaves a captioned media post unframed and one size down', () => {
-      const card = mixedCard();
-
-      expect(isFramedHomeFeedBody(card)).toBe(false);
-      expect(getHomeFeedBodyFontSize(card)).toBe(14);
-    });
-
-    it('sends a text post to its discussion instead of the media viewer', () => {
-      expect(getHomeFeedCardOpenTarget(textCard())).toBe('comments');
+    it('opens a text post on its own screen, not in the showcase reel', () => {
+      expect(getHomeFeedCardOpenTarget(textCard())).toBe('post');
       expect(getHomeFeedCardOpenTarget(mixedCard())).toBe('viewer');
       expect(getHomeFeedCardOpenTarget(showcaseToHomeFeedCard(item()))).toBe('viewer');
     });
@@ -223,18 +213,21 @@ describe('home feed view model', () => {
       expect(estimateWrappedLineCount('words', 0, 16)).toBe(0);
     });
 
-    it('offers Read more only when the clamp actually hides something', () => {
-      const short = showcaseToHomeFeedCard(item({
+    it('offers Read more only when the clamp actually hides part of a caption', () => {
+      const caption = (body: string) => showcaseToHomeFeedCard(item({ postFormat: 'mixed', body }));
+
+      expect(canExpandHomeFeedBody(caption('One line.'), 360)).toBe(false);
+      expect(canExpandHomeFeedBody(caption('sentence. '.repeat(400)), 360)).toBe(true);
+    });
+
+    it('never offers Read more for a text post — the card opens the post', () => {
+      const note = (body: string) => showcaseToHomeFeedCard(item({
         mediaUrl: null, mediaKind: null, category: 'text', postFormat: 'text',
-        title: 'Short note', prompt: '', body: 'One line.',
-      }));
-      const long = showcaseToHomeFeedCard(item({
-        mediaUrl: null, mediaKind: null, category: 'text', postFormat: 'text',
-        title: 'Long note', prompt: '', body: 'sentence. '.repeat(400),
+        title: 'A note', prompt: '', body,
       }));
 
-      expect(canExpandHomeFeedBody(short, 360)).toBe(false);
-      expect(canExpandHomeFeedBody(long, 360)).toBe(true);
+      expect(canExpandHomeFeedBody(note('One line.'), 360)).toBe(false);
+      expect(canExpandHomeFeedBody(note('sentence. '.repeat(400)), 360)).toBe(false);
     });
 
     it('never offers Read more for a post with no body', () => {

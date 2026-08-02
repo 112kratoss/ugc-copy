@@ -54,7 +54,8 @@ export function getImmersiveSlideHint({
   }
 
   if (currentHorizontalIndex === detailsIndex) {
-    return 'Swipe right for media';
+    // A text post has no media to swipe back to — it has the writing.
+    return item.previewKind === 'text' ? 'Swipe right for the post' : 'Swipe right for media';
   }
 
   return currentHorizontalIndex < detailsIndex - 1

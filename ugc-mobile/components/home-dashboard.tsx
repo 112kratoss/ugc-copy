@@ -404,14 +404,19 @@ export function HomeDashboard() {
   };
 
   /**
-   * The immersive viewer is a full-screen media pager, so a post with no media
-   * opens its discussion instead of an empty slide.
+   * The immersive viewer is the showcase reel — a vertical swipe there pages
+   * through other showcase posts — so a written post opens its own screen
+   * rather than being dropped into a reel of other people's media.
    */
   const openCard = (card: HomeFeedCard) => {
-    if (getHomeFeedCardOpenTarget(card) === 'comments') {
+    if (getHomeFeedCardOpenTarget(card) === 'post') {
       recordFeedEvent(card.item, 'open');
-      setCommentsReplyToId(null);
-      setCommentsItem(card.item);
+      // Seeded so the post screen paints from cache instead of refetching.
+      queryClient.setQueryData<ShowcasePostResponse>(
+        createShowcasePostQueryKey(card.item.id, user?.id),
+        { success: true, item: card.item }
+      );
+      router.push(`/post/${card.item.id}` as never);
       return;
     }
     openPost(card.item);

@@ -8,7 +8,6 @@ import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import {
   canExpandHomeFeedBody,
   getHomeFeedMediaHeight,
-  isFramedHomeFeedBody,
   type HomeFeedCard,
 } from '@/lib/home-feed-view-model';
 import { getShowcasePreviewMediaItems } from '@/lib/showcase-media';
@@ -45,7 +44,6 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   const accent = accentColor(card.accent);
   const hasMedia = card.previewKind !== 'text' && Boolean(card.mediaUrl);
   const mediaHeight = hasMedia ? getHomeFeedMediaHeight(card, contentWidth) : 0;
-  const framedBody = isFramedHomeFeedBody(card);
   const bodyWidth = contentWidth - appTheme.spacing.card * 2;
 
   return (
@@ -64,12 +62,10 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
       title={card.title}
       body={card.bodyText ? (
         <PostTextBlock
-          accent={accent}
           text={card.bodyText}
           clampLines={card.bodyLines}
           canExpand={canExpandHomeFeedBody(card, bodyWidth)}
           expanded={bodyExpanded}
-          framed={framedBody}
           onToggle={onToggleBody}
         />
       ) : null}
