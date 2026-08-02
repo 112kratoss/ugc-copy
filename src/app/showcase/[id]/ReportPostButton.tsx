@@ -67,8 +67,10 @@ export default function ReportPostButton({ postId, bundleId = null, accessToken 
     }
   };
 
+  // A row in the rail card, not a card of its own — the rail is one surface
+  // divided by hairlines, the same way the document column reads.
   return (
-    <div className="rounded-[24px] border border-white/8 bg-black/30 p-5">
+    <div className="border-t border-white/8 px-5 py-3.5 sm:px-6">
       <button
         type="button"
         onClick={() => setIsOpen((current) => !current)}

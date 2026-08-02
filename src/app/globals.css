@@ -725,43 +725,74 @@ button:disabled,
   gap: 1rem;
 }
 
+/*
+ * The carousel sizes the frame from the media's own aspect ratio (inline
+ * style); these are only ceilings so a tall portrait cannot eat the page.
+ * A fixed height here would letterbox every landscape image in black.
+ *
+ * The paired max-width is what keeps a capped portrait from pillarboxing:
+ * once the height ceiling bites, the frame narrows to match instead of
+ * holding full width and filling the sides with black. `--media-ratio` is
+ * published by the carousel; the fallback keeps landscape media unclamped.
+ */
 .canonical-post-media-viewport {
-  height: min(62dvh, 560px);
-  min-height: 360px;
+  max-height: min(62dvh, 560px);
+  max-width: calc(min(62dvh, 560px) * var(--media-ratio, 999));
+  margin-inline: auto;
 }
 
 @media (min-width: 640px) {
   .canonical-post-media-viewport {
-    height: min(70dvh, 680px);
-    min-height: 420px;
+    max-height: min(70dvh, 680px);
+    max-width: calc(min(70dvh, 680px) * var(--media-ratio, 999));
   }
 }
 
 @container canonical-post (min-width: 900px) {
+  /*
+   * The document column caps at 56rem and the pair centers as a unit —
+   * stretching column 1 to the shell's full 1860px left the article hugging
+   * the far left with a field of nothing before the rail.
+   */
   .canonical-post-layout {
-    grid-template-columns: minmax(0, 1fr) minmax(340px, 400px);
-    gap: 1.5rem;
+    grid-template-columns: minmax(0, 56rem) minmax(320px, 400px);
+    justify-content: center;
+    /* The masthead-to-media gap is document rhythm, not column separation. */
+    row-gap: 1.25rem;
+    column-gap: 2rem;
+  }
+
+  /*
+   * Row 1 is the masthead alone; row 2 pairs the post with the rail, so the
+   * rail's top edge lands level with the media instead of the byline.
+   */
+  .canonical-post-head {
+    grid-column: 1;
+    grid-row: 1;
   }
 
   .canonical-post-media {
     grid-column: 1;
+    grid-row: 2;
   }
 
   .canonical-post-actions {
     position: sticky;
     top: 76px;
     grid-column: 2;
-    grid-row: 1;
+    grid-row: 2;
   }
 
   .canonical-post-media-viewport {
-    height: min(72dvh, 760px);
+    max-height: min(72dvh, 760px);
+    max-width: calc(min(72dvh, 760px) * var(--media-ratio, 999));
   }
 }
 
 @container canonical-post (min-width: 1200px) {
   .canonical-post-layout {
-    grid-template-columns: minmax(0, 1fr) 430px;
+    grid-template-columns: minmax(0, 56rem) 400px;
+    column-gap: 2.5rem;
   }
 }
 
