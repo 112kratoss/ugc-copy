@@ -47,8 +47,16 @@ const RESTORABLE_TAB_IDS = new Set<AppNavItem['id']>([
 ]);
 const TAB_SCROLL_POSITION_PREFIX = 'magicbooklet:app-tab-scroll:';
 const PENDING_TAB_RESTORE_KEY = 'magicbooklet:pending-app-tab-restore';
-const MIN_RESTORE_FRAMES = 8;
-const MAX_RESTORE_FRAMES = 60;
+const RESTORE_SETTLE_MS = 10_000;
+const SCROLL_INTENT_KEYS = new Set([
+  'ArrowDown',
+  'ArrowUp',
+  'End',
+  'Home',
+  'PageDown',
+  'PageUp',
+  ' ',
+]);
 
 type AppNavClickHandler = (
   event: ReactMouseEvent<HTMLAnchorElement>,
@@ -279,6 +287,7 @@ export default function AppShellClient({ children }: { children: React.ReactNode
   const scrollPositionsRef = useRef<Partial<Record<AppNavItem['id'], number>>>({});
   const pendingRestoreRef = useRef<AppNavItem['id'] | null>(null);
   const restoreFrameRef = useRef<number | null>(null);
+  const cancelRestoreRef = useRef<(() => void) | null>(null);
   const isRestoringRef = useRef(false);
 
   const activeItem = useMemo(() => getActiveAppNavItem(pathname), [pathname]);
@@ -297,6 +306,7 @@ export default function AppShellClient({ children }: { children: React.ReactNode
 
     const currentTabId = getRestorableTabId(routePathname);
     const wasRestoring = isRestoringRef.current;
+    cancelRestoreRef.current?.();
     if (restoreFrameRef.current !== null) {
       window.cancelAnimationFrame(restoreFrameRef.current);
       restoreFrameRef.current = null;
@@ -353,43 +363,88 @@ export default function AppShellClient({ children }: { children: React.ReactNode
     const top = scrollPositionsRef.current[currentTabId]
       ?? readStoredScrollPosition(currentTabId)
       ?? 0;
-    let frameCount = 0;
-    let stableFrameCount = 0;
+    let finished = false;
+    let resizeObserver: ResizeObserver | null = null;
+    let settleTimeout: number | null = null;
     isRestoringRef.current = true;
 
-    const finishRestore = () => {
-      restoreFrameRef.current = null;
-      isRestoringRef.current = false;
-      pendingRestoreRef.current = null;
-      storePendingRestore(null);
-    };
+    function removeIntentListeners() {
+      window.removeEventListener('wheel', finishRestore);
+      window.removeEventListener('touchstart', finishRestore);
+      window.removeEventListener('pointerdown', finishRestore);
+      window.removeEventListener('keydown', handleRestoreKeyDown);
+      window.removeEventListener('scroll', handleRestoreScroll);
+    }
 
-    const restore = () => {
-      window.scrollTo({ top, behavior: 'auto' });
-      frameCount += 1;
-      stableFrameCount = Math.abs(window.scrollY - top) <= 1
-        ? stableFrameCount + 1
-        : 0;
-
-      if (
-        (frameCount >= MIN_RESTORE_FRAMES && stableFrameCount >= MIN_RESTORE_FRAMES)
-        || frameCount >= MAX_RESTORE_FRAMES
-      ) {
-        finishRestore();
-        return;
-      }
-
-      restoreFrameRef.current = window.requestAnimationFrame(restore);
-    };
-
-    restore();
-
-    return () => {
+    function stopRestoreWork() {
       if (restoreFrameRef.current !== null) {
         window.cancelAnimationFrame(restoreFrameRef.current);
         restoreFrameRef.current = null;
       }
+      if (settleTimeout !== null) {
+        window.clearTimeout(settleTimeout);
+        settleTimeout = null;
+      }
+      resizeObserver?.disconnect();
+      resizeObserver = null;
+      removeIntentListeners();
+      cancelRestoreRef.current = null;
       isRestoringRef.current = false;
+    }
+
+    function finishRestore() {
+      if (finished) return;
+      finished = true;
+      stopRestoreWork();
+      pendingRestoreRef.current = null;
+      storePendingRestore(null);
+    }
+
+    function handleRestoreKeyDown(event: KeyboardEvent) {
+      if (SCROLL_INTENT_KEYS.has(event.key)) finishRestore();
+    }
+
+    function handleRestoreScroll() {
+      if (Math.abs(window.scrollY - top) > 1) scheduleRestore();
+    }
+
+    const restore = () => {
+      if (finished) return;
+      window.scrollTo({ top, behavior: 'auto' });
+    };
+
+    function scheduleRestore() {
+      if (finished || restoreFrameRef.current !== null) return;
+      restoreFrameRef.current = window.requestAnimationFrame(() => {
+        restoreFrameRef.current = null;
+        restore();
+      });
+    }
+
+    cancelRestoreRef.current = finishRestore;
+    window.addEventListener('wheel', finishRestore, { passive: true });
+    window.addEventListener('touchstart', finishRestore, { passive: true });
+    window.addEventListener('pointerdown', finishRestore, { passive: true });
+    window.addEventListener('keydown', handleRestoreKeyDown);
+    window.addEventListener('scroll', handleRestoreScroll, { passive: true });
+
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => {
+        restore();
+        scheduleRestore();
+      });
+      resizeObserver.observe(document.body);
+      const mainContent = document.getElementById('main-content');
+      if (mainContent) resizeObserver.observe(mainContent);
+    }
+
+    settleTimeout = window.setTimeout(finishRestore, RESTORE_SETTLE_MS);
+    restore();
+    scheduleRestore();
+
+    return () => {
+      finished = true;
+      stopRestoreWork();
     };
   }, [routePathname]);
 
