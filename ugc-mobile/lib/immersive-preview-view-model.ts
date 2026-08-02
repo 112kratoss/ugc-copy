@@ -132,6 +132,46 @@ export function immersiveViewerHref({
   };
 }
 
+export function textPostViewerHref({
+  comments = false,
+  postId,
+  source,
+}: {
+  comments?: boolean;
+  postId: string;
+  source?: 'profile-posts' | 'profile-saved';
+}) {
+  const pathname = `/post/${encodeURIComponent(postId)}`;
+  const params = [
+    ...(source ? [['source', source]] : []),
+    ...(comments ? [['comments', postId]] : []),
+  ];
+  return params.length
+    ? `${pathname}?${params
+        .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+        .join('&')}`
+    : pathname;
+}
+
+export function immersivePreviewOpenHref(
+  item: ImmersivePreviewItem,
+  options: { comments?: boolean } = {}
+) {
+  if (item.previewKind === 'text' && item.sourceType !== 'generation') {
+    return textPostViewerHref({
+      comments: options.comments,
+      postId: item.id,
+      source: item.sourceType === 'owner-post'
+        ? 'profile-posts'
+        : item.source === 'profile-saved'
+          ? 'profile-saved'
+          : undefined,
+    });
+  }
+
+  return immersiveViewerHref({ source: item.source, initialId: item.id });
+}
+
 export function immersiveViewerReturnPath({
   algorithmVersion,
   creatorUsername,

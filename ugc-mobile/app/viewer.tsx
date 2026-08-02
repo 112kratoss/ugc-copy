@@ -33,7 +33,6 @@ import {
 import { createShowcaseFeedViewerQueryKey } from '@/lib/showcase-feed-query';
 import {
   buildImmersiveSlidePages,
-  getImmersiveSlideHint,
   getImmersiveVideoBlockerId,
   isImmersiveDetailsSlidePageIndex,
   type ImmersiveSlidePage,
@@ -911,7 +910,6 @@ function ImmersiveSlide({
 
   const pages = useMemo(() => buildImmersiveSlidePages(item), [item]);
   const currentPageIsDetails = isImmersiveDetailsSlidePageIndex(pages, currentHorizontalIndex);
-  const slideHint = getImmersiveSlideHint({ item, pages, currentHorizontalIndex });
   const canOpenCreator = Boolean(item.creatorUsername);
   const updateCurrentHorizontalIndex = useCallback((pageIndex: number) => {
     setCurrentHorizontalIndex(pageIndex);
@@ -963,29 +961,7 @@ function ImmersiveSlide({
 
   const renderOverlays = () => {
     if (currentPageIsDetails) {
-      return (
-        <View pointerEvents="none" style={{ position: 'absolute', inset: 0 }}>
-          {slideHint ? (
-            <View
-              style={{
-                position: 'absolute',
-                left: 18,
-                bottom: bottomInset + 28,
-                borderRadius: 999,
-                backgroundColor: 'rgba(255,255,255,0.10)',
-                borderWidth: 1,
-                borderColor: 'rgba(255,255,255,0.14)',
-                paddingHorizontal: 11,
-                paddingVertical: 7,
-              }}
-            >
-              <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, lineHeight: 15, fontWeight: '800' }}>
-                {slideHint}
-              </Text>
-            </View>
-          ) : null}
-        </View>
-      );
+      return null;
     }
 
     return (
@@ -1148,8 +1124,7 @@ function ImmersiveSlide({
           }}
         >
           {/* A text slide already prints its own badge, title and body, so the
-              overlay would say all three a second time. Only the swipe hint,
-              which the slide has no room for, still belongs here. */}
+              overlay would say all three a second time. */}
           {isTextPost ? null : (
           <>
           <View pointerEvents="none" style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
@@ -1199,11 +1174,6 @@ function ImmersiveSlide({
           </Text>
           </>
           )}
-          {slideHint ? (
-            <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, lineHeight: 15, fontWeight: '800' }}>
-              {slideHint}
-            </Text>
-          ) : null}
         </View>
       </View>
     );

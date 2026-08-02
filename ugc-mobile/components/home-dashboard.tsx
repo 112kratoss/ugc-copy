@@ -58,7 +58,7 @@ import {
   type HomeLoopedSlide,
 } from '@/lib/home-feed-view-model';
 import { getOwnerPostSalesSummary } from '@/lib/home-view-model';
-import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
+import { immersiveViewerHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
 import { SHOWCASE_DRAW_DISTANCE, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS } from '@/lib/media-performance';
 import { useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -408,7 +408,7 @@ export function HomeDashboard() {
    * through other showcase posts — so a written post opens its own screen
    * rather than being dropped into a reel of other people's media.
    */
-  const openCard = (card: HomeFeedCard) => {
+  const openCard = (card: HomeFeedCard, options: { comments?: boolean } = {}) => {
     if (getHomeFeedCardOpenTarget(card) === 'post') {
       recordFeedEvent(card.item, 'open');
       // Seeded so the post screen paints from cache instead of refetching.
@@ -416,7 +416,10 @@ export function HomeDashboard() {
         createShowcasePostQueryKey(card.item.id, user?.id),
         { success: true, item: card.item }
       );
-      router.push(`/post/${card.item.id}` as never);
+      router.push(textPostViewerHref({
+        comments: options.comments,
+        postId: card.item.id,
+      }) as never);
       return;
     }
     openPost(card.item);
@@ -621,6 +624,10 @@ export function HomeDashboard() {
         onCreatorOpen={() => openCreator(card.item)}
         onSave={() => toggleSave({ postId: card.id, isSaved: card.isSaved, saveCount: card.item.saveCount })}
         onComments={() => {
+          if (getHomeFeedCardOpenTarget(card) === 'post') {
+            openCard(card, { comments: true });
+            return;
+          }
           setCommentsReplyToId(null);
           setCommentsItem(card.item);
         }}

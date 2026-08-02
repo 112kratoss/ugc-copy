@@ -26,7 +26,7 @@ import { StableMediaImage } from '@/components/media-preview';
 import { AppText, SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { formatUsdCents, getOwnerPostSalesSummary } from '@/lib/home-view-model';
-import { immersiveViewerHref, profileMediaFeedHref } from '@/lib/immersive-preview-view-model';
+import { immersiveViewerHref, profileMediaFeedHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
 import {
   FALLBACK_PROFILE_MEDIA,
   PROFILE_MEDIA_TABS,
@@ -993,6 +993,17 @@ function ProfileMediaTile({
       onPress={() => {
         if (isFallbackPreview) {
           router.push(item.href as never);
+          return;
+        }
+        if (item.previewKind === 'text' && item.label !== 'Creation') {
+          router.push(textPostViewerHref({
+            postId: item.sourceId,
+            source: item.viewerSource === 'profile-posts'
+              ? 'profile-posts'
+              : item.viewerSource === 'profile-saved'
+                ? 'profile-saved'
+                : undefined,
+          }) as never);
           return;
         }
         // Saved media is for looking at, so it opens the reel. Creations and Posts

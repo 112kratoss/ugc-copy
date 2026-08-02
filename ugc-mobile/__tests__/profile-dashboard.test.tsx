@@ -401,6 +401,67 @@ describe('ProfileDashboard media tiles routing', () => {
     });
   });
 
+  it('opens a saved text-only post in the same dedicated viewer as Home', () => {
+    queryState.savedItems = [{
+      id: 'saved-text',
+      mediaUrl: null,
+      mediaKind: null,
+      mediaItems: [],
+      title: 'Saved text',
+      body: 'A saved written post.',
+      category: 'text',
+      postFormat: 'text',
+      creator: { name: 'Luna', username: 'luna' },
+      isSaved: true,
+      saveCount: 7,
+    }];
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard />);
+    });
+
+    const tile = tree!.root.findByProps({
+      accessibilityLabel: 'Saved, Saved text, 7 likes',
+    });
+    renderer.act(() => {
+      tile.props.onPress();
+    });
+
+    expect(routerState.push).toHaveBeenCalledWith('/post/saved-text?source=profile-saved');
+  });
+
+  it('opens an owner text-only post in the shared viewer through the owner source', () => {
+    queryState.ownerPosts = [{
+      id: 'private-text',
+      title: 'Private note',
+      createdAt: '2026-06-10T00:00:00Z',
+      visibility: 'private',
+      mediaUrl: null,
+      mediaKind: null,
+      mediaItems: [],
+      body: 'A private written post.',
+      category: 'text',
+      postFormat: 'text',
+      bundle: null,
+      commentCount: 0,
+    }];
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Posts" />);
+    });
+
+    const tile = tree!.root.findByProps({
+      accessibilityLabel: 'Post, Private note',
+    });
+    renderer.act(() => {
+      tile.props.onPress();
+    });
+
+    expect(routerState.push).toHaveBeenCalledWith('/post/private-text?source=profile-posts');
+  });
+
   it('opens the Credits purchase screen from the Credits card', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {

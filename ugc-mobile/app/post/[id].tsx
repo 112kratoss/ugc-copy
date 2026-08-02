@@ -1,8 +1,7 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import {
   ArrowLeft,
-  ChevronRight,
   FileText,
   Heart,
   MessageCircle,
@@ -10,12 +9,11 @@ import {
   Repeat2,
   Share2,
 } from 'lucide-react-native';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
   Pressable,
-  ScrollView,
   Share,
   Text,
   useWindowDimensions,
@@ -23,7 +21,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { CommentsSheet } from '@/components/comments-sheet';
+import { PostComments, type PostCommentsHandle } from '@/components/comments-sheet';
 import { CreatorAvatar } from '@/components/ui';
 import { FeedCardAction } from '@/components/feed-card-shell';
 import { PostDetailsPage } from '@/components/post-details-page';
@@ -31,11 +29,15 @@ import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { env } from '@/lib/env';
 import { useAuth } from '@/lib/auth';
 import {
+  buildImmersiveOwnerPostItems,
   buildImmersiveShowcaseItems,
   hasImmersiveDetailsPage,
   immersiveViewerHref,
+  textPostViewerHref,
 } from '@/lib/immersive-preview-view-model';
-import { getImmersiveSlideHint } from '@/lib/immersive-slide-pages';
+import { readCachedImmersiveSourceData, readCachedProfile } from '@/lib/immersive-preview-source-data';
+import { getCommentCountLabel } from '@/lib/comments-view-model';
+import { getProfileHandle } from '@/lib/profile-view-model';
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
 import { buildTextPostPage } from '@/lib/text-post-page-view-model';
 import { appTheme } from '@/lib/theme';
@@ -53,31 +55,103 @@ import { getSaveHeartIconProps, getViewerActionSlots, getViewerStateChip } from 
  * posts have. There is no vertical reel, so the body simply scrolls.
  */
 export default function PostScreen() {
-  const params = useLocalSearchParams<{ id: string }>();
+  const params = useLocalSearchParams<{ id: string; source?: string; comments?: string; replyTo?: string }>();
   const postId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const source = Array.isArray(params.source) ? params.source[0] : params.source;
+  const requestedCommentsPostId = Array.isArray(params.comments) ? params.comments[0] : params.comments;
+  const requestedReplyToId = Array.isArray(params.replyTo) ? params.replyTo[0] : params.replyTo;
+  const isOwnerPost = source === 'profile-posts';
+  const showcaseSource = source === 'profile-saved' ? 'profile-saved' : 'showcase-feed';
   const { api, user } = useAuth();
+  const queryClient = useQueryClient();
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const pagerRef = useRef<FlatList<'post' | 'details'>>(null);
+  const commentsRef = useRef<PostCommentsHandle>(null);
+  const restoredCommentContextRef = useRef<string | null>(null);
 
-  const [commentsVisible, setCommentsVisible] = useState(false);
   const [actionsVisible, setActionsVisible] = useState(false);
   const [pageIndex, setPageIndex] = useState(0);
+  const [commentCountOverride, setCommentCountOverride] = useState<number | null>(null);
+  const [restoredReplyToId, setRestoredReplyToId] = useState<string | null>(null);
 
-  const postQuery = useQuery({
+  const profileQuery = useQuery({
+    queryKey: ['profile', user?.id],
+    enabled: isOwnerPost && Boolean(user),
+    initialData: () => readCachedProfile(queryClient, user?.id),
+    queryFn: api.getProfile,
+    staleTime: 1000 * 60 * 5,
+  });
+
+  const showcasePostQuery = useQuery({
     queryKey: createShowcasePostQueryKey(postId, user?.id),
-    enabled: Boolean(postId),
+    enabled: Boolean(postId) && !isOwnerPost,
+    initialData: () => {
+      if (!postId || showcaseSource !== 'profile-saved') return undefined;
+      const post = readCachedImmersiveSourceData(
+        queryClient,
+        showcaseSource,
+        user?.id,
+        postId
+      )?.showcaseItems?.find((candidate) => candidate.id === postId);
+      return post ? { success: true, item: post } : undefined;
+    },
     queryFn: () => api.getShowcasePost(postId!) as Promise<ShowcasePostResponse>,
     staleTime: 1000 * 45,
   });
 
-  // The feed seeds this query before navigating, so a tap paints from cache;
-  // a deep link falls through to the fetch above.
+  const ownerPostQuery = useQuery({
+    queryKey: ['owner-text-post', postId, user?.id],
+    enabled: Boolean(postId) && isOwnerPost && Boolean(user),
+    initialData: () => {
+      if (!postId || !user) return undefined;
+      const post = readCachedImmersiveSourceData(
+        queryClient,
+        'profile-posts',
+        user.id,
+        postId
+      )?.ownerPosts?.find((candidate) => candidate.id === postId);
+      return post ? { success: true, post } : undefined;
+    },
+    queryFn: () => api.getOwnerPost(postId!),
+    staleTime: 1000 * 45,
+  });
+
+  // Home seeds the public showcase query before navigating. Profile-owned posts
+  // use the authenticated owner endpoint so private text posts can share this UI.
   const item = useMemo(() => {
-    const post = postQuery.data?.item;
+    if (isOwnerPost) {
+      const post = ownerPostQuery.data?.post;
+      if (!post) return null;
+      return buildImmersiveOwnerPostItems('profile-posts', [post], {
+        creatorLabel: getProfileHandle(profileQuery.data, user?.email),
+        creatorAvatar: profileQuery.data?.avatarUrl ?? null,
+        creatorId: user?.id ?? null,
+      })[0] ?? null;
+    }
+
+    const post = showcasePostQuery.data?.item;
     if (!post) return null;
-    return buildImmersiveShowcaseItems('showcase-feed', [post])[0] ?? null;
-  }, [postQuery.data]);
+    return buildImmersiveShowcaseItems(showcaseSource, [post])[0] ?? null;
+  }, [isOwnerPost, ownerPostQuery.data, profileQuery.data, showcasePostQuery.data, showcaseSource, user]);
+
+  const postQueryIsError = isOwnerPost ? ownerPostQuery.isError : showcasePostQuery.isError;
+  const refetchPost = isOwnerPost ? ownerPostQuery.refetch : showcasePostQuery.refetch;
+
+  useEffect(() => {
+    setCommentCountOverride(null);
+    setRestoredReplyToId(null);
+    restoredCommentContextRef.current = null;
+  }, [item?.id]);
+
+  const displayItem = useMemo(() => {
+    if (!item || commentCountOverride == null) return item;
+    return {
+      ...item,
+      commentCount: commentCountOverride,
+      commentLabel: getCommentCountLabel(commentCountOverride),
+    };
+  }, [commentCountOverride, item]);
 
   const { toggleSave, isSaving } = useShowcaseSaveMutation({ sourceSurface: 'mobile-post-page' });
 
@@ -87,8 +161,31 @@ export default function PostScreen() {
   );
 
   const goToPage = useCallback((index: number) => {
+    setPageIndex(index);
     pagerRef.current?.scrollToOffset({ offset: index * width, animated: true });
   }, [width]);
+
+  const openComments = useCallback(() => {
+    if (pageIndex !== 0) {
+      goToPage(0);
+      requestAnimationFrame(() => commentsRef.current?.scrollToComments());
+      return;
+    }
+    commentsRef.current?.scrollToComments();
+  }, [goToPage, pageIndex]);
+
+  useEffect(() => {
+    if (!displayItem?.showcasePostId || requestedCommentsPostId !== displayItem.showcasePostId) return;
+    const restoreKey = `${requestedCommentsPostId}:${requestedReplyToId ?? ''}`;
+    if (restoredCommentContextRef.current === restoreKey) return;
+    restoredCommentContextRef.current = restoreKey;
+    setRestoredReplyToId(requestedReplyToId ?? null);
+    const frame = requestAnimationFrame(() => {
+      openComments();
+      router.setParams({ comments: undefined, replyTo: undefined } as never);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [displayItem?.showcasePostId, openComments, requestedCommentsPostId, requestedReplyToId]);
 
   const shareItem = useCallback(async () => {
     if (!item?.canShare) return;
@@ -106,7 +203,7 @@ export default function PostScreen() {
   if (!item) {
     return (
       <View style={{ flex: 1, backgroundColor: appTheme.colors.app, alignItems: 'center', justifyContent: 'center' }}>
-        {postQuery.isError ? (
+        {postQueryIsError ? (
           <Text style={{ color: appTheme.colors.muted, ...appTheme.type.body }}>
             This post could not be loaded.
           </Text>
@@ -122,15 +219,22 @@ export default function PostScreen() {
   if (item.previewKind !== 'text') {
     return (
       <Redirect
-        href={immersiveViewerHref({ source: 'showcase-feed', initialId: item.id }) as never}
+        href={immersiveViewerHref({
+          source: isOwnerPost ? 'profile-posts' : showcaseSource,
+          initialId: item.id,
+        }) as never}
       />
     );
   }
 
-  const hint = getImmersiveSlideHint({
-    item,
-    pages: pages.map((page) => (page === 'post' ? { type: 'text' } : { type: 'details' })),
-    currentHorizontalIndex: pageIndex,
+  const resolvedItem = displayItem ?? item;
+  const authReturnTo = textPostViewerHref({
+    postId: resolvedItem.id,
+    source: isOwnerPost
+      ? 'profile-posts'
+      : showcaseSource === 'profile-saved'
+        ? 'profile-saved'
+        : undefined,
   });
 
   return (
@@ -147,44 +251,63 @@ export default function PostScreen() {
         }}
         renderItem={({ item: page }) => (
           page === 'post' ? (
-            <TextPostPage
-              item={item}
-              width={width}
-              topInset={insets.top}
-              bottomInset={insets.bottom}
-              saving={isSaving}
-              onActionsOpen={() => setActionsVisible(true)}
-              onComments={() => setCommentsVisible(true)}
-              onCreatorOpen={() => {
-                if (item.creatorUsername) {
-                  router.push(`/creators/${encodeURIComponent(item.creatorUsername)}` as never);
-                }
-              }}
-              onDetails={() => goToPage(1)}
-              onSave={() => {
-                if (!item.showcasePostId) return;
-                toggleSave({
-                  postId: item.showcasePostId,
-                  isSaved: item.isSaved,
-                  saveCount: item.details?.saveCount ?? 0,
-                });
-              }}
-              onShare={() => void shareItem()}
-            />
+            <View style={{ width, height }}>
+              <PostComments
+                ref={commentsRef}
+                authReturnTo={authReturnTo}
+                commentCount={resolvedItem.commentCount}
+                contentHeader={(
+                  <TextPostContent
+                    item={resolvedItem}
+                    topInset={insets.top}
+                    saving={isSaving}
+                    onActionsOpen={() => setActionsVisible(true)}
+                    onComments={openComments}
+                    onCreatorOpen={() => {
+                      if (resolvedItem.creatorUsername) {
+                        router.push(`/creators/${encodeURIComponent(resolvedItem.creatorUsername)}` as never);
+                      }
+                    }}
+                    onDetails={() => goToPage(1)}
+                    onSave={() => {
+                      if (!resolvedItem.showcasePostId) return;
+                      toggleSave({
+                        postId: resolvedItem.showcasePostId,
+                        isSaved: resolvedItem.isSaved,
+                        saveCount: resolvedItem.details?.saveCount ?? 0,
+                      });
+                    }}
+                    onShare={() => void shareItem()}
+                  />
+                )}
+                enabled={resolvedItem.canComment && Boolean(resolvedItem.showcasePostId)}
+                initialReplyToId={restoredReplyToId}
+                onCommentCountChange={setCommentCountOverride}
+                postCreatorId={resolvedItem.creatorId ?? null}
+                postId={resolvedItem.showcasePostId ?? resolvedItem.id}
+                postTitle={resolvedItem.title}
+                presentation="inline"
+                unavailableMessage={resolvedItem.canComment
+                  ? null
+                  : resolvedItem.archivedAt
+                    ? 'Comments are unavailable while this post is archived.'
+                    : 'Comments become available when this post is public.'}
+              />
+            </View>
           ) : (
             <PostDetailsPage
               active={pageIndex === 1}
               bottomInset={insets.bottom}
               height={height}
               hostRendersPostText
-              item={item}
+              item={resolvedItem}
               onRecreate={() => undefined}
               onSave={() => {
-                if (!item.showcasePostId) return;
+                if (!resolvedItem.showcasePostId) return;
                 toggleSave({
-                  postId: item.showcasePostId,
-                  isSaved: item.isSaved,
-                  saveCount: item.details?.saveCount ?? 0,
+                  postId: resolvedItem.showcasePostId,
+                  isSaved: resolvedItem.isSaved,
+                  saveCount: resolvedItem.details?.saveCount ?? 0,
                 });
               }}
               onShare={() => void shareItem()}
@@ -218,54 +341,24 @@ export default function PostScreen() {
         <ArrowLeft size={20} color={appTheme.colors.text} />
       </Pressable>
 
-      {hint ? (
-        <Text
-          style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            bottom: insets.bottom + 14,
-            textAlign: 'center',
-            color: appTheme.colors.faint,
-            ...appTheme.type.caption,
-          }}
-        >
-          {hint}
-        </Text>
-      ) : null}
-
-      {item.canComment && item.showcasePostId ? (
-        <CommentsSheet
-          postId={item.showcasePostId}
-          postCreatorId={item.creatorId ?? null}
-          postTitle={item.title}
-          commentCount={item.commentCount}
-          authReturnTo={`/post/${item.id}`}
-          visible={commentsVisible}
-          onClose={() => setCommentsVisible(false)}
-        />
-      ) : null}
-
       <ViewerActionSheet
-        item={item}
+        item={resolvedItem}
         visible={actionsVisible}
         onClose={() => setActionsVisible(false)}
-        onComments={() => setCommentsVisible(true)}
+        onComments={openComments}
         onDetails={() => goToPage(1)}
         onRecreate={() => undefined}
         onShare={() => void shareItem()}
-        onSourceRefresh={() => void postQuery.refetch()}
+        onSourceRefresh={() => void refetchPost()}
         onDeleted={() => router.back()}
       />
     </View>
   );
 }
 
-function TextPostPage({
+function TextPostContent({
   item,
-  width,
   topInset,
-  bottomInset,
   saving,
   onActionsOpen,
   onComments,
@@ -275,9 +368,7 @@ function TextPostPage({
   onShare,
 }: {
   item: Parameters<typeof buildTextPostPage>[0];
-  width: number;
   topInset: number;
-  bottomInset: number;
   saving: boolean;
   onActionsOpen: () => void;
   onComments: () => void;
@@ -292,11 +383,10 @@ function TextPostPage({
   const hasDetails = hasImmersiveDetailsPage(item);
 
   return (
-    <ScrollView
-      style={{ width }}
-      contentContainerStyle={{
+    <View
+      style={{
         paddingTop: topInset + 66,
-        paddingBottom: bottomInset + 56,
+        paddingBottom: appTheme.spacing.panel,
         paddingHorizontal: appTheme.spacing.panel,
         gap: appTheme.spacing.gap,
       }}
@@ -445,29 +535,6 @@ function TextPostPage({
         })}
       </View>
 
-      {item.canComment ? (
-        <>
-          <View style={{ height: 1, backgroundColor: appTheme.colors.borderSubtle }} />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Open comments on ${content.title}`}
-            onPress={onComments}
-            style={({ pressed }) => ({
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: appTheme.spacing.compact,
-              minHeight: 48,
-              opacity: pressed ? appTheme.opacity.pressed : 1,
-            })}
-          >
-            <MessageCircle size={18} color={appTheme.colors.faint} strokeWidth={2.2} />
-            <Text style={{ flex: 1, color: appTheme.colors.textSecondary, ...appTheme.type.body }}>
-              {content.commentLabel}
-            </Text>
-            <ChevronRight size={18} color={appTheme.colors.faint} />
-          </Pressable>
-        </>
-      ) : null}
-    </ScrollView>
+    </View>
   );
 }
