@@ -349,9 +349,9 @@ describe('PostResourceBundlePanel', () => {
       },
     });
 
-    expect(screen.getAllByText(/creation recipe/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/prompt, notes, references, and files are available here as a creation recipe/i)).toBeInTheDocument();
-    expect(screen.getByText(/available now/i)).toBeInTheDocument();
+    // The content is the message: a public recipe shows its parts directly,
+    // with just the status chip saying what it is.
+    expect(screen.getAllByText(/public recipe/i).length).toBeGreaterThan(0);
     expect(screen.getByText('Public recipe prompt')).toBeInTheDocument();
     expect(screen.getByText('Public recipe notes')).toBeInTheDocument();
     expect(screen.getByText('Image input')).toBeInTheDocument();
@@ -401,6 +401,19 @@ describe('PostResourceBundlePanel', () => {
   });
 
   it('shows grouped item counts before access and grouped resources after access', () => {
+    // Locked: the pitch summarizes what is inside without leaking it.
+    const locked = renderPanel({
+      resourceKinds: ['workflow', 'files'],
+      lockedPreview: groupedPreview,
+      initialResources: null,
+    });
+
+    expect(screen.getByText(/includes 2 workflows, 2 reference images/i)).toBeInTheDocument();
+    expect(screen.queryByText('Main workflow')).not.toBeInTheDocument();
+
+    locked.unmount();
+
+    // Unlocked: no table of contents, just the grouped resources themselves.
     renderPanel({
       resourceKinds: ['workflow', 'files'],
       lockedPreview: groupedPreview,
@@ -415,7 +428,7 @@ describe('PostResourceBundlePanel', () => {
       viewerCanAccess: true,
     });
 
-    expect(screen.getByText(/includes 2 workflows, 2 reference images/i)).toBeInTheDocument();
+    expect(screen.queryByText(/includes 2 workflows, 2 reference images/i)).not.toBeInTheDocument();
     expect(screen.getByText('Workflows')).toBeInTheDocument();
     expect(screen.getByText('Reference images')).toBeInTheDocument();
     expect(screen.getByText('Main workflow')).toBeInTheDocument();
@@ -423,6 +436,17 @@ describe('PostResourceBundlePanel', () => {
   });
 
   it('shows section counts while locked and groups unlocked resources by section', () => {
+    const locked = renderPanel({
+      resourceKinds: ['prompt', 'files'],
+      lockedPreview: sectionedPreview,
+      initialResources: null,
+    });
+
+    expect(screen.getByText(/includes 1 section, 1 prompt, 1 reference image/i)).toBeInTheDocument();
+    expect(screen.queryByText('Hook prompt')).not.toBeInTheDocument();
+
+    locked.unmount();
+
     renderPanel({
       resourceKinds: ['prompt', 'files'],
       lockedPreview: sectionedPreview,
@@ -438,7 +462,6 @@ describe('PostResourceBundlePanel', () => {
       viewerCanAccess: true,
     });
 
-    expect(screen.getByText(/includes 1 section, 1 prompt, 1 reference image/i)).toBeInTheDocument();
     expect(screen.getByText('Full post resources')).toBeInTheDocument();
     expect(screen.getByText('Hook')).toBeInTheDocument();
     expect(screen.getByText('Hook prompt')).toBeInTheDocument();
@@ -481,7 +504,8 @@ describe('PostResourceBundlePanel', () => {
     });
 
     expect(screen.getByText('Product photo prompt')).toBeInTheDocument();
-    expect(screen.getByText('Applies to all outputs')).toBeInTheDocument();
+    // The default scope is silent — only a narrowed scope earns a label.
+    expect(screen.queryByText('Applies to all outputs')).not.toBeInTheDocument();
     expect(screen.queryByText('Private working prompt title')).not.toBeInTheDocument();
   });
 
@@ -511,7 +535,8 @@ describe('PostResourceBundlePanel', () => {
     expect(screen.getByText('Open remix template')).toBeInTheDocument();
     expect(screen.getByText('Applies to 1 selected output')).toBeInTheDocument();
     expect(screen.getByText('Applies to 2 selected outputs')).toBeInTheDocument();
-    expect(screen.getByText('Applies to all outputs')).toBeInTheDocument();
+    // The default scope carries no information, so it renders nothing.
+    expect(screen.queryByText('Applies to all outputs')).not.toBeInTheDocument();
   });
 
   it('keeps paid packages below 100 tokens credit-only on web', () => {

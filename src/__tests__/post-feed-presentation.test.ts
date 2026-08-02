@@ -7,11 +7,9 @@ import {
     formatCompactCount,
     formatRelativeTime,
     getPostBodyClampLines,
-    getPostBodyFontSize,
     getPostCategoryLabel,
     getPostFeedBody,
     getPostFeedTitle,
-    isFramedPostBody,
     isTextOnlyPost,
     resolvePostPreviewKind,
 } from '@/lib/post-feed-presentation';
@@ -110,18 +108,14 @@ describe('post feed presentation', () => {
         });
     });
 
-    describe('body framing', () => {
-        it('gives a text post the most room and its own frame', () => {
-            expect(getPostBodyClampLines('text')).toBe(8);
-            expect(isFramedPostBody('text')).toBe(true);
-            expect(getPostBodyFontSize('text')).toBe(16);
+    describe('body clamping', () => {
+        it('gives a text post the most room', () => {
+            expect(getPostBodyClampLines('text')).toBe(6);
         });
 
-        it('keeps a caption compact and unframed', () => {
+        it('keeps a caption compact', () => {
             expect(getPostBodyClampLines('mixed')).toBe(3);
             expect(getPostBodyClampLines('media')).toBe(2);
-            expect(isFramedPostBody('mixed')).toBe(false);
-            expect(getPostBodyFontSize('media')).toBe(14);
         });
     });
 
@@ -146,9 +140,16 @@ describe('post feed presentation', () => {
     });
 
     describe('card building', () => {
-        it('offers Read more only when the clamp hides something', () => {
+        it('offers Read more only when the clamp hides part of a caption', () => {
+            const caption = (body: string) => item({ postFormat: 'mixed', body });
+
+            expect(buildPostFeedCard(caption('One short line.')).canExpandBody).toBe(false);
+            expect(buildPostFeedCard(caption('sentence. '.repeat(400))).canExpandBody).toBe(true);
+        });
+
+        it('never offers Read more for a text post — the card itself opens it', () => {
             expect(buildPostFeedCard(textItem({ body: 'One short line.' })).canExpandBody).toBe(false);
-            expect(buildPostFeedCard(textItem({ body: 'sentence. '.repeat(400) })).canExpandBody).toBe(true);
+            expect(buildPostFeedCard(textItem({ body: 'sentence. '.repeat(400) })).canExpandBody).toBe(false);
         });
 
         it('never offers Read more for a post with no body', () => {

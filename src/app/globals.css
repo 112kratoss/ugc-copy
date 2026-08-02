@@ -725,20 +725,12 @@ button:disabled,
   gap: 1rem;
 }
 
-.canonical-post-stats {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
 .canonical-post-media-viewport {
   height: min(62dvh, 560px);
   min-height: 360px;
 }
 
 @media (min-width: 640px) {
-  .canonical-post-stats {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
   .canonical-post-media-viewport {
     height: min(70dvh, 680px);
     min-height: 420px;
@@ -751,25 +743,15 @@ button:disabled,
     gap: 1.5rem;
   }
 
-  .canonical-post-identity {
-    grid-column: 2;
-    grid-row: 1;
-  }
-
   .canonical-post-media {
     grid-column: 1;
-    grid-row: 1 / span 2;
   }
 
   .canonical-post-actions {
     position: sticky;
     top: 76px;
     grid-column: 2;
-    grid-row: 2;
-  }
-
-  .canonical-post-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-row: 1;
   }
 
   .canonical-post-media-viewport {

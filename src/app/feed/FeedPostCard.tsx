@@ -70,8 +70,8 @@ interface FeedPostCardProps {
 /**
  * A post as Reddit frames one: a thin attribution line, then the title as the
  * loudest thing on the card, then the body, then media as an attachment. A text
- * post gets a framed body with an accent rail so it reads as something written
- * rather than as a media card whose preview failed to load.
+ * post is the same card with nothing attached — its body simply clamps, and the
+ * card click is what opens the rest.
  */
 function FeedPostCardView({
     card,
@@ -188,7 +188,6 @@ function FeedPostCardView({
                 {card.body ? (
                     <PostBody
                         body={card.body}
-                        framed={card.framedBody}
                         clampLines={card.clampLines}
                         canExpand={card.canExpandBody}
                         expanded={expanded}
@@ -293,66 +292,46 @@ function FeedPostCardView({
 
 function PostBody({
     body,
-    framed,
     clampLines,
     canExpand,
     expanded,
     onToggle,
 }: {
     body: string;
-    framed: boolean;
     clampLines: number;
     canExpand: boolean;
     expanded: boolean;
     onToggle: () => void;
 }) {
-    const text = (
-        <p
-            // `cursor-auto` restores the I-beam the card's pointer cursor would
-            // otherwise hide, so the body still reads as selectable text.
-            className={`cursor-auto whitespace-pre-wrap ${
-                framed
-                    ? 'text-base leading-7 text-[var(--ui-text-secondary)]'
-                    : 'text-sm leading-6 text-[var(--ui-text-muted)]'
-            }`}
-            style={expanded ? undefined : {
-                display: '-webkit-box',
-                WebkitBoxOrient: 'vertical',
-                WebkitLineClamp: clampLines,
-                overflow: 'hidden',
-            }}
-        >
-            {body}
-        </p>
-    );
-
-    const readMore = canExpand ? (
-        <button
-            type="button"
-            onClick={onToggle}
-            aria-expanded={expanded}
-            className="ui-focus-ring inline-flex min-h-11 items-center self-start rounded-full px-2 text-xs font-extrabold text-[var(--ui-primary)] hover:bg-[var(--ui-surface-2)]"
-        >
-            {expanded ? 'Show less' : 'Read more'}
-        </button>
-    ) : null;
-
-    if (!framed) {
-        return (
-            <div className="flex flex-col gap-1">
-                {text}
-                {readMore}
-            </div>
-        );
-    }
-
     return (
-        <div className="flex gap-0 overflow-hidden rounded-2xl bg-[var(--ui-surface-2)]">
-            <span aria-hidden="true" className="w-[3px] shrink-0 bg-[var(--ui-primary)]" />
-            <div className="flex flex-1 flex-col gap-2 px-4 py-3.5">
-                {text}
-                {readMore}
-            </div>
+        <div className="flex flex-col gap-1">
+            <p
+                // `cursor-auto` restores the I-beam the card's pointer cursor would
+                // otherwise hide, so the body still reads as selectable text.
+                className="cursor-auto whitespace-pre-wrap text-sm leading-6 text-[var(--ui-text-muted)]"
+                // `canExpand` is part of the condition, not just `expanded`: a
+                // restored scroll snapshot can carry an expanded id for a card
+                // that no longer offers the toggle, which would otherwise leave
+                // an unclamped body with no way to collapse it.
+                style={expanded && canExpand ? undefined : {
+                    display: '-webkit-box',
+                    WebkitBoxOrient: 'vertical',
+                    WebkitLineClamp: clampLines,
+                    overflow: 'hidden',
+                }}
+            >
+                {body}
+            </p>
+            {canExpand ? (
+                <button
+                    type="button"
+                    onClick={onToggle}
+                    aria-expanded={expanded}
+                    className="ui-focus-ring inline-flex min-h-11 items-center self-start rounded-full px-2 text-xs font-extrabold text-[var(--ui-primary)] hover:bg-[var(--ui-surface-2)]"
+                >
+                    {expanded ? 'Show less' : 'Read more'}
+                </button>
+            ) : null}
         </div>
     );
 }

@@ -496,6 +496,8 @@ export default function PostComments({
                         ? `${totalCount} ${totalCount === 1 ? 'comment' : 'comments'}`
                         : 'Comments'}
                 </h2>
+                {/* Sorting nothing is noise — the pills appear with the first comment. */}
+                {totalCount > 0 ? (
                 <div
                     className="flex items-center gap-1 rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] p-1"
                     role="group"
@@ -517,6 +519,7 @@ export default function PostComments({
                         </button>
                     ))}
                 </div>
+                ) : null}
             </div>
 
             {user ? (

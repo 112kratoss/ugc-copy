@@ -73,6 +73,12 @@ vi.mock('@/app/components/PostComments', () => ({
   default: () => <div data-testid="post-comments-component">Comments</div>,
 }));
 
+vi.mock('@/app/showcase/[id]/ShowcaseDetailEngagementRow', () => ({
+  default: ({ postId, canRemix }: { postId: string; canRemix: boolean }) => (
+    <div data-testid="showcase-detail-engagement-row">{`${postId}:${canRemix}`}</div>
+  ),
+}));
+
 describe('Showcase detail page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -134,6 +140,8 @@ describe('Showcase detail page', () => {
       sourceSurface: 'detail-page',
     });
     expect(screen.getByTestId('canonical-post-comments')).toBeInTheDocument();
+    // No bundle on this post — the rail offers no recipe pointer.
+    expect(screen.queryByTestId('recipe-jump-link')).not.toBeInTheDocument();
   });
 
   it('does not count an in-app open as a share visit', async () => {
@@ -200,26 +208,36 @@ describe('Showcase detail page', () => {
     }));
 
     expect(screen.getByTestId('media-detail-frame')).toBeInTheDocument();
-    expect(screen.getByTestId('post-body-panel')).toHaveTextContent('Behind-the-scenes context for this frame.');
+    // The note reads in the document under the media, not in a side panel.
+    expect(screen.queryByTestId('post-body-panel')).not.toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('media-detail-document')).getByText('Behind-the-scenes context for this frame.')
+    ).toBeInTheDocument();
   });
 
-  it('puts identity, bounded media, and actions in a logical reading order', async () => {
+  it('reads as one document: byline, title, media, then engagement', async () => {
     const { container } = render(await ShowcaseDetailPage({
       params: Promise.resolve({ id: 'post-1' }),
     }));
 
-    const identity = screen.getByTestId('canonical-post-identity');
     const media = screen.getByTestId('canonical-post-media');
     const actions = screen.getByTestId('canonical-post-actions');
+    const heading = screen.getByRole('heading', { level: 1, name: 'Shared creation' });
+    const frame = screen.getByTestId('media-detail-frame');
+    const engagement = screen.getByTestId('showcase-detail-engagement-row');
     const mediaViewport = container.querySelector('[data-showcase-media-viewport]');
 
-    expect(identity.compareDocumentPosition(media) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // No identity side card: the title leads the document, media follows it.
+    expect(screen.queryByTestId('canonical-post-identity')).not.toBeInTheDocument();
+    expect(media).toContainElement(heading);
+    expect(media).toContainElement(frame);
+    expect(heading.compareDocumentPosition(frame) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(frame.compareDocumentPosition(engagement) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(media.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(mediaViewport).toHaveClass(
       'canonical-post-media-viewport',
       'w-full',
     );
-    expect(identity).toHaveClass('canonical-post-identity', 'min-w-0');
     expect(media).toHaveClass('canonical-post-media', 'min-w-0');
     expect(actions).toHaveClass('canonical-post-actions', 'min-w-0');
     expect(screen.getByRole('button', { name: 'Open media full screen' })).toBeInTheDocument();
@@ -328,9 +346,26 @@ describe('Showcase detail page', () => {
     expect(screen.queryByTestId('media-detail-frame')).not.toBeInTheDocument();
     expect(screen.queryByTestId('post-body-panel')).not.toBeInTheDocument();
     expect(screen.getByTestId('showcase-detail-actions')).toHaveTextContent('post-text:false');
+
+    // The writing is the page: one document column carrying its own byline,
+    // with no identity card printing the title a second time.
+    expect(screen.queryByTestId('canonical-post-identity')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Three hooks that keep working' })).toBeInTheDocument();
+    expect(screen.getAllByText('Three hooks that keep working')).toHaveLength(1);
+    expect(screen.getByTestId('text-detail-note')).toHaveTextContent('@creator-name');
+    expect(screen.getByTestId('text-detail-note')).toHaveTextContent('Tip / note');
+
+    // The chip bar is media furniture; a written note carries its own byline.
+    expect(screen.queryByText(/shared post/i)).not.toBeInTheDocument();
+
+    // Reddit reading order: the conversation flows in the document column,
+    // directly under the writing, not in a full-width block below the rail.
+    expect(
+      within(screen.getByTestId('canonical-post-media')).getByTestId('canonical-post-comments')
+    ).toBeInTheDocument();
   });
 
-  it('uses the top unlock card as a jump link, not a second unlock action', async () => {
+  it('pitches a text post recipe once, in the document column', async () => {
     getPostReferenceForShowcaseIdMock.mockResolvedValueOnce({
       id: 'post-text',
       generation_id: null,
@@ -406,12 +441,17 @@ describe('Showcase detail page', () => {
       params: Promise.resolve({ id: 'post-text' }),
     }));
 
-    const unlockSummary = screen.getByTestId('unlock-summary-link');
-    expect(within(unlockSummary).getByText(/free recipe available/i)).toBeInTheDocument();
-    expect(within(unlockSummary).getByText(/view free recipe/i)).toBeInTheDocument();
-    expect(within(unlockSummary).queryByText(/view unlock details/i)).not.toBeInTheDocument();
+    // A text post pitches the recipe exactly once — in the document column,
+    // after the conversation. The rail keeps a one-line pointer to it (not a
+    // second pitch), so the recipe stays reachable under a long thread.
+    expect(screen.queryByTestId('unlock-summary-link')).not.toBeInTheDocument();
+    expect(screen.getByTestId('recipe-jump-link')).toHaveAttribute('href', '#recipe');
+    expect(screen.getByTestId('recipe-jump-link')).toHaveTextContent('Free recipe');
     expect(
-      screen.getByTestId('canonical-post-actions').compareDocumentPosition(
+      within(screen.getByTestId('canonical-post-media')).getByTestId('canonical-post-recipe')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId('canonical-post-comments').compareDocumentPosition(
         screen.getByTestId('canonical-post-recipe')
       ) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
