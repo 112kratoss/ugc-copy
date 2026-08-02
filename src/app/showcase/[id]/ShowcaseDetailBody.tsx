@@ -1,10 +1,11 @@
 import Link from 'next/link';
-import { BarChart3, BookText, Eye, Heart, Share2, ShoppingBag, Tag, Wand2 } from 'lucide-react';
+import { BookText, ShoppingBag } from 'lucide-react';
 
-import CreatorIdentity from '@/app/components/CreatorIdentity';
+import PostCommentAvatar from '@/app/components/PostCommentAvatar';
 import PostComments from '@/app/components/PostComments';
+import { formatRelativeTime, getPostFeedTitle, type PostPreviewKind } from '@/lib/post-feed-presentation';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
-import { formatUnlockCountLabel, getPostResourceKindLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
+import { getPostResourceKindLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
 import { getPublicPostMetaDescription, type PublicPostDetail } from '@/lib/public-posts';
 import type { ShowcaseReturnContext } from '@/lib/share';
 import { isGenerationRecipeAssetId } from '@/lib/showcase';
@@ -13,6 +14,7 @@ import PostResourceBundlePanel from './PostResourceBundlePanel';
 import ReportPostButton from './ReportPostButton';
 import ShowcaseDetailActions from './ShowcaseDetailActions';
 import ShowcaseDetailBackLink from './ShowcaseDetailBackLink';
+import ShowcaseDetailEngagementRow from './ShowcaseDetailEngagementRow';
 
 /**
  * The post detail, rendered identically by the full page (`/showcase/[id]`)
@@ -118,19 +120,32 @@ export default function ShowcaseDetailBody({
     bundle ? `${previewKindSummary} recipe attached` : null,
   ].filter(Boolean).join(' · ');
   const publicText = detail.body || publicPostFallback || detail.description || detail.title;
-  const shouldRenderTextNoteTitle =
+  // The same title rules as the feed card: a placeholder like "Untitled
+  // Creation" gives way to the prompt or body instead of leaking into the h1.
+  const previewKind: PostPreviewKind = isTextOnlyPost
+    ? 'text'
+    : detail.postFormat === 'mixed' && (detail.body ?? '').trim()
+      ? 'mixed'
+      : 'media';
+  const displayTitle = getPostFeedTitle({
+    title: detail.title,
+    prompt: detail.prompt,
+    body: detail.body,
+    creationMode: null,
+    mediaKind: detail.mediaKind,
+    category: detail.category,
+  }, previewKind);
+  // The title always renders for a text post now, so it is the body that gives
+  // way when the two are the same line — the fallback chain above can resolve
+  // `publicText` to the title itself on a post with no body.
+  const shouldRenderTextNoteBody =
     isTextOnlyPost &&
-    normalizeComparableText(detail.title) !== normalizeComparableText(publicText);
-  const statItems = [
-    { singular: 'Save', plural: 'Saves', value: detail.saveCount, icon: Heart, color: 'text-[var(--ui-primary-strong)]' },
-    { singular: 'Remix', plural: 'Remixes', value: detail.remixCount, icon: Wand2, color: 'text-[var(--ui-primary)]' },
-    { singular: 'Share', plural: 'Shares', value: detail.shareCount, icon: BarChart3, color: 'text-blue-300' },
-    { singular: 'Visit', plural: 'Visits', value: detail.shareVisitCount, icon: Eye, color: 'text-emerald-300' },
-  ].filter((item) => item.value > 0);
+    normalizeComparableText(publicText) !== normalizeComparableText(displayTitle);
   const resourceBundlePanel = bundle ? (
     <PostResourceBundlePanel
       postId={detail.id}
       title={bundle.title}
+      suppressTitle={normalizeComparableText(bundle.title) === normalizeComparableText(displayTitle)}
       summary={bundle.summary}
       previewText={bundle.previewText}
       priceLabel={bundle.priceQuote.formatted}
@@ -172,6 +187,33 @@ export default function ShowcaseDetailBody({
         : null}
     />
   ) : null;
+  /*
+   * Every post reads as one column, the way Reddit orders it: the post, then
+   * the conversation, then the recipe — all beside the rail. The recipe
+   * trails the comments and is pitched nowhere else; the locked-viewer
+   * bottom CTA covers viewports where the panel sits below the fold.
+   */
+  const recipeBlock = resourceBundlePanel ? (
+    <div
+      data-testid="canonical-post-recipe"
+      className="mt-8 w-full min-w-0 max-w-3xl border-t border-white/8 pt-8"
+    >
+      {resourceBundlePanel}
+    </div>
+  ) : null;
+  const commentsBlock = detail.visibility === 'public' ? (
+    <div
+      id="comments"
+      data-testid="canonical-post-comments"
+      className="mt-8 w-full min-w-0 max-w-3xl scroll-mt-24"
+    >
+      <PostComments
+        postId={detail.id}
+        postCreatorId={detail.creator.id}
+        commentCount={detail.commentCount}
+      />
+    </div>
+  ) : null;
 
   return (
     <div className={isOverlay
@@ -190,120 +232,117 @@ export default function ShowcaseDetailBody({
         ? 'canonical-post-shell canonical-post-shell-overlay relative z-10'
         : 'canonical-post-shell studio-shell-wide relative z-10 pt-4 sm:pt-6'}
       >
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          {isOverlay || !returnContext ? null : (
+        {returnContext && !isOverlay ? (
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
             <ShowcaseDetailBackLink href={returnContext.href} label={returnContext.label} />
-          )}
-          <div className="flex flex-wrap items-center gap-2">
-            {sourceToolLabel ? (
-              <span className="inline-flex items-center gap-2 rounded-full border border-sky-300/20 bg-sky-400/10 px-3 py-1.5 text-xs font-semibold text-sky-50">
-                <Tag className="h-3.5 w-3.5" />
-                {sourceToolLabel}
-              </span>
-            ) : null}
-            <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-400">
-              <Share2 className="h-3.5 w-3.5" />
-              Shared post
-            </div>
           </div>
-        </div>
+        ) : null}
 
         <div className="canonical-post-layout">
-          <header
-            data-testid="canonical-post-identity"
-            className="canonical-post-identity min-w-0 overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(24,24,27,0.86),rgba(10,10,12,0.9))] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl sm:p-6"
-          >
-            <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-zinc-500">
-              <span>{postTypeLabel}</span>
-              <span aria-hidden="true">/</span>
-              <span>{formatPostDate(detail.createdAt)}</span>
-              {detail.visibility === 'unlisted' ? (
-                <>
-                  <span aria-hidden="true">/</span>
-                  <span>Unlisted</span>
-                </>
-              ) : null}
-            </div>
-            <h1 className="mt-3 text-balance text-2xl font-semibold tracking-tight text-white sm:text-3xl">
-              {detail.title}
-            </h1>
-            <div className="mt-5">
-              <CreatorIdentity creator={detail.creator} />
-            </div>
-            {detail.description ? (
-              <p className="mt-5 line-clamp-3 border-t border-white/8 pt-4 text-sm leading-7 text-zinc-300">
-                {detail.description}
-              </p>
-            ) : null}
-          </header>
-
           <section
             data-testid="canonical-post-media"
-            aria-label={isTextOnlyPost ? 'Post content' : 'Post media'}
-            className={isTextOnlyPost
-              ? 'canonical-post-media min-w-0'
-              : 'canonical-post-media min-w-0 overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(24,24,27,0.78),rgba(5,5,6,0.92))] p-3 shadow-[0_28px_90px_rgba(0,0,0,0.5)] backdrop-blur-sm sm:p-4'}
+            aria-label="Post content"
+            className="canonical-post-media min-w-0"
           >
-            {isTextOnlyPost ? (
-              <article
-                data-testid="text-detail-note"
-                className="mx-auto max-w-4xl rounded-[28px] border border-white/8 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.12),transparent_34%),linear-gradient(180deg,rgba(13,13,18,0.98),rgba(6,6,9,0.98))] p-6 shadow-[0_22px_80px_-58px_rgba(56,189,248,0.75)] sm:p-8"
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="inline-flex items-center gap-2 rounded-full border border-sky-300/20 bg-sky-400/10 px-3 py-1 text-xs font-semibold text-sky-100">
-                    <BookText className="h-3.5 w-3.5" />
-                    Tip / note
-                  </span>
-                  {sourceToolLabel ? (
-                    <span className="rounded-full border border-white/10 bg-black/35 px-3 py-1 text-xs font-medium text-zinc-200">
-                      {sourceToolLabel}
-                    </span>
+            {/*
+              * One document template for every post kind, the order Reddit
+              * proved: byline, title, media as an attachment, body, then the
+              * engagement row. No card chrome — the post sits on the page.
+              */}
+            <article
+              data-testid={isTextOnlyPost ? 'text-detail-note' : 'media-detail-document'}
+              className="w-full max-w-3xl"
+            >
+                {/* One breath of attribution: who, when, what kind — a single line. */}
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-xs text-zinc-500">
+                  {detail.creator.username ? (
+                    <Link
+                      href={`/creators/${detail.creator.username}`}
+                      className="ui-focus-ring flex min-w-0 items-center gap-2 rounded-full font-semibold text-zinc-200 transition hover:text-white"
+                    >
+                      <PostCommentAvatar avatarUrl={detail.creator.avatar} name={detail.creator.name} size={24} />
+                      <span className="truncate">{`@${detail.creator.username}`}</span>
+                    </Link>
+                  ) : (
+                    <div className="flex min-w-0 items-center gap-2 font-semibold text-zinc-200">
+                      <PostCommentAvatar avatarUrl={detail.creator.avatar} name={detail.creator.name} size={24} />
+                      <span className="truncate">{detail.creator.name}</span>
+                    </div>
+                  )}
+                  <span aria-hidden="true">·</span>
+                  <span title={formatPostDate(detail.createdAt)}>{formatRelativeTime(detail.createdAt)}</span>
+                  {!isTextOnlyPost && sourceToolLabel ? (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span>{sourceToolLabel}</span>
+                    </>
                   ) : null}
-                  <span className="rounded-full border border-white/10 bg-black/35 px-3 py-1 text-xs font-medium text-zinc-200">
-                    {formatPostDate(detail.createdAt)}
+                  {detail.visibility === 'unlisted' ? (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span>Unlisted</span>
+                    </>
+                  ) : null}
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-300/20 bg-sky-400/10 px-2.5 py-0.5 text-[11px] font-semibold text-sky-100">
+                    {isTextOnlyPost ? <BookText className="h-3 w-3" aria-hidden="true" /> : null}
+                    {postTypeLabel}
                   </span>
                 </div>
 
-                {shouldRenderTextNoteTitle ? (
-                  <h2 className="mt-6 max-w-3xl text-3xl font-semibold tracking-tight text-white">
-                    {detail.title}
-                  </h2>
+                <h1 className="mt-4 text-balance text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+                  {displayTitle}
+                </h1>
+
+                {!isTextOnlyPost && detail.description ? (
+                  <p className="mt-3 text-sm leading-7 text-zinc-300">
+                    {detail.description}
+                  </p>
                 ) : null}
 
-                <div className="mt-6 max-w-3xl whitespace-pre-wrap text-base leading-8 text-zinc-100 sm:text-lg sm:leading-9">
-                  {publicText}
-                </div>
-              </article>
-            ) : (
-              <div data-testid="media-detail-frame" className="relative overflow-hidden rounded-[22px] border border-white/8 bg-black">
-                  <div className="absolute left-4 top-4 z-10 flex max-w-[calc(100%-7rem)] flex-wrap gap-2 sm:max-w-[calc(100%-10rem)]">
-                    <span className="rounded-full border border-white/10 bg-black/55 px-3 py-1.5 text-xs font-semibold text-zinc-100 backdrop-blur-md">
-                      {postTypeLabel}
-                    </span>
-                    <span className="rounded-full border border-white/10 bg-black/55 px-3 py-1.5 text-xs font-medium text-zinc-300 backdrop-blur-md">
-                      {formatPostDate(detail.createdAt)}
-                    </span>
-                  </div>
-                  {detailMediaItems.length > 0 ? (
+                {!isTextOnlyPost && detailMediaItems.length > 0 ? (
+                  <div
+                    data-testid="media-detail-frame"
+                    className="mt-5 overflow-hidden rounded-[22px] border border-white/8 bg-black"
+                  >
                     <ShowcaseMediaCarousel
                       mediaItems={detailMediaItems}
-                      title={detail.title}
+                      title={displayTitle}
                       mode="detail"
                       allowFullscreen
                       viewportClassName="canonical-post-media-viewport w-full"
                     />
-                  ) : (
-                    <div className="flex min-h-[420px] items-start justify-center bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.14),transparent_40%),linear-gradient(180deg,rgba(10,10,14,1),rgba(6,6,8,1))] p-8">
-                      <article className="w-full max-w-3xl rounded-[28px] border border-white/8 bg-zinc-950/85 p-8 shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
-                        <div className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-500">Tip / Note</div>
-                        <div className="mt-6 whitespace-pre-wrap text-lg leading-9 text-zinc-100">
-                          {detail.body || publicPostFallback}
-                        </div>
-                      </article>
-                    </div>
-                  )}
-              </div>
-            )}
+                  </div>
+                ) : null}
+
+                {isTextOnlyPost && shouldRenderTextNoteBody ? (
+                  <div className="mt-5 whitespace-pre-wrap text-base leading-8 text-zinc-100">
+                    {publicText}
+                  </div>
+                ) : null}
+
+                {!isTextOnlyPost
+                  && detail.body
+                  && normalizeComparableText(detail.body) !== normalizeComparableText(displayTitle) ? (
+                  <div className="mt-5 whitespace-pre-wrap text-base leading-8 text-zinc-100">
+                    {detail.body}
+                  </div>
+                ) : null}
+
+                <ShowcaseDetailEngagementRow
+                  postId={detail.id}
+                  generationId={detail.generationId}
+                  title={displayTitle}
+                  shareDescription={getPublicPostMetaDescription(detail)}
+                  canRemix={detail.canRemix}
+                  saveCount={detail.saveCount}
+                  commentCount={detail.commentCount}
+                  remixCount={detail.remixCount}
+                  shareVisitCount={detail.shareVisitCount}
+                  showComments={detail.visibility === 'public'}
+                />
+            </article>
+            {commentsBlock}
+            {recipeBlock}
           </section>
 
           <aside
@@ -311,83 +350,50 @@ export default function ShowcaseDetailBody({
             className="canonical-post-actions min-w-0 space-y-4"
           >
             <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(24,24,27,0.86),rgba(10,10,12,0.9))] shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl">
+              {/*
+                * A pointer, not a pitch: the recipe is presented once, in the
+                * document column, but it sits below the whole conversation —
+                * this sticky one-liner keeps it reachable at any scroll depth.
+                */}
               {bundle ? (
                 <Link
-                  data-testid="unlock-summary-link"
+                  data-testid="recipe-jump-link"
                   href="#recipe"
-                  className="m-5 block rounded-[22px] border border-emerald-300/25 bg-[radial-gradient(circle_at_top_left,rgba(52,211,153,0.2),transparent_50%),rgba(16,185,129,0.08)] p-4 text-emerald-50 transition hover:border-emerald-300/45 hover:bg-emerald-500/15 sm:m-6"
+                  className="flex items-center justify-between gap-3 border-b border-white/8 px-5 py-3.5 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/[0.06] sm:px-6"
                 >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="inline-flex items-center gap-2 rounded-full border border-emerald-300/20 bg-black/30 px-3 py-1 text-xs font-semibold">
-                      <ShoppingBag className="h-3.5 w-3.5" />
-                      {isPublicRecipeBundle ? 'Public recipe' : bundle.accessMode === 'free' ? 'Free recipe' : 'Paid recipe'}
+                  <span className="inline-flex min-w-0 items-center gap-2">
+                    <ShoppingBag className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span className="truncate">
+                      {isPublicRecipeBundle
+                        ? 'Public recipe'
+                        : lockedViewer && bundle.accessMode !== 'free'
+                          ? `${bundle.priceQuote.formatted} recipe`
+                          : bundle.accessMode === 'free'
+                            ? 'Free recipe'
+                            : 'Recipe unlocked'}
                     </span>
-                    <span className="rounded-full border border-white/10 bg-black/25 px-3 py-1 text-xs text-emerald-50/80">
-                      {formatUnlockCountLabel(bundle.accessMode, bundle.salesCount)}
-                    </span>
-                  </div>
-                  <div className="mt-3 text-lg font-semibold tracking-tight">
-                    {isPublicRecipeBundle
-                      ? 'Public recipe available'
-                      : bundle.accessMode === 'free'
-                      ? 'Free recipe available'
-                      : `${bundle.priceQuote.formatted} recipe available`}
-                  </div>
-                  <p className="mt-2 text-sm leading-6 text-emerald-50/80">
-                    Includes {previewKindSummary}.
-                  </p>
-                  <div className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950">
-                    {isPublicRecipeBundle ? 'View recipe' : bundle.accessMode === 'free' ? 'View free recipe' : `Unlock recipe for ${bundle.priceQuote.formatted}`}
-                    <ShoppingBag className="h-4 w-4" />
-                  </div>
+                  </span>
+                  <span className="shrink-0 text-xs font-medium text-emerald-200/70">
+                    {lockedViewer && bundle.accessMode !== 'free' && !isPublicRecipeBundle ? 'Unlock' : 'View'}
+                  </span>
                 </Link>
               ) : null}
-
-              <div className={bundle ? 'border-t border-white/8 p-5 sm:p-6' : 'p-5 sm:p-6'}>
+              <div className="p-5 sm:p-6">
                 <ShowcaseDetailActions
                   postId={detail.id}
                   generationId={detail.generationId}
-                  title={detail.title}
+                  title={displayTitle}
                   description={getPublicPostMetaDescription(detail)}
                   creatorUsername={detail.creator.username}
                   canRemix={detail.canRemix}
                   visibility={detail.visibility}
                   viewerIsOwner={Boolean(viewerUserId && viewerUserId === detail.creator.id)}
                   hasResourceBundle={Boolean(detail.resourceBundle)}
+                  showShare={false}
+                  showRemix={false}
                 />
               </div>
             </div>
-
-            {statItems.length > 0 ? (
-              <div className="canonical-post-stats grid gap-2">
-                {statItems.map((item) => {
-                  const Icon = item.icon;
-                  const label = item.value === 1 ? item.singular : item.plural;
-
-                  return (
-                    <div
-                      key={item.plural}
-                      className="flex min-w-0 items-center gap-2 rounded-2xl border border-white/8 bg-white/[0.035] px-3 py-3 text-sm text-zinc-300 backdrop-blur-sm sm:gap-3"
-                    >
-                      <Icon className={`h-4 w-4 shrink-0 ${item.color}`} />
-                      <span className="shrink-0 font-semibold text-zinc-100">{item.value}</span>
-                      <span className="min-w-0 truncate text-zinc-500">{label}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
-
-            {detail.body && !isTextOnlyPost ? (
-              <div data-testid="post-body-panel" className="rounded-[24px] border border-white/8 bg-zinc-900/60 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-sm">
-                <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                  {detail.postFormat === 'mixed' ? 'Note' : 'Post'}
-                </div>
-                <div className="mt-3 max-h-72 overflow-y-auto whitespace-pre-wrap pr-2 text-sm leading-7 text-zinc-300 custom-scrollbar">
-                  {detail.body}
-                </div>
-              </div>
-            ) : null}
 
             {detail.prompt ? (
               <div className="rounded-[24px] border border-white/8 bg-zinc-900/60 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-sm">
@@ -407,25 +413,6 @@ export default function ShowcaseDetailBody({
             />
           </aside>
         </div>
-
-        {resourceBundlePanel ? (
-          <div data-testid="canonical-post-recipe" className="mt-6 min-w-0">
-            {resourceBundlePanel}
-          </div>
-        ) : null}
-
-        {detail.visibility === 'public' ? (
-          <div
-            data-testid="canonical-post-comments"
-            className="mt-6 min-w-0 rounded-[24px] border border-white/8 bg-zinc-900/60 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-sm sm:p-6"
-          >
-            <PostComments
-              postId={detail.id}
-              postCreatorId={detail.creator.id}
-              commentCount={detail.commentCount}
-            />
-          </div>
-        ) : null}
       </div>
 
       {bundle && lockedViewer ? (

@@ -20,6 +20,10 @@ interface ShowcaseDetailActionsProps {
   visibility: 'public' | 'unlisted';
   viewerIsOwner: boolean;
   hasResourceBundle: boolean;
+  /** The document's engagement row renders Share instead. */
+  showShare?: boolean;
+  /** The document's engagement row renders Remix instead. */
+  showRemix?: boolean;
 }
 
 export default function ShowcaseDetailActions({
@@ -32,6 +36,8 @@ export default function ShowcaseDetailActions({
   visibility,
   viewerIsOwner,
   hasResourceBundle,
+  showShare = true,
+  showRemix = true,
 }: ShowcaseDetailActionsProps) {
   const router = useRouter();
   const { session, user } = useAuth();
@@ -212,16 +218,18 @@ export default function ShowcaseDetailActions({
   return (
     <div className="space-y-4">
       <div className="grid gap-2 sm:grid-cols-2">
-        <PublicShareButton
-          generationId={postId}
-          title={title}
-          description={description}
-          sourceSurface="detail-page"
-          accessToken={session?.access_token ?? null}
-          className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08]"
-        />
+        {showShare ? (
+          <PublicShareButton
+            generationId={postId}
+            title={title}
+            description={description}
+            sourceSurface="detail-page"
+            accessToken={session?.access_token ?? null}
+            className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08]"
+          />
+        ) : null}
 
-        {canRemix ? (
+        {canRemix && showRemix ? (
           <button
             type="button"
             onClick={handleRemix}

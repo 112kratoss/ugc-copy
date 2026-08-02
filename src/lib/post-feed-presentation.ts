@@ -8,10 +8,15 @@ import type { ShowcaseFeedItem } from '@/lib/showcase';
  * clients share no code, so the rules are duplicated and each side unit-tests
  * them. Change one, change the other — `post-feed-presentation.test.ts` and
  * `home-feed-view-model.test.ts` assert the same cases.
+ *
+ * Deliberate divergence (2026-08): web presents a text post Reddit-style — an
+ * unframed six-line clamp with no "Read more", because the whole card already
+ * opens the post. Mobile keeps its framed eight-line body with in-place
+ * expansion, where there is no equivalent whole-card affordance.
  */
 export type PostPreviewKind = 'media' | 'text' | 'mixed';
 
-const TEXT_BODY_CLAMP_LINES = 8;
+const TEXT_BODY_CLAMP_LINES = 6;
 const MIXED_BODY_CLAMP_LINES = 3;
 const MEDIA_BODY_CLAMP_LINES = 2;
 
@@ -32,7 +37,11 @@ export function resolvePostPreviewKind(item: ShowcaseFeedItem): PostPreviewKind 
     return 'media';
 }
 
-export function getPostFeedTitle(item: ShowcaseFeedItem, kind: PostPreviewKind) {
+/** Structural pick so the post detail page (a different DTO) can reuse it. */
+export function getPostFeedTitle(
+    item: Pick<ShowcaseFeedItem, 'title' | 'prompt' | 'body' | 'creationMode' | 'mediaKind' | 'category'>,
+    kind: PostPreviewKind
+) {
     const title = item.title?.trim();
     if (title && !PLACEHOLDER_TITLE.test(title)) return title;
 
@@ -63,11 +72,6 @@ export function getPostBodyClampLines(kind: PostPreviewKind) {
     if (kind === 'text') return TEXT_BODY_CLAMP_LINES;
     if (kind === 'mixed') return MIXED_BODY_CLAMP_LINES;
     return MEDIA_BODY_CLAMP_LINES;
-}
-
-/** A text post is the post, so it reads at body size in its own panel. */
-export function isFramedPostBody(kind: PostPreviewKind) {
-    return kind === 'text';
 }
 
 export function getPostCategoryLabel(item: ShowcaseFeedItem) {
@@ -137,7 +141,6 @@ export interface PostFeedCard {
     title: string;
     body: string;
     clampLines: number;
-    framedBody: boolean;
     categoryLabel: string;
     /**
      * Creation context for media posts — `Image · GPT Image 2 · Remixable` —
@@ -155,12 +158,8 @@ export interface PostFeedCard {
 
 /** Width the feed column gives body text, used only for the line estimate. */
 export const FEED_BODY_WIDTH = 620;
-const TEXT_BODY_FONT_SIZE = 16;
-const COMPACT_BODY_FONT_SIZE = 14;
-
-export function getPostBodyFontSize(kind: PostPreviewKind) {
-    return kind === 'text' ? TEXT_BODY_FONT_SIZE : COMPACT_BODY_FONT_SIZE;
-}
+/** Every kind renders its body at the same size; only the estimate reads this. */
+const BODY_FONT_SIZE = 14;
 
 /**
  * Model ids are internal slugs (`gpt-image-2`); creators should read the
@@ -214,7 +213,6 @@ export function buildPostFeedCard(item: ShowcaseFeedItem, now = new Date()): Pos
         title: getPostFeedTitle(item, kind),
         body,
         clampLines,
-        framedBody: isFramedPostBody(kind),
         categoryLabel: getPostCategoryLabel(item),
         metadataLabel: getPostFeedMetadataLabel(item, kind),
         creatorLabel: item.creator.username ? `@${item.creator.username}` : creatorName,
@@ -222,7 +220,10 @@ export function buildPostFeedCard(item: ShowcaseFeedItem, now = new Date()): Pos
         saveLabel: formatActionLabel(item.saveCount, 'Save'),
         commentLabel: formatActionLabel(item.commentCount, 'Comment'),
         remixLabel: item.remixCount > 0 ? `Remix · ${formatCompactCount(item.remixCount)}` : 'Remix',
-        canExpandBody: estimateWrappedLineCount(body, FEED_BODY_WIDTH, getPostBodyFontSize(kind)) > clampLines,
+        // A text post never expands in place — the card itself opens the post,
+        // so a clamped body ends in an ellipsis that reads as "there is more".
+        canExpandBody: kind !== 'text'
+            && estimateWrappedLineCount(body, FEED_BODY_WIDTH, BODY_FONT_SIZE) > clampLines,
     };
 }
 
