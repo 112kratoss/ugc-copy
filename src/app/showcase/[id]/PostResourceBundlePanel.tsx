@@ -701,7 +701,9 @@ export default function PostResourceBundlePanel({
   // One renderer for every unlocked item, sectioned or not: media preview,
   // title, description, file facts, a scope line only when narrowed, then the
   // actions. No role or remix-use enums — those are composer vocabulary.
-  const renderResourceItem = (item: PostResourceItem, key: string) => {
+  // `suppressTitle` avoids the stutter of a lone item titled after its group
+  // ("PROMPT" over "Prompt") — the eyebrow already said it.
+  const renderResourceItem = (item: PostResourceItem, key: string, suppressTitle = false) => {
     const scopeLabel = formatResourceScopeLabel(item.scope);
     const fileMeta = item.storagePath
       ? [item.contentType, formatFileSize(item.sizeBytes)].filter(Boolean).join(' · ')
@@ -712,7 +714,9 @@ export default function PostResourceBundlePanel({
         {renderResourceItemMediaPreview(item)}
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-sm font-semibold text-white">{item.title}</div>
+            {suppressTitle ? null : (
+              <div className="text-sm font-semibold text-white">{item.title}</div>
+            )}
             {item.description ? (
               <p className="mt-1 text-sm leading-6 text-zinc-400">{item.description}</p>
             ) : null}
@@ -773,6 +777,11 @@ export default function PostResourceBundlePanel({
       </div>
     );
   };
+
+  const soloItemEchoesGroup = (group: { type: PostResourceItemType; items: PostResourceItem[] }) =>
+    group.items.length === 1
+    && group.items[0].title.trim().toLowerCase()
+      === getPostResourceItemTypeLabel(group.type, 1).trim().toLowerCase();
 
   return (
     <section id="recipe" className="min-w-0 scroll-mt-24">
@@ -1004,7 +1013,7 @@ export default function PostResourceBundlePanel({
                           </div>
                           <div className="mt-2 space-y-4">
                             {group.items.map((item, index) =>
-                              renderResourceItem(item, `${sectionGroup.id}:${item.type}:${item.title}:${index}`))}
+                              renderResourceItem(item, `${sectionGroup.id}:${item.type}:${item.title}:${index}`, soloItemEchoesGroup(group)))}
                           </div>
                         </div>
                       ))}
@@ -1021,7 +1030,7 @@ export default function PostResourceBundlePanel({
                     </div>
                     <div className="mt-2 space-y-4">
                       {group.items.map((item, index) =>
-                        renderResourceItem(item, `${item.type}:${item.title}:${index}`))}
+                        renderResourceItem(item, `${item.type}:${item.title}:${index}`, soloItemEchoesGroup(group)))}
                     </div>
                   </div>
                 ))}

@@ -266,13 +266,15 @@ export default function ShowcaseDetailActions({
       ) : null}
 
       {viewerIsOwner ? (
-        <details className="group rounded-[22px] border border-white/8 bg-black/25">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.03] [&::-webkit-details-marker]:hidden">
+        // Chrome-less: the rail card already draws the border, so a nested
+        // card here would inset this row from every other one.
+        <details className="group -mx-5 -mb-5 border-t border-white/8 sm:-mx-6 sm:-mb-6">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-3.5 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.03] sm:px-6 [&::-webkit-details-marker]:hidden">
             <span>Owner tools</span>
             <span className="text-xs font-medium text-zinc-500 group-open:hidden">Edit, visibility, archive</span>
             <span className="hidden text-xs font-medium text-zinc-500 group-open:inline">Hide tools</span>
           </summary>
-          <div className="flex flex-wrap gap-2 border-t border-white/8 px-4 pb-4 pt-3">
+          <div className="flex flex-wrap gap-2 border-t border-white/8 px-5 pb-4 pt-3 sm:px-6">
             <Link
               href={`/post/${postId}/edit`}
               className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"

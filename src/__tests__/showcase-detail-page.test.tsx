@@ -220,6 +220,7 @@ describe('Showcase detail page', () => {
       params: Promise.resolve({ id: 'post-1' }),
     }));
 
+    const head = screen.getByTestId('canonical-post-head');
     const media = screen.getByTestId('canonical-post-media');
     const actions = screen.getByTestId('canonical-post-actions');
     const heading = screen.getByRole('heading', { level: 1, name: 'Shared creation' });
@@ -227,10 +228,13 @@ describe('Showcase detail page', () => {
     const engagement = screen.getByTestId('showcase-detail-engagement-row');
     const mediaViewport = container.querySelector('[data-showcase-media-viewport]');
 
-    // No identity side card: the title leads the document, media follows it.
+    // No identity side card. The masthead is its own grid row, which is what
+    // lets the rail start level with the media instead of the byline.
     expect(screen.queryByTestId('canonical-post-identity')).not.toBeInTheDocument();
-    expect(media).toContainElement(heading);
+    expect(head).toContainElement(heading);
+    expect(head).toHaveTextContent('@creator-name');
     expect(media).toContainElement(frame);
+    expect(head.compareDocumentPosition(media) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(heading.compareDocumentPosition(frame) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(frame.compareDocumentPosition(engagement) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(media.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -352,8 +356,9 @@ describe('Showcase detail page', () => {
     expect(screen.queryByTestId('canonical-post-identity')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 1, name: 'Three hooks that keep working' })).toBeInTheDocument();
     expect(screen.getAllByText('Three hooks that keep working')).toHaveLength(1);
-    expect(screen.getByTestId('text-detail-note')).toHaveTextContent('@creator-name');
-    expect(screen.getByTestId('text-detail-note')).toHaveTextContent('Tip / note');
+    // Attribution sits in the masthead row; the note keeps the writing.
+    expect(screen.getByTestId('canonical-post-head')).toHaveTextContent('@creator-name');
+    expect(screen.getByTestId('canonical-post-head')).toHaveTextContent('Tip / note');
 
     // The chip bar is media furniture; a written note carries its own byline.
     expect(screen.queryByText(/shared post/i)).not.toBeInTheDocument();

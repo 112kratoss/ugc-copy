@@ -141,6 +141,16 @@ export default function ShowcaseDetailBody({
   const shouldRenderTextNoteBody =
     isTextOnlyPost &&
     normalizeComparableText(publicText) !== normalizeComparableText(displayTitle);
+  // Composers auto-fill the description with the generation setup, which is
+  // exactly what the recipe's notes hold — showing both prints the settings
+  // twice, once as a mangled lede. The recipe is the better home for it.
+  const bundleNotesText = bundle?.resources?.notesMarkdown
+    ?? bundle?.resources?.items?.find((item) => item.type === 'note' && item.textContent)?.textContent
+    ?? null;
+  const shouldRenderLede = !isTextOnlyPost
+    && Boolean(detail.description)
+    && (!bundleNotesText
+      || normalizeComparableText(detail.description) !== normalizeComparableText(bundleNotesText));
   const resourceBundlePanel = bundle ? (
     <PostResourceBundlePanel
       postId={detail.id}
@@ -196,7 +206,7 @@ export default function ShowcaseDetailBody({
   const recipeBlock = resourceBundlePanel ? (
     <div
       data-testid="canonical-post-recipe"
-      className="mt-8 w-full min-w-0 max-w-3xl border-t border-white/8 pt-8"
+      className="mt-8 w-full min-w-0 max-w-4xl border-t border-white/8 pt-8"
     >
       {resourceBundlePanel}
     </div>
@@ -205,7 +215,7 @@ export default function ShowcaseDetailBody({
     <div
       id="comments"
       data-testid="canonical-post-comments"
-      className="mt-8 w-full min-w-0 max-w-3xl scroll-mt-24"
+      className="mt-8 w-full min-w-0 max-w-4xl scroll-mt-24"
     >
       <PostComments
         postId={detail.id}
@@ -239,20 +249,15 @@ export default function ShowcaseDetailBody({
         ) : null}
 
         <div className="canonical-post-layout">
-          <section
-            data-testid="canonical-post-media"
-            aria-label="Post content"
-            className="canonical-post-media min-w-0"
+          {/*
+            * The masthead owns its own grid row so the rail can start level
+            * with the media rather than with the byline — attribution reads
+            * above the post, the way a document titles itself.
+            */}
+          <header
+            data-testid="canonical-post-head"
+            className="canonical-post-head w-full min-w-0 max-w-4xl"
           >
-            {/*
-              * One document template for every post kind, the order Reddit
-              * proved: byline, title, media as an attachment, body, then the
-              * engagement row. No card chrome — the post sits on the page.
-              */}
-            <article
-              data-testid={isTextOnlyPost ? 'text-detail-note' : 'media-detail-document'}
-              className="w-full max-w-3xl"
-            >
                 {/* One breath of attribution: who, when, what kind — a single line. */}
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-xs text-zinc-500">
                   {detail.creator.username ? (
@@ -293,29 +298,46 @@ export default function ShowcaseDetailBody({
                   {displayTitle}
                 </h1>
 
-                {!isTextOnlyPost && detail.description ? (
-                  <p className="mt-3 text-sm leading-7 text-zinc-300">
+                {shouldRenderLede ? (
+                  <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-300">
                     {detail.description}
                   </p>
                 ) : null}
+          </header>
 
+          <section
+            data-testid="canonical-post-media"
+            aria-label="Post content"
+            className="canonical-post-media min-w-0"
+          >
+            {/*
+              * The post body: media as an attachment, the writing, then the
+              * engagement row. No card chrome — the post sits on the page.
+              */}
+            <article
+              data-testid={isTextOnlyPost ? 'text-detail-note' : 'media-detail-document'}
+              className="w-full max-w-4xl"
+            >
+                {/*
+                  * A bare wrapper: the carousel's viewport carries the frame
+                  * chrome and now shrinks to the media, so any background here
+                  * would show as bars beside a narrow portrait.
+                  */}
                 {!isTextOnlyPost && detailMediaItems.length > 0 ? (
-                  <div
-                    data-testid="media-detail-frame"
-                    className="mt-5 overflow-hidden rounded-[22px] border border-white/8 bg-black"
-                  >
+                  <div data-testid="media-detail-frame">
                     <ShowcaseMediaCarousel
                       mediaItems={detailMediaItems}
                       title={displayTitle}
                       mode="detail"
                       allowFullscreen
-                      viewportClassName="canonical-post-media-viewport w-full"
+                      viewportClassName="canonical-post-media-viewport w-full border border-white/8"
                     />
                   </div>
                 ) : null}
 
+                {/* First child on a text post — the masthead row already spaced it. */}
                 {isTextOnlyPost && shouldRenderTextNoteBody ? (
-                  <div className="mt-5 whitespace-pre-wrap text-base leading-8 text-zinc-100">
+                  <div className="whitespace-pre-wrap text-base leading-8 text-zinc-100">
                     {publicText}
                   </div>
                 ) : null}
@@ -393,24 +415,24 @@ export default function ShowcaseDetailBody({
                   showRemix={false}
                 />
               </div>
-            </div>
 
-            {detail.prompt ? (
-              <div className="rounded-[24px] border border-white/8 bg-zinc-900/60 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-sm">
-                <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                  {detail.postFormat === 'text' ? 'Workflow notes' : 'Prompt'}
+              {detail.prompt ? (
+                <div className="border-t border-white/8 px-5 py-4 sm:px-6">
+                  <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                    {detail.postFormat === 'text' ? 'Workflow notes' : 'Prompt'}
+                  </div>
+                  <p className="mt-3 max-h-64 overflow-y-auto whitespace-pre-wrap pr-2 text-sm leading-7 text-zinc-300 [overflow-wrap:anywhere] custom-scrollbar">
+                    {detail.prompt}
+                  </p>
                 </div>
-                <p className="mt-3 max-h-64 overflow-y-auto whitespace-pre-wrap pr-2 text-sm leading-7 text-zinc-300 [overflow-wrap:anywhere] custom-scrollbar">
-                  {detail.prompt}
-                </p>
-              </div>
-            ) : null}
+              ) : null}
 
-            <ReportPostButton
-              postId={detail.id}
-              bundleId={detail.resourceBundle?.id ?? null}
-              accessToken={accessToken}
-            />
+              <ReportPostButton
+                postId={detail.id}
+                bundleId={detail.resourceBundle?.id ?? null}
+                accessToken={accessToken}
+              />
+            </div>
           </aside>
         </div>
       </div>

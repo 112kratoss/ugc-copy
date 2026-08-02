@@ -357,6 +357,9 @@ export default function ShowcaseMediaCarousel({
   const frameAspectRatio = aspectRatio === 'auto'
     ? coverAspectRatio ?? '4 / 5'
     : aspectRatio ?? (mode === 'feed' ? '4 / 5' : coverAspectRatio ?? '16 / 10');
+  // Published as a custom property so a height-capped frame can also cap its
+  // width: without it a tall portrait keeps full width and pillarboxes.
+  const numericFrameRatio = typeof frameAspectRatio === 'number' ? frameAspectRatio : null;
   const frameFit = fit ?? (mode === 'feed' ? 'cover' : 'contain');
   const previewUrl = renderedActiveItem.previewUrl ?? null;
   const posterUrl = priorityPoster?.mediaId === renderedActiveItem.id
@@ -375,7 +378,10 @@ export default function ShowcaseMediaCarousel({
       <div
         data-showcase-media-viewport
         className={`group/carousel relative overflow-hidden bg-black ${isDetail ? 'rounded-[22px]' : ''} ${isReel ? 'h-full' : ''} ${onOpen ? 'cursor-pointer' : ''} ${viewportClassName}`}
-        style={isReel ? undefined : { aspectRatio: frameAspectRatio }}
+        style={isReel ? undefined : {
+          aspectRatio: frameAspectRatio,
+          ...(numericFrameRatio ? { '--media-ratio': numericFrameRatio } as React.CSSProperties : {}),
+        }}
         onClick={(event) => {
           if (!onOpen || event.target instanceof HTMLElement && event.target.closest('button, video[controls]')) {
             return;
@@ -488,6 +494,15 @@ export default function ShowcaseMediaCarousel({
               alt={title}
               loading={isDetail ? 'eager' : 'lazy'}
               decoding="async"
+              // A cached image can finish before React attaches `onLoad`, which
+              // would strand the frame on its fallback ratio and letterbox the
+              // media in black. `complete` is the only signal for that case.
+              ref={(image) => {
+                if (!image?.complete || activeIndex !== 0) return;
+                if (image.naturalWidth && image.naturalHeight) {
+                  setCoverAspectRatio(image.naturalWidth / image.naturalHeight);
+                }
+              }}
               onLoad={(event) => {
                 if (activeIndex === 0 && event.currentTarget.naturalWidth && event.currentTarget.naturalHeight) {
                   setCoverAspectRatio(event.currentTarget.naturalWidth / event.currentTarget.naturalHeight);
