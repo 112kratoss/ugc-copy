@@ -1,6 +1,6 @@
 import { FlashList, type FlashListRef, type ListRenderItem, type ViewToken } from '@shopify/flash-list';
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -138,6 +138,8 @@ export function HomeDashboard() {
   const pageWidth = Math.min(width, 430);
   const isCompact = pageWidth < 390;
   const reduceMotion = useReducedMotion();
+  const feedRef = useRef<FlashListRef<HomeFeedCard>>(null);
+  useScrollToTop(feedRef);
   const horizontalPadding = isCompact ? 15 : 18;
   const contentWidth = pageWidth - horizontalPadding * 2;
   const slideWidth = Math.round(contentWidth * 0.82);
@@ -626,6 +628,7 @@ export function HomeDashboard() {
   return (
     <View style={{ flex: 1, backgroundColor: DASHBOARD_COLORS.background, paddingTop: topInset }}>
       <FlashList
+        ref={feedRef}
         data={cards}
         keyExtractor={(card) => card.id}
         renderItem={renderCard}

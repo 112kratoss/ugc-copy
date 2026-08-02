@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
-import { FlashList } from '@shopify/flash-list';
-import { useIsFocused } from '@react-navigation/native';
+import { FlashList, type FlashListRef } from '@shopify/flash-list';
+import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
@@ -467,6 +467,8 @@ function ProfileMediaList({
   title?: string;
   topInset: number;
 }) {
+  const listRef = useRef<FlashListRef<ProfileMediaCard>>(null);
+  useScrollToTop(listRef);
   const { width } = useWindowDimensions();
   const pageWidth = Math.min(width, 430);
   const contentWidth = pageWidth - horizontalPadding * 2;
@@ -486,6 +488,7 @@ function ProfileMediaList({
   return (
     <View {...swipeResponder.panHandlers} style={{ flex: 1, backgroundColor: appTheme.colors.background, paddingTop: topInset }}>
       <FlashList
+        ref={listRef}
         data={isLoading ? [] : cards}
         drawDistance={400}
         extraData={activeTab}

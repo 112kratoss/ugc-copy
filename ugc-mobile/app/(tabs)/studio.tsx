@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useScrollToTop } from '@react-navigation/native';
 import { router } from 'expo-router';
 import {
   BellRing,
@@ -12,6 +13,7 @@ import {
   ToggleRight,
   WandSparkles,
 } from 'lucide-react-native';
+import { useRef } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -59,6 +61,8 @@ export default function StudioScreen() {
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
+  const scrollRef = useRef<ScrollView>(null);
+  useScrollToTop(scrollRef);
   const pageWidth = Math.min(width, 430);
   const isCompact = pageWidth < 390;
   const horizontalPadding = isCompact ? 16 : 18;
@@ -132,6 +136,7 @@ export default function StudioScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: appTheme.colors.background, paddingTop: topInset }}>
       <ScrollView
+        ref={scrollRef}
         bounces={false}
         contentInsetAdjustmentBehavior="never"
         overScrollMode="never"

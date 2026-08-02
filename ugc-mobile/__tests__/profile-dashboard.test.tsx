@@ -16,6 +16,7 @@ vi.mock('expo-router', () => ({
 
 vi.mock('@react-navigation/native', () => ({
   useIsFocused: () => true,
+  useScrollToTop: vi.fn(),
 }));
 
 // react-native mock

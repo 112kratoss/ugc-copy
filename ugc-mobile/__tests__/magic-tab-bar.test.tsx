@@ -90,14 +90,14 @@ const routes = [
   { key: 'profile-key', name: 'profile' },
 ];
 
-function renderTabBar() {
+function renderTabBar(activeIndex = 0) {
   const navigation = {
     emit: vi.fn(() => ({ defaultPrevented: false })),
     navigate: vi.fn(),
     jumpTo: vi.fn(),
   };
   const state = {
-    index: 0,
+    index: activeIndex,
     key: 'tabs-key',
     routeNames: routes.map((route) => route.name),
     routes,
@@ -121,7 +121,7 @@ function renderTabBar() {
   return { tree: tree!, navigation };
 }
 
-describe('MagicTabBar create menu', () => {
+describe('MagicTabBar', () => {
   beforeEach(() => {
     routerState.push.mockClear();
   });
@@ -145,6 +145,36 @@ describe('MagicTabBar create menu', () => {
     });
 
     expect(opaqueBottomFillers).toHaveLength(0);
+  });
+
+  it('emits tabPress before navigating when the active tab is pressed again', () => {
+    const { tree, navigation } = renderTabBar();
+
+    renderer.act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Home' }).props.onPress();
+    });
+
+    expect(navigation.emit).toHaveBeenCalledWith({
+      type: 'tabPress',
+      target: 'home-key',
+      canPreventDefault: true,
+    });
+    expect(navigation.navigate).toHaveBeenCalledWith('index');
+  });
+
+  it('uses the same tabPress contract without resetting an inactive tab', () => {
+    const { tree, navigation } = renderTabBar();
+
+    renderer.act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Showcase' }).props.onPress();
+    });
+
+    expect(navigation.emit).toHaveBeenCalledWith({
+      type: 'tabPress',
+      target: 'showcase-key',
+      canPreventDefault: true,
+    });
+    expect(navigation.navigate).toHaveBeenCalledWith('showcase');
   });
 
   it('opens and closes the action menu from the center button', () => {

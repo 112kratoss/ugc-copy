@@ -1,9 +1,9 @@
-import { FlashList, type ListRenderItem, type ViewToken } from '@shopify/flash-list';
+import { FlashList, type FlashListRef, type ListRenderItem, type ViewToken } from '@shopify/flash-list';
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ImageIcon, MoreVertical, Play, RefreshCw, X } from 'lucide-react-native';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -117,6 +117,8 @@ export default function ShowcaseScreen() {
   const bottomInset = resolvedBottomInset(insets.bottom);
   const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
   const gridLayout = getShowcaseGridLayout(width);
+  const feedRef = useRef<FlashListRef<ShowcaseMasonryCard>>(null);
+  useScrollToTop(feedRef);
   const routeFilterId = resolveMobileShowcaseFeedFilterId(routeParams.filter);
   const routeTool = normalizeShowcaseToolFilter(routeParams.tool);
   const [activeFilterId, setActiveFilterId] = useState<FeedFilterId>(routeFilterId);
@@ -526,6 +528,7 @@ export default function ShowcaseScreen() {
     <WorkspaceSideMenuGestureLayer bottomOffset={tabBarMetrics.contentBottomPadding} enabled={!isSwipingMedia}>
       <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
         <FlashList
+        ref={feedRef}
         contentInsetAdjustmentBehavior="never"
         data={isFirstLoad ? [] : cards}
         drawDistance={SHOWCASE_DRAW_DISTANCE}
