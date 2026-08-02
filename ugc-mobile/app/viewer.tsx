@@ -1890,6 +1890,25 @@ function TextSlide({ item, width, height }: { item: ImmersivePreviewItem; width:
         <Text numberOfLines={8} style={{ color: appTheme.colors.textSecondary, fontSize: 16, lineHeight: 23 }}>
           {item.displayText}
         </Text>
+        {/* The slide clamps; the post page does not. A reel encounter with a
+            long note needs a way out to actually read it. */}
+        {item.showcasePostId ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Read the full post ${item.title}`}
+            onPress={() => router.push(`/post/${item.showcasePostId}` as never)}
+            style={({ pressed }) => ({
+              alignSelf: 'flex-start',
+              minHeight: 32,
+              justifyContent: 'center',
+              opacity: pressed ? appTheme.opacity.pressed : 1,
+            })}
+          >
+            <Text style={{ color: appTheme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>
+              Read full post
+            </Text>
+          </Pressable>
+        ) : null}
       </View>
     </View>
   );

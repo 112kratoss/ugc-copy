@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { router, useLocalSearchParams } from 'expo-router';
+import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import {
   ArrowLeft,
   ChevronRight,
@@ -30,7 +30,11 @@ import { PostDetailsPage } from '@/components/post-details-page';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { env } from '@/lib/env';
 import { useAuth } from '@/lib/auth';
-import { buildImmersiveShowcaseItems, hasImmersiveDetailsPage } from '@/lib/immersive-preview-view-model';
+import {
+  buildImmersiveShowcaseItems,
+  hasImmersiveDetailsPage,
+  immersiveViewerHref,
+} from '@/lib/immersive-preview-view-model';
 import { getImmersiveSlideHint } from '@/lib/immersive-slide-pages';
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
 import { buildTextPostPage } from '@/lib/text-post-page-view-model';
@@ -110,6 +114,16 @@ export default function PostScreen() {
           <ActivityIndicator color={appTheme.colors.primary} />
         )}
       </View>
+    );
+  }
+
+  // This route is the canonical post resolver — shared links land here without
+  // knowing the post's kind. Prose stays; media belongs to the reel.
+  if (item.previewKind !== 'text') {
+    return (
+      <Redirect
+        href={immersiveViewerHref({ source: 'showcase-feed', initialId: item.id }) as never}
+      />
     );
   }
 
