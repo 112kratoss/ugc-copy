@@ -402,12 +402,10 @@ function ResourceAction({ icon, label, onPress }: { icon: React.ReactNode; label
 
 function ScopeSummary({ mediaItems, scope }: { mediaItems: ShowcaseMediaItem[]; scope: PostResourceItemScope | undefined }) {
   const normalizedScope = normalizeScope(scope);
+  // Everything applying to every output is the norm, so saying so on each item
+  // is noise. Only a deliberate narrowing carries information. Matches web.
   if (normalizedScope.kind === 'all') {
-    return (
-      <Text style={{ color: appTheme.colors.faint, ...appTheme.type.caption }}>
-        Applies to all outputs
-      </Text>
-    );
+    return null;
   }
 
   const targets = mediaItems.filter((item) => {

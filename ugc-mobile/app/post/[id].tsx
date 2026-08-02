@@ -176,6 +176,7 @@ export default function PostScreen() {
               active={pageIndex === 1}
               bottomInset={insets.bottom}
               height={height}
+              hostRendersPostText
               item={item}
               onRecreate={() => undefined}
               onSave={() => {

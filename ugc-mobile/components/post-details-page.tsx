@@ -30,6 +30,7 @@ export function PostDetailsPage({
   onUnlockRemix,
   saveLoading,
   sheet = false,
+  hostRendersPostText = false,
   topInset,
   width,
 }: {
@@ -43,6 +44,12 @@ export function PostDetailsPage({
   onUnlockRemix: (item: ImmersivePreviewItem) => void;
   saveLoading: boolean;
   sheet?: boolean;
+  /**
+   * True when the host already shows the post's title and body in full — the
+   * text post page does. Over the reel, where the details page is the only
+   * place the post is named without truncation, it does not.
+   */
+  hostRendersPostText?: boolean;
   topInset: number;
   width: number;
 }) {
@@ -126,6 +133,12 @@ export function PostDetailsPage({
   const canRecreate = item.availableActions.includes('recreate');
   const canUnlockRemix = item.availableActions.includes('unlock-remix');
   const generationInfo = details?.generationInfo ?? null;
+  // A text post derives both `prompt` and `body` from the same paragraph, so
+  // showing the caption after the host already printed it prints it twice.
+  const captionText = hostRendersPostText
+    && normalizeComparable(details.body) === normalizeComparable(item.displayText)
+    ? ''
+    : details.body;
 
   return (
     <View style={{ width, height, backgroundColor: appTheme.colors.app }}>
@@ -144,9 +157,11 @@ export function PostDetailsPage({
           <Text style={{ color: appTheme.colors.faint, ...appTheme.type.label, textTransform: 'uppercase' }}>
             {generationInfo ? 'Creation details' : 'Post details'}
           </Text>
-          <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.pageTitle, fontWeight: '800' }}>
-            {details.title}
-          </Text>
+          {hostRendersPostText ? null : (
+            <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.pageTitle, fontWeight: '800' }}>
+              {details.title}
+            </Text>
+          )}
           <Text style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm, fontWeight: '700' }}>
             {details.creatorLabel} · {details.categoryLabel}
           </Text>
@@ -173,15 +188,15 @@ export function PostDetailsPage({
           </View>
         )}
 
-        <DetailSection title="Prompt" emptyLabel="No prompt provided">
+        <DetailSection title="Prompt">
           {details.prompt ? (
             <CopyableText text={details.prompt} onCopy={copyText} />
           ) : null}
         </DetailSection>
 
-        <DetailSection title="Caption" emptyLabel="No caption provided">
-          {details.body ? (
-            <CopyableText text={details.body} onCopy={copyText} />
+        <DetailSection title="Caption">
+          {captionText ? (
+            <CopyableText text={captionText} onCopy={copyText} />
           ) : null}
         </DetailSection>
 
@@ -217,21 +232,18 @@ export function PostDetailsPage({
           />
         </View>
 
-        <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: unlock ? `${accentColor(unlockAccent)}55` : appTheme.colors.border, backgroundColor: appTheme.colors.surfaceStrong, padding: appTheme.spacing.card, gap: appTheme.spacing.gap }}>
+        {/* Most posts carry no unlock. A card announcing that absence is the
+            page telling the reader about something that is not there. */}
+        {unlock ? (
+        <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: `${accentColor(unlockAccent)}55`, backgroundColor: appTheme.colors.surfaceStrong, padding: appTheme.spacing.card, gap: appTheme.spacing.gap }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
             <View style={{ flex: 1, gap: 5 }}>
               <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>Creator unlocks</Text>
-              {unlock ? (
-                <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
-                  {bundle?.previewText ?? unlock.previewText ?? 'Reusable resources are attached to this post.'}
-                </Text>
-              ) : (
-                <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
-                  No unlock attached.
-                </Text>
-              )}
+              <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
+                {bundle?.previewText ?? unlock.previewText ?? 'Reusable resources are attached to this post.'}
+              </Text>
             </View>
-            {unlock && unlockPriceLabel ? <Pill label={unlockPriceLabel} accent={unlockAccent} /> : null}
+            {unlockPriceLabel ? <Pill label={unlockPriceLabel} accent={unlockAccent} /> : null}
           </View>
 
           {unlock ? (
@@ -274,6 +286,7 @@ export function PostDetailsPage({
             </>
           ) : null}
         </View>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -288,13 +301,24 @@ function DetailStat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function DetailSection({ title, emptyLabel, children }: { title: string; emptyLabel: string; children: React.ReactNode }) {
+/**
+ * A section only exists when it has something to say. A heading over
+ * "No prompt provided" is a label for an absence — it costs a line of the
+ * reader's attention to tell them nothing.
+ */
+function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
+  if (!children) return null;
+
   return (
     <View style={{ gap: 8 }}>
       <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>{title}</Text>
-      {children || <Text style={{ color: appTheme.colors.faint, ...appTheme.type.bodySm }}>{emptyLabel}</Text>}
+      {children}
     </View>
   );
+}
+
+function normalizeComparable(value: string) {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 function CopyableText({ text, onCopy }: { text: string; onCopy: (text: string) => Promise<void> }) {
