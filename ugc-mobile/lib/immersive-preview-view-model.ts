@@ -323,7 +323,8 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
     creatorUsername: item.creator.username?.trim() || null,
     createdAt: item.createdAt ?? null,
     badge: showcaseBadge(item),
-    saveLabel: formatCompactCount(item.saveCount),
+    // Verb until there is real social proof — a young post reads "Save", not "0".
+    saveLabel: item.saveCount > 0 ? formatCompactCount(item.saveCount) : 'Save',
     saveCount: item.saveCount,
     commentLabel: formatCompactCount(item.commentCount),
     commentCount: item.commentCount ?? 0,
@@ -524,7 +525,7 @@ function ownerPostToImmersiveItem(
     creatorId: owner.creatorId ?? null,
     createdAt: item.createdAt ?? null,
     badge: ownerPostBadge(item),
-    saveLabel: '0',
+    saveLabel: 'Save',
     saveCount: 0,
     commentLabel: formatCompactCount(item.commentCount),
     commentCount: item.commentCount,

@@ -108,6 +108,14 @@ function RootLayoutNav() {
                     contentStyle: { backgroundColor: appTheme.colors.background },
                   }}
                 />
+                <Stack.Screen
+                  name="post/[id]"
+                  options={{
+                    headerShown: false,
+                    animation: reducedMotion ? 'none' : 'simple_push',
+                    contentStyle: { backgroundColor: appTheme.colors.app },
+                  }}
+                />
                 <Stack.Screen name="viewer" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
                 <Stack.Screen name="profile-media-feed" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
                 <Stack.Screen name="showcase" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />

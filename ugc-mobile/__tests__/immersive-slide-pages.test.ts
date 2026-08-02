@@ -93,8 +93,12 @@ describe('immersive slide pages', () => {
       mediaKind: null,
       previewKind: 'text',
     });
+    const pages = buildImmersiveSlidePages(post);
 
-    expect(buildImmersiveSlidePages(post).map((page) => page.type)).toEqual(['text', 'details']);
+    expect(pages.map((page) => page.type)).toEqual(['text', 'details']);
+    expect(getImmersiveSlideHint({ item: post, pages, currentHorizontalIndex: 0 })).toBe('Swipe left for details');
+    // A text post has no media to swipe back to.
+    expect(getImmersiveSlideHint({ item: post, pages, currentHorizontalIndex: 1 })).toBe('Swipe right for the post');
   });
 
   it('adds a details page for creation-only generation items', () => {

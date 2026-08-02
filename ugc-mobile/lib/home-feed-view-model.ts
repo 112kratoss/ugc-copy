@@ -63,13 +63,13 @@ export interface HomeFeedCard {
 }
 
 /**
- * Where a tap on the card body should land. Text posts have no media, so the
- * immersive viewer — a full-screen media pager — is the wrong destination for
- * them; the discussion is the payload instead.
+ * Where a tap on the card body should land. The immersive viewer is the
+ * showcase reel — a vertical swipe there pages through other showcase posts —
+ * so a text post opens its own screen instead of joining that reel.
  */
-export type HomeFeedCardOpenTarget = 'viewer' | 'comments';
+export type HomeFeedCardOpenTarget = 'viewer' | 'post';
 
-const TEXT_BODY_LINES = 8;
+const TEXT_BODY_LINES = 6;
 const MIXED_BODY_LINES = 3;
 const MEDIA_BODY_LINES = 2;
 const MIN_MEDIA_HEIGHT = 180;
@@ -77,13 +77,8 @@ const MAX_MEDIA_HEIGHT_RATIO = 1.25;
 const FALLBACK_MEDIA_ASPECT_RATIO = 4 / 5;
 const FALLBACK_VIDEO_ASPECT_RATIO = 16 / 9;
 
-/** Body font sizes the card renders at, mirrored here so line estimates match. */
-const TEXT_BODY_FONT_SIZE = 16;
-const COMPACT_BODY_FONT_SIZE = 14;
-/** Accent rail plus left and right padding the framed text panel adds. */
-export const TEXT_PANEL_RAIL_WIDTH = 3;
-export const TEXT_PANEL_PADDING = 14;
-const TEXT_PANEL_HORIZONTAL_CHROME = TEXT_PANEL_RAIL_WIDTH + TEXT_PANEL_PADDING * 2;
+/** Every kind renders its body at one size; only the line estimate reads this. */
+const BODY_FONT_SIZE = 14;
 /**
  * Mean glyph advance as a fraction of font size for the system UI face. Only
  * used to decide whether "Read more" is worth offering, so a rough estimate is
@@ -312,20 +307,8 @@ function homeCardBodyLines(previewKind: HomeFeedCard['previewKind']) {
   return MEDIA_BODY_LINES;
 }
 
-/**
- * A text post is the only card whose body is the post itself, so it reads at
- * body size inside its own panel; every other kind captions media below it.
- */
-export function getHomeFeedBodyFontSize(card: HomeFeedCard) {
-  return card.previewKind === 'text' ? TEXT_BODY_FONT_SIZE : COMPACT_BODY_FONT_SIZE;
-}
-
-export function isFramedHomeFeedBody(card: HomeFeedCard) {
-  return card.previewKind === 'text';
-}
-
 export function getHomeFeedCardOpenTarget(card: HomeFeedCard): HomeFeedCardOpenTarget {
-  return card.previewKind === 'text' ? 'comments' : 'viewer';
+  return card.previewKind === 'text' ? 'post' : 'viewer';
 }
 
 /**
@@ -345,15 +328,16 @@ export function estimateWrappedLineCount(text: string, width: number, fontSize: 
   }, 0);
 }
 
-/** True when the collapsed body hides content worth a "Read more" tap. */
+/**
+ * True when the collapsed body hides content worth a "Read more" tap.
+ *
+ * A text post never expands in place — tapping the card opens the post, so the
+ * clamp ends in an ellipsis that already reads as "there is more".
+ */
 export function canExpandHomeFeedBody(card: HomeFeedCard, contentWidth: number) {
-  if (!card.bodyText) return false;
+  if (!card.bodyText || card.previewKind === 'text') return false;
 
-  const width = isFramedHomeFeedBody(card)
-    ? contentWidth - TEXT_PANEL_HORIZONTAL_CHROME
-    : contentWidth;
-
-  return estimateWrappedLineCount(card.bodyText, width, getHomeFeedBodyFontSize(card)) > card.bodyLines;
+  return estimateWrappedLineCount(card.bodyText, contentWidth, BODY_FONT_SIZE) > card.bodyLines;
 }
 
 function resolveHomePreviewKind(
