@@ -10,7 +10,15 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 
 import {
   APP_NAV_ITEMS,
@@ -31,14 +39,102 @@ const subscribeToHydration = () => () => undefined;
 const getHydratedSnapshot = () => true;
 const getServerHydratedSnapshot = () => false;
 
-function DesktopNavItem({ item, active }: { item: AppNavItem; active: boolean }) {
+const RESTORABLE_TAB_IDS = new Set<AppNavItem['id']>([
+  'home',
+  'showcase',
+  'alerts',
+  'profile',
+]);
+const TAB_SCROLL_POSITION_PREFIX = 'magicbooklet:app-tab-scroll:';
+const PENDING_TAB_RESTORE_KEY = 'magicbooklet:pending-app-tab-restore';
+const MIN_RESTORE_FRAMES = 8;
+const MAX_RESTORE_FRAMES = 60;
+
+type AppNavClickHandler = (
+  event: ReactMouseEvent<HTMLAnchorElement>,
+  item: AppNavItem
+) => void;
+
+function isRestorableTab(item: AppNavItem) {
+  return RESTORABLE_TAB_IDS.has(item.id);
+}
+
+function getRestorableTabId(pathname: string) {
+  if (pathname === '/' || pathname === '/home') return 'home';
+
+  const item = APP_NAV_ITEMS.find(
+    (candidate) => RESTORABLE_TAB_IDS.has(candidate.id) && candidate.href === pathname
+  );
+  return item?.id ?? null;
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+}
+
+function readStoredScrollPosition(id: AppNavItem['id']) {
+  try {
+    const storedValue = window.sessionStorage.getItem(`${TAB_SCROLL_POSITION_PREFIX}${id}`);
+    if (storedValue === null) return null;
+    const value = Number(storedValue);
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeScrollPosition(id: AppNavItem['id'], top: number) {
+  try {
+    window.sessionStorage.setItem(
+      `${TAB_SCROLL_POSITION_PREFIX}${id}`,
+      String(Math.max(0, top))
+    );
+  } catch {
+    // Session storage can be unavailable in privacy-restricted browsers.
+  }
+}
+
+function readPendingRestore() {
+  try {
+    const id = window.sessionStorage.getItem(PENDING_TAB_RESTORE_KEY);
+    return id && RESTORABLE_TAB_IDS.has(id as AppNavItem['id'])
+      ? id as AppNavItem['id']
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function storePendingRestore(id: AppNavItem['id'] | null) {
+  try {
+    if (id) {
+      window.sessionStorage.setItem(PENDING_TAB_RESTORE_KEY, id);
+    } else {
+      window.sessionStorage.removeItem(PENDING_TAB_RESTORE_KEY);
+    }
+  } catch {
+    // The in-memory ref still covers layouts that remain mounted.
+  }
+}
+
+function DesktopNavItem({
+  item,
+  active,
+  onNavigate,
+}: {
+  item: AppNavItem;
+  active: boolean;
+  onNavigate: AppNavClickHandler;
+}) {
   const Icon = item.icon;
 
   return (
     <Link
       href={item.href}
       prefetch={false}
+      scroll={isRestorableTab(item) ? false : undefined}
       aria-current={active ? 'page' : undefined}
+      onClick={(event) => onNavigate(event, item)}
       className={`ui-focus-ring group relative flex min-h-11 items-center gap-3 rounded-[14px] border px-3 py-2 text-[13px] font-semibold transition ${
         active
           ? 'border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary-soft)] text-[var(--ui-text-primary)]'
@@ -64,10 +160,12 @@ function DrawerNavItem({
   item,
   active,
   onClick,
+  onNavigate,
 }: {
   item: AppNavItem;
   active: boolean;
   onClick: () => void;
+  onNavigate: AppNavClickHandler;
 }) {
   const Icon = item.icon;
 
@@ -75,8 +173,12 @@ function DrawerNavItem({
     <Link
       href={item.href}
       prefetch={false}
+      scroll={isRestorableTab(item) ? false : undefined}
       aria-current={active ? 'page' : undefined}
-      onClick={onClick}
+      onClick={(event) => {
+        onClick();
+        onNavigate(event, item);
+      }}
       className={`ui-focus-ring flex min-h-12 items-center gap-3 rounded-2xl border px-3 py-3 text-sm font-bold transition ${
         active
           ? 'border-[rgba(255,122,89,0.28)] bg-[var(--ui-primary-soft)] text-[var(--ui-text-primary)]'
@@ -89,7 +191,15 @@ function DrawerNavItem({
   );
 }
 
-function BottomNavItem({ item, active }: { item: AppNavItem; active: boolean }) {
+function BottomNavItem({
+  item,
+  active,
+  onNavigate,
+}: {
+  item: AppNavItem;
+  active: boolean;
+  onNavigate: AppNavClickHandler;
+}) {
   const Icon = item.icon;
 
   if (item.id === 'create') {
@@ -98,6 +208,7 @@ function BottomNavItem({ item, active }: { item: AppNavItem; active: boolean }) 
         href={item.href}
         prefetch={false}
         aria-current={active ? 'page' : undefined}
+        onClick={(event) => onNavigate(event, item)}
         aria-label="Create"
         className="ui-focus-ring relative flex min-w-0 flex-1 flex-col items-center justify-end gap-0.5 rounded-2xl pb-1 text-xs font-extrabold text-[var(--ui-primary)]"
       >
@@ -113,7 +224,9 @@ function BottomNavItem({ item, active }: { item: AppNavItem; active: boolean }) 
     <Link
       href={item.href}
       prefetch={false}
+      scroll={isRestorableTab(item) ? false : undefined}
       aria-current={active ? 'page' : undefined}
+      onClick={(event) => onNavigate(event, item)}
       className={`ui-focus-ring relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-[18px] px-1 py-2 text-[11px] font-bold transition ${
         active
           ? 'bg-[var(--ui-primary-soft)] text-[var(--ui-primary)]'
@@ -163,6 +276,10 @@ export default function AppShellClient({ children }: { children: React.ReactNode
   const [mobileOpen, setMobileOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const scrollPositionsRef = useRef<Partial<Record<AppNavItem['id'], number>>>({});
+  const pendingRestoreRef = useRef<AppNavItem['id'] | null>(null);
+  const restoreFrameRef = useRef<number | null>(null);
+  const isRestoringRef = useRef(false);
 
   const activeItem = useMemo(() => getActiveAppNavItem(pathname), [pathname]);
   const title = useMemo(() => getAppShellTitle(pathname), [pathname]);
@@ -172,6 +289,109 @@ export default function AppShellClient({ children }: { children: React.ReactNode
       .map((id) => APP_NAV_ITEMS.find((item) => item.id === id))
       .filter((item): item is AppNavItem => Boolean(item));
   }, []);
+
+  const handleAppNavClick = useCallback<AppNavClickHandler>((event, item) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return;
+    }
+
+    const currentTabId = getRestorableTabId(routePathname);
+    const wasRestoring = isRestoringRef.current;
+    if (restoreFrameRef.current !== null) {
+      window.cancelAnimationFrame(restoreFrameRef.current);
+      restoreFrameRef.current = null;
+    }
+    isRestoringRef.current = false;
+
+    if (currentTabId && !wasRestoring) {
+      scrollPositionsRef.current[currentTabId] = window.scrollY;
+      storeScrollPosition(currentTabId, window.scrollY);
+    }
+
+    if (!isRestorableTab(item)) {
+      pendingRestoreRef.current = null;
+      storePendingRestore(null);
+      return;
+    }
+
+    if (currentTabId === item.id) {
+      event.preventDefault();
+      pendingRestoreRef.current = null;
+      storePendingRestore(null);
+      scrollPositionsRef.current[item.id] = 0;
+      storeScrollPosition(item.id, 0);
+      window.scrollTo({
+        top: 0,
+        behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+      });
+      return;
+    }
+
+    pendingRestoreRef.current = item.id;
+    storePendingRestore(item.id);
+  }, [routePathname]);
+
+  useEffect(() => {
+    const currentTabId = getRestorableTabId(routePathname);
+    if (!currentTabId) return;
+
+    const captureScrollPosition = () => {
+      if (isRestoringRef.current) return;
+      scrollPositionsRef.current[currentTabId] = window.scrollY;
+      storeScrollPosition(currentTabId, window.scrollY);
+    };
+
+    window.addEventListener('scroll', captureScrollPosition, { passive: true });
+    return () => window.removeEventListener('scroll', captureScrollPosition);
+  }, [routePathname]);
+
+  useEffect(() => {
+    const currentTabId = getRestorableTabId(routePathname);
+    const pendingRestore = pendingRestoreRef.current ?? readPendingRestore();
+    if (!currentTabId || pendingRestore !== currentTabId) return;
+
+    const top = scrollPositionsRef.current[currentTabId]
+      ?? readStoredScrollPosition(currentTabId)
+      ?? 0;
+    let frameCount = 0;
+    let stableFrameCount = 0;
+    isRestoringRef.current = true;
+
+    const finishRestore = () => {
+      restoreFrameRef.current = null;
+      isRestoringRef.current = false;
+      pendingRestoreRef.current = null;
+      storePendingRestore(null);
+    };
+
+    const restore = () => {
+      window.scrollTo({ top, behavior: 'auto' });
+      frameCount += 1;
+      stableFrameCount = Math.abs(window.scrollY - top) <= 1
+        ? stableFrameCount + 1
+        : 0;
+
+      if (
+        (frameCount >= MIN_RESTORE_FRAMES && stableFrameCount >= MIN_RESTORE_FRAMES)
+        || frameCount >= MAX_RESTORE_FRAMES
+      ) {
+        finishRestore();
+        return;
+      }
+
+      restoreFrameRef.current = window.requestAnimationFrame(restore);
+    };
+
+    restore();
+
+    return () => {
+      if (restoreFrameRef.current !== null) {
+        window.cancelAnimationFrame(restoreFrameRef.current);
+        restoreFrameRef.current = null;
+      }
+      isRestoringRef.current = false;
+    };
+  }, [routePathname]);
 
   useEffect(() => {
     if (!mobileOpen) return;
@@ -243,7 +463,12 @@ export default function AppShellClient({ children }: { children: React.ReactNode
                 {group.ids.map((id) => {
                   const item = APP_NAV_ITEMS.find((candidate) => candidate.id === id);
                   return item ? (
-                    <DesktopNavItem key={item.id} item={item} active={activeItem?.id === item.id} />
+                    <DesktopNavItem
+                      key={item.id}
+                      item={item}
+                      active={activeItem?.id === item.id}
+                      onNavigate={handleAppNavClick}
+                    />
                   ) : null;
                 })}
               </div>
@@ -317,7 +542,12 @@ export default function AppShellClient({ children }: { children: React.ReactNode
         aria-hidden={mobileOpen ? true : undefined}
       >
         {visibleBottomItems.map((item) => (
-          <BottomNavItem key={item.id} item={item} active={activeItem?.id === item.id} />
+          <BottomNavItem
+            key={item.id}
+            item={item}
+            active={activeItem?.id === item.id}
+            onNavigate={handleAppNavClick}
+          />
         ))}
       </nav>
 
@@ -364,6 +594,7 @@ export default function AppShellClient({ children }: { children: React.ReactNode
                           item={item}
                           active={activeItem?.id === item.id}
                           onClick={() => setMobileOpen(false)}
+                          onNavigate={handleAppNavClick}
                         />
                       ) : null;
                     })}

@@ -8,6 +8,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import AppShellClient from '@/app/components/AppShellClient';
 
 let mockedPathname = '/';
+let mockedScrollY = 0;
+let mockedReducedMotion = false;
+const scrollToMock = vi.fn((options: ScrollToOptions | number) => {
+  mockedScrollY = typeof options === 'number' ? options : options.top ?? 0;
+});
 
 vi.mock('next/navigation', () => ({
   usePathname: () => mockedPathname,
@@ -15,10 +20,20 @@ vi.mock('next/navigation', () => ({
 }));
 
 vi.mock('next/link', () => ({
-  default: ({ prefetch, ...props }: ComponentPropsWithoutRef<'a'> & { prefetch?: boolean }) => (
+  default: ({
+    prefetch,
+    scroll,
+    onClick,
+    ...props
+  }: ComponentPropsWithoutRef<'a'> & { prefetch?: boolean; scroll?: boolean }) => (
     <a
       {...props}
       data-prefetch={prefetch === undefined ? undefined : String(prefetch)}
+      data-scroll={scroll === undefined ? undefined : String(scroll)}
+      onClick={(event) => {
+        event.preventDefault();
+        onClick?.(event);
+      }}
     />
   ),
 }));
@@ -26,7 +41,31 @@ vi.mock('next/link', () => ({
 describe('AppShellClient', () => {
   beforeEach(() => {
     mockedPathname = '/';
+    mockedScrollY = 0;
+    mockedReducedMotion = false;
+    scrollToMock.mockClear();
     document.body.style.overflow = '';
+    window.sessionStorage.clear();
+    Object.defineProperty(window, 'scrollY', {
+      configurable: true,
+      get: () => mockedScrollY,
+    });
+    Object.defineProperty(window, 'scrollTo', {
+      configurable: true,
+      value: scrollToMock,
+    });
+    Object.defineProperty(window, 'requestAnimationFrame', {
+      configurable: true,
+      value: vi.fn(() => 1),
+    });
+    Object.defineProperty(window, 'cancelAnimationFrame', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn(() => ({ matches: mockedReducedMotion })),
+    });
   });
 
   it('uses the home shell title after mounting when the pathname is empty', () => {
@@ -201,6 +240,75 @@ describe('AppShellClient', () => {
     ]) {
       expect(link).toHaveAttribute('data-prefetch', 'false');
     }
+  });
+
+  it('restores each primary tab position and scrolls an active tab to the top', () => {
+    const homeRender = render(
+      <AppShellClient>
+        <div>Home content</div>
+      </AppShellClient>
+    );
+    const mobileNavigation = screen.getByRole('navigation', {
+      name: 'Primary mobile navigation',
+    });
+
+    mockedScrollY = 640;
+    fireEvent.click(within(mobileNavigation).getByRole('link', { name: 'Showcase' }));
+    homeRender.unmount();
+
+    mockedPathname = '/showcase';
+    const showcaseRender = render(
+      <AppShellClient>
+        <div>Showcase content</div>
+      </AppShellClient>
+    );
+
+    expect(scrollToMock).toHaveBeenLastCalledWith({ top: 0, behavior: 'auto' });
+
+    mockedScrollY = 420;
+    fireEvent.click(
+      within(screen.getByRole('navigation', { name: 'Primary mobile navigation' }))
+        .getByRole('link', { name: 'Home' })
+    );
+    showcaseRender.unmount();
+
+    mockedPathname = '/';
+    render(
+      <AppShellClient>
+        <div>Home content</div>
+      </AppShellClient>
+    );
+
+    expect(scrollToMock).toHaveBeenLastCalledWith({ top: 640, behavior: 'auto' });
+
+    mockedScrollY = 329;
+    fireEvent.scroll(window);
+    expect(window.sessionStorage.getItem('magicbooklet:app-tab-scroll:home')).toBe('640');
+
+    fireEvent.click(
+      within(screen.getByRole('navigation', { name: 'Primary mobile navigation' }))
+        .getByRole('link', { name: 'Home' })
+    );
+
+    expect(scrollToMock).toHaveBeenLastCalledWith({ top: 0, behavior: 'smooth' });
+  });
+
+  it('uses an instant active-tab return when reduced motion is enabled', () => {
+    mockedReducedMotion = true;
+    mockedScrollY = 320;
+
+    render(
+      <AppShellClient>
+        <div>Home content</div>
+      </AppShellClient>
+    );
+
+    fireEvent.click(
+      within(screen.getByRole('navigation', { name: 'Primary mobile navigation' }))
+        .getByRole('link', { name: 'Home' })
+    );
+
+    expect(scrollToMock).toHaveBeenLastCalledWith({ top: 0, behavior: 'auto' });
   });
 
   it('opens an accessible mobile drawer and closes it with Escape', () => {
