@@ -1,13 +1,14 @@
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { MoreHorizontal, SendHorizontal } from 'lucide-react-native';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
   KeyboardAvoidingView,
+  type LayoutChangeEvent,
   Modal,
   type ModalProps,
   Platform,
@@ -25,6 +26,7 @@ import {
   POST_COMMENT_MAX_LENGTH,
   applyCommentCountToInfiniteFeed,
   applyCommentCountToPostResponse,
+  applyCommentCountToSourceData,
   appendReplyToPages,
   canDeleteComment,
   canRemoveComment,
@@ -49,11 +51,13 @@ import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
 import type { CommentReportReason } from '@/lib/api-client';
 import type {
+  OwnerPostsResponse,
   PostComment,
   PostCommentsResponse,
   ShowcaseFeedResponse,
   ShowcasePostResponse,
 } from '@/lib/types';
+import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
 
 const IS_TEST_ENVIRONMENT = typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
 const FallbackModal = ({ children, visible }: ModalProps) => (visible ? <>{children}</> : null);
@@ -67,29 +71,42 @@ const REPORT_REASONS: Array<{ label: string; value: CommentReportReason }> = [
 
 type CommentActionHandler = (comment: PostComment) => void;
 
-export function CommentsSheet({
+export type PostCommentsHandle = {
+  focusComposer: () => void;
+  scrollToComments: (options?: { focus?: boolean }) => void;
+};
+
+type PostCommentsProps = {
+  postId: string;
+  postCreatorId: string | null;
+  postTitle?: string | null;
+  commentCount: number;
+  visible?: boolean;
+  enabled?: boolean;
+  presentation: 'sheet' | 'inline';
+  contentHeader?: React.ReactNode;
+  onClose?: () => void;
+  onCommentCountChange?: (commentCount: number) => void;
+  authReturnTo?: string;
+  initialReplyToId?: string | null;
+  unavailableMessage?: string | null;
+};
+
+export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(function PostComments({
   postId,
   postCreatorId,
   postTitle,
   commentCount,
-  visible,
-  onClose,
+  visible = true,
+  enabled = true,
+  presentation,
+  contentHeader,
+  onClose = () => undefined,
   onCommentCountChange,
   authReturnTo,
   initialReplyToId,
-}: {
-  postId: string;
-  postCreatorId: string | null;
-  /** Anchors the sheet when it is opened as a text post's discussion. */
-  postTitle?: string | null;
-  commentCount: number;
-  visible: boolean;
-  onClose: () => void;
-  onCommentCountChange?: (commentCount: number) => void;
-  /** Route restored after sign-in; the sheet adds its post/reply context. */
-  authReturnTo?: string;
-  initialReplyToId?: string | null;
-}) {
+  unavailableMessage,
+}, ref) {
   const reducedMotion = useReducedMotion();
   const queryClient = useQueryClient();
   const { api, user } = useAuth();
@@ -105,12 +122,15 @@ export function CommentsSheet({
   const [reporting, setReporting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const restoredReplyIdRef = useRef<string | null>(null);
+  const commentsListRef = useRef<FlatList<PostComment>>(null);
+  const composerRef = useRef<TextInput>(null);
+  const commentsOffsetRef = useRef(0);
 
   const commentsQueryKey = createPostCommentsQueryKey(postId, sort, user?.id);
 
   const commentsQuery = useInfiniteQuery({
     queryKey: commentsQueryKey,
-    enabled: visible,
+    enabled: visible && enabled,
     initialPageParam: 0,
     queryFn: ({ pageParam }) => api.listPostComments(
       postId,
@@ -137,6 +157,7 @@ export function CommentsSheet({
   useEffect(() => {
     if (
       !visible
+      || !enabled
       || !initialReplyToId
       || restoredReplyIdRef.current === initialReplyToId
     ) {
@@ -158,6 +179,7 @@ export function CommentsSheet({
     initialReplyToId,
     topLevel,
     visible,
+    enabled,
   ]);
 
   const serverCommentCount = commentsQuery.data?.pages?.[0]?.commentCount ?? commentCount;
@@ -171,9 +193,36 @@ export function CommentsSheet({
       { queryKey: ['showcase-feed'] },
       (current) => applyCommentCountToInfiniteFeed(current, result)
     );
+    queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
+      { queryKey: ['profile-saved-media'] },
+      (current) => applyCommentCountToInfiniteFeed(current, result)
+    );
     queryClient.setQueriesData<ShowcasePostResponse>(
       { queryKey: ['showcase-post', postId] },
       (current) => applyCommentCountToPostResponse(current, result)
+    );
+    queryClient.setQueriesData<ImmersiveSourceData>(
+      { queryKey: ['immersive-preview-source'] },
+      (current) => applyCommentCountToSourceData(current, result)
+    );
+    queryClient.setQueriesData<InfiniteData<OwnerPostsResponse>>(
+      { queryKey: ['profile-owner-posts'] },
+      (current) => current ? {
+        ...current,
+        pages: current.pages.map((page) => ({
+          ...page,
+          posts: page.posts.map((post) => (
+            post.id === postId ? { ...post, commentCount: result.commentCount } : post
+          )),
+        })),
+      } : current
+    );
+    queryClient.setQueriesData<{ success: boolean; post: OwnerPostsResponse['posts'][number] }>(
+      { queryKey: ['owner-text-post', postId] },
+      (current) => current ? {
+        ...current,
+        post: { ...current.post, commentCount: result.commentCount },
+      } : current
     );
     onCommentCountChange?.(nextCount);
   }, [onCommentCountChange, postId, queryClient]);
@@ -403,38 +452,245 @@ export function CommentsSheet({
 
   const canSubmit = draft.trim().length > 0 && !submitting && !commentsUnavailable;
 
-  return (
-    <ModalSurface
-      animationType={reducedMotion ? 'none' : 'slide'}
-      accessibilityViewIsModal
-      onRequestClose={onClose}
-      transparent
-      visible={visible}
+  const focusComposer = useCallback(() => {
+    if (!enabled || commentsUnavailable) return;
+    if (!requireSignIn(replyTo)) return;
+    composerRef.current?.focus();
+  }, [commentsUnavailable, enabled, replyTo, requireSignIn]);
+
+  const scrollToComments = useCallback((options: { focus?: boolean } = {}) => {
+    commentsListRef.current?.scrollToOffset({
+      offset: commentsOffsetRef.current,
+      animated: !reducedMotion,
+    });
+    if (options.focus !== false) {
+      requestAnimationFrame(focusComposer);
+    }
+  }, [focusComposer, reducedMotion]);
+
+  useImperativeHandle(ref, () => ({ focusComposer, scrollToComments }), [focusComposer, scrollToComments]);
+
+  const captureCommentsOffset = useCallback((event: LayoutChangeEvent) => {
+    commentsOffsetRef.current = event.nativeEvent.layout.y;
+  }, []);
+
+  const commentsHeader = (
+    <View
+      onLayout={presentation === 'inline' ? captureCommentsOffset : undefined}
+      style={{
+        borderTopWidth: presentation === 'inline' ? 8 : 0,
+        borderTopColor: appTheme.colors.background,
+        paddingHorizontal: appTheme.spacing.panel,
+        paddingTop: presentation === 'inline' ? appTheme.spacing.panel : 0,
+        paddingBottom: appTheme.spacing.compact,
+        gap: 2,
+      }}
     >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={0}
-        style={{ flex: 1, justifyContent: 'flex-end' }}
+      {presentation === 'sheet' && postTitle ? (
+        <Text numberOfLines={2} style={{ color: appTheme.colors.muted, ...appTheme.type.caption, fontWeight: '800' }}>
+          {postTitle}
+        </Text>
+      ) : null}
+      <Text accessibilityRole="header" style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>
+        {serverCommentCount > 0 ? `Comments · ${serverCommentCount}` : 'Comments'}
+      </Text>
+    </View>
+  );
+
+  const retryState = (
+    <View style={{ padding: appTheme.spacing.panel, gap: appTheme.spacing.gap }}>
+      <StatusBlock
+        tone="danger"
+        title="Comments are unavailable"
+        body="We could not load this conversation. Check your connection, then try again."
+      />
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Try loading comments again"
+        accessibilityState={{ busy: commentsQuery.isRefetching }}
+        disabled={commentsQuery.isRefetching}
+        onPress={() => void commentsQuery.refetch()}
+        style={({ pressed }) => ({
+          minHeight: 48,
+          alignItems: 'center',
+          justifyContent: 'center',
+          borderRadius: appTheme.radii.md,
+          backgroundColor: appTheme.colors.primary,
+          opacity: pressed ? appTheme.opacity.pressed : 1,
+        })}
       >
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Close comments"
-          onPress={onClose}
-          style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.58)' }}
-        />
-        <View
+        {commentsQuery.isRefetching ? (
+          <ActivityIndicator color={appTheme.colors.onPrimary} />
+        ) : (
+          <Text style={{ color: appTheme.colors.onPrimary, ...appTheme.type.bodySm, fontWeight: '800' }}>
+            Try again
+          </Text>
+        )}
+      </Pressable>
+    </View>
+  );
+
+  const emptyState = !enabled && unavailableMessage ? (
+    <View style={{ paddingVertical: appTheme.spacing.section, paddingHorizontal: appTheme.spacing.panel }}>
+      <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
+        {unavailableMessage}
+      </Text>
+    </View>
+  ) : commentsUnavailable ? retryState : commentsQuery.isLoading ? (
+    <View style={{ paddingVertical: appTheme.spacing.section, alignItems: 'center' }}>
+      <ActivityIndicator color={appTheme.colors.faint} />
+    </View>
+  ) : (
+    <View style={{ paddingVertical: appTheme.spacing.section, paddingHorizontal: appTheme.spacing.panel, gap: 4 }}>
+      <Text style={{ color: appTheme.colors.text, ...appTheme.type.body, fontWeight: '800' }}>
+        No comments yet
+      </Text>
+      <Text style={{ color: appTheme.colors.faint, ...appTheme.type.bodySm }}>
+        Be the first to share what you think about this post.
+      </Text>
+    </View>
+  );
+
+  const list = (
+    <FlatList
+      ref={commentsListRef}
+      data={commentsUnavailable || !enabled ? [] : topLevel}
+      keyExtractor={(comment) => comment.id}
+      renderItem={renderTopLevelComment}
+      keyboardShouldPersistTaps="handled"
+      ListHeaderComponent={presentation === 'inline' ? (
+        <>
+          {contentHeader}
+          {commentsHeader}
+        </>
+      ) : undefined}
+      onRefresh={enabled && !commentsUnavailable ? () => void commentsQuery.refetch() : undefined}
+      refreshing={enabled && commentsQuery.isRefetching && !commentsQuery.isFetchingNextPage}
+      onEndReachedThreshold={0.4}
+      onEndReached={() => {
+        if (enabled && commentsQuery.hasNextPage && !commentsQuery.isFetchingNextPage) {
+          void commentsQuery.fetchNextPage();
+        }
+      }}
+      ListEmptyComponent={emptyState}
+      ListFooterComponent={commentsQuery.isFetchingNextPage ? (
+        <View style={{ minHeight: 48, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator color={appTheme.colors.faint} />
+        </View>
+      ) : null}
+      contentContainerStyle={presentation === 'inline' ? { paddingBottom: appTheme.spacing.section } : undefined}
+    />
+  );
+
+  const composer = enabled ? (
+    <View
+      style={{
+        borderTopWidth: 1,
+        borderTopColor: appTheme.colors.borderStrong,
+        backgroundColor: presentation === 'inline' ? appTheme.colors.app : 'transparent',
+        paddingHorizontal: appTheme.spacing.panel,
+        paddingTop: appTheme.spacing.gap,
+        paddingBottom: Math.max(bottomInset, appTheme.spacing.panel),
+        gap: appTheme.spacing.compact,
+      }}
+    >
+      {replyTo ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact }}>
+          <Text numberOfLines={1} style={{ color: appTheme.colors.faint, ...appTheme.type.caption, flex: 1 }}>
+            {`Replying to ${getCommentDisplay(replyTo).authorLabel}`}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Cancel reply"
+            onPress={() => setReplyTo(null)}
+            style={{ minWidth: 48, minHeight: 48, alignItems: 'flex-end', justifyContent: 'center' }}
+          >
+            <Text style={{ color: appTheme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>Cancel</Text>
+          </Pressable>
+        </View>
+      ) : null}
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: appTheme.spacing.compact }}>
+        <TextInput
+          ref={composerRef}
+          accessibilityLabel="Write a comment"
+          accessibilityHint={commentsUnavailable ? 'Retry loading comments before posting.' : undefined}
+          value={draft}
+          onChangeText={setDraft}
+          editable={!submitting && !commentsUnavailable}
+          maxLength={POST_COMMENT_MAX_LENGTH}
+          multiline
+          placeholder={replyTo
+            ? 'Write a reply…'
+            : presentation === 'inline'
+              ? 'Join the conversation…'
+              : 'Add a comment…'}
+          placeholderTextColor={appTheme.colors.faint}
+          onPressIn={() => { if (!user) requireSignIn(replyTo); }}
           style={{
-            height: '78%',
-            borderTopLeftRadius: appTheme.radii.xl,
-            borderTopRightRadius: appTheme.radii.xl,
+            flex: 1,
+            minHeight: 44,
+            maxHeight: 120,
+            borderRadius: appTheme.radii.md,
             borderCurve: 'continuous',
             borderWidth: 1,
-            borderBottomWidth: 0,
             borderColor: appTheme.colors.borderStrong,
-            backgroundColor: appTheme.colors.panel,
-            paddingTop: appTheme.spacing.gap,
+            backgroundColor: appTheme.colors.surface,
+            color: appTheme.colors.text,
+            paddingHorizontal: appTheme.spacing.gap,
+            paddingTop: 12,
+            paddingBottom: 12,
+            ...appTheme.type.bodySm,
           }}
+        />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Post comment"
+          accessibilityState={{ disabled: !canSubmit }}
+          disabled={!canSubmit}
+          onPress={() => void submitComment()}
+          style={({ pressed }) => ({
+            width: 44,
+            height: 44,
+            borderRadius: appTheme.radii.md,
+            borderCurve: 'continuous',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: canSubmit ? appTheme.colors.primary : appTheme.colors.surface,
+            opacity: pressed ? appTheme.opacity.pressed : 1,
+          })}
         >
+          {submitting ? (
+            <ActivityIndicator color={appTheme.colors.onPrimary} />
+          ) : (
+            <SendHorizontal
+              size={18}
+              color={canSubmit ? appTheme.colors.onPrimary : appTheme.colors.faint}
+            />
+          )}
+        </Pressable>
+      </View>
+    </View>
+  ) : null;
+
+  const panel = (
+    <View
+      style={presentation === 'sheet' ? {
+        height: '78%',
+        borderTopLeftRadius: appTheme.radii.xl,
+        borderTopRightRadius: appTheme.radii.xl,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderBottomWidth: 0,
+        borderColor: appTheme.colors.borderStrong,
+        backgroundColor: appTheme.colors.panel,
+        paddingTop: appTheme.spacing.gap,
+      } : {
+        flex: 1,
+        backgroundColor: appTheme.colors.app,
+      }}
+    >
+      {presentation === 'sheet' ? (
+        <>
           <View
             style={{
               width: 42,
@@ -445,179 +701,62 @@ export function CommentsSheet({
               marginBottom: appTheme.spacing.gap,
             }}
           />
-          <View style={{ paddingHorizontal: appTheme.spacing.panel, paddingBottom: appTheme.spacing.compact, gap: 2 }}>
-            {postTitle ? (
-              <Text numberOfLines={2} style={{ color: appTheme.colors.muted, ...appTheme.type.caption, fontWeight: '800' }}>
-                {postTitle}
-              </Text>
-            ) : null}
-            <Text accessibilityRole="header" style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>
-              {serverCommentCount > 0 ? `Comments · ${serverCommentCount}` : 'Comments'}
-            </Text>
-          </View>
+          {commentsHeader}
+        </>
+      ) : null}
+      {list}
+      {composer}
+      {reportingComment ? (
+        <ReportReasonPicker
+          bottomInset={bottomInset}
+          loading={reporting}
+          onCancel={() => {
+            if (!reporting) setReportingComment(null);
+          }}
+          onSelect={(reason) => void submitReport(reason)}
+        />
+      ) : null}
+    </View>
+  );
 
-          {commentsUnavailable ? (
-            <View style={{ flex: 1, padding: appTheme.spacing.panel, gap: appTheme.spacing.gap }}>
-              <StatusBlock
-                tone="danger"
-                title="Comments are unavailable"
-                body="We could not load this conversation. Check your connection, then try again."
-              />
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Try loading comments again"
-                accessibilityState={{ busy: commentsQuery.isRefetching }}
-                disabled={commentsQuery.isRefetching}
-                onPress={() => void commentsQuery.refetch()}
-                style={({ pressed }) => ({
-                  minHeight: 48,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: appTheme.radii.md,
-                  backgroundColor: appTheme.colors.primary,
-                  opacity: pressed ? appTheme.opacity.pressed : 1,
-                })}
-              >
-                {commentsQuery.isRefetching ? (
-                  <ActivityIndicator color={appTheme.colors.onPrimary} />
-                ) : (
-                  <Text style={{ color: appTheme.colors.onPrimary, ...appTheme.type.bodySm, fontWeight: '800' }}>
-                    Try again
-                  </Text>
-                )}
-              </Pressable>
-            </View>
-          ) : (
-            <FlatList
-              data={topLevel}
-              keyExtractor={(comment) => comment.id}
-              renderItem={renderTopLevelComment}
-              keyboardShouldPersistTaps="handled"
-              onRefresh={() => void commentsQuery.refetch()}
-              refreshing={commentsQuery.isRefetching && !commentsQuery.isFetchingNextPage}
-              onEndReachedThreshold={0.4}
-              onEndReached={() => {
-                if (commentsQuery.hasNextPage && !commentsQuery.isFetchingNextPage) {
-                  void commentsQuery.fetchNextPage();
-                }
-              }}
-              ListEmptyComponent={commentsQuery.isLoading ? (
-                <View style={{ paddingVertical: appTheme.spacing.section, alignItems: 'center' }}>
-                  <ActivityIndicator color={appTheme.colors.faint} />
-                </View>
-              ) : (
-                <View style={{ paddingVertical: appTheme.spacing.section, paddingHorizontal: appTheme.spacing.panel, gap: 4 }}>
-                  <Text style={{ color: appTheme.colors.text, ...appTheme.type.body, fontWeight: '800' }}>
-                    No comments yet
-                  </Text>
-                  <Text style={{ color: appTheme.colors.faint, ...appTheme.type.bodySm }}>
-                    Be the first to share what you think about this post.
-                  </Text>
-                </View>
-              )}
-              ListFooterComponent={commentsQuery.isFetchingNextPage ? (
-                <View style={{ minHeight: 48, alignItems: 'center', justifyContent: 'center' }}>
-                  <ActivityIndicator color={appTheme.colors.faint} />
-                </View>
-              ) : null}
-            />
-          )}
+  const keyboardSurface = (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={0}
+      style={{ flex: 1, justifyContent: presentation === 'sheet' ? 'flex-end' : 'flex-start' }}
+    >
+      {presentation === 'sheet' ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Close comments"
+          onPress={onClose}
+          style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.58)' }}
+        />
+      ) : null}
+      {panel}
+    </KeyboardAvoidingView>
+  );
 
-          <View
-            style={{
-              borderTopWidth: 1,
-              borderTopColor: appTheme.colors.borderStrong,
-              paddingHorizontal: appTheme.spacing.panel,
-              paddingTop: appTheme.spacing.gap,
-              paddingBottom: Math.max(bottomInset, appTheme.spacing.panel),
-              gap: appTheme.spacing.compact,
-            }}
-          >
-            {replyTo ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact }}>
-                <Text numberOfLines={1} style={{ color: appTheme.colors.faint, ...appTheme.type.caption, flex: 1 }}>
-                  {`Replying to ${getCommentDisplay(replyTo).authorLabel}`}
-                </Text>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Cancel reply"
-                  onPress={() => setReplyTo(null)}
-                  style={{ minWidth: 48, minHeight: 48, alignItems: 'flex-end', justifyContent: 'center' }}
-                >
-                  <Text style={{ color: appTheme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>Cancel</Text>
-                </Pressable>
-              </View>
-            ) : null}
-            <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: appTheme.spacing.compact }}>
-              <TextInput
-                accessibilityLabel="Write a comment"
-                accessibilityHint={commentsUnavailable ? 'Retry loading comments before posting.' : undefined}
-                value={draft}
-                onChangeText={setDraft}
-                editable={!submitting && !commentsUnavailable}
-                maxLength={POST_COMMENT_MAX_LENGTH}
-                multiline
-                placeholder={replyTo ? 'Write a reply…' : 'Add a comment…'}
-                placeholderTextColor={appTheme.colors.faint}
-                onPressIn={() => { if (!user) requireSignIn(replyTo); }}
-                style={{
-                  flex: 1,
-                  minHeight: 44,
-                  maxHeight: 120,
-                  borderRadius: appTheme.radii.md,
-                  borderCurve: 'continuous',
-                  borderWidth: 1,
-                  borderColor: appTheme.colors.borderStrong,
-                  backgroundColor: appTheme.colors.surface,
-                  color: appTheme.colors.text,
-                  paddingHorizontal: appTheme.spacing.gap,
-                  paddingTop: 12,
-                  paddingBottom: 12,
-                  ...appTheme.type.bodySm,
-                }}
-              />
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Post comment"
-                accessibilityState={{ disabled: !canSubmit }}
-                disabled={!canSubmit}
-                onPress={() => void submitComment()}
-                style={({ pressed }) => ({
-                  width: 44,
-                  height: 44,
-                  borderRadius: appTheme.radii.md,
-                  borderCurve: 'continuous',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  backgroundColor: canSubmit ? appTheme.colors.primary : appTheme.colors.surface,
-                  opacity: pressed ? appTheme.opacity.pressed : 1,
-                })}
-              >
-                {submitting ? (
-                  <ActivityIndicator color={appTheme.colors.onPrimary} />
-                ) : (
-                  <SendHorizontal
-                    size={18}
-                    color={canSubmit ? appTheme.colors.onPrimary : appTheme.colors.faint}
-                  />
-                )}
-              </Pressable>
-            </View>
-          </View>
-          {reportingComment ? (
-            <ReportReasonPicker
-              bottomInset={bottomInset}
-              loading={reporting}
-              onCancel={() => {
-                if (!reporting) setReportingComment(null);
-              }}
-              onSelect={(reason) => void submitReport(reason)}
-            />
-          ) : null}
-        </View>
-      </KeyboardAvoidingView>
+  if (presentation === 'inline') return keyboardSurface;
+
+  return (
+    <ModalSurface
+      animationType={reducedMotion ? 'none' : 'slide'}
+      accessibilityViewIsModal
+      onRequestClose={onClose}
+      transparent
+      visible={visible}
+    >
+      {keyboardSurface}
     </ModalSurface>
   );
+});
+
+export function CommentsSheet(props: Omit<PostCommentsProps, 'presentation' | 'enabled' | 'contentHeader' | 'unavailableMessage'> & {
+  visible: boolean;
+  onClose: () => void;
+}) {
+  return <PostComments {...props} enabled={props.visible} presentation="sheet" />;
 }
 
 function RepliesList({

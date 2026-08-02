@@ -7,10 +7,12 @@ import {
   getImmersiveHorizontalPageIndex,
   getImmersiveInitialIndex,
   hasImmersiveDetailsPage,
+  immersivePreviewOpenHref,
   isImmersiveDetailsHorizontalPage,
   immersiveViewerHref,
   immersiveViewerReturnPath,
   selectActiveImmersiveVideoId,
+  textPostViewerHref,
 } from '../lib/immersive-preview-view-model';
 import type { GenerationListItem, OwnerPostListItem, ShowcaseFeedItem } from '../lib/types';
 
@@ -75,6 +77,42 @@ function ownerPost(overrides: Partial<OwnerPostListItem>): OwnerPostListItem {
 }
 
 describe('immersive preview view model', () => {
+  it('builds the shared text-post viewer route for public and owner posts', () => {
+    expect(textPostViewerHref({ postId: 'post-1' })).toBe('/post/post-1');
+    expect(textPostViewerHref({ postId: 'private/post', source: 'profile-posts' }))
+      .toBe('/post/private%2Fpost?source=profile-posts');
+    expect(textPostViewerHref({ postId: 'saved-post', source: 'profile-saved' }))
+      .toBe('/post/saved-post?source=profile-saved');
+    expect(textPostViewerHref({ postId: 'saved/post', source: 'profile-saved', comments: true }))
+      .toBe('/post/saved%2Fpost?source=profile-saved&comments=saved%2Fpost');
+  });
+
+  it('opens profile text posts in the reading screen and media in the reel', () => {
+    const [savedText] = buildImmersiveShowcaseItems('profile-saved', [showcaseItem({
+      id: 'saved-text',
+      category: 'text',
+      postFormat: 'text',
+    })]);
+    const [ownerText] = buildImmersiveOwnerPostItems('profile-posts', [ownerPost({
+      id: 'owner-text',
+      visibility: 'private',
+    })], { creatorLabel: '@luna' });
+    const [savedImage] = buildImmersiveShowcaseItems('profile-saved', [showcaseItem({
+      id: 'saved-image',
+      mediaUrl: 'https://cdn.example.com/image.jpg',
+      mediaKind: 'image',
+    })]);
+
+    expect(immersivePreviewOpenHref(savedText!)).toBe('/post/saved-text?source=profile-saved');
+    expect(immersivePreviewOpenHref(savedText!, { comments: true }))
+      .toBe('/post/saved-text?source=profile-saved&comments=saved-text');
+    expect(immersivePreviewOpenHref(ownerText!)).toBe('/post/owner-text?source=profile-posts');
+    expect(immersivePreviewOpenHref(savedImage!)).toEqual({
+      pathname: '/viewer',
+      params: { source: 'profile-saved', initialId: 'saved-image' },
+    });
+  });
+
   it('maps showcase image, video, and text posts into viewer items', () => {
     const items = buildImmersiveShowcaseItems('showcase-feed', [
       showcaseItem({

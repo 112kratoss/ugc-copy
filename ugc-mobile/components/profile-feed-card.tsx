@@ -37,8 +37,8 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
   const accent = accentColor(card.accent);
   const mediaHeight = getProfileFeedMediaHeight(card, contentWidth);
   const item = card.item;
-  // The card drops the reel's Details slot: tapping the card already opens the reel,
-  // where the details page lives, and five labelled actions wrap onto a second row.
+  // The card drops the Details slot: tapping the card already opens its canonical
+  // viewer, and five labelled actions wrap onto a second row.
   const slots = getViewerActionSlots(item).filter((slot) => slot.id !== 'details');
 
   return (

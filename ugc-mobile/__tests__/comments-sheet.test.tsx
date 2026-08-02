@@ -1,11 +1,20 @@
 // Define React Native development global
 (global as typeof globalThis & { __DEV__: boolean }).__DEV__ = true;
+(global as typeof globalThis & { requestAnimationFrame: (callback: FrameRequestCallback) => number })
+  .requestAnimationFrame = (callback) => {
+    callback(0);
+    return 1;
+  };
 
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { CommentsSheet } from '../components/comments-sheet';
+import {
+  CommentsSheet,
+  PostComments,
+  type PostCommentsHandle,
+} from '../components/comments-sheet';
 import type { PostComment, PostCommentsResponse } from '../lib/types';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
@@ -29,6 +38,9 @@ const mocks = vi.hoisted(() => ({
   topFetchNext: vi.fn(),
   replyFetchNext: vi.fn(),
   alert: vi.fn(),
+  composerFocus: vi.fn(),
+  listScrollToOffset: vi.fn(),
+  queryOptions: vi.fn(),
   routerPush: vi.fn(),
   routerSetParams: vi.fn(),
 }));
@@ -45,6 +57,9 @@ const {
   topFetchNext,
   replyFetchNext,
   alert,
+  composerFocus,
+  listScrollToOffset,
+  queryOptions,
   routerPush,
   routerSetParams,
 } = mocks;
@@ -58,16 +73,19 @@ let replyQueryState: Record<string, unknown> = {};
 vi.mock('react-native', () => ({
   ActivityIndicator: (props: MockProps) => React.createElement('spinner', props),
   Alert: { alert: mocks.alert },
-  FlatList: ({
+  FlatList: React.forwardRef(({
     data,
     renderItem,
     keyExtractor,
+    ListHeaderComponent,
     ListEmptyComponent,
     ListFooterComponent,
     ...props
-  }: MockProps) => {
+  }: MockProps, ref: React.ForwardedRef<{ scrollToOffset: typeof mocks.listScrollToOffset }>) => {
+    React.useImperativeHandle(ref, () => ({ scrollToOffset: mocks.listScrollToOffset }));
     const rows = (data as unknown[]) ?? [];
     const children: React.ReactNode[] = [];
+    if (ListHeaderComponent) children.push(ListHeaderComponent as React.ReactNode);
     if (!rows.length) {
       children.push(ListEmptyComponent as React.ReactNode);
     } else {
@@ -79,7 +97,7 @@ vi.mock('react-native', () => ({
     }
     if (ListFooterComponent) children.push(ListFooterComponent as React.ReactNode);
     return React.createElement('list', props, children);
-  },
+  }),
   KeyboardAvoidingView: ({ children, ...props }: MockProps) => React.createElement('kav', props, children),
   Modal: ({ children, ...props }: MockProps) => React.createElement('modal', props, children),
   Platform: { OS: 'ios' },
@@ -89,7 +107,10 @@ vi.mock('react-native', () => ({
   }, children),
   StatusBar: { currentHeight: 0 },
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
-  TextInput: (props: MockProps) => React.createElement('textinput', props),
+  TextInput: React.forwardRef((props: MockProps, ref: React.ForwardedRef<{ focus: typeof mocks.composerFocus }>) => {
+    React.useImperativeHandle(ref, () => ({ focus: mocks.composerFocus }));
+    return React.createElement('textinput', props);
+  }),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
 }));
 
@@ -121,6 +142,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 vi.mock('@tanstack/react-query', () => ({
   useInfiniteQuery: (options: { queryKey: readonly unknown[] }) => {
+    mocks.queryOptions(options);
     const isReplyQuery = options.queryKey[0] === 'post-comment-replies';
     return {
       data: (isReplyQuery ? replyPages : pages)
@@ -195,6 +217,32 @@ function renderSheet(overrides: Partial<React.ComponentProps<typeof CommentsShee
   return tree;
 }
 
+function renderInline(overrides: Partial<React.ComponentProps<typeof PostComments>> = {}) {
+  const ref = React.createRef<PostCommentsHandle>();
+  let tree: renderer.ReactTestRenderer | undefined;
+  renderer.act(() => {
+    tree = renderer.create(
+      <PostComments
+        ref={ref}
+        authReturnTo="/post/post-1"
+        postId="post-1"
+        postCreatorId="owner-1"
+        commentCount={0}
+        contentHeader={<TextFixture value="Post content" />}
+        enabled
+        presentation="inline"
+        {...overrides}
+      />
+    );
+  });
+  if (!tree) throw new Error('PostComments failed to render');
+  return { ref, tree };
+}
+
+function TextFixture({ value }: { value: string }) {
+  return React.createElement('text', null, value);
+}
+
 function texts(root: renderer.ReactTestInstance) {
   return root
     .findAll((node) => String(node.type) === 'text')
@@ -226,6 +274,9 @@ beforeEach(() => {
     topFetchNext,
     replyFetchNext,
     alert,
+    composerFocus,
+    listScrollToOffset,
+    queryOptions,
     routerPush,
     routerSetParams,
   ]) {
@@ -233,10 +284,57 @@ beforeEach(() => {
   }
 });
 
+describe('inline post comments', () => {
+  it('renders the post and first comment page in one list without a modal', () => {
+    pages = [page([comment()])];
+    const { tree } = renderInline();
+
+    expect(texts(tree.root)).toEqual(expect.arrayContaining([
+      'Post content',
+      'Comments · 1',
+      'This prompt is unreal.',
+    ]));
+    expect(tree.root.findAll((node) => String(node.type) === 'modal')).toHaveLength(0);
+    expect(queryOptions).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
+  });
+
+  it('scrolls to the attached thread and focuses its composer through the imperative API', () => {
+    const { ref, tree } = renderInline();
+    const commentsHeader = tree.root.find(
+      (node) => String(node.type) === 'view' && typeof node.props.onLayout === 'function'
+    );
+
+    renderer.act(() => {
+      commentsHeader.props.onLayout({ nativeEvent: { layout: { y: 420 } } });
+    });
+
+    renderer.act(() => {
+      ref.current?.scrollToComments();
+    });
+
+    expect(listScrollToOffset).toHaveBeenCalledWith({ offset: 420, animated: true });
+    expect(composerFocus).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the private-post note without querying or rendering a composer', () => {
+    const { tree } = renderInline({
+      enabled: false,
+      unavailableMessage: 'Comments become available when this post is public.',
+    });
+
+    expect(texts(tree.root)).toContain('Comments become available when this post is public.');
+    expect(tree.root.findAll((node) => String(node.type) === 'textinput')).toHaveLength(0);
+    expect(queryOptions).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
+  });
+});
+
 describe('comments sheet', () => {
   it('shows the empty state when a post has no comments', () => {
     pages = [page([])];
-    expect(texts(renderSheet().root)).toContain('No comments yet');
+    const root = renderSheet().root;
+    expect(texts(root)).toContain('No comments yet');
+    expect(root.find((node) => String(node.type) === 'textinput').props.placeholder)
+      .toBe('Add a comment…');
   });
 
   it('renders the count and uses accessible 48pt comment actions', () => {
@@ -364,6 +462,40 @@ describe('comments sheet', () => {
     ) => { pages: PostCommentsResponse[]; pageParams: number[] };
     const updated = update({ pages: [page([])], pageParams: [0] });
     expect(updated.pages[0].comments.map((item) => item.id)).toContain('reply-created');
+  });
+
+  it('publishes updated counts to showcase, saved, owner, source, and detail caches', async () => {
+    const onCommentCountChange = vi.fn();
+    pages = [page([])];
+    createPostComment.mockResolvedValue({
+      comment: comment({
+        id: 'comment-created',
+        body: 'Fresh thought',
+        author: { id: 'viewer-1', username: 'viewer', displayName: 'Viewer', avatarUrl: null },
+      }),
+      commentCount: 1,
+    });
+    const tree = renderSheet({ onCommentCountChange });
+
+    renderer.act(() => {
+      tree.root.find((node) => String(node.type) === 'textinput').props.onChangeText('Fresh thought');
+    });
+    await renderer.act(async () => {
+      await pressable(tree.root, 'Post comment').props.onPress();
+    });
+
+    const synchronizedPrefixes = querySetQueriesData.mock.calls.map(
+      ([filters]) => (filters as { queryKey: string[] }).queryKey[0]
+    );
+    expect(synchronizedPrefixes).toEqual(expect.arrayContaining([
+      'showcase-feed',
+      'profile-saved-media',
+      'showcase-post',
+      'immersive-preview-source',
+      'profile-owner-posts',
+      'owner-text-post',
+    ]));
+    expect(onCommentCountChange).toHaveBeenCalledWith(1);
   });
 
   it('resets draft and reply state when the sheet changes posts', () => {

@@ -31,7 +31,7 @@ import {
 } from '@/lib/immersive-preview-source-data';
 import {
   getImmersiveInitialIndex,
-  immersiveViewerHref,
+  immersivePreviewOpenHref,
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
 import { buildProfileFeedCards, type ProfileFeedCard } from '@/lib/profile-feed-card-view-model';
@@ -51,8 +51,8 @@ const CARD_GAP = 12;
 /**
  * Creations and Posts open here rather than in the reel: owned media is managed,
  * not consumed, so it reads as a card feed in the same visual language as Home,
- * with the ownership controls inline. Tapping a card's media still opens the
- * reel, exactly like Home does.
+ * with the ownership controls inline. Opening a text post uses its dedicated
+ * reading screen; image and video cards still open the reel.
  */
 export function ProfileMediaFeedScreen() {
   const params = useLocalSearchParams<ProfileMediaFeedParams>();
@@ -129,9 +129,12 @@ export function ProfileMediaFeedScreen() {
     return () => cancelAnimationFrame(frame);
   }, [cards.length, initialIndex]);
 
-  const openReel = useCallback((item: ImmersivePreviewItem) => {
-    router.push(immersiveViewerHref({ source, initialId: item.id }) as never);
-  }, [source]);
+  const openItem = useCallback((
+    item: ImmersivePreviewItem,
+    options: { comments?: boolean } = {}
+  ) => {
+    router.push(immersivePreviewOpenHref(item, options) as never);
+  }, []);
 
   const shareItem = useCallback(async (item: ImmersivePreviewItem) => {
     if (!item.canShare) return;
@@ -195,13 +198,17 @@ export function ProfileMediaFeedScreen() {
         }
         return;
       case 'comment':
+        if (item.previewKind === 'text' && item.sourceType !== 'generation') {
+          openItem(item, { comments: true });
+          return;
+        }
         setCommentsOpenItemId(item.id);
         return;
       case 'share':
         void shareItem(item);
         return;
       case 'view-details':
-        openReel(item);
+        openItem(item);
         return;
       case 'recreate':
       case 'unlock-remix':
@@ -239,7 +246,7 @@ export function ProfileMediaFeedScreen() {
       default:
         return;
     }
-  }, [applyPostVisibility, openReel, recreateItem, shareItem, user]);
+  }, [applyPostVisibility, openItem, recreateItem, shareItem, user]);
 
   if (!cards.length && sourceQuery.isLoading) {
     return (
@@ -307,7 +314,7 @@ export function ProfileMediaFeedScreen() {
             showActiveVideo={isFocused && activeVideoId === card.id}
             bodyExpanded={Boolean(expandedBodyIds[card.id])}
             pendingAction={pendingAction}
-            onOpen={() => openReel(card.item)}
+            onOpen={() => openItem(card.item)}
             onToggleBody={() => setExpandedBodyIds((current) => ({
               ...current,
               [card.id]: !current[card.id],
@@ -324,11 +331,15 @@ export function ProfileMediaFeedScreen() {
           onClose={() => setActionsOpenItemId(null)}
           onComments={activeItem.canComment ? () => {
             setActionsOpenItemId(null);
+            if (activeItem.previewKind === 'text' && activeItem.sourceType !== 'generation') {
+              openItem(activeItem, { comments: true });
+              return;
+            }
             setCommentsOpenItemId(activeItem.id);
           } : undefined}
           onDetails={() => {
             setActionsOpenItemId(null);
-            openReel(activeItem);
+            openItem(activeItem);
           }}
           onRecreate={() => recreateItem(activeItem)}
           onShare={() => void shareItem(activeItem)}
