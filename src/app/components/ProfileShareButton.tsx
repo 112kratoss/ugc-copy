@@ -4,19 +4,26 @@ import { Check, Loader2, Share2 } from 'lucide-react';
 
 import { useShareAction } from '@/app/components/useShareAction';
 import { shareCreatorProfile } from '@/lib/share-client';
+import type { ProfileShareSourceSurface } from '@/lib/share';
 
 interface ProfileShareButtonProps {
   username: string;
   displayName: string;
+  sourceSurface: ProfileShareSourceSurface;
+  accessToken?: string | null;
   className?: string;
   label?: string;
+  onShared?: () => void;
 }
 
 export default function ProfileShareButton({
   username,
   displayName,
+  sourceSurface,
+  accessToken,
   className,
   label = 'Share profile',
+  onShared,
 }: ProfileShareButtonProps) {
   const {
     state,
@@ -26,10 +33,13 @@ export default function ProfileShareButton({
     runShareAction,
   } = useShareAction({
     label,
+    onShared,
     onAction: () =>
       shareCreatorProfile({
         username,
         displayName,
+        sourceSurface,
+        accessToken,
       }),
   });
 

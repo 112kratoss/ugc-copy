@@ -12,6 +12,10 @@ import FeedMediaLightbox from '@/app/feed/FeedMediaLightbox';
 import FeedPostCard, { type FeedDetailContext } from '@/app/feed/FeedPostCard';
 import { FEED_CHIPS, FEED_PAGE_SIZE, getFeedChip, type FeedChipId } from '@/lib/post-feed-chips';
 import { buildPostFeedCards } from '@/lib/post-feed-presentation';
+import {
+    getShowcaseFeedSessionId,
+    sendShowcaseFeedEvent,
+} from '@/app/showcase/ShowcaseFeedInteraction';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { ShowcaseFeedItem, ShowcaseFeedPage, ShowcaseMediaItem } from '@/lib/showcase';
 import {
@@ -106,6 +110,10 @@ export default function FeedClient({
         seedFeed.pageInfo.hasMore ? seedFeed.pageInfo.nextOffset : null
     );
     const [loadingMore, setLoadingMore] = useState(false);
+    // The ranker groups a viewer's events into one session. It arrives on the
+    // feed page rather than the item, so it has to be carried forward as pages
+    // load or every event after the first page lands in a stale session.
+    const [feedSessionId, setFeedSessionId] = useState(() => getShowcaseFeedSessionId(seedFeed));
     const [switching, setSwitching] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
@@ -185,6 +193,13 @@ export default function FeedClient({
                 // React keys unique rather than trusting the page boundary.
                 : [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))]));
             setNextOffset(page.pageInfo.hasMore ? page.pageInfo.nextOffset : null);
+            // A lane switch starts a new session and adopts whatever the page
+            // says, including nothing. Paging within a lane keeps the session it
+            // already has rather than dropping it for an unranked page.
+            const nextFeedSessionId = getShowcaseFeedSessionId(page);
+            if (replace || nextFeedSessionId) {
+                setFeedSessionId(nextFeedSessionId);
+            }
         } catch (error) {
             if (error instanceof Error && error.name === 'AbortError') return;
             if (requestId !== requestIdRef.current) return;
@@ -354,7 +369,7 @@ export default function FeedClient({
                 </div>
             ) : (
                 <div className="flex flex-col gap-3">
-                    {cards.map((card) => (
+                    {cards.map((card, cardIndex) => (
                         <FeedPostCard
                             key={card.id}
                             card={card}
@@ -367,6 +382,20 @@ export default function FeedClient({
                             onToggleExpanded={() => toggleExpanded(card.id)}
                             onToggleComments={() => toggleComments(card.id)}
                             onToggleSave={() => void toggleSave(card.id)}
+                            // The 'recent' lane is unranked, so its cards carry no
+                            // deliveryId and sendShowcaseFeedEvent drops the event.
+                            // That is correct, not a bug to fix: an unranked
+                            // impression has nothing to attribute the share to.
+                            onShared={() => {
+                                void sendShowcaseFeedEvent({
+                                    item: card.item,
+                                    eventType: 'share',
+                                    sourceSurface: 'feed',
+                                    accessToken,
+                                    feedSessionId,
+                                    fallbackPosition: cardIndex,
+                                }).catch(() => undefined);
+                            }}
                             onCommentCountChange={(commentCount) => applyCommentCount(card.id, commentCount)}
                             onOpenMedia={(mediaIndex) => setLightbox({
                                 postId: card.id,

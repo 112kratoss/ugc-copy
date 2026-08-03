@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
   buildFallbackUsername,
+  normalizeUsername,
   sanitizeProfileRecord,
   validateProfileUpdate,
   type ProfileApiResponse,
@@ -35,6 +36,45 @@ export interface ProfileRow {
 interface ExistingProfileRow {
   id: string;
   username: string | null;
+}
+
+export interface ShareableProfileReference {
+  id: string;
+  username: string;
+}
+
+/**
+ * The profile behind a `/creators/<username>` URL, for surfaces that only need
+ * to know a share target exists.
+ *
+ * Deliberately not `getCreatorProfileSummary`: that one is `cache()`-wrapped and
+ * builds its own service client, which makes it impossible to inject in a test.
+ * This takes the caller's client so the share service stays testable.
+ */
+export async function findShareableProfileByUsername(
+  username: string,
+  adminSupabase: SupabaseClient
+): Promise<ShareableProfileReference | null> {
+  const normalizedUsername = normalizeUsername(username);
+
+  if (!normalizedUsername) {
+    return null;
+  }
+
+  const { data, error } = await adminSupabase
+    .from('profiles')
+    .select('id, username')
+    .eq('username', normalizedUsername)
+    .maybeSingle();
+
+  if (error) {
+    logBackendError('failed_to_find_shareable_profile', { error: error });
+    throw error;
+  }
+
+  const profile = data as ExistingProfileRow | null;
+
+  return profile?.username ? { id: profile.id, username: profile.username } : null;
 }
 
 interface ProfileValidationSuccess {

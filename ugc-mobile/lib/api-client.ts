@@ -57,6 +57,9 @@ import type {
   VideoGenerationRequest,
   ViewerUnlocksResponse,
   ViewerUnlockDetailResponse,
+  GenerationShareSourceSurface,
+  ProfileShareSourceSurface,
+  ShareChannel,
 } from './types';
 import {
   GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
@@ -158,6 +161,16 @@ type RequestOptions = {
 export interface SaveShowcasePostOptions {
   shouldSave: boolean;
   sourceSurface?: string;
+}
+
+export interface ShareShowcasePostOptions {
+  sourceSurface: GenerationShareSourceSurface;
+  channel?: ShareChannel;
+}
+
+export interface ShareCreatorProfileOptions {
+  sourceSurface: ProfileShareSourceSurface;
+  channel?: ShareChannel;
 }
 
 export interface GenerationListOptions {
@@ -692,10 +705,26 @@ export function createApiClient({
       }),
     getRemixSourceBundle: (generationId: string, options: { postId?: string | null } = {}) =>
       request<RemixSourceBundle>(`/api/remix-source${buildQuery({ id: generationId, postId: options.postId })}`),
-    shareShowcasePost: (postId: string, channel: 'native-share' | 'copy-link' = 'native-share') =>
+    // `sourceSurface` is required rather than defaulted: every mobile share used
+    // to report 'detail-page' regardless of origin, which made three distinct
+    // surfaces indistinguishable from each other and from the web detail page.
+    shareShowcasePost: (postId: string, options: ShareShowcasePostOptions) =>
       request<{ success: boolean }>('/api/showcase/share', {
         method: 'POST',
-        body: JSON.stringify({ postId, sourceSurface: 'detail-page', channel }),
+        body: JSON.stringify({
+          postId,
+          sourceSurface: options.sourceSurface,
+          channel: options.channel ?? 'native-share',
+        }),
+      }),
+    shareCreatorProfile: (username: string, options: ShareCreatorProfileOptions) =>
+      request<{ success: boolean }>('/api/profile/share', {
+        method: 'POST',
+        body: JSON.stringify({
+          username,
+          sourceSurface: options.sourceSurface,
+          channel: options.channel ?? 'native-share',
+        }),
       }),
     publishGeneration: (body: Record<string, unknown>) =>
       request<CreatePostResponse>('/api/showcase/publish', { method: 'POST', body: JSON.stringify(body) }),

@@ -56,6 +56,7 @@ interface FeedPostCardProps {
     onToggleExpanded: () => void;
     onToggleComments: () => void;
     onToggleSave: () => void;
+    onShared?: () => void;
     onCommentCountChange: (commentCount: number) => void;
     onOpenMedia: (mediaIndex: number) => void;
     /** Opens the post page. Fired by a click on the card outside any control. */
@@ -84,6 +85,7 @@ function FeedPostCardView({
     onToggleExpanded,
     onToggleComments,
     onToggleSave,
+    onShared,
     onCommentCountChange,
     onOpenMedia,
     onOpenPost,
@@ -269,6 +271,7 @@ function FeedPostCardView({
                     description={card.body || item.prompt}
                     sourceSurface="feed"
                     accessToken={accessToken}
+                    onShared={onShared}
                     iconOnly
                     className="ui-focus-ring inline-flex h-11 w-11 items-center justify-center rounded-full text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
                 />

@@ -1682,7 +1682,7 @@ export default function ShowcaseReelViewer({
             generationId={item.id}
             title={item.title}
             description={item.body || item.prompt}
-            sourceSurface="showcase"
+            sourceSurface="showcase-reel"
             accessToken={accessToken ?? null}
             onShared={() => {
               void sendShowcaseFeedEvent({

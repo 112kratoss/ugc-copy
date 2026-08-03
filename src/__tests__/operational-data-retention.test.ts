@@ -9,6 +9,7 @@ function createClient(result: {
   data?: unknown;
   error?: unknown;
   shareEvents?: { data?: unknown; error?: unknown };
+  profileShareEvents?: { data?: unknown; error?: unknown };
   freeUnlockOrders?: { data?: unknown; error?: unknown };
 }) {
   const calls: RpcCall[] = [];
@@ -24,6 +25,12 @@ function createClient(result: {
           return {
             data: result.shareEvents?.data ?? 0,
             error: result.shareEvents?.error ?? null,
+          };
+        }
+        if (fn === 'prune_profile_share_events') {
+          return {
+            data: result.profileShareEvents?.data ?? 0,
+            error: result.profileShareEvents?.error ?? null,
           };
         }
         if (fn === 'prune_abandoned_free_unlock_orders') {
@@ -52,6 +59,7 @@ describe('operational data retention', () => {
         pruned_at: '2026-07-25T00:50:00.000Z',
       },
       shareEvents: { data: 18 },
+      profileShareEvents: { data: 6 },
       freeUnlockOrders: { data: 2 },
     });
 
@@ -67,16 +75,18 @@ describe('operational data retention', () => {
       totalDeleted: 4312,
       batchLimitReached: false,
       shareEventsDeleted: 18,
+      profileShareEventsDeleted: 6,
       abandonedFreeUnlockOrdersDeleted: 2,
     });
   });
 
-  it('sweeps the two post-system tables the main retention function misses', async () => {
-    // post_share_events is append-only telemetry with no retention policy, and
-    // a retried free unlock leaves a synthetic $0 order behind.
+  it('sweeps the tables the main retention function misses', async () => {
+    // Both share ledgers are append-only telemetry with no retention policy of
+    // their own, and a retried free unlock leaves a synthetic $0 order behind.
     const { client, calls } = createClient({
       data: { total_deleted: 0 },
       shareEvents: { data: 40 },
+      profileShareEvents: { data: 11 },
       freeUnlockOrders: { data: 5 },
     });
 
@@ -85,9 +95,11 @@ describe('operational data retention', () => {
     expect(calls.map((call) => call.fn)).toEqual([
       'prune_operational_backend_data',
       'prune_post_share_events',
+      'prune_profile_share_events',
       'prune_abandoned_free_unlock_orders',
     ]);
     expect(summary.shareEventsDeleted).toBe(40);
+    expect(summary.profileShareEventsDeleted).toBe(11);
     expect(summary.abandonedFreeUnlockOrdersDeleted).toBe(5);
   });
 
@@ -97,6 +109,7 @@ describe('operational data retention', () => {
     const { client } = createClient({
       data: { total_deleted: 12, job_runs_deleted: 12 },
       shareEvents: { error: { message: 'function does not exist' } },
+      profileShareEvents: { error: { message: 'function does not exist' } },
       freeUnlockOrders: { error: { message: 'function does not exist' } },
     });
 
@@ -104,6 +117,7 @@ describe('operational data retention', () => {
 
     expect(summary.jobRunsDeleted).toBe(12);
     expect(summary.shareEventsDeleted).toBe(0);
+    expect(summary.profileShareEventsDeleted).toBe(0);
     expect(summary.abandonedFreeUnlockOrdersDeleted).toBe(0);
   });
 

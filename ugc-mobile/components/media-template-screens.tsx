@@ -22,7 +22,6 @@ import {
   AppState,
   Linking,
   Pressable,
-  Share,
   View,
 } from 'react-native';
 
@@ -891,22 +890,16 @@ function ResultStage({
     }
   };
 
-  const shareResult = async () => {
-    if (!safeResultUrl) {
-      setMessage('The share link is unavailable. Refresh this creation and try again.');
-      return;
-    }
-    try {
-      await Share.share({ message: safeResultUrl, url: safeResultUrl });
-    } catch {
-      setMessage('Could not open the share sheet. Please try again.');
-    }
-  };
-
-  const publishResult = () => {
+  const publishResult = (options: { shareAfterPublish?: boolean } = {}) => {
     const generationId = result?.generationId?.trim();
     if (!canPublish || !generationId) return;
-    router.push({ pathname: '/post/new', params: { generationId } } as never);
+    router.push({
+      pathname: '/post/new',
+      params: {
+        generationId,
+        ...(options.shareAfterPublish ? { shareAfterPublish: '1' } : {}),
+      },
+    } as never);
   };
 
   if (!result) return null;
@@ -928,14 +921,20 @@ function ResultStage({
       ) : null}
       {message ? <StatusBlock title="Could not continue" body={message} tone="danger" /> : null}
       {canPublish ? (
-        <PrimaryButton label="Publish to Showcase" onPress={publishResult} />
+        <PrimaryButton label="Publish to Showcase" onPress={() => publishResult()} />
       ) : (
         <PrimaryButton label={`Open full-quality ${result.kind}`} disabled={!safeResultUrl} onPress={() => void openOriginal()} />
       )}
       {canPublish ? (
         <SecondaryButton label={`Open full-quality ${result.kind}`} disabled={!safeResultUrl} onPress={() => void openOriginal()} />
       ) : null}
-      <SecondaryButton label={`Share ${result.kind}`} disabled={!safeResultUrl} onPress={() => void shareResult()} />
+      {/* Sharing used to send the raw storage URL, which reaches non-users with
+          no landing page, no attribution, no remix path, and unmetered egress.
+          Publishing first is what turns a share into a product surface — so the
+          control only exists when there is something publishable. */}
+      {canPublish ? (
+        <SecondaryButton label="Publish & share" onPress={() => publishResult({ shareAfterPublish: true })} />
+      ) : null}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
         <Download size={15} color={appTheme.colors.muted} />
         <AppText variant="caption" color="muted">The original full-quality file opens outside the app.</AppText>

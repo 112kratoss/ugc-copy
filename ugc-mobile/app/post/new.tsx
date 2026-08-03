@@ -16,6 +16,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  Share,
   Text,
   TextInput,
   useWindowDimensions,
@@ -78,10 +79,12 @@ import {
   type PostComposerResourceCardType,
   type PostComposerValidationResult,
 } from '@/lib/post-new-view-model';
+import { env } from '@/lib/env';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme, type ToolAccent } from '@/lib/theme';
 import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-file';
 import type { GenerationListItem, OwnerPostsResponse, PostResourceAttachment, PostResourceBundleAccessMode, SourceToolOption } from '@/lib/types';
+import { buildShareUrl } from '@/lib/viewer-actions';
 
 const getDefaultResourceDraft = () => ({
   accessMode: 'none' as const,
@@ -1424,10 +1427,20 @@ export default function NewPostScreen() {
   const { user, isLoading: authLoading, api } = useAuth();
   const queryClient = useQueryClient();
   const navigation = useNavigation();
-  const params = useLocalSearchParams<{ generationId?: string; postId?: string; focus?: string }>();
+  const params = useLocalSearchParams<{
+    generationId?: string;
+    postId?: string;
+    focus?: string;
+    shareAfterPublish?: string;
+  }>();
   const generationId = params.generationId;
   const postId = params.postId;
   const focusTarget = Array.isArray(params.focus) ? params.focus[0] : params.focus;
+  // Set when the viewer reached this screen by tapping Share on something that
+  // was not public yet. Publishing is the real action; the share sheet follows.
+  const shareAfterPublish = (Array.isArray(params.shareAfterPublish)
+    ? params.shareAfterPublish[0]
+    : params.shareAfterPublish) === '1';
 
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -1779,7 +1792,7 @@ export default function NewPostScreen() {
         if (draftStorageId) {
           void clearPersistedPostComposerDraft(draftStorageId);
         }
-        setTimeout(() => {
+        const goToPost = () => {
           router.replace({
             pathname: '/(tabs)/profile',
             params: {
@@ -1787,6 +1800,34 @@ export default function NewPostScreen() {
               postId: targetPostId,
             },
           } as never);
+        };
+
+        // The share sheet has to fully resolve before this screen unmounts, so
+        // it is awaited ahead of the navigation rather than raced against it.
+        // Publishing has already succeeded at this point: a dismissed or failed
+        // share must never be reported as a failed publish.
+        setTimeout(() => {
+          if (!shareAfterPublish || response.visibility !== 'public') {
+            goToPost();
+            return;
+          }
+
+          void (async () => {
+            try {
+              const title = (context?.submittedDraft ?? draft).title.trim() || 'My creation';
+              const url = buildShareUrl(env.siteUrl, `/showcase/${targetPostId}`, 'my-creations');
+              const result = await Share.share({ title, message: `${title}\n${url}`, url });
+              if (result.action === Share.sharedAction) {
+                await api
+                  .shareShowcasePost(targetPostId, { sourceSurface: 'my-creations' })
+                  .catch(() => null);
+              }
+            } catch {
+              // A share sheet that could not open is not a publish failure.
+            } finally {
+              goToPost();
+            }
+          })();
         }, 0);
       }
     },

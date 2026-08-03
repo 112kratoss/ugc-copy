@@ -58,6 +58,7 @@ import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from '@/lib/showca
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
 import { accentColor, appTheme } from '@/lib/theme';
 import type { CreatorProfileResponse, ShowcaseFeedItem } from '@/lib/types';
+import { buildShareUrl } from '@/lib/viewer-actions';
 
 const PROFILE_PAGE_SIZE = 24;
 const GRID_GAP = 10;
@@ -174,12 +175,20 @@ export function CreatorProfileScreen({
 
   const handleShareProfile = async () => {
     if (!data) return;
-    const url = `${env.siteUrl.replace(/\/$/, '')}/creators/${encodeURIComponent(data.profile.username)}`;
-    await Share.share({
+    const url = buildShareUrl(
+      env.siteUrl,
+      `/creators/${encodeURIComponent(data.profile.username)}`,
+      'creator-profile'
+    );
+    const result = await Share.share({
       message: `${data.profile.displayName} on Magicbooklet\n${url}`,
       url,
       title: data.profile.displayName,
     });
+    if (result.action !== Share.sharedAction) return;
+    await api
+      .shareCreatorProfile(data.profile.username, { sourceSurface: 'creator-profile' })
+      .catch(() => null);
   };
 
   const requireSafetySignIn = () => {

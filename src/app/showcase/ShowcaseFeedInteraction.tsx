@@ -24,7 +24,7 @@ export type ShowcaseFeedEventType =
   | 'share'
   | 'remix_start'
   | ShowcaseFeedbackAction;
-export type ShowcaseEventSourceSurface = 'showcase' | 'showcase-reel';
+export type ShowcaseEventSourceSurface = 'showcase' | 'showcase-reel' | 'feed';
 
 interface ShowcaseRecommendationMetadata {
   deliveryId?: string | null;

@@ -43,7 +43,7 @@ import { buildTextPostPage } from '@/lib/text-post-page-view-model';
 import { appTheme } from '@/lib/theme';
 import type { ShowcasePostResponse } from '@/lib/types';
 import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
-import { getSaveHeartIconProps, getViewerActionSlots, getViewerStateChip } from '@/lib/viewer-actions';
+import { getSaveHeartIconProps, getViewerActionSlots, getViewerShareIntent, getViewerStateChip } from '@/lib/viewer-actions';
 
 /**
  * A written post, read as a page.
@@ -188,15 +188,22 @@ export default function PostScreen() {
   }, [displayItem?.showcasePostId, openComments, requestedCommentsPostId, requestedReplyToId]);
 
   const shareItem = useCallback(async () => {
-    if (!item?.canShare) return;
-    const url = item.sharePath ? `${env.siteUrl}${item.sharePath}` : null;
-    const result = await Share.share({
-      title: item.title,
-      message: url ? `${item.title}\n${url}` : `${item.title}\n${item.displayText}`,
-      url: url ?? undefined,
-    });
+    if (!item) return;
+    const intent = getViewerShareIntent(item, env.siteUrl);
+    if (intent.kind === 'unavailable') return;
+
+    if (intent.kind === 'publish') {
+      router.push({ pathname: '/post/new', params: { generationId: intent.generationId, shareAfterPublish: '1' } } as never);
+      return;
+    }
+    if (intent.kind === 'make-public') {
+      router.push({ pathname: '/post/new', params: { postId: intent.postId, shareAfterPublish: '1' } } as never);
+      return;
+    }
+
+    const result = await Share.share({ ...intent.content });
     if (result.action === Share.sharedAction && item.showcasePostId) {
-      await api.shareShowcasePost(item.showcasePostId, 'native-share').catch(() => null);
+      await api.shareShowcasePost(item.showcasePostId, { sourceSurface: 'detail-page' }).catch(() => null);
     }
   }, [api, item]);
 

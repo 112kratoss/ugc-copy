@@ -18,6 +18,9 @@ interface ProfileActionsProps {
 export function ProfileActions({ profile }: ProfileActionsProps) {
   const router = useRouter();
   const [isOwner, setIsOwner] = useState<boolean | null>(null);
+  // Captured alongside ownership so a share can be attributed to the viewer
+  // without a second getSession() round trip.
+  const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isFollowing, setIsFollowing] = useState(false);
   const [isFollowLoading, setIsFollowLoading] = useState(false);
   const [followError, setFollowError] = useState<string | null>(null);
@@ -59,6 +62,7 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
 
       const ownsProfile = session?.user?.id === profile.id;
       setIsOwner(ownsProfile);
+      setAccessToken(session?.access_token ?? null);
       setFollowError(null);
       setFollowStatusMessage(null);
 
@@ -120,6 +124,8 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
         <ProfileShareButton
           username={profile.username}
           displayName={profile.displayName}
+          sourceSurface="creator-profile"
+          accessToken={accessToken}
           className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-5 py-2.5 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-70"
         />
       </div>
@@ -222,6 +228,8 @@ export function ProfileActions({ profile }: ProfileActionsProps) {
         <ProfileShareButton
           username={profile.username}
           displayName={profile.displayName}
+          sourceSurface="creator-profile"
+          accessToken={accessToken}
           className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-5 text-sm font-bold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-70"
         />
       </div>

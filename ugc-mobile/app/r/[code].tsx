@@ -213,6 +213,11 @@ function normalizeMobileReferralDestination(value?: string) {
   if (value === '/create') return '/(tabs)';
   if (/^\/create\/(?:image|video|motion)$/.test(value)) return value;
   if (value === '/pricing') return '/(tabs)/pricing';
-  if (value === '/invite' || /^\/showcase\/[^/]+$/.test(value)) return value;
+  // Kept in step with NOTIFICATION_ROUTE_PATTERNS in lib/notifications.ts: both
+  // decide which web paths an outside link may land a viewer on, and a path
+  // allowed by one and refused by the other is always a bug in the stricter one.
+  if (value === '/invite' || /^\/showcase\/[^/]+$/.test(value) || /^\/creators\/[^/]+$/.test(value)) {
+    return value;
+  }
   return '/(tabs)';
 }

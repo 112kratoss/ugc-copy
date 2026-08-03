@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "host": "magicbooklet.com",
+  "paths": [
+    "/r/*",
+    "/showcase/*",
+    "/creators/*"
+  ]
+}

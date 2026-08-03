@@ -29,12 +29,10 @@ describe('feed share surface migration', () => {
     }
   });
 
-  it('allows every surface the client can send, so no share is rejected at write time', () => {
-    for (const surface of GENERATION_SHARE_SOURCE_SURFACES) {
-      expect(migration).toContain(`'${surface}'`);
-    }
-  });
-
+  // Whether the *current* constraint matches the TypeScript union is asserted by
+  // share-source-surface-migration.test.ts, which reads the effective constraint
+  // across all migrations. Asserting it here too would fail this file every time
+  // a later migration widened the enum -- which is not what this file is about.
   it('adds the feed surface the previous constraint rejected', () => {
     expect(GENERATION_SHARE_SOURCE_SURFACES).toContain('feed');
     expect(migration).toContain("'feed'");

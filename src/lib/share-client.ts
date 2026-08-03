@@ -3,6 +3,7 @@ import {
   buildShowcaseDetailUrl,
   type GenerationShareChannel,
   type GenerationShareSourceSurface,
+  type ProfileShareSourceSurface,
 } from '@/lib/share';
 import { buildCreatorProfileUrl } from '@/lib/profile';
 import { logBackendError } from '@/lib/backend-logger';
@@ -40,6 +41,39 @@ async function postShareClick({
   }
 }
 
+async function postProfileShareClick({
+  username,
+  sourceSurface,
+  channel,
+  accessToken,
+}: {
+  username: string;
+  sourceSurface: ProfileShareSourceSurface;
+  channel: GenerationShareChannel;
+  accessToken?: string | null;
+}) {
+  try {
+    await fetch('/api/profile/share', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(accessToken
+          ? {
+              Authorization: `Bearer ${accessToken}`,
+            }
+          : {}),
+      },
+      body: JSON.stringify({
+        username,
+        sourceSurface,
+        channel,
+      }),
+    });
+  } catch (error) {
+    logBackendError('failed_to_record_profile_share_click', { error: error });
+  }
+}
+
 export async function sharePublicGeneration({
   generationId,
   title,
@@ -57,7 +91,7 @@ export async function sharePublicGeneration({
     return null;
   }
 
-  const url = buildShowcaseDetailUrl(generationId, window.location.origin);
+  const url = buildShowcaseDetailUrl(generationId, window.location.origin, sourceSurface);
   const normalizedTitle = title.trim();
   const normalizedDescription = description?.trim() || null;
   const shareText =
@@ -105,9 +139,13 @@ export async function sharePublicGeneration({
 export async function shareCreatorProfile({
   username,
   displayName,
+  sourceSurface,
+  accessToken,
 }: {
   username: string;
   displayName: string;
+  sourceSurface: ProfileShareSourceSurface;
+  accessToken?: string | null;
 }): Promise<GenerationShareChannel | null> {
   if (typeof window === 'undefined') {
     return null;
@@ -128,6 +166,12 @@ export async function shareCreatorProfile({
         text,
         url,
       });
+      await postProfileShareClick({
+        username,
+        sourceSurface,
+        channel: 'native-share',
+        accessToken,
+      });
       return 'native-share';
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
@@ -141,5 +185,11 @@ export async function shareCreatorProfile({
   }
 
   await navigator.clipboard.writeText(url);
+  await postProfileShareClick({
+    username,
+    sourceSurface,
+    channel: 'copy-link',
+    accessToken,
+  });
   return 'copy-link';
 }

@@ -156,16 +156,43 @@ end
     expect(() => setPathSafeIosBundleScript(project)).not.toThrow();
   });
 
-  it('registers verified referral links on iOS and Android', () => {
+  it('registers verified app links on iOS and Android', () => {
     const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
 
     expect(appJson.expo.ios.associatedDomains).toContain('applinks:magicbooklet.com');
-    expect(appJson.expo.android.intentFilters).toContainEqual({
-      action: 'VIEW',
-      autoVerify: true,
-      data: [{ scheme: 'https', host: 'magicbooklet.com', pathPrefix: '/r/' }],
-      category: ['BROWSABLE', 'DEFAULT'],
-    });
+
+    // Referral, post, and creator links. Without the last two, every shared post
+    // or profile link opens the browser instead of the app.
+    for (const pathPrefix of ['/r/', '/showcase/', '/creators/']) {
+      expect(appJson.expo.android.intentFilters).toContainEqual({
+        action: 'VIEW',
+        autoVerify: true,
+        data: [{ scheme: 'https', host: 'magicbooklet.com', pathPrefix }],
+        category: ['BROWSABLE', 'DEFAULT'],
+      });
+    }
+    // Pinned so a later edit cannot silently drop a path family: toContainEqual
+    // alone would still pass if one were removed and another duplicated.
+    expect(appJson.expo.android.intentFilters).toHaveLength(3);
+  });
+
+  it('keeps the Android path prefixes in step with the shared app-link contract', () => {
+    // The AASA `paths` list and these prefixes are the same fact stated in two
+    // workspaces that never import each other.
+    const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
+    const contract = JSON.parse(
+      readFileSync(join(projectRoot, '..', 'contracts', 'universal-links-v1.json'), 'utf8')
+    ) as { host: string; paths: string[] };
+
+    const declaredPrefixes = appJson.expo.android.intentFilters
+      .map((filter: { data: { pathPrefix: string }[] }) => filter.data[0].pathPrefix)
+      .sort();
+    const contractPrefixes = contract.paths
+      .map((path) => (path.endsWith('*') ? path.slice(0, -1) : path))
+      .sort();
+
+    expect(declaredPrefixes).toEqual(contractPrefixes);
+    expect(appJson.expo.ios.associatedDomains).toContain(`applinks:${contract.host}`);
   });
 
   it('sets a manifest placeholder and debug-only Gradle values for local HTTP', () => {

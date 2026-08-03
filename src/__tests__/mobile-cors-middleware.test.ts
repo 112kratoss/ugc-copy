@@ -25,6 +25,7 @@ describe('mobile API CORS proxy', () => {
     expect(isMobileCorsPath('/api/uploads/media/sign')).toBe(true);
     expect(isMobileCorsPath('/api/uploads/media/read-url')).toBe(true);
     expect(isMobileCorsPath('/api/profile/media/sign')).toBe(true);
+    expect(isMobileCorsPath('/api/profile/share')).toBe(true);
     expect(isMobileCorsPath('/api/marketplace/resources')).toBe(true);
     expect(isMobileCorsPath('/api/marketplace/resources/bundle-1')).toBe(true);
     expect(isMobileCorsPath('/api/showcase/feed')).toBe(true);

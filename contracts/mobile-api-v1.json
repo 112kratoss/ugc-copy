@@ -532,6 +532,15 @@
         "success": true
       }
     },
+    "shareCreatorProfile": {
+      "method": "POST",
+      "path": "/api/profile/share",
+      "auth": "none",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true
+      }
+    },
     "publishGeneration": {
       "method": "POST",
       "path": "/api/showcase/publish",
