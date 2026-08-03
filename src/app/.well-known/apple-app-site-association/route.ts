@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 
+import { UNIVERSAL_LINK_PATHS } from '@/lib/app-links';
+
 export const dynamic = 'force-static';
 
 export function GET() {
@@ -10,7 +12,7 @@ export function GET() {
   return NextResponse.json({
     applinks: {
       apps: [],
-      details: appId ? [{ appID: appId, paths: ['/r/*'] }] : [],
+      details: appId ? [{ appID: appId, paths: [...UNIVERSAL_LINK_PATHS] }] : [],
     },
   }, {
     headers: {

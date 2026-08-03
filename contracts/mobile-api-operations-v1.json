@@ -226,6 +226,11 @@
       "path": "/api/showcase/share",
       "auth": "required"
     },
+    "shareCreatorProfile": {
+      "method": "POST",
+      "path": "/api/profile/share",
+      "auth": "required"
+    },
     "publishGeneration": {
       "method": "POST",
       "path": "/api/showcase/publish",

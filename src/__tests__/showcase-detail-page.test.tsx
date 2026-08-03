@@ -125,32 +125,59 @@ describe('Showcase detail page', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders a public post and records a share visit', async () => {
+  it('renders a public post and records a share visit attributed to its origin surface', async () => {
     render(await ShowcaseDetailPage({
       params: Promise.resolve({ id: 'post-1' }),
+      searchParams: Promise.resolve({ s: 'showcase-reel' }),
     }));
 
     expect(screen.getByRole('heading', { name: /shared creation/i })).toBeInTheDocument();
     expect(screen.getByText('A polished showcase description.')).toBeInTheDocument();
     expect(screen.getByText('A creator holds the product by a bright window.')).toBeInTheDocument();
     expect(screen.getByTestId('showcase-detail-actions')).toHaveTextContent('post-1:true');
+    // The marker names where the share came from. The landing page cannot infer
+    // that, and before it existed every visit was filed as 'detail-page'.
     expect(recordPostShareEventMock).toHaveBeenCalledWith({
       postId: 'post-1',
       eventType: 'share_visit',
-      sourceSurface: 'detail-page',
+      sourceSurface: 'showcase-reel',
     });
     expect(screen.getByTestId('canonical-post-comments')).toBeInTheDocument();
     // No bundle on this post — the rail offers no recipe pointer.
     expect(screen.queryByTestId('recipe-jump-link')).not.toBeInTheDocument();
   });
 
-  it('does not count an in-app open as a share visit', async () => {
-    // Every in-app link carries `from`; a shared URL never does, because
-    // buildShowcaseDetailUrl is called without options. So the presence of that
-    // param is the exact test for "did not arrive from outside".
+  it('does not count an unmarked visit, which is a bookmark or a search result', async () => {
+    // This is the behaviour change: a bare URL used to be counted as a share
+    // visit, so bookmarks, Google traffic and pasted links all inflated the
+    // number. Only a link the product actually handed out carries the marker.
     render(await ShowcaseDetailPage({
       params: Promise.resolve({ id: 'post-1' }),
-      searchParams: Promise.resolve({ from: 'community', returnTo: '/feed' }),
+    }));
+
+    expect(screen.getByRole('heading', { name: /shared creation/i })).toBeInTheDocument();
+    expect(recordPostShareEventMock).not.toHaveBeenCalled();
+  });
+
+  it('files an unrecognised marker under the landing surface rather than dropping it', async () => {
+    render(await ShowcaseDetailPage({
+      params: Promise.resolve({ id: 'post-1' }),
+      searchParams: Promise.resolve({ s: 'some-future-surface' }),
+    }));
+
+    expect(recordPostShareEventMock).toHaveBeenCalledWith({
+      postId: 'post-1',
+      eventType: 'share_visit',
+      sourceSurface: 'detail-page',
+    });
+  });
+
+  it('does not count an in-app open as a share visit', async () => {
+    // Every in-app link carries `from` and no marker. Both guards hold: even a
+    // marker copied into an internal link cannot turn one into a share visit.
+    render(await ShowcaseDetailPage({
+      params: Promise.resolve({ id: 'post-1' }),
+      searchParams: Promise.resolve({ from: 'community', returnTo: '/feed', s: 'showcase-reel' }),
     }));
 
     expect(screen.getByRole('heading', { name: /shared creation/i })).toBeInTheDocument();
@@ -260,6 +287,76 @@ describe('Showcase detail page', () => {
       'href',
       '/marketplace?access=paid&resource=workflow'
     );
+  });
+
+  it('gives a shared video link the post\'s own poster frame', async () => {
+    // Video and motion posts used to fall through to the site-wide OG image, so
+    // the flagship output produced the least appealing card in every chat app.
+    const detail = await getPublicPostDetailMock('post-1');
+    getPublicPostDetailMock.mockResolvedValue({
+      ...detail,
+      mediaKind: 'video',
+      mediaUrl: 'https://cdn.example.com/showcase/gen-1.mp4',
+      mediaItems: [{
+        previewUrl: 'https://cdn.example.com/showcase/gen-1.preview.webp',
+        previewStatus: 'ready',
+        width: 1080,
+        height: 1920,
+      }],
+    });
+
+    const metadata = await generateMetadata({ params: Promise.resolve({ id: 'post-1' }) });
+    const images = Array.isArray(metadata.openGraph?.images)
+      ? metadata.openGraph?.images
+      : [metadata.openGraph?.images];
+
+    expect(images[0]).toMatchObject({
+      url: 'https://cdn.example.com/showcase/gen-1.preview.webp',
+      // Real dimensions, not the 1200x630 default: post media is usually
+      // portrait, and a wrong ratio makes crawlers letterbox the card.
+      width: 1080,
+      height: 1920,
+    });
+  });
+
+  it('falls back to the site card while a poster is still rendering', async () => {
+    // Posters are generated asynchronously, so a freshly published video has a
+    // storage path before it has an image. Serving it would be a broken card.
+    const detail = await getPublicPostDetailMock('post-1');
+    getPublicPostDetailMock.mockResolvedValue({
+      ...detail,
+      mediaKind: 'video',
+      mediaUrl: 'https://cdn.example.com/showcase/gen-1.mp4',
+      mediaItems: [{
+        previewUrl: 'https://cdn.example.com/showcase/gen-1.preview.webp',
+        previewStatus: 'pending',
+        width: 1080,
+        height: 1920,
+      }],
+    });
+
+    const metadata = await generateMetadata({ params: Promise.resolve({ id: 'post-1' }) });
+    const images = Array.isArray(metadata.openGraph?.images)
+      ? metadata.openGraph?.images
+      : [metadata.openGraph?.images];
+
+    expect(images[0]).toMatchObject({ url: '/opengraph-image.png', width: 1200, height: 630 });
+  });
+
+  it('falls back to the site card for legacy posts that carry no media items', async () => {
+    const detail = await getPublicPostDetailMock('post-1');
+    getPublicPostDetailMock.mockResolvedValue({
+      ...detail,
+      mediaKind: 'video',
+      mediaUrl: 'https://cdn.example.com/showcase/gen-1.mp4',
+    });
+
+    const metadata = await generateMetadata({ params: Promise.resolve({ id: 'post-1' }) });
+    const images = Array.isArray(metadata.openGraph?.images)
+      ? metadata.openGraph?.images
+      : [metadata.openGraph?.images];
+
+    expect(images[0]).toMatchObject({ url: '/opengraph-image.png' });
   });
 
   it('generates canonical metadata for the public detail page', async () => {

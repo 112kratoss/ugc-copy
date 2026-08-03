@@ -38,7 +38,7 @@ import { buildProfileFeedCards, type ProfileFeedCard } from '@/lib/profile-feed-
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
-import { getNativeRemixCreateHref } from '@/lib/viewer-actions';
+import { getNativeRemixCreateHref, getViewerShareIntent, getViewerShareSourceSurface } from '@/lib/viewer-actions';
 import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
 
 type ProfileMediaFeedParams = {
@@ -137,14 +137,24 @@ export function ProfileMediaFeedScreen() {
   }, []);
 
   const shareItem = useCallback(async (item: ImmersivePreviewItem) => {
-    if (!item.canShare) return;
-    const url = item.sharePath ? `${env.siteUrl}${item.sharePath}` : null;
-    await Share.share({
-      title: item.title,
-      message: url ? `${item.title}\n${url}` : `${item.title}\n${item.displayText}`,
-      url: url ?? undefined,
-    });
-  }, []);
+    const intent = getViewerShareIntent(item, env.siteUrl);
+    if (intent.kind === 'unavailable') return;
+
+    if (intent.kind === 'publish') {
+      router.push({ pathname: '/post/new', params: { generationId: intent.generationId, shareAfterPublish: '1' } } as never);
+      return;
+    }
+    if (intent.kind === 'make-public') {
+      router.push({ pathname: '/post/new', params: { postId: intent.postId, shareAfterPublish: '1' } } as never);
+      return;
+    }
+
+    const result = await Share.share({ ...intent.content });
+    if (result.action !== Share.sharedAction || !item.showcasePostId) return;
+    await api
+      .shareShowcasePost(item.showcasePostId, { sourceSurface: getViewerShareSourceSurface(item.source) })
+      .catch(() => null);
+  }, [api]);
 
   const recreateItem = useCallback((item: ImmersivePreviewItem) => {
     if (!user) {

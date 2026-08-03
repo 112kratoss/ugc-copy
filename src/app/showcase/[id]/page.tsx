@@ -8,9 +8,16 @@ import {
   getPostReferenceForShowcaseId,
   getPublicPostDetail,
   getPublicPostMetaDescription,
+  type PublicPostDetail,
 } from '@/lib/public-posts';
-import { createMetadata } from '@/lib/seo';
-import { buildShowcaseDetailPath, getShowcaseReturnContext } from '@/lib/share';
+import { createMetadata, type MetadataImage } from '@/lib/seo';
+import {
+  SHARE_SOURCE_QUERY_PARAM,
+  buildShowcaseDetailPath,
+  getShowcaseReturnContext,
+  isGenerationShareSourceSurface,
+  type GenerationShareSourceSurface,
+} from '@/lib/share';
 import { getServerAuthState } from '@/lib/supabase-server';
 import ShowcaseDetailBody from './ShowcaseDetailBody';
 
@@ -28,6 +35,55 @@ function shouldTrackShareVisit(headerStore: Headers): boolean {
 
 function getParam(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+/**
+ * The card a shared link renders in a chat app.
+ *
+ * Video and motion posts used to fall straight through to the site-wide OG
+ * image, which is the least appealing preview the product can produce for its
+ * flagship output. The poster frame is already sitting on the cover media as a
+ * public storage URL, so this costs no extra query.
+ *
+ * `previewStatus` is checked rather than just the URL: `previewUrl` is derived
+ * from the stored path alone, so a failed render leaves a path behind that would
+ * otherwise be served as a broken image.
+ */
+function resolveShowcaseOgImage(detail: PublicPostDetail): MetadataImage | undefined {
+  const cover = detail.mediaItems?.[0];
+  const dimensions = cover?.width && cover?.height
+    ? { width: cover.width, height: cover.height }
+    : {};
+
+  if (detail.mediaKind === 'image' && detail.mediaUrl) {
+    return { url: detail.mediaUrl, ...dimensions };
+  }
+
+  if (cover?.previewUrl && cover.previewStatus === 'ready') {
+    return { url: cover.previewUrl, ...dimensions };
+  }
+
+  // Legacy posts predating post_media carry no poster at all, and a freshly
+  // published video's poster is still rendering. Both fall back to the site
+  // card rather than to a signed generation URL, which expires in an hour and
+  // would leave crawlers caching a dead image.
+  return undefined;
+}
+
+/**
+ * A share visit means someone arrived from a link that left the product. Shared
+ * URLs carry `?s=<surface>`; in-app links never do, so the marker is the test —
+ * and it names the surface the share came from, which the landing page has no
+ * other way to know.
+ */
+function getShareVisitSurface(
+  value: string | undefined
+): GenerationShareSourceSurface | null {
+  if (!value) {
+    return null;
+  }
+
+  return isGenerationShareSourceSurface(value) ? value : 'detail-page';
 }
 
 export async function generateMetadata({ params }: ShowcaseDetailPageProps): Promise<Metadata> {
@@ -56,7 +112,7 @@ export async function generateMetadata({ params }: ShowcaseDetailPageProps): Pro
     title: detail.title,
     description: getPublicPostMetaDescription(detail),
     path: buildShowcaseDetailPath(detail.id),
-    image: detail.mediaKind === 'image' ? detail.mediaUrl ?? undefined : undefined,
+    image: resolveShowcaseOgImage(detail),
   });
 }
 
@@ -100,18 +156,23 @@ export default async function ShowcaseDetailPage({ params, searchParams }: Showc
     notFound();
   }
 
-  // A share visit means someone arrived from outside. An in-app open always
-  // carries `from`, and a shared URL never does (buildShowcaseDetailUrl passes
-  // no options), so the absence of that param is the exact test.
-  //
   // Deferred with `after` so an analytics write never sits between the click and
   // the post appearing — nothing in this render depends on its result, and the
   // recorder swallows its own failures.
-  if (detail.visibility === 'public' && !returnFrom && shouldTrackShareVisit(headerStore)) {
+  const shareVisitSurface = getShareVisitSurface(
+    getParam(resolvedSearchParams[SHARE_SOURCE_QUERY_PARAM])
+  );
+
+  if (
+    detail.visibility === 'public'
+    && shareVisitSurface
+    && !returnFrom
+    && shouldTrackShareVisit(headerStore)
+  ) {
     after(recordPostShareEvent({
       postId: detail.id,
       eventType: 'share_visit',
-      sourceSurface: 'detail-page',
+      sourceSurface: shareVisitSurface,
     }));
   }
 

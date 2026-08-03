@@ -1,5 +1,16 @@
 import type { Metadata } from 'next';
 
+/**
+ * An OG image. Pass a bare string to accept the 1200x630 default, or the object
+ * form when the real dimensions are known — post media is usually portrait, and
+ * declaring 1200x630 for it makes chat apps letterbox the card.
+ */
+export type MetadataImage = {
+    url: string;
+    width?: number;
+    height?: number;
+};
+
 type CreateMetadataOptions = {
     title: string;
     description: string;
@@ -7,7 +18,7 @@ type CreateMetadataOptions = {
     absoluteTitle?: string;
     keywords?: string[];
     type?: 'website' | 'article';
-    image?: string;
+    image?: string | MetadataImage;
     noIndex?: boolean;
     publishedTime?: string;
     modifiedTime?: string;
@@ -120,6 +131,13 @@ export function createMetadata({
     const metadataTitle = absoluteTitle || title === siteConfig.name
         ? { absolute: fullTitle }
         : title;
+    const resolvedImage = typeof image === 'string' ? { url: image } : image;
+    // Crawlers lay the card out from these before fetching the asset, so real
+    // dimensions win when a caller knows them. Everything else keeps the site
+    // card's own 1200x630.
+    const imageDimensions = resolvedImage.width && resolvedImage.height
+        ? { width: resolvedImage.width, height: resolvedImage.height }
+        : { width: 1200, height: 630 };
 
     return {
         title: metadataTitle,
@@ -137,9 +155,8 @@ export function createMetadata({
             type,
             images: [
                 {
-                    url: image,
-                    width: 1200,
-                    height: 630,
+                    url: resolvedImage.url,
+                    ...imageDimensions,
                     alt: `${siteConfig.name} preview`,
                 },
             ],
@@ -154,7 +171,7 @@ export function createMetadata({
             card: 'summary_large_image',
             title: fullTitle,
             description,
-            images: [image],
+            images: [resolvedImage.url],
         },
     };
 }

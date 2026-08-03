@@ -62,6 +62,7 @@ const expectedEndpointKeys = [
   'saveShowcasePost',
   'remixShowcasePost',
   'shareShowcasePost',
+  'shareCreatorProfile',
   'publishGeneration',
   'createPost',
   'listSourceTools',

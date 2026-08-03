@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-describe('referral verified app-link association files', () => {
+import { UNIVERSAL_LINK_PATHS } from '@/lib/app-links';
+
+describe('verified app-link association files', () => {
   afterEach(() => {
     vi.resetModules();
     delete process.env.APPLE_TEAM_ID;
@@ -20,9 +22,32 @@ describe('referral verified app-link association files', () => {
     await expect(response.json()).resolves.toEqual({
       applinks: {
         apps: [],
-        details: [{ appID: 'TEAM123456.com.magicbooklet.mobile', paths: ['/r/*'] }],
+        details: [{
+          appID: 'TEAM123456.com.magicbooklet.mobile',
+          paths: [...UNIVERSAL_LINK_PATHS],
+        }],
       },
     });
+  });
+
+  it('claims the post and creator paths, so a shared link opens the app', async () => {
+    // Without these, every shared post or profile link dumps an installed user
+    // into mobile Safari -- the whole social loop leaks out of the product.
+    process.env.APPLE_TEAM_ID = 'TEAM123456';
+    const { GET } = await import('@/app/.well-known/apple-app-site-association/route');
+    const body = await GET().json() as { applinks: { details: { paths: string[] }[] } };
+
+    expect(body.applinks.details[0].paths).toEqual(
+      expect.arrayContaining(['/r/*', '/showcase/*', '/creators/*']),
+    );
+  });
+
+  it('serves no association at all when the team id is unset', async () => {
+    // A details entry with a malformed appID is worse than none: iOS caches it.
+    const { GET } = await import('@/app/.well-known/apple-app-site-association/route');
+    const body = await GET().json() as { applinks: { details: unknown[] } };
+
+    expect(body.applinks.details).toEqual([]);
   });
 
   it('serves only valid Android signing fingerprints', async () => {

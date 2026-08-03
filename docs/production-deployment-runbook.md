@@ -290,7 +290,7 @@ Until one of those thresholds is met, prefer optimizing the current path first: 
 - Verify payment and refund reconciliation in Supabase without relying only on the provider dashboard.
 - Confirm the referral reward reconciliation job has no unsettled verified credit purchases before release promotion.
 
-### Invite And Earn
+### App Links
 
 ```bash
 curl -fsS https://magicbooklet.com/.well-known/apple-app-site-association
@@ -298,7 +298,12 @@ curl -fsS https://magicbooklet.com/.well-known/assetlinks.json
 ```
 
 - Confirm both association documents return `200` directly over HTTPS without a redirect and contain the production app identifiers/signing fingerprints.
-- Open a real `/r/<code>` link on desktop, iOS, and Android. Confirm the web fallback records the invite before enabling sign-up, and installed apps open the native referral route.
+- Confirm the AASA `paths` list matches `contracts/universal-links-v1.json` — currently `/r/*`, `/showcase/*`, and `/creators/*`. The Android side of the same contract lives in `ugc-mobile/app.json` `intentFilters`, one entry per path family.
+- Open a real `/r/<code>`, `/showcase/<id>`, and `/creators/<username>` link on desktop, iOS, and Android. Confirm the web fallback works everywhere, and that installed apps open the native route rather than the browser.
+- **Test iOS on a fresh install.** Apple's CDN caches the association document, so a device that already has the app may keep the previous, narrower path list for a while. A link that still opens Safari on an existing install is not evidence the change failed.
+
+### Invite And Earn
+
 - Complete a new-account referral in the release environment, then make one verified test credit-pack purchase. Confirm the invitee receives the one-time 5% promotional bonus and the inviter receives 5% promotional credits.
 - Refund that test purchase through the provider, then restore/reverse the refund when the provider supports it. Confirm base and referral balances change atomically and notification entries use one idempotent provider event key.
 - Confirm promotional credits can fund creation but do not increase paid-credit marketplace spending power.

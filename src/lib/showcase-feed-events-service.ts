@@ -23,7 +23,7 @@ const EVENT_TYPES = new Set<ShowcaseFeedEventType>([
   'hide_creator',
   'report',
 ]);
-const SOURCE_SURFACES = new Set(['showcase', 'showcase-reel']);
+const SOURCE_SURFACES = new Set(['showcase', 'showcase-reel', 'feed']);
 const SAFE_IDENTIFIER_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const MAX_METADATA_BYTES = 4_096;
 const MAX_EVENT_AGE_MS = 24 * 60 * 60 * 1_000;
@@ -59,7 +59,7 @@ export type ShowcaseFeedEventPayload = {
   position: number | null;
   durationMs: number | null;
   progress: number | null;
-  sourceSurface: 'showcase' | 'showcase-reel';
+  sourceSurface: 'showcase' | 'showcase-reel' | 'feed';
   occurredAt: string;
   metadata: Record<string, string | number | boolean | null>;
 };

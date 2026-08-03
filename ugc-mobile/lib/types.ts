@@ -666,6 +666,28 @@ export interface ShowcaseRecommendationMetadata {
   algorithmVersion?: string | null;
 }
 
+/**
+ * Mirror of GENERATION_SHARE_SOURCE_SURFACES in the web app's `src/lib/share.ts`.
+ * The backend validates against a closed enum and a matching database CHECK, so
+ * an unlisted value is a 400 and a lost share event, not a new label.
+ */
+export type GenerationShareSourceSurface =
+  | 'create-image'
+  | 'create-video'
+  | 'create-motion'
+  | 'my-creations'
+  | 'creator-profile'
+  | 'showcase'
+  | 'showcase-reel'
+  | 'detail-page'
+  | 'feed';
+
+/** Mirror of PROFILE_SHARE_SOURCE_SURFACES. Mobile only ever shares from the
+ * creator profile screen; 'profile' is the web owner-profile surface. */
+export type ProfileShareSourceSurface = 'creator-profile' | 'profile';
+
+export type ShareChannel = 'native-share' | 'copy-link';
+
 export type ShowcaseFeedEventType =
   | 'impression'
   | 'open'

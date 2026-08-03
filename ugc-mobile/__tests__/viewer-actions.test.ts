@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildShareUrl,
   canSaveViewerItemOnDoubleTap,
   getDoubleTapSaveHeartAnimationSpec,
   getDoubleTapSaveHeartPalette,
@@ -12,10 +13,12 @@ import {
   getViewerActionGroupLabel,
   getViewerActionLabel,
   getViewerActionSlots,
+  getViewerShareIntent,
+  getViewerShareSourceSurface,
   getViewerStateChip,
   isDestructiveViewerAction,
 } from '../lib/viewer-actions';
-import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
+import type { ImmersivePreviewItem, PreviewViewerSource } from '../lib/immersive-preview-view-model';
 
 function railItem(overrides: Partial<ImmersivePreviewItem> = {}): ImmersivePreviewItem {
   return {
@@ -293,5 +296,84 @@ describe('immersive viewer actions', () => {
       recreateTool: 'video',
       prompt: '',
     })).toBeNull();
+  });
+});
+
+
+describe('viewer share source surface', () => {
+  // Every mobile share used to report 'detail-page' regardless of origin, so
+  // three distinct surfaces were indistinguishable from each other and from
+  // genuine web detail-page shares.
+  it.each([
+    ['showcase-feed', 'showcase-reel'],
+    ['home-community', 'feed'],
+    ['creator-profile', 'creator-profile'],
+    ['profile-saved', 'my-creations'],
+    ['profile-posts', 'my-creations'],
+    ['profile-creations', 'my-creations'],
+    ['studio-creations', 'my-creations'],
+    ['home-creations', 'my-creations'],
+  ] as [PreviewViewerSource, string][])('maps %s to %s', (source, expected) => {
+    expect(getViewerShareSourceSurface(source)).toBe(expected);
+  });
+});
+
+describe('share url', () => {
+  it('marks the link with its origin surface so an arriving visit is attributable', () => {
+    expect(buildShareUrl('https://magicbooklet.com', '/showcase/post-1', 'showcase-reel'))
+      .toBe('https://magicbooklet.com/showcase/post-1?s=showcase-reel');
+  });
+
+  it('normalises a trailing slash, which call sites used to disagree about', () => {
+    expect(buildShareUrl('https://magicbooklet.com/', '/creators/nova', 'creator-profile'))
+      .toBe('https://magicbooklet.com/creators/nova?s=creator-profile');
+  });
+});
+
+describe('viewer share intent', () => {
+  it('shares a published post as a link, never as bare text', () => {
+    const intent = getViewerShareIntent(
+      railItem({ source: 'showcase-feed', sourceType: 'showcase', sharePath: '/showcase/post-1', title: 'Neon skyline' }),
+      'https://magicbooklet.com'
+    );
+
+    expect(intent).toEqual({
+      kind: 'share',
+      content: {
+        title: 'Neon skyline',
+        message: 'Neon skyline\nhttps://magicbooklet.com/showcase/post-1?s=showcase-reel',
+        url: 'https://magicbooklet.com/showcase/post-1?s=showcase-reel',
+      },
+    });
+  });
+
+  it('routes an unpublished creation to publishing instead of sending a linkless message', () => {
+    // This used to share `${title}\n${displayText}` with no URL at all -- a blob
+    // of text with nothing to click and no way back into the product.
+    expect(getViewerShareIntent(
+      railItem({ sourceType: 'generation', sharePath: null, generationId: 'gen-9' }),
+      'https://magicbooklet.com'
+    )).toEqual({ kind: 'publish', generationId: 'gen-9' });
+  });
+
+  it('routes a private owned post to a visibility change', () => {
+    expect(getViewerShareIntent(
+      railItem({ sourceType: 'owner-post', sharePath: null, ownerPostId: 'post-7', visibility: 'private' }),
+      'https://magicbooklet.com'
+    )).toEqual({ kind: 'make-public', postId: 'post-7' });
+  });
+
+  it('reports nothing to do when the item cannot be shared at all', () => {
+    expect(getViewerShareIntent(
+      railItem({ canShare: false, sharePath: '/showcase/post-1' }),
+      'https://magicbooklet.com'
+    )).toEqual({ kind: 'unavailable' });
+  });
+
+  it('reports nothing to do for a generation with no id to publish', () => {
+    expect(getViewerShareIntent(
+      railItem({ sourceType: 'generation', sharePath: null, generationId: null }),
+      'https://magicbooklet.com'
+    )).toEqual({ kind: 'unavailable' });
   });
 });

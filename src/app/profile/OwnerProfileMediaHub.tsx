@@ -680,6 +680,8 @@ export default function OwnerProfileMediaHub({
                 <ProfileShareButton
                   username={creator.username}
                   displayName={publicProfileDisplayName || creator.name}
+                  sourceSurface="profile"
+                  accessToken={accessToken}
                   label="Share"
                   className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 text-sm font-bold text-zinc-100 transition hover:bg-white/10 disabled:opacity-60"
                 />

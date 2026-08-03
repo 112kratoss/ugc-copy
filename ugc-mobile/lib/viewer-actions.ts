@@ -1,5 +1,5 @@
-import type { ImmersivePreviewItem } from './immersive-preview-view-model';
-import type { CreatorToolId } from './types';
+import type { ImmersivePreviewItem, PreviewViewerSource } from './immersive-preview-view-model';
+import type { CreatorToolId, GenerationShareSourceSurface } from './types';
 
 export const SAVE_HEART_COLOR = '#ff3b64';
 const ENABLED_HEART_COLOR = '#ffffff';
@@ -58,6 +58,96 @@ export function getNativeRemixCreateHref({
   }
 
   return createPromptHref(recreateTool, prompt);
+}
+
+/**
+ * Which share surface a viewer source reports.
+ *
+ * Every mobile share used to be recorded as 'detail-page' no matter where it
+ * came from, so the reel, the home feed and the post page were indistinguishable
+ * from each other and from genuine web detail-page shares. The values are the
+ * web app's closed enum — an unlisted one is a 400 and a lost event.
+ */
+export function getViewerShareSourceSurface(
+  source: PreviewViewerSource
+): GenerationShareSourceSurface {
+  switch (source) {
+    case 'showcase-feed':
+      return 'showcase-reel';
+    case 'home-community':
+      return 'feed';
+    case 'creator-profile':
+      return 'creator-profile';
+    default:
+      return 'my-creations';
+  }
+}
+
+export interface ViewerShareContent {
+  title: string;
+  message: string;
+  url: string;
+}
+
+/**
+ * What the Share control should actually do for an item.
+ *
+ * Sharing used to be three near-identical copies of the same body, one of which
+ * recorded nothing, and all of which fell back to sending a title and some body
+ * text with no link at all when the item had no public URL. That linkless
+ * message is gone: an item without a public URL isn't shareable yet, it's
+ * publishable, and the intent says so.
+ */
+export type ViewerShareIntent =
+  | { kind: 'share'; content: ViewerShareContent }
+  | { kind: 'publish'; generationId: string }
+  | { kind: 'make-public'; postId: string }
+  | { kind: 'unavailable' };
+
+export function getViewerShareIntent(
+  item: ImmersivePreviewItem,
+  siteUrl: string
+): ViewerShareIntent {
+  if (!item.canShare) {
+    return { kind: 'unavailable' };
+  }
+
+  if (item.sharePath) {
+    const url = buildShareUrl(siteUrl, item.sharePath, getViewerShareSourceSurface(item.source));
+    return {
+      kind: 'share',
+      content: { title: item.title, message: `${item.title}\n${url}`, url },
+    };
+  }
+
+  // No public URL yet. A creation has never been posted; an owned post exists
+  // but is private or unlisted. Either way the honest next step is to make it
+  // public, not to send a link that does not exist.
+  if (item.sourceType === 'generation' && item.generationId) {
+    return { kind: 'publish', generationId: item.generationId };
+  }
+
+  if (item.sourceType === 'owner-post' && item.ownerPostId) {
+    return { kind: 'make-public', postId: item.ownerPostId };
+  }
+
+  return { kind: 'unavailable' };
+}
+
+/**
+ * The one place a shareable magicbooklet URL is assembled.
+ *
+ * `?s=<surface>` is what lets an arriving visit be told apart from a bookmark or
+ * a search result, and attributes it back to the surface that produced it. The
+ * trailing-slash normalisation lives here too — call sites used to disagree
+ * about whether `siteUrl` needed trimming.
+ */
+export function buildShareUrl(
+  siteUrl: string,
+  path: string,
+  sourceSurface: GenerationShareSourceSurface
+): string {
+  return `${siteUrl.replace(/\/$/, '')}${path}?s=${encodeURIComponent(sourceSurface)}`;
 }
 
 export function getSaveHeartIconProps({

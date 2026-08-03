@@ -32,7 +32,10 @@ describe('PublicShareButton', () => {
   });
 
   it('uses native share when available and records the share click', async () => {
-    const shareUrl = `${window.location.origin}/showcase/gen-1`;
+    // The shared URL carries `?s=<surface>`; the in-app path deliberately does
+    // not. That marker is what tells a real share visit apart from a bookmark or
+    // a search result, and attributes it back to the surface it came from.
+    const shareUrl = `${window.location.origin}/showcase/gen-1?s=showcase`;
     shareMock.mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'share', {
       configurable: true,
@@ -99,7 +102,7 @@ describe('PublicShareButton', () => {
   });
 
   it('falls back to clipboard copy when navigator.share is unavailable', async () => {
-    const shareUrl = `${window.location.origin}/showcase/gen-2`;
+    const shareUrl = `${window.location.origin}/showcase/gen-2?s=creator-profile`;
     writeTextMock.mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'share', {
       configurable: true,

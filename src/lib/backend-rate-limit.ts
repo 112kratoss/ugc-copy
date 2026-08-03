@@ -257,6 +257,12 @@ export const SHOWCASE_SHARE_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const PROFILE_SHARE_RATE_LIMIT = {
+  scope: 'profile:share',
+  limit: 120,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const SHOWCASE_SAVE_RATE_LIMIT = {
   scope: 'showcase:save',
   limit: 120,

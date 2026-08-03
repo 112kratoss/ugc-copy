@@ -94,7 +94,7 @@ import type {
   ShowcaseFeedResponse,
   ShowcasePostResponse,
 } from '@/lib/types';
-import { getNativeRemixCreateHref } from '@/lib/viewer-actions';
+import { buildShareUrl, getNativeRemixCreateHref } from '@/lib/viewer-actions';
 import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
 
 const DASHBOARD_COLORS = {
@@ -438,11 +438,11 @@ export function HomeDashboard() {
   };
 
   const shareItem = async (item: ShowcaseFeedItem) => {
-    const url = `${env.siteUrl}/showcase/${item.id}`;
+    const url = buildShareUrl(env.siteUrl, `/showcase/${item.id}`, 'feed');
     try {
       const result = await Share.share({ title: item.title, message: `${item.title}\n${url}`, url });
       if (result.action === Share.sharedAction) {
-        void api.shareShowcasePost(item.id, 'native-share').catch(() => null);
+        void api.shareShowcasePost(item.id, { sourceSurface: 'feed' }).catch(() => null);
         recordFeedEvent(item, 'share');
       }
     } catch {

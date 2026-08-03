@@ -19,7 +19,12 @@ const routerState = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), back: v
 const navigationState = vi.hoisted(() => ({ dispatch: vi.fn() }));
 const alertState = vi.hoisted(() => ({ alert: vi.fn() }));
 const storageState = vi.hoisted(() => ({ values: new Map<string, string>() }));
-const paramsState = vi.hoisted(() => ({ params: {} as { generationId?: string; postId?: string; focus?: string } }));
+const paramsState = vi.hoisted(() => ({ params: {} as { generationId?: string; postId?: string; focus?: string; shareAfterPublish?: string } }));
+const shareState = vi.hoisted(() => ({
+  share: vi.fn(async () => ({ action: 'sharedAction' })),
+  sharedAction: 'sharedAction',
+  dismissedAction: 'dismissedAction',
+}));
 const authState = vi.hoisted(() => ({
   user: { id: 'user-123', email: 'creator@example.com' },
   isLoading: false,
@@ -31,6 +36,7 @@ const authState = vi.hoisted(() => ({
     createPost: vi.fn(),
     updatePost: vi.fn(),
     uploadPostResourceFile: vi.fn(),
+    shareShowcasePost: vi.fn(async () => ({ success: true })),
   },
 }));
 const sourceToolsState = vi.hoisted(() => ({
@@ -128,6 +134,7 @@ vi.mock('react-native', () => ({
   KeyboardAvoidingView: ({ children, ...props }: MockProps) => React.createElement('keyboard-avoiding-view', props, children),
   Modal: ({ children, visible, ...props }: MockProps) => visible ? React.createElement('modal', props, children) : null,
   Platform: { OS: 'ios', select: (obj: Record<string, unknown>) => obj.ios || obj.default },
+  Share: shareState,
   Pressable: React.forwardRef((_props: MockProps, ref) => {
     const { children, style, ...props } = _props;
     return React.createElement('pressable', { ...props, ref, style: resolvePressableStyle(style) }, children);
@@ -291,6 +298,9 @@ describe('mobile external post composer', () => {
     vi.mocked(uploadPickedMedia).mockReset();
     sourceToolsState.tools = [{ slug: 'runway', label: 'Runway', models: [{ slug: 'gen-4', label: 'Gen-4' }], supportedMediaKinds: ['image', 'video'] }];
     authState.api.listSourceTools.mockResolvedValue({ tools: sourceToolsState.tools });
+    shareState.share.mockReset();
+    shareState.share.mockResolvedValue({ action: 'sharedAction' });
+    authState.api.shareShowcasePost.mockClear();
   });
 
   it('opens on a compact details step with one dominant next action', async () => {
@@ -531,5 +541,67 @@ describe('mobile external post composer', () => {
     renderer.act(() => mutationState.options?.onSuccess?.({ postId: 'post-123' }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(routerState.replace).toHaveBeenCalledWith({ pathname: '/(tabs)/profile', params: { tab: 'posts', postId: 'post-123' } });
+  });
+
+  describe('publish then share', () => {
+    // Reached by tapping Share on something not yet public. Publishing is the
+    // real action and the share sheet follows it, so a shared link always points
+    // at a post that exists rather than at a raw storage file or nothing at all.
+    async function publishWithShareIntent(response: Record<string, unknown>) {
+      paramsState.params = { shareAfterPublish: '1' };
+      await renderScreen();
+      renderer.act(() => mutationState.options?.onSuccess?.(response as { postId?: string | null }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    it('opens the share sheet, records the share, then navigates', async () => {
+      await publishWithShareIntent({ postId: 'post-123', visibility: 'public' });
+
+      expect(shareState.share).toHaveBeenCalledWith(expect.objectContaining({
+        url: 'https://magicbooklet.com/showcase/post-123?s=my-creations',
+      }));
+      expect(authState.api.shareShowcasePost).toHaveBeenCalledWith('post-123', { sourceSurface: 'my-creations' });
+      expect(routerState.replace).toHaveBeenCalledWith({
+        pathname: '/(tabs)/profile',
+        params: { tab: 'posts', postId: 'post-123' },
+      });
+    });
+
+    it('skips the share when the post did not end up public', async () => {
+      await publishWithShareIntent({ postId: 'post-124', visibility: 'private' });
+
+      expect(shareState.share).not.toHaveBeenCalled();
+      expect(routerState.replace).toHaveBeenCalled();
+    });
+
+    it('records nothing when the viewer dismisses the sheet, but still navigates', async () => {
+      shareState.share.mockResolvedValueOnce({ action: 'dismissedAction' });
+      await publishWithShareIntent({ postId: 'post-125', visibility: 'public' });
+
+      expect(authState.api.shareShowcasePost).not.toHaveBeenCalled();
+      expect(routerState.replace).toHaveBeenCalled();
+    });
+
+    it('still navigates when the share sheet cannot open', async () => {
+      // Publishing already succeeded; a share failure must never strand the
+      // creator on the composer as though the post had not gone out.
+      shareState.share.mockRejectedValueOnce(new Error('no share sheet'));
+      await publishWithShareIntent({ postId: 'post-126', visibility: 'public' });
+
+      expect(routerState.replace).toHaveBeenCalledWith({
+        pathname: '/(tabs)/profile',
+        params: { tab: 'posts', postId: 'post-126' },
+      });
+    });
+
+    it('does not share when the composer was not opened with a share intent', async () => {
+      paramsState.params = {};
+      await renderScreen();
+      renderer.act(() => mutationState.options?.onSuccess?.({ postId: 'post-127', visibility: 'public' } as { postId?: string | null }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(shareState.share).not.toHaveBeenCalled();
+    });
   });
 });

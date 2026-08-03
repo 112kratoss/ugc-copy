@@ -82,7 +82,8 @@ const successCases: Array<{
   { key: 'deletePostComment', call: (api) => api.deletePostComment('post-1', 'comment-1') },
   { key: 'saveShowcasePost', call: (api) => api.saveShowcasePost('post-1', { shouldSave: true }) },
   { key: 'remixShowcasePost', call: (api) => api.remixShowcasePost('post-1') },
-  { key: 'shareShowcasePost', call: (api) => api.shareShowcasePost('post-1') },
+  { key: 'shareShowcasePost', call: (api) => api.shareShowcasePost('post-1', { sourceSurface: 'showcase-reel' }) },
+  { key: 'shareCreatorProfile', call: (api) => api.shareCreatorProfile('nova', { sourceSurface: 'creator-profile' }) },
   { key: 'publishGeneration', call: (api) => api.publishGeneration({ generationId: 'generation-1', visibility: 'public' }) },
   { key: 'createPost', call: (api) => api.createPost(new FormData()) },
   { key: 'listSourceTools', call: (api) => api.listSourceTools() },
@@ -381,6 +382,7 @@ describe('mobile shared API v1 contract fixture', () => {
       fetcher: fetcher as unknown as typeof fetch,
     });
 
-    await expect(api.shareShowcasePost('post-1')).resolves.toEqual(contract.endpoints.shareShowcasePost.response);
+    await expect(api.shareShowcasePost('post-1', { sourceSurface: 'showcase-reel' }))
+      .resolves.toEqual(contract.endpoints.shareShowcasePost.response);
   });
 });

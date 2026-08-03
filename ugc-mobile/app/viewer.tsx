@@ -77,7 +77,7 @@ import {
 } from '@/lib/showcase-media-progress';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { PostResourceKind, ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
-import { canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, getViewerActionSlots, getViewerStateChip, type SaveHeartTapAnimationSpec, type ViewerStateTone } from '@/lib/viewer-actions';
+import { canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, getViewerActionSlots, getViewerShareIntent, getViewerShareSourceSurface, getViewerStateChip, type SaveHeartTapAnimationSpec, type ViewerStateTone } from '@/lib/viewer-actions';
 import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
 
 type ViewerParams = {
@@ -442,16 +442,24 @@ export default function ImmersivePreviewViewerScreen() {
   };
 
   const shareItem = async (item: ImmersivePreviewItem) => {
-    if (!item.canShare) return;
-    const url = item.sharePath ? `${env.siteUrl}${item.sharePath}` : null;
-    const shareResult = await Share.share({
-      title: item.title,
-      message: url ? `${item.title}\n${url}` : `${item.title}\n${item.displayText}`,
-      url: url ?? undefined,
-    });
+    const intent = getViewerShareIntent(item, env.siteUrl);
+    if (intent.kind === 'unavailable') return;
+
+    if (intent.kind === 'publish') {
+      router.push({ pathname: '/post/new', params: { generationId: intent.generationId, shareAfterPublish: '1' } } as never);
+      return;
+    }
+    if (intent.kind === 'make-public') {
+      router.push({ pathname: '/post/new', params: { postId: intent.postId, shareAfterPublish: '1' } } as never);
+      return;
+    }
+
+    const shareResult = await Share.share({ ...intent.content });
     if (shareResult.action !== Share.sharedAction) return;
     if (item.showcasePostId) {
-      await api.shareShowcasePost(item.showcasePostId, 'native-share').catch(() => null);
+      await api
+        .shareShowcasePost(item.showcasePostId, { sourceSurface: getViewerShareSourceSurface(source) })
+        .catch(() => null);
       if (source === 'showcase-feed') {
         recordViewerFeedEvent(item, 'share');
       }
