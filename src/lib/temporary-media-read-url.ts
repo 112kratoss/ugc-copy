@@ -47,6 +47,21 @@ type CreateTemporaryMediaReadUrlInput = {
 const TEMPORARY_UPLOADS_BUCKET = 'uploads';
 const SIGNED_READ_EXPIRES_IN_SECONDS = 60 * 60;
 
+/**
+ * A staged object can legitimately be gone -- the reclaim sweep collects
+ * abandoned uploads -- and a client resuming a draft has to tell that apart
+ * from a transient failure. Re-uploading on a missing object is correct;
+ * dropping media because storage briefly errored is not.
+ */
+export const MEDIA_OBJECT_NOT_FOUND_CODE = 'MEDIA_OBJECT_NOT_FOUND';
+
+function isMissingStorageObjectError(error: { message?: string; statusCode?: string } | Error | null) {
+  if (!error) return false;
+  const statusCode = (error as { statusCode?: string }).statusCode;
+  return statusCode === '404'
+    || /not found|does not exist/i.test(error.message ?? '');
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
@@ -124,6 +139,15 @@ export async function createTemporaryMediaReadUrl({
   const { data, error } = await resolvedClient.storage
     .from(TEMPORARY_UPLOADS_BUCKET)
     .createSignedUrl(parsedPath.path, SIGNED_READ_EXPIRES_IN_SECONDS);
+
+  if (isMissingStorageObjectError(error)) {
+    return {
+      ok: false,
+      status: 404,
+      code: MEDIA_OBJECT_NOT_FOUND_CODE,
+      error: 'That upload is no longer available.',
+    };
+  }
 
   if (error || !data?.signedUrl) {
     return {

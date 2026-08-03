@@ -30,6 +30,14 @@ import {
 } from '@/lib/generation-completion-jobs';
 import { verifyPublishedGenerationModels } from '@/lib/generation-model-provider-verification';
 import { hasRepairableMediaPreviews, repairMediaPreviews } from '@/lib/media-preview-repair';
+import {
+  hasReclaimableMediaUploads,
+  reclaimAbandonedMediaUploads,
+} from '@/lib/media-upload-reclaim-service';
+import {
+  hasRepairableLegacyGenerations,
+  repairMissingGenerationInputMedia,
+} from '@/lib/generation-input-media-repair';
 import { hasMobilePushMaintenanceWork, processMobilePushMaintenance } from '@/lib/mobile-notifications';
 import {
   hasUnsettledReferralPurchaseTransactions,
@@ -471,6 +479,49 @@ export function runOperationalDataRetentionBackendJob(options: {
     run: (client, context) => pruneOperationalBackendData(client, {
       now: new Date(context.startedAtMs),
     }),
+  });
+}
+
+export function runMediaUploadReclaimBackendJob(options: {
+  requestId?: string;
+  startedAtMs?: number;
+  serviceClient?: SupabaseClient;
+  triggerRoute?: string;
+} = {}) {
+  const job = BACKEND_JOBS_BY_NAME['media-upload-reclaim'];
+  return runManagedBackendJob({
+    ...options,
+    job,
+    messages: {
+      started: 'media_upload_reclaim_started',
+      skippedNoWork: 'media_upload_reclaim_skipped_no_reclaimable_uploads',
+      skippedLocked: 'media_upload_reclaim_skipped',
+      completed: 'media_upload_reclaim_completed',
+      failed: 'media_upload_reclaim_failed',
+    },
+    hasWork: async (client) => (
+      await hasReclaimableMediaUploads(client) || hasRepairableLegacyGenerations(client)
+    ),
+    run: async (client, context) => {
+      const now = new Date(context.startedAtMs);
+      // Repair first: a generation healed this run releases its staged paths
+      // from the protected set before the reclaim step recomputes it.
+      const repair = await repairMissingGenerationInputMedia(client, { now });
+
+      if (repair.rollbackFailures.length > 0) {
+        // A generation is stuck holding a half-set, so it no longer appears in
+        // the guard's selection -- while its staged files are the only surviving
+        // copy of the inputs that failed to persist. Reclaiming now would delete
+        // exactly those bytes.
+        return {
+          repair,
+          reclaimSkipped: 'unrolled_back_partial_repair',
+        };
+      }
+
+      const reclaim = await reclaimAbandonedMediaUploads(client, { now });
+      return { repair, ...reclaim };
+    },
   });
 }
 

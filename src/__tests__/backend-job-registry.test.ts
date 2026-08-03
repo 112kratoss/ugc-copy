@@ -56,6 +56,7 @@ describe('backend job registry', () => {
       'generation-completions',
       'generation-model-verification',
       'media-preview-repair',
+      'media-upload-reclaim',
       'mobile-push-receipts',
       'operational-data-retention',
       'referral-reward-reconciliation',
@@ -85,9 +86,10 @@ describe('backend job registry', () => {
 
     expect(getCronScheduleDailyInvocations('*/10 * * * *')).toBe(144);
     expect(getCronScheduleDailyInvocations('0 * * * *')).toBe(24);
-    // 505 from the seven original jobs, one daily retention sweep, and the
-    // ten-minute durable account-deletion cleanup worker.
-    expect(logicalDailyRuns).toBe(650);
+    // 505 from the seven original jobs, one daily retention sweep, one daily
+    // staged-upload reclaim sweep, and the ten-minute durable
+    // account-deletion cleanup worker.
+    expect(logicalDailyRuns).toBe(651);
     expect(BACKEND_JOB_SCHEDULER.dailyInvocations).toBe(144);
     expect(BACKEND_JOB_SCHEDULER.dailyInvocations).toBeLessThanOrEqual(BACKEND_JOB_DAILY_INVOCATION_BUDGET);
     expect(

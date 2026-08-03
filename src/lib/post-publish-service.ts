@@ -23,6 +23,11 @@ import {
   isMissingPostMediaSchemaError,
   type PostMediaPersistInput,
 } from '@/lib/post-media';
+import {
+  getConfirmedRemovedPaths,
+  markMediaUploadIntentsCleared,
+  markMediaUploadIntentsConsumed,
+} from '@/lib/media-upload-intents';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
 import { createPostMediaRendition } from '@/lib/post-media-rendition';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
@@ -205,6 +210,15 @@ export async function publishPreparedPost({
         .remove(temporaryUploadPathsToCleanup);
       if (cleanupUpload.error) {
         logBackendWarning('failed_to_remove_temporary_uploaded_post_media', { error: cleanupUpload.error });
+      }
+
+      // Rolled back, so nothing consumed these -- but the bytes are gone and
+      // the sweep should not go looking for them. Only confirmed deletions are
+      // marked, though: a path the remove() did not actually delete keeps its
+      // untouched row and is collected as an ordinary abandoned upload.
+      const removal = getConfirmedRemovedPaths(temporaryUploadPathsToCleanup, cleanupUpload);
+      if (removal.confirmed.length > 0) {
+        await markMediaUploadIntentsCleared(adminSupabase, removal.confirmed);
       }
     }
 
@@ -409,6 +423,32 @@ export async function publishPreparedPost({
         .remove(temporaryUploadPathsToCleanup);
       if (cleanupUpload.error) {
         logBackendWarning('failed_to_remove_temporary_uploaded_post_media', { error: cleanupUpload.error });
+      }
+
+      // Only what storage confirmed deleted is marked cleared. A failed or
+      // partial remove stays consumed-but-uncleared, which is exactly the state
+      // the reclaim sweep retries -- marking it cleared would hide the object
+      // from the sweep forever.
+      const removal = getConfirmedRemovedPaths(temporaryUploadPathsToCleanup, cleanupUpload);
+      if (removal.confirmed.length > 0) {
+        await markMediaUploadIntentsConsumed(adminSupabase, {
+          storagePaths: removal.confirmed,
+          consumedBy: 'post_publish',
+          storageCleared: true,
+        });
+      }
+      if (removal.unconfirmed.length > 0) {
+        if (!cleanupUpload.error) {
+          logBackendWarning('partially_removed_temporary_uploaded_post_media', {
+            requested: temporaryUploadPathsToCleanup.length,
+            removed: removal.confirmed.length,
+          });
+        }
+        await markMediaUploadIntentsConsumed(adminSupabase, {
+          storagePaths: removal.unconfirmed,
+          consumedBy: 'post_publish',
+          storageCleared: false,
+        });
       }
     }
 

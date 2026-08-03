@@ -8,6 +8,52 @@ const supabaseMocks = vi.hoisted(() => ({
   createSignedUrl: vi.fn(),
 }));
 
+/**
+ * Captures the raw PUT the helper now issues. supabase-js is no longer the
+ * transport: it posts through fetch, which cannot report upload progress or be
+ * cancelled, so the upload goes out over XHR instead.
+ */
+function stubXhr() {
+  const sent: Array<{
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    body: unknown;
+  }> = [];
+
+  class FakeXhr {
+    status = 200;
+    responseText = '';
+    upload = { onprogress: null as ((event: ProgressEvent) => void) | null };
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onabort: (() => void) | null = null;
+    private request = { method: '', url: '', headers: {} as Record<string, string> };
+
+    open(method: string, url: string) {
+      this.request.method = method;
+      this.request.url = url;
+    }
+
+    setRequestHeader(key: string, value: string) {
+      this.request.headers[key] = value;
+    }
+
+    send(body: unknown) {
+      sent.push({ ...this.request, body });
+      this.upload.onprogress?.({ lengthComputable: true, loaded: 5, total: 10 } as ProgressEvent);
+      this.onload?.();
+    }
+
+    abort() {
+      this.onabort?.();
+    }
+  }
+
+  vi.stubGlobal('XMLHttpRequest', FakeXhr as unknown as typeof XMLHttpRequest);
+  return sent;
+}
+
 vi.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
@@ -82,10 +128,14 @@ describe('uploadMediaToTemporaryStorage', () => {
   });
 
   it('uploads temporary media through a backend-issued signed upload intent', async () => {
+    const sent = stubXhr();
     const { uploadMediaToTemporaryStorage } = await import('@/lib/temporary-media-upload');
     const file = new File(['image-bytes'], 'Reference Image.PNG', { type: 'image/png' });
+    const progress: number[] = [];
 
-    await expect(uploadMediaToTemporaryStorage(file, 'user-1')).resolves.toEqual({
+    await expect(uploadMediaToTemporaryStorage(file, 'user-1', {
+      onProgress: ({ fraction }) => progress.push(fraction),
+    })).resolves.toEqual({
       signedUrl: 'https://storage.example.test/signed/reference.png',
       storagePath: 'uploads/user-1/reference.png',
     });
@@ -103,13 +153,21 @@ describe('uploadMediaToTemporaryStorage', () => {
         sizeBytes: file.size,
       }),
     });
-    expect(supabaseMocks.from).toHaveBeenCalledWith('uploads');
-    expect(supabaseMocks.uploadToSignedUrl).toHaveBeenCalledWith(
-      'user-1/reference.png',
-      'upload-token',
-      file,
-      { contentType: 'image/png' }
-    );
+    // The signed URL from the sign response is used directly; supabase-js is no
+    // longer in the upload path at all.
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      method: 'PUT',
+      url: 'https://storage.example.test/upload',
+      headers: {
+        'cache-control': 'max-age=3600',
+        'content-type': 'image/png',
+        'x-upsert': 'false',
+      },
+      body: file,
+    });
+    expect(supabaseMocks.uploadToSignedUrl).not.toHaveBeenCalled();
+    expect(progress).toEqual([0.5, 1]);
     expect(fetch).toHaveBeenCalledWith('/api/uploads/media/read-url', {
       method: 'POST',
       headers: {

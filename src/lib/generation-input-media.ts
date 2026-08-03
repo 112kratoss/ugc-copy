@@ -7,6 +7,7 @@ import {
   normalizeSubmittedElementDescriptors,
   type ImageElementDescriptor,
 } from '@/lib/image-elements';
+import { markMediaUploadIntentsConsumed } from '@/lib/media-upload-intents';
 import { buildMediaProxyUrl, getStoredMediaLocation, isMediaBucket } from '@/lib/media-urls';
 import {
   downloadAllowlistedRemoteMedia,
@@ -340,6 +341,19 @@ export async function persistGenerationInputMedia(params: {
 
       if (insertError) {
         throw insertError;
+      }
+
+      // The bytes now live in generation_inputs, but the staging object stays:
+      // an unchanged picker selection can be submitted again, and the second
+      // run re-sends this same path. Recording the claim lets the reclaim sweep
+      // collect it once it is past the window, which is what stopped every
+      // generation input from leaving a permanent duplicate behind.
+      if (isUploadsStoragePath(candidate.sourceStoragePath)) {
+        await markMediaUploadIntentsConsumed(supabase, {
+          storagePaths: [candidate.sourceStoragePath as string],
+          consumedBy: 'generation_input',
+          storageCleared: false,
+        });
       }
     } catch (error) {
       logBackendError('failed_to_persist_generation_input_media', { error: error });

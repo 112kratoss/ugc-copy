@@ -7,9 +7,16 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { canUserCreateDurableUpload } from '@/lib/account-deletion-guard';
+import { recordMediaUploadIntent } from '@/lib/media-upload-intents';
 import { isAllowedStorageMediaMimeType } from '@/lib/storage-upload-mime-policy';
 
 export type TemporaryMediaUploadSignClient = Parameters<typeof enforceBackendRateLimit>[0] & {
+  // Widened for media_upload_intents. The staging bucket has no other record
+  // that an object was handed out, so an upload that is signed without a row is
+  // an object nothing will ever collect.
+  from: (table: string) => {
+    insert: (values: Record<string, unknown>) => PromiseLike<{ error: { message?: string } | null }>;
+  };
   storage: {
     from: (bucket: string) => {
       createSignedUploadUrl: (
@@ -106,7 +113,12 @@ function sanitizeFileName(fileName: string): string {
   const extension = path.extname(fileName).toLowerCase();
   const stem = path.basename(fileName, extension).toLowerCase();
   const safeStem = stem.replace(/[^a-z0-9-_]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'media';
-  return `${safeStem}${extension || '.bin'}`;
+  // The extension is caller-supplied too, and only the stem used to be
+  // sanitized -- so `clip.mp4 ` produced a key with a trailing space that
+  // storage silently dropped, leaving the recorded path and the real object key
+  // different strings. Everything downstream matches these by exact value.
+  const safeExtension = extension.replace(/[^a-z0-9.]+/g, '');
+  return `${safeStem}${safeExtension && safeExtension !== '.' ? safeExtension : '.bin'}`;
 }
 
 function normalizeUploadKind(value: unknown): UploadKind | null {
@@ -230,6 +242,26 @@ export async function createTemporaryMediaUploadIntent({
   }
 
   const uploadPath = `${userId}/${createUploadId()}-${metadata.fileName}`;
+
+  // Recorded before the URL is handed out, never after. Signing first and
+  // failing here would leave an object the client can write and nothing can
+  // collect; failing in this order leaves a row for an object that will never
+  // exist, which the sweep drops once the signed URL lapses.
+  const intent = await recordMediaUploadIntent(resolvedClient, {
+    userId,
+    storagePath: uploadPath,
+    kind: metadata.kind,
+    contentType: metadata.mimeType,
+    declaredBytes: metadata.sizeBytes,
+  });
+  if (!intent.ok) {
+    return {
+      ok: false,
+      status: 500,
+      error: 'Failed to prepare media upload.',
+    };
+  }
+
   const { data, error } = await resolvedClient.storage
     .from(TEMPORARY_UPLOADS_BUCKET)
     .createSignedUploadUrl(uploadPath);

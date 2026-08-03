@@ -1,4 +1,9 @@
 import { supabase } from '@/lib/supabase';
+import {
+  resolveSignedUploadUrl,
+  uploadFileToSignedUrl,
+  type SignedUrlUploadProgress,
+} from '@/lib/signed-url-upload';
 
 type TemporaryMediaUploadIntent = {
   success: boolean;
@@ -28,7 +33,13 @@ function inferUploadKind(file: File): 'image' | 'video' | 'audio' {
 
 export async function uploadMediaToTemporaryStorage(
   file: File,
-  ownerUserId = ''
+  ownerUserId = '',
+  // Optional so existing callers (and the composer tests that mock this export
+  // by name) keep working unchanged.
+  options: {
+    onProgress?: (progress: SignedUrlUploadProgress) => void;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<{ signedUrl: string; storagePath: string }> {
   void ownerUserId;
   const { data: { session } } = await supabase.auth.getSession();
@@ -65,16 +76,18 @@ export async function uploadMediaToTemporaryStorage(
     throw new Error('Media upload response was invalid.');
   }
 
-  const { error: uploadError } = await supabase.storage.from(uploadIntent.bucket).uploadToSignedUrl(
-    uploadIntent.path,
-    uploadIntent.token,
+  // Raw PUT rather than supabase-js: uploadToSignedUrl goes through fetch, which
+  // cannot report upload progress or be cancelled mid-transfer.
+  await uploadFileToSignedUrl(
     file,
-    { contentType: mimeType }
+    resolveSignedUploadUrl({
+      bucket: uploadIntent.bucket,
+      path: uploadIntent.path,
+      token: uploadIntent.token,
+      signedUploadUrl: uploadIntent.signedUploadUrl,
+    }),
+    { mimeType, onProgress: options.onProgress, signal: options.signal },
   );
-
-  if (uploadError) {
-    throw new Error(`Upload failed: ${uploadError.message}`);
-  }
 
   const readUrlResponse = await fetch('/api/uploads/media/read-url', {
     method: 'POST',
