@@ -10,6 +10,7 @@ import {
   runGenerationCompletionsBackendJob,
   runGenerationModelVerificationBackendJob,
   runMediaPreviewRepairBackendJob,
+  runMediaUploadReclaimBackendJob,
   runMobilePushReceiptsBackendJob,
   runOperationalDataRetentionBackendJob,
   runReferralRewardReconciliationBackendJob,
@@ -33,6 +34,7 @@ type BackendJobsRouteDependencies = {
   runGenerationCompletionsBackendJob?: typeof runGenerationCompletionsBackendJob;
   runGenerationModelVerificationBackendJob?: typeof runGenerationModelVerificationBackendJob;
   runMediaPreviewRepairBackendJob?: typeof runMediaPreviewRepairBackendJob;
+  runMediaUploadReclaimBackendJob?: typeof runMediaUploadReclaimBackendJob;
   runMobilePushReceiptsBackendJob?: typeof runMobilePushReceiptsBackendJob;
   runOperationalDataRetentionBackendJob?: typeof runOperationalDataRetentionBackendJob;
   runReferralRewardReconciliationBackendJob?: typeof runReferralRewardReconciliationBackendJob;
@@ -77,6 +79,8 @@ function resolveDependencies(dependencies: BackendJobsRouteDependencies | undefi
       ?? runGenerationModelVerificationBackendJob,
     runMediaPreviewRepairBackendJob: dependencies?.runMediaPreviewRepairBackendJob
       ?? runMediaPreviewRepairBackendJob,
+    runMediaUploadReclaimBackendJob: dependencies?.runMediaUploadReclaimBackendJob
+      ?? runMediaUploadReclaimBackendJob,
     runMobilePushReceiptsBackendJob: dependencies?.runMobilePushReceiptsBackendJob
       ?? runMobilePushReceiptsBackendJob,
     runOperationalDataRetentionBackendJob: dependencies?.runOperationalDataRetentionBackendJob
@@ -116,6 +120,8 @@ async function runDueBackendJob(
       return options.dependencies.runGenerationModelVerificationBackendJob(runOptions);
     case 'media-preview-repair':
       return options.dependencies.runMediaPreviewRepairBackendJob(runOptions);
+    case 'media-upload-reclaim':
+      return options.dependencies.runMediaUploadReclaimBackendJob(runOptions);
     case 'mobile-push-receipts':
       return options.dependencies.runMobilePushReceiptsBackendJob(runOptions);
     case 'operational-data-retention':

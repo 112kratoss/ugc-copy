@@ -44,12 +44,15 @@ function createSupabaseMock({
     status: 'draft',
   },
   postMedia = [] as Array<Record<string, unknown>>,
+  downloadedMedia = null as Blob | null,
 }: {
   post?: Record<string, unknown> | null;
   bundle?: Record<string, unknown> | null;
   postMedia?: Array<Record<string, unknown>>;
+  downloadedMedia?: Blob | null;
 } = {}) {
   const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const uploaded: string[] = [];
   const client = {
     from(table: string) {
       const query = {
@@ -91,14 +94,29 @@ function createSupabaseMock({
       });
     },
     storage: {
-      from: vi.fn(),
+      from: vi.fn(() => ({
+        download: vi.fn(async () => ({ data: downloadedMedia, error: downloadedMedia ? null : new Error('missing') })),
+        upload: vi.fn(async (storagePath: string) => {
+          uploaded.push(storagePath);
+          return { error: null };
+        }),
+        remove: vi.fn(async () => ({ error: null })),
+      })),
     },
   };
 
   return {
     client: client as unknown as SupabaseClient,
     rpcCalls,
+    uploaded,
   };
+}
+
+/** A Blob whose reported size is decoupled from its actual bytes. */
+function blobOfSize(sizeBytes: number, type: string): Blob {
+  const blob = new Blob(['x'], { type });
+  Object.defineProperty(blob, 'size', { value: sizeBytes });
+  return blob;
 }
 
 describe('updateOwnerPostForRoute', () => {
@@ -478,5 +496,69 @@ describe('updateOwnerPostForRoute', () => {
         expect.objectContaining({ mediaKey: 'proof-a', sortOrder: 1 }),
       ],
     }));
+  });
+
+  it('rejects edited media larger than its kind allows before it reaches the public bucket', async () => {
+    // The signed upload could only check a client-declared size, and the
+    // uploads bucket's own ceiling is 250 MB for every kind -- so without this
+    // check an oversized image reaches showcase_media through edit even though
+    // the create path would have rejected the same bytes.
+    const { client, uploaded } = createSupabaseMock({
+      bundle: null,
+      downloadedMedia: blobOfSize(26 * 1024 * 1024, 'image/jpeg'),
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'private',
+        title: 'Proof post',
+        description: null,
+        prompt: null,
+        body: null,
+        category: 'image',
+        post_format: 'media',
+        source_tool: null,
+        source_tool_slug: null,
+        source_kind: 'external',
+        archived_at: null,
+        showcase_asset_path: 'posts/post-1/a.jpg',
+        output_url: null,
+        review_status: 'visible',
+      },
+    });
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        mediaItems: [{
+          mediaKey: 'proof-a',
+          storagePath: 'uploads/user-1/oversized.jpg',
+          contentType: 'image/jpeg',
+          originalName: 'oversized.jpg',
+        }],
+        resourceBundle: { accessMode: 'none' },
+      },
+      dependencies: {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'private' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('Expected the oversized edit to be rejected');
+    expect(result.status).toBe(400);
+    expect(result.body.error).toContain('25 MB');
+    expect(uploaded).toEqual([]);
   });
 });

@@ -183,6 +183,15 @@ describe('collectBackendHealth', () => {
             error_message: null,
           },
           {
+            job_name: 'media-upload-reclaim',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:46:00.000Z',
+            finished_at: '2026-06-21T09:46:02.000Z',
+            duration_ms: 2000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
             job_name: 'mobile-push-receipts',
             status: 'succeeded',
             started_at: '2026-06-21T09:50:00.000Z',
@@ -244,8 +253,8 @@ describe('collectBackendHealth', () => {
       cadenceMinutes: 10,
       dailyInvocations: 144,
       dailyInvocationBudget: 180,
-      logicalDailyInvocations: 650,
-      coveredJobCount: 9,
+      logicalDailyInvocations: 651,
+      coveredJobCount: 10,
       coveredJobs: expect.arrayContaining([
         expect.objectContaining({
           name: 'account-deletion-resweeps',
@@ -284,7 +293,12 @@ describe('collectBackendHealth', () => {
         }),
       ]),
     });
-    expect(health.jobs).toHaveLength(9);
+    expect(health.jobs).toHaveLength(10);
+    expect(health.jobs.find((job) => job.name === 'media-upload-reclaim')).toMatchObject({
+      status: 'ok',
+      dailyInvocations: 1,
+      expectedMaxAgeMinutes: 2880,
+    });
     expect(health.jobs.find((job) => job.name === 'backend-alert-delivery')).toMatchObject({
       status: 'ok',
       dailyInvocations: 144,
@@ -819,6 +833,15 @@ describe('collectBackendHealth', () => {
             finished_at: '2026-06-21T09:55:01.000Z',
             duration_ms: 1000,
             skip_reason: 'no_repairable_media',
+            error_message: null,
+          },
+          {
+            job_name: 'media-upload-reclaim',
+            status: 'skipped',
+            started_at: '2026-06-21T09:56:00.000Z',
+            finished_at: '2026-06-21T09:56:01.000Z',
+            duration_ms: 1000,
+            skip_reason: 'no_reclaimable_media_uploads',
             error_message: null,
           },
           {

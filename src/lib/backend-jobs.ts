@@ -5,6 +5,7 @@ export type BackendJobName =
   | 'generation-completions'
   | 'generation-model-verification'
   | 'media-preview-repair'
+  | 'media-upload-reclaim'
   | 'mobile-push-receipts'
   | 'operational-data-retention'
   | 'referral-reward-reconciliation';
@@ -217,6 +218,18 @@ export const BACKEND_JOB_REGISTRY = [
     maxDurationSeconds: 300,
     lockTtlSeconds: 14 * 60,
     noWorkSkipReason: 'no_repairable_media',
+    maxMissedRunsBeforeDegraded: 2,
+  }),
+  defineBackendJob({
+    // Daily for the same reason as retention: the work is bounded per run and a
+    // backlog simply drains over subsequent days. Nothing downstream waits on
+    // a staged object being collected promptly.
+    name: 'media-upload-reclaim',
+    route: '/api/cron/media-upload-reclaim',
+    schedule: '10 */24 * * *',
+    maxDurationSeconds: 300,
+    lockTtlSeconds: 14 * 60,
+    noWorkSkipReason: 'no_reclaimable_media_uploads',
     maxMissedRunsBeforeDegraded: 2,
   }),
   defineBackendJob({

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import NewPostClient from '@/app/post/new/NewPostClient';
@@ -1072,5 +1072,219 @@ describe('NewPostClient', () => {
     const call = fetchMock.mock.calls[1];
     const body = JSON.parse(call[1].body);
     expect(body.visibility).toBe('unlisted');
+  });
+
+  describe('media upload progress', () => {
+    function attachFile(container: HTMLElement, file: File) {
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(fileInput, { target: { files: [file] } });
+    }
+
+    it('reports real byte progress while the upload is in flight', async () => {
+      // Uploads happen at submit, so this banner is the only feedback during the
+      // one stretch where the user is waiting on bytes.
+      let reportProgress: ((progress: { bytesSent: number; totalBytes: number; fraction: number }) => void) | null = null;
+      let finishUpload: ((value: { signedUrl: string; storagePath: string }) => void) | null = null;
+
+      temporaryUploadMock.mockImplementation(async (
+        file: File,
+        _ownerUserId: string,
+        options?: { onProgress?: (progress: { bytesSent: number; totalBytes: number; fraction: number }) => void },
+      ) => {
+        reportProgress = options?.onProgress ?? null;
+        return new Promise((resolve) => {
+          finishUpload = () => resolve({
+            signedUrl: `https://storage.example.test/signed/${file.name}`,
+            storagePath: `uploads/user-1/${file.name}`,
+          });
+        });
+      });
+
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          postId: 'post-progress',
+          showcasePath: '/showcase/post-progress',
+          resourceBundlePath: null,
+          visibility: 'public',
+          resourceBundleStatus: null,
+        }),
+      });
+
+      const { container } = render(<NewPostClient />);
+      attachFile(container, new File(['png-bytes'], 'proof.png', { type: 'image/png' }));
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      const progressBar = await screen.findByRole('progressbar', { name: /media upload progress/i });
+      expect(progressBar).toHaveAttribute('aria-valuenow', '0');
+
+      await act(async () => {
+        reportProgress?.({ bytesSent: 30, totalBytes: 100, fraction: 0.3 });
+      });
+      await waitFor(() => {
+        expect(screen.getByRole('progressbar', { name: /media upload progress/i }))
+          .toHaveAttribute('aria-valuenow', '30');
+      });
+
+      await act(async () => {
+        finishUpload?.({ signedUrl: 'x', storagePath: 'uploads/user-1/proof.png' });
+      });
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    });
+
+    it('lets the user cancel an in-flight upload without publishing', async () => {
+      temporaryUploadMock.mockImplementation(async (
+        _file: File,
+        _ownerUserId: string,
+        options?: { signal?: AbortSignal },
+      ) => new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => {
+          const cancelled = new Error('Upload cancelled.');
+          cancelled.name = 'UploadCancelledError';
+          reject(cancelled);
+        });
+      }));
+
+      const { container } = render(<NewPostClient />);
+      attachFile(container, new File(['png-bytes'], 'proof.png', { type: 'image/png' }));
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await screen.findByRole('progressbar', { name: /media upload progress/i });
+      fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+
+      await waitFor(() => expect(screen.getByText(/upload cancelled/i)).toBeInTheDocument());
+      // Only the source-tools fetch: cancelling must not publish the post.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries only the files that failed, keeping already-staged uploads', async () => {
+      // Throwing away successes made a retry re-upload every file: duplicate
+      // staged objects, wasted bandwidth, and sign rate limit burned for files
+      // that were already up.
+      let brokenShouldFail = true;
+      temporaryUploadMock.mockImplementation(async (file: File) => {
+        if (file.name === 'broken.png' && brokenShouldFail) {
+          throw new Error('Storage rejected the upload.');
+        }
+        return {
+          signedUrl: `https://storage.example.test/signed/${file.name}`,
+          storagePath: `uploads/user-1/${file.name}`,
+        };
+      });
+
+      const { container } = render(<NewPostClient />);
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(fileInput, {
+        target: {
+          files: [
+            new File(['ok'], 'good.png', { type: 'image/png' }),
+            new File(['bad'], 'broken.png', { type: 'image/png' }),
+          ],
+        },
+      });
+
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      await waitFor(() => {
+        expect(screen.getByText(/1 of 2 uploads failed/i)).toBeInTheDocument();
+      });
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(2);
+
+      brokenShouldFail = false;
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          postId: 'post-retry',
+          showcasePath: '/showcase/post-retry',
+          resourceBundlePath: null,
+          visibility: 'public',
+          resourceBundleStatus: null,
+        }),
+      });
+
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+      // Only broken.png went up again; good.png kept its staged path.
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(3);
+      const request = fetchMock.mock.calls[1][1] as { body: FormData };
+      const mediaItems = JSON.parse(String(request.body.get('mediaItems')));
+      expect(mediaItems).toEqual([
+        expect.objectContaining({ storagePath: 'uploads/user-1/good.png', originalName: 'good.png' }),
+        expect.objectContaining({ storagePath: 'uploads/user-1/broken.png', originalName: 'broken.png' }),
+      ]);
+    });
+
+    it('re-uploads after a server-side publish failure, because the server deleted the staged media', async () => {
+      // Every server-side failure path runs cleanupUploadedMedia, which deletes
+      // the staged objects the composer still holds paths to. Keeping them would
+      // make every retry skip the upload and fail on "Failed to load uploaded
+      // media" forever, with no way out but removing and re-adding the file.
+      enqueueResponse({
+        ok: false,
+        json: async () => ({ error: 'Failed to create post.' }),
+      });
+
+      const { container } = render(<NewPostClient />);
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(fileInput, {
+        target: { files: [new File(['png-bytes'], 'proof.png', { type: 'image/png' })] },
+      });
+
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      await waitFor(() => {
+        expect(screen.getByText(/failed to create post/i)).toBeInTheDocument();
+      });
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(1);
+
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          postId: 'post-recovered',
+          showcasePath: '/showcase/post-recovered',
+          resourceBundlePath: null,
+          visibility: 'public',
+          resourceBundleStatus: null,
+        }),
+      });
+
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+
+      // Re-staged rather than reusing the path the server just deleted.
+      expect(temporaryUploadMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('names the files that failed instead of discarding the whole batch', async () => {
+      // The old Promise.all rejected everything on the first failure, throwing
+      // away uploads that had already succeeded and stranding their objects.
+      temporaryUploadMock.mockImplementation(async (file: File) => {
+        if (file.name === 'broken.png') {
+          throw new Error('Storage rejected the upload.');
+        }
+        return {
+          signedUrl: `https://storage.example.test/signed/${file.name}`,
+          storagePath: `uploads/user-1/${file.name}`,
+        };
+      });
+
+      const { container } = render(<NewPostClient />);
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(fileInput, {
+        target: {
+          files: [
+            new File(['ok'], 'good.png', { type: 'image/png' }),
+            new File(['bad'], 'broken.png', { type: 'image/png' }),
+          ],
+        },
+      });
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await waitFor(() => {
+        expect(screen.getByText(/1 of 2 uploads failed/i)).toBeInTheDocument();
+      });
+      expect(screen.getByText(/broken\.png/i)).toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
   });
 });

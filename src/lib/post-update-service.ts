@@ -27,7 +27,15 @@ import {
   replacePostMediaItems,
   type PostMediaPersistInput,
 } from '@/lib/post-media';
+import {
+  getConfirmedRemovedPaths,
+  markMediaUploadIntentsConsumed,
+} from '@/lib/media-upload-intents';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
+import {
+  formatUploadByteLimit,
+  getMaxUploadBytesForContentType,
+} from '@/lib/temporary-media-upload-sign';
 import { createPostMediaRendition, type PostMediaRenditionStatus } from '@/lib/post-media-rendition';
 import { defaultPostMediaKey, normalizePostMediaKey } from '@/lib/post-media-key';
 import { isCreatorProfileCheckError } from '@/lib/marketplace-trust';
@@ -51,6 +59,18 @@ import {
 
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 const UPLOADS_BUCKET = 'uploads';
+
+/**
+ * Raised when the bytes actually received exceed the limit for their media
+ * kind. Distinct from the generic media failure so the caller gets a 400 it can
+ * act on rather than a 500 that reads like an outage.
+ */
+class PostMediaTooLargeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PostMediaTooLargeError';
+  }
+}
 
 type MutablePostRow = {
   id: string;
@@ -563,6 +583,22 @@ async function replaceEditedPostMedia(params: {
         throw new Error('Failed to load uploaded media.');
       }
 
+      // Same check the create path runs at post-publish-service.ts. The signed
+      // upload could only validate a client-declared size, so without this an
+      // oversized object reaches the public bucket through edit even though
+      // create would have rejected it -- the uploads bucket's own ceiling is
+      // 250 MB for every media kind.
+      const maxBytes = getMaxUploadBytesForContentType(item.contentType || downloadedMedia.data.type);
+      if (
+        maxBytes !== null
+        && typeof downloadedMedia.data.size === 'number'
+        && downloadedMedia.data.size > maxBytes
+      ) {
+        throw new PostMediaTooLargeError(
+          `${item.originalName || 'That file'} is larger than the ${formatUploadByteLimit(maxBytes)} limit for this media type.`,
+        );
+      }
+
       const extension = inferExtension(item.originalName, item.contentType);
       const storagePath = `posts/${params.postId}/${randomUUID()}/${sanitizeFileStem(item.originalName)}.${extension}`;
       const uploadResult = await params.adminSupabase.storage
@@ -656,6 +692,31 @@ async function replaceEditedPostMedia(params: {
       if (temporaryCleanup.error) {
         logBackendWarning('failed_to_remove_temporary_post_media_after_edit', { error: temporaryCleanup.error });
       }
+
+      // Only what storage confirmed deleted is marked cleared; the rest stays
+      // consumed-but-uncleared so the reclaim sweep retries it instead of
+      // ignoring the surviving object forever.
+      const removal = getConfirmedRemovedPaths(temporaryStoragePaths, temporaryCleanup);
+      if (removal.confirmed.length > 0) {
+        await markMediaUploadIntentsConsumed(params.adminSupabase, {
+          storagePaths: removal.confirmed,
+          consumedBy: 'post_update',
+          storageCleared: true,
+        });
+      }
+      if (removal.unconfirmed.length > 0) {
+        if (!temporaryCleanup.error) {
+          logBackendWarning('partially_removed_temporary_post_media_after_edit', {
+            requested: temporaryStoragePaths.length,
+            removed: removal.confirmed.length,
+          });
+        }
+        await markMediaUploadIntentsConsumed(params.adminSupabase, {
+          storagePaths: removal.unconfirmed,
+          consumedBy: 'post_update',
+          storageCleared: false,
+        });
+      }
     }
 
     const retainedStoragePaths = new Set(
@@ -677,10 +738,17 @@ async function replaceEditedPostMedia(params: {
       }
     }
   } catch (mediaError) {
-    logBackendError('failed_to_update_post_media', { error: mediaError });
     if (newStoragePaths.length > 0) {
       await params.adminSupabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove(newStoragePaths);
     }
+
+    // A rejected upload is the caller's problem to fix, not a server fault, so
+    // it neither logs as an error nor collapses into the generic 500.
+    if (mediaError instanceof PostMediaTooLargeError) {
+      return { ok: false, status: 400, body: { error: mediaError.message } };
+    }
+
+    logBackendError('failed_to_update_post_media', { error: mediaError });
     return { ok: false, status: 500, body: { error: 'Failed to update post media.' } };
   }
 

@@ -52,6 +52,9 @@ and applies a 15-second timeout to the signed Vercel forward.
 
 Optional alert delivery can be enabled with `BACKEND_ALERT_DELIVERY_URL`, plus optional `BACKEND_ALERT_DELIVERY_AUTH_HEADER`. The protected backend dashboard is the no-extra-vendor monitoring baseline, so the external alert hook is not a required production capability.
 
+`MEDIA_UPLOAD_RECLAIM_ABANDONED` is an optional, deliberately-off gate on the
+`media-upload-reclaim` job — see "Staged Upload Reclaim" below before setting it.
+
 Keep secrets scoped to Production unless a separate preview environment has isolated provider credentials and an isolated database. Never connect untrusted preview branches to production service-role credentials.
 
 ### Rotating `CRON_SECRET` And `OPS_READ_SECRET`
@@ -264,9 +267,89 @@ If email/password sign-up is ever wanted:
 4. Re-run the Supabase Auth advisors and confirm no warnings remain.
 5. Give the legacy accounts above a reset path before announcing the change.
 
+## Staged Upload Reclaim
+
+`uploads` is the shared staging bucket: the post composer and the generation
+input pipeline both sign objects into it and copy the bytes elsewhere once the
+work is claimed. `media_upload_intents` records every signed upload, and the
+daily `media-upload-reclaim` job deletes staged objects nothing needs any more —
+48 hours after they were signed.
+
+The job also repairs before it reclaims, because some staged objects are not
+redundant at all — see "Legacy generation references" below.
+
+The reclaim half runs in two parts, and only one of them is on by default.
+
+**Consumed intents (on by default).** A generation input is copied into
+`generation_inputs` and the staging object is deliberately left in place, because
+an unchanged picker selection can be submitted twice and the second run re-sends
+the same path. These were previously never deleted at all, so every generation
+with an uploaded input left a permanent duplicate. Nothing client-side depends on
+them, so the sweep collects them from day one.
+
+**Never-consumed intents (`MEDIA_UPLOAD_RECLAIM_ABANDONED=true`).** These are
+abandoned composer drafts. **Do not enable this until the mobile build that
+verifies draft media on resume has reached the installed base.** Mobile persists
+composer drafts — storage paths included — and builds without that fix restore a
+draft without checking whether its staged objects still exist. Reclaiming one
+makes the draft fail at publish with `Failed to load uploaded media` and no
+recovery path, while the composer still looks completely intact.
+
+Raising the reclaim TTL is *not* a substitute for waiting. Those builds refresh a
+draft's expiry every time the composer is opened, so a draft can outlive its
+media by an unbounded margin. The fix is client-side or nothing.
+
+### Legacy generation references
+
+`persistGenerationInputMedia` catches per-candidate failures and only logs them,
+so a transient error leaves a generation with **zero** `generation_input_media`
+rows while its `workflow_settings` still name the staged paths. Three read paths
+then fall back to `buildLegacyGenerationInputMedia` and serve those staging
+objects directly: the owner inputs view, remix source, and paid-bundle recipe
+inputs. For those generations the staged file is load-bearing, not garbage.
+
+Two mechanisms handle this, both inside the `media-upload-reclaim` job:
+
+- **The guard** loads every staged path named by a generation with no durable
+  rows and refuses to reclaim it, counted as `protectedLegacyReferences`. It is
+  path-based rather than consumption-based on purpose: a repair that persists
+  and then rolls back leaves an intent marked consumed while its generation is
+  legacy-only again. If the guard scan fails or looks truncated, the run
+  reclaims **nothing** — an unproven answer never authorises a delete.
+- **The repair** runs first each night, healing up to five such generations by
+  persisting exactly what the legacy view renders. It is all-or-nothing per
+  generation: a partial set would *degrade* the view, because the read paths flip
+  to durable rows the moment one exists, so an incomplete repair deletes its own
+  rows (before its objects — a row whose object is missing blocks account
+  deletion) and records a failed attempt. After three attempts a generation is
+  left alone permanently and stays guarded. Cross-user source references are a
+  terminal skip: those bytes cannot be copied into this owner's bucket.
+
+Watch `repair.completed` / `repair.failed` and `protectedLegacyReferences`.
+`protectedLegacyReferences` should fall toward zero as repairs land; a number
+that stops falling means repair is stuck on something worth reading the logs for.
+
+### Rollout order
+
+1. Ship the server side. Watch `repair.*` and `protectedLegacyReferences` drain.
+2. Backfill the pre-migration backlog once, so the sweep can see it at all:
+   `npm run backfill:media-upload-intents` (dry run) then
+   `-- --execute --project-ref=<ref>`. It re-derives categories at run time,
+   seeds only durable-backed objects as consumed, and reports both directions of
+   `generation_inputs` drift without changing anything.
+3. Ship the mobile build with draft-media verification (`mobile-store-release`).
+4. Wait for store review plus adoption.
+5. **Check the preconditions**: the legacy-only backlog is drained (or the
+   remainder is attempt-exhausted and understood), and `protectedLegacyReferences`
+   has been stable for several runs.
+6. Set `MEDIA_UPLOAD_RECLAIM_ABANDONED=true` in Vercel Production.
+7. Watch the job's reported `reclaimed` / `rowsDropped` counts for a few runs.
+
+To roll back, unset the variable; the consumed half and the repair keep running.
+
 ## Durable Queue Graduation Decision
 
-Current decision: keep the Vercel cron orchestrator for `account-deletion-resweeps`, `backend-alert-delivery`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `media-preview-repair`, `mobile-push-receipts`, `operational-data-retention`, and `referral-reward-reconciliation`.
+Current decision: keep the Vercel cron orchestrator for `account-deletion-resweeps`, `backend-alert-delivery`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `media-preview-repair`, `media-upload-reclaim`, `mobile-push-receipts`, `operational-data-retention`, and `referral-reward-reconciliation`.
 
 This is the cost-efficient production baseline for the current workload because the jobs are idempotent, lock-protected in Supabase, bounded by 300-second function limits, and tolerant of the current ten-minute or hourly cadence. The single `/api/cron/backend-jobs` scheduler keeps Vercel cron invocations at 144 per day while logical jobs can still run at their own cadence.
 

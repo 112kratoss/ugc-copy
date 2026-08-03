@@ -10,6 +10,7 @@ const downloadMock = vi.fn();
 const insertPayloads: Array<Record<string, unknown>> = [];
 const postMediaRows: Array<Record<string, unknown>> = [];
 const sourceToolRows: Array<Record<string, unknown>> = [];
+const uploadIntentUpdates: Array<Record<string, unknown>> = [];
 const sourceToolRpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
 let bundleUpsertError: { code?: string; message?: string } | null = null;
 let postMediaInsertError: { code?: string; message?: string } | null = null;
@@ -77,6 +78,28 @@ function createServiceClientTestDouble() {
           },
           eq() {
             return Promise.resolve({ error: null });
+          },
+        };
+
+        return query;
+      }
+
+      if (table === 'media_upload_intents') {
+        // Publishing closes out the staged uploads it consumed so the reclaim
+        // sweep does not go looking for objects it already deleted.
+        const query = {
+          update(values: Record<string, unknown>) {
+            uploadIntentUpdates.push(values);
+            return query;
+          },
+          in() {
+            return query;
+          },
+          is() {
+            return query;
+          },
+          then(resolve: (result: { error: null }) => unknown) {
+            return Promise.resolve(resolve({ error: null }));
           },
         };
 
@@ -254,6 +277,7 @@ describe('/api/posts route', () => {
     insertPayloads.length = 0;
     postMediaRows.length = 0;
     sourceToolRows.length = 0;
+    uploadIntentUpdates.length = 0;
     sourceToolRpcCalls.length = 0;
     bundleUpsertError = null;
     postMediaInsertError = null;
@@ -542,6 +566,31 @@ describe('/api/posts route', () => {
         sort_order: 0,
       }),
     ]);
+  });
+
+  it('leaves the upload intent uncleared when the staging cleanup fails', async () => {
+    // A failed remove() marked cleared would hide the surviving object from the
+    // reclaim sweep forever -- cleared rows are never selected again. Consumed
+    // but uncleared is the state the sweep retries after the reclaim window.
+    removeMock.mockResolvedValueOnce({ error: { message: 'storage outage' } });
+
+    const { POST } = await import('@/app/api/posts/route');
+    const formData = new FormData();
+    formData.set('postFormat', 'mixed');
+    formData.set('body', 'Cleanup failure must not lose track of the staged object.');
+    formData.set('category', 'video');
+    formData.set('visibility', 'public');
+    formData.set('mediaStoragePath', 'uploads/user-1/tmp-proof.mp4');
+    formData.set('mediaOriginalName', 'proof.mp4');
+    formData.set('mediaContentType', 'video/mp4');
+
+    const response = await POST(createRouteRequest(formData));
+
+    // The publish itself must still succeed: cleanup is bookkeeping.
+    expect(response.status).toBe(200);
+    const consumedUpdates = uploadIntentUpdates.filter((update) => update.consumed_by === 'post_publish');
+    expect(consumedUpdates).toHaveLength(1);
+    expect(consumedUpdates[0]).not.toHaveProperty('storage_cleared_at');
   });
 
   it('creates ordered multi-media posts from uploaded storage references', async () => {

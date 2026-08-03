@@ -24,8 +24,11 @@ const createSignedUploadUrlMock = vi.fn(async () => ({
 const storageFromMock = vi.fn(() => ({
   createSignedUploadUrl: createSignedUploadUrlMock,
 }));
+const intentInsertMock = vi.fn(async () => ({ error: null }));
+const tableFromMock = vi.fn(() => ({ insert: intentInsertMock }));
 const adminClient = {
   rpc: rpcMock,
+  from: tableFromMock,
   storage: {
     from: storageFromMock,
   },
@@ -55,6 +58,9 @@ describe('/api/uploads/media/sign route', () => {
       error: null,
     });
     storageFromMock.mockClear();
+    tableFromMock.mockClear();
+    intentInsertMock.mockClear();
+    intentInsertMock.mockResolvedValue({ error: null });
     createSignedUploadUrlMock.mockReset();
     createSignedUploadUrlMock.mockResolvedValue({
       data: {

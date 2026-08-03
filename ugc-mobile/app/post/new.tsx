@@ -27,6 +27,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppText, ChoiceChip, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
 import { StableMediaImage } from '@/components/media-preview';
+import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import { truncateInfiniteDataToFirstPage } from '@/lib/profile-media-query';
 import { pickMediaList, pickResourceDocument, uploadPickedMedia } from '@/lib/media';
@@ -38,6 +39,12 @@ import {
   loadPersistedPostComposerDraft,
   persistPostComposerDraft,
 } from '@/lib/post-composer-draft-resume';
+import {
+  applyPostComposerMediaRecovery,
+  describeLostRecoveryMedia,
+  planPostComposerMediaRecovery,
+  type MediaVerification,
+} from '@/lib/post-composer-media-recovery';
 import {
   buildPostComposerMediaItemsPayload,
   buildCreatePostFormData,
@@ -1456,6 +1463,7 @@ export default function NewPostScreen() {
   const [message, setMessage] = useState<{ tone: 'danger' | 'success' | 'neutral'; title: string; body?: string } | null>(null);
   const [detailErrors, setDetailErrors] = useState<PostComposerDetailErrors>({});
   const [isPickingMedia, setIsPickingMedia] = useState(false);
+  const [isRecoveringDraftMedia, setIsRecoveringDraftMedia] = useState(false);
   const [isPickingResourceFile, setIsPickingResourceFile] = useState(false);
   const [hasPrefilledEdit, setHasPrefilledEdit] = useState(false);
   const [hasHydratedPersistedDraft, setHasHydratedPersistedDraft] = useState(false);
@@ -1469,12 +1477,23 @@ export default function NewPostScreen() {
   const [isNavigationAllowed, setIsNavigationAllowed] = useState(false);
   const [pendingPublishVisibility, setPendingPublishVisibility] = useState<PostComposerDraft['visibility'] | null>(null);
   const [mediaUploadProgress, setMediaUploadProgress] = useState<MediaUploadBatchProgress | null>(null);
+  // Separate from the pick banner: the two can run concurrently, and sharing one
+  // slot made the numbers incoherent and let whichever finished first blank the
+  // other's banner (and its Cancel button) mid-transfer.
+  const [recoveryUploadProgress, setRecoveryUploadProgress] = useState<MediaUploadBatchProgress | null>(null);
   const [pendingRetryMedia, setPendingRetryMedia] = useState<ImagePickerAsset[]>([]);
   const scrollRef = useRef<ScrollView>(null);
   const mediaControlRef = useRef<View>(null);
   const titleInputRef = useRef<TextInput>(null);
   const contentInputRef = useRef<TextInput>(null);
   const mediaUploadAbortRef = useRef<AbortController | null>(null);
+  /**
+   * Every in-flight upload controller. Draft recovery and normal media picking
+   * can overlap -- the picker blocks on the OS sheet while a resumed draft
+   * starts re-uploading -- and a single ref meant whichever finished first
+   * nulled it, leaving Cancel and the unmount abort as no-ops on the other.
+   */
+  const activeUploadControllersRef = useRef<Set<AbortController>>(new Set());
   const mediaUploadIdRef = useRef(0);
   const initialDraftSignatureRef = useRef<string | null>(null);
   const draftStorageId = user ? getPostComposerDraftStorageId({
@@ -1515,6 +1534,9 @@ export default function NewPostScreen() {
   const hasPaidOrders = postQuery.data?.post?.hasPaidOrders === true;
   const canSubmit = !isPickingMedia
     && !isPickingResourceFile
+    // A publish racing draft-media recovery would submit a reclaimed path and
+    // fail with the opaque server error recovery exists to prevent.
+    && !isRecoveringDraftMedia
     && (!isEditMode || (postQuery.isSuccess && hasPrefilledEdit));
   const sourceTools = sourceToolsQuery.data?.tools ?? [];
   const packageStatus = useMemo(
@@ -1667,7 +1689,9 @@ export default function NewPostScreen() {
   }, [postId, postQuery.data, hasPrefilledEdit]);
 
   useEffect(() => () => {
-    mediaUploadAbortRef.current?.abort();
+    for (const controller of activeUploadControllersRef.current) {
+      controller.abort();
+    }
   }, []);
 
   useEffect(() => {
@@ -1696,6 +1720,9 @@ export default function NewPostScreen() {
           title: 'Draft restored',
           body: 'Your unfinished post was recovered on this device.',
         });
+        // Deliberately not awaited: the draft is already usable, and verifying
+        // its uploads is a background repair the user should not wait behind.
+        void recoverRestoredDraftMedia(persisted.draft);
       } else if (focusTarget === 'resources') {
         const details = getPostComposerDetailErrors(draft);
         if (Object.keys(details).length === 0) {
@@ -2000,10 +2027,177 @@ export default function NewPostScreen() {
     });
   };
 
+  /**
+   * Re-attach a restored draft's staged media.
+   *
+   * Staged uploads are not permanent -- the server reclaims ones nothing ever
+   * published -- so a draft resumed days later can reference objects that are
+   * gone. Without this the composer looked completely intact and publishing
+   * failed with "Failed to load uploaded media", which the user had no way to
+   * act on. Each item still knows the local file it came from, so the usual
+   * outcome is a re-upload.
+   *
+   * Publishing is disabled for the duration (`isRecoveringDraftMedia` feeds
+   * `canSubmit`): a publish racing the recovery would submit the reclaimed
+   * path and fail with exactly the opaque error this exists to prevent. The
+   * re-upload phase runs through the same progress banner and cancel button as
+   * a normal media pick, so several large videos never upload invisibly.
+   */
+  const recoverRestoredDraftMedia = async (restored: PostComposerDraft) => {
+    const staged = restored.mediaItems.filter((item) => !item.existingId && item.storagePath);
+    if (staged.length === 0) return;
+
+    setIsRecoveringDraftMedia(true);
+    try {
+      const verifications = new Map<string, MediaVerification>();
+      const localUris = new Set<string>();
+
+      await Promise.all(staged.map(async (item) => {
+        const storagePath = item.storagePath as string;
+        try {
+          await api.createMediaReadUrl({ storagePath });
+          verifications.set(storagePath, { exists: true, inconclusive: false });
+        } catch (error) {
+          // Only a positive 404 means reclaimed. Anything else -- offline, rate
+          // limited, storage blip -- leaves the item alone rather than risking
+          // dropping media that is really still there.
+          const missing = error instanceof ApiError && error.status === 404;
+          verifications.set(storagePath, { exists: false, inconclusive: !missing });
+        }
+      }));
+
+      await Promise.all(staged.map(async (item) => {
+        if (!item.uri) return;
+        try {
+          const { File: ExpoFile } = await import('expo-file-system');
+          if (new ExpoFile(item.uri).exists) localUris.add(item.uri);
+        } catch {
+          // An unreadable local file is treated as gone, which is what it is.
+        }
+      }));
+
+      const plan = planPostComposerMediaRecovery(
+        restored.mediaItems,
+        verifications,
+        (uri) => localUris.has(uri),
+      );
+      if (plan.toReupload.length === 0 && plan.lost.length === 0) return;
+
+      const reuploaded = new Map<string, { storagePath: string }>();
+      const lost = new Set(plan.lost.map((item) => item.id));
+      const failedReupload: typeof plan.toReupload = [];
+      let cancelled = false;
+
+      if (plan.toReupload.length > 0) {
+        const controller = new AbortController();
+        activeUploadControllersRef.current.add(controller);
+
+        const progressByIndex = new Map<number, { bytesSent: number; totalBytes: number }>();
+        let completed = 0;
+        const publishRecoveryProgress = () => {
+          const totals = [...progressByIndex.values()].reduce(
+            (sum, progress) => ({
+              bytesSent: sum.bytesSent + progress.bytesSent,
+              totalBytes: sum.totalBytes + progress.totalBytes,
+            }),
+            { bytesSent: 0, totalBytes: 0 }
+          );
+          setRecoveryUploadProgress({
+            ...totals,
+            completed,
+            percent: totals.totalBytes > 0 ? Math.round((totals.bytesSent / totals.totalBytes) * 100) : 0,
+            total: plan.toReupload.length,
+          });
+        };
+        publishRecoveryProgress();
+
+        try {
+          for (const [index, item] of plan.toReupload.entries()) {
+            if (controller.signal.aborted) {
+              cancelled = true;
+              break;
+            }
+
+            try {
+              const uploaded = await uploadPickedMedia(item.uri, {
+                api,
+                fileName: item.name,
+                mimeType: item.type,
+                kind: item.mediaKind,
+                signal: controller.signal,
+                onProgress: (progress) => {
+                  progressByIndex.set(index, {
+                    bytesSent: progress.bytesSent,
+                    totalBytes: progress.totalBytes,
+                  });
+                  publishRecoveryProgress();
+                },
+              });
+              completed += 1;
+              publishRecoveryProgress();
+              reuploaded.set(item.id, { storagePath: uploaded.storagePath });
+            } catch (error) {
+              if (isUploadCancelledError(error)) {
+                // The user stopped the restore; the items stay in the draft
+                // untouched rather than being written off as lost.
+                cancelled = true;
+                break;
+              }
+              // The planner already confirmed this file is still on the device,
+              // so a failed PUT is transient -- dropping the item would destroy
+              // work one retry would have restored. `lost` stays reserved for
+              // the planner's verdict: gone from storage AND gone locally.
+              failedReupload.push(item);
+            }
+          }
+        } finally {
+          activeUploadControllersRef.current.delete(controller);
+          setRecoveryUploadProgress(null);
+        }
+      }
+
+      setDraft((current) => ({
+        ...current,
+        mediaItems: applyPostComposerMediaRecovery(current.mediaItems, { reuploaded, lost }),
+      }));
+
+      if (cancelled) {
+        setMessage({
+          tone: 'neutral',
+          title: 'Media restore cancelled',
+          body: 'Some of this draft\'s media may need to be added again before publishing.',
+        });
+        return;
+      }
+
+      const lostMessage = describeLostRecoveryMedia(
+        restored.mediaItems.filter((item) => lost.has(item.id)),
+      );
+      if (lostMessage) {
+        setMessage({ tone: 'danger', title: 'Some media could not be restored', body: lostMessage });
+        return;
+      }
+
+      if (failedReupload.length > 0) {
+        // Kept in the draft, but publishing would fail on the reclaimed path,
+        // so the user is told rather than left to discover it at publish time.
+        const names = failedReupload.map((item) => item.name).filter(Boolean).join(', ');
+        setMessage({
+          tone: 'danger',
+          title: 'Could not restore some media',
+          body: `${names || 'Some media'} could not be re-uploaded. Remove and re-add ${failedReupload.length === 1 ? 'it' : 'them'}, or try opening this draft again.`,
+        });
+      }
+    } finally {
+      setIsRecoveringDraftMedia(false);
+    }
+  };
+
   const uploadSelectedMedia = async (assets: ImagePickerAsset[]) => {
     if (assets.length === 0) return;
     const controller = new AbortController();
     mediaUploadAbortRef.current = controller;
+    activeUploadControllersRef.current.add(controller);
     setIsPickingMedia(true);
     setPendingRetryMedia([]);
     setMessage(null);
@@ -2097,6 +2291,7 @@ export default function NewPostScreen() {
         body: error instanceof Error ? error.message : 'Try again.',
       });
     } finally {
+      activeUploadControllersRef.current.delete(controller);
       if (mediaUploadAbortRef.current === controller) {
         mediaUploadAbortRef.current = null;
       }
@@ -2106,7 +2301,7 @@ export default function NewPostScreen() {
   };
 
   const chooseMedia = async (kind: 'image' | 'video' | 'mixed') => {
-    if (isFieldsLocked || isPickingMedia) return;
+    if (isFieldsLocked || isPickingMedia || isRecoveringDraftMedia) return;
     setMessage(null);
     setPendingRetryMedia([]);
     setIsPickingMedia(true);
@@ -2124,14 +2319,16 @@ export default function NewPostScreen() {
     }
   };
   const retryPendingMediaUploads = async () => {
-    if (pendingRetryMedia.length === 0 || isPickingMedia) return;
+    if (pendingRetryMedia.length === 0 || isPickingMedia || isRecoveringDraftMedia) return;
     const retryAssets = pendingRetryMedia;
     setPendingRetryMedia([]);
     await uploadSelectedMedia(retryAssets);
   };
 
   const cancelMediaUploads = () => {
-    mediaUploadAbortRef.current?.abort();
+    for (const controller of activeUploadControllersRef.current) {
+      controller.abort();
+    }
   };
 
   const updateMadeWithRow = (id: string, patch: Partial<PostComposerMadeWithRow>) => {
@@ -2475,6 +2672,17 @@ export default function NewPostScreen() {
       >
         {message ? (
           <StatusBlock tone={message.tone} title={message.title} body={message.body} />
+        ) : null}
+
+        {recoveryUploadProgress ? (
+          <View style={{ gap: 8 }}>
+            <StatusBlock
+              tone="neutral"
+              title={`Restoring draft media · ${recoveryUploadProgress.percent}%`}
+              body={`${recoveryUploadProgress.completed} of ${recoveryUploadProgress.total} complete${recoveryUploadProgress.totalBytes > 0 ? ` · ${formatUploadBytes(recoveryUploadProgress.bytesSent)} of ${formatUploadBytes(recoveryUploadProgress.totalBytes)}` : ''}`}
+            />
+            <SecondaryButton label="Cancel restore" onPress={cancelMediaUploads} />
+          </View>
         ) : null}
 
         {mediaUploadProgress ? (

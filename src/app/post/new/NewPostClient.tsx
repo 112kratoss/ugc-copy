@@ -51,6 +51,7 @@ import {
 import { slugifySourceTool, type SourceToolOption } from '@/lib/source-tools';
 import { supabase } from '@/lib/supabase';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
+import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-queue';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
 import CreatableCombobox, { type CreatableComboboxOption } from './CreatableCombobox';
 import type { EditablePostDraft } from './post-editor-types';
@@ -95,6 +96,34 @@ interface ComposerMediaItem {
   mediaKind: 'image' | 'video';
   contentType: string | null;
   originalName: string | null;
+  /**
+   * Set once the file has been staged into the uploads bucket, and kept across
+   * failed publish attempts: a retry must re-upload only what actually failed,
+   * not re-send files that already made it up.
+   */
+  storagePath: string | null;
+}
+
+/**
+ * Aggregate upload state for the publish step.
+ *
+ * Uploading still happens at submit rather than at pick time, so this is the
+ * only window where the user is waiting on bytes -- and before this they waited
+ * on a spinner that could not say how long, could not be cancelled, and threw
+ * away completed uploads if any single file failed.
+ */
+interface MediaUploadProgress {
+  bytesSent: number;
+  totalBytes: number;
+  completed: number;
+  total: number;
+  percent: number;
+}
+
+function formatUploadBytes(bytes: number): string {
+  return bytes >= 1024 * 1024
+    ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
 class ComposerSubmissionError extends Error {
@@ -299,6 +328,7 @@ function createComposerMediaItem(file: File, index: number): ComposerMediaItem {
     mediaKind: file.type.startsWith('video/') ? 'video' : 'image',
     contentType: file.type || null,
     originalName: file.name,
+    storagePath: null,
   };
 }
 
@@ -870,6 +900,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         mediaKind: item.mediaKind,
         contentType: item.contentType,
         originalName: item.originalName,
+        storagePath: null,
       }));
     }
 
@@ -882,6 +913,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         mediaKind: initialPost.mediaKind,
         contentType: null,
         originalName: null,
+        storagePath: null,
       }];
     }
 
@@ -964,6 +996,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [didFocusPriceInput, setDidFocusPriceInput] = useState(false);
   const [error, setError] = useState<ComposerError | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<MediaUploadProgress | null>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
   const [createdPost, setCreatedPost] = useState<CreatedPostState | null>(null);
   const [prefilledGeneration, setPrefilledGeneration] = useState<GenerationDraft | null>(() =>
     initialPost?.generationId
@@ -1512,6 +1546,165 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     });
   };
 
+  /**
+   * Upload every not-yet-staged media item, reporting aggregate byte progress.
+   *
+   * Runs through the weighted queue rather than `Promise.all` so one failure
+   * cannot discard files that already uploaded. Items keep their composer order
+   * because the first one is the Showcase cover.
+   */
+  const uploadComposerMedia = async (items: ComposerMediaItem[], ownerUserId: string) => {
+    // Items that already carry a storagePath were staged by an earlier publish
+    // attempt that failed on a sibling -- re-uploading them would duplicate the
+    // staged object and burn the sign rate limit for nothing.
+    const pending = items.filter((item) => !item.existingId && !item.storagePath);
+    const describeItem = (item: ComposerMediaItem) => {
+      if (item.existingId) {
+        return { existingId: item.existingId };
+      }
+      if (item.storagePath) {
+        return {
+          storagePath: item.storagePath,
+          contentType: item.contentType ?? item.file?.type ?? '',
+          originalName: item.originalName ?? item.file?.name ?? '',
+        };
+      }
+      return null;
+    };
+
+    if (pending.length === 0) {
+      return items.map((item) => {
+        const described = describeItem(item);
+        if (!described) {
+          throw new Error('A selected media item is no longer available.');
+        }
+        return described;
+      });
+    }
+
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
+
+    const bytesByIndex = new Map<number, { bytesSent: number; totalBytes: number }>();
+    let completed = 0;
+    const publishProgress = () => {
+      const totals = [...bytesByIndex.values()].reduce(
+        (sum, entry) => ({
+          bytesSent: sum.bytesSent + entry.bytesSent,
+          totalBytes: sum.totalBytes + entry.totalBytes,
+        }),
+        { bytesSent: 0, totalBytes: 0 },
+      );
+      setUploadProgress({
+        ...totals,
+        completed,
+        total: pending.length,
+        percent: totals.totalBytes > 0 ? Math.round((totals.bytesSent / totals.totalBytes) * 100) : 0,
+      });
+    };
+
+    pending.forEach((item, index) => {
+      bytesByIndex.set(index, { bytesSent: 0, totalBytes: item.file?.size ?? 0 });
+    });
+    publishProgress();
+
+    try {
+      const uploaded = await runWeightedUploadQueue(
+        pending.map((item) => ({ item, kind: item.mediaKind })),
+        async (item, index) => {
+          if (!item.file) {
+            throw new Error('A selected media item is no longer available.');
+          }
+
+          const media = await uploadMediaToTemporaryStorage(item.file, ownerUserId, {
+            signal: controller.signal,
+            onProgress: ({ bytesSent, totalBytes }) => {
+              bytesByIndex.set(index, { bytesSent, totalBytes });
+              publishProgress();
+            },
+          });
+
+          completed += 1;
+          publishProgress();
+          return {
+            storagePath: media.storagePath,
+            contentType: item.file.type,
+            originalName: item.file.name,
+          };
+        },
+        { signal: controller.signal },
+      );
+
+      const byItemId = new Map(uploaded.successes.map((entry) => [entry.item.id, entry.result]));
+
+      // Record what made it up BEFORE deciding whether to throw. This is what
+      // turns "publish again" into a retry of only the failures instead of a
+      // full re-upload that duplicates already-staged objects.
+      if (byItemId.size > 0) {
+        setMediaItems((current) => current.map((item) => {
+          const result = byItemId.get(item.id);
+          return result ? { ...item, storagePath: result.storagePath } : item;
+        }));
+      }
+
+      if (uploaded.failures.length > 0) {
+        const cancelled = uploaded.failures.every((failure) => isUploadCancelledError(failure.error));
+        if (cancelled) {
+          throw new ComposerSubmissionError('Upload cancelled.', 'publish');
+        }
+
+        const firstError = uploaded.failures.find((failure) => !isUploadCancelledError(failure.error))?.error;
+        const failedNames = uploaded.failures
+          .map((failure) => failure.item.originalName ?? failure.item.file?.name)
+          .filter(Boolean)
+          .join(', ');
+        throw new ComposerSubmissionError(
+          `${uploaded.failures.length} of ${pending.length} uploads failed${failedNames ? ` (${failedNames})` : ''}. ${
+            firstError instanceof Error ? firstError.message : 'Publish again to retry just those files.'
+          }`,
+          'publish',
+        );
+      }
+
+      return items.map((item) => {
+        const described = describeItem(item);
+        if (described) {
+          return described;
+        }
+
+        const result = byItemId.get(item.id);
+        if (!result) {
+          throw new Error('A selected media item is no longer available.');
+        }
+        return result;
+      });
+    } finally {
+      if (uploadAbortRef.current === controller) {
+        uploadAbortRef.current = null;
+      }
+      setUploadProgress(null);
+    }
+  };
+
+  const cancelMediaUpload = () => {
+    uploadAbortRef.current?.abort();
+  };
+
+  /**
+   * Forget staged paths after the server has been asked to publish and failed.
+   *
+   * Every server-side publish failure runs `cleanupUploadedMedia`, which deletes
+   * the staged objects the composer is still holding paths to. Keeping them
+   * would make the retry skip re-uploading and fail forever on
+   * "Failed to load uploaded media" -- so paths survive a client-side upload
+   * failure (the point of retrying only what failed) but never a dispatched one.
+   */
+  const forgetStagedMediaPaths = () => {
+    setMediaItems((current) => current.map((item) => (
+      item.storagePath ? { ...item, storagePath: null } : item
+    )));
+  };
+
   const stopWithError = (
     message: string,
     section: 'post' | 'story' | 'resources' | 'publish',
@@ -1923,24 +2116,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       setIsSubmitting(true);
       const mediaItemsForSubmit = generationId
         ? undefined
-        : await Promise.all(mediaItems.map(async (item) => {
-            if (item.existingId) {
-              return {
-                existingId: item.existingId,
-              };
-            }
-
-            if (!item.file) {
-              throw new Error('A selected media item is no longer available.');
-            }
-
-            const uploadedMedia = await uploadMediaToTemporaryStorage(item.file, session.user.id);
-            return {
-              storagePath: uploadedMedia.storagePath,
-              contentType: item.file.type,
-              originalName: item.file.name,
-            };
-          }));
+        : await uploadComposerMedia(mediaItems, session.user.id);
 
       if (generationId) {
         const response = await fetch('/api/showcase/publish', {
@@ -2045,16 +2221,25 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         formData.set('category', 'text');
       }
 
-      const response = await fetch('/api/posts', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: formData,
-      });
+      let response: Response;
+      try {
+        response = await fetch('/api/posts', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: formData,
+        });
+      } catch (networkError) {
+        // The request may have reached the server and rolled back its staged
+        // media, so the safe assumption is that the paths are gone.
+        forgetStagedMediaPaths();
+        throw networkError;
+      }
       const data = await response.json();
 
       if (!response.ok) {
+        forgetStagedMediaPaths();
         throw getSubmissionError(data, 'Failed to publish post.');
       }
 
@@ -2573,6 +2758,40 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                             event.currentTarget.value = '';
                           }}
                         />
+
+                        {uploadProgress ? (
+                          <div className="mt-5 rounded-2xl border border-sky-400/20 bg-sky-400/5 p-4">
+                            <div className="flex items-center justify-between gap-4">
+                              <div className="text-xs font-medium text-sky-100">
+                                Uploading {uploadProgress.completed} of {uploadProgress.total}
+                                {uploadProgress.totalBytes > 0
+                                  ? ` · ${formatUploadBytes(uploadProgress.bytesSent)} of ${formatUploadBytes(uploadProgress.totalBytes)}`
+                                  : ''}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={cancelMediaUpload}
+                                className="rounded-full border border-white/15 px-3 py-1 text-xs font-semibold text-zinc-200 transition hover:border-white/30 hover:text-white"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                            <div
+                              role="progressbar"
+                              aria-label="Media upload progress"
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-valuenow={uploadProgress.percent}
+                              aria-valuetext={`${uploadProgress.percent}% uploaded`}
+                              className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10"
+                            >
+                              <div
+                                className="h-full rounded-full bg-sky-300 transition-[width] duration-200 ease-out"
+                                style={{ width: `${uploadProgress.percent}%` }}
+                              />
+                            </div>
+                          </div>
+                        ) : null}
 
                         <div className="mt-5 rounded-[24px] border border-white/8 bg-black/50 p-3">
                           {coverPreviewItem?.previewUrl ? (
