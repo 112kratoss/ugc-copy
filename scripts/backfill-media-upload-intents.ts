@@ -53,6 +53,22 @@ export async function runMediaUploadIntentBackfill(
     console.log(`  ${count.objects.toString().padStart(4)} objects  ${formatBytes(count.bytes).padStart(9)}  ${label}`);
   }
 
+  if (plan.unattributable.objects > 0) {
+    // No intent row can exist for these: user_id is NOT NULL and references
+    // auth.users, and their paths predate the {userId}/... layout. They are
+    // reported rather than skipped quietly, because they are real bytes this
+    // system will never collect on its own.
+    console.log(`\n${plan.unattributable.objects} objects (${formatBytes(plan.unattributable.bytes)}) cannot be tracked:`);
+    console.log('  their paths predate the {userId}/... layout, so no owner can be derived.');
+    for (const path of plan.unattributable.samplePaths) {
+      console.log(`    ${path}`);
+    }
+    if (plan.unattributable.objects > plan.unattributable.samplePaths.length) {
+      console.log(`    ... and ${plan.unattributable.objects - plan.unattributable.samplePaths.length} more`);
+    }
+    console.log('  Verify they are unreferenced, then remove them manually if so.');
+  }
+
   const drift = await buildStorageDriftReport(supabase);
   console.log('\nDurable copy drift (reported only, never repaired here):');
   console.log(`  ${drift.orphanedObjects.length} generation_inputs objects with no row`);
