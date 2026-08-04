@@ -1,6 +1,6 @@
 # Production Deployment And Operations Runbook
 
-Last updated: 2026-07-26
+Last updated: 2026-08-04
 
 ## Production Topology
 
@@ -17,6 +17,14 @@ Supabase migrations, deploys the Edge Function, creates a production-configured
 Vercel deployment without assigning the domains, verifies that deployment, and
 only then promotes it. Vercel Git integration may continue to create previews,
 but it must not independently move the production domains for `main`.
+
+The same workflow has a guarded manual entry point for configuration-only
+redeployments. It ignores the branch selected in the GitHub Actions UI, resolves
+the current remote `main` SHA, and requires a successful push-triggered `Quality`
+run for that exact SHA before it can enter the protected `production`
+environment. The operator must declare whether abandoned-upload reclaim is
+expected to be effectively enabled; the staged protected health response must
+match that declaration before promotion.
 
 ## Required Environment Contract
 
@@ -54,6 +62,12 @@ Optional alert delivery can be enabled with `BACKEND_ALERT_DELIVERY_URL`, plus o
 
 `MEDIA_UPLOAD_RECLAIM_ABANDONED` is an optional, deliberately-off gate on the
 `media-upload-reclaim` job — see "Staged Upload Reclaim" below before setting it.
+
+Vercel environment values are captured when a deployment is built. Adding,
+changing, or removing a Production environment value does not alter the running
+deployment: complete a verified configuration-only redeployment after every
+such change. This includes both setting and removing
+`MEDIA_UPLOAD_RECLAIM_ABANDONED`.
 
 Keep secrets scoped to Production unless a separate preview environment has isolated provider credentials and an isolated database. Never connect untrusted preview branches to production service-role credentials.
 
@@ -155,8 +169,32 @@ This probe does not replace the provider-dashboard gate. After it passes, send t
 
 If the release workflow fails before promotion, production domains remain on the
 last known-good deployment. Do not manually promote the staged deployment until
-the failed gate is understood. Manual production deployment is recovery-only and
+the failed gate is understood. Ad-hoc production deployment is recovery-only and
 must be recorded in the change history.
+
+### Configuration-only redeployment
+
+Use the manual `Production release` workflow after changing a Vercel Production
+environment value. Do not run `vercel --prod` locally and do not promote a
+deployment from the Vercel dashboard.
+
+1. Confirm the intended environment change is saved in Vercel Production.
+2. Confirm current `main` has a successful push-triggered `Quality` run.
+3. In GitHub Actions, run `Production release`. Set
+   `expected_abandoned_reclaim_effective` to the state that should be reported
+   after all gates are applied: `true` only when the environment flag is set and
+   the code-controlled minimum app version permits abandoned reclaim; otherwise
+   `false`.
+4. The workflow resolves current remote `main`, stages a new deployment using
+   Production values, authenticates to `/api/ops/backend-health`, and refuses to
+   promote unless `reclaimPolicy.abandonedReclaimEffective` matches the declared
+   state.
+5. After promotion, confirm the production domain serves the workflow's exact
+   SHA and perform the applicable smoke tests.
+
+Selecting another branch in the Actions UI cannot deploy it: the workflow always
+resolves and checks out current remote `main`. A changed or missing effective
+reclaim state leaves the deployment staged and production untouched.
 
 ## Generation Model Catalog Control Plane
 
@@ -337,15 +375,36 @@ that stops falling means repair is stuck on something worth reading the logs for
    `-- --execute --project-ref=<ref>`. It re-derives categories at run time,
    seeds only durable-backed objects as consumed, and reports both directions of
    `generation_inputs` drift without changing anything.
-3. Ship the mobile build with draft-media verification (`mobile-store-release`).
-4. Wait for store review plus adoption.
-5. **Check the preconditions**: the legacy-only backlog is drained (or the
-   remainder is attempt-exhausted and understood), and `protectedLegacyReferences`
-   has been stable for several runs.
-6. Set `MEDIA_UPLOAD_RECLAIM_ABANDONED=true` in Vercel Production.
-7. Watch the job's reported `reclaimed` / `rowsDropped` counts for a few runs.
+3. Ship mobile `0.0.5` with draft-media verification through
+   `mobile-store-release`. Do not start the adoption clock until both TestFlight
+   and closed Alpha are installable and one tester has installed and opened each
+   platform build.
+4. Allow a 72-hour adoption window and confirm every current internal tester has
+   installed and opened `0.0.5`.
+5. In a separate reviewed change, raise the code-controlled
+   `minimumAppVersion` to `0.0.5`. Verify `/api/app-version`, a real `0.0.4`
+   forced-update flow, HTTP 426 for identified `0.0.4` API requests, and normal
+   access for `0.0.5`, web, and unidentified clients. Observe production for 24
+   hours. Rolling the minimum back below `0.0.5` disables abandoned reclaim even
+   if the environment flag remains set.
+6. **Check the deletion preconditions** across at least three healthy daily
+   reclaim runs: no rollback failures, no unverifiable guard skips, and
+   `protectedLegacyReferences` is zero or the stable attempt-exhausted remainder
+   is documented and understood.
+7. Set `MEDIA_UPLOAD_RECLAIM_ABANDONED=true` in Vercel Production, then run the
+   guarded configuration-only redeployment with
+   `expected_abandoned_reclaim_effective=true`. The environment edit alone does
+   not change the running application.
+8. Monitor `reclaimed`, `rowsDropped`, `bytesReclaimed`, repair results,
+   `protectedLegacyReferences`, and `storage_cleared_at` until the eligible
+   tracked backlog reaches zero. Re-run the backfill dry run and durable-copy
+   drift report. Do not delete an uploads folder or wildcard; any exceptional
+   cleanup must use an explicitly reviewed exact-path manifest.
 
-To roll back, unset the variable; the consumed half and the repair keep running.
+To roll back, unset the variable and run the guarded configuration-only
+redeployment with `expected_abandoned_reclaim_effective=false`; the consumed half
+and the repair keep running. Removing the variable without redeploying does not
+disable it in the already-built deployment.
 
 ## Durable Queue Graduation Decision
 

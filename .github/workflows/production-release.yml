@@ -6,26 +6,87 @@ on:
       - Quality
     types:
       - completed
+  workflow_dispatch:
+    inputs:
+      expected_abandoned_reclaim_effective:
+        description: Expected effective abandoned-upload reclaim state after applying Production environment values
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: production-release
   cancel-in-progress: false
 
 jobs:
+  authorize:
+    name: Authorize exact main revision
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (
+        github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.head_branch == 'main'
+      )
+    runs-on: ubuntu-latest
+    outputs:
+      release_sha: ${{ steps.revision.outputs.release_sha }}
+    steps:
+      - name: Check out current main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Resolve current main and require exact-SHA Quality
+        id: revision
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALITY_WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+        run: |
+          set -euo pipefail
+          release_sha="$(git rev-parse HEAD)"
+          current_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          test -n "${current_main}"
+          if [ "${release_sha}" != "${current_main}" ]; then
+            echo "::error::Checked-out main ${release_sha} is stale; remote main is ${current_main}."
+            exit 1
+          fi
+
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            successful_runs="$(
+              gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/workflows/quality.yml/runs?branch=main&event=push&head_sha=${release_sha}&status=completed&per_page=100" \
+                --jq '[.workflow_runs[] | select(.conclusion == "success")] | length'
+            )"
+            if [ "${successful_runs}" -lt 1 ]; then
+              echo "::error::Current main ${release_sha} has no successful push-triggered Quality run."
+              exit 1
+            fi
+          elif [ "${release_sha}" != "${QUALITY_WORKFLOW_RUN_SHA}" ]; then
+            echo "::error::The successful Quality run belongs to ${QUALITY_WORKFLOW_RUN_SHA}, but main is ${release_sha}."
+            exit 1
+          fi
+
+          echo "release_sha=${release_sha}" >> "${GITHUB_OUTPUT}"
+
   release:
     name: Migrate, stage, verify, and promote
-    if: >-
-      github.event.workflow_run.conclusion == 'success'
-      && github.event.workflow_run.event == 'push'
-      && github.event.workflow_run.head_branch == 'main'
+    needs: authorize
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
     env:
-      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+      RELEASE_SHA: ${{ needs.authorize.outputs.release_sha }}
+      EXPECTED_ABANDONED_RECLAIM_EFFECTIVE: ${{ inputs.expected_abandoned_reclaim_effective || '' }}
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -37,7 +98,7 @@ jobs:
       - name: Check out the quality-verified commit
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ needs.authorize.outputs.release_sha }}
           fetch-depth: 1
 
       - name: Reject a stale release before changing production
@@ -68,6 +129,13 @@ jobs:
             echo "::error::PRODUCTION_BASE_URL must be an absolute HTTPS origin."
             exit 1
           fi
+          case "${EXPECTED_ABANDONED_RECLAIM_EFFECTIVE}" in
+            ""|"true"|"false") ;;
+            *)
+              echo "::error::Expected abandoned-reclaim state must be true or false."
+              exit 1
+              ;;
+          esac
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -155,6 +223,19 @@ jobs:
             }
             if (!['ok', 'warning'].includes(body.status)) {
               throw new Error('Staged backend health is ' + body.status);
+            }
+            const expectedReclaim = process.env.EXPECTED_ABANDONED_RECLAIM_EFFECTIVE;
+            if (expectedReclaim) {
+              const effective = body.reclaimPolicy?.abandonedReclaimEffective;
+              if (typeof effective !== 'boolean') {
+                throw new Error('Staged backend health did not report an effective abandoned-reclaim state');
+              }
+              if (String(effective) !== expectedReclaim) {
+                throw new Error(
+                  'Staged abandoned-reclaim state is ' + effective + ', expected ' + expectedReclaim,
+                );
+              }
+              console.log('Staged abandoned-reclaim state matches expected ' + expectedReclaim + '.');
             }
             if (body.status === 'warning') {
               const issues = Array.isArray(body.issues)

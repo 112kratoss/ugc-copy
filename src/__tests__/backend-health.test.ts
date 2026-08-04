@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { collectBackendHealth } from '@/lib/backend-health';
 import { BACKEND_ENVIRONMENT_REQUIREMENTS } from '@/lib/backend-environment';
+import { BACKEND_JOB_REGISTRY } from '@/lib/backend-jobs';
 
 type QueryResult = {
   data: unknown[] | null;
@@ -18,6 +19,7 @@ class FakeQueryBuilder {
   in = vi.fn(() => this);
   lt = vi.fn(() => this);
   not = vi.fn(() => this);
+  range = vi.fn(() => this);
 
   constructor(private readonly result: QueryResult) {}
 
@@ -29,7 +31,10 @@ class FakeQueryBuilder {
   }
 }
 
-function createClient(results: Record<string, QueryResult | QueryResult[]>) {
+function createClient(
+  results: Record<string, QueryResult | QueryResult[]>,
+  options: { withHealthyRequiredRuns?: boolean } = {},
+) {
   const withHealthyRequiredRuns = (result: QueryResult): QueryResult => {
     if (result.error || !Array.isArray(result.data)) return result;
     const rows = [...result.data];
@@ -99,7 +104,7 @@ function createClient(results: Record<string, QueryResult | QueryResult[]>) {
     // generations read, so tests that do not care about it stay untouched.
     posts: { error: null, data: [] },
     ...results,
-    ...(backendJobRuns
+    ...(backendJobRuns && options.withHealthyRequiredRuns !== false
       ? {
           backend_job_runs: Array.isArray(backendJobRuns)
             ? backendJobRuns.map(withHealthyRequiredRuns)
@@ -243,6 +248,11 @@ describe('collectBackendHealth', () => {
       totalRequirementCount: BACKEND_ENVIRONMENT_REQUIREMENTS.length,
       missing: [],
       invalid: [],
+    });
+    expect(health.reclaimPolicy).toEqual({
+      abandonedReclaimConfigured: false,
+      minimumAppVersion: '0.0.1',
+      abandonedReclaimEffective: false,
     });
     expect(health.catalog.activeModels).toBeGreaterThan(0);
     expect(health.catalog.schemaVersion).toBe(2);
@@ -799,8 +809,117 @@ describe('collectBackendHealth', () => {
 
     expect(health.status).toBe('warning');
     expect(health.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'JOB_NO_RECENT_RUN', severity: 'warning' }),
+      expect.objectContaining({
+        code: 'JOB_NO_RECENT_RUN',
+        severity: 'warning',
+        message: 'media-upload-reclaim has no recorded run in the last 48 hours.',
+      }),
     ]));
+  });
+
+  it('paginates registered job runs so daily successes are not crowded out', async () => {
+    const now = new Date('2026-06-21T10:00:00.000Z');
+    const highFrequencyRuns = Array.from({ length: 1_000 }, (_, index) => ({
+      id: `frequent-${String(1_000 - index).padStart(4, '0')}`,
+      job_name: 'generation-completions',
+      status: 'succeeded',
+      started_at: '2026-06-21T09:59:00.000Z',
+      finished_at: '2026-06-21T09:59:01.000Z',
+      duration_ms: 1000,
+      skip_reason: null,
+      error_message: null,
+    }));
+    const dailyAndRemainingRuns = BACKEND_JOB_REGISTRY.map((job, index) => ({
+      id: `registered-${String(index).padStart(2, '0')}`,
+      job_name: job.name,
+      status: 'succeeded',
+      started_at: '2026-06-21T09:58:00.000Z',
+      finished_at: '2026-06-21T09:58:01.000Z',
+      duration_ms: 1000,
+      skip_reason: null,
+      error_message: null,
+    }));
+    const db = createClient({
+      backend_job_runs: [
+        { error: null, data: highFrequencyRuns },
+        { error: null, data: dailyAndRemainingRuns },
+      ],
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+    }, { withHealthyRequiredRuns: false });
+
+    const health = await collectBackendHealth(
+      db.client as never,
+      now,
+      COMPLETE_BACKEND_ENVIRONMENT,
+    );
+
+    expect(health.issues.filter((issue) => issue.code === 'JOB_NO_RECENT_RUN')).toEqual([]);
+    expect(health.jobs.find((job) => job.name === 'media-upload-reclaim')).toMatchObject({
+      status: 'ok',
+      latestRun: { startedAt: '2026-06-21T09:58:00.000Z' },
+    });
+    expect(health.jobs.find((job) => job.name === 'generation-model-verification')).toMatchObject({
+      status: 'ok',
+      latestRun: { startedAt: '2026-06-21T09:58:00.000Z' },
+    });
+
+    expect(db.builders.backend_job_runs).toHaveLength(2);
+    expect(db.builders.backend_job_runs[0].select).toHaveBeenCalledWith(
+      'id,job_name,status,started_at,finished_at,duration_ms,skip_reason,error_message',
+    );
+    expect(db.builders.backend_job_runs[0].in).toHaveBeenCalledWith(
+      'job_name',
+      BACKEND_JOB_REGISTRY.map((job) => job.name),
+    );
+    expect(db.builders.backend_job_runs[0].gte).toHaveBeenCalledWith(
+      'started_at',
+      '2026-06-19T10:00:00.000Z',
+    );
+    expect(db.builders.backend_job_runs[0].order.mock.calls).toEqual([
+      ['started_at', { ascending: false }],
+      ['id', { ascending: false }],
+    ]);
+    expect(db.builders.backend_job_runs[0].range).toHaveBeenCalledWith(0, 999);
+    expect(db.builders.backend_job_runs[1].order.mock.calls).toEqual([
+      ['started_at', { ascending: false }],
+      ['id', { ascending: false }],
+    ]);
+    expect(db.builders.backend_job_runs[1].range).toHaveBeenCalledWith(1_000, 1_999);
+  });
+
+  it('propagates a failure from a later job-run page', async () => {
+    const firstPage = Array.from({ length: 1_000 }, (_, index) => ({
+      id: `run-${index}`,
+      job_name: 'generation-completions',
+      status: 'succeeded',
+      started_at: '2026-06-21T09:59:00.000Z',
+      finished_at: '2026-06-21T09:59:01.000Z',
+      duration_ms: 1000,
+      skip_reason: null,
+      error_message: null,
+    }));
+    const db = createClient({
+      backend_job_runs: [
+        { error: null, data: firstPage },
+        { error: new Error('job-run page two unavailable'), data: null },
+      ],
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+    }, { withHealthyRequiredRuns: false });
+
+    await expect(collectBackendHealth(db.client as never)).rejects.toThrow(
+      'job-run page two unavailable',
+    );
+
+    expect(db.builders.backend_job_runs).toHaveLength(2);
+    expect(db.builders.backend_job_runs[1].range).toHaveBeenCalledWith(1_000, 1_999);
   });
 
   it('treats recent no-work skipped cron runs as healthy liveness', async () => {
@@ -1319,6 +1438,32 @@ describe('collectBackendHealth', () => {
     });
 
     await expect(collectBackendHealth(db.client as never)).rejects.toThrow('database unavailable');
+  });
+
+  it('reports a configured abandoned-reclaim flag as ineffective below the safe app floor', async () => {
+    const db = createClient({
+      backend_job_runs: { error: null, data: [] },
+      generations: [
+        { error: null, data: [] },
+        { error: null, data: [] },
+        { error: null, data: [] },
+      ],
+    });
+
+    const health = await collectBackendHealth(
+      db.client as never,
+      new Date('2026-06-21T10:00:00.000Z'),
+      {
+        ...COMPLETE_BACKEND_ENVIRONMENT,
+        MEDIA_UPLOAD_RECLAIM_ABANDONED: 'true',
+      },
+    );
+
+    expect(health.reclaimPolicy).toEqual({
+      abandonedReclaimConfigured: true,
+      minimumAppVersion: '0.0.1',
+      abandonedReclaimEffective: false,
+    });
   });
 
   it('keeps a failed account deletion cleanup visible until a successful retry', async () => {

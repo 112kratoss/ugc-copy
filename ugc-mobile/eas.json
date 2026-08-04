@@ -42,7 +42,7 @@
       },
       "android": {
         "track": "alpha",
-        "releaseStatus": "draft"
+        "releaseStatus": "completed"
       }
     },
     "alpha": {

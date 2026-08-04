@@ -7,6 +7,7 @@ import {
   selectReclaimableIntents,
 } from '@/lib/media-upload-reclaim-service';
 import { RECLAIM_AFTER_HOURS } from '@/lib/media-upload-reclaim';
+import { getMediaUploadReclaimPolicy } from '@/lib/media-upload-reclaim-policy';
 
 const NOW = new Date('2026-08-03T12:00:00.000Z');
 
@@ -90,11 +91,57 @@ function clientDouble({
 }
 
 describe('abandoned reclaim rollout gate', () => {
-  it('is off unless explicitly enabled', () => {
+  it('requires both the exact flag and a safe compatibility minimum', () => {
     expect(isAbandonedIntentReclaimEnabled({})).toBe(false);
-    expect(isAbandonedIntentReclaimEnabled({ MEDIA_UPLOAD_RECLAIM_ABANDONED: 'false' })).toBe(false);
-    expect(isAbandonedIntentReclaimEnabled({ MEDIA_UPLOAD_RECLAIM_ABANDONED: '1' })).toBe(false);
-    expect(isAbandonedIntentReclaimEnabled({ MEDIA_UPLOAD_RECLAIM_ABANDONED: 'true' })).toBe(true);
+    for (const value of ['false', '1', 'TRUE', 'true ']) {
+      expect(isAbandonedIntentReclaimEnabled(
+        { MEDIA_UPLOAD_RECLAIM_ABANDONED: value },
+        '0.0.5',
+      )).toBe(false);
+    }
+    expect(isAbandonedIntentReclaimEnabled(
+      { MEDIA_UPLOAD_RECLAIM_ABANDONED: 'true' },
+      '0.0.4',
+    )).toBe(false);
+    expect(isAbandonedIntentReclaimEnabled(
+      { MEDIA_UPLOAD_RECLAIM_ABANDONED: 'true' },
+      '0.0.5',
+    )).toBe(true);
+  });
+
+  it.each([
+    ['', false],
+    ['not-a-version', false],
+    ['v0.0.5', false],
+    ['0.0', false],
+    ['0.0.05', false],
+    ['0.0.5-beta.1', false],
+    ['0.0.5', true],
+    ['0.0.5+build.7', true],
+    ['0.0.6-beta.1', true],
+    ['0.1.0', true],
+    ['1.0.0', true],
+  ])('fails closed for minimum app version %j (enabled: %j)', (minimumAppVersion, enabled) => {
+    expect(getMediaUploadReclaimPolicy({
+      environment: { MEDIA_UPLOAD_RECLAIM_ABANDONED: 'true' },
+      minimumAppVersion,
+    })).toEqual({
+      flagConfigured: true,
+      minimumAppVersion,
+      effectiveEnabled: enabled,
+    });
+  });
+
+  it('automatically disables abandoned reclaim when the compatibility minimum is rolled back', () => {
+    const environment = { MEDIA_UPLOAD_RECLAIM_ABANDONED: 'true' };
+    expect(getMediaUploadReclaimPolicy({ environment, minimumAppVersion: '0.0.5' }).effectiveEnabled)
+      .toBe(true);
+    expect(getMediaUploadReclaimPolicy({ environment, minimumAppVersion: '0.0.1' }).effectiveEnabled)
+      .toBe(false);
+  });
+
+  it('keeps the gate disabled with the current code-controlled minimum', () => {
+    expect(isAbandonedIntentReclaimEnabled({ MEDIA_UPLOAD_RECLAIM_ABANDONED: 'true' })).toBe(false);
   });
 
   it('withholds never-consumed rows while the gate is closed', async () => {
@@ -193,6 +240,7 @@ describe('reclaimAbandonedMediaUploads', () => {
     });
 
     expect(summary).toEqual({
+      abandonedReclaimEnabled: false,
       scanned: 0,
       reclaimed: 0,
       rowsDropped: 0,
@@ -201,6 +249,19 @@ describe('reclaimAbandonedMediaUploads', () => {
       protectedLegacyReferences: 0,
     });
     expect(sweep.removed).toEqual([]);
+  });
+
+  it('does not let an explicit caller option bypass the destructive rollout interlock', async () => {
+    const sweep = clientDouble({ rows: [] });
+
+    const summary = await reclaimAbandonedMediaUploads(sweep.client, {
+      now: NOW,
+      includeAbandoned: true,
+      protectedPaths: new Set(),
+    });
+
+    expect(summary.abandonedReclaimEnabled).toBe(false);
+    expect(sweep.notFilters).toContainEqual(['consumed_by', 'is', null]);
   });
 });
 

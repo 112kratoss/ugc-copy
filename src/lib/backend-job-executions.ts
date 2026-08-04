@@ -34,6 +34,7 @@ import {
   hasReclaimableMediaUploads,
   reclaimAbandonedMediaUploads,
 } from '@/lib/media-upload-reclaim-service';
+import { getMediaUploadReclaimPolicy } from '@/lib/media-upload-reclaim-policy';
 import {
   hasRepairableLegacyGenerations,
   repairMissingGenerationInputMedia,
@@ -489,6 +490,7 @@ export function runMediaUploadReclaimBackendJob(options: {
   triggerRoute?: string;
 } = {}) {
   const job = BACKEND_JOBS_BY_NAME['media-upload-reclaim'];
+  const reclaimPolicy = getMediaUploadReclaimPolicy();
   return runManagedBackendJob({
     ...options,
     job,
@@ -500,8 +502,13 @@ export function runMediaUploadReclaimBackendJob(options: {
       failed: 'media_upload_reclaim_failed',
     },
     hasWork: async (client) => (
-      await hasReclaimableMediaUploads(client) || hasRepairableLegacyGenerations(client)
+      await hasReclaimableMediaUploads(client, {
+        includeAbandoned: reclaimPolicy.effectiveEnabled,
+      }) || hasRepairableLegacyGenerations(client)
     ),
+    onNoWork: async () => ({
+      abandonedReclaimEnabled: reclaimPolicy.effectiveEnabled,
+    }),
     run: async (client, context) => {
       const now = new Date(context.startedAtMs);
       // Repair first: a generation healed this run releases its staged paths
@@ -515,11 +522,15 @@ export function runMediaUploadReclaimBackendJob(options: {
         // exactly those bytes.
         return {
           repair,
+          abandonedReclaimEnabled: reclaimPolicy.effectiveEnabled,
           reclaimSkipped: 'unrolled_back_partial_repair',
         };
       }
 
-      const reclaim = await reclaimAbandonedMediaUploads(client, { now });
+      const reclaim = await reclaimAbandonedMediaUploads(client, {
+        now,
+        includeAbandoned: reclaimPolicy.effectiveEnabled,
+      });
       return { repair, ...reclaim };
     },
   });
