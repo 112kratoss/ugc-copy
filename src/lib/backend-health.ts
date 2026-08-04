@@ -14,11 +14,13 @@ import {
   GENERATION_MODEL_CATALOG_V1_SCHEMA_VERSION,
 } from '@/lib/generation-model-catalog';
 import { loadPublishedGenerationModelCatalog } from '@/lib/generation-model-catalog-store';
+import { getMediaUploadReclaimPolicy } from '@/lib/media-upload-reclaim-policy';
 import { PAYMENT_WEBHOOK_PROCESSING_SERVICE_NAMES } from '@/lib/provider-dependency-telemetry';
 
 export type BackendHealthStatus = 'ok' | 'warning' | 'degraded';
 
 type BackendJobRunRow = {
+  id: string;
   job_name: string;
   status: 'started' | 'succeeded' | 'skipped' | 'failed';
   started_at: string;
@@ -268,6 +270,15 @@ export type BackendDataAccessHealth = {
   projectionReadError: string | null;
 };
 
+export type BackendMediaUploadReclaimPolicyHealth = {
+  /** Whether Production supplied the one accepted opt-in value, `true`. */
+  abandonedReclaimConfigured: boolean;
+  /** The code-controlled compatibility floor that protects older drafts. */
+  minimumAppVersion: string;
+  /** Whether abandoned draft objects may actually be deleted. */
+  abandonedReclaimEffective: boolean;
+};
+
 export type BackendHealth = {
   status: BackendHealthStatus;
   checkedAt: string;
@@ -288,10 +299,12 @@ export type BackendHealth = {
   aiUsage: BackendAiUsageHealth;
   providerDependencies: BackendProviderDependencyHealth;
   dataAccess: BackendDataAccessHealth;
+  reclaimPolicy: BackendMediaUploadReclaimPolicyHealth;
   issues: BackendHealthIssue[];
 };
 
 const JOB_LOOKBACK_HOURS = 48;
+const JOB_RUN_PAGE_SIZE = 1_000;
 const GENERATION_RECENT_WINDOW_MINUTES = 60;
 const GENERATION_STALLED_AFTER_MINUTES = 60;
 const GENERATION_PENDING_WITHOUT_PROVIDER_TASK_AFTER_MINUTES = 5;
@@ -329,6 +342,31 @@ function getBuildId(): string {
     || process.env.VERCEL_URL?.trim()
     || 'dev'
   );
+}
+
+async function loadRecentBackendJobRuns(
+  client: SupabaseClient,
+  startedAtOrAfter: string,
+): Promise<BackendJobRunRow[]> {
+  const jobNames = BACKEND_JOB_REGISTRY.map((job) => job.name);
+  const rows: BackendJobRunRow[] = [];
+
+  for (let offset = 0; ; offset += JOB_RUN_PAGE_SIZE) {
+    const { data, error } = await client
+      .from('backend_job_runs')
+      .select('id,job_name,status,started_at,finished_at,duration_ms,skip_reason,error_message')
+      .in('job_name', jobNames)
+      .gte('started_at', startedAtOrAfter)
+      .order('started_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(offset, offset + JOB_RUN_PAGE_SIZE - 1);
+
+    if (error) throw error;
+
+    const page = (data ?? []) as BackendJobRunRow[];
+    rows.push(...page);
+    if (page.length < JOB_RUN_PAGE_SIZE) return rows;
+  }
 }
 
 function maxStatus(statuses: BackendHealthStatus[]): BackendHealthStatus {
@@ -1080,7 +1118,7 @@ export async function collectBackendHealth(
   ).toISOString();
 
   const [
-    jobRunsResult,
+    jobRows,
     recentGenerationsResult,
     stalledGenerationsResult,
     pendingWithoutProviderTaskResult,
@@ -1092,12 +1130,7 @@ export async function collectBackendHealth(
     recentProviderDependencyResult,
     remixablePostsResult,
   ] = await Promise.all([
-    client
-      .from('backend_job_runs')
-      .select('job_name,status,started_at,finished_at,duration_ms,skip_reason,error_message')
-      .gte('started_at', jobSince)
-      .order('started_at', { ascending: false })
-      .limit(200),
+    loadRecentBackendJobRuns(client, jobSince),
     client
       .from('generations')
       .select('status,created_at,cost')
@@ -1171,7 +1204,6 @@ export async function collectBackendHealth(
       .limit(DATA_ACCESS_REMIX_SAMPLE_LIMIT),
   ]);
 
-  if (jobRunsResult.error) throw jobRunsResult.error;
   if (recentGenerationsResult.error) throw recentGenerationsResult.error;
   if (stalledGenerationsResult.error) throw stalledGenerationsResult.error;
   if (pendingWithoutProviderTaskResult.error) throw pendingWithoutProviderTaskResult.error;
@@ -1182,7 +1214,6 @@ export async function collectBackendHealth(
   if (stalePendingAiUsageResult.error) throw stalePendingAiUsageResult.error;
   if (recentProviderDependencyResult.error) throw recentProviderDependencyResult.error;
 
-  const jobRows = (jobRunsResult.data ?? []) as BackendJobRunRow[];
   const jobResults = BACKEND_JOB_REGISTRY.map((job) => buildJobHealth(job, jobRows, now));
   const schedulerResult = buildSchedulerHealth();
   const generationResult = buildGenerationHealth(
@@ -1241,6 +1272,9 @@ export async function collectBackendHealth(
   const environment = environmentVariables
     ? collectBackendEnvironmentHealth(environmentVariables)
     : null;
+  const reclaimPolicy = getMediaUploadReclaimPolicy({
+    environment: environmentVariables ?? process.env,
+  });
   const environmentIssues: BackendHealthIssue[] = environment?.status === 'degraded'
     ? [
       ...(environment.missing.length > 0 ? [{
@@ -1309,6 +1343,11 @@ export async function collectBackendHealth(
     aiUsage: aiUsageResult.health,
     providerDependencies: providerDependencyResult.health,
     dataAccess: dataAccessResult.health,
+    reclaimPolicy: {
+      abandonedReclaimConfigured: reclaimPolicy.flagConfigured,
+      minimumAppVersion: reclaimPolicy.minimumAppVersion,
+      abandonedReclaimEffective: reclaimPolicy.effectiveEnabled,
+    },
     issues,
   };
 }

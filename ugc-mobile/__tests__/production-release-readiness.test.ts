@@ -3,6 +3,11 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import {
+  extractEasSubmissionId,
+  verifyEasStoreBuild,
+} from '../scripts/verify-eas-store-build.mjs';
+
 const mobileRoot = path.resolve(__dirname, '..');
 const repoRoot = path.resolve(mobileRoot, '..');
 
@@ -11,6 +16,17 @@ function read(relativePath: string) {
 }
 
 describe('mobile production release contracts', () => {
+  it('keeps every mobile release manifest aligned to version 0.0.5', () => {
+    const appJson = JSON.parse(read('ugc-mobile/app.json'));
+    const packageJson = JSON.parse(read('ugc-mobile/package.json'));
+    const packageLock = JSON.parse(read('ugc-mobile/package-lock.json'));
+
+    expect(appJson.expo.version).toBe('0.0.5');
+    expect(packageJson.version).toBe(appJson.expo.version);
+    expect(packageLock.version).toBe(appJson.expo.version);
+    expect(packageLock.packages[''].version).toBe(appJson.expo.version);
+  });
+
   it('uses store-native crash reporting without requiring Sentry configuration', () => {
     const packageJson = JSON.parse(read('ugc-mobile/package.json'));
     const appJson = JSON.parse(read('ugc-mobile/app.json'));
@@ -38,18 +54,126 @@ describe('mobile production release contracts', () => {
     expect(easJson.cli.requireCommit).toBe(true);
     expect(easJson.build.production.env.MAGICBOOKLET_INCLUDE_DEV_CLIENT).toBe('false');
     expect(easJson.submit.staging.android.track).toBe('alpha');
+    expect(easJson.submit.staging.android.releaseStatus).toBe('completed');
     expect(validator).toContain('EAS_BUILD_GIT_COMMIT_HASH');
     expect(validator).not.toContain('SENTRY');
   });
 
-  it('builds only an exact green main SHA and cannot submit directly to public production', () => {
+  it('builds only an exact green main SHA and submits only to protected tester tracks', () => {
     const workflow = read('.github/workflows/mobile-store-release.yml');
+    const submitStepStart = workflow.indexOf('- name: Submit to TestFlight or closed alpha');
+    const summaryStepStart = workflow.indexOf('- name: Write verified release summary');
+    const testerSubmissionStep = workflow.slice(submitStepStart, summaryStepStart);
+    const livePrebuildCheck = workflow.indexOf(
+      '- name: Verify production serves the authorized commit before build',
+    );
+    const buildStep = workflow.indexOf('- name: Build signed production artifact');
+    const presubmitCheck = workflow.indexOf(
+      '- name: Reconfirm main before test-track submission',
+    );
 
     expect(workflow).toContain('actions/workflows/quality.yml/runs?head_sha=');
-    expect(workflow).toContain('gitCommitHash');
+    expect(workflow).toContain('actions/workflows/production-release.yml/runs?head_sha=');
+    expect(workflow).toContain('/api/app-version?release=${EXPECTED_SHA}');
+    expect(workflow.match(/body\.buildId !== process\.env\.EXPECTED_SHA/g)).toHaveLength(2);
+    expect(workflow).toContain('test "$app_version" = "0.0.5"');
+    expect(workflow).toContain('verify-eas-store-build.mjs');
+    expect(workflow).toContain('EXPECTED_APP_VERSION');
+    expect(workflow).toContain('TESTFLIGHT_INTERNAL_GROUP: ${{ vars.TESTFLIGHT_INTERNAL_GROUP }}');
+    expect(workflow).toContain('--groups "$TESTFLIGHT_INTERNAL_GROUP"');
     expect(workflow).toContain('--profile production');
-    expect(workflow).toContain('--profile staging');
-    expect(workflow).not.toContain('submit \\\n            --profile production');
     expect(workflow).toContain('Submit to TestFlight or closed alpha');
+    expect(submitStepStart).toBeGreaterThan(-1);
+    expect(summaryStepStart).toBeGreaterThan(submitStepStart);
+    expect(livePrebuildCheck).toBeGreaterThan(-1);
+    expect(buildStep).toBeGreaterThan(livePrebuildCheck);
+    expect(presubmitCheck).toBeGreaterThan(buildStep);
+    expect(submitStepStart).toBeGreaterThan(presubmitCheck);
+    expect(testerSubmissionStep).toContain('--profile staging');
+    expect(testerSubmissionStep).not.toContain('--profile production');
+    expect(workflow).not.toContain('submit_profile:');
+    expect(workflow).toContain('| Platform |');
+    expect(workflow).toContain('| App version |');
+    expect(workflow).toContain('| Native build number |');
+    expect(workflow).toContain('| Build ID |');
+    expect(workflow).toContain('| Submission ID |');
+    expect(workflow).toContain('| Commit SHA |');
+  });
+
+  it('accepts only a finished signed store artifact for the exact build inputs', () => {
+    const sha = 'a'.repeat(40);
+    const verified = verifyEasStoreBuild(
+      {
+        id: 'build-id',
+        status: 'FINISHED',
+        platform: 'IOS',
+        gitCommitHash: sha,
+        appVersion: '0.0.5',
+        appBuildVersion: '27',
+        buildProfile: 'production',
+        distribution: 'STORE',
+        isForIosSimulator: false,
+        completedAt: '2026-08-04T12:00:00.000Z',
+        artifacts: {
+          buildUrl: 'https://expo.dev/artifacts/eas/example.ipa',
+        },
+      },
+      {
+        buildId: 'build-id',
+        sha,
+        appVersion: '0.0.5',
+        platform: 'ios',
+      },
+    );
+
+    expect(verified).toMatchObject({
+      platform: 'ios',
+      appVersion: '0.0.5',
+      nativeBuildNumber: '27',
+      buildId: 'build-id',
+      commitSha: sha,
+    });
+  });
+
+  it.each([
+    ['wrong commit', { gitCommitHash: 'b'.repeat(40) }, 'SHA mismatch'],
+    ['wrong version', { appVersion: '0.0.4' }, 'app version mismatch'],
+    ['unfinished build', { status: 'IN_PROGRESS' }, 'not finished'],
+    ['internal artifact', { distribution: 'INTERNAL' }, 'not a signed store distribution'],
+    ['missing artifact', { artifacts: {} }, 'store artifact URL is missing'],
+  ])('rejects %s metadata before submission', (_name, override, error) => {
+    const sha = 'a'.repeat(40);
+    const build = {
+      id: 'build-id',
+      status: 'FINISHED',
+      platform: 'ANDROID',
+      gitCommitHash: sha,
+      appVersion: '0.0.5',
+      appBuildVersion: '39',
+      buildProfile: 'production',
+      distribution: 'STORE',
+      completedAt: '2026-08-04T12:00:00.000Z',
+      artifacts: {
+        buildUrl: 'https://expo.dev/artifacts/eas/example.aab',
+      },
+      ...override,
+    };
+
+    expect(() => verifyEasStoreBuild(build, {
+      buildId: 'build-id',
+      sha,
+      appVersion: '0.0.5',
+      platform: 'android',
+    })).toThrow(error);
+  });
+
+  it('extracts the EAS submission ID used in the release summary', () => {
+    const id = '12345678-1234-4abc-8def-123456789abc';
+    const output = `Submission details: https://expo.dev/accounts/team/projects/app/submissions/${id}`;
+
+    expect(extractEasSubmissionId(output)).toBe(id);
+    expect(() => extractEasSubmissionId('submission did not start')).toThrow(
+      'did not contain a submission ID',
+    );
   });
 });

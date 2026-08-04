@@ -9,6 +9,7 @@ import {
   type UnclearedUploadIntent,
   type UploadIntentConsumer,
 } from '@/lib/media-upload-reclaim';
+import { getMediaUploadReclaimPolicy } from '@/lib/media-upload-reclaim-policy';
 
 const UPLOADS_BUCKET = 'uploads';
 
@@ -33,12 +34,15 @@ export const RECLAIM_BATCH_SIZE = 500;
  * copied into generation_inputs -- so they are collected from day one, which is
  * the larger of the two leaks anyway.
  *
- * Turn this on once the mobile fix has reached the installed base.
+ * Set the flag once the mobile fix has reached the installed base. The policy
+ * helper also requires the code-controlled minimum app version to prove old
+ * clients are excluded before this can become effective.
  */
 export function isAbandonedIntentReclaimEnabled(
   environment: Record<string, string | undefined> = process.env,
+  minimumAppVersion?: string,
 ): boolean {
-  return environment.MEDIA_UPLOAD_RECLAIM_ABANDONED === 'true';
+  return getMediaUploadReclaimPolicy({ environment, minimumAppVersion }).effectiveEnabled;
 }
 
 type IntentRow = {
@@ -51,6 +55,7 @@ type IntentRow = {
 };
 
 export type ReclaimSummary = {
+  abandonedReclaimEnabled: boolean;
   scanned: number;
   reclaimed: number;
   rowsDropped: number;
@@ -110,8 +115,11 @@ export async function selectReclaimableIntents(
   return (data ?? []) as IntentRow[];
 }
 
-export async function hasReclaimableMediaUploads(client: SupabaseClient): Promise<boolean> {
-  const rows = await selectReclaimableIntents(client, { limit: 1 });
+export async function hasReclaimableMediaUploads(
+  client: SupabaseClient,
+  options: { includeAbandoned?: boolean } = {},
+): Promise<boolean> {
+  const rows = await selectReclaimableIntents(client, { ...options, limit: 1 });
   return rows.length > 0;
 }
 
@@ -137,8 +145,18 @@ export async function reclaimAbandonedMediaUploads(
   } = {},
 ): Promise<ReclaimSummary> {
   const now = options.now ?? new Date();
-  const rows = await selectReclaimableIntents(client, options);
+  // Caller intent may narrow the destructive scope, but it must never widen
+  // it past the code-controlled rollout interlock. Keeping this check at the
+  // delete boundary prevents a future route, script, or refactor from turning
+  // `includeAbandoned: true` into a bypass while old mobile builds are allowed.
+  const abandonedReclaimEnabled = isAbandonedIntentReclaimEnabled()
+    && options.includeAbandoned !== false;
+  const rows = await selectReclaimableIntents(client, {
+    ...options,
+    includeAbandoned: abandonedReclaimEnabled,
+  });
   const summary: ReclaimSummary = {
+    abandonedReclaimEnabled,
     scanned: rows.length,
     reclaimed: 0,
     rowsDropped: 0,

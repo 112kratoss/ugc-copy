@@ -32,6 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_sha: ${{ steps.revision.outputs.release_sha }}
+      app_version: ${{ steps.revision.outputs.app_version }}
     steps:
       - name: Check out current main
         uses: actions/checkout@v6
@@ -39,7 +40,7 @@ jobs:
           ref: main
           fetch-depth: 1
 
-      - name: Require current remote main and a green Quality run
+      - name: Require current main, green Quality, and live production release
         id: revision
         env:
           GH_TOKEN: ${{ github.token }}
@@ -48,13 +49,22 @@ jobs:
           release_sha="$(git rev-parse HEAD)"
           remote_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
           test "$release_sha" = "$remote_sha"
+          app_version="$(node -p "require('./ugc-mobile/app.json').expo.version")"
+          test "$app_version" = "0.0.5"
           successful_runs="$(
             gh api \
               "repos/${GITHUB_REPOSITORY}/actions/workflows/quality.yml/runs?head_sha=${release_sha}&status=completed&per_page=100" \
               --jq '[.workflow_runs[] | select(.conclusion == "success")] | length'
           )"
           test "$successful_runs" -gt 0
+          successful_production_runs="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/production-release.yml/runs?head_sha=${release_sha}&status=completed&per_page=100" \
+              --jq '[.workflow_runs[] | select(.conclusion == "success")] | length'
+          )"
+          test "$successful_production_runs" -gt 0
           echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
+          echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
 
   validate:
     name: Validate mobile release inputs
@@ -105,6 +115,8 @@ jobs:
       - validate
     runs-on: ubuntu-latest
     environment: mobile-production
+    env:
+      PRODUCTION_BASE_URL: ${{ vars.PRODUCTION_BASE_URL || 'https://magicbooklet.com' }}
     strategy:
       fail-fast: false
       matrix:
@@ -115,6 +127,14 @@ jobs:
         with:
           ref: ${{ needs.authorize.outputs.release_sha }}
           fetch-depth: 1
+
+      - name: Require TestFlight internal group
+        if: ${{ inputs.submit_to_test_track && matrix.platform == 'ios' }}
+        env:
+          TESTFLIGHT_INTERNAL_GROUP: ${{ vars.TESTFLIGHT_INTERNAL_GROUP }}
+        run: |
+          set -euo pipefail
+          test -n "${TESTFLIGHT_INTERNAL_GROUP//[[:space:]]/}"
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -135,6 +155,24 @@ jobs:
           set -euo pipefail
           test -n "$EXPO_TOKEN"
           npx --yes eas-cli@21.2.0 whoami
+
+      - name: Verify production serves the authorized commit before build
+        env:
+          EXPECTED_SHA: ${{ needs.authorize.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          production_origin="${PRODUCTION_BASE_URL%/}"
+          curl --fail --silent --show-error \
+            --retry 3 --retry-all-errors \
+            "${production_origin}/api/app-version?release=${EXPECTED_SHA}&probe=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.platform }}-prebuild" \
+            --output "${RUNNER_TEMP}/production-app-version-prebuild.json"
+          EXPECTED_SHA="$EXPECTED_SHA" node -e "
+            const fs = require('node:fs');
+            const body = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/production-app-version-prebuild.json', 'utf8'));
+            if (body.buildId !== process.env.EXPECTED_SHA) {
+              throw new Error('Production serves ' + (body.buildId || 'an unknown build') + ', expected ' + process.env.EXPECTED_SHA);
+            }
+          "
 
       - name: Build signed production artifact
         id: build
@@ -161,29 +199,21 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `build_id=${build.id}\n`);
           NODE
 
-      - name: Verify EAS artifact belongs to the authorized commit
+      - name: Verify signed EAS store artifact
+        id: verify
         working-directory: ugc-mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EXPECTED_APP_VERSION: ${{ needs.authorize.outputs.app_version }}
+          EXPECTED_BUILD_ID: ${{ steps.build.outputs.build_id }}
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
           EXPECTED_SHA: ${{ needs.authorize.outputs.release_sha }}
-          BUILD_ID: ${{ steps.build.outputs.build_id }}
         run: |
           set -euo pipefail
           view="$RUNNER_TEMP/eas-build-view-${{ matrix.platform }}.json"
-          npx --yes eas-cli@21.2.0 build:view "$BUILD_ID" \
+          npx --yes eas-cli@21.2.0 build:view "$EXPECTED_BUILD_ID" \
             --json > "$view"
-          VIEW_PATH="$view" node - <<'NODE'
-          const fs = require('node:fs');
-          const build = JSON.parse(fs.readFileSync(process.env.VIEW_PATH, 'utf8'));
-          if (build.status !== 'FINISHED') {
-            throw new Error(`EAS build is not finished: ${build.status}`);
-          }
-          if (build.gitCommitHash !== process.env.EXPECTED_SHA) {
-            throw new Error(
-              `EAS build SHA mismatch: expected ${process.env.EXPECTED_SHA}, received ${build.gitCommitHash ?? 'missing'}`,
-            );
-          }
-          NODE
+          VIEW_PATH="$view" node ./scripts/verify-eas-store-build.mjs
 
       - name: Save verified build metadata
         uses: actions/upload-artifact@v4
@@ -202,18 +232,71 @@ jobs:
           set -euo pipefail
           remote_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
           test "$remote_sha" = "$EXPECTED_SHA"
+          production_origin="${PRODUCTION_BASE_URL%/}"
+          curl --fail --silent --show-error \
+            --retry 3 --retry-all-errors \
+            "${production_origin}/api/app-version?release=${EXPECTED_SHA}&probe=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.platform }}-presubmit" \
+            --output "${RUNNER_TEMP}/production-app-version-presubmit.json"
+          EXPECTED_SHA="$EXPECTED_SHA" node -e "
+            const fs = require('node:fs');
+            const body = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/production-app-version-presubmit.json', 'utf8'));
+            if (body.buildId !== process.env.EXPECTED_SHA) {
+              throw new Error('Production serves ' + (body.buildId || 'an unknown build') + ', expected ' + process.env.EXPECTED_SHA);
+            }
+          "
 
       - name: Submit to TestFlight or closed alpha
+        id: submit
         if: ${{ inputs.submit_to_test_track }}
         working-directory: ugc-mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           BUILD_ID: ${{ steps.build.outputs.build_id }}
+          TESTFLIGHT_INTERNAL_GROUP: ${{ vars.TESTFLIGHT_INTERNAL_GROUP }}
         run: |
           set -euo pipefail
-          npx --yes eas-cli@21.2.0 submit \
+          submission_log="$RUNNER_TEMP/eas-submit-${{ matrix.platform }}.log"
+          submit_args=(
             --profile staging \
             --platform "${{ matrix.platform }}" \
             --id "$BUILD_ID" \
             --non-interactive \
             --wait
+          )
+          if [[ "${{ matrix.platform }}" == "ios" ]]; then
+            test -n "${TESTFLIGHT_INTERNAL_GROUP//[[:space:]]/}"
+            submit_args+=(--groups "$TESTFLIGHT_INTERNAL_GROUP")
+          fi
+          npx --yes eas-cli@21.2.0 submit "${submit_args[@]}" 2>&1 | tee "$submission_log"
+          SUBMISSION_LOG_PATH="$submission_log" node ./scripts/verify-eas-store-build.mjs --submission
+
+      - name: Write verified release summary
+        if: ${{ always() && steps.verify.outcome == 'success' }}
+        env:
+          APP_VERSION: ${{ steps.verify.outputs.app_version }}
+          BUILD_ID: ${{ steps.verify.outputs.build_id }}
+          COMMIT_SHA: ${{ steps.verify.outputs.commit_sha }}
+          NATIVE_BUILD_NUMBER: ${{ steps.verify.outputs.native_build_number }}
+          PLATFORM: ${{ steps.verify.outputs.platform }}
+          SUBMISSION_ID: ${{ steps.submit.outputs.submission_id }}
+          SUBMISSION_REQUESTED: ${{ inputs.submit_to_test_track }}
+        run: |
+          set -euo pipefail
+          submission_id="$SUBMISSION_ID"
+          if [[ "$SUBMISSION_REQUESTED" != "true" ]]; then
+            submission_id="not requested"
+          elif [[ -z "$submission_id" ]]; then
+            submission_id="unavailable (submission failed)"
+          fi
+          {
+            echo "### Verified mobile tester artifact"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Platform | \`$PLATFORM\` |"
+            echo "| App version | \`$APP_VERSION\` |"
+            echo "| Native build number | \`$NATIVE_BUILD_NUMBER\` |"
+            echo "| Build ID | \`$BUILD_ID\` |"
+            echo "| Submission ID | \`$submission_id\` |"
+            echo "| Commit SHA | \`$COMMIT_SHA\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

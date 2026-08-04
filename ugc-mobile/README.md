@@ -37,15 +37,25 @@ build/version codes through `appVersionSource: remote` and `autoIncrement`.
 
 Use the manual `Mobile signed store build` GitHub workflow. It accepts only the
 current `main` SHA with a successful exact-SHA `Quality` run, creates signed EAS
-production artifacts, re-reads EAS build metadata to verify the Git commit, and
-optionally submits only to TestFlight or Google Play closed alpha. It never
-promotes a public store release.
+production artifacts, and re-reads EAS build metadata before submission. The
+build must be `FINISHED`, match the authorized commit and `app.json` version,
+use the production store-distribution profile, and expose an HTTPS artifact.
+Immediately before the EAS build and again before tester submission, the
+workflow also requires the live production `/api/app-version` response to serve
+that exact commit.
+The workflow optionally submits only to the configured internal TestFlight
+group or Google Play closed alpha; it cannot promote a public store release.
+Its run summary records the platform, app version, native build number, build
+ID, submission ID, and commit SHA for tester-delivery readback.
 
-The GitHub `mobile-production` environment needs `EXPO_TOKEN`. The EAS
-`production` environment must contain the public site/API/Supabase/RevenueCat
-variables below. Store signing and submission credentials stay in EAS. The build
-hook fails before dependency installation if the production profile has a
-missing, placeholder, insecure, wrong-platform, or non-production value.
+The GitHub `mobile-production` environment needs the `EXPO_TOKEN` secret and a
+`TESTFLIGHT_INTERNAL_GROUP` environment variable. Set that variable to the exact
+App Store Connect internal group name (`Team (Expo)`); an iOS tester submission
+fails closed when it is absent. The EAS `production` environment must contain
+the public site/API/Supabase/RevenueCat variables below. Store signing and
+submission credentials stay in EAS. The build hook fails before dependency
+installation if the production profile has a missing, placeholder, insecure,
+wrong-platform, or non-production value.
 
 Public App Store / Play promotion remains a deliberate operator action after
 TestFlight/closed-alpha purchases, auth, generation, account deletion, privacy
