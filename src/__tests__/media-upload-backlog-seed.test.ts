@@ -5,6 +5,7 @@ import {
   categorizeBacklogObject,
   getSeedConsumer,
   inferUploadIntentKind,
+  isUserScopedStagedPath,
   type BacklogObject,
 } from '@/lib/media-upload-backlog-seed';
 
@@ -35,6 +36,23 @@ describe('inferUploadIntentKind', () => {
 
   it('defaults to image so the kind check constraint always passes', () => {
     expect(inferUploadIntentKind(null, 'user-1/mystery')).toBe('image');
+  });
+});
+
+describe('isUserScopedStagedPath', () => {
+  it('accepts the current {userId}/{uploadId}-{name} layout', () => {
+    expect(isUserScopedStagedPath('28677503-bfbe-4e99-9105-b8f0c7e0e507/abc-ref.png')).toBe(true);
+  });
+
+  it('rejects paths from the retired root-level scheme', () => {
+    // These really exist in production -- `images/...` and `videos/...` written
+    // before uploads were scoped per user. Seeding them threw a uuid syntax
+    // error because the first path segment was the filename, so the whole
+    // backfill aborted rather than skipping 60 objects.
+    expect(isUserScopedStagedPath('images/1770464299435-photo.jpg')).toBe(false);
+    expect(isUserScopedStagedPath('videos/1770464299437-clip.mp4')).toBe(false);
+    expect(isUserScopedStagedPath('2lda807m63j.mp4')).toBe(false);
+    expect(isUserScopedStagedPath('not-a-uuid/file.png')).toBe(false);
   });
 });
 

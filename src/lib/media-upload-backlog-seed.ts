@@ -51,7 +51,27 @@ export type BacklogSeedPlan = {
   objects: CategorizedBacklogObject[];
   counts: Record<BacklogCategory, { objects: number; bytes: number }>;
   alreadyTracked: number;
+  /**
+   * Objects whose path does not start with a user id, so no intent row can be
+   * written for them -- `user_id` is NOT NULL and references auth.users.
+   *
+   * These are survivors of a retired upload scheme that wrote to `images/...`
+   * and `videos/...` at the bucket root. Reported rather than silently skipped:
+   * they are real bytes that this system will never collect, so the operator
+   * has to see them and decide.
+   */
+  unattributable: { objects: number; bytes: number; samplePaths: string[] };
 };
+
+/**
+ * Staged objects are laid out as `{userId}/{uploadId}-{fileName}`. Anything else
+ * predates that scheme and cannot be attributed to an owner from its path.
+ */
+const USER_SCOPED_PATH = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\//i;
+
+export function isUserScopedStagedPath(storagePath: string): boolean {
+  return USER_SCOPED_PATH.test(storagePath);
+}
 
 export type StorageDriftReport = {
   /** `generation_inputs` objects with no row pointing at them. */
@@ -256,7 +276,10 @@ export async function buildBacklogSeedPlan(client: SupabaseClient): Promise<Back
   ]);
 
   const untracked = objects.filter((object) => !tracked.has(object.storagePath));
-  const categorized = untracked.map((object) => categorizeBacklogObject(object, {
+  const seedable = untracked.filter((object) => isUserScopedStagedPath(object.storagePath));
+  const unattributable = untracked.filter((object) => !isUserScopedStagedPath(object.storagePath));
+
+  const categorized = seedable.map((object) => categorizeBacklogObject(object, {
     legacyReferenced,
     durableCopied: durable.copied,
   }));
@@ -271,6 +294,11 @@ export async function buildBacklogSeedPlan(client: SupabaseClient): Promise<Back
     objects: categorized,
     counts,
     alreadyTracked: objects.length - untracked.length,
+    unattributable: {
+      objects: unattributable.length,
+      bytes: unattributable.reduce((total, object) => total + (object.sizeBytes ?? 0), 0),
+      samplePaths: unattributable.slice(0, 5).map((object) => object.storagePath),
+    },
   };
 }
 
