@@ -499,7 +499,10 @@ const DEFAULT_RESOURCE_SELECTIONS: PostComposerResourceSelections = {
   remix: false,
 };
 
-const TITLE_MAX_LENGTH = 100;
+// Matches TITLE_MAX_LENGTH in the web app's posts-server.ts, which is the gate
+// that actually rejects on both create and edit. Exported so the composer
+// screen renders its counter from the same number instead of a literal.
+export const TITLE_MAX_LENGTH = 100;
 // Matches the server's limit in post-creation-submission-service.ts. A lower
 // value here silently truncated half of what a creator was allowed to write.
 export const BODY_MAX_LENGTH = 2000;
@@ -752,8 +755,21 @@ export function buildUpdatePostPayload(
   }
 }
 
-export function validatePostComposerDraft(draft: PostComposerDraft): PostComposerValidationResult {
-  const detailsValidation = validatePostComposerDetails(draft);
+export type PostComposerValidationOptions = {
+  /**
+   * The title the post already carried when it was loaded into the editor.
+   * Titles written before the 100-character limit are let through unchanged —
+   * the server grandfathers them the same way on edit — so an author can fix
+   * other fields without first rewriting an old title.
+   */
+  grandfatheredTitle?: string | null;
+};
+
+export function validatePostComposerDraft(
+  draft: PostComposerDraft,
+  options: PostComposerValidationOptions = {},
+): PostComposerValidationResult {
+  const detailsValidation = validatePostComposerDetails(draft, options);
   if (!detailsValidation.valid) {
     return detailsValidation;
   }
@@ -782,8 +798,11 @@ export function validatePostComposerDraft(draft: PostComposerDraft): PostCompose
   return { valid: true };
 }
 
-export function validatePostComposerDetails(draft: PostComposerDraft): PostComposerValidationResult {
-  const errors = getPostComposerDetailErrors(draft);
+export function validatePostComposerDetails(
+  draft: PostComposerDraft,
+  options: PostComposerValidationOptions = {},
+): PostComposerValidationResult {
+  const errors = getPostComposerDetailErrors(draft, options);
   const fieldOrder: readonly PostComposerDetailField[] = draft.mode === 'text'
     ? ['title', 'content']
     : ['media', 'title'];
@@ -794,7 +813,10 @@ export function validatePostComposerDetails(draft: PostComposerDraft): PostCompo
   return firstMessage ? { valid: false, message: firstMessage } : { valid: true };
 }
 
-export function getPostComposerDetailErrors(draft: PostComposerDraft): PostComposerDetailErrors {
+export function getPostComposerDetailErrors(
+  draft: PostComposerDraft,
+  options: PostComposerValidationOptions = {},
+): PostComposerDetailErrors {
   const errors: PostComposerDetailErrors = {};
   const body = getCreatePostBody(draft);
 
@@ -810,9 +832,15 @@ export function getPostComposerDetailErrors(draft: PostComposerDraft): PostCompo
     errors.content = `Posts are limited to ${BODY_MAX_LENGTH} characters.`;
   }
 
-  if (!draft.title.trim()) {
-    errors.title = 'Add a title before continuing.';
-  } else if (draft.title.trim().length > TITLE_MAX_LENGTH) {
+  // Titles are optional on every post format, matching the server and the web
+  // composer: text posts derive one from the body, media posts may publish
+  // without one. Only the length limit is enforced, and a title the post
+  // already had when it exceeded that limit is grandfathered unchanged.
+  const trimmedTitle = draft.title.trim();
+  if (
+    trimmedTitle.length > TITLE_MAX_LENGTH
+    && trimmedTitle !== (options.grandfatheredTitle ?? '').trim()
+  ) {
     errors.title = `Titles are limited to ${TITLE_MAX_LENGTH} characters.`;
   }
 

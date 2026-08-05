@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query';
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 import type { ImagePickerAsset } from 'expo-image-picker';
 import { ArrowLeft, Check, ChevronDown, ChevronRight, FileText, Globe2, ImageIcon, Link2, Lock, Package, Play, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
@@ -21,6 +22,7 @@ import {
   TextInput,
   useWindowDimensions,
   View,
+  type GestureResponderEvent,
   type TextInputProps,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -65,6 +67,7 @@ import {
   getPublishGenerationMediaKind,
   getPublishGenerationTitle,
   BODY_MAX_LENGTH,
+  TITLE_MAX_LENGTH,
   hydratePostComposerResourceCards,
   isTemplateGeneration,
   isPostComposerResourceCardReady,
@@ -74,6 +77,7 @@ import {
   POST_COMPOSER_SOURCE_OPTIONS,
   POST_COMPOSER_UNLOCK_OPTIONS,
   validatePostComposerDraft,
+  type PostComposerValidationOptions,
   hasGenerationReferences,
   upsertOptimisticOwnerPostInfiniteData,
   type PostComposerDraft,
@@ -256,13 +260,13 @@ function PostDetailsPage({
     : 'Add tool and model';
   const titleField = (
     <ComposerFieldShell>
-      <CompactFieldLabel label="Title" required valueLength={draft.title.length} maxLength={100} />
+      <CompactFieldLabel label="Title" optional valueLength={draft.title.length} maxLength={TITLE_MAX_LENGTH} />
       <ComposerInput
         inputRef={titleInputRef}
-        accessibilityLabel="Title, required"
-        accessibilityHint="Enter a short title for this post. Maximum 100 characters."
+        accessibilityLabel="Title, optional"
+        accessibilityHint={`Enter a short title for this post. Maximum ${TITLE_MAX_LENGTH} characters.`}
         value={draft.title}
-        onChangeText={(title) => onChange({ title: title.slice(0, 100) })}
+        onChangeText={(title) => onChange({ title: title.slice(0, TITLE_MAX_LENGTH) })}
         placeholder="What is this creation about?"
         editable={!isFieldsLocked}
       />
@@ -271,7 +275,7 @@ function PostDetailsPage({
   );
   const textField = (
     <ComposerFieldShell>
-      <CompactFieldLabel label="Post text" required valueLength={draft.contentText.length} maxLength={1000} />
+      <CompactFieldLabel label="Post text" required valueLength={draft.contentText.length} maxLength={BODY_MAX_LENGTH} />
       <ComposerInput
         inputRef={contentInputRef}
         accessibilityLabel="Post text, required"
@@ -364,10 +368,10 @@ function PostDetailsPage({
       </View> : null}
 
       {draft.mode !== 'text' ? <ComposerFieldShell>
-        <CompactFieldLabel label="Story" optional valueLength={draft.caption.length} maxLength={1000} />
+        <CompactFieldLabel label="Story" optional valueLength={draft.caption.length} maxLength={BODY_MAX_LENGTH} />
         <ComposerInput
           accessibilityLabel="Story, optional"
-          accessibilityHint="Share the idea, process, or story behind this post. Maximum 1000 characters."
+          accessibilityHint={`Share the idea, process, or story behind this post. Maximum ${BODY_MAX_LENGTH} characters.`}
           value={draft.caption}
           onChangeText={(caption) => onChange({ caption: caption.slice(0, BODY_MAX_LENGTH), description: caption.slice(0, BODY_MAX_LENGTH) })}
           placeholder="Share the idea, process, or story behind it..."
@@ -1495,6 +1499,10 @@ export default function NewPostScreen() {
    */
   const activeUploadControllersRef = useRef<Set<AbortController>>(new Set());
   const mediaUploadIdRef = useRef(0);
+  // The title the post carried when the edit prefill loaded it. Fed into every
+  // validation call so a pre-limit title is grandfathered exactly like the
+  // server does; stays null for new posts, where nothing is grandfathered.
+  const initialTitleRef = useRef<string | null>(null);
   const initialDraftSignatureRef = useRef<string | null>(null);
   const draftStorageId = user ? getPostComposerDraftStorageId({
     userId: user.id,
@@ -1544,7 +1552,7 @@ export default function NewPostScreen() {
     [draft, selectedGeneration]
   );
   const publishValidation = useMemo(
-    () => validateCurrentDraft(draft, selectedGeneration, isEditMode && isGenerationBacked, hasPaidOrders),
+    () => validateCurrentDraft(draft, selectedGeneration, isEditMode && isGenerationBacked, hasPaidOrders, { grandfatheredTitle: initialTitleRef.current }),
     [draft, hasPaidOrders, isEditMode, isGenerationBacked, selectedGeneration]
   );
   const hasUnsavedChanges = hasHydratedPersistedDraft && (
@@ -1568,7 +1576,9 @@ export default function NewPostScreen() {
             mode: 'creation',
             proofMode: 'media',
             selectedGenerationId: found.id,
-            title: current.title || getPublishGenerationTitle(found),
+            // getPublishGenerationTitle falls back to the raw prompt, which is
+            // routinely longer than a title is allowed to be.
+            title: current.title || getPublishGenerationTitle(found).slice(0, TITLE_MAX_LENGTH),
             contentText: '',
             sourceTool: 'Magicbooklet',
             sourceToolSlug: 'magicbooklet',
@@ -1599,6 +1609,7 @@ export default function NewPostScreen() {
       const resourceBundleInput = post.resourceBundleInput;
       const mode = post.postFormat === 'text' ? 'text' : post.generationId ? 'creation' : 'upload';
 
+      initialTitleRef.current = post.title || null;
       setDraft({
         mode,
         proofMode: mode === 'text' ? 'text' : 'media',
@@ -1710,7 +1721,7 @@ export default function NewPostScreen() {
     void loadPersistedPostComposerDraft(draftStorageId!).then((persisted) => {
       if (!active) return;
       if (persisted) {
-        const details = getPostComposerDetailErrors(persisted.draft);
+        const details = getPostComposerDetailErrors(persisted.draft, { grandfatheredTitle: initialTitleRef.current });
         const canOpenReview = Object.keys(details).length === 0;
         setDraft(persisted.draft);
         setComposerStep(persisted.step === 'resources' && canOpenReview ? 'resources' : 'details');
@@ -1724,7 +1735,7 @@ export default function NewPostScreen() {
         // its uploads is a background repair the user should not wait behind.
         void recoverRestoredDraftMedia(persisted.draft);
       } else if (focusTarget === 'resources') {
-        const details = getPostComposerDetailErrors(draft);
+        const details = getPostComposerDetailErrors(draft, { grandfatheredTitle: initialTitleRef.current });
         if (Object.keys(details).length === 0) {
           setComposerStep('resources');
         } else {
@@ -1771,6 +1782,7 @@ export default function NewPostScreen() {
         selectedGeneration,
         isEditMode && isGenerationBacked,
         hasPaidOrders,
+        { grandfatheredTitle: initialTitleRef.current },
       );
       if (!validation.valid) {
         throw new Error(validation.message);
@@ -1970,7 +1982,7 @@ export default function NewPostScreen() {
     };
     setDraft(next);
     if (Object.keys(detailErrors).length > 0) {
-      setDetailErrors(getPostComposerDetailErrors(next));
+      setDetailErrors(getPostComposerDetailErrors(next, { grandfatheredTitle: initialTitleRef.current }));
     }
   };
 
@@ -1978,7 +1990,7 @@ export default function NewPostScreen() {
     const next = { ...draft, ...patch };
     setDraft(next);
     if (Object.keys(detailErrors).length > 0) {
-      setDetailErrors(getPostComposerDetailErrors(next));
+      setDetailErrors(getPostComposerDetailErrors(next, { grandfatheredTitle: initialTitleRef.current }));
     }
     if (message?.tone === 'danger') {
       setMessage(null);
@@ -2620,7 +2632,7 @@ export default function NewPostScreen() {
   };
 
   const goToResources = () => {
-    const errors = getPostComposerDetailErrors(draft);
+    const errors = getPostComposerDetailErrors(draft, { grandfatheredTitle: initialTitleRef.current });
     const detailFieldOrder: readonly PostComposerDetailField[] = draft.mode === 'text'
       ? ['title', 'content']
       : ['media', 'title'];
@@ -3035,7 +3047,7 @@ function TitleSection({
     >
       <ComposerInput
         value={draft.title}
-        onChangeText={(title) => onChange({ title })}
+        onChangeText={(title) => onChange({ title: title.slice(0, TITLE_MAX_LENGTH) })}
         placeholder={draft.proofMode === 'text' ? 'Title (optional)' : 'Give your post a title'}
         editable={!disabled}
       />
@@ -4081,6 +4093,11 @@ function SmallChip({ label, active, onPress, disabled = false }: { label: string
 const MEDIA_CARD_WIDTH = 132;
 const MEDIA_CARD_GAP = 10;
 const MEDIA_CARD_STEP = MEDIA_CARD_WIDTH + MEDIA_CARD_GAP;
+// How long a finger must rest on a card before it can be dragged. Long enough
+// that starting a scroll never picks a card up, short enough to not feel stuck.
+const MEDIA_DRAG_HOLD_MS = 300;
+// Movement past this many points before the hold completes counts as a scroll.
+const MEDIA_DRAG_SLOP = 8;
 
 function UploadContent({
   draft,
@@ -4101,16 +4118,30 @@ function UploadContent({
   onReorderMedia: (id: string, targetIndex: number) => void;
   disabled?: boolean;
 }) {
+  // On Android the horizontal ScrollView intercepts touches natively, so a card
+  // can never win the gesture from JS once scrolling engages. Switching the
+  // ScrollView off the moment a card is picked up is what hands the drag over.
+  const [isReordering, setIsReordering] = useState(false);
+
   return (
     <View style={{ gap: 10 }}>
       <View style={{ gap: 4 }}>
         <AppText variant="label" color="text">
           Upload images or videos <AppText variant="caption" color="primary">Required</AppText>
         </AppText>
-        <AppText variant="caption" color="muted">Cover first · max 5</AppText>
+        <AppText variant="caption" color="muted">
+          {draft.mediaItems.length > 1
+            ? 'Cover first · max 5 · hold a card to reorder'
+            : 'Cover first · max 5'}
+        </AppText>
       </View>
       {draft.mediaItems.length > 0 ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          scrollEnabled={!isReordering}
+          contentContainerStyle={{ gap: 10 }}
+        >
           {draft.mediaItems.map((item, index) => (
             <MediaGalleryCard
               key={item.id}
@@ -4120,6 +4151,7 @@ function UploadContent({
               disabled={disabled}
               onRemoveMedia={onRemoveMedia}
               onReorderMedia={onReorderMedia}
+              onDragStateChange={setIsReordering}
             />
           ))}
           {!disabled && draft.mediaItems.length < 5 ? (
@@ -4233,6 +4265,7 @@ function MediaGalleryCard({
   disabled,
   onRemoveMedia,
   onReorderMedia,
+  onDragStateChange,
 }: {
   item: PostComposerMediaItem;
   index: number;
@@ -4240,10 +4273,13 @@ function MediaGalleryCard({
   disabled: boolean;
   onRemoveMedia: (id: string) => void;
   onReorderMedia: (id: string, targetIndex: number) => void;
+  onDragStateChange: (dragging: boolean) => void;
 }) {
   const [dragOffset, setDragOffset] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const isDragArmedRef = useRef(false);
+  const isResponderRef = useRef(false);
+  const touchOriginRef = useRef<{ x: number; y: number } | null>(null);
   const dragTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const label = index === 0 ? 'Cover' : `Media ${index + 1}`;
   const canDrag = !disabled && totalItems > 1;
@@ -4264,6 +4300,7 @@ function MediaGalleryCard({
     setDragArmed(false);
     setIsDragging(false);
     setDragOffset(0);
+    onDragStateChange(false);
   };
 
   const finishDrag = (dx: number) => {
@@ -4278,21 +4315,64 @@ function MediaGalleryCard({
 
   useEffect(() => () => clearDragTimer(), []);
 
-  const dragResponder = useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => canDrag,
-    onPanResponderGrant: () => {
+  // Press-and-hold arms the reorder. Until it fires the card claims nothing, so
+  // an ordinary swipe scrolls the row instead of fighting it.
+  const handleTouchStart = (event: GestureResponderEvent) => {
+    if (!canDrag) return;
+    const { pageX, pageY } = event.nativeEvent;
+    touchOriginRef.current = { x: pageX, y: pageY };
+    clearDragTimer();
+    dragTimerRef.current = setTimeout(() => {
+      setDragArmed(true);
+      setIsDragging(true);
+      // Frees the gesture from the native scroller so the pan below can take it.
+      onDragStateChange(true);
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+    }, MEDIA_DRAG_HOLD_MS);
+  };
+
+  // Moving before the hold completes means the finger is scrolling, not picking
+  // the card up — drop the pending arm so a slow swipe never becomes a reorder.
+  const handleTouchMove = (event: GestureResponderEvent) => {
+    const origin = touchOriginRef.current;
+    if (!origin || isDragArmedRef.current) return;
+    const { pageX, pageY } = event.nativeEvent;
+    if (
+      Math.abs(pageX - origin.x) > MEDIA_DRAG_SLOP
+      || Math.abs(pageY - origin.y) > MEDIA_DRAG_SLOP
+    ) {
       clearDragTimer();
-      dragTimerRef.current = setTimeout(() => {
-        setDragArmed(true);
-        setIsDragging(true);
-      }, 220);
+    }
+  };
+
+  // If the card armed but the finger lifted without ever moving, no responder
+  // callback runs — clean up here so it does not stay stuck in the lifted state.
+  const handleTouchEnd = () => {
+    touchOriginRef.current = null;
+    if (!isResponderRef.current) resetDrag();
+  };
+
+  const dragResponder = useMemo(() => PanResponder.create({
+    // Never claim on touch-down. The horizontal ScrollView that holds these
+    // cards has to own the gesture by default, otherwise every swipe that
+    // happens to start on a card is captured and the row barely scrolls.
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponder: () => isDragArmedRef.current,
+    onPanResponderGrant: () => {
+      isResponderRef.current = true;
       setDragOffset(0);
     },
     onPanResponderMove: (_event, gesture) => {
       if (canDrag && isDragArmedRef.current) setDragOffset(gesture.dx);
     },
-    onPanResponderRelease: (_event, gesture) => finishDrag(gesture.dx),
-    onPanResponderTerminate: resetDrag,
+    onPanResponderRelease: (_event, gesture) => {
+      isResponderRef.current = false;
+      finishDrag(gesture.dx);
+    },
+    onPanResponderTerminate: () => {
+      isResponderRef.current = false;
+      resetDrag();
+    },
     onPanResponderTerminationRequest: () => false,
   }), [canDrag, index, item.id, onReorderMedia, totalItems]);
 
@@ -4314,6 +4394,10 @@ function MediaGalleryCard({
         }
       } : undefined}
       {...dragResponder.panHandlers}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
       style={{
         width: MEDIA_CARD_WIDTH,
         borderRadius: 16,
@@ -4530,13 +4614,14 @@ function validateCurrentDraft(
   selectedGeneration: GenerationListItem | null,
   skipGenerationSelection = false,
   preserveSoldResourceBundle = false,
+  options: PostComposerValidationOptions = {},
 ) {
   const result = validatePostComposerDraft(preserveSoldResourceBundle
     ? {
         ...draft,
         resource: { ...draft.resource, accessMode: 'none' },
       }
-    : draft);
+    : draft, options);
   if (!result.valid) return result;
   if (draft.mode === 'creation' && !selectedGeneration && !skipGenerationSelection) {
     return { valid: false, message: 'Choose a finished creation before publishing.' };
