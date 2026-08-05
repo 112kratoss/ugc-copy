@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "description": "Shared behavioral contract for the weighted upload queue that exists twice by design: src/lib/upload-queue.ts (web) and ugc-mobile/lib/upload-file.ts (mobile). The two workspaces cannot share code, so each side's test suite replays these scenarios against its own implementation — a semantic change that lands on only one side fails the other side's CI.",
+  "semantics": {
+    "capacity": 2,
+    "weights": {
+      "image": 1,
+      "video": 2
+    }
+  },
+  "scenarios": [
+    {
+      "name": "two images run concurrently and the third waits for a freed slot",
+      "items": ["image", "image", "image"],
+      "releaseOrder": [0, 1, 2],
+      "expectedStartWaves": [[0, 1], [2], [], []],
+      "expectedSuccessIndexes": [0, 1, 2],
+      "expectedFailureIndexes": []
+    },
+    {
+      "name": "a video consumes both slots and never runs beside another item",
+      "items": ["image", "video", "image"],
+      "releaseOrder": [0, 1, 2],
+      "expectedStartWaves": [[0], [1], [2], []],
+      "expectedSuccessIndexes": [0, 1, 2],
+      "expectedFailureIndexes": []
+    },
+    {
+      "name": "a failure frees its slot, later items still run, and successes are kept",
+      "items": ["image", "image", "image", "image"],
+      "releaseOrder": [1, 0, 2, 3],
+      "failingIndexes": [1],
+      "expectedStartWaves": [[0, 1], [2], [3], [], []],
+      "expectedSuccessIndexes": [0, 2, 3],
+      "expectedFailureIndexes": [1]
+    }
+  ]
+}

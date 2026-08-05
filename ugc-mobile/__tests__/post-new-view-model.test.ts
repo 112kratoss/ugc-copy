@@ -14,6 +14,7 @@ import {
   getDefaultPostComposerDraft,
   getExplicitPublishGeneration,
   getPostComposerDetailErrors,
+  TITLE_MAX_LENGTH,
   getPostComposerPackageStatus,
   getPostComposerPriceTokens,
   getPostComposerPreviewStatusLabel,
@@ -225,17 +226,60 @@ describe('post new view model', () => {
     };
 
     expect(validatePostComposerDraft(draft)).toEqual({ valid: true });
-    expect(validatePostComposerDraft({ ...draft, title: ' ' })).toMatchObject({
-      valid: false,
-      message: 'Add a title before continuing.',
-    });
+    // Titles are optional, matching the server (it derives one from the body
+    // for text posts) and the web composer.
+    expect(validatePostComposerDraft({ ...draft, title: ' ' })).toEqual({ valid: true });
     expect(validatePostComposerDraft({ ...draft, contentText: '', caption: '' })).toMatchObject({
       valid: false,
       message: 'Write the text post before continuing.',
     });
     expect(validatePostComposerDraft({ ...draft, title: '', contentText: '', caption: '' })).toMatchObject({
       valid: false,
-      message: 'Add a title before continuing.',
+      message: 'Write the text post before continuing.',
+    });
+  });
+
+  // Every title input slices to TITLE_MAX_LENGTH, so this branch is a backstop
+  // for titles that arrive without passing through the keyboard — an edit
+  // prefill of an older post, or a generation title used as the default.
+  it('flags a title longer than the shared limit and accepts one exactly at it', () => {
+    const draft = {
+      ...getDefaultPostComposerDraft(),
+      mode: 'text' as const,
+      proofMode: 'text' as const,
+      contentText: 'A reusable breakdown for product hooks.',
+      category: 'text' as const,
+    };
+
+    expect(getPostComposerDetailErrors({ ...draft, title: 'a'.repeat(TITLE_MAX_LENGTH) }).title).toBeUndefined();
+    expect(getPostComposerDetailErrors({ ...draft, title: 'a'.repeat(TITLE_MAX_LENGTH + 1) })).toMatchObject({
+      title: `Titles are limited to ${TITLE_MAX_LENGTH} characters.`,
+    });
+  });
+
+  it('grandfathers a pre-limit title while it stays unchanged, like the server does', () => {
+    const grandfathered = 'g'.repeat(TITLE_MAX_LENGTH + 9);
+    const draft = {
+      ...getDefaultPostComposerDraft(),
+      mode: 'text' as const,
+      proofMode: 'text' as const,
+      contentText: 'A reusable breakdown for product hooks.',
+      category: 'text' as const,
+      title: grandfathered,
+    };
+
+    expect(getPostComposerDetailErrors(draft, { grandfatheredTitle: grandfathered }).title).toBeUndefined();
+    expect(validatePostComposerDraft(draft, { grandfatheredTitle: grandfathered })).toEqual({ valid: true });
+    // Changing it to a different over-limit value forfeits the exemption.
+    expect(getPostComposerDetailErrors(
+      { ...draft, title: `${grandfathered} plus` },
+      { grandfatheredTitle: grandfathered },
+    )).toMatchObject({
+      title: `Titles are limited to ${TITLE_MAX_LENGTH} characters.`,
+    });
+    // A new post grandfathers nothing.
+    expect(getPostComposerDetailErrors(draft)).toMatchObject({
+      title: `Titles are limited to ${TITLE_MAX_LENGTH} characters.`,
     });
   });
 
@@ -252,7 +296,6 @@ describe('post new view model', () => {
 
     expect(getPostComposerDetailErrors(draft)).toEqual({
       media: 'Add at least one image or video to continue.',
-      title: 'Add a title before continuing.',
     });
   });
 

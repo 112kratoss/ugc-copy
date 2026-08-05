@@ -154,6 +154,10 @@ vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ t
 vi.mock('expo-image', () => ({ Image: (props: MockProps) => React.createElement('image', props) }));
 vi.mock('expo-linear-gradient', () => ({ LinearGradient: ({ children, ...props }: MockProps) => React.createElement('linear-gradient', props, children) }));
 vi.mock('@/components/media-preview', () => ({ StableMediaImage: (props: MockProps) => React.createElement('stable-media-image', props) }));
+vi.mock('expo-haptics', () => ({
+  impactAsync: vi.fn(() => Promise.resolve()),
+  ImpactFeedbackStyle: { Light: 'light', Medium: 'medium', Heavy: 'heavy' },
+}));
 
 vi.mock('lucide-react-native', () => {
   const icon = (name: string) => (props: MockProps) => React.createElement(name, props);
@@ -353,15 +357,14 @@ describe('mobile external post composer', () => {
     expect(queryOptionsState.options.find((options) => options.queryKey[0] === 'post-new-generations')?.enabled).toBe(false);
   });
 
-  it('blocks the next step until media and a title are present', async () => {
+  it('advances past post details without a title once media is present', async () => {
+    // Titles are optional everywhere, matching the server and the web composer.
     paramsState.params = {};
     await uploadManualMedia();
     const tree = await renderScreen();
     await choosePreparedMedia(tree);
     renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
-    expect(collectText(tree.root)).toContain('Add a title before continuing.');
-    renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Neon garden study'));
-    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    expect(collectText(tree.root)).not.toContain('Add a title before continuing.');
     expect(collectText(tree.root)).toContain('Optional resources');
   });
 
@@ -371,7 +374,8 @@ describe('mobile external post composer', () => {
     renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
     const text = collectText(tree.root);
     expect(text).toContain('Add at least one image or video to continue.');
-    expect(text).toContain('Add a title before continuing.');
+    // Titles are optional now, so an empty one must not block or warn.
+    expect(text).not.toContain('Add a title before continuing.');
     expect(text).toContain('Step 1 of 2 · post details');
   });
 
@@ -379,10 +383,10 @@ describe('mobile external post composer', () => {
     paramsState.params = {};
     const tree = await renderScreen();
     renderer.act(() => findPressableByText(tree.root, 'Text post').props.onPress());
-    const requiredTextInputs = tree.root
-      .findAll((node) => String(node.type) === 'textinput' && ['Title, required', 'Post text, required'].includes(node.props.accessibilityLabel))
+    const labeledTextInputs = tree.root
+      .findAll((node) => String(node.type) === 'textinput' && ['Title, optional', 'Post text, required'].includes(node.props.accessibilityLabel))
       .map((node) => node.props.accessibilityLabel);
-    expect(requiredTextInputs).toEqual(['Title, required', 'Post text, required']);
+    expect(labeledTextInputs).toEqual(['Title, optional', 'Post text, required']);
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'Share a prompt, idea, breakdown, or useful note...').props.onChangeText('A useful text breakdown'));
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Prompt teardown'));
     renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
@@ -444,7 +448,7 @@ describe('mobile external post composer', () => {
   it('uses semantic accessibility names instead of placeholders', async () => {
     paramsState.params = {};
     const tree = await renderScreen();
-    expect(findTextInputByAccessibilityLabel(tree.root, 'Title, required')).toBeTruthy();
+    expect(findTextInputByAccessibilityLabel(tree.root, 'Title, optional')).toBeTruthy();
     expect(findTextInputByAccessibilityLabel(tree.root, 'Story, optional')).toBeTruthy();
     renderer.act(() => findPressableByText(tree.root, 'Text post').props.onPress());
     expect(findTextInputByAccessibilityLabel(tree.root, 'Post text, required')).toBeTruthy();

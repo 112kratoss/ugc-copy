@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
@@ -204,6 +204,16 @@ interface GenerationDraft {
 }
 
 const BODY_MAX_LENGTH = 2000;
+// Mirrors TITLE_MAX_LENGTH in posts-server.ts, which is the gate that actually
+// rejects. This copy exists only because posts-server.ts is `server-only` and
+// cannot be imported into a client component — keep the two in step.
+const TITLE_MAX_LENGTH = 100;
+
+// Media reorder gesture, matched to the mobile composer so the interaction reads
+// the same on both. w-28 (112px) + gap-3 (12px) is how far one slot is.
+const MEDIA_CARD_STEP = 124;
+const MEDIA_DRAG_HOLD_MS = 300;
+const MEDIA_DRAG_SLOP = 8;
 
 const RESOURCE_KIND_OPTIONS: Array<{
   value: PostResourceKind;
@@ -1032,6 +1042,67 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     [mediaItems]
   );
   const coverPreviewItem = mediaPreviewItems[0] ?? null;
+
+  // Reordering swaps DOM nodes, which the browser paints instantly — the cards
+  // teleport. FLIP fixes that: after React commits the new order, each card is
+  // offset back to where it just was and then animated to zero, so the eye
+  // follows a move instead of a jump. Only transforms are touched, so this stays
+  // off the layout/paint path.
+  const mediaCardNodesRef = useRef(new Map<string, HTMLDivElement>());
+  const mediaCardLeftsRef = useRef(new Map<string, number>());
+  // Where the finger let go, so the picked-up card settles from that exact point
+  // into its new slot instead of snapping back first.
+  const releasedDragRef = useRef<{ id: string; dx: number } | null>(null);
+
+  const registerMediaCard = useCallback((id: string, node: HTMLDivElement | null) => {
+    if (node) {
+      mediaCardNodesRef.current.set(id, node);
+    } else {
+      mediaCardNodesRef.current.delete(id);
+      mediaCardLeftsRef.current.delete(id);
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    const previousLefts = mediaCardLeftsRef.current;
+    const nextLefts = new Map<string, number>();
+    // offsetLeft, not getBoundingClientRect: it reports layout position, so the
+    // live drag transform and the row's scroll offset cannot skew the baseline.
+    mediaCardNodesRef.current.forEach((node, id) => {
+      nextLefts.set(id, node.offsetLeft);
+    });
+
+    const released = releasedDragRef.current;
+    releasedDragRef.current = null;
+
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    if (previousLefts.size > 0 && !reduceMotion) {
+      mediaCardNodesRef.current.forEach((node, id) => {
+        const before = previousLefts.get(id);
+        const after = nextLefts.get(id);
+        if (before === undefined || after === undefined) {
+          return;
+        }
+        // The dragged card starts from where it was released, not from the slot
+        // it used to occupy — otherwise it visibly jumps back before animating.
+        const delta = before - after + (released?.id === id ? released.dx : 0);
+        if (Math.abs(delta) < 1) {
+          return;
+        }
+        // Absent in jsdom and older browsers — the reorder still happens, it
+        // just lands instantly rather than animating.
+        if (typeof node.animate !== 'function') {
+          return;
+        }
+        node.animate(
+          [{ transform: `translateX(${delta}px)` }, { transform: 'translateX(0)' }],
+          { duration: 220, easing: 'cubic-bezier(0.77, 0, 0.175, 1)' }
+        );
+      });
+    }
+
+    mediaCardLeftsRef.current = nextLefts;
+  }, [mediaPreviewItems]);
   const hasGeneratedProof = Boolean(prefilledGeneration);
   const selectedResourceKinds = useMemo(
     () => RESOURCE_KIND_OPTIONS.filter((option) => resourceSelections[option.value]).map((option) => option.value),
@@ -1039,6 +1110,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   );
   const trimmedBody = body.trim();
   const bodyCount = body.length;
+  const titleCount = title.trim().length;
   const hasMediaProof = proofMode === 'media' && (mediaItems.length > 0 || hasGeneratedProof);
   const postFormat: PostFormat = hasMediaProof ? (trimmedBody ? 'mixed' : 'media') : 'text';
   const displayVisibility = visibility;
@@ -1323,7 +1395,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         setPrefilledGeneration(nextGeneration);
         setProofMode('media');
         setCategory(nextGeneration.category);
-        setTitle((current) => current || nextGeneration.title);
+        // maxLength caps typing, not a programmatic prefill, so trim here too —
+        // otherwise a long generation title submits over-limit and the server
+        // rejects a post the composer never flagged.
+        setTitle((current) => current || nextGeneration.title.slice(0, TITLE_MAX_LENGTH));
         setDescription((current) => current || nextGeneration.description);
       } catch (loadError) {
         if (!cancelled) {
@@ -1480,6 +1555,146 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     setIsDragging(false);
   };
 
+  // Every in-flight add-time batch, so publish can wait for all of them — a
+  // single "latest batch" ref let a second add overwrite the first, and publish
+  // then re-uploaded the still-running batch's files.
+  const activeEagerUploadsRef = useRef(new Set<Promise<void>>());
+  // Controllers for those batches. Cancel aborts every one of them, not just
+  // whichever batch happened to start last.
+  const eagerUploadControllersRef = useRef(new Set<AbortController>());
+  // Per-batch progress, merged into the one bar — with two batches in flight the
+  // numbers must sum rather than fight, and the bar only clears when the last
+  // batch is done.
+  const eagerProgressRef = useRef(new Map<AbortController, {
+    bytesSent: number; totalBytes: number; completed: number; total: number;
+  }>());
+  // Staged paths keyed by item id. Publish reads this rather than waiting for the
+  // setMediaItems above to round-trip through React — resuming from an awaited
+  // upload does not guarantee the new state has committed, and reading it too
+  // early made publish upload the same file a second time.
+  const stagedPathsRef = useRef(new Map<string, string>());
+
+  const publishCombinedEagerProgress = () => {
+    const batches = [...eagerProgressRef.current.values()];
+    if (batches.length === 0) {
+      setUploadProgress(null);
+      return;
+    }
+    const totals = batches.reduce(
+      (sum, batch) => ({
+        bytesSent: sum.bytesSent + batch.bytesSent,
+        totalBytes: sum.totalBytes + batch.totalBytes,
+        completed: sum.completed + batch.completed,
+        total: sum.total + batch.total,
+      }),
+      { bytesSent: 0, totalBytes: 0, completed: 0, total: 0 },
+    );
+    setUploadProgress({
+      ...totals,
+      percent: totals.totalBytes > 0 ? Math.round((totals.bytesSent / totals.totalBytes) * 100) : 0,
+    });
+  };
+
+  const uploadAddedMedia = async (added: ComposerMediaItem[]) => {
+    const uploadable = added.filter((item) => item.file);
+    if (uploadable.length === 0) {
+      return;
+    }
+
+    const controller = new AbortController();
+    eagerUploadControllersRef.current.add(controller);
+
+    const bytesByIndex = new Map<number, { bytesSent: number; totalBytes: number }>();
+    let completed = 0;
+    const publishAddProgress = () => {
+      const totals = [...bytesByIndex.values()].reduce(
+        (sum, entry) => ({
+          bytesSent: sum.bytesSent + entry.bytesSent,
+          totalBytes: sum.totalBytes + entry.totalBytes,
+        }),
+        { bytesSent: 0, totalBytes: 0 },
+      );
+      eagerProgressRef.current.set(controller, {
+        ...totals,
+        completed,
+        total: uploadable.length,
+      });
+      publishCombinedEagerProgress();
+    };
+
+    uploadable.forEach((item, index) => {
+      bytesByIndex.set(index, { bytesSent: 0, totalBytes: item.file?.size ?? 0 });
+    });
+    publishAddProgress();
+
+    const run = (async () => {
+      try {
+        const result = await runWeightedUploadQueue(
+          uploadable.map((item) => ({ item, kind: item.mediaKind })),
+          async (item, index) => {
+            // uploadMediaToTemporaryStorage resolves the session itself and
+            // ignores this argument, so there is nothing to look up here.
+            const media = await uploadMediaToTemporaryStorage(item.file!, '', {
+              signal: controller.signal,
+              onProgress: ({ bytesSent, totalBytes }) => {
+                bytesByIndex.set(index, { bytesSent, totalBytes });
+                publishAddProgress();
+              },
+            });
+            completed += 1;
+            publishAddProgress();
+            return media.storagePath;
+          },
+          { signal: controller.signal },
+        );
+
+        // Stamping storagePath is what makes publish skip these — the pending
+        // filter there already excludes anything that carries one.
+        const pathById = new Map<string, string>();
+        result.successes.forEach((entry) => {
+          pathById.set(entry.item.id, entry.result);
+          stagedPathsRef.current.set(entry.item.id, entry.result);
+        });
+        if (pathById.size > 0) {
+          setMediaItems((current) => current.map((item) => (
+            pathById.has(item.id) ? { ...item, storagePath: pathById.get(item.id)! } : item
+          )));
+        }
+
+        // Say so now rather than at publish. Nothing is lost — a failed item
+        // keeps its File and publish re-uploads it — but silently pretending the
+        // add worked would strand the user until the final click.
+        const failures = result.failures.filter((failure) => !isUploadCancelledError(failure.error));
+        if (failures.length > 0) {
+          const failedNames = failures
+            .map((failure) => failure.item.originalName ?? failure.item.file?.name)
+            .filter(Boolean)
+            .join(', ');
+          setError({
+            section: 'post',
+            message: `${failures.length} of ${uploadable.length} uploads failed${failedNames ? ` (${failedNames})` : ''}. They will be retried when you publish.`,
+          });
+        }
+      } catch {
+        // Unexpected throw rather than a per-file failure. Anything not staged
+        // keeps its File, so publish re-uploads it and the composer recovers.
+      } finally {
+        eagerUploadControllersRef.current.delete(controller);
+        eagerProgressRef.current.delete(controller);
+        // Re-renders the sum of whatever batches remain, or clears the bar when
+        // this was the last one.
+        publishCombinedEagerProgress();
+      }
+    })();
+
+    activeEagerUploadsRef.current.add(run);
+    try {
+      await run;
+    } finally {
+      activeEagerUploadsRef.current.delete(run);
+    }
+  };
+
   const appendMediaFiles = (files: File[]) => {
     const supportedFiles = files.filter(
       (candidate) => candidate.type.startsWith('image/') || candidate.type.startsWith('video/')
@@ -1488,13 +1703,26 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       return;
     }
 
-    setMediaItems((current) => [
-      ...current,
-      ...supportedFiles
-        .slice(0, Math.max(0, 5 - current.length))
-        .map((candidate, index) => createComposerMediaItem(candidate, current.length + index)),
-    ]);
+    // Computed from the render snapshot, not inside the updater: updaters must
+    // stay pure (Strict Mode replays them, and collecting into an outer array
+    // from one is exactly the impurity that replay duplicates). Appends only
+    // arrive from discrete user events, so the snapshot is always current; the
+    // slice inside the updater is a pure re-cap in case it ever is not.
+    const accepted = supportedFiles
+      .slice(0, Math.max(0, 5 - mediaItems.length))
+      .map((candidate, index) => createComposerMediaItem(candidate, mediaItems.length + index));
+    if (accepted.length === 0) {
+      return;
+    }
+
+    setMediaItems((current) => [...current, ...accepted].slice(0, 5));
     resetFeedback();
+
+    // Upload as soon as the files are chosen, the way the mobile composer does,
+    // so the wait is spent here with a progress bar rather than silently at
+    // publish. Failures are deliberately non-blocking: the item keeps its File,
+    // so the publish flow still uploads anything that did not make it.
+    void uploadAddedMedia(accepted);
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -1530,6 +1758,116 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       return next;
     });
     resetFeedback();
+  };
+
+  // Pointer-driven reorder, mirroring the mobile composer: the card is picked up
+  // and follows the pointer, then lands in whichever slot it travelled to. The
+  // offset is written straight to the node rather than held in state — this
+  // component renders a very large tree, and re-rendering it per pointermove
+  // would drop frames for a purely visual translation.
+  const dragOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const dragArmedRef = useRef(false);
+  const dragTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragNodeRef = useRef<HTMLDivElement | null>(null);
+  const dragDxRef = useRef(0);
+
+  const clearMediaDragTimer = () => {
+    if (dragTimerRef.current) {
+      clearTimeout(dragTimerRef.current);
+      dragTimerRef.current = null;
+    }
+  };
+
+  const resetMediaDrag = () => {
+    clearMediaDragTimer();
+    if (dragNodeRef.current) {
+      dragNodeRef.current.style.transform = '';
+    }
+    dragArmedRef.current = false;
+    dragOriginRef.current = null;
+    dragNodeRef.current = null;
+    dragDxRef.current = 0;
+    setDraggedMediaId(null);
+  };
+
+  useEffect(() => () => clearMediaDragTimer(), []);
+
+  const armMediaDrag = (node: HTMLDivElement, pointerId: number, id: string) => {
+    dragArmedRef.current = true;
+    dragNodeRef.current = node;
+    setDraggedMediaId(id);
+    // Keeps the drag alive once the pointer leaves the card's own bounds.
+    if (node.isConnected && node.hasPointerCapture?.(pointerId) === false) {
+      node.setPointerCapture(pointerId);
+    }
+  };
+
+  const handleMediaPointerDown = (event: React.PointerEvent<HTMLDivElement>, id: string) => {
+    if (mediaPreviewItems.length < 2 || event.button !== 0) {
+      return;
+    }
+    // Remove and the arrow nudges live inside the card. Capturing the pointer for
+    // them would swallow their click and make the card lift on a plain button press.
+    if ((event.target as HTMLElement).closest('button')) {
+      return;
+    }
+    dragOriginRef.current = { x: event.clientX, y: event.clientY };
+    dragDxRef.current = 0;
+
+    // A mouse has no scrolling gesture to compete with, and the grip handle
+    // already says "drag me", so it picks up on contact. Touch has to hold —
+    // otherwise the row could never be scrolled past its first card.
+    if (event.pointerType !== 'touch') {
+      armMediaDrag(event.currentTarget, event.pointerId, id);
+      return;
+    }
+
+    const node = event.currentTarget;
+    const { pointerId } = event;
+    clearMediaDragTimer();
+    dragTimerRef.current = setTimeout(() => armMediaDrag(node, pointerId, id), MEDIA_DRAG_HOLD_MS);
+  };
+
+  const handleMediaPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const origin = dragOriginRef.current;
+    if (!origin) {
+      return;
+    }
+
+    const dx = event.clientX - origin.x;
+    if (!dragArmedRef.current) {
+      // Moving before the hold completes is a scroll, not a pick-up.
+      if (Math.abs(dx) > MEDIA_DRAG_SLOP || Math.abs(event.clientY - origin.y) > MEDIA_DRAG_SLOP) {
+        clearMediaDragTimer();
+        dragOriginRef.current = null;
+      }
+      return;
+    }
+
+    dragDxRef.current = dx;
+    if (dragNodeRef.current) {
+      dragNodeRef.current.style.transform = `translateX(${dx}px)`;
+    }
+  };
+
+  const handleMediaPointerUp = (id: string, index: number) => {
+    if (!dragArmedRef.current) {
+      resetMediaDrag();
+      return;
+    }
+
+    const dx = dragDxRef.current;
+    const slotDelta = Math.round(dx / MEDIA_CARD_STEP);
+    const targetIndex = Math.max(0, Math.min(index + slotDelta, mediaPreviewItems.length - 1));
+    const targetId = mediaPreviewItems[targetIndex]?.id;
+    resetMediaDrag();
+
+    if (slotDelta === 0 || !targetId || targetId === id) {
+      return;
+    }
+
+    releasedDragRef.current = { id, dx };
+    moveMediaItem(id, targetId);
   };
 
   const focusComposerSection = (section: 'post' | 'story' | 'resources' | 'publish') => {
@@ -1687,7 +2025,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   };
 
   const cancelMediaUpload = () => {
+    // Publish-time uploads and every in-flight add-time batch — cancelling only
+    // the most recent batch left older ones running with no way to stop them.
     uploadAbortRef.current?.abort();
+    eagerUploadControllersRef.current.forEach((controller) => controller.abort());
   };
 
   /**
@@ -1700,6 +2041,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
    * failure (the point of retrying only what failed) but never a dispatched one.
    */
   const forgetStagedMediaPaths = () => {
+    // The add-time cache has to go too, or publish would re-apply the very paths
+    // the server just deleted and the retry could never recover.
+    stagedPathsRef.current.clear();
     setMediaItems((current) => current.map((item) => (
       item.storagePath ? { ...item, storagePath: null } : item
     )));
@@ -2044,6 +2388,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       return;
     }
 
+    // No client-side title-length gate on purpose. The input is capped at
+    // TITLE_MAX_LENGTH, so typing or pasting can never exceed it; the only way
+    // an over-limit title reaches here is an older post loaded into the editor,
+    // and the server deliberately grandfathers those. Blocking here would be
+    // wrong in exactly the one case it could ever fire.
+
     if (effectiveVisibility === 'public') {
       const publicPostQualityError = getPublicPostQualityError({
         title: publicPostTitle,
@@ -2114,9 +2464,22 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
 
     try {
       setIsSubmitting(true);
+      // An add-time upload may still be running. Letting it finish means its
+      // storagePath is already stamped, so publish skips that file instead of
+      // uploading it a second time.
+      // Loop, not a single await: a new batch can start while an earlier one is
+      // being awaited, and publish must not proceed until every one has settled.
+      while (activeEagerUploadsRef.current.size > 0) {
+        await Promise.all([...activeEagerUploadsRef.current]);
+      }
+      const itemsWithStagedPaths = mediaItems.map((item) => (
+        !item.storagePath && stagedPathsRef.current.has(item.id)
+          ? { ...item, storagePath: stagedPathsRef.current.get(item.id)! }
+          : item
+      ));
       const mediaItemsForSubmit = generationId
         ? undefined
-        : await uploadComposerMedia(mediaItems, session.user.id);
+        : await uploadComposerMedia(itemsWithStagedPaths, session.user.id);
 
       if (generationId) {
         const response = await fetch('/api/showcase/publish', {
@@ -2404,13 +2767,26 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                 className="rounded-3xl border border-white/8 bg-[linear-gradient(180deg,rgba(17,24,39,0.82),rgba(9,11,16,0.9))] p-5 outline-none sm:p-6"
               >
                 <label className="block">
-                  <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Title</div>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Title</span>
+                    {/* aria-hidden so the input's accessible name stays "Title, maximum N
+                        characters" instead of churning on every keystroke; the limit itself
+                        is announced once via aria-label. */}
+                    <span
+                      aria-hidden="true"
+                      className={`text-xs ${titleCount > TITLE_MAX_LENGTH ? 'text-rose-300' : 'text-zinc-500'}`}
+                    >
+                      {titleCount}/{TITLE_MAX_LENGTH}
+                    </span>
+                  </div>
                   <input
                     value={title}
                     onChange={(event) => {
                       setTitle(event.target.value);
                       resetFeedback();
                     }}
+                    maxLength={TITLE_MAX_LENGTH}
+                    aria-label={`Title, maximum ${TITLE_MAX_LENGTH} characters`}
                     placeholder={proofMode === 'text' ? 'Title (optional)' : 'Give your post a title'}
                     className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
                   />
@@ -2845,19 +3221,24 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                             {mediaPreviewItems.map((item, index) => (
                               <div
                                 key={item.id}
-                                draggable
-                                onDragStart={() => setDraggedMediaId(item.id)}
-                                onDragEnd={() => setDraggedMediaId(null)}
-                                onDragOver={(event) => event.preventDefault()}
-                                onDrop={(event) => {
-                                  event.preventDefault();
-                                  if (draggedMediaId) {
-                                    moveMediaItem(draggedMediaId, item.id);
-                                  }
-                                  setDraggedMediaId(null);
+                                ref={(node) => registerMediaCard(item.id, node)}
+                                onPointerDown={(event) => handleMediaPointerDown(event, item.id)}
+                                onPointerMove={handleMediaPointerMove}
+                                onPointerUp={() => handleMediaPointerUp(item.id, index)}
+                                onPointerCancel={resetMediaDrag}
+                                // The row sits inside the file dropzone; without this a
+                                // reorder also lights up "drag & drop files" behind it.
+                                onDragStart={(event) => event.preventDefault()}
+                                style={{
+                                  // Held cards must not also pan the scroll container.
+                                  touchAction: draggedMediaId === item.id ? 'none' : undefined,
                                 }}
-                                className={`relative w-28 shrink-0 rounded-lg border bg-zinc-950 p-1 ${
-                                  index === 0 ? 'border-sky-300/70' : 'border-white/10'
+                                className={`relative w-28 shrink-0 cursor-grab touch-pan-x rounded-lg border p-1 transition-[border-color,box-shadow,opacity,scale] duration-150 ease-out select-none active:cursor-grabbing ${
+                                  draggedMediaId === item.id
+                                    ? 'z-10 scale-[1.04] border-sky-300 bg-zinc-900 opacity-90 shadow-[0_8px_24px_rgba(0,0,0,0.45)]'
+                                    : index === 0
+                                      ? 'border-sky-300/70 bg-zinc-950'
+                                      : 'border-white/10 bg-zinc-950'
                                 }`}
                               >
                                 <div className="relative aspect-[4/5] overflow-hidden rounded-md bg-black">
@@ -2896,7 +3277,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                                       disabled={index === 0}
                                       onClick={() => moveMediaItem(item.id, mediaPreviewItems[index - 1]?.id ?? item.id)}
                                       aria-label={`Move media ${index + 1} left`}
-                                      className="flex h-6 w-6 items-center justify-center disabled:opacity-25"
+                                      className="flex h-6 w-6 items-center justify-center transition-transform duration-100 ease-out active:scale-90 disabled:opacity-25 disabled:active:scale-100"
                                     >
                                       <ArrowLeft className="h-3.5 w-3.5" />
                                     </button>
@@ -2905,7 +3286,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                                       disabled={index === mediaPreviewItems.length - 1}
                                       onClick={() => moveMediaItem(item.id, mediaPreviewItems[index + 1]?.id ?? item.id)}
                                       aria-label={`Move media ${index + 1} right`}
-                                      className="flex h-6 w-6 items-center justify-center disabled:opacity-25"
+                                      className="flex h-6 w-6 items-center justify-center transition-transform duration-100 ease-out active:scale-90 disabled:opacity-25 disabled:active:scale-100"
                                     >
                                       <ArrowRight className="h-3.5 w-3.5" />
                                     </button>

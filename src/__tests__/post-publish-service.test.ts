@@ -56,7 +56,13 @@ describe('publishPreparedPost', () => {
       getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
       createPostWithResourceBundleAtomically: vi.fn(async ({ post }) => ({
         postId: String(post.id),
-        visibility: post.visibility as 'public',
+        visibility: post.visibility as 'private',
+        bundleId: null,
+        bundleStatus: null,
+      })),
+      updatePostWithResourceBundleAtomically: vi.fn(async ({ patch }) => ({
+        postId: 'post-1',
+        visibility: patch.visibility as 'public',
         bundleId: null,
         bundleStatus: null,
       })),
@@ -82,15 +88,27 @@ describe('publishPreparedPost', () => {
       }),
       bundle: null,
     }));
+    // Created private regardless of the requested visibility: nothing public
+    // may exist until media and source tools are in place.
     expect(dependencies.createPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
       post: expect.objectContaining({
         id: 'post-1',
         user_id: 'user-1',
+        visibility: 'private',
         category: 'text',
         post_format: 'text',
         source_kind: 'manual',
         showcase_asset_path: null,
       }),
+      bundle: null,
+    }));
+    // Promotion happens last, through the update RPC with the bundle payload so
+    // bundle status is recomputed against the now-public post.
+    expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      postId: 'post-1',
+      ownerUserId: 'user-1',
+      patch: { visibility: 'public' },
+      hasBundlePayload: true,
       bundle: null,
     }));
     expect(dependencies.insertPostMediaItems).toHaveBeenCalledWith(expect.objectContaining({
@@ -118,10 +136,14 @@ describe('publishPreparedPost', () => {
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
-  it('invalidates after a public post commit when follow-up media persistence fails', async () => {
+  it('never had a public post to invalidate when media persistence fails', async () => {
+    // The old flow created the post at its requested visibility, so a media
+    // failure whose compensating delete also failed left a public post with no
+    // media rows. Creating private-first makes that state unreachable: the
+    // shared feed was never touched, so there is nothing to invalidate.
     const formData = new FormData();
     formData.set('postFormat', 'text');
-    formData.set('body', 'A public post that commits before its metadata write fails.');
+    formData.set('body', 'A public post whose media write fails before promotion.');
     formData.set('visibility', 'public');
     const prepared = await preparePostCreationSubmission({
       formData,
@@ -134,12 +156,15 @@ describe('publishPreparedPost', () => {
     const deleteEq = vi.fn(async () => ({ error: null }));
     const dependencies = {
       getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
-      createPostWithResourceBundleAtomically: vi.fn(async () => ({
+      createPostWithResourceBundleAtomically: vi.fn(async ({ post }) => ({
         postId: 'post-1',
-        visibility: 'public' as const,
+        visibility: post.visibility as 'private',
         bundleId: null,
         bundleStatus: null,
       })),
+      updatePostWithResourceBundleAtomically: vi.fn(async () => {
+        throw new Error('Promotion must not run when media persistence failed.');
+      }),
       insertPostMediaItems: vi.fn(async () => {
         throw new Error('post media insert failed');
       }),
@@ -164,9 +189,61 @@ describe('publishPreparedPost', () => {
       status: 500,
       body: { error: 'Failed to save post media.' },
     });
-    expect(dependencies.createPostWithResourceBundleAtomically).toHaveBeenCalledTimes(1);
+    expect(dependencies.createPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      post: expect.objectContaining({ visibility: 'private' }),
+    }));
+    expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
     expect(deleteEq).toHaveBeenCalledWith('id', 'post-1');
-    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  it('keeps the finished post as a private draft when promotion fails', async () => {
+    const formData = new FormData();
+    formData.set('postFormat', 'text');
+    formData.set('body', 'A post whose final visibility flip fails.');
+    formData.set('visibility', 'public');
+    const prepared = await preparePostCreationSubmission({
+      formData,
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) throw new Error('Expected prepared submission');
+
+    const dependencies = {
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+      createPostWithResourceBundleAtomically: vi.fn(async ({ post }) => ({
+        postId: 'post-1',
+        visibility: post.visibility as 'private',
+        bundleId: null,
+        bundleStatus: null,
+      })),
+      updatePostWithResourceBundleAtomically: vi.fn(async () => {
+        throw new Error('visibility flip failed');
+      }),
+      insertPostMediaItems: vi.fn(async () => undefined),
+      insertPostSourceTools: vi.fn(async () => undefined),
+      createPostMediaPreview: vi.fn(async () => null),
+    } satisfies PostPublishDependencies;
+
+    const result = await publishPreparedPost({
+      adminSupabase: adminSupabaseDouble(),
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      submission: prepared.submission,
+      dependencies,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      body: {
+        error: 'Your post was saved as a private draft, but publishing failed. Open it from your posts to publish again.',
+      },
+    });
+    // The draft survives — promotion failure must not tear down finished work —
+    // and the never-public post never invalidates the shared feed.
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
   it('returns a profile repair action before creating an incomplete public post', async () => {
@@ -323,5 +400,56 @@ describe('publishPreparedPost', () => {
       status: 500,
       body: { error: 'Could not verify your creator profile right now. Try again.' },
     });
+  });
+
+  it('rejects an oversized staged object from its metadata without downloading the bytes', async () => {
+    const formData = new FormData();
+    formData.set('postFormat', 'media');
+    formData.set('category', 'image');
+    formData.set('visibility', 'public');
+    formData.set('sourceTool', 'magicbooklet');
+    formData.set('mediaStoragePath', 'uploads/user-1/oversized.png');
+    formData.set('mediaOriginalName', 'oversized.png');
+    formData.set('mediaContentType', 'image/png');
+    const prepared = await preparePostCreationSubmission({
+      formData,
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) throw new Error('Expected prepared submission');
+
+    const list = vi.fn(async () => ({
+      data: [{ name: 'oversized.png', metadata: { size: 26 * 1024 * 1024 } }],
+      error: null,
+    }));
+    const download = vi.fn(async () => ({ data: new Blob(['should never be read']), error: null }));
+
+    const result = await publishPreparedPost({
+      adminSupabase: adminSupabaseDouble({
+        storage: { from: vi.fn(() => ({ list, download, remove: vi.fn(async () => ({ data: [], error: null })) })) },
+        from: vi.fn(() => ({ delete: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })) })),
+      }),
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      submission: prepared.submission,
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        createPostWithResourceBundleAtomically: vi.fn(),
+        insertPostMediaItems: vi.fn(),
+        insertPostSourceTools: vi.fn(),
+        createPostMediaPreview: vi.fn(),
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 400,
+      body: { error: expect.stringContaining('25 MB') },
+    });
+    // filePath carries the in-bucket path (bucket prefix already stripped).
+    expect(list).toHaveBeenCalledWith('user-1', { search: 'oversized.png' });
+    // The point of the precheck: the oversized bytes never enter the function.
+    expect(download).not.toHaveBeenCalled();
   });
 });
