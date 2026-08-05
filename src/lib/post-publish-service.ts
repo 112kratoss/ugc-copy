@@ -10,6 +10,7 @@ import {
 import {
   createPostWithResourceBundleAtomically,
   getMarketplaceQualityErrorForPostBundle,
+  updatePostWithResourceBundleAtomically,
   type PostResourceBundleMutationResult,
 } from '@/lib/post-resource-bundles-server';
 import {
@@ -63,6 +64,7 @@ const MISSING_POST_MEDIA_SCHEMA_ERROR =
 export type PostPublishDependencies = {
   getMarketplaceQualityErrorForPostBundle?: typeof getMarketplaceQualityErrorForPostBundle;
   createPostWithResourceBundleAtomically?: typeof createPostWithResourceBundleAtomically;
+  updatePostWithResourceBundleAtomically?: typeof updatePostWithResourceBundleAtomically;
   insertPostMediaItems?: typeof insertPostMediaItems;
   insertPostSourceTools?: typeof insertPostSourceTools;
   createPostMediaPreview?: typeof createPostMediaPreview;
@@ -101,6 +103,8 @@ function resolveDependencies(dependencies: PostPublishDependencies | undefined):
       dependencies?.getMarketplaceQualityErrorForPostBundle ?? getMarketplaceQualityErrorForPostBundle,
     createPostWithResourceBundleAtomically:
       dependencies?.createPostWithResourceBundleAtomically ?? createPostWithResourceBundleAtomically,
+    updatePostWithResourceBundleAtomically:
+      dependencies?.updatePostWithResourceBundleAtomically ?? updatePostWithResourceBundleAtomically,
     insertPostMediaItems: dependencies?.insertPostMediaItems ?? insertPostMediaItems,
     insertPostSourceTools: dependencies?.insertPostSourceTools ?? insertPostSourceTools,
     createPostMediaPreview: dependencies?.createPostMediaPreview ?? createPostMediaPreview,
@@ -251,6 +255,26 @@ export async function publishPreparedPost({
       const mediaBody = mediaItem.source === 'file'
         ? mediaItem.file
         : await (async () => {
+            // Reject an oversized object from its stored metadata before the
+            // bytes are pulled into this function — otherwise a 250 MB video is
+            // downloaded just to be refused. Metadata can be absent, so this is
+            // a fast path only; the byte-size check below stays authoritative.
+            const precheckMax = getMaxUploadBytesForContentType(mediaItem.contentType);
+            if (precheckMax !== null) {
+              const separatorIndex = mediaItem.filePath.lastIndexOf('/');
+              const parentPrefix = separatorIndex >= 0 ? mediaItem.filePath.slice(0, separatorIndex) : '';
+              const objectName = mediaItem.filePath.slice(separatorIndex + 1);
+              const listed = await adminSupabase.storage
+                .from(UPLOADS_BUCKET)
+                .list(parentPrefix, { search: objectName });
+              const entry = listed.data?.find((candidate) => candidate.name === objectName);
+              const storedSize = (entry?.metadata as { size?: unknown } | null | undefined)?.size;
+              if (typeof storedSize === 'number' && storedSize > precheckMax) {
+                mediaRejection = `${mediaItem.originalName || 'That file'} is larger than the ${formatUploadByteLimit(precheckMax)} limit for this media type.`;
+                throw new Error('post_media_exceeds_size_limit');
+              }
+            }
+
             const downloadedMedia = await adminSupabase.storage
               .from(UPLOADS_BUCKET)
               .download(mediaItem.filePath);
@@ -360,6 +384,13 @@ export async function publishPreparedPost({
   }
 
   const coverMedia = persistedMediaItems[0] ?? null;
+  // The post is created private no matter what was requested, and promoted to
+  // the requested visibility only after media and source tools are all in.
+  // Post-then-media is not one transaction, so creating at the final visibility
+  // opened a window — permanent, if the compensating delete also failed — where
+  // a public post existed with no media rows. Nothing here is visible until
+  // everything it needs exists.
+  const requestedVisibility = submission.visibility;
   let post: PostResourceBundleMutationResult;
   try {
     post = await resolvedDependencies.createPostWithResourceBundleAtomically({
@@ -367,7 +398,7 @@ export async function publishPreparedPost({
       post: {
         id: postId,
         user_id: ownerUserId,
-        visibility: submission.visibility,
+        visibility: 'private',
         category: submission.category,
         title: submission.title,
         description: submission.description,
@@ -398,7 +429,7 @@ export async function publishPreparedPost({
     return { ok: false, status: 500, body: { error: 'Failed to create post.' } };
   }
 
-  const didMutateSharedFeed = post.visibility === 'public';
+  let didMutateSharedFeed = false;
 
   try {
     try {
@@ -410,7 +441,12 @@ export async function publishPreparedPost({
     } catch (mediaError) {
       logBackendError('failed_to_save_post_media', { error: mediaError });
       await cleanupUploadedMedia();
-      await adminSupabase.from('posts').delete().eq('id', post.postId);
+      const cleanupPost = await adminSupabase.from('posts').delete().eq('id', post.postId);
+      if (cleanupPost.error) {
+        // A warning is enough: the leftover shell is private, so nothing broken
+        // is reachable — this row is cruft, not a user-facing post.
+        logBackendWarning('failed_to_remove_post_after_media_failure', { error: cleanupPost.error });
+      }
       if (isMissingPostMediaSchemaError(mediaError)) {
         return { ok: false, status: 500, body: { error: MISSING_POST_MEDIA_SCHEMA_ERROR } };
       }
@@ -482,19 +518,52 @@ export async function publishPreparedPost({
       };
     }
 
+    let finalVisibility = post.visibility;
+    let finalBundleStatus = post.bundleStatus;
+    if (requestedVisibility !== 'private') {
+      try {
+        // The update RPC, not a bare visibility write: going public has to rerun
+        // the bundle mutation, because both RPCs force bundles to draft while a
+        // post is non-public — a bare write would leave a paid bundle stuck in
+        // draft on a live post. The sparse patch keeps every other field.
+        const promoted = await resolvedDependencies.updatePostWithResourceBundleAtomically({
+          supabase: adminSupabase,
+          postId: post.postId,
+          ownerUserId,
+          patch: { visibility: requestedVisibility },
+          hasBundlePayload: true,
+          bundle: submission.resourceBundle,
+        });
+        finalVisibility = promoted.visibility;
+        finalBundleStatus = promoted.bundleStatus;
+        didMutateSharedFeed = finalVisibility === 'public';
+      } catch (promoteError) {
+        // Everything the user made exists, just privately. Do not tear it down —
+        // report the failure and let them publish from the editor.
+        logBackendError('failed_to_promote_created_post', { error: promoteError });
+        return {
+          ok: false,
+          status: 500,
+          body: {
+            error: 'Your post was saved as a private draft, but publishing failed. Open it from your posts to publish again.',
+          },
+        };
+      }
+    }
+
     return {
       ok: true,
       body: {
         success: true,
         postId: post.postId,
-        visibility: post.visibility,
-        showcasePath: post.visibility === 'private' ? null : `/showcase/${post.postId}`,
+        visibility: finalVisibility,
+        showcasePath: finalVisibility === 'private' ? null : `/showcase/${post.postId}`,
         ownerPath: `/post/${post.postId}/edit`,
         resourceBundlePath:
-          post.bundleStatus === 'draft' || post.visibility === 'private'
+          finalBundleStatus === 'draft' || finalVisibility === 'private'
             ? `/post/${post.postId}/edit#recipe`
             : `/showcase/${post.postId}#recipe`,
-        resourceBundleStatus: post.bundleStatus,
+        resourceBundleStatus: finalBundleStatus,
       },
     };
   } finally {

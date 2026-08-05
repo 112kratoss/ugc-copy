@@ -7,7 +7,11 @@ const rateLimitRpcMock = vi.fn();
 const uploadMock = vi.fn();
 const removeMock = vi.fn();
 const downloadMock = vi.fn();
+// Default: object listing carries no size metadata, so the publish path's
+// metadata precheck falls through and the download-time byte check governs.
+const listMock = vi.fn(async () => ({ data: [], error: null }));
 const insertPayloads: Array<Record<string, unknown>> = [];
+const promoteRpcCalls: Array<{ args: Record<string, unknown> }> = [];
 const postMediaRows: Array<Record<string, unknown>> = [];
 const sourceToolRows: Array<Record<string, unknown>> = [];
 const uploadIntentUpdates: Array<Record<string, unknown>> = [];
@@ -130,6 +134,32 @@ function createServiceClientTestDouble() {
           error: sourceToolInsertError,
         });
       }
+      if (name === 'update_post_with_resource_bundle') {
+        // Mirrors the real RPC's sparse-patch + bundle recompute, the way the
+        // upsert branch below mirrors its demote rule. The created row is
+        // mutated in place so assertions on insertPayloads see the post's end
+        // state, exactly like the database row would.
+        promoteRpcCalls.push({ args });
+        const patch = (args.p_post_patch ?? {}) as Record<string, unknown>;
+        const created = insertPayloads.find((row) => row.id === args.p_post_id);
+        const visibility = typeof patch.visibility === 'string'
+          ? patch.visibility
+          : ((created?.visibility as string | undefined) ?? 'private');
+        if (created && typeof patch.visibility === 'string') {
+          created.visibility = patch.visibility;
+        }
+        const bundle = args.p_bundle as { accessMode?: string } | null;
+        const hasBundle = Boolean(bundle?.accessMode && bundle.accessMode !== 'none');
+        return Promise.resolve({
+          data: [{
+            post_id: args.p_post_id,
+            visibility,
+            bundle_id: hasBundle ? 'bundle-1' : null,
+            bundle_status: hasBundle ? (visibility === 'public' ? 'published' : 'draft') : null,
+          }],
+          error: null,
+        });
+      }
       if (name !== 'upsert_post_with_resource_bundle') {
         throw new Error(`Unexpected rpc call: ${name}`);
       }
@@ -158,6 +188,7 @@ function createServiceClientTestDouble() {
         upload: uploadMock,
         remove: removeMock,
         download: downloadMock,
+        list: listMock,
       }),
     },
   };
@@ -275,6 +306,7 @@ describe('/api/posts route', () => {
       error: null,
     });
     insertPayloads.length = 0;
+    promoteRpcCalls.length = 0;
     postMediaRows.length = 0;
     sourceToolRows.length = 0;
     uploadIntentUpdates.length = 0;
