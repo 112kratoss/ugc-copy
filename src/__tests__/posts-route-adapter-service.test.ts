@@ -271,4 +271,106 @@ describe('posts route adapter service', () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: 'Unsupported posts scope.' });
   });
+
+  describe('deferred media repair', () => {
+    const createdPost = {
+      ok: true as const,
+      body: {
+        success: true as const,
+        postId: 'post-1',
+        visibility: 'public' as const,
+        showcasePath: '/showcase/post-1',
+        ownerPath: '/post/post-1/edit',
+        resourceBundlePath: '/showcase/post-1#recipe',
+        resourceBundleStatus: null,
+      },
+    };
+
+    function createPostRequest() {
+      return new Request('http://localhost/api/posts', { method: 'POST', body: new FormData() });
+    }
+
+    it('kicks the repair for the new post with the same service client', async () => {
+      const adminSupabase = { kind: 'admin' } as unknown as SupabaseClient;
+      const repairMediaForPost = vi.fn(async () => ({ attempted: 1, completed: 1, failed: 0 }));
+      const scheduled: Array<() => Promise<void>> = [];
+
+      const response = await postPostsRouteResponse({
+        request: createPostRequest(),
+        dependencies: {
+          createOwnerPostForRoute: vi.fn(async () => createdPost),
+          createServiceClient: vi.fn(() => adminSupabase),
+          createUserClient: () => createUserClient('user-1'),
+          repairMediaForPost,
+          schedulePostMediaRepair: (callback) => { scheduled.push(callback); },
+        },
+      });
+
+      expect(response.status).toBe(200);
+      // Scheduled, not awaited: the publish response must not wait on a transcode.
+      expect(repairMediaForPost).not.toHaveBeenCalled();
+      expect(scheduled).toHaveLength(1);
+
+      await scheduled[0]();
+      expect(repairMediaForPost).toHaveBeenCalledWith(adminSupabase, 'post-1');
+    });
+
+    it('does not schedule a repair when creation failed', async () => {
+      const scheduled: Array<() => Promise<void>> = [];
+
+      const response = await postPostsRouteResponse({
+        request: createPostRequest(),
+        dependencies: {
+          createOwnerPostForRoute: vi.fn(async () => ({
+            ok: false as const,
+            status: 400 as const,
+            body: { error: 'Add a note or upload media to publish a post.' },
+          })),
+          createServiceClient: vi.fn(() => ({} as unknown as SupabaseClient)),
+          createUserClient: () => createUserClient('user-1'),
+          schedulePostMediaRepair: (callback) => { scheduled.push(callback); },
+        },
+      });
+
+      expect(response.status).toBe(400);
+      expect(scheduled).toEqual([]);
+    });
+
+    it('keeps a failing repair from surfacing after the post is published', async () => {
+      const scheduled: Array<() => Promise<void>> = [];
+
+      const response = await postPostsRouteResponse({
+        request: createPostRequest(),
+        dependencies: {
+          createOwnerPostForRoute: vi.fn(async () => createdPost),
+          createServiceClient: vi.fn(() => ({} as unknown as SupabaseClient)),
+          createUserClient: () => createUserClient('user-1'),
+          repairMediaForPost: vi.fn(async () => { throw new Error('ffmpeg exited with code 1'); }),
+          schedulePostMediaRepair: (callback) => { scheduled.push(callback); },
+        },
+      });
+
+      expect(response.status).toBe(200);
+      // The post is already published and the hourly sweep retries this exact
+      // work, so a rejection here must not escape into the runtime.
+      await expect(scheduled[0]()).resolves.toBeUndefined();
+    });
+
+    it('still publishes when the repair cannot even be scheduled', async () => {
+      // `after()` throws outside a request scope. A publish that already
+      // succeeded must not be reported as a failure because of it.
+      const response = await postPostsRouteResponse({
+        request: createPostRequest(),
+        dependencies: {
+          createOwnerPostForRoute: vi.fn(async () => createdPost),
+          createServiceClient: vi.fn(() => ({} as unknown as SupabaseClient)),
+          createUserClient: () => createUserClient('user-1'),
+          schedulePostMediaRepair: () => { throw new Error('after() outside a request scope'); },
+        },
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ postId: 'post-1' });
+    });
+  });
 });

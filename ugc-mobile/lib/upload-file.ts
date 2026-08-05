@@ -128,7 +128,11 @@ export async function uploadUriToSignedUrl(
     uri,
     {
       headers: {
-        'cache-control': 'max-age=3600',
+        // Matches SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL on the web side. Publish
+        // copies this object server-side into the public bucket, and a copy
+        // carries the source's cache-control with no way to override it -- so
+        // staging at an hour would put a taken-down object an hour out of reach.
+        'cache-control': 'max-age=300',
         'content-type': mimeType,
         'x-upsert': 'false',
       },

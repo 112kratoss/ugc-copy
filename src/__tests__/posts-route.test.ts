@@ -7,9 +7,13 @@ const rateLimitRpcMock = vi.fn();
 const uploadMock = vi.fn();
 const removeMock = vi.fn();
 const downloadMock = vi.fn();
-// Default: object listing carries no size metadata, so the publish path's
-// metadata precheck falls through and the download-time byte check governs.
-const listMock = vi.fn(async () => ({ data: [], error: null }));
+const copyMock = vi.fn(async () => ({ data: { path: 'copied' }, error: null }));
+// Staged objects move bucket-to-bucket, so publish reads their size from
+// storage metadata rather than from bytes it downloaded. Well under every cap.
+const infoMock = vi.fn(async () => ({
+  data: { size: 1024, contentType: 'image/png' },
+  error: null,
+}));
 const insertPayloads: Array<Record<string, unknown>> = [];
 const promoteRpcCalls: Array<{ args: Record<string, unknown> }> = [];
 const postMediaRows: Array<Record<string, unknown>> = [];
@@ -188,7 +192,8 @@ function createServiceClientTestDouble() {
         upload: uploadMock,
         remove: removeMock,
         download: downloadMock,
-        list: listMock,
+        copy: copyMock,
+        info: infoMock,
       }),
     },
   };
@@ -305,6 +310,10 @@ describe('/api/posts route', () => {
       data: new Blob(['video-bytes'], { type: 'video/mp4' }),
       error: null,
     });
+    copyMock.mockReset();
+    copyMock.mockResolvedValue({ data: { path: 'copied' }, error: null });
+    infoMock.mockReset();
+    infoMock.mockResolvedValue({ data: { size: 1024, contentType: 'image/png' }, error: null });
     insertPayloads.length = 0;
     promoteRpcCalls.length = 0;
     postMediaRows.length = 0;
@@ -314,6 +323,15 @@ describe('/api/posts route', () => {
     bundleUpsertError = null;
     postMediaInsertError = null;
     sourceToolInsertError = null;
+  });
+
+  it('budgets for the post-response transcode the publish path defers', async () => {
+    // Publishing returns as soon as the post exists and finishes the rendition
+    // in an after() callback; without this the callback is cut short.
+    const route = await import('@/app/api/posts/route');
+
+    expect(route.maxDuration).toBe(300);
+    expect(route.runtime).toBe('nodejs');
   });
 
   it('does not create an admin client before authentication succeeds', async () => {
@@ -577,8 +595,15 @@ describe('/api/posts route', () => {
     const response = await POST(createRouteRequest(formData));
 
     expect(response.status).toBe(200);
-    expect(downloadMock).toHaveBeenCalledWith('user-1/tmp-proof.mp4');
-    expect(uploadMock).toHaveBeenCalledTimes(1);
+    // Staged video moves bucket-to-bucket; the bytes never enter the function.
+    expect(infoMock).toHaveBeenCalledWith('user-1/tmp-proof.mp4');
+    expect(copyMock).toHaveBeenCalledWith(
+      'user-1/tmp-proof.mp4',
+      expect.stringMatching(/^posts\/.+\/proof\.mp4$/),
+      { destinationBucket: 'showcase_media' },
+    );
+    expect(downloadMock).not.toHaveBeenCalled();
+    expect(uploadMock).not.toHaveBeenCalled();
     expect(removeMock).toHaveBeenCalledWith(['user-1/tmp-proof.mp4']);
     expect(insertPayloads[0]).toMatchObject({
       category: 'video',
@@ -648,9 +673,20 @@ describe('/api/posts route', () => {
     const response = await POST(createRouteRequest(formData));
 
     expect(response.status).toBe(200);
+    expect(copyMock).toHaveBeenCalledWith(
+      'user-1/cover.png',
+      expect.stringMatching(/^posts\/.+\/cover\.png$/),
+      { destinationBucket: 'showcase_media' },
+    );
+    expect(copyMock).toHaveBeenCalledWith(
+      'user-1/clip.mp4',
+      expect.stringMatching(/^posts\/.+\/clip\.mp4$/),
+      { destinationBucket: 'showcase_media' },
+    );
+    // Only the image is read back, for its inline thumbhash placeholder.
     expect(downloadMock).toHaveBeenCalledWith('user-1/cover.png');
-    expect(downloadMock).toHaveBeenCalledWith('user-1/clip.mp4');
-    expect(uploadMock).toHaveBeenCalledTimes(2);
+    expect(downloadMock).not.toHaveBeenCalledWith('user-1/clip.mp4');
+    expect(uploadMock).not.toHaveBeenCalled();
     expect(removeMock).toHaveBeenCalledWith(['user-1/cover.png', 'user-1/clip.mp4']);
     expect(insertPayloads[0]).toMatchObject({
       category: 'image',

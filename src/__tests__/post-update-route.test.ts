@@ -391,6 +391,15 @@ describe('/api/posts/[postId] route', () => {
     expect(data.resourceBundlePath).toBe('/post/post-1/edit#recipe');
   });
 
+  it('budgets for the post-response transcode the edit path defers', async () => {
+    // Editing returns as soon as the post is saved and finishes any swapped-in
+    // video rendition in an after() callback; without this it is cut short.
+    const route = await import('@/app/api/posts/[postId]/route');
+
+    expect(route.maxDuration).toBe(300);
+    expect(route.runtime).toBe('nodejs');
+  });
+
   it('reuses a single admin client while updating an owner post', async () => {
     const { PUT } = await import('@/app/api/posts/[postId]/route');
     const response = await PUT(new Request('http://localhost/api/posts/post-1', {

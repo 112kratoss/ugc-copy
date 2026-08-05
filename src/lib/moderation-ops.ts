@@ -116,6 +116,7 @@ type PostModerationMediaRow = {
 type PostMediaModerationRow = {
   storage_path: string | null;
   preview_storage_path: string | null;
+  rendition_storage_path: string | null;
   external_url: string | null;
 };
 
@@ -217,7 +218,7 @@ async function revokePostPublicMedia(
       .maybeSingle(),
     supabase
       .from('post_media')
-      .select('storage_path, preview_storage_path, external_url')
+      .select('storage_path, preview_storage_path, rendition_storage_path, external_url')
       .eq('post_id', postId),
   ]);
 
@@ -234,10 +235,17 @@ async function revokePostPublicMedia(
   }
 
   const mediaRows = (mediaResult.data ?? []) as PostMediaModerationRow[];
+  // The feed rendition is a separate public object, not a variant of
+  // storage_path -- omitting it left a taken-down video still fetchable at the
+  // exact URL the feed had been serving.
   const rawStorageValues = [
     post.showcase_asset_path,
     post.output_url,
-    ...mediaRows.flatMap((row) => [row.storage_path, row.preview_storage_path]),
+    ...mediaRows.flatMap((row) => [
+      row.storage_path,
+      row.preview_storage_path,
+      row.rendition_storage_path,
+    ]),
   ];
   const storagePaths = [...new Set(rawStorageValues
     .map(normalizeShowcaseMediaPath)

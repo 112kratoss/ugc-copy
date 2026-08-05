@@ -252,42 +252,118 @@ export async function publishPreparedPost({
     for (const [index, mediaItem] of submission.submittedMediaItems.entries()) {
       const extension = inferExtension(mediaItem.originalName, mediaItem.contentType);
       const storagePath = `posts/${postId}/${index}/${sanitizeFileStem(mediaItem.originalName)}.${extension}`;
-      const mediaBody = mediaItem.source === 'file'
-        ? mediaItem.file
-        : await (async () => {
-            // Reject an oversized object from its stored metadata before the
-            // bytes are pulled into this function — otherwise a 250 MB video is
-            // downloaded just to be refused. Metadata can be absent, so this is
-            // a fast path only; the byte-size check below stays authoritative.
-            const precheckMax = getMaxUploadBytesForContentType(mediaItem.contentType);
-            if (precheckMax !== null) {
-              const separatorIndex = mediaItem.filePath.lastIndexOf('/');
-              const parentPrefix = separatorIndex >= 0 ? mediaItem.filePath.slice(0, separatorIndex) : '';
-              const objectName = mediaItem.filePath.slice(separatorIndex + 1);
-              const listed = await adminSupabase.storage
-                .from(UPLOADS_BUCKET)
-                .list(parentPrefix, { search: objectName });
-              const entry = listed.data?.find((candidate) => candidate.name === objectName);
-              const storedSize = (entry?.metadata as { size?: unknown } | null | undefined)?.size;
-              if (typeof storedSize === 'number' && storedSize > precheckMax) {
-                mediaRejection = `${mediaItem.originalName || 'That file'} is larger than the ${formatUploadByteLimit(precheckMax)} limit for this media type.`;
-                throw new Error('post_media_exceeds_size_limit');
-              }
-            }
+      const mediaKind = getSubmittedMediaKind(mediaItem);
 
+      if (mediaItem.source === 'uploaded') {
+        // Staged bytes are already in Storage, so the object moves between
+        // buckets server-side. Nothing is pulled into this function: a 250 MB
+        // video used to be downloaded, re-uploaded, and transcoded inline,
+        // which is the whole latency and memory profile of a publish.
+        //
+        // The tradeoff `copy()` forces: it carries the source object's
+        // cache-control and offers no override, which is why both clients stage
+        // at the public 300s policy.
+        const info = await adminSupabase.storage.from(UPLOADS_BUCKET).info(mediaItem.filePath);
+        const storedSize = (info.data as { size?: unknown } | null | undefined)?.size;
+        if (info.error || typeof storedSize !== 'number') {
+          // Fail closed. The sign step could only trust a client-declared size,
+          // so this metadata read is the only authoritative check there is --
+          // proceeding without it makes the 25 MB image cap decoration and the
+          // real ceiling the bucket's 250 MB. Nothing is registered for cleanup
+          // here: a metadata failure is retryable, and deleting the staged
+          // object would turn that retry into a permanent failure. The reclaim
+          // sweep owns anything left behind.
+          throw info.error ?? new Error('Uploaded media metadata was unavailable.');
+        }
+
+        // The object is confirmed to exist, so every rejection from here on
+        // must roll it back -- an oversized upload can never be published, and
+        // leaving it in the staging bucket reintroduces the exact leak the
+        // intents table was built to end.
+        temporaryUploadPathsToCleanup.push(mediaItem.temporaryStoragePath);
+        // Registered before the copy, not after: a copy that materializes the
+        // destination and then fails to answer would otherwise leak an object
+        // no cleanup knows about. Removing a path that was never written is a
+        // no-op, so the pessimistic order costs nothing.
+        storagePathsToCleanup.push(storagePath);
+
+        const infoContentType = (info.data as { contentType?: unknown } | null | undefined)?.contentType;
+        const resolvedContentType = mediaItem.contentType
+          || (typeof infoContentType === 'string' ? infoContentType : '')
+          || null;
+        const maxBytes = getMaxUploadBytesForContentType(resolvedContentType);
+        if (maxBytes !== null && storedSize > maxBytes) {
+          mediaRejection = `${mediaItem.originalName || 'That file'} is larger than the ${formatUploadByteLimit(maxBytes)} limit for this media type.`;
+          throw new Error('post_media_exceeds_size_limit');
+        }
+
+        const showcaseCopy = await adminSupabase.storage
+          .from(UPLOADS_BUCKET)
+          .copy(mediaItem.filePath, storagePath, { destinationBucket: SHOWCASE_MEDIA_BUCKET });
+        if (showcaseCopy.error) {
+          throw showcaseCopy.error;
+        }
+
+        // Video work is deferred entirely: the transcode is the expensive part
+        // and the feed falls back to the source until it lands. Images keep an
+        // inline preview because the thumbhash placeholder is what the feed
+        // renders first, and an image is capped at 25 MB.
+        let preview: Awaited<ReturnType<typeof createPostMediaPreview>> = null;
+        if (mediaKind === 'image') {
+          try {
             const downloadedMedia = await adminSupabase.storage
               .from(UPLOADS_BUCKET)
               .download(mediaItem.filePath);
             if (downloadedMedia.error || !downloadedMedia.data) {
-              throw new Error('Failed to load uploaded media.');
+              throw downloadedMedia.error ?? new Error('Failed to load uploaded media.');
             }
-            temporaryUploadPathsToCleanup.push(mediaItem.temporaryStoragePath);
-            return downloadedMedia.data;
-          })();
 
-      // The signed-upload step could only trust a client-declared size. These
-      // are the bytes we actually received, checked before anything reaches the
-      // public bucket, where it would be world-readable and billed as egress.
+            preview = await resolvedDependencies.createPostMediaPreview({
+              body: downloadedMedia.data,
+              contentType: resolvedContentType || downloadedMedia.data.type,
+              storagePath,
+              supabase: adminSupabase,
+            });
+            if (preview?.previewStoragePath) {
+              storagePathsToCleanup.push(preview.previewStoragePath);
+            }
+          } catch (previewError) {
+            logBackendWarning('failed_to_create_post_media_preview', { error: previewError });
+          }
+        }
+
+        persistedMediaItems.push({
+          mediaKey: mediaItem.mediaKey,
+          storagePath,
+          // Preview and rendition fields are omitted rather than marked failed
+          // when there is nothing to record: insertPostMediaItems defaults them
+          // to pending with zero attempts, which is the state the repair sweep
+          // acts on. Writing `failed`/1 here would spend one of three attempts
+          // on work that was never tried.
+          ...(preview
+            ? {
+              previewStoragePath: preview.previewStoragePath,
+              previewThumbhash: preview.previewThumbhash,
+              previewStatus: preview.previewStatus,
+              previewAttemptCount: 1,
+              previewError: null,
+              previewGeneratedAt: new Date().toISOString(),
+            }
+            : {}),
+          mediaKind,
+          contentType: resolvedContentType,
+          originalName: mediaItem.originalName,
+          width: preview?.width ?? null,
+          height: preview?.height ?? null,
+          sortOrder: index,
+        });
+        continue;
+      }
+
+      // The legacy multipart path still arrives as bytes in the request, so
+      // there is nothing to copy and the work is already in memory.
+      const mediaBody = mediaItem.file;
+
       const maxBytes = getMaxUploadBytesForContentType(mediaItem.contentType || mediaBody.type);
       if (maxBytes !== null && typeof mediaBody.size === 'number' && mediaBody.size > maxBytes) {
         mediaRejection = `${mediaItem.originalName || 'That file'} is larger than the ${formatUploadByteLimit(maxBytes)} limit for this media type.`;
@@ -342,7 +418,6 @@ export async function publishPreparedPost({
         logBackendWarning('failed_to_create_post_media_rendition', { error: renditionError });
       }
 
-      const mediaKind = getSubmittedMediaKind(mediaItem);
       persistedMediaItems.push({
         mediaKey: mediaItem.mediaKey,
         storagePath,

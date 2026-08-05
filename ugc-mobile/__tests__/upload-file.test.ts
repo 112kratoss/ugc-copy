@@ -69,7 +69,9 @@ describe('mobile upload file helpers', () => {
       'file:///file.png',
       {
         headers: {
-          'cache-control': 'max-age=3600',
+          // Publish copies staged objects into the public bucket carrying this
+          // header, so it has to match the public 300s policy.
+          'cache-control': 'max-age=300',
           'content-type': 'image/png',
           'x-upsert': 'false',
         },

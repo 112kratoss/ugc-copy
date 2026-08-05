@@ -26,7 +26,7 @@ export const SIGNED_UPLOAD_EXPIRES_IN_SECONDS = 2 * 60 * 60;
  *
  * That re-verification is what makes this number safe, and it only exists in
  * builds that shipped it -- see MEDIA_UPLOAD_RECLAIM_ABANDONED in
- * media-upload-reclaim-service.ts, which gates the never-consumed half on
+ * media-upload-reclaim-policy.ts, which gates the never-consumed half on
  * adoption rather than relying on a larger constant here. No upload-age TTL can
  * protect the old builds:
  * they refresh a draft's expiry every time the composer is opened, so a draft

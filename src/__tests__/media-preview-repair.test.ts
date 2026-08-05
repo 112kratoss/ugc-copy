@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { canRepairPreview, hasRepairableMediaPreviews } from '@/lib/media-preview-repair';
 
@@ -42,6 +42,17 @@ vi.mock('@/lib/post-media-rendition', () => ({
  */
 function createSelectChain(result: { data: unknown[] | null; error: Error | null }) {
   const equalities: Array<[string, unknown]> = [];
+  const resolve = () => {
+    if (!result.data) return result;
+    // Filter only on columns a fixture actually models. Fixtures list just
+    // the columns their case cares about, and treating an absent one as a
+    // mismatch would drop rows the real query would have returned.
+    const data = result.data.filter((row) => equalities.every(
+      ([column, value]) => !(column in (row as Record<string, unknown>))
+        || (row as Record<string, unknown>)[column] === value,
+    ));
+    return { ...result, data };
+  };
   const chain = {
     eq: vi.fn((column: string, value: unknown) => {
       equalities.push([column, value]);
@@ -51,17 +62,13 @@ function createSelectChain(result: { data: unknown[] | null; error: Error | null
     lt: vi.fn(() => chain),
     not: vi.fn(() => chain),
     order: vi.fn(() => chain),
-    limit: vi.fn(async () => {
-      if (!result.data) return result;
-      // Filter only on columns a fixture actually models. Fixtures list just
-      // the columns their case cares about, and treating an absent one as a
-      // mismatch would drop rows the real query would have returned.
-      const data = result.data.filter((row) => equalities.every(
-        ([column, value]) => !(column in (row as Record<string, unknown>))
-          || (row as Record<string, unknown>)[column] === value,
-      ));
-      return { ...result, data };
-    }),
+    limit: vi.fn(async () => resolve()),
+    // Thenable so a query that ends at `.order()` resolves too: the per-post
+    // repair is bounded by one post's media and takes no limit.
+    then: (
+      onfulfilled?: ((value: ReturnType<typeof resolve>) => unknown) | null,
+      onrejected?: ((reason: unknown) => unknown) | null,
+    ) => Promise.resolve(resolve()).then(onfulfilled, onrejected),
   };
   return chain;
 }
@@ -409,5 +416,157 @@ describe('showcase feed rendition repair', () => {
     expect(canRepairRendition(null)).toBe(true);
     expect(canRepairRendition(2)).toBe(true);
     expect(canRepairRendition(3)).toBe(false);
+  });
+});
+
+describe('per-post media repair', () => {
+  // Earlier blocks leave implementations behind (mockClear keeps them), so this
+  // one states its own rather than inheriting a rejecting transcode.
+  beforeEach(() => {
+    previewMocks.createPostMediaPreview.mockResolvedValue({
+      previewStoragePath: 'posts/post-1/0/clip.preview.abc123.webp',
+      previewThumbhash: 'thumbhash',
+      previewStatus: 'ready',
+      width: 400,
+      height: 300,
+    });
+    renditionMocks.createPostMediaRendition.mockResolvedValue({
+      status: 'ready' as const,
+      renditionStoragePath: 'posts/post-1/0/clip.feed.abc123.mp4',
+      renditionBytes: 2_031_616,
+      width: 610,
+      height: 1280,
+      durationSeconds: 11.4,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    previewMocks.createPostMediaPreview.mockClear();
+    renditionMocks.createPostMediaRendition.mockClear();
+  });
+
+  function createPostRepairClient(rows: Array<Record<string, unknown>>) {
+    const updates: Array<Record<string, unknown>> = [];
+    const selectFilters: Array<Array<[string, unknown]>> = [];
+    const download = vi.fn(async () => ({
+      data: new Blob(['media'], { type: 'video/mp4' }),
+      error: null,
+    }));
+    const supabase = {
+      from: vi.fn((table: string) => ({
+        select: vi.fn(() => {
+          const chain = createSelectChain({
+            data: table === 'post_media' ? rows : [],
+            error: null,
+          });
+          const filters: Array<[string, unknown]> = [];
+          selectFilters.push(filters);
+          const originalEq = chain.eq;
+          chain.eq = vi.fn((column: string, value: unknown) => {
+            filters.push([column, value]);
+            return originalEq(column, value);
+          });
+          return chain;
+        }),
+        update: vi.fn((payload: Record<string, unknown>) => {
+          updates.push(payload);
+          return { eq: vi.fn(async () => ({ error: null })) };
+        }),
+      })),
+      storage: { from: vi.fn(() => ({ download })) },
+    };
+    return { supabase, updates, download, selectFilters };
+  }
+
+  const pendingVideoRow = {
+    id: 'media-video-1',
+    post_id: 'post-1',
+    storage_path: 'posts/post-1/0/clip.mp4',
+    media_kind: 'video',
+    content_type: 'video/mp4',
+    preview_status: 'pending',
+    preview_attempt_count: 0,
+    rendition_status: 'pending',
+    rendition_attempt_count: 0,
+  };
+
+  it('repairs only the named post and invalidates the feed once work lands', async () => {
+    const { repairMediaForPost } = await import('@/lib/media-preview-repair');
+    const { supabase, updates, selectFilters } = createPostRepairClient([
+      pendingVideoRow,
+      { ...pendingVideoRow, id: 'media-other', post_id: 'post-2' },
+    ]);
+    const invalidateFeedCache = vi.fn();
+
+    const summary = await repairMediaForPost(supabase as never, 'post-1', { invalidateFeedCache });
+
+    // Two rows exist, but only post-1's is in scope for both passes.
+    expect(summary).toEqual({ attempted: 2, completed: 2, failed: 0 });
+    expect(selectFilters.every((filters) => filters.some(
+      ([column, value]) => column === 'post_id' && value === 'post-1',
+    ))).toBe(true);
+    expect(updates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ preview_status: 'ready' }),
+      expect.objectContaining({ rendition_status: 'ready' }),
+    ]));
+    expect(invalidateFeedCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the feed cache alone when nothing was repaired', async () => {
+    const { repairMediaForPost } = await import('@/lib/media-preview-repair');
+    const { supabase } = createPostRepairClient([]);
+    const invalidateFeedCache = vi.fn();
+
+    const summary = await repairMediaForPost(supabase as never, 'post-1', { invalidateFeedCache });
+
+    expect(summary).toEqual({ attempted: 0, completed: 0, failed: 0 });
+    expect(invalidateFeedCache).not.toHaveBeenCalled();
+  });
+
+  it('still repairs previews when the rendition columns are absent', async () => {
+    const { repairMediaForPost } = await import('@/lib/media-preview-repair');
+    const updates: Array<Record<string, unknown>> = [];
+    let selectCount = 0;
+    const supabase = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => {
+          selectCount += 1;
+          // The preview read succeeds; the rendition read hits the missing column.
+          return selectCount === 1
+            ? createSelectChain({
+              data: [{ ...pendingVideoRow, media_kind: 'image', content_type: 'image/png' }],
+              error: null,
+            })
+            : createSelectChain({
+              data: null,
+              error: Object.assign(new Error('column post_media.rendition_status does not exist'), {
+                code: '42703',
+              }),
+            });
+        }),
+        update: vi.fn((payload: Record<string, unknown>) => {
+          updates.push(payload);
+          return { eq: vi.fn(async () => ({ error: null })) };
+        }),
+      })),
+      storage: {
+        from: vi.fn(() => ({
+          download: vi.fn(async () => ({
+            data: new Blob(['image'], { type: 'image/png' }),
+            error: null,
+          })),
+        })),
+      },
+    };
+    const invalidateFeedCache = vi.fn();
+
+    const summary = await repairMediaForPost(supabase as never, 'post-1', { invalidateFeedCache });
+
+    expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
+    expect(updates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ preview_status: 'ready' }),
+    ]));
+    expect(renditionMocks.createPostMediaRendition).not.toHaveBeenCalled();
   });
 });

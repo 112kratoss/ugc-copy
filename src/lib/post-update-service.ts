@@ -36,11 +36,10 @@ import {
   formatUploadByteLimit,
   getMaxUploadBytesForContentType,
 } from '@/lib/temporary-media-upload-sign';
-import { createPostMediaRendition, type PostMediaRenditionStatus } from '@/lib/post-media-rendition';
+import { type PostMediaRenditionStatus } from '@/lib/post-media-rendition';
 import { defaultPostMediaKey, normalizePostMediaKey } from '@/lib/post-media-key';
 import { isCreatorProfileCheckError } from '@/lib/marketplace-trust';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
-import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import {
   getPublicUgcSafetyViolation,
@@ -156,7 +155,6 @@ export type PostUpdateDependencies = {
   replacePostSourceTools?: typeof replacePostSourceTools;
   replacePostMediaItems?: typeof replacePostMediaItems;
   createPostMediaPreview?: typeof createPostMediaPreview;
-  createPostMediaRendition?: typeof createPostMediaRendition;
   listSourceToolsCatalog?: typeof listSourceToolsCatalog;
 };
 
@@ -205,7 +203,6 @@ function resolveDependencies(dependencies: PostUpdateDependencies | undefined): 
     replacePostSourceTools: dependencies?.replacePostSourceTools ?? replacePostSourceTools,
     replacePostMediaItems: dependencies?.replacePostMediaItems ?? replacePostMediaItems,
     createPostMediaPreview: dependencies?.createPostMediaPreview ?? createPostMediaPreview,
-    createPostMediaRendition: dependencies?.createPostMediaRendition ?? createPostMediaRendition,
     listSourceToolsCatalog: dependencies?.listSourceToolsCatalog ?? listSourceToolsCatalog,
   };
 }
@@ -534,7 +531,6 @@ async function replaceEditedPostMedia(params: {
   postId: string;
   submittedMediaItems: SubmittedEditMediaItem[];
   createPostMediaPreview: typeof createPostMediaPreview;
-  createPostMediaRendition: typeof createPostMediaRendition;
   replacePostMediaItems: typeof replacePostMediaItems;
 }): Promise<PostUpdateRouteResult | null> {
   const existingMediaRows = await loadOwnedPostMedia(params.adminSupabase, params.postId);
@@ -576,24 +572,27 @@ async function replaceEditedPostMedia(params: {
         continue;
       }
 
-      const downloadedMedia = await params.adminSupabase.storage
-        .from(UPLOADS_BUCKET)
-        .download(item.filePath);
-      if (downloadedMedia.error || !downloadedMedia.data) {
-        throw new Error('Failed to load uploaded media.');
+      // Same shape as the create path in post-publish-service.ts: the staged
+      // object moves between buckets server-side, so an edit that swaps in a
+      // 250 MB video no longer pulls those bytes through this function.
+      //
+      // The size check reads storage metadata and fails closed. The signed
+      // upload could only validate a client-declared size, so without an
+      // authoritative check here an oversized object reaches the public bucket
+      // through edit even though create would have rejected it -- the uploads
+      // bucket's own ceiling is 250 MB for every media kind.
+      const info = await params.adminSupabase.storage.from(UPLOADS_BUCKET).info(item.filePath);
+      const storedSize = (info.data as { size?: unknown } | null | undefined)?.size;
+      if (info.error || typeof storedSize !== 'number') {
+        throw info.error ?? new Error('Uploaded media metadata was unavailable.');
       }
 
-      // Same check the create path runs at post-publish-service.ts. The signed
-      // upload could only validate a client-declared size, so without this an
-      // oversized object reaches the public bucket through edit even though
-      // create would have rejected it -- the uploads bucket's own ceiling is
-      // 250 MB for every media kind.
-      const maxBytes = getMaxUploadBytesForContentType(item.contentType || downloadedMedia.data.type);
-      if (
-        maxBytes !== null
-        && typeof downloadedMedia.data.size === 'number'
-        && downloadedMedia.data.size > maxBytes
-      ) {
+      const infoContentType = (info.data as { contentType?: unknown } | null | undefined)?.contentType;
+      const resolvedContentType = item.contentType
+        || (typeof infoContentType === 'string' ? infoContentType : '')
+        || null;
+      const maxBytes = getMaxUploadBytesForContentType(resolvedContentType);
+      if (maxBytes !== null && storedSize > maxBytes) {
         throw new PostMediaTooLargeError(
           `${item.originalName || 'That file'} is larger than the ${formatUploadByteLimit(maxBytes)} limit for this media type.`,
         );
@@ -601,79 +600,70 @@ async function replaceEditedPostMedia(params: {
 
       const extension = inferExtension(item.originalName, item.contentType);
       const storagePath = `posts/${params.postId}/${randomUUID()}/${sanitizeFileStem(item.originalName)}.${extension}`;
-      const uploadResult = await params.adminSupabase.storage
-        .from(SHOWCASE_MEDIA_BUCKET)
-        .upload(storagePath, downloadedMedia.data, {
-          cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
-          contentType: downloadedMedia.data.type || item.contentType || undefined,
-          upsert: false,
-        });
-      if (uploadResult.error) {
-        throw uploadResult.error;
-      }
-
-      newStoragePaths.push(storagePath);
+      // Both registered before the copy: the staged object is confirmed to
+      // exist, and a copy that materializes its destination then fails to
+      // answer would otherwise leak an object no cleanup knows about. Removing
+      // a path that was never written is a no-op.
       temporaryStoragePaths.push(item.temporaryStoragePath);
-      let preview: Awaited<ReturnType<typeof createPostMediaPreview>> = null;
-      try {
-        preview = await params.createPostMediaPreview({
-          body: downloadedMedia.data,
-          contentType: item.contentType || downloadedMedia.data.type,
-          storagePath,
-          supabase: params.adminSupabase,
-        });
-        if (preview?.previewStoragePath) {
-          newStoragePaths.push(preview.previewStoragePath);
-        }
-      } catch (previewError) {
-        logBackendWarning('failed_to_create_edited_post_media_preview', { error: previewError });
+      newStoragePaths.push(storagePath);
+
+      const copyResult = await params.adminSupabase.storage
+        .from(UPLOADS_BUCKET)
+        .copy(item.filePath, storagePath, { destinationBucket: SHOWCASE_MEDIA_BUCKET });
+      if (copyResult.error) {
+        throw copyResult.error;
       }
 
-      let rendition: Awaited<ReturnType<typeof createPostMediaRendition>> | null = null;
-      let renditionFailed = false;
-      try {
-        rendition = await params.createPostMediaRendition({
-          body: downloadedMedia.data,
-          contentType: item.contentType || downloadedMedia.data.type,
-          storagePath,
-          supabase: params.adminSupabase,
-        });
-        if (rendition.status === 'ready') {
-          newStoragePaths.push(rendition.renditionStoragePath);
+      // Video work is deferred to the repair sweep, kicked right after the
+      // response. Images keep an inline preview: the thumbhash placeholder is
+      // what renders first, and an image is capped at 25 MB.
+      let preview: Awaited<ReturnType<typeof createPostMediaPreview>> = null;
+      if (item.mediaKind === 'image') {
+        try {
+          const downloadedMedia = await params.adminSupabase.storage
+            .from(UPLOADS_BUCKET)
+            .download(item.filePath);
+          if (downloadedMedia.error || !downloadedMedia.data) {
+            throw downloadedMedia.error ?? new Error('Failed to load uploaded media.');
+          }
+
+          preview = await params.createPostMediaPreview({
+            body: downloadedMedia.data,
+            contentType: resolvedContentType || downloadedMedia.data.type,
+            storagePath,
+            supabase: params.adminSupabase,
+          });
+          if (preview?.previewStoragePath) {
+            newStoragePaths.push(preview.previewStoragePath);
+          }
+        } catch (previewError) {
+          logBackendWarning('failed_to_create_edited_post_media_preview', { error: previewError });
         }
-      } catch (renditionError) {
-        renditionFailed = true;
-        logBackendWarning('failed_to_create_edited_post_media_rendition', { error: renditionError });
       }
 
       persistedMediaItems.push({
         mediaKey: item.mediaKey,
         storagePath,
-        previewStoragePath: preview?.previewStoragePath ?? null,
-        previewThumbhash: preview?.previewThumbhash ?? null,
-        previewStatus: preview?.previewStatus ?? 'failed',
-        previewAttemptCount: 1,
-        previewError: preview ? null : 'Preview generation failed.',
-        previewGeneratedAt: preview ? new Date().toISOString() : null,
-        renditionStoragePath: rendition?.status === 'ready' ? rendition.renditionStoragePath : null,
-        renditionStatus: rendition?.status === 'ready'
-          ? 'ready'
-          : rendition?.status === 'skipped'
-            ? 'skipped'
-            : renditionFailed
-              ? 'failed'
-              : item.mediaKind === 'video' ? 'pending' : 'skipped',
-        renditionAttemptCount: item.mediaKind === 'video' ? 1 : 0,
-        renditionError: renditionFailed ? 'Rendition generation failed.' : null,
-        renditionGeneratedAt: rendition?.status === 'ready' ? new Date().toISOString() : null,
-        renditionBytes: rendition?.status === 'ready' ? rendition.renditionBytes : null,
+        // Omitted rather than marked failed when there is nothing to record:
+        // replace_post_media defaults these to pending with zero attempts, the
+        // state the repair sweep acts on. Writing `failed`/1 here would spend
+        // one of three attempts on work that was never tried.
+        ...(preview
+          ? {
+            previewStoragePath: preview.previewStoragePath,
+            previewThumbhash: preview.previewThumbhash,
+            previewStatus: preview.previewStatus,
+            previewAttemptCount: 1,
+            previewError: null,
+            previewGeneratedAt: new Date().toISOString(),
+          }
+          : {}),
         externalUrl: null,
         mediaKind: item.mediaKind,
-        contentType: item.contentType,
+        contentType: resolvedContentType,
         originalName: item.originalName,
-        width: preview?.width ?? (rendition?.status === 'ready' ? rendition.width : null),
-        height: preview?.height ?? (rendition?.status === 'ready' ? rendition.height : null),
-        durationSeconds: rendition?.status === 'ready' ? rendition.durationSeconds : null,
+        width: preview?.width ?? null,
+        height: preview?.height ?? null,
         sortOrder: index,
       });
     }
@@ -721,11 +711,14 @@ async function replaceEditedPostMedia(params: {
 
     const retainedStoragePaths = new Set(
       persistedMediaItems
-        .flatMap((item) => [item.storagePath, item.previewStoragePath])
+        .flatMap((item) => [item.storagePath, item.previewStoragePath, item.renditionStoragePath])
         .filter((storagePath): storagePath is string => Boolean(storagePath)),
     );
+    // Renditions belong on both sides: a dropped video's feed rendition is its
+    // own public object, and skipping it left the exact URL the feed had been
+    // serving fetchable forever -- the same gap takedown revocation had.
     const removedStoragePaths = existingMediaRows
-      .flatMap((row) => [row.storage_path, row.preview_storage_path])
+      .flatMap((row) => [row.storage_path, row.preview_storage_path, row.rendition_storage_path])
       .filter((storagePath): storagePath is string =>
         Boolean(storagePath) && !retainedStoragePaths.has(storagePath as string),
       );
@@ -1049,7 +1042,6 @@ export async function updateOwnerPostForRoute({
         postId,
         submittedMediaItems,
         createPostMediaPreview: resolvedDependencies.createPostMediaPreview,
-        createPostMediaRendition: resolvedDependencies.createPostMediaRendition,
         replacePostMediaItems: resolvedDependencies.replacePostMediaItems,
       });
       if (mediaError) {

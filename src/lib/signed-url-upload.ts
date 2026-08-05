@@ -135,7 +135,12 @@ export function uploadFileToSignedUrl(
     // The same headers the mobile client sends to this endpoint. supabase-js
     // sends cacheControl as a multipart field instead; Storage accepts both, but
     // the raw PUT needs it as a header.
-    request.setRequestHeader('cache-control', 'max-age=3600');
+    //
+    // Matches SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL: publish copies this object
+    // server-side into the public bucket, and a copy carries the source's
+    // cache-control with no way to override it -- so staging at an hour would
+    // put a taken-down object an hour out of reach.
+    request.setRequestHeader('cache-control', 'max-age=300');
     request.setRequestHeader('content-type', mimeType);
     request.setRequestHeader('x-upsert', 'false');
     request.send(file);
