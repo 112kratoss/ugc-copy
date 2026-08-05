@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import NewPostClient from '@/app/post/new/NewPostClient';
+import { TITLE_MAX_LENGTH } from '@/lib/posts-server';
 
 const mockPush = vi.fn();
 const fetchMock = vi.fn();
@@ -122,6 +123,68 @@ describe('NewPostClient', () => {
     expect(
       titleInput.compareDocumentPosition(captionInput) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+  });
+
+  it('caps the title input at the limit and shows a live counter', () => {
+    render(<NewPostClient />);
+
+    const titleInput = screen.getByRole('textbox', { name: /^title/i });
+    expect(screen.getByText(`0/${TITLE_MAX_LENGTH}`)).toBeInTheDocument();
+    expect(titleInput).toHaveAttribute('maxlength', String(TITLE_MAX_LENGTH));
+
+    fireEvent.change(titleInput, { target: { value: 'a'.repeat(TITLE_MAX_LENGTH) } });
+    const atLimit = screen.getByText(`${TITLE_MAX_LENGTH}/${TITLE_MAX_LENGTH}`);
+    expect(atLimit).toBeInTheDocument();
+    expect(atLimit).not.toHaveClass('text-rose-300');
+  });
+
+  // A post written before the cap existed still opens in the editor with its
+  // original title. The counter flags it, but the composer must not refuse to
+  // save — the server grandfathers an unchanged title, and blocking here would
+  // strand the author on every other field.
+  it('flags but does not block a grandfathered over-limit title loaded into the editor', async () => {
+    const grandfatheredTitle = 'g'.repeat(TITLE_MAX_LENGTH + 9);
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        success: true,
+        postId: 'post-grandfathered-1',
+        showcasePath: '/showcase/post-grandfathered-1',
+        resourceBundlePath: null,
+        visibility: 'private',
+        resourceBundleStatus: null,
+      }),
+    });
+
+    render(<NewPostClient initialPost={{
+      id: 'post-grandfathered-1',
+      generationId: null,
+      title: grandfatheredTitle,
+      description: '',
+      prompt: '',
+      body: '',
+      visibility: 'private',
+      category: 'image',
+      postFormat: 'media',
+      sourceKind: 'external',
+      sourceTool: 'Pika Labs',
+      sourceToolSlug: 'pika-labs',
+      sourceTools: [{ toolLabel: 'Pika Labs', toolSlug: 'pika-labs' }],
+      mediaUrl: '/proof.png',
+      mediaKind: 'image',
+      archivedAt: null,
+      resourceBundle: { accessMode: 'none' },
+      hasPaidOrders: false,
+    }} />);
+
+    expect(screen.getByText(`${TITLE_MAX_LENGTH + 9}/${TITLE_MAX_LENGTH}`)).toHaveClass('text-rose-300');
+
+    fireEvent.click(screen.getAllByRole('button', { name: /save/i })[0]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('keeps the minimal composer chrome quiet and focused', () => {
@@ -646,6 +709,242 @@ describe('NewPostClient', () => {
     expect(request.body.get('media')).toBeNull();
   });
 
+  function renderComposerWithTwoImages() {
+    const { container } = render(<NewPostClient />);
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: {
+        files: [
+          new File(['cover'], 'cover.png', { type: 'image/png' }),
+          new File(['second'], 'second.png', { type: 'image/png' }),
+        ],
+      },
+    });
+    return () => Array.from(screen.getByLabelText('Post media order').children) as HTMLElement[];
+  }
+
+  function pickUpCard(card: HTMLElement, clientX: number) {
+    // jsdom has no pointer capture; the component only calls it when available.
+    card.setPointerCapture = vi.fn();
+    card.hasPointerCapture = vi.fn(() => false);
+    fireEvent.pointerDown(card, { button: 0, pointerId: 1, pointerType: 'mouse', clientX, clientY: 0 });
+  }
+
+  it('uploads media as soon as it is added and does not upload it again on publish', async () => {
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        postId: 'post-eager-1',
+        showcasePath: '/showcase/post-eager-1',
+        resourceBundlePath: null,
+        visibility: 'public',
+        resourceBundleStatus: null,
+      }),
+    });
+
+    const { container } = render(<NewPostClient />);
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+
+    await act(async () => {
+      fireEvent.change(fileInput, {
+        target: {
+          files: [
+            new File(['cover'], 'cover.png', { type: 'image/png' }),
+            new File(['clip'], 'clip.mp4', { type: 'video/mp4' }),
+          ],
+        },
+      });
+    });
+
+    // Both files went up on selection, before publish was ever pressed.
+    expect(temporaryUploadMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('2 of 5 media added')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('textbox', { name: /^title/i }), {
+      target: { value: 'Eagerly uploaded post' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+    // Still 2: publish skipped both because they already carry a storagePath.
+    expect(temporaryUploadMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('publish waits for every in-flight add batch, not just the newest one', async () => {
+    // Two separate adds create two concurrent upload batches. Tracking only the
+    // latest batch let publish proceed while the older one was still uploading,
+    // and it re-uploaded that batch's files.
+    let releaseSlow: (() => void) | null = null;
+    temporaryUploadMock.mockImplementation(async (file: File) => {
+      if (file.name === 'slow.png' && !releaseSlow) {
+        await new Promise<void>((resolve) => {
+          releaseSlow = resolve;
+        });
+      }
+      return {
+        signedUrl: `https://storage.example.test/signed/${file.name}`,
+        storagePath: `uploads/user-1/${file.name}`,
+      };
+    });
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        postId: 'post-two-batches',
+        showcasePath: '/showcase/post-two-batches',
+        resourceBundlePath: null,
+        visibility: 'public',
+        resourceBundleStatus: null,
+      }),
+    });
+
+    const { container } = render(<NewPostClient />);
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+
+    // Batch A hangs mid-transfer; batch B lands instantly.
+    fireEvent.change(fileInput, {
+      target: { files: [new File(['a'], 'slow.png', { type: 'image/png' })] },
+    });
+    await act(async () => {
+      fireEvent.change(fileInput, {
+        target: { files: [new File(['b'], 'fast.png', { type: 'image/png' })] },
+      });
+    });
+
+    fireEvent.change(screen.getByRole('textbox', { name: /^title/i }), {
+      target: { value: 'Two batches' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+    // Publish is parked on batch A — nothing may dispatch yet.
+    await act(async () => {});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      releaseSlow?.();
+    });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    // Each file went up exactly once; publish reused both staged paths.
+    const uploadsOf = (name: string) => temporaryUploadMock.mock.calls
+      .filter((call) => (call[0] as File).name === name).length;
+    expect(uploadsOf('slow.png')).toBe(1);
+    expect(uploadsOf('fast.png')).toBe(1);
+    const request = fetchMock.mock.calls[1][1] as { body: FormData };
+    const mediaItems = JSON.parse(String(request.body.get('mediaItems')));
+    expect(mediaItems).toEqual([
+      expect.objectContaining({ storagePath: 'uploads/user-1/slow.png' }),
+      expect.objectContaining({ storagePath: 'uploads/user-1/fast.png' }),
+    ]);
+  });
+
+  it('uploads each added file exactly once under React Strict Mode', async () => {
+    // Strict Mode double-invokes state updaters in dev. Collecting the accepted
+    // files via a side effect inside the updater made every add upload each
+    // file twice, staging an orphaned duplicate object per file.
+    const { StrictMode } = await import('react');
+    const { container } = render(
+      <StrictMode>
+        <NewPostClient />
+      </StrictMode>
+    );
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+
+    await act(async () => {
+      fireEvent.change(fileInput, {
+        target: {
+          files: [
+            new File(['cover'], 'cover.png', { type: 'image/png' }),
+            new File(['clip'], 'clip.mp4', { type: 'video/mp4' }),
+          ],
+        },
+      });
+    });
+
+    expect(screen.getByText('2 of 5 media added')).toBeInTheDocument();
+    expect(temporaryUploadMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows a progress bar while added media uploads', async () => {
+    let releaseUpload: (() => void) | null = null;
+    temporaryUploadMock.mockImplementation(async (file: File) => {
+      await new Promise<void>((resolve) => {
+        releaseUpload = resolve;
+      });
+      return {
+        signedUrl: `https://storage.example.test/signed/${file.name}`,
+        storagePath: `uploads/user-1/${file.name}`,
+      };
+    });
+
+    const { container } = render(<NewPostClient />);
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: { files: [new File(['cover'], 'cover.png', { type: 'image/png' })] },
+    });
+
+    // The bar is on screen while the transfer is still open.
+    const bar = await screen.findByRole('progressbar', { name: /media upload progress/i });
+    expect(bar).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^cancel$/i })).toBeInTheDocument();
+
+    await act(async () => {
+      releaseUpload?.();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('progressbar', { name: /media upload progress/i })).not.toBeInTheDocument();
+    });
+  });
+
+  it('lifts a card on pick-up and moves it with the pointer', () => {
+    const getCards = renderComposerWithTwoImages();
+    const cards = getCards();
+    expect(cards).toHaveLength(2);
+    expect(cards[0].className).toContain('cursor-grab');
+
+    pickUpCard(cards[0], 0);
+    expect(getCards()[0].className).toContain('scale-[1.04]');
+
+    fireEvent.pointerMove(cards[0], { pointerId: 1, clientX: 60, clientY: 0 });
+    expect(cards[0].style.transform).toBe('translateX(60px)');
+
+    // Released short of a full slot: it settles back, order untouched.
+    fireEvent.pointerUp(cards[0], { pointerId: 1, clientX: 60, clientY: 0 });
+    expect(cards[0].style.transform).toBe('');
+    expect(getCards()[0].className).not.toContain('scale-[1.04]');
+    expect(getCards()[0].querySelector('img')?.getAttribute('alt')).toBe('Media 1');
+  });
+
+  it('reorders when a card is carried a full slot', () => {
+    const getCards = renderComposerWithTwoImages();
+    const second = getCards()[1];
+    expect(second.querySelector('img')?.getAttribute('alt')).toBe('Media 2');
+
+    pickUpCard(second, 300);
+    // One slot is 124px; drag left past it.
+    fireEvent.pointerMove(second, { pointerId: 1, clientX: 160, clientY: 0 });
+    fireEvent.pointerUp(second, { pointerId: 1, clientX: 160, clientY: 0 });
+
+    // That card now holds the cover slot, and no phantom media was added.
+    const after = getCards();
+    expect(after[0].textContent).toContain('Cover');
+    expect(after[0].querySelector('img')?.getAttribute('alt')).toBe('Media 1');
+    expect(screen.getByText('2 of 5 media added')).toBeInTheDocument();
+  });
+
+  it('does not pick a card up when the press lands on its buttons', () => {
+    const getCards = renderComposerWithTwoImages();
+    const removeButton = screen.getByRole('button', { name: /remove media 1/i });
+
+    fireEvent.pointerDown(removeButton, { button: 0, pointerId: 1, pointerType: 'mouse', clientX: 0, clientY: 0 });
+    expect(getCards()[0].className).not.toContain('scale-[1.04]');
+
+    fireEvent.click(removeButton);
+    expect(screen.getByText('1 of 5 media added')).toBeInTheDocument();
+  });
+
   it('uploads and preserves the order of multiple image and video files', async () => {
     enqueueResponse({
       ok: true,
@@ -1133,7 +1432,7 @@ describe('NewPostClient', () => {
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     });
 
-    it('lets the user cancel an in-flight upload without publishing', async () => {
+    it('lets the user cancel an add-time upload and keeps the file in the composer', async () => {
       temporaryUploadMock.mockImplementation(async (
         _file: File,
         _ownerUserId: string,
@@ -1148,13 +1447,16 @@ describe('NewPostClient', () => {
 
       const { container } = render(<NewPostClient />);
       attachFile(container, new File(['png-bytes'], 'proof.png', { type: 'image/png' }));
-      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
+      // The bar belongs to the add now — no publish click is needed to see it.
       await screen.findByRole('progressbar', { name: /media upload progress/i });
       fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
 
-      await waitFor(() => expect(screen.getByText(/upload cancelled/i)).toBeInTheDocument());
-      // Only the source-tools fetch: cancelling must not publish the post.
+      await waitFor(() => {
+        expect(screen.queryByRole('progressbar', { name: /media upload progress/i })).not.toBeInTheDocument();
+      });
+      // Cancelling the transfer must not drop the media or publish anything.
+      expect(screen.getByText('1 of 5 media added')).toBeInTheDocument();
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
@@ -1184,7 +1486,7 @@ describe('NewPostClient', () => {
         },
       });
 
-      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      // Both went up on add; only broken.png failed, and it is reported there.
       await waitFor(() => {
         expect(screen.getByText(/1 of 2 uploads failed/i)).toBeInTheDocument();
       });
@@ -1205,8 +1507,12 @@ describe('NewPostClient', () => {
       fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
 
-      // Only broken.png went up again; good.png kept its staged path.
-      expect(temporaryUploadMock).toHaveBeenCalledTimes(3);
+      // good.png was staged on add and never touched again; only broken.png
+      // was retried. Counting per file is what actually pins that down.
+      const uploadsOf = (name: string) => temporaryUploadMock.mock.calls
+        .filter((call) => (call[0] as File).name === name).length;
+      expect(uploadsOf('good.png')).toBe(1);
+      expect(uploadsOf('broken.png')).toBe(2);
       const request = fetchMock.mock.calls[1][1] as { body: FormData };
       const mediaItems = JSON.parse(String(request.body.get('mediaItems')));
       expect(mediaItems).toEqual([
@@ -1278,12 +1584,14 @@ describe('NewPostClient', () => {
           ],
         },
       });
-      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
+      // Reported at the point of adding, without waiting for a publish attempt,
+      // and the surviving upload is kept rather than the batch being discarded.
       await waitFor(() => {
         expect(screen.getByText(/1 of 2 uploads failed/i)).toBeInTheDocument();
       });
       expect(screen.getByText(/broken\.png/i)).toBeInTheDocument();
+      expect(screen.getByText('2 of 5 media added')).toBeInTheDocument();
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   });
