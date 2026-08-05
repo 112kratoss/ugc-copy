@@ -1,12 +1,13 @@
 import 'server-only';
-import { logBackendRouteError } from '@/lib/backend-logger';
+import { logBackendRouteError, logBackendWarning } from '@/lib/backend-logger';
 
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
 import { createOwnerPostForRoute } from '@/lib/post-create-route-service';
 import { listOwnerPostsForRoute } from '@/lib/owner-post-list-route-service';
+import { repairMediaForPost } from '@/lib/media-preview-repair';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
 type PostsRouteDependencies = {
@@ -15,6 +16,9 @@ type PostsRouteDependencies = {
   createUserClient?: typeof createUserClient;
   listOwnerPostsForRoute?: typeof listOwnerPostsForRoute;
   logError?: typeof logBackendRouteError;
+  repairMediaForPost?: typeof repairMediaForPost;
+  /** Seam over `after` so tests can drive the post-response work directly. */
+  schedulePostMediaRepair?: (callback: () => Promise<void>) => void;
 };
 
 function resolveDependencies(dependencies: PostsRouteDependencies | undefined) {
@@ -24,6 +28,9 @@ function resolveDependencies(dependencies: PostsRouteDependencies | undefined) {
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     listOwnerPostsForRoute: dependencies?.listOwnerPostsForRoute ?? listOwnerPostsForRoute,
     logError: dependencies?.logError ?? logBackendRouteError,
+    repairMediaForPost: dependencies?.repairMediaForPost ?? repairMediaForPost,
+    schedulePostMediaRepair: dependencies?.schedulePostMediaRepair
+      ?? ((callback: () => Promise<void>) => after(callback)),
   };
 }
 
@@ -50,8 +57,9 @@ async function handlePostsPOST(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const adminSupabase = dependencies.createServiceClient();
     const result = await dependencies.createOwnerPostForRoute({
-      adminSupabase: dependencies.createServiceClient(),
+      adminSupabase,
       ownerUserId,
       readFormData: () => request.formData(),
     });
@@ -62,6 +70,27 @@ async function handlePostsPOST(
       }
 
       return NextResponse.json(result.body, { status: result.status });
+    }
+
+    // Publishing defers preview and rendition work so the response does not
+    // wait on a transcode. Without this kick a new post would carry a
+    // placeholder until the hourly sweep reached it. Scheduled unconditionally:
+    // a text post costs two indexed reads that match nothing.
+    //
+    // Both layers swallow deliberately. The post is already published, and the
+    // hourly sweep repairs exactly this work, so neither a scheduling failure
+    // nor a repair failure may turn a successful publish into an error.
+    const { postId } = result.body;
+    try {
+      dependencies.schedulePostMediaRepair(async () => {
+        try {
+          await dependencies.repairMediaForPost(adminSupabase, postId);
+        } catch (error) {
+          logBackendWarning('post_media_async_repair_failed', { error, postId });
+        }
+      });
+    } catch (error) {
+      logBackendWarning('post_media_async_repair_not_scheduled', { error, postId });
     }
 
     return NextResponse.json(result.body);

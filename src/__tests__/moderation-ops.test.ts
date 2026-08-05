@@ -117,6 +117,7 @@ describe('moderation operations', () => {
     const postMedia = queryResult([{
       storage_path: `posts/${POST_ID}/0/proof.webp`,
       preview_storage_path: `posts/${POST_ID}/0/proof.preview.webp`,
+      rendition_storage_path: `posts/${POST_ID}/0/proof.feed.mp4`,
       external_url: null,
     }]);
     const from = vi.fn((table: string) => {
@@ -151,16 +152,19 @@ describe('moderation operations', () => {
       postReviewStatus: 'hidden',
       resolvedReportCount: 2,
       reviewedBy: REVIEWER_ID,
-      revokedMediaCount: 3,
+      revokedMediaCount: 4,
       mediaRevocationVerified: true,
       externalMediaRevocationRequired: true,
     });
+    // The feed rendition is its own public object: a takedown that skips it
+    // leaves the exact URL the feed was serving alive.
     expect(remove).toHaveBeenCalledWith([
       'showcase/80000000-0000-4000-8000-000000000008/output.webp',
       `posts/${POST_ID}/0/proof.webp`,
       `posts/${POST_ID}/0/proof.preview.webp`,
+      `posts/${POST_ID}/0/proof.feed.mp4`,
     ]);
-    expect(exists).toHaveBeenCalledTimes(3);
+    expect(exists).toHaveBeenCalledTimes(4);
   });
 
   it('hydrates reported comments with enough context for an operator decision', async () => {

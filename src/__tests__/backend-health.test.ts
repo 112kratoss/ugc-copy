@@ -87,6 +87,17 @@ function createClient(
     return { ...result, data: rows };
   };
   const backendJobRuns = results.backend_job_runs;
+  // `posts` is read twice: the remix-source sample, then the orphaned shell-post
+  // probe. A test that only cares about the first passes a single result and
+  // gets an empty shell probe appended, so shell-post cases are the only ones
+  // that have to spell both out.
+  const normalizePostsResults = (
+    provided: QueryResult | QueryResult[] | undefined,
+  ): QueryResult[] => {
+    const emptyShellProbe: QueryResult = { error: null, data: [] };
+    if (!provided) return [emptyShellProbe, emptyShellProbe];
+    return Array.isArray(provided) ? provided : [provided, emptyShellProbe];
+  };
   const tableResultsByName: Record<string, QueryResult | QueryResult[]> = {
     ai_usage_events: [
       { error: null, data: [] },
@@ -99,11 +110,12 @@ function createClient(
       { error: null, data: [] },
     ],
     provider_dependency_events: { error: null, data: [] },
-    // Remix-source sample for the data-access probe. Empty by default: with no
-    // remixable posts the probe reports ok without issuing its follow-up
-    // generations read, so tests that do not care about it stay untouched.
-    posts: { error: null, data: [] },
     ...results,
+    // Remix-source sample for the data-access probe, then the shell-post probe.
+    // Empty by default: with no remixable posts the probe reports ok without
+    // issuing its follow-up generations read, so tests that do not care about
+    // it stay untouched.
+    posts: normalizePostsResults(results.posts),
     ...(backendJobRuns && options.withHealthyRequiredRuns !== false
       ? {
           backend_job_runs: Array.isArray(backendJobRuns)
@@ -1832,6 +1844,112 @@ describe('collectBackendHealth', () => {
       // No remixable posts means no follow-up read at all.
       expect(db.builders.generations).toHaveLength(3);
       expect(dataAccessIssues(health)).toEqual([]);
+    });
+  });
+
+  describe('orphaned shell posts', () => {
+    const now = new Date('2026-06-21T10:00:00.000Z');
+    // Recent, stalled, and pending-without-provider-task -- the three
+    // generations reads in the main batch. No remixable posts, so the
+    // data-access probe never issues its fourth.
+    const SHELL_PROBE_GENERATION_READS = [
+      { error: null, data: [] },
+      { error: null, data: [] },
+      { error: null, data: [] },
+    ];
+    const shellPost = {
+      id: 'post-shell-1',
+      visibility: 'private',
+      created_at: '2026-06-21T06:00:00.000Z',
+    };
+
+    function shellPostIssues(health: Awaited<ReturnType<typeof collectBackendHealth>>) {
+      return health.issues.filter((issue) => (
+        issue.code === 'ORPHANED_MEDIA_SHELL_POSTS' || issue.code === 'SHELL_POST_PROBE_FAILED'
+      ));
+    }
+
+    it('warns when media posts survive without their media rows', async () => {
+      const db = createClient({
+        backend_job_runs: { error: null, data: [] },
+        generations: SHELL_PROBE_GENERATION_READS,
+        posts: [
+          { error: null, data: [] },
+          { error: null, data: [shellPost, { ...shellPost, id: 'post-shell-2', created_at: '2026-06-21T08:00:00.000Z' }] },
+        ],
+      });
+
+      const health = await collectBackendHealth(db.client as never, now, COMPLETE_BACKEND_ENVIRONMENT);
+
+      expect(health.postIntegrity).toEqual({
+        status: 'warning',
+        staleAfterMinutes: 60,
+        shellPostCount: 2,
+        oldestShellPostCreatedAt: '2026-06-21T06:00:00.000Z',
+        sampleTruncated: false,
+        probeReadError: null,
+      });
+      expect(shellPostIssues(health)).toEqual([{
+        severity: 'warning',
+        code: 'ORPHANED_MEDIA_SHELL_POSTS',
+        message:
+          '2 media post(s) older than 60 minutes have no media rows; '
+          + 'a compensating delete failed after the media write did.',
+      }]);
+      // Cruft an operator clears, not a release blocker.
+      expect(health.status).toBe('warning');
+    });
+
+    it('degrades when the probe itself cannot be read', async () => {
+      const db = createClient({
+        backend_job_runs: { error: null, data: [] },
+        generations: SHELL_PROBE_GENERATION_READS,
+        posts: [
+          { error: null, data: [] },
+          { error: new Error('permission denied for table post_media'), data: null },
+        ],
+      });
+
+      const health = await collectBackendHealth(db.client as never, now, COMPLETE_BACKEND_ENVIRONMENT);
+
+      expect(health.postIntegrity).toMatchObject({
+        status: 'degraded',
+        shellPostCount: 0,
+        probeReadError: 'permission denied for table post_media',
+      });
+      expect(shellPostIssues(health)[0]).toMatchObject({
+        severity: 'degraded',
+        code: 'SHELL_POST_PROBE_FAILED',
+      });
+    });
+
+    it('excludes generation-backed and pre-gallery posts from the probe', async () => {
+      const db = createClient({
+        backend_job_runs: { error: null, data: [] },
+        generations: SHELL_PROBE_GENERATION_READS,
+        posts: [
+          { error: null, data: [] },
+          { error: null, data: [] },
+        ],
+      });
+
+      const health = await collectBackendHealth(db.client as never, now, COMPLETE_BACKEND_ENVIRONMENT);
+
+      const probe = db.builders.posts[1];
+      expect(probe.in).toHaveBeenCalledWith('post_format', ['media', 'mixed']);
+      // Generation-backed posts keep media on posts.showcase_asset_path, and
+      // pre-gallery posts predate post_media entirely -- both legitimately have
+      // zero rows and would otherwise be reported as permanent cruft.
+      expect(probe.is).toHaveBeenCalledWith('generation_id', null);
+      expect(probe.is).toHaveBeenCalledWith('post_media', null);
+      // The gallery migration's own timestamp, not midnight of that day --
+      // widening to midnight would flag legacy same-day posts as shells.
+      expect(probe.gte).toHaveBeenCalledWith('created_at', '2026-06-09T09:40:06.000Z');
+      // One hour before `now`: anything younger may still be mid-publish.
+      expect(probe.lt).toHaveBeenCalledWith('created_at', '2026-06-21T09:00:00.000Z');
+
+      expect(health.postIntegrity).toMatchObject({ status: 'ok', shellPostCount: 0 });
+      expect(shellPostIssues(health)).toEqual([]);
     });
   });
 });

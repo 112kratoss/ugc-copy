@@ -10,6 +10,7 @@ import {
   type PostReportResolution,
   type SubjectReportResolution,
 } from '@/lib/moderation-ops';
+import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 /**
  * Admin console wrapper over the existing moderation ops core.
@@ -76,12 +77,28 @@ export async function applyAdminPostReportDecision(
     throw new Error('A resolution note is required.');
   }
 
-  return resolvePostReport(client, {
+  const resolution = await resolvePostReport(client, {
     reportId: options.reportId,
     reviewerId: options.reviewerId,
     action: options.action,
     resolutionNote: note,
   });
+
+  // Hiding the post is not enough on its own: cached feed pages keep serving it
+  // until their tag is revalidated. This lives here rather than in
+  // moderation-ops.ts because that module is also driven by the tsx ops CLI,
+  // where next/cache does not exist -- a CLI take-down stays bounded by the
+  // feed's own 60s revalidate instead.
+  //
+  // The predicate matches the one moderation-ops uses to decide media
+  // revocation, so a retried take-down re-invalidates just as it re-sweeps.
+  const tookDownPost = resolution.status === 'taken_down'
+    || (resolution.status === 'already_resolved' && resolution.resolutionAction === 'take_down');
+  if (tookDownPost) {
+    invalidateShowcaseFeedCache();
+  }
+
+  return resolution;
 }
 
 export async function applyAdminSubjectReportDecision(

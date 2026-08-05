@@ -34,6 +34,34 @@ const sourceToolCatalog: SourceToolOption[] = [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
 ];
 
+/** A single staged (already-uploaded) media item, the shape both clients send. */
+async function prepareStagedMediaSubmission({
+  fileName,
+  contentType,
+  category = 'image',
+}: {
+  fileName: string;
+  contentType: string;
+  category?: string;
+}) {
+  const formData = new FormData();
+  formData.set('postFormat', 'media');
+  formData.set('category', category);
+  formData.set('visibility', 'public');
+  formData.set('sourceTool', 'magicbooklet');
+  formData.set('mediaStoragePath', `uploads/user-1/${fileName}`);
+  formData.set('mediaOriginalName', fileName);
+  formData.set('mediaContentType', contentType);
+
+  const prepared = await preparePostCreationSubmission({
+    formData,
+    userId: 'user-1',
+    sourceToolCatalog,
+  });
+  if (!prepared.ok) throw new Error('Expected prepared submission');
+  return prepared;
+}
+
 describe('publishPreparedPost', () => {
   beforeEach(() => {
     cacheMocks.invalidateShowcaseFeedCache.mockClear();
@@ -419,16 +447,33 @@ describe('publishPreparedPost', () => {
     expect(prepared.ok).toBe(true);
     if (!prepared.ok) throw new Error('Expected prepared submission');
 
-    const list = vi.fn(async () => ({
-      data: [{ name: 'oversized.png', metadata: { size: 26 * 1024 * 1024 } }],
+    const info = vi.fn(async () => ({
+      data: { size: 26 * 1024 * 1024, contentType: 'image/png' },
       error: null,
     }));
     const download = vi.fn(async () => ({ data: new Blob(['should never be read']), error: null }));
+    const copy = vi.fn(async () => ({ data: { path: 'unused' }, error: null }));
+    const removedBatches: string[][] = [];
+    const remove = vi.fn(async (paths: string[]) => {
+      removedBatches.push(paths);
+      return { data: paths.map((name) => ({ name })), error: null };
+    });
+    const clearedIntents = vi.fn(async () => ({ error: null }));
 
     const result = await publishPreparedPost({
       adminSupabase: adminSupabaseDouble({
-        storage: { from: vi.fn(() => ({ list, download, remove: vi.fn(async () => ({ data: [], error: null })) })) },
-        from: vi.fn(() => ({ delete: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })) })),
+        storage: {
+          from: vi.fn(() => ({
+            info,
+            download,
+            copy,
+            remove,
+          })),
+        },
+        from: vi.fn(() => ({
+          delete: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+          update: vi.fn(() => ({ in: vi.fn(() => ({ is: clearedIntents })) })),
+        })),
       }),
       ownerUserId: 'user-1',
       postId: 'post-1',
@@ -448,8 +493,245 @@ describe('publishPreparedPost', () => {
       body: { error: expect.stringContaining('25 MB') },
     });
     // filePath carries the in-bucket path (bucket prefix already stripped).
-    expect(list).toHaveBeenCalledWith('user-1', { search: 'oversized.png' });
-    // The point of the precheck: the oversized bytes never enter the function.
+    expect(info).toHaveBeenCalledWith('user-1/oversized.png');
+    // The point of the metadata check: the oversized object is neither read nor
+    // promoted into the public bucket.
     expect(download).not.toHaveBeenCalled();
+    expect(copy).not.toHaveBeenCalled();
+    // The rejection is permanent, so the staged object is rolled back rather
+    // than left to leak in the staging bucket until the sweep. The destination
+    // was registered pessimistically but never written, so its remove is a
+    // harmless no-op.
+    expect(removedBatches).toEqual([
+      ['posts/post-1/0/oversized.png'],
+      ['user-1/oversized.png'],
+    ]);
+    expect(clearedIntents).toHaveBeenCalled();
+  });
+
+  it('fails closed when staged media metadata carries no size', async () => {
+    const prepared = await prepareStagedMediaSubmission({
+      fileName: 'clip.mp4',
+      contentType: 'video/mp4',
+      category: 'video',
+    });
+    const info = vi.fn(async () => ({ data: { contentType: 'video/mp4' }, error: null }));
+    const copy = vi.fn(async () => ({ data: { path: 'unused' }, error: null }));
+    const remove = vi.fn(async () => ({ data: [], error: null }));
+
+    const result = await publishPreparedPost({
+      adminSupabase: adminSupabaseDouble({
+        storage: {
+          from: vi.fn(() => ({
+            info,
+            copy,
+            download: vi.fn(),
+            remove,
+          })),
+        },
+        from: vi.fn(() => ({
+          delete: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+          update: vi.fn(() => ({ in: vi.fn(() => ({ is: vi.fn(async () => ({ error: null })) })) })),
+        })),
+      }),
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      submission: prepared.submission,
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        createPostWithResourceBundleAtomically: vi.fn(),
+        insertPostMediaItems: vi.fn(),
+        insertPostSourceTools: vi.fn(),
+        createPostMediaPreview: vi.fn(),
+      },
+    });
+
+    // Without a size there is no authoritative cap left, so nothing is promoted.
+    expect(result).toMatchObject({ ok: false, status: 500 });
+    expect(copy).not.toHaveBeenCalled();
+    // Metadata absence is retryable: deleting the staged object here would turn
+    // the retry into a permanent failure, so it is left for the reclaim sweep.
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('copies staged video into the public bucket without reading the bytes', async () => {
+    const prepared = await prepareStagedMediaSubmission({
+      fileName: 'clip.mp4',
+      contentType: 'video/mp4',
+      category: 'video',
+    });
+    const info = vi.fn(async () => ({
+      data: { size: 13 * 1024 * 1024, contentType: 'video/mp4' },
+      error: null,
+    }));
+    const copy = vi.fn(async () => ({ data: { path: 'posts/post-1/0/clip.mp4' }, error: null }));
+    const download = vi.fn();
+    const insertPostMediaItems = vi.fn();
+    const createPostMediaRendition = vi.fn();
+
+    const result = await publishPreparedPost({
+      adminSupabase: adminSupabaseDouble({
+        storage: {
+          from: vi.fn(() => ({
+            info,
+            copy,
+            download,
+            remove: vi.fn(async () => ({ data: [], error: null })),
+          })),
+        },
+        from: vi.fn(() => ({
+          update: vi.fn(() => ({ in: vi.fn(() => ({ is: vi.fn(async () => ({ error: null })) })) })),
+        })),
+      }),
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      submission: prepared.submission,
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        createPostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'private' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'public' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        insertPostMediaItems,
+        insertPostSourceTools: vi.fn(),
+        createPostMediaPreview: vi.fn(),
+        createPostMediaRendition,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    // Cross-bucket server-side move: no bytes enter the function at all.
+    expect(copy).toHaveBeenCalledWith(
+      'user-1/clip.mp4',
+      'posts/post-1/0/clip.mp4',
+      { destinationBucket: 'showcase_media' },
+    );
+    expect(download).not.toHaveBeenCalled();
+    expect(createPostMediaRendition).not.toHaveBeenCalled();
+
+    // Omitted, not marked failed: insertPostMediaItems defaults these to
+    // pending/0, which is exactly what the repair sweep picks up.
+    const [{ mediaItems }] = insertPostMediaItems.mock.calls[0];
+    expect(mediaItems[0]).not.toHaveProperty('previewStatus');
+    expect(mediaItems[0]).not.toHaveProperty('renditionStatus');
+    expect(mediaItems[0]).toMatchObject({
+      storagePath: 'posts/post-1/0/clip.mp4',
+      mediaKind: 'video',
+      contentType: 'video/mp4',
+    });
+  });
+
+  it('previews a staged image inline but leaves the row pending when that fails', async () => {
+    const prepared = await prepareStagedMediaSubmission({ fileName: 'shot.png', contentType: 'image/png' });
+    const info = vi.fn(async () => ({
+      data: { size: 2 * 1024 * 1024, contentType: 'image/png' },
+      error: null,
+    }));
+    const download = vi.fn(async () => ({ data: new Blob(['png'], { type: 'image/png' }), error: null }));
+    const insertPostMediaItems = vi.fn();
+
+    const result = await publishPreparedPost({
+      adminSupabase: adminSupabaseDouble({
+        storage: {
+          from: vi.fn(() => ({
+            info,
+            download,
+            copy: vi.fn(async () => ({ data: { path: 'ok' }, error: null })),
+            remove: vi.fn(async () => ({ data: [], error: null })),
+          })),
+        },
+        from: vi.fn(() => ({
+          update: vi.fn(() => ({ in: vi.fn(() => ({ is: vi.fn(async () => ({ error: null })) })) })),
+        })),
+      }),
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      submission: prepared.submission,
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        createPostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'private' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'public' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        insertPostMediaItems,
+        insertPostSourceTools: vi.fn(),
+        // The inline attempt throws; publishing must still succeed.
+        createPostMediaPreview: vi.fn(async () => { throw new Error('sharp failed'); }),
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    // An image is small enough to read once for its thumbhash placeholder.
+    expect(download).toHaveBeenCalledTimes(1);
+
+    // A failed inline attempt must not spend one of the sweep's three retries.
+    const [{ mediaItems }] = insertPostMediaItems.mock.calls[0];
+    expect(mediaItems[0]).not.toHaveProperty('previewStatus');
+    expect(mediaItems[0]).not.toHaveProperty('previewAttemptCount');
+  });
+
+  it('cleans up both the copy and the staged source when the copy fails', async () => {
+    const prepared = await prepareStagedMediaSubmission({ fileName: 'shot.png', contentType: 'image/png' });
+    const removedBatches: string[][] = [];
+    const remove = vi.fn(async (paths: string[]) => {
+      removedBatches.push(paths);
+      return { data: paths.map((name) => ({ name })), error: null };
+    });
+    const clearedIntents = vi.fn(async () => ({ error: null }));
+
+    const result = await publishPreparedPost({
+      adminSupabase: adminSupabaseDouble({
+        storage: {
+          from: vi.fn(() => ({
+            info: vi.fn(async () => ({
+              data: { size: 1024, contentType: 'image/png' },
+              error: null,
+            })),
+            copy: vi.fn(async () => ({ data: null, error: new Error('destination already exists') })),
+            download: vi.fn(),
+            remove,
+          })),
+        },
+        from: vi.fn(() => ({
+          update: vi.fn(() => ({ in: vi.fn(() => ({ is: clearedIntents })) })),
+        })),
+      }),
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      submission: prepared.submission,
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        createPostWithResourceBundleAtomically: vi.fn(),
+        insertPostMediaItems: vi.fn(),
+        insertPostSourceTools: vi.fn(),
+        createPostMediaPreview: vi.fn(),
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 500 });
+    // The destination is registered before the copy runs, so an ambiguous
+    // failure still cleans up whatever may have materialized.
+    expect(removedBatches).toEqual([
+      ['posts/post-1/0/shot.png'],
+      ['user-1/shot.png'],
+    ]);
+    // Rolled back, so the staged bytes are marked cleared rather than consumed.
+    expect(clearedIntents).toHaveBeenCalled();
   });
 });

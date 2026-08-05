@@ -79,6 +79,12 @@ type RemixablePostRow = {
   generation_id: string | null;
 };
 
+type OrphanedShellPostRow = {
+  id: string;
+  visibility: string | null;
+  created_at: string | null;
+};
+
 type RemixSourceProjectionRow = {
   id: string;
   user_id: string | null;
@@ -270,6 +276,25 @@ export type BackendDataAccessHealth = {
   projectionReadError: string | null;
 };
 
+/**
+ * Media posts that never got their media rows.
+ *
+ * Publishing creates the post private, writes `post_media`, then promotes. When
+ * the media write fails the compensating `posts.delete()` runs — and when that
+ * delete also fails it is only warned about, leaving a private shell nothing
+ * will ever clean up. Each one is invisible cruft rather than broken content,
+ * so this counts them instead of paging anyone.
+ */
+export type BackendPostIntegrityHealth = {
+  status: BackendHealthStatus;
+  staleAfterMinutes: number;
+  shellPostCount: number;
+  oldestShellPostCreatedAt: string | null;
+  sampleTruncated: boolean;
+  /** Set when the probe itself could not be read. */
+  probeReadError: string | null;
+};
+
 export type BackendMediaUploadReclaimPolicyHealth = {
   /** Whether Production supplied the one accepted opt-in value, `true`. */
   abandonedReclaimConfigured: boolean;
@@ -299,6 +324,7 @@ export type BackendHealth = {
   aiUsage: BackendAiUsageHealth;
   providerDependencies: BackendProviderDependencyHealth;
   dataAccess: BackendDataAccessHealth;
+  postIntegrity: BackendPostIntegrityHealth;
   reclaimPolicy: BackendMediaUploadReclaimPolicyHealth;
   issues: BackendHealthIssue[];
 };
@@ -328,6 +354,18 @@ const MEDIA_RENDITION_MAX_ATTEMPTS = 3;
 const MEDIA_PIPELINE_STALE_AFTER_MINUTES = 360;
 const MEDIA_PIPELINE_SAMPLE_LIMIT = 500;
 const DATA_ACCESS_REMIX_SAMPLE_LIMIT = 25;
+// A publish that is still writing its media rows is not a shell. One hour is
+// far past the request timeout, so anything older failed rather than raced.
+const SHELL_POST_STALE_AFTER_MINUTES = 60;
+const SHELL_POST_SAMPLE_LIMIT = 100;
+// post_media arrived in 20260609094006_post_media_gallery.sql, so the epoch is
+// that migration's own timestamp (09:40:06Z), not midnight of that day. Media
+// posts older than it legitimately carry no rows and are read through the
+// legacy single-asset projection instead -- counting them would report a real
+// post as deletable cruft. Production applied the migration at the following
+// release, slightly after this, so a hit from that same day is still suspect:
+// the runbook says verify before deleting.
+const POST_MEDIA_GALLERY_EPOCH = '2026-06-09T09:40:06.000Z';
 
 function minutesSince(timestamp: string, now: Date): number {
   const ms = now.getTime() - new Date(timestamp).getTime();
@@ -774,6 +812,44 @@ function buildMediaPipelineHealth(
       oldestUnresolvedPreviewAt: oldestPreview?.created_at ?? null,
       sampleTruncated: renditionRows.length >= MEDIA_PIPELINE_SAMPLE_LIMIT
         || previewRows.length >= MEDIA_PIPELINE_SAMPLE_LIMIT,
+    },
+    issues,
+  };
+}
+
+function buildOrphanedShellPostHealth(
+  rows: OrphanedShellPostRow[],
+  probeError: { message?: string } | null,
+): { health: BackendPostIntegrityHealth; issues: BackendHealthIssue[] } {
+  const issues: BackendHealthIssue[] = [];
+
+  if (probeError) {
+    issues.push({
+      severity: 'degraded',
+      code: 'SHELL_POST_PROBE_FAILED',
+      message: `Orphaned shell posts could not be counted (${probeError.message ?? 'unknown error'}).`,
+    });
+  }
+
+  const oldest = sortByTimestamp(rows, (row) => row.created_at)[0] ?? null;
+  // A warning, not degraded: every shell is private and unreachable, so this
+  // reports accumulating cruft an operator should clear, not user-facing damage.
+  if (rows.length > 0) {
+    issues.push({
+      severity: 'warning',
+      code: 'ORPHANED_MEDIA_SHELL_POSTS',
+      message: `${rows.length} media post(s) older than ${SHELL_POST_STALE_AFTER_MINUTES} minutes have no media rows; a compensating delete failed after the media write did.`,
+    });
+  }
+
+  return {
+    health: {
+      status: maxStatus(issues.map((issue) => issue.severity)),
+      staleAfterMinutes: SHELL_POST_STALE_AFTER_MINUTES,
+      shellPostCount: rows.length,
+      oldestShellPostCreatedAt: oldest?.created_at ?? null,
+      sampleTruncated: rows.length >= SHELL_POST_SAMPLE_LIMIT,
+      probeReadError: probeError ? probeError.message ?? 'unknown error' : null,
     },
     issues,
   };
@@ -1269,6 +1345,27 @@ export async function collectBackendHealth(
     remixSources,
     remixProjectionError,
   );
+
+  // Same tolerance as the remix projection above: a probe that cannot read must
+  // report itself as degraded, not collapse the whole endpoint into a 500.
+  // `post_media!left(id)` + `.is('post_media', null)` is a server-side anti-join
+  // -- the candidate set is otherwise every media post ever published.
+  const shellPostsResult = await client
+    .from('posts')
+    .select('id, visibility, created_at, post_media!left(id)')
+    .in('post_format', ['media', 'mixed'])
+    // Generation-backed posts keep their media on posts.showcase_asset_path and
+    // legitimately have no post_media rows.
+    .is('generation_id', null)
+    .is('post_media', null)
+    .gte('created_at', POST_MEDIA_GALLERY_EPOCH)
+    .lt('created_at', new Date(now.getTime() - SHELL_POST_STALE_AFTER_MINUTES * 60_000).toISOString())
+    .order('created_at', { ascending: true })
+    .limit(SHELL_POST_SAMPLE_LIMIT);
+  const postIntegrityResult = buildOrphanedShellPostHealth(
+    (shellPostsResult.data ?? []) as OrphanedShellPostRow[],
+    shellPostsResult.error ?? null,
+  );
   const environment = environmentVariables
     ? collectBackendEnvironmentHealth(environmentVariables)
     : null;
@@ -1309,6 +1406,7 @@ export async function collectBackendHealth(
     ...aiUsageResult.issues,
     ...providerDependencyResult.issues,
     ...dataAccessResult.issues,
+    ...postIntegrityResult.issues,
     ...environmentIssues,
   ];
   const componentStatuses = [
@@ -1320,6 +1418,7 @@ export async function collectBackendHealth(
     aiUsageResult.health.status,
     providerDependencyResult.health.status,
     dataAccessResult.health.status,
+    postIntegrityResult.health.status,
     ...(environment ? [environment.status] : []),
   ];
 
@@ -1343,6 +1442,7 @@ export async function collectBackendHealth(
     aiUsage: aiUsageResult.health,
     providerDependencies: providerDependencyResult.health,
     dataAccess: dataAccessResult.health,
+    postIntegrity: postIntegrityResult.health,
     reclaimPolicy: {
       abandonedReclaimConfigured: reclaimPolicy.flagConfigured,
       minimumAppVersion: reclaimPolicy.minimumAppVersion,

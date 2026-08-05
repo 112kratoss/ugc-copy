@@ -283,4 +283,100 @@ describe('owner post route adapter service', () => {
     expect(updateOwnerPostRoute).toHaveBeenCalledTimes(2);
     expect(deleteOwnerPostRoute).toHaveBeenCalledTimes(1);
   });
+
+  describe('deferred media repair', () => {
+    const savedEdit = {
+      ok: true as const,
+      body: {
+        success: true as const,
+        postId: 'post-1',
+        visibility: 'private' as const,
+        showcasePath: null,
+        ownerPath: '/post/post-1/edit',
+        resourceBundlePath: '/post/post-1/edit#recipe',
+        resourceBundleStatus: null,
+      },
+    };
+
+    it('kicks the repair after a saved edit', async () => {
+      const adminSupabase = { kind: 'admin' };
+      const repairMediaForPost = vi.fn(async () => ({ attempted: 1, completed: 1, failed: 0 }));
+      const createServiceClient = vi.fn(() => adminSupabase);
+      const scheduled: Array<() => Promise<void>> = [];
+
+      const response = await putOwnerPostRouteResponse({
+        request: createRequest('PUT'),
+        context: createContext(),
+        dependencies: {
+          updateOwnerPostRoute: vi.fn(async () => savedEdit),
+          createServiceClient: createServiceClient as never,
+          repairMediaForPost: repairMediaForPost as never,
+          schedulePostMediaRepair: (callback) => { scheduled.push(callback); },
+        },
+      });
+
+      expect(response.status).toBe(200);
+      // Scheduled, not awaited: the edit response must not wait on a transcode,
+      // and no admin client is built until the repair actually runs.
+      expect(repairMediaForPost).not.toHaveBeenCalled();
+      expect(createServiceClient).not.toHaveBeenCalled();
+
+      await scheduled[0]();
+      expect(repairMediaForPost).toHaveBeenCalledWith(adminSupabase, 'post-1');
+    });
+
+    it('does not schedule a repair when the edit was rejected', async () => {
+      const scheduled: Array<() => Promise<void>> = [];
+
+      const response = await putOwnerPostRouteResponse({
+        request: createRequest('PUT'),
+        context: createContext(),
+        dependencies: {
+          updateOwnerPostRoute: vi.fn(async () => ({
+            ok: false as const,
+            status: 400 as const,
+            body: { error: 'Titles are limited to 120 characters.' },
+          })),
+          schedulePostMediaRepair: (callback) => { scheduled.push(callback); },
+        },
+      });
+
+      expect(response.status).toBe(400);
+      expect(scheduled).toEqual([]);
+    });
+
+    it('keeps a failing repair from surfacing after the edit is saved', async () => {
+      const scheduled: Array<() => Promise<void>> = [];
+
+      const response = await putOwnerPostRouteResponse({
+        request: createRequest('PUT'),
+        context: createContext(),
+        dependencies: {
+          updateOwnerPostRoute: vi.fn(async () => savedEdit),
+          createServiceClient: (() => ({})) as never,
+          repairMediaForPost: (async () => { throw new Error('ffmpeg exited with code 1'); }) as never,
+          schedulePostMediaRepair: (callback) => { scheduled.push(callback); },
+        },
+      });
+
+      expect(response.status).toBe(200);
+      await expect(scheduled[0]()).resolves.toBeUndefined();
+    });
+
+    it('still saves the edit when the repair cannot be scheduled', async () => {
+      // `after()` throws outside a request scope; an edit that already
+      // succeeded must not be reported as a failure because of it.
+      const response = await putOwnerPostRouteResponse({
+        request: createRequest('PUT'),
+        context: createContext(),
+        dependencies: {
+          updateOwnerPostRoute: vi.fn(async () => savedEdit),
+          schedulePostMediaRepair: () => { throw new Error('after() outside a request scope'); },
+        },
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ postId: 'post-1' });
+    });
+  });
 });

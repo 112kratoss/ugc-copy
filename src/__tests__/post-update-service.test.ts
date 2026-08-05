@@ -46,14 +46,20 @@ function createSupabaseMock({
   },
   postMedia = [] as Array<Record<string, unknown>>,
   downloadedMedia = null as Blob | null,
+  stagedInfo = { size: 1024, contentType: 'image/jpeg' } as Record<string, unknown> | null,
 }: {
   post?: Record<string, unknown> | null;
   bundle?: Record<string, unknown> | null;
   postMedia?: Array<Record<string, unknown>>;
   downloadedMedia?: Blob | null;
+  /** Storage metadata for the staged object; the authoritative size check. */
+  stagedInfo?: Record<string, unknown> | null;
 } = {}) {
   const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
   const uploaded: string[] = [];
+  const copied: Array<{ from: string; to: string }> = [];
+  const downloads: string[] = [];
+  const removals: string[][] = [];
   const client = {
     from(table: string) {
       const query = {
@@ -62,6 +68,16 @@ function createSupabaseMock({
         },
         eq() {
           return query;
+        },
+        // media_upload_intents bookkeeping after a successful media replace.
+        update() {
+          return query;
+        },
+        in() {
+          return query;
+        },
+        is() {
+          return Promise.resolve({ error: null });
         },
         order() {
           return Promise.resolve({ data: table === 'post_media' ? postMedia : [], error: null });
@@ -96,12 +112,26 @@ function createSupabaseMock({
     },
     storage: {
       from: vi.fn(() => ({
-        download: vi.fn(async () => ({ data: downloadedMedia, error: downloadedMedia ? null : new Error('missing') })),
+        info: vi.fn(async () => ({
+          data: stagedInfo,
+          error: stagedInfo ? null : new Error('missing'),
+        })),
+        copy: vi.fn(async (from: string, to: string) => {
+          copied.push({ from, to });
+          return { data: { path: to }, error: null };
+        }),
+        download: vi.fn(async (storagePath: string) => {
+          downloads.push(storagePath);
+          return { data: downloadedMedia, error: downloadedMedia ? null : new Error('missing') };
+        }),
         upload: vi.fn(async (storagePath: string) => {
           uploaded.push(storagePath);
           return { error: null };
         }),
-        remove: vi.fn(async () => ({ error: null })),
+        remove: vi.fn(async (paths: string[]) => {
+          removals.push(paths);
+          return { data: paths.map((name) => ({ name })), error: null };
+        }),
       })),
     },
   };
@@ -110,6 +140,9 @@ function createSupabaseMock({
     client: client as unknown as SupabaseClient,
     rpcCalls,
     uploaded,
+    copied,
+    downloads,
+    removals,
   };
 }
 
@@ -499,13 +532,92 @@ describe('updateOwnerPostForRoute', () => {
     }));
   });
 
+  it('removes a dropped video item together with its preview and feed rendition', async () => {
+    const { client, removals } = createSupabaseMock({
+      bundle: null,
+      stagedInfo: { size: 13 * 1024 * 1024, contentType: 'video/mp4' },
+      postMedia: [{
+        id: 'media-old',
+        media_key: 'proof-old',
+        storage_path: 'posts/post-1/a/clip.mp4',
+        preview_storage_path: 'posts/post-1/a/clip.preview.webp',
+        rendition_storage_path: 'posts/post-1/a/clip.feed.mp4',
+        external_url: null,
+        media_kind: 'video',
+        content_type: 'video/mp4',
+        original_name: 'clip.mp4',
+        width: null,
+        height: null,
+        duration_seconds: null,
+        sort_order: 0,
+      }],
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'private',
+        title: 'Proof post',
+        description: null,
+        prompt: null,
+        body: null,
+        category: 'video',
+        post_format: 'media',
+        source_tool: null,
+        source_tool_slug: null,
+        source_kind: 'external',
+        archived_at: null,
+        showcase_asset_path: 'posts/post-1/a/clip.mp4',
+        output_url: null,
+        review_status: 'visible',
+      },
+    });
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        mediaItems: [{
+          mediaKey: 'proof-new',
+          storagePath: 'uploads/user-1/new.mp4',
+          contentType: 'video/mp4',
+          originalName: 'new.mp4',
+        }],
+        resourceBundle: { accessMode: 'none' },
+      },
+      dependencies: {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'private' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    // The dropped item's feed rendition is its own public object: leaving it
+    // behind keeps the exact URL the feed was serving fetchable forever.
+    expect(removals).toContainEqual([
+      'posts/post-1/a/clip.mp4',
+      'posts/post-1/a/clip.preview.webp',
+      'posts/post-1/a/clip.feed.mp4',
+    ]);
+  });
+
   it('rejects edited media larger than its kind allows before it reaches the public bucket', async () => {
     // The signed upload could only check a client-declared size, and the
     // uploads bucket's own ceiling is 250 MB for every kind -- so without this
     // check an oversized image reaches showcase_media through edit even though
     // the create path would have rejected the same bytes.
-    const { client, uploaded } = createSupabaseMock({
+    const { client, uploaded, copied, downloads } = createSupabaseMock({
       bundle: null,
+      stagedInfo: { size: 26 * 1024 * 1024, contentType: 'image/jpeg' },
       downloadedMedia: blobOfSize(26 * 1024 * 1024, 'image/jpeg'),
       post: {
         id: 'post-1',
@@ -561,6 +673,156 @@ describe('updateOwnerPostForRoute', () => {
     expect(result.status).toBe(400);
     expect(result.body.error).toContain('25 MB');
     expect(uploaded).toEqual([]);
+    // Rejected from storage metadata, so the oversized bytes are never read and
+    // never promoted into the public bucket.
+    expect(copied).toEqual([]);
+    expect(downloads).toEqual([]);
+  });
+
+  it('copies edited video into the public bucket without reading the bytes', async () => {
+    const { client, copied, downloads, uploaded } = createSupabaseMock({
+      bundle: null,
+      stagedInfo: { size: 13 * 1024 * 1024, contentType: 'video/mp4' },
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'private',
+        title: 'Proof post',
+        description: null,
+        prompt: null,
+        body: null,
+        category: 'video',
+        post_format: 'media',
+        source_tool: null,
+        source_tool_slug: null,
+        source_kind: 'external',
+        archived_at: null,
+        showcase_asset_path: 'posts/post-1/a.mp4',
+        output_url: null,
+        review_status: 'visible',
+      },
+    });
+    const replacePostMediaItems = vi.fn();
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        mediaItems: [{
+          mediaKey: 'proof-a',
+          storagePath: 'uploads/user-1/clip.mp4',
+          contentType: 'video/mp4',
+          originalName: 'clip.mp4',
+        }],
+        resourceBundle: { accessMode: 'none' },
+      },
+      dependencies: {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'private' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems,
+        createPostMediaPreview: vi.fn(async () => null),
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(copied).toEqual([{
+      from: 'user-1/clip.mp4',
+      to: expect.stringMatching(/^posts\/post-1\/.+\/clip\.mp4$/),
+    }]);
+    // No bytes enter the function, and nothing is re-uploaded.
+    expect(downloads).toEqual([]);
+    expect(uploaded).toEqual([]);
+
+    // Omitted, not marked failed: replace_post_media defaults these to pending
+    // with zero attempts, which is what the repair sweep acts on.
+    const [{ mediaItems }] = replacePostMediaItems.mock.calls[0];
+    expect(mediaItems[0]).not.toHaveProperty('previewStatus');
+    expect(mediaItems[0]).not.toHaveProperty('renditionStatus');
+    expect(mediaItems[0]).toMatchObject({ mediaKind: 'video', contentType: 'video/mp4' });
+  });
+
+  it('previews an edited image inline and reads it exactly once', async () => {
+    const { client, copied, downloads } = createSupabaseMock({
+      bundle: null,
+      stagedInfo: { size: 2 * 1024 * 1024, contentType: 'image/jpeg' },
+      downloadedMedia: blobOfSize(2 * 1024 * 1024, 'image/jpeg'),
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'private',
+        title: 'Proof post',
+        description: null,
+        prompt: null,
+        body: null,
+        category: 'image',
+        post_format: 'media',
+        source_tool: null,
+        source_tool_slug: null,
+        source_kind: 'external',
+        archived_at: null,
+        showcase_asset_path: 'posts/post-1/a.jpg',
+        output_url: null,
+        review_status: 'visible',
+      },
+    });
+    const replacePostMediaItems = vi.fn();
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        mediaItems: [{
+          mediaKey: 'proof-a',
+          storagePath: 'uploads/user-1/shot.jpg',
+          contentType: 'image/jpeg',
+          originalName: 'shot.jpg',
+        }],
+        resourceBundle: { accessMode: 'none' },
+      },
+      dependencies: {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'private' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems,
+        createPostMediaPreview: vi.fn(async () => ({
+          previewStoragePath: 'posts/post-1/x/shot.preview.webp',
+          previewThumbhash: 'hash',
+          previewStatus: 'ready' as const,
+          width: 800,
+          height: 600,
+        })),
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(copied).toHaveLength(1);
+    // An image is small enough to read once, for its thumbhash placeholder.
+    expect(downloads).toEqual(['user-1/shot.jpg']);
+
+    const [{ mediaItems }] = replacePostMediaItems.mock.calls[0];
+    expect(mediaItems[0]).toMatchObject({
+      previewStatus: 'ready',
+      previewThumbhash: 'hash',
+      width: 800,
+      height: 600,
+    });
   });
 
   describe('title length', () => {

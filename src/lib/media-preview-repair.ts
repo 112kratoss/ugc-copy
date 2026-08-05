@@ -305,6 +305,81 @@ export async function repairPostMediaRenditions(
   return { attempted: rows.length, completed, failed: rows.length - completed };
 }
 
+/**
+ * Repair one post's media immediately after it publishes.
+ *
+ * Publishing defers preview and rendition work rather than doing it inline, so
+ * without this a fresh post would wait up to an hour for the sweep. The row
+ * workers are the same ones the sweep uses, so overlapping with it is safe:
+ * derivatives upload to deterministic paths with upsert, and 'processing' stays
+ * in UNRESOLVED_STATUSES precisely so an interrupted attempt is retried.
+ *
+ * Bounded by a single post's media (at most five items). It CAN throw -- a
+ * failed post_media read surfaces to the caller -- so anyone scheduling it
+ * post-response must wrap it (both route adapters do); the hourly sweep retries
+ * whatever an interrupted run left unfinished.
+ */
+export async function repairMediaForPost(
+  supabase: SupabaseClient,
+  postId: string,
+  options: { invalidateFeedCache?: typeof invalidateShowcaseFeedCache } = {},
+): Promise<RepairSummary> {
+  const previewResult = await supabase
+    .from('post_media')
+    .select('id, storage_path, media_kind, content_type, preview_attempt_count')
+    .eq('post_id', postId)
+    .in('preview_status', ['pending', 'failed', 'processing'])
+    .lt('preview_attempt_count', MAX_PREVIEW_ATTEMPTS)
+    .not('storage_path', 'is', null)
+    .order('sort_order', { ascending: true });
+
+  if (previewResult.error) throw previewResult.error;
+
+  const previewRows = ((previewResult.data ?? []) as PostMediaRepairRow[])
+    .filter((row) => canRepairPreview(row.preview_attempt_count));
+  const previewOutcomes = await Promise.all(
+    previewRows.map((row) => repairPostMedia(supabase, row)),
+  );
+
+  const renditionResult = await supabase
+    .from('post_media')
+    .select('id, storage_path, content_type, rendition_attempt_count')
+    .eq('post_id', postId)
+    .eq('media_kind', 'video')
+    .in('rendition_status', UNRESOLVED_STATUSES)
+    .lt('rendition_attempt_count', MAX_RENDITION_ATTEMPTS)
+    .not('storage_path', 'is', null)
+    .order('sort_order', { ascending: true });
+
+  // A database without the rendition migration still repairs previews here,
+  // exactly as the sweep does.
+  let renditionRows: PostMediaRenditionRepairRow[] = [];
+  if (renditionResult.error) {
+    if (!isMissingRenditionColumnError(renditionResult.error)) throw renditionResult.error;
+  } else {
+    renditionRows = ((renditionResult.data ?? []) as PostMediaRenditionRepairRow[])
+      .filter((row) => canRepairRendition(row.rendition_attempt_count));
+  }
+
+  // Sequential for the same reason the sweep is: concurrent ffmpeg processes
+  // contend for the same one or two cores.
+  let renditionsCompleted = 0;
+  for (const row of renditionRows) {
+    if (await repairPostMediaRendition(supabase, row)) {
+      renditionsCompleted += 1;
+    }
+  }
+
+  const completed = previewOutcomes.filter(Boolean).length + renditionsCompleted;
+  const attempted = previewRows.length + renditionRows.length;
+
+  if (completed > 0) {
+    (options.invalidateFeedCache ?? invalidateShowcaseFeedCache)();
+  }
+
+  return { attempted, completed, failed: attempted - completed };
+}
+
 export async function repairMediaPreviews(
   supabase: SupabaseClient,
   options: {
