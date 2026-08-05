@@ -84,6 +84,16 @@ export function getPostMediaKind(
   return getShowcaseMediaKind(category, postFormat);
 }
 
+// The single server-side source of truth for how long a post title may be.
+// Both composers mirror this number for their character counters — web in
+// NewPostClient.tsx, mobile in post-new-view-model.ts — but this is the gate
+// that actually rejects, on create and on edit alike.
+export const TITLE_MAX_LENGTH = 100;
+
+// Titles derived from a body are cut well short of TITLE_MAX_LENGTH, so an
+// auto-generated title can never violate the limit a creator is held to.
+const DERIVED_TITLE_MAX_LENGTH = 80;
+
 export function deriveTitleFromBody(body: string | null | undefined): string | null {
   if (!body) {
     return null;
@@ -98,7 +108,7 @@ export function deriveTitleFromBody(body: string | null | undefined): string | n
     return null;
   }
 
-  return firstLine.slice(0, 80);
+  return firstLine.slice(0, DERIVED_TITLE_MAX_LENGTH);
 }
 
 export function summarizeBody(body: string | null | undefined, maxLength = 160): string {

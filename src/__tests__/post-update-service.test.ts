@@ -13,6 +13,7 @@ import {
   type PostUpdateDependencies,
 } from '@/lib/post-update-service';
 import type { SourceToolOption } from '@/lib/source-tools';
+import { TITLE_MAX_LENGTH } from '@/lib/posts-server';
 import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
 
 const sourceToolCatalog: SourceToolOption[] = [
@@ -560,5 +561,137 @@ describe('updateOwnerPostForRoute', () => {
     expect(result.status).toBe(400);
     expect(result.body.error).toContain('25 MB');
     expect(uploaded).toEqual([]);
+  });
+
+  describe('title length', () => {
+    const grandfatheredTitle = 'g'.repeat(TITLE_MAX_LENGTH + 9);
+
+    function buildDependencies() {
+      return {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'private' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      } satisfies PostUpdateDependencies;
+    }
+
+    function postWithTitle(title: string) {
+      return {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'private',
+        title,
+        description: null,
+        prompt: null,
+        body: 'A draft post with an unlock package.',
+        category: 'text',
+        post_format: 'text',
+        source_tool: null,
+        source_tool_slug: null,
+        source_kind: 'manual',
+        archived_at: null,
+        showcase_asset_path: null,
+        output_url: null,
+        review_status: 'visible',
+      };
+    }
+
+    it('rejects an edit that sets a title longer than the limit', async () => {
+      const { client } = createSupabaseMock({ post: postWithTitle('Short enough') });
+      const dependencies = buildDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          title: 'x'.repeat(TITLE_MAX_LENGTH + 1),
+          body: 'A draft post with an unlock package.',
+          visibility: 'private',
+          resourceBundle: { accessMode: 'none' },
+        },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        status: 400,
+        body: { error: `Titles are limited to ${TITLE_MAX_LENGTH} characters.`, field: 'title' },
+      });
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    });
+
+    // Grandfathering: composers PATCH the whole draft, so an over-limit title
+    // written before the cap existed is resent verbatim on every edit. It must
+    // not block its author from changing some other field.
+    it('still saves a post whose pre-existing title exceeds the limit when the title is unchanged', async () => {
+      const { client } = createSupabaseMock({ post: postWithTitle(grandfatheredTitle) });
+      const dependencies = buildDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          title: grandfatheredTitle,
+          description: 'Fixing a typo in the description only.',
+          body: 'A draft post with an unlock package.',
+          visibility: 'private',
+          resourceBundle: { accessMode: 'none' },
+        },
+        dependencies,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalled();
+    });
+
+    // The mobile viewer flips visibility with a sparse patch that omits `title`
+    // entirely (ugc-mobile/app/viewer.tsx). A grandfathered post must stay
+    // toggleable from there.
+    it('allows a sparse patch that never mentions the title of a grandfathered post', async () => {
+      const { client } = createSupabaseMock({ post: postWithTitle(grandfatheredTitle) });
+      const dependencies = buildDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { visibility: 'private' },
+        dependencies,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalled();
+    });
+
+    it('rejects a grandfathered title once the author edits it into a different over-limit value', async () => {
+      const { client } = createSupabaseMock({ post: postWithTitle(grandfatheredTitle) });
+      const dependencies = buildDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          title: `${grandfatheredTitle} and then some`,
+          body: 'A draft post with an unlock package.',
+          visibility: 'private',
+          resourceBundle: { accessMode: 'none' },
+        },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({ ok: false, status: 400, body: { field: 'title' } });
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    });
   });
 });

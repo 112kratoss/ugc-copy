@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import { deriveTitleFromBody } from '@/lib/posts-server';
+import { TITLE_MAX_LENGTH, deriveTitleFromBody } from '@/lib/posts-server';
 import {
   isPostResourceBundleAccessMode,
   validatePostResourceBundleInput,
@@ -472,7 +472,12 @@ export async function preparePostCreationSubmission({
   const visibility = normalizeVisibility(
     typeof formData.get('visibility') === 'string' ? String(formData.get('visibility')) : null
   );
-  const title = resolveTitle(normalizeText(formData.get('title')), body, postFormat);
+  const submittedTitle = normalizeText(formData.get('title'));
+  if (submittedTitle && submittedTitle.length > TITLE_MAX_LENGTH) {
+    return badRequest(`Titles are limited to ${TITLE_MAX_LENGTH} characters.`);
+  }
+
+  const title = resolveTitle(submittedTitle, body, postFormat);
   const description = normalizeText(formData.get('description'));
   const sourceTool = hasSubmittedMedia ? normalizeText(formData.get('sourceTool')) : null;
   const sourceToolSlugRaw = normalizeText(formData.get('sourceToolSlug'));

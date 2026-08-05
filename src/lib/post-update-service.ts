@@ -20,7 +20,7 @@ import {
   updatePostWithResourceBundleAtomically,
 } from '@/lib/post-resource-bundles-server';
 import { PostSourceToolsWriteError, replacePostSourceTools } from '@/lib/post-source-tools-server';
-import { isMissingPostResourceBundlesSchemaError } from '@/lib/posts-server';
+import { TITLE_MAX_LENGTH, isMissingPostResourceBundlesSchemaError } from '@/lib/posts-server';
 import {
   getMediaKindFromContentType,
   MAX_POST_MEDIA_ITEMS,
@@ -894,6 +894,18 @@ export async function updateOwnerPostForRoute({
           ? body.category
           : post.category;
     const nextTitle = Object.prototype.hasOwnProperty.call(body, 'title') ? normalizeText(body.title) : post.title;
+    // Grandfathered: the cap applies only when this request actually changes the
+    // title. Both composers PATCH the whole draft rather than a sparse patch, so
+    // without the equality check a post written before the limit existed would
+    // become unsavable — its author could not fix a typo in the description
+    // without first rewriting a title that was legal when they wrote it.
+    if (nextTitle && nextTitle !== post.title && nextTitle.length > TITLE_MAX_LENGTH) {
+      return {
+        ok: false,
+        status: 400,
+        body: { error: `Titles are limited to ${TITLE_MAX_LENGTH} characters.`, field: 'title' },
+      };
+    }
     const nextDescription = Object.prototype.hasOwnProperty.call(body, 'description')
       ? normalizeText(body.description)
       : post.description;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { preparePostCreationSubmission } from '@/lib/post-creation-submission-service';
+import { TITLE_MAX_LENGTH } from '@/lib/posts-server';
 import type { SourceToolOption } from '@/lib/source-tools';
 
 const sourceToolCatalog: SourceToolOption[] = [
@@ -131,5 +132,55 @@ describe('preparePostCreationSubmission', () => {
       status: 400,
       body: { error: expect.stringMatching(/not part of this post/i) },
     });
+  });
+
+  it('rejects titles longer than the shared limit and accepts one exactly at it', async () => {
+    function buildFormData(title: string) {
+      const formData = new FormData();
+      formData.set('postFormat', 'text');
+      formData.set('body', 'A text post that carries its own title.');
+      formData.set('visibility', 'public');
+      formData.set('title', title);
+      return formData;
+    }
+
+    const rejected = await preparePostCreationSubmission({
+      formData: buildFormData('a'.repeat(TITLE_MAX_LENGTH + 1)),
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+    expect(rejected).toMatchObject({
+      ok: false,
+      status: 400,
+      body: { error: `Titles are limited to ${TITLE_MAX_LENGTH} characters.` },
+    });
+
+    const accepted = await preparePostCreationSubmission({
+      formData: buildFormData('a'.repeat(TITLE_MAX_LENGTH)),
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+    expect(accepted).toMatchObject({
+      ok: true,
+      submission: { title: 'a'.repeat(TITLE_MAX_LENGTH) },
+    });
+  });
+
+  it('never rejects a title derived from the body, which is cut shorter than the limit', async () => {
+    const formData = new FormData();
+    formData.set('postFormat', 'text');
+    formData.set('body', 'b'.repeat(500));
+    formData.set('visibility', 'public');
+
+    const result = await preparePostCreationSubmission({
+      formData,
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) {
+      expect(result.submission.title?.length).toBeLessThanOrEqual(TITLE_MAX_LENGTH);
+    }
   });
 });
