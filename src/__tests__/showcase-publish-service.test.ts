@@ -394,6 +394,104 @@ describe('publishGenerationToShowcaseForRoute', () => {
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
+  // This endpoint serves the composer and Studio's visibility switch. Only the
+  // first is composing a post, so only the first has to name one — otherwise
+  // flipping an old untitled generation to private would start failing.
+  it('rejects a compose submission that resolves to no title at all', async () => {
+    const generation = {
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: null,
+      description: null,
+      prompt: 'Original prompt',
+    };
+    const adminClient = createAdminClientMock(generation);
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn();
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      body: {
+        generationId: 'gen-1',
+        visibility: 'private',
+        // Carrying post content is what marks this a compose submission; the
+        // composer always sends a resource bundle, even an empty one.
+        resourceBundle: { accessMode: 'none' },
+      },
+      userId: 'user-1',
+      dependencies: {
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+          outputUrl: mediaGeneration.outputUrl,
+          createdLocation: null,
+        })),
+        publishGenerationPostWithResourceBundleAtomically,
+      } satisfies Partial<ShowcasePublishServiceDependencies>,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 400,
+      body: { error: 'Add a title for your post.', field: 'title' },
+    });
+    expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  it('still flips visibility on an untitled generation, because that is not composing', async () => {
+    const generation = {
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: null,
+      description: null,
+      prompt: 'Original prompt',
+    };
+    const adminClient = createAdminClientMock(generation);
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn(async () => ({
+      postId: 'post-1',
+      visibility: 'private' as const,
+      bundleId: null,
+      bundleStatus: null,
+    }));
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      // Exactly what Studio sends: no title, no body, no bundle.
+      body: {
+        generationId: 'gen-1',
+        visibility: 'private',
+      },
+      userId: 'user-1',
+      dependencies: {
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+          outputUrl: mediaGeneration.outputUrl,
+          createdLocation: null,
+        })),
+        listSourceToolsCatalog: vi.fn(async () => [
+          {
+            slug: 'magicbooklet',
+            label: 'magicbooklet',
+            models: [],
+            supportedMediaKinds: ['image' as const, 'video' as const],
+          },
+        ]),
+        publishGenerationPostWithResourceBundleAtomically,
+      } satisfies Partial<ShowcasePublishServiceDependencies>,
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledTimes(1);
+  });
+
   it('returns an actionable profile repair response for public publishing', async () => {
     const generation = {
       id: 'gen-1',

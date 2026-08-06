@@ -187,6 +187,33 @@ describe('NewPostClient', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  it('blocks publishing an untitled post and never reaches the API', async () => {
+    render(<NewPostClient />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
+      target: { value: 'A note that is long enough to publish on its own.' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/add a title for your post/i);
+    // Only the source-tools bootstrap fetch — the post itself never went out.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks the title required and drops the old optional placeholder', () => {
+    render(<NewPostClient />);
+
+    const titleInput = screen.getByRole('textbox', { name: /^title/i });
+    expect(titleInput).toHaveAttribute('aria-required', 'true');
+    expect(titleInput).toHaveAttribute('placeholder', 'Give your post a title');
+    expect(screen.queryByPlaceholderText(/title \(optional\)/i)).not.toBeInTheDocument();
+
+    // The publish checklist has to agree, or the composer reads "ready" while
+    // the publish button refuses.
+    expect(screen.getByText('Title added')).toBeInTheDocument();
+  });
+
   it('keeps the minimal composer chrome quiet and focused', () => {
     render(<NewPostClient />);
 
@@ -217,6 +244,7 @@ describe('NewPostClient', () => {
   it('shows section-local validation feedback near the failing composer section', () => {
     render(<NewPostClient />);
 
+    fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     const alert = screen.getByRole('alert');
@@ -243,6 +271,7 @@ describe('NewPostClient', () => {
         files: [new File(['png-bytes'], 'proof.png', { type: 'image/png' })],
       },
     });
+    fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     const alert = await screen.findByRole('alert');
@@ -309,6 +338,7 @@ describe('NewPostClient', () => {
         files: [new File(['png-bytes'], 'proof.png', { type: 'image/png' })],
       },
     });
+    fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
@@ -368,6 +398,7 @@ describe('NewPostClient', () => {
         files: [new File(['png-bytes'], 'proof.png', { type: 'image/png' })],
       },
     });
+    fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     const alert = await screen.findByRole('alert');
@@ -402,6 +433,7 @@ describe('NewPostClient', () => {
         files: [new File(['png-bytes'], 'proof.png', { type: 'image/png' })],
       },
     });
+    fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
@@ -464,6 +496,7 @@ describe('NewPostClient', () => {
     fireEvent.change(toolPicker, { target: { value: 'Pika Studio' } });
     fireEvent.blur(toolPicker);
 
+    fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
@@ -514,6 +547,7 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByPlaceholderText(/https:\/\//i), {
       target: { value: 'https://ugc.example.com/workflow' },
     });
+    fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
@@ -575,6 +609,7 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByRole('spinbutton', { name: /price in tokens/i }), {
       target: { value: '1200' },
     });
+    fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
 
     await waitFor(() => {
@@ -636,6 +671,7 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByLabelText(/section notes 1/i), {
       target: { value: 'Keep this first section under seven seconds.' },
     });
+    fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
@@ -689,6 +725,7 @@ describe('NewPostClient', () => {
         files: [new File(['png-bytes'], 'proof.png', { type: 'image/png' })],
       },
     });
+    fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
@@ -709,6 +746,15 @@ describe('NewPostClient', () => {
     expect(request.body.get('media')).toBeNull();
   });
 
+  // Every post now needs a title, so tests that submit have to name the post
+  // before clicking through. Tests asserting the title rule itself skip this.
+  // Deliberately not "test"/"sample"/"draft": those are placeholder tokens that
+  // getPublicPostQualityError rejects, which would block publishing here for a
+  // reason that has nothing to do with what each test is asserting.
+  function fillRequiredTitle(value = 'Neon skyline color study') {
+    fireEvent.change(screen.getByPlaceholderText(/Give your post a title/i), { target: { value } });
+  }
+
   function renderComposerWithTwoImages() {
     const { container } = render(<NewPostClient />);
     const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
@@ -720,7 +766,11 @@ describe('NewPostClient', () => {
         ],
       },
     });
-    return () => Array.from(screen.getByLabelText('Post media order').children) as HTMLElement[];
+    // The strip also holds the "Add media" tile, which is not a reorderable card.
+    return () =>
+      (Array.from(screen.getByLabelText('Post media order').children) as HTMLElement[]).filter(
+        (node) => node.getAttribute('aria-label') !== 'Add more media'
+      );
   }
 
   function pickUpCard(card: HTMLElement, clientX: number) {
@@ -763,6 +813,7 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /^title/i }), {
       target: { value: 'Eagerly uploaded post' },
     });
+    fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
@@ -815,6 +866,7 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /^title/i }), {
       target: { value: 'Two batches' },
     });
+    fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     // Publish is parked on batch A — nothing may dispatch yet.
@@ -971,6 +1023,7 @@ describe('NewPostClient', () => {
     expect(screen.getByText('2 of 5 media added')).toBeInTheDocument();
     expect(screen.getByLabelText('Post media order')).toBeInTheDocument();
 
+    fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
@@ -1043,6 +1096,7 @@ describe('NewPostClient', () => {
       expect(priceInput).toHaveFocus();
     });
 
+    fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
@@ -1168,6 +1222,7 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
       target: { value: 'A private draft note.' },
     });
+    fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
 
     await waitFor(() => {
@@ -1196,6 +1251,7 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByPlaceholderText(/Write the post content.../i), {
       target: { value: 'A public note for the community.' },
     });
+    fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
@@ -1230,6 +1286,7 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByPlaceholderText(/paste the exact prompt included in the recipe/i), {
       target: { value: 'Use a simple private-only setup.' },
     });
+    fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
 
     await waitFor(() => {
@@ -1412,6 +1469,7 @@ describe('NewPostClient', () => {
 
       const { container } = render(<NewPostClient />);
       attachFile(container, new File(['png-bytes'], 'proof.png', { type: 'image/png' }));
+      fillRequiredTitle();
       fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
       const progressBar = await screen.findByRole('progressbar', { name: /media upload progress/i });
@@ -1504,6 +1562,7 @@ describe('NewPostClient', () => {
         }),
       });
 
+      fillRequiredTitle();
       fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
 
@@ -1537,6 +1596,7 @@ describe('NewPostClient', () => {
         target: { files: [new File(['png-bytes'], 'proof.png', { type: 'image/png' })] },
       });
 
+      fillRequiredTitle();
       fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
       await waitFor(() => {
         expect(screen.getByText(/failed to create post/i)).toBeInTheDocument();
@@ -1554,6 +1614,7 @@ describe('NewPostClient', () => {
         }),
       });
 
+      fillRequiredTitle();
       fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
 

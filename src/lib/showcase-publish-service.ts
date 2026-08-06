@@ -529,6 +529,21 @@ export async function publishGenerationToShowcaseForRoute({
     ?? resolvedDependencies.deriveTitleFromBody(sanitizedPublicContent.body || null)
     ?? null;
 
+  // This endpoint serves two very different callers. Studio flips an existing
+  // post's visibility with nothing but { generationId, visibility }, and that
+  // must keep working — it is not composing anything. A request that carries
+  // post content is a compose submission, and those have to name the post.
+  const isComposeSubmission =
+    title !== undefined
+    || description !== undefined
+    || body !== undefined
+    || category !== undefined
+    || requestBody.resourceBundle !== undefined;
+
+  if (isComposeSubmission && !resolvedTitle) {
+    return { ok: false, status: 400, body: { error: 'Add a title for your post.', field: 'title' } };
+  }
+
   const safetyViolation = shouldExposePost
     ? getPublicUgcSafetyViolation({
         title: resolvedTitle,

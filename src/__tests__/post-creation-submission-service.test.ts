@@ -12,6 +12,7 @@ const sourceToolCatalog: SourceToolOption[] = [
 describe('preparePostCreationSubmission', () => {
   it('normalizes mixed posts from uploaded storage references', async () => {
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'mixed');
     formData.set('body', 'Keep the product benefit visible before the hook resolves.');
     formData.set('category', 'video');
@@ -34,7 +35,9 @@ describe('preparePostCreationSubmission', () => {
         postFormat: 'mixed',
         category: 'video',
         visibility: 'public',
-        title: 'Keep the product benefit visible before the hook resolves.',
+        // The author's own title, not one derived from the body: every new post
+        // is named explicitly now.
+        title: 'Studio lighting reference',
         sourceKind: 'external',
         mediaMimeType: 'video/mp4',
         hasSubmittedMedia: true,
@@ -62,6 +65,7 @@ describe('preparePostCreationSubmission', () => {
 
   it('rejects media metadata outside the authenticated user upload prefix', async () => {
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'media');
     formData.set('mediaItems', JSON.stringify([
       {
@@ -89,6 +93,7 @@ describe('preparePostCreationSubmission', () => {
   it('preserves submitted media keys and validates resource scopes against them', async () => {
     const buildFormData = (scopeKey: string) => {
       const formData = new FormData();
+      formData.set('title', 'Studio lighting reference');
       formData.set('postFormat', 'media');
       formData.set('category', 'image');
       formData.set('mediaItems', JSON.stringify([{
@@ -166,10 +171,39 @@ describe('preparePostCreationSubmission', () => {
     });
   });
 
-  it('never rejects a title derived from the body, which is cut shorter than the limit', async () => {
+  // Text posts used to be handed a title derived from their body, so an author
+  // could publish one without ever naming it. Every format is named explicitly
+  // now, and the body is no longer a fallback for any of them.
+  it.each(['text', 'media', 'mixed'])('rejects a %s post submitted without a title', async (postFormat) => {
+    const formData = new FormData();
+    formData.set('postFormat', postFormat);
+    formData.set('body', 'A body long enough to have been a usable derived title.');
+    formData.set('visibility', 'public');
+    if (postFormat !== 'text') {
+      formData.set('category', 'image');
+      formData.set('mediaStoragePath', 'uploads/user-1/proof.png');
+      formData.set('mediaOriginalName', 'proof.png');
+      formData.set('mediaContentType', 'image/png');
+    }
+
+    const result = await preparePostCreationSubmission({
+      formData,
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 400,
+      body: { error: 'Add a title for your post.', field: 'title' },
+    });
+  });
+
+  it('rejects a title that is only whitespace', async () => {
     const formData = new FormData();
     formData.set('postFormat', 'text');
-    formData.set('body', 'b'.repeat(500));
+    formData.set('title', '   \n  ');
+    formData.set('body', 'A text post whose author typed only spaces into the title.');
     formData.set('visibility', 'public');
 
     const result = await preparePostCreationSubmission({
@@ -178,9 +212,10 @@ describe('preparePostCreationSubmission', () => {
       sourceToolCatalog,
     });
 
-    expect(result).toMatchObject({ ok: true });
-    if (result.ok) {
-      expect(result.submission.title?.length).toBeLessThanOrEqual(TITLE_MAX_LENGTH);
-    }
+    expect(result).toMatchObject({
+      ok: false,
+      status: 400,
+      body: { error: 'Add a title for your post.', field: 'title' },
+    });
   });
 });

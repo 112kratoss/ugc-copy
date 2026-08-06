@@ -13,6 +13,7 @@ import {
   GripVertical,
   ImageIcon,
   Loader2,
+  Maximize2,
   Plus,
   Sparkles,
   UploadCloud,
@@ -53,6 +54,7 @@ import { supabase } from '@/lib/supabase';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
 import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-queue';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
+import ComposerMediaLightbox, { getComposerMediaLabel } from './ComposerMediaLightbox';
 import CreatableCombobox, { type CreatableComboboxOption } from './CreatableCombobox';
 import type { EditablePostDraft } from './post-editor-types';
 
@@ -1208,7 +1210,13 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     resourceWorkflowUrl,
   ]);
   const publicPostTitle = title.trim() || (trimmedBody ? trimmedBody.split(/[.!?\n]/)[0]?.trim() ?? '' : '');
+  const hasTitle = title.trim().length > 0;
   const completionChecklist = [
+    {
+      label: 'Title added',
+      complete: hasTitle,
+      detail: hasTitle ? 'Your post is named' : 'Every post needs a title',
+    },
     {
       label: 'Proof added',
       complete: hasMediaProof || trimmedBody.length >= 24,
@@ -1771,6 +1779,13 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const dragNodeRef = useRef<HTMLDivElement | null>(null);
   const dragDxRef = useRef(0);
 
+  // Every pointer that lands on a card body starts out as a tap, which opens the
+  // preview on release. It stops being one the moment it travels past the slop
+  // or the touch hold arms a pick-up, so scrolling and carrying stay silent.
+  const mediaTapCandidateRef = useRef(false);
+  const tapOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const [previewMediaIndex, setPreviewMediaIndex] = useState<number | null>(null);
+
   const clearMediaDragTimer = () => {
     if (dragTimerRef.current) {
       clearTimeout(dragTimerRef.current);
@@ -1787,6 +1802,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     dragOriginRef.current = null;
     dragNodeRef.current = null;
     dragDxRef.current = 0;
+    mediaTapCandidateRef.current = false;
+    tapOriginRef.current = null;
     setDraggedMediaId(null);
   };
 
@@ -1803,14 +1820,25 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   };
 
   const handleMediaPointerDown = (event: React.PointerEvent<HTMLDivElement>, id: string) => {
-    if (mediaPreviewItems.length < 2 || event.button !== 0) {
+    if (event.button !== 0) {
       return;
     }
-    // Remove and the arrow nudges live inside the card. Capturing the pointer for
-    // them would swallow their click and make the card lift on a plain button press.
+    // Remove, the arrow nudges and the expand control live inside the card.
+    // Capturing the pointer for them would swallow their click and make the card
+    // lift on a plain button press.
     if ((event.target as HTMLElement).closest('button')) {
       return;
     }
+
+    // Armed before the reorder guard below, because a lone media item has nothing
+    // to reorder but must still open its preview on tap.
+    mediaTapCandidateRef.current = true;
+    tapOriginRef.current = { x: event.clientX, y: event.clientY };
+
+    if (mediaPreviewItems.length < 2) {
+      return;
+    }
+
     dragOriginRef.current = { x: event.clientX, y: event.clientY };
     dragDxRef.current = 0;
 
@@ -1825,10 +1853,26 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     const node = event.currentTarget;
     const { pointerId } = event;
     clearMediaDragTimer();
-    dragTimerRef.current = setTimeout(() => armMediaDrag(node, pointerId, id), MEDIA_DRAG_HOLD_MS);
+    dragTimerRef.current = setTimeout(() => {
+      // The hold completed, so this is a deliberate pick-up: releasing in place
+      // should settle the card rather than pop a preview open.
+      mediaTapCandidateRef.current = false;
+      armMediaDrag(node, pointerId, id);
+    }, MEDIA_DRAG_HOLD_MS);
   };
 
   const handleMediaPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    // Checked ahead of the drag origin, which a single-item strip never sets.
+    const tapOrigin = tapOriginRef.current;
+    if (
+      tapOrigin
+      && (Math.abs(event.clientX - tapOrigin.x) > MEDIA_DRAG_SLOP
+        || Math.abs(event.clientY - tapOrigin.y) > MEDIA_DRAG_SLOP)
+    ) {
+      // Travelled too far to be a tap — this is a scroll or a carry.
+      mediaTapCandidateRef.current = false;
+    }
+
     const origin = dragOriginRef.current;
     if (!origin) {
       return;
@@ -1851,8 +1895,14 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   };
 
   const handleMediaPointerUp = (id: string, index: number) => {
+    // Read before resetMediaDrag clears it.
+    const wasTap = mediaTapCandidateRef.current;
+
     if (!dragArmedRef.current) {
       resetMediaDrag();
+      if (wasTap) {
+        setPreviewMediaIndex(index);
+      }
       return;
     }
 
@@ -1863,6 +1913,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     resetMediaDrag();
 
     if (slotDelta === 0 || !targetId || targetId === id) {
+      if (wasTap) {
+        setPreviewMediaIndex(index);
+      }
       return;
     }
 
@@ -2363,6 +2416,11 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       return;
     }
 
+    if (!hasTitle) {
+      stopWithError('Add a title for your post.', 'post');
+      return;
+    }
+
     if (proofMode === 'media' && !hasMediaProof) {
       stopWithError(hasGeneratedProof ? 'We could not load the generated media. Try again from My Studio.' : 'Upload an image or video to start the post.', 'post');
       return;
@@ -2768,7 +2826,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
               >
                 <label className="block">
                   <div className="mb-2 flex items-center justify-between gap-3">
-                    <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Title</span>
+                    <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                      Title <span className="text-sky-300">Required</span>
+                    </span>
                     {/* aria-hidden so the input's accessible name stays "Title, maximum N
                         characters" instead of churning on every keystroke; the limit itself
                         is announced once via aria-label. */}
@@ -2786,8 +2846,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       resetFeedback();
                     }}
                     maxLength={TITLE_MAX_LENGTH}
-                    aria-label={`Title, maximum ${TITLE_MAX_LENGTH} characters`}
-                    placeholder={proofMode === 'text' ? 'Title (optional)' : 'Give your post a title'}
+                    aria-label={`Title, required, maximum ${TITLE_MAX_LENGTH} characters`}
+                    aria-required="true"
+                    placeholder="Give your post a title"
                     className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
                   />
                 </label>
@@ -3233,7 +3294,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                                   // Held cards must not also pan the scroll container.
                                   touchAction: draggedMediaId === item.id ? 'none' : undefined,
                                 }}
-                                className={`relative w-28 shrink-0 cursor-grab touch-pan-x rounded-lg border p-1 transition-[border-color,box-shadow,opacity,scale] duration-150 ease-out select-none active:cursor-grabbing ${
+                                className={`group/media-card relative w-28 shrink-0 cursor-grab touch-pan-x rounded-lg border p-1 transition-[border-color,box-shadow,opacity,scale] duration-150 ease-out select-none active:cursor-grabbing ${
                                   draggedMediaId === item.id
                                     ? 'z-10 scale-[1.04] border-sky-300 bg-zinc-900 opacity-90 shadow-[0_8px_24px_rgba(0,0,0,0.45)]'
                                     : index === 0
@@ -3268,6 +3329,20 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                                   >
                                     <X className="h-4 w-4" />
                                   </button>
+                                  {/*
+                                    Tapping the card body already opens the preview.
+                                    This is the same action as a real control, so a
+                                    keyboard reaches it without the card itself having
+                                    to become a button around other buttons.
+                                  */}
+                                  <button
+                                    type="button"
+                                    onClick={() => setPreviewMediaIndex(index)}
+                                    aria-label={`Preview ${getComposerMediaLabel(index)}`}
+                                    className="absolute bottom-1 right-1 flex h-7 w-7 items-center justify-center rounded-md bg-black/75 text-zinc-200 opacity-0 transition-opacity duration-150 ease-out hover:text-white focus-visible:opacity-100 group-hover/media-card:opacity-100"
+                                  >
+                                    <Maximize2 className="h-3.5 w-3.5" />
+                                  </button>
                                 </div>
                                 <div className="mt-1 flex items-center justify-between gap-1 px-1 text-[11px] text-zinc-400">
                                   <span>{index === 0 ? 'Cover' : `${index + 1}`}</span>
@@ -3294,6 +3369,24 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                                 </div>
                               </div>
                             ))}
+                            {mediaPreviewItems.length < 5 ? (
+                              <button
+                                type="button"
+                                onClick={() => mediaInputRef.current?.click()}
+                                aria-label="Add more media"
+                                className="group w-28 shrink-0 rounded-lg border border-dashed border-white/15 bg-zinc-950 p-1 text-left transition-[border-color,background-color] duration-150 ease-out hover:border-sky-300/70 hover:bg-zinc-900"
+                              >
+                                <div className="flex aspect-[4/5] flex-col items-center justify-center gap-2 rounded-md bg-black">
+                                  <span className="flex h-10 w-10 items-center justify-center rounded-full border border-sky-400/50 bg-sky-400/10 transition-colors duration-150 ease-out group-hover:bg-sky-400/20">
+                                    <Plus className="h-5 w-5 text-sky-300" strokeWidth={2.8} />
+                                  </span>
+                                  <span className="text-[11px] font-semibold text-white">Add media</span>
+                                </div>
+                                <div className="mt-1 flex h-6 items-center px-1 text-[11px] text-zinc-400">
+                                  {`${5 - mediaPreviewItems.length} ${5 - mediaPreviewItems.length === 1 ? 'slot' : 'slots'} left`}
+                                </div>
+                              </button>
+                            ) : null}
                           </div>
                         ) : null}
                       </div>
@@ -4127,6 +4220,13 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           </aside>
         </div>
       </div>
+
+      <ComposerMediaLightbox
+        items={mediaPreviewItems}
+        activeIndex={previewMediaIndex}
+        onClose={() => setPreviewMediaIndex(null)}
+        onNavigate={setPreviewMediaIndex}
+      />
     </div>
   );
 }

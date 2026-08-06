@@ -28,6 +28,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppText, ChoiceChip, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
+import { ComposerMediaLightbox, getComposerMediaLabel } from '@/components/composer-media-lightbox';
 import { StableMediaImage } from '@/components/media-preview';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
@@ -260,10 +261,10 @@ function PostDetailsPage({
     : 'Add tool and model';
   const titleField = (
     <ComposerFieldShell>
-      <CompactFieldLabel label="Title" optional valueLength={draft.title.length} maxLength={TITLE_MAX_LENGTH} />
+      <CompactFieldLabel label="Title" required valueLength={draft.title.length} maxLength={TITLE_MAX_LENGTH} />
       <ComposerInput
         inputRef={titleInputRef}
-        accessibilityLabel="Title, optional"
+        accessibilityLabel="Title, required"
         accessibilityHint={`Enter a short title for this post. Maximum ${TITLE_MAX_LENGTH} characters.`}
         value={draft.title}
         onChangeText={(title) => onChange({ title: title.slice(0, TITLE_MAX_LENGTH) })}
@@ -3048,7 +3049,7 @@ function TitleSection({
       <ComposerInput
         value={draft.title}
         onChangeText={(title) => onChange({ title: title.slice(0, TITLE_MAX_LENGTH) })}
-        placeholder={draft.proofMode === 'text' ? 'Title (optional)' : 'Give your post a title'}
+        placeholder="Give your post a title"
         editable={!disabled}
       />
     </SurfaceSection>
@@ -4122,6 +4123,9 @@ function UploadContent({
   // can never win the gesture from JS once scrolling engages. Switching the
   // ScrollView off the moment a card is picked up is what hands the drag over.
   const [isReordering, setIsReordering] = useState(false);
+  // Kept here rather than threaded down from the screen: a Modal renders into
+  // its own native window, so the state only has to sit above the cards.
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
 
   return (
     <View style={{ gap: 10 }}>
@@ -4152,6 +4156,7 @@ function UploadContent({
               onRemoveMedia={onRemoveMedia}
               onReorderMedia={onReorderMedia}
               onDragStateChange={setIsReordering}
+              onPreviewMedia={setPreviewIndex}
             />
           ))}
           {!disabled && draft.mediaItems.length < 5 ? (
@@ -4191,6 +4196,12 @@ function UploadContent({
         </Pressable>
       )}
       <FieldErrorText message={error} />
+      <ComposerMediaLightbox
+        items={draft.mediaItems}
+        activeIndex={previewIndex}
+        onClose={() => setPreviewIndex(null)}
+        onNavigate={setPreviewIndex}
+      />
     </View>
   );
 }
@@ -4266,6 +4277,7 @@ function MediaGalleryCard({
   onRemoveMedia,
   onReorderMedia,
   onDragStateChange,
+  onPreviewMedia,
 }: {
   item: PostComposerMediaItem;
   index: number;
@@ -4274,6 +4286,7 @@ function MediaGalleryCard({
   onRemoveMedia: (id: string) => void;
   onReorderMedia: (id: string, targetIndex: number) => void;
   onDragStateChange: (dragging: boolean) => void;
+  onPreviewMedia: (index: number) => void;
 }) {
   const [dragOffset, setDragOffset] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
@@ -4281,7 +4294,11 @@ function MediaGalleryCard({
   const isResponderRef = useRef(false);
   const touchOriginRef = useRef<{ x: number; y: number } | null>(null);
   const dragTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const label = index === 0 ? 'Cover' : `Media ${index + 1}`;
+  // A touch on the card opens the preview on lift, unless it turns into a
+  // scroll, a hold, or lands on the remove control that sits on top of it.
+  const tapCandidateRef = useRef(false);
+  const suppressTapRef = useRef(false);
+  const label = getComposerMediaLabel(index);
   const canDrag = !disabled && totalItems > 1;
 
   const clearDragTimer = () => {
@@ -4318,11 +4335,19 @@ function MediaGalleryCard({
   // Press-and-hold arms the reorder. Until it fires the card claims nothing, so
   // an ordinary swipe scrolls the row instead of fighting it.
   const handleTouchStart = (event: GestureResponderEvent) => {
-    if (!canDrag) return;
     const { pageX, pageY } = event.nativeEvent;
+    // Recorded ahead of the canDrag guard: a lone media item has nothing to
+    // reorder but must still open its preview on tap.
     touchOriginRef.current = { x: pageX, y: pageY };
+    tapCandidateRef.current = true;
+
+    if (!canDrag) return;
+
     clearDragTimer();
     dragTimerRef.current = setTimeout(() => {
+      // The hold completed, so this is a deliberate pick-up — lifting in place
+      // should settle the card rather than open a preview.
+      tapCandidateRef.current = false;
       setDragArmed(true);
       setIsDragging(true);
       // Frees the gesture from the native scroller so the pan below can take it.
@@ -4341,15 +4366,25 @@ function MediaGalleryCard({
       Math.abs(pageX - origin.x) > MEDIA_DRAG_SLOP
       || Math.abs(pageY - origin.y) > MEDIA_DRAG_SLOP
     ) {
+      // Travelled too far to be a tap — this is a scroll.
+      tapCandidateRef.current = false;
       clearDragTimer();
     }
+  };
+
+  const clearTouchState = () => {
+    touchOriginRef.current = null;
+    tapCandidateRef.current = false;
+    suppressTapRef.current = false;
+    if (!isResponderRef.current) resetDrag();
   };
 
   // If the card armed but the finger lifted without ever moving, no responder
   // callback runs — clean up here so it does not stay stuck in the lifted state.
   const handleTouchEnd = () => {
-    touchOriginRef.current = null;
-    if (!isResponderRef.current) resetDrag();
+    const wasTap = tapCandidateRef.current && !suppressTapRef.current;
+    clearTouchState();
+    if (wasTap) onPreviewMedia(index);
   };
 
   const dragResponder = useMemo(() => PanResponder.create({
@@ -4380,7 +4415,11 @@ function MediaGalleryCard({
     <View
       accessibilityRole={canDrag ? 'adjustable' : undefined}
       accessibilityLabel={canDrag ? `${label}, ${index + 1} of ${totalItems}` : undefined}
+      accessibilityHint="Opens a full preview of this media"
       accessibilityValue={canDrag ? { text: `${index + 1} of ${totalItems}` } : undefined}
+      // The pointer path opens the preview on tap; this is the same action for
+      // a screen reader, which never produces those raw touch events.
+      onAccessibilityTap={() => onPreviewMedia(index)}
       accessibilityActions={canDrag ? [
         { name: 'decrement', label: 'Move left' },
         { name: 'increment', label: 'Move right' },
@@ -4397,7 +4436,7 @@ function MediaGalleryCard({
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
-      onTouchCancel={handleTouchEnd}
+      onTouchCancel={clearTouchState}
       style={{
         width: MEDIA_CARD_WIDTH,
         borderRadius: 16,
@@ -4428,6 +4467,9 @@ function MediaGalleryCard({
             accessibilityRole="button"
               accessibilityLabel={`Remove ${label}`}
               hitSlop={9}
+            // Touch events reach the card underneath too, so removal has to say
+            // "not a tap" or dismissing a card would also open its preview.
+            onPressIn={() => { suppressTapRef.current = true; }}
             onPress={() => onRemoveMedia(item.id)}
             style={({ pressed }) => ({
               position: 'absolute',

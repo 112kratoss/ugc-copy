@@ -832,12 +832,14 @@ export function getPostComposerDetailErrors(
     errors.content = `Posts are limited to ${BODY_MAX_LENGTH} characters.`;
   }
 
-  // Titles are optional on every post format, matching the server and the web
-  // composer: text posts derive one from the body, media posts may publish
-  // without one. Only the length limit is enforced, and a title the post
-  // already had when it exceeded that limit is grandfathered unchanged.
+  // Every post is named by its author, on every format, matching the server and
+  // the web composer. Posts written before this rule keep their derived or
+  // absent title until someone edits them. The length limit still grandfathers a
+  // title the post already had when it exceeded that limit.
   const trimmedTitle = draft.title.trim();
-  if (
+  if (!trimmedTitle) {
+    errors.title = 'Add a title for your post.';
+  } else if (
     trimmedTitle.length > TITLE_MAX_LENGTH
     && trimmedTitle !== (options.grandfatheredTitle ?? '').trim()
   ) {
@@ -1170,7 +1172,9 @@ export function getPostComposerReadiness(
       id: 'preview',
       label: 'Preview updates live',
       body: draft.title.trim() ? 'The preview reflects the public post and unlock cue.' : 'Add a title to make the preview meaningful.',
-      state: draft.title.trim() ? 'ready' : 'neutral',
+      // A missing title now blocks publishing, so this reads as a warning
+      // rather than an idle suggestion.
+      state: draft.title.trim() ? 'ready' : 'warning',
     },
     {
       id: 'publish',
