@@ -1940,9 +1940,12 @@ export async function startVideoGeneration(params: {
         firstFrameUrl ? 'image' : 'text',
         firstFrameUrl ? 'kling/v3-turbo-image-to-video' : 'kling/v3-turbo-text-to-video',
       );
+      // Kling v3 Turbo types `duration` as a string ('5'), where grok-imagine
+      // types the same field as an integer. Every other Kling branch already
+      // sends String(...); this one passed the raw number straight through.
       const input: Record<string, unknown> = {
         prompt: compiledPrompt,
-        duration,
+        duration: String(duration),
         resolution,
       };
       if (firstFrameUrl) {
