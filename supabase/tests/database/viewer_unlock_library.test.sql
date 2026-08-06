@@ -7,7 +7,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(18);
+select plan(19);
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
 values
@@ -40,17 +40,29 @@ select
   case when suffix = 2 then 0 else 500 end
 from generate_series(1, 3) AS suffix;
 
+-- Created orders must carry the immutable quote checkout would have pinned;
+-- each bundle insert above minted revision 1, so quote against that.
 insert into public.post_resource_bundle_orders (
   id, bundle_id, buyer_user_id, razorpay_order_id, razorpay_payment_id,
-  amount_subunits, currency, status
+  amount_subunits, currency, status,
+  quoted_price_usd_cents, quoted_revision_id, quoted_content_fingerprint, quoted_media
 )
 select
   ('41000000-0000-4000-8000-00000000000' || suffix)::uuid,
   ('31000000-0000-4000-8000-00000000000' || suffix)::uuid,
   '12000000-0000-4000-8000-000000000002'::uuid,
   'order_lib_' || suffix, 'pay_lib_' || suffix,
-  case when suffix = 2 then 0 else 500 end, 'USD', 'created'
-from generate_series(1, 3) AS suffix;
+  case when suffix = 2 then 0 else 500 end, 'USD', 'created',
+  case when suffix = 2 then 0 else 500 end,
+  revisions.id, revisions.content_fingerprint, '[]'::jsonb
+from generate_series(1, 3) AS suffix
+join lateral (
+  select id, content_fingerprint
+  from public.post_resource_bundle_revisions
+  where bundle_id = ('31000000-0000-4000-8000-00000000000' || suffix)::uuid
+  order by revision_number desc
+  limit 1
+) as revisions on true;
 
 insert into public.post_resource_bundle_purchases (
   bundle_id, buyer_user_id, order_id, price_usd_cents, amount_subunits, currency
@@ -169,16 +181,21 @@ update public.posts
 set review_status = 'hidden'
 where id = '21000000-0000-4000-8000-000000000003'::uuid;
 
--- A newer revision is surfaced so the buyer can tell something changed.
-update public.post_resource_bundles
-set prompt_text = 'Rewritten prompt'
-where id = '31000000-0000-4000-8000-000000000001'::uuid;
+-- Sold content is frozen: the rewrite is refused, so a paid unlock can never
+-- dangle a newer version under its buyer.
+select throws_ok(
+  $$update public.post_resource_bundles
+    set prompt_text = 'Rewritten prompt'
+    where id = '31000000-0000-4000-8000-000000000001'::uuid$$,
+  'RESOURCE_BUNDLE_LOCKED: purchased package content cannot be changed',
+  'sold bundle content cannot change under the buyer'
+);
 
 select ok(
-  (select has_newer_revision from public.list_viewer_post_resource_unlocks(
+  not (select has_newer_revision from public.list_viewer_post_resource_unlocks(
     '12000000-0000-4000-8000-000000000002'::uuid, 24, 0)
    where post_id = '21000000-0000-4000-8000-000000000001'::uuid),
-  'an edited bundle is flagged as having a newer version'
+  'a frozen purchase never reports a newer version'
 );
 
 select is(

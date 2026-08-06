@@ -548,6 +548,9 @@ values (
   'Paid prompt'
 );
 
+-- Created orders must carry the immutable quote checkout would have pinned;
+-- the bundle insert above minted revision 1, so all three orders below quote
+-- that revision at its 200-cent price.
 insert into public.post_resource_bundle_orders (
   id,
   bundle_id,
@@ -555,7 +558,11 @@ insert into public.post_resource_bundle_orders (
   razorpay_order_id,
   amount_subunits,
   currency,
-  status
+  status,
+  quoted_price_usd_cents,
+  quoted_revision_id,
+  quoted_content_fingerprint,
+  quoted_media
 )
 values (
   'c3000000-3000-4000-8000-000000000003'::uuid,
@@ -564,7 +571,15 @@ values (
   'order_resource_cash_1',
   19900,
   'INR',
-  'created'
+  'created',
+  200,
+  (select id from public.post_resource_bundle_revisions
+   where bundle_id = 'c2000000-2000-4000-8000-000000000002'::uuid
+   order by revision_number desc limit 1),
+  (select content_fingerprint from public.post_resource_bundle_revisions
+   where bundle_id = 'c2000000-2000-4000-8000-000000000002'::uuid
+   order by revision_number desc limit 1),
+  '[]'::jsonb
 );
 
 select is(
@@ -598,7 +613,11 @@ insert into public.post_resource_bundle_orders (
   razorpay_order_id,
   amount_subunits,
   currency,
-  status
+  status,
+  quoted_price_usd_cents,
+  quoted_revision_id,
+  quoted_content_fingerprint,
+  quoted_media
 )
 values (
   'c3500000-3500-4000-8000-000000000003'::uuid,
@@ -607,7 +626,15 @@ values (
   'order_resource_duplicate_checkout',
   19900,
   'INR',
-  'created'
+  'created',
+  200,
+  (select id from public.post_resource_bundle_revisions
+   where bundle_id = 'c2000000-2000-4000-8000-000000000002'::uuid
+   order by revision_number desc limit 1),
+  (select content_fingerprint from public.post_resource_bundle_revisions
+   where bundle_id = 'c2000000-2000-4000-8000-000000000002'::uuid
+   order by revision_number desc limit 1),
+  '[]'::jsonb
 );
 
 select is(
@@ -731,7 +758,11 @@ insert into public.post_resource_bundle_orders (
   razorpay_order_id,
   amount_subunits,
   currency,
-  status
+  status,
+  quoted_price_usd_cents,
+  quoted_revision_id,
+  quoted_content_fingerprint,
+  quoted_media
 )
 values (
   'c4000000-4000-4000-8000-000000000004'::uuid,
@@ -740,7 +771,15 @@ values (
   'order_resource_refund_before_capture',
   19900,
   'INR',
-  'created'
+  'created',
+  200,
+  (select id from public.post_resource_bundle_revisions
+   where bundle_id = 'c2000000-2000-4000-8000-000000000002'::uuid
+   order by revision_number desc limit 1),
+  (select content_fingerprint from public.post_resource_bundle_revisions
+   where bundle_id = 'c2000000-2000-4000-8000-000000000002'::uuid
+   order by revision_number desc limit 1),
+  '[]'::jsonb
 );
 
 select is(
