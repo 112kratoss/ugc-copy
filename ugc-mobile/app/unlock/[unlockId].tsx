@@ -28,6 +28,17 @@ export default function ViewerUnlockScreen() {
   const resources = purchasedSelected
     ? detail?.purchasedRevision.resources ?? null
     : detail?.currentResources ?? detail?.purchasedRevision.resources ?? null;
+  const selectedRevision = purchasedSelected ? detail?.purchasedRevision : null;
+  const activeTitle = selectedRevision?.title ?? detail?.title ?? 'Creator unlock';
+  const activeSummary = selectedRevision?.summary
+    || selectedRevision?.previewText
+    || detail?.summary
+    || detail?.previewText
+    || 'Reusable creator resources.';
+  const activeAccessMode = selectedRevision?.accessMode ?? detail?.accessMode ?? 'free';
+  const activePriceUsdCents = selectedRevision?.priceUsdCents ?? detail?.priceUsdCents ?? 0;
+  const activeVersionPrice = activeAccessMode === 'free' ? 'Free' : `${activePriceUsdCents} credits`;
+  const activeMediaItems = selectedRevision?.mediaItems ?? detail?.mediaItems ?? [];
 
   const resolveResourceFileUrl = async (storagePath: string) => {
     if (!unlockId) throw new Error('Missing unlock identity.');
@@ -59,7 +70,7 @@ export default function ViewerUnlockScreen() {
     <Screen>
       <SectionTitle
         eyebrow="Your unlock"
-        title={detail?.title ?? 'Creator unlock'}
+        title={activeTitle}
         body={detail ? `by ${detail.creatorDisplayName}` : 'Loading your purchased resources.'}
       />
 
@@ -73,14 +84,17 @@ export default function ViewerUnlockScreen() {
 
       {detail ? (
         <>
-          <Card accent={detail.accessMode === 'free' ? 'workflow' : 'commerce'}>
+          <Card accent={activeAccessMode === 'free' ? 'workflow' : 'commerce'}>
             <MediaPreview url={detail.post?.mediaUrl ?? null} kind={detail.post?.mediaKind ?? null} />
             <View style={{ gap: appTheme.spacing.compact }}>
               <Pill
                 label={detail.purchasePriceUsdCents > 0 ? `${detail.purchasePriceUsdCents} credits paid` : 'Free unlock'}
-                accent={detail.accessMode === 'free' ? 'workflow' : 'commerce'}
+                accent={activeAccessMode === 'free' ? 'workflow' : 'commerce'}
               />
-              <AppText variant="body" color="text">{detail.summary || detail.previewText || 'Reusable creator resources.'}</AppText>
+              <AppText variant="caption" color="faint">
+                {purchasedSelected ? `Purchased version ${detail.purchasedRevision.revisionNumber}` : 'Latest version'} · {activeVersionPrice}
+              </AppText>
+              <AppText variant="body" color="text">{activeSummary}</AppText>
               {detail.detached ? (
                 <AppText variant="bodySm" color="muted">The creator deleted their account. Your purchased version and files are retained.</AppText>
               ) : detail.tombstoned || detail.retired ? (
@@ -104,6 +118,7 @@ export default function ViewerUnlockScreen() {
                   { label: 'Purchased', selected: showPurchased, onPress: () => setShowPurchased(true) },
                 ].map((option) => (
                   <Pressable
+                    accessibilityLabel={`Show ${option.label.toLowerCase()} unlock version`}
                     accessibilityRole="button"
                     accessibilityState={{ selected: option.selected }}
                     key={option.label}
@@ -126,6 +141,7 @@ export default function ViewerUnlockScreen() {
 
             <PostResourceBundleContent
               fileLoadingPath={fileLoadingPath}
+              mediaItems={activeMediaItems}
               onCopy={async (text) => {
                 await Clipboard.setStringAsync(text);
               }}

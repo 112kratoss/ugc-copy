@@ -264,6 +264,17 @@
     "uploadPostResourceFile": {
       "method": "POST",
       "path": "/api/posts/resource-files",
+      "auth": "required",
+      "retired": "Multipart resource uploads are retired and answer 410 DIRECT_UPLOAD_REQUIRED. Kept in the registry so shipped builds that still call it receive that answer with CORS and version headers attached instead of an opaque failure. Remove once the client compatibility policy drops those versions."
+    },
+    "signPostResourceFileUpload": {
+      "method": "POST",
+      "path": "/api/posts/resource-files/sign",
+      "auth": "required"
+    },
+    "finalizePostResourceFileUpload": {
+      "method": "POST",
+      "path": "/api/posts/resource-files/finalize",
       "auth": "required"
     },
     "createMediaUpload": {

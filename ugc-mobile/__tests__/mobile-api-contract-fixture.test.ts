@@ -98,7 +98,23 @@ const successCases: Array<{
       catalogRevision: 'catalog-rev-1',
     }),
   },
-  { key: 'uploadPostResourceFile', call: (api) => api.uploadPostResourceFile(new FormData()) },
+  {
+    key: 'signPostResourceFileUpload',
+    call: (api) => api.signPostResourceFileUpload({
+      fileName: 'prompt.txt',
+      contentType: 'text/plain',
+      sizeBytes: 256,
+    }),
+  },
+  {
+    key: 'finalizePostResourceFileUpload',
+    call: (api) => api.finalizePostResourceFileUpload({
+      path: 'user-1/11111111-1111-4111-8111-111111111111-prompt.txt',
+      fileName: 'prompt.txt',
+      contentType: 'text/plain',
+      sizeBytes: 256,
+    }),
+  },
   {
     key: 'mediaUploadIntent',
     call: (api) => api.createMediaUpload({
@@ -279,14 +295,22 @@ describe('mobile shared API v1 contract fixture', () => {
       },
       fetcher: vi.fn() as unknown as typeof fetch,
     });
+    // A retired operation stays in the registry so shipped builds that still
+    // call it keep getting CORS and version headers on the route's 410, but
+    // this client no longer has a method for it.
+    const liveOperations = Object.entries(mobileApiOperationsV1.operations)
+      .filter(([, operation]) => !('retired' in operation))
+      .map(([key]) => key)
+      .sort();
+
     const clientOperations = Object.keys(api).filter((key) => key !== 'request').sort();
-    expect(clientOperations).toEqual(Object.keys(mobileApiOperationsV1.operations).sort());
+    expect(clientOperations).toEqual(liveOperations);
 
     const exercisedOperations = [
       ...successCases.map(({ key }) => legacyOperationAliases[key] ?? key),
       ...extendedOperationCases.map(({ key }) => key),
     ].sort();
-    expect(exercisedOperations).toEqual(Object.keys(mobileApiOperationsV1.operations).sort());
+    expect(exercisedOperations).toEqual(liveOperations);
   });
 
   it.each(extendedOperationCases)('keeps $key aligned with its registered method and route', async ({ key, call }) => {

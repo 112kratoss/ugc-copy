@@ -957,6 +957,39 @@ export interface PostResourceAttachment {
   remixUse?: PostResourceRemixUse | null;
 }
 
+/**
+ * Resource files are uploaded straight to storage, the same way the web
+ * composer does it: sign for a one-time URL, PUT the bytes, then finalize so
+ * the server can verify what actually landed. The multipart route this used to
+ * post to is retired and answers 410.
+ */
+export interface PostResourceFileUploadMetadata {
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+}
+
+export interface PostResourceFileSignRequest extends PostResourceFileUploadMetadata {}
+
+export interface PostResourceFileSignResponse {
+  success: boolean;
+  bucket: 'post_resource_files';
+  path: string;
+  token: string;
+  signedUploadUrl: string | null;
+  expiresInSeconds: number;
+  expected: PostResourceFileUploadMetadata;
+}
+
+export interface PostResourceFileFinalizeRequest extends PostResourceFileUploadMetadata {
+  path: string;
+}
+
+export interface PostResourceFileFinalizeResponse {
+  success: boolean;
+  attachment: PostResourceAttachment;
+}
+
 export interface PostResourceBundleResources {
   promptText: string | null;
   notesMarkdown: string | null;
@@ -1272,6 +1305,7 @@ export interface ViewerUnlockRevision {
   accessMode: 'free' | 'paid';
   priceUsdCents: number;
   resources: PostResourceBundleResources;
+  mediaItems: ShowcaseMediaItem[];
 }
 
 export interface ViewerUnlockDetail {
@@ -1284,6 +1318,7 @@ export interface ViewerUnlockDetail {
   accessMode: 'free' | 'paid';
   priceUsdCents: number;
   purchasePriceUsdCents: number;
+  salesCount: number | null;
   purchasedAt: string;
   creatorDisplayName: string;
   resourceKinds: PostResourceKind[];
@@ -1295,6 +1330,7 @@ export interface ViewerUnlockDetail {
   tombstoned: boolean;
   postVisibility: string | null;
   post: MarketplaceResource['post'] | null;
+  mediaItems: ShowcaseMediaItem[];
 }
 
 export interface ViewerUnlockDetailResponse {

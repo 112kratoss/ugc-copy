@@ -52,6 +52,7 @@ let viewerHasPurchased: boolean;
 let bundlePresenceError: unknown;
 let postRow: Record<string, unknown> | null;
 let purchasedRevisionRow: Record<string, unknown> | null;
+let purchasedMediaRows: Record<string, unknown>[];
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({
@@ -67,6 +68,9 @@ vi.mock('@/lib/server-helpers', () => ({
     },
     storage: {
       from: vi.fn(() => ({
+        getPublicUrl: (filePath: string) => ({
+          data: { publicUrl: `https://public.example.com/${filePath}` },
+        }),
         createSignedUrl: vi.fn(async (filePath: string) => ({
           data: { signedUrl: `https://signed.example.com/${filePath}` },
           error: null,
@@ -123,13 +127,22 @@ vi.mock('@/lib/server-helpers', () => ({
           async maybeSingle() {
             return {
               data: viewerHasPurchased
-                ? { bundle_id: 'bundle-1', buyer_user_id: 'viewer-1' }
+                ? { id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: 'viewer-1' }
                 : null,
               error: null,
             };
           },
         };
 
+        return query;
+      }
+
+      if (table === 'post_resource_purchase_media') {
+        const query = {
+          select() { return query; },
+          eq() { return query; },
+          async order() { return { data: purchasedMediaRows, error: null }; },
+        };
         return query;
       }
 
@@ -260,6 +273,45 @@ vi.mock('@/lib/server-helpers', () => ({
 }));
 
 describe('post resource bundle server access', () => {
+  it('commits post, bundle, and proof media through the combined mutation RPC', async () => {
+    const rpc = vi.fn(async () => ({
+      data: {
+        post_id: 'post-1',
+        visibility: 'private',
+        bundle_id: 'bundle-1',
+        bundle_status: 'draft',
+      },
+      error: null,
+    }));
+    const { updatePostWithResourceBundleAtomically } = await import('@/lib/post-resource-bundles-server');
+
+    await updatePostWithResourceBundleAtomically({
+      supabase: { rpc } as never,
+      postId: 'post-1',
+      ownerUserId: 'user-1',
+      patch: { title: 'Atomic edit' },
+      hasBundlePayload: false,
+      bundle: null,
+      mediaItems: [{
+        mediaKey: 'proof-new',
+        storagePath: 'posts/post-1/new.jpg',
+        mediaKind: 'image',
+        contentType: 'image/jpeg',
+        originalName: 'new.jpg',
+        sortOrder: 0,
+      }],
+    });
+
+    expect(rpc).toHaveBeenCalledWith('update_post_with_resource_bundle_and_media', {
+      p_post_id: 'post-1',
+      p_owner_user_id: 'user-1',
+      p_post_patch: { title: 'Atomic edit' },
+      p_has_bundle: false,
+      p_bundle: null,
+      p_media_items: [expect.objectContaining({ mediaKey: 'proof-new' })],
+    });
+  });
+
   beforeEach(() => {
     vi.resetModules();
     bundleRow = {
@@ -349,6 +401,22 @@ describe('post resource bundle server access', () => {
       created_at: '2026-06-05T00:00:00.000Z',
     };
     purchasedRevisionRow = null;
+    purchasedMediaRows = [{
+      purchase_id: 'purchase-1',
+      source_media_id: 'proof-media-1',
+      media_key: 'purchased-output-1',
+      storage_path: 'owner-1/posts/original.png',
+      external_url: null,
+      preview_storage_path: 'owner-1/posts/original-preview.png',
+      preview_thumbhash: 'thumbhash-original',
+      media_kind: 'image',
+      content_type: 'image/png',
+      original_name: 'original.png',
+      width: 800,
+      height: 1000,
+      duration_seconds: null,
+      sort_order: 0,
+    }];
   });
 
   it('keeps a published free recipe gated until the viewer adds it', async () => {
@@ -764,7 +832,9 @@ describe('post resource bundle server access', () => {
       is_latest: false,
       content_fingerprint: 'fingerprint-of-what-they-bought',
       title: 'Launch hook recipe',
+      summary: 'Original buyer-facing summary',
       preview_text: 'The version you unlocked.',
+      access_mode: 'paid',
       price_usd_cents: 500,
       prompt_text: 'THE PROMPT THEY PAID FOR',
       notes_markdown: 'Notes they paid for',
@@ -792,7 +862,21 @@ describe('post resource bundle server access', () => {
       expect(detail?.resources?.promptText).toBe('Rewritten to something useless');
       // ...but what they actually paid for stays retrievable.
       expect(detail?.purchasedRevision?.revisionNumber).toBe(2);
+      expect(detail?.purchasedRevision).toMatchObject({
+        title: 'Launch hook recipe',
+        summary: 'Original buyer-facing summary',
+        previewText: 'The version you unlocked.',
+        accessMode: 'paid',
+        priceUsdCents: 500,
+      });
       expect(detail?.purchasedRevision?.resources.promptText).toBe('THE PROMPT THEY PAID FOR');
+      expect(detail?.purchasedRevision?.mediaItems).toEqual([
+        expect.objectContaining({
+          mediaKey: 'purchased-output-1',
+          url: 'https://public.example.com/owner-1/posts/original.png',
+          previewUrl: 'https://public.example.com/owner-1/posts/original-preview.png',
+        }),
+      ]);
     });
 
     it('omits the purchased revision while the bundle is unchanged', async () => {

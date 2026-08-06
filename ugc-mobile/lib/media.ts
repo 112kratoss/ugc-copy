@@ -5,6 +5,7 @@ import { env, getMissingMobileEnvKeys } from './env';
 import {
   getUploadExtension,
   inspectUriUpload,
+  UploadCancelledError,
   uploadUriToSignedUrl,
   type UriUploadProgress,
 } from './upload-file';
@@ -23,6 +24,68 @@ export interface UploadedMedia {
 
 const CLIENT_UPLOAD_BUCKETS = new Set(['uploads']);
 const TEMPLATE_INPUT_BUCKET = 'template_inputs';
+const RESOURCE_FILES_BUCKET = 'post_resource_files';
+// Mirrors MAX_POST_RESOURCE_FILE_SIZE_BYTES in
+// src/lib/post-resource-file-upload-service.ts. Checked here as well so an
+// oversized pick fails before the bytes are pushed anywhere.
+const MAX_RESOURCE_FILE_SIZE_BYTES = 50 * 1024 * 1024;
+
+const REFERENCE_MEDIA_FAMILY_BY_EXTENSION = new Map<string, 'image' | 'video' | 'audio'>([
+  ['jpg', 'image'],
+  ['jpeg', 'image'],
+  ['png', 'image'],
+  ['webp', 'image'],
+  ['gif', 'image'],
+  ['heic', 'image'],
+  ['heif', 'image'],
+  ['mp4', 'video'],
+  ['m4v', 'video'],
+  ['mov', 'video'],
+  ['webm', 'video'],
+  ['mp3', 'audio'],
+  ['wav', 'audio'],
+  ['m4a', 'audio'],
+  ['aac', 'audio'],
+  ['ogg', 'audio'],
+  ['flac', 'audio'],
+]);
+
+function getFileNameExtension(fileName: string | null | undefined): string | null {
+  const baseName = fileName?.split(/[\\/]/).filter(Boolean).pop()?.trim() ?? '';
+  const dotIndex = baseName.lastIndexOf('.');
+  if (dotIndex <= 0 || dotIndex === baseName.length - 1) return null;
+  return baseName.slice(dotIndex + 1).toLowerCase();
+}
+
+function validateReferenceMediaFile(fileName: string | null | undefined, mimeType: string): void {
+  const extensionFamily = REFERENCE_MEDIA_FAMILY_BY_EXTENSION.get(getFileNameExtension(fileName) ?? '');
+  const normalizedMimeType = mimeType.split(';')[0]?.trim().toLowerCase() ?? '';
+  const mimeFamily = /^(image|video|audio)\//.exec(normalizedMimeType)?.[1] ?? null;
+
+  if (
+    !extensionFamily
+    || (mimeFamily !== null && mimeFamily !== extensionFamily)
+    || (mimeFamily === null && normalizedMimeType !== 'application/octet-stream')
+  ) {
+    throw new Error('Choose an image, video, or audio file for reference media.');
+  }
+}
+
+function throwIfUploadCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new UploadCancelledError();
+}
+
+async function awaitAbortAware<T>(signal: AbortSignal | undefined, operation: Promise<T>): Promise<T> {
+  try {
+    return await operation;
+  } catch (error) {
+    // The API client intentionally wraps fetch failures in ApiError. Restore
+    // the upload-specific cancellation shape so the editor offers Retry
+    // instead of presenting an aborted sign/finalize request as a network bug.
+    if (signal?.aborted) throw new UploadCancelledError();
+    throw error;
+  }
+}
 
 function assertClientUploadBucket(bucket: string) {
   if (!CLIENT_UPLOAD_BUCKETS.has(bucket)) {
@@ -83,17 +146,61 @@ export async function pickAudioDocument() {
   return result.assets[0];
 }
 
-export async function pickResourceDocument() {
+export type ResourceDocumentPickerMode = 'reference_media' | 'resource';
+
+const REFERENCE_MEDIA_DOCUMENT_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'image/heic',
+  'image/heif',
+  'video/mp4',
+  'video/x-m4v',
+  'video/quicktime',
+  'video/webm',
+  'audio/mpeg',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/mp4',
+  'audio/aac',
+  'audio/ogg',
+  'audio/flac',
+] as const;
+
+// Keep this aligned with ALLOWED_RESOURCE_FILE_TYPES in the web upload
+// service. Including the specific aliases matters on Android, where providers
+// commonly report YAML, gzip, and CSV files under different safe MIME names.
+const RESOURCE_DOCUMENT_TYPES = [
+  ...REFERENCE_MEDIA_DOCUMENT_TYPES,
+  'application/csv',
+  'application/json',
+  'application/pdf',
+  'application/gzip',
+  'application/octet-stream',
+  'application/x-yaml',
+  'application/x-gzip',
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/yaml',
+  'text/comma-separated-values',
+  'text/csv',
+  'text/markdown',
+  'text/plain',
+  'text/x-markdown',
+  'text/x-yaml',
+  'text/yaml',
+] as const;
+
+export async function pickResourceDocument(mode: ResourceDocumentPickerMode = 'resource') {
   const result = await DocumentPicker.getDocumentAsync({
-    type: [
-      'application/json',
-      'application/pdf',
-      'application/zip',
-      'application/x-zip-compressed',
-      'application/gzip',
-      'text/*',
-      '*/*',
-    ],
+    // Deliberately no '*/*' entry: with the wildcard present the picker offers
+    // every file on the device and the allowlist becomes decoration. Reference
+    // cards are narrower still so a PDF or archive cannot later be mislabeled
+    // as reference media.
+    type: mode === 'reference_media'
+      ? [...REFERENCE_MEDIA_DOCUMENT_TYPES]
+      : [...RESOURCE_DOCUMENT_TYPES],
     multiple: false,
     copyToCacheDirectory: true,
   });
@@ -225,6 +332,85 @@ export async function uploadTemplateRunInput(
   return options.api.finalizeTemplateRunInput(options.runId, {
     inputs: [{ slotKey: options.slotKey, storagePath: uploadIntent.storagePath }],
   });
+}
+
+/**
+ * Uploads a resource-bundle attachment the same way the web composer does:
+ * sign, PUT the bytes straight to storage, then finalize so the server can
+ * confirm the object matches the intent it issued. The old multipart route is
+ * retired and answers 410, so this path is the only one that works.
+ */
+export async function uploadResourceDocument(
+  uri: string,
+  options: {
+    api: Pick<MagicbookletApiClient, 'signPostResourceFileUpload' | 'finalizePostResourceFileUpload'>;
+    fileName?: string | null;
+    mimeType?: string | null;
+    sizeBytes?: number | null;
+    mediaOnly?: boolean;
+    signal?: AbortSignal;
+    onProgress?: (progress: UriUploadProgress) => void;
+  }
+) {
+  const missingEnvKeys = getMissingMobileEnvKeys();
+  if (missingEnvKeys.length > 0) {
+    throw new Error(`Configure mobile uploads first: ${missingEnvKeys.join(', ')}`);
+  }
+
+  const upload = await inspectUriUpload(uri, {
+    mimeType: options.mimeType,
+    sizeBytes: options.sizeBytes,
+  });
+
+  if (options.mediaOnly) validateReferenceMediaFile(options.fileName, upload.mimeType);
+
+  if (upload.sizeBytes > MAX_RESOURCE_FILE_SIZE_BYTES) {
+    throw new Error('Resource files must be 50MB or smaller.');
+  }
+
+  const extension = getFileNameExtension(options.fileName)
+    ?? getUploadExtension(upload.mimeType, options.fileName);
+  const fileName = sanitizeUploadFileName(
+    options.fileName,
+    extension ? `resource.${extension}` : 'resource'
+  );
+  throwIfUploadCancelled(options.signal);
+  const uploadIntent = await awaitAbortAware(
+    options.signal,
+    options.api.signPostResourceFileUpload({
+      fileName,
+      contentType: upload.mimeType,
+      sizeBytes: upload.sizeBytes,
+    }, options.signal),
+  );
+
+  if (uploadIntent.bucket !== RESOURCE_FILES_BUCKET) {
+    throw new Error('Unsupported resource upload bucket.');
+  }
+
+  throwIfUploadCancelled(options.signal);
+  await uploadUriToSignedUrl(uri, resolveSignedUploadUrl(uploadIntent), {
+    // The server signs for the content type it resolved, not the one the
+    // picker guessed, so send that back or finalize rejects the object.
+    mimeType: uploadIntent.expected.contentType,
+    onProgress: options.onProgress,
+    signal: options.signal,
+    sizeBytes: upload.sizeBytes,
+  });
+
+  throwIfUploadCancelled(options.signal);
+  const finalized = await awaitAbortAware(
+    options.signal,
+    options.api.finalizePostResourceFileUpload({
+      path: uploadIntent.path,
+      fileName,
+      contentType: uploadIntent.expected.contentType,
+      sizeBytes: upload.sizeBytes,
+    }, options.signal),
+  );
+  throwIfUploadCancelled(options.signal);
+
+  return finalized.attachment;
 }
 
 export async function uploadProfileImage(

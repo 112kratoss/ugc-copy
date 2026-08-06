@@ -27,6 +27,7 @@ vi.mock('lucide-react-native', () => ({
   ExternalLink: (props: MockProps) => React.createElement('external-link-icon', props),
   FileText: (props: MockProps) => React.createElement('file-icon', props),
   Link2: (props: MockProps) => React.createElement('link-icon', props),
+  Lock: (props: MockProps) => React.createElement('lock-icon', props),
   Repeat2: (props: MockProps) => React.createElement('repeat-icon', props),
   Settings2: (props: MockProps) => React.createElement('settings-icon', props),
 }));
@@ -137,6 +138,66 @@ describe('PostResourceBundleContent', () => {
     expect(values).not.toContain('Private notes preview');
   });
 
+  // The server has already redacted these to "File 1" / "Link 1". Showing them
+  // is how a locked package communicates its size, which is what web does.
+  it('shows redacted attachment rows while a package is locked', () => {
+    const tree = renderContent(
+      <PostResourceBundleContent
+        lockedPreview={{
+          cardPreviews: [],
+          itemPreviews: [],
+          attachmentPreviews: [
+            { kind: 'file', label: 'File 1' },
+            { kind: 'link', label: 'Link 1' },
+          ],
+        }}
+        resources={null}
+      />
+    );
+
+    const values = textValues(tree);
+    expect(values).toContain('File 1');
+    expect(values).toContain('Link 1');
+    expect(values).not.toContain('Resource details stay private until this package is unlocked.');
+  });
+
+  it('renders the section description a creator wrote after unlock', () => {
+    const tree = renderContent(
+      <PostResourceBundleContent
+        resources={{
+          promptText: null,
+          notesMarkdown: null,
+          workflowShareUrl: null,
+          workflowSnapshot: null,
+          attachments: [],
+          allowRemix: false,
+          sections: [{
+            id: 'hook',
+            title: 'Hook',
+            publicTitle: 'Hook',
+            kind: 'global',
+            description: 'Why this opening works.',
+            sortOrder: 0,
+          }],
+          items: [{
+            id: 'hook-item-1',
+            sectionId: 'hook',
+            type: 'prompt',
+            role: 'primary',
+            title: 'Hook prompt',
+            textContent: 'Open on the before state.',
+            remixUse: 'text_template',
+            scope: { kind: 'all' },
+            sortOrder: 0,
+            isPrimary: true,
+          }],
+        } as never}
+      />
+    );
+
+    expect(textValues(tree)).toContain('Why this opening works.');
+  });
+
   it('renders and opens every typed resource after unlock', async () => {
     const onCopy = vi.fn();
     const onOpenFile = vi.fn();
@@ -221,5 +282,114 @@ describe('PostResourceBundleContent', () => {
     expect(values).toContain('Shared guide');
     expect(values).toContain('Second image prompt');
     expect(values).not.toContain('First image prompt');
+  });
+
+  it('explains when a locked output has no matching resource cards', () => {
+    const tree = renderContent(
+      <PostResourceBundleContent
+        lockedPreview={{
+          cardPreviews: [
+            { sectionId: 'second', publicTitle: 'Second image prompt', resourceType: 'prompt', scope: { kind: 'media', mediaKeys: ['media-two'] }, itemCount: 1, hasRemix: false },
+          ],
+        }}
+        mediaItems={[media('1', 'media-one'), media('2', 'media-two')]}
+        resources={null}
+      />
+    );
+
+    renderer.act(() => {
+      pressable(tree, 'Resources for output 1').props.onPress();
+    });
+
+    const values = textValues(tree);
+    expect(values).toContain('No resources apply to this output.');
+    expect(values).not.toContain('Second image prompt');
+  });
+
+  it('filters unlocked library resources with the full proof-media array', () => {
+    const tree = renderContent(
+      <PostResourceBundleContent
+        mediaItems={[media('1', 'media-one'), media('2', 'media-two')]}
+        resources={{
+          promptText: null,
+          notesMarkdown: null,
+          workflowShareUrl: null,
+          workflowSnapshot: null,
+          attachments: [],
+          allowRemix: false,
+          sections: [
+            { id: 'first', title: 'First output', kind: 'asset_group', description: null, sortOrder: 0, resourceType: 'prompt', scope: { kind: 'media', mediaKeys: ['media-one'] } },
+            { id: 'second', title: 'Second output', kind: 'asset_group', description: null, sortOrder: 1, resourceType: 'prompt', scope: { kind: 'media', mediaKeys: ['media-two'] } },
+          ],
+          items: [
+            item({ id: 'first-prompt', type: 'prompt', title: 'First prompt', sectionId: 'first', textContent: 'First', scope: { kind: 'all' } }),
+            item({ id: 'second-prompt', type: 'prompt', title: 'Second prompt', sectionId: 'second', textContent: 'Second', scope: { kind: 'all' } }),
+          ],
+        }}
+      />
+    );
+
+    renderer.act(() => {
+      pressable(tree, 'Resources for output 2').props.onPress();
+    });
+
+    const values = textValues(tree);
+    expect(values).toContain('Second output');
+    expect(values).toContain('Second prompt');
+    expect(values).not.toContain('First output');
+    expect(values).not.toContain('First prompt');
+  });
+
+  it('clears a stale output selection when a purchased revision has different media keys', () => {
+    const resourcesFor = (sectionId: string, mediaKey: string, title: string): PostResourceBundleResources => ({
+      promptText: null,
+      notesMarkdown: null,
+      workflowShareUrl: null,
+      workflowSnapshot: null,
+      attachments: [],
+      allowRemix: false,
+      sections: [{
+        id: sectionId,
+        title,
+        kind: 'asset_group',
+        description: null,
+        sortOrder: 0,
+        resourceType: 'prompt',
+        scope: { kind: 'media', mediaKeys: [mediaKey] },
+      }],
+      items: [item({
+        id: `${sectionId}-prompt`,
+        type: 'prompt',
+        title: `${title} prompt`,
+        sectionId,
+        textContent: title,
+        scope: { kind: 'all' },
+      })],
+    });
+    const latestMedia = [media('1', 'latest-one'), media('2', 'latest-two')];
+    const purchasedMedia = [media('3', 'purchased-one'), media('4', 'purchased-two')];
+    const tree = renderContent(
+      <PostResourceBundleContent
+        mediaItems={latestMedia}
+        resources={resourcesFor('latest', 'latest-two', 'Latest output')}
+      />
+    );
+
+    renderer.act(() => {
+      pressable(tree, 'Resources for output 2').props.onPress();
+    });
+    expect(textValues(tree)).toContain('Latest output');
+
+    renderer.act(() => {
+      tree.update(
+        <PostResourceBundleContent
+          mediaItems={purchasedMedia}
+          resources={resourcesFor('purchased', 'purchased-one', 'Purchased output')}
+        />
+      );
+    });
+
+    expect(textValues(tree)).toContain('Purchased output');
+    expect(textValues(tree)).not.toContain('No resources apply to this output.');
   });
 });

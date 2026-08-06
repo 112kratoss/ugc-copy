@@ -35,7 +35,8 @@ const authState = vi.hoisted(() => ({
     publishGeneration: vi.fn(),
     createPost: vi.fn(),
     updatePost: vi.fn(),
-    uploadPostResourceFile: vi.fn(),
+    signPostResourceFileUpload: vi.fn(),
+    finalizePostResourceFileUpload: vi.fn(),
     shareShowcasePost: vi.fn(async () => ({ success: true })),
   },
 }));
@@ -193,11 +194,13 @@ vi.mock('@/lib/media', () => ({
   pickMediaList: vi.fn(),
   pickResourceDocument: vi.fn(),
   uploadPickedMedia: vi.fn(),
+  uploadResourceDocument: vi.fn(),
 }));
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
 
 import NewPostScreen from '../app/post/new';
-import { pickMediaList, uploadPickedMedia } from '@/lib/media';
+import { pickMediaList, pickResourceDocument, uploadPickedMedia, uploadResourceDocument } from '@/lib/media';
+import { buildPostResourceBundleInput, type PostComposerDraft } from '../lib/post-new-view-model';
 
 function collectText(root: renderer.ReactTestInstance) {
   return root
@@ -305,7 +308,10 @@ describe('mobile external post composer', () => {
     postEditState.post = null;
     vi.mocked(pickMediaList).mockReset();
     vi.mocked(pickMediaList).mockResolvedValue([]);
+    vi.mocked(pickResourceDocument).mockReset();
+    vi.mocked(pickResourceDocument).mockResolvedValue(null);
     vi.mocked(uploadPickedMedia).mockReset();
+    vi.mocked(uploadResourceDocument).mockReset();
     sourceToolsState.tools = [{ slug: 'runway', label: 'Runway', models: [{ slug: 'gen-4', label: 'Gen-4' }], supportedMediaKinds: ['image', 'video'] }];
     authState.api.listSourceTools.mockResolvedValue({ tools: sourceToolsState.tools });
     shareState.share.mockReset();
@@ -423,12 +429,196 @@ describe('mobile external post composer', () => {
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
     expect(collectText(tree.root)).toContain('Prompt or script');
     renderer.act(() => findPressableByText(tree.root, 'Prompt or script').props.onPress());
+    expect(findTextInputByAccessibilityLabel(tree.root, 'Unlocked description, optional').props.placeholder).toBe('Optional note shown after unlock');
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'This content is revealed only after unlock').props.onChangeText('Exact reusable prompt'));
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Save resource').props.onPress());
     const text = collectText(tree.root);
     expect(text).toContain('1 resource card');
     expect(text).toContain('Prompt or script');
     expect(findTextInputByPlaceholder(tree.root, 'Tell people what they will receive').props.value).toBe('Includes Prompt or script.');
+  });
+
+  it('shows resource-link validation in the editor before Save', async () => {
+    const tree = await renderScreen();
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'External link').props.onPress());
+    renderer.act(() => findTextInputByPlaceholder(tree.root, 'https://').props.onChangeText('example.com/resource'));
+
+    expect(collectText(tree.root)).toContain('Add a valid http:// or https:// link.');
+    expect(findPressableByAccessibilityLabel(tree.root, 'Save resource').props.disabled).toBe(true);
+  });
+
+  it('shows buyer-preview quality guidance next to the package preview', async () => {
+    const tree = await renderScreen();
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Prompt or script').props.onPress());
+    renderer.act(() => findTextInputByPlaceholder(tree.root, 'This content is revealed only after unlock').props.onChangeText('Exact reusable prompt'));
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Save resource').props.onPress());
+    renderer.act(() => findTextInputByPlaceholder(tree.root, 'Tell people what they will receive').props.onChangeText('test'));
+
+    expect(collectText(tree.root)).toContain('Improve this recipe before publishing: Add a useful preview or summary that tells buyers what the recipe includes.');
+    expect(findPressableByAccessibilityLabel(tree.root, 'Publish public').props.disabled).toBe(true);
+  });
+
+  it('places listing-quality guidance beside a non-empty public summary', async () => {
+    const tree = await renderScreen();
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Prompt or script').props.onPress());
+    renderer.act(() => findTextInputByPlaceholder(tree.root, 'This content is revealed only after unlock').props.onChangeText('Exact reusable prompt'));
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Save resource').props.onPress());
+    renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Public package summary, optional').props.onChangeText('test'));
+
+    const summaryInput = findTextInputByAccessibilityLabel(tree.root, 'Public package summary, optional');
+    let summaryField = summaryInput.parent;
+    while (summaryField && !collectText(summaryField).includes('Public summary')) summaryField = summaryField.parent;
+    expect(summaryField).toBeTruthy();
+    expect(collectText(summaryField!)).toContain('Improve this recipe before publishing: Add a useful preview or summary that tells buyers what the recipe includes.');
+    expect(findPressableByAccessibilityLabel(tree.root, 'Publish public').props.disabled).toBe(true);
+  });
+
+  // The multipart route this used to call is retired and answers 410, so the
+  // whole flow has to go through the signed direct upload instead.
+  it('attaches a source file through the signed upload path', async () => {
+    vi.mocked(pickResourceDocument).mockResolvedValue({
+      uri: 'file:///tmp/project.zip',
+      name: 'project.zip',
+      mimeType: 'application/zip',
+      size: 4096,
+    } as never);
+    vi.mocked(uploadResourceDocument).mockResolvedValue({
+      label: 'project.zip',
+      kind: 'file',
+      storagePath: 'user-123/uuid-project.zip',
+      contentType: 'application/zip',
+      sizeBytes: 4096,
+    } as never);
+
+    const tree = await renderScreen();
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Source assets').props.onPress());
+    await renderer.act(async () => {
+      findPressableByText(tree.root, 'Add file').props.onPress();
+    });
+
+    expect(pickResourceDocument).toHaveBeenCalledWith('resource');
+    expect(uploadResourceDocument).toHaveBeenCalledWith('file:///tmp/project.zip', expect.objectContaining({
+      fileName: 'project.zip',
+      mediaOnly: false,
+      mimeType: 'application/zip',
+      sizeBytes: 4096,
+    }));
+    expect(collectText(tree.root)).toContain('project.zip');
+
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Save resource').props.onPress());
+    expect(collectText(tree.root)).toContain('1 resource card');
+  });
+
+  it('keeps resource upload progress and recovery inside the editor sheet', async () => {
+    vi.mocked(pickResourceDocument).mockResolvedValue({
+      uri: 'file:///tmp/project.zip',
+      name: 'project.zip',
+      mimeType: 'application/zip',
+      size: 10_000,
+    } as never);
+    vi.mocked(uploadResourceDocument).mockImplementation((_uri, options) => new Promise((resolve, reject) => {
+      options.onProgress?.({ bytesSent: 4_000, totalBytes: 10_000, fraction: 0.4 });
+      options.signal?.addEventListener('abort', () => {
+        const error = new Error('Upload cancelled.');
+        error.name = 'UploadCancelledError';
+        reject(error);
+      }, { once: true });
+      // Keep the promise pending until the in-sheet Cancel action aborts it.
+      void resolve;
+    }));
+
+    const tree = await renderScreen();
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Source assets').props.onPress());
+    await renderer.act(async () => {
+      findPressableByText(tree.root, 'Add file').props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(collectText(tree.root)).toContain('Uploading file · 40%');
+    expect(collectText(tree.root)).toContain('4 KB of 10 KB');
+    expect(findPressableByAccessibilityLabel(tree.root, 'Save resource').props.disabled).toBe(true);
+
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Close resource editor').props.onPress());
+    expect(alertState.alert).toHaveBeenLastCalledWith(
+      'File upload in progress',
+      expect.stringContaining('Keep this resource editor open'),
+      expect.any(Array),
+    );
+    const closeButtons = alertState.alert.mock.calls.at(-1)?.[2] as Array<{ text: string; onPress?: () => void }>;
+    await renderer.act(async () => {
+      closeButtons.find((button) => button.text === 'Cancel upload')?.onPress?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(collectText(tree.root)).toContain('Could not add file');
+    expect(collectText(tree.root)).toContain('Upload cancelled. You can retry the selected file.');
+    expect(findPressableByAccessibilityLabel(tree.root, 'Retry resource upload')).toBeTruthy();
+    expect(collectText(tree.root)).not.toContain('project.zip');
+
+    vi.mocked(uploadResourceDocument).mockResolvedValueOnce({
+      label: 'project.zip',
+      kind: 'file',
+      storagePath: 'user-123/retried-project.zip',
+      contentType: 'application/zip',
+      sizeBytes: 10_000,
+    } as never);
+    await renderer.act(async () => {
+      findPressableByAccessibilityLabel(tree.root, 'Retry resource upload').props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(pickResourceDocument).toHaveBeenCalledTimes(1);
+    expect(collectText(tree.root)).toContain('project.zip');
+    expect(collectText(tree.root)).not.toContain('Could not add file');
+  });
+
+  it('uses the media-only upload contract for reference cards', async () => {
+    vi.mocked(pickResourceDocument).mockResolvedValue({
+      uri: 'file:///tmp/reference.png',
+      name: 'reference.png',
+      mimeType: 'image/png',
+      size: 2048,
+    } as never);
+    vi.mocked(uploadResourceDocument).mockResolvedValue({
+      label: 'reference.png',
+      kind: 'file',
+      storagePath: 'user-123/reference.png',
+      contentType: 'image/png',
+      sizeBytes: 2048,
+    } as never);
+
+    const tree = await renderScreen();
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Add resource').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Reference media').props.onPress());
+    await renderer.act(async () => {
+      findPressableByText(tree.root, 'Add file').props.onPress();
+    });
+
+    expect(pickResourceDocument).toHaveBeenCalledWith('reference_media');
+    expect(uploadResourceDocument).toHaveBeenCalledWith('file:///tmp/reference.png', expect.objectContaining({
+      mediaOnly: true,
+    }));
+    expect(collectText(tree.root)).toContain('reference.png');
   });
 
   it('keeps resource edits isolated until Save and confirms dirty discard', async () => {
@@ -456,6 +646,179 @@ describe('mobile external post composer', () => {
     expect(collectText(tree.root)).not.toContain('1 resource card');
   });
 
+  it('keeps a legacy title private until the creator explicitly edits it', async () => {
+    paramsState.params = { postId: 'post-legacy-resource' };
+    postEditState.post = {
+      id: 'post-legacy-resource',
+      title: 'Legacy resource post',
+      description: 'Existing description',
+      body: 'Existing story',
+      postFormat: 'media',
+      generationId: null,
+      category: 'image',
+      visibility: 'public',
+      sourceTool: 'Manual',
+      sourceToolSlug: 'manual',
+      mediaUrl: 'https://cdn.example.com/legacy.png',
+      mediaKind: 'image',
+      mediaItems: [],
+      resourceBundleInput: {
+        accessMode: 'free',
+        summary: 'A compact public summary for the existing package.',
+        previewText: 'Includes the reusable prompt and guidance.',
+        resources: {
+          items: [{
+            id: 'legacy-prompt',
+            type: 'prompt',
+            title: 'Private client launch prompt',
+            textContent: 'Protected prompt',
+            sortOrder: 0,
+          }],
+        },
+      },
+      hasPaidOrders: false,
+    };
+
+    const tree = await renderScreen();
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    expect(findTextInputByAccessibilityLabel(tree.root, 'Public package summary, optional').props.value)
+      .toBe('A compact public summary for the existing package.');
+    expect(findTextInputByAccessibilityLabel(tree.root, 'Package preview, required').props.value)
+      .toBe('Includes the reusable prompt and guidance.');
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Edit Private client launch prompt').props.onPress());
+    expect(collectText(tree.root)).toContain('This legacy title stays private. Editing it makes the updated title visible in the locked package preview.');
+
+    renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Resource title, required').props.onChangeText('Reusable launch prompt'));
+    expect(collectText(tree.root)).not.toContain('This legacy title stays private. Editing it makes the updated title visible in the locked package preview.');
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Save resource').props.onPress());
+
+    const contextHolder: {
+      value?: {
+        submittedDraft?: {
+          resource: {
+            cards: Array<{ publicTitleIntent?: string }>;
+            summary: string;
+            previewText: string;
+          };
+        };
+      };
+    } = {};
+    renderer.act(() => {
+      contextHolder.value = mutationState.options?.onMutate?.('public') as typeof contextHolder.value;
+    });
+    expect(contextHolder.value?.submittedDraft?.resource.cards[0]?.publicTitleIntent).toBe('explicit');
+    expect(contextHolder.value?.submittedDraft?.resource).toMatchObject({
+      summary: 'A compact public summary for the existing package.',
+      previewText: 'Includes the reusable prompt and guidance.',
+    });
+  });
+
+  it('does not resurrect legacy protected fields after the last hydrated card is removed', async () => {
+    paramsState.params = { postId: 'post-remove-last-resource' };
+    postEditState.post = {
+      id: 'post-remove-last-resource',
+      title: 'Legacy resource deletion',
+      description: 'Existing description',
+      body: 'Existing story',
+      postFormat: 'media',
+      generationId: null,
+      category: 'image',
+      visibility: 'public',
+      sourceTool: 'Manual',
+      sourceToolSlug: 'manual',
+      mediaUrl: 'https://cdn.example.com/legacy.png',
+      mediaKind: 'image',
+      mediaItems: [],
+      resourceBundleInput: {
+        accessMode: 'free',
+        summary: 'A useful public summary for the legacy resource.',
+        previewText: 'Includes a reusable prompt and practical guidance.',
+        resources: {
+          promptText: 'Old protected prompt that must stay deleted',
+          items: [{
+            id: 'legacy-delete-prompt',
+            type: 'prompt',
+            title: 'Private prompt to remove',
+            textContent: 'Old protected prompt that must stay deleted',
+            sortOrder: 0,
+          }],
+        },
+      },
+      hasPaidOrders: false,
+    };
+
+    const tree = await renderScreen();
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Remove Private prompt to remove').props.onPress());
+
+    const context = mutationState.options?.onMutate?.('public') as {
+      submittedDraft?: PostComposerDraft;
+    } | void;
+    expect(context?.submittedDraft?.resource).toMatchObject({
+      cardAuthoringMode: 'cards',
+      accessMode: 'none',
+      cards: [],
+      promptText: 'Old protected prompt that must stay deleted',
+    });
+    expect(buildPostResourceBundleInput(context!.submittedDraft!.resource)).toBeNull();
+  });
+
+  it('keeps files visible when a hydrated legacy card is primarily text', async () => {
+    paramsState.params = { postId: 'post-mixed-resource' };
+    postEditState.post = {
+      id: 'post-mixed-resource',
+      title: 'Mixed legacy resource post',
+      description: 'Existing description',
+      body: 'Existing story',
+      postFormat: 'media',
+      generationId: null,
+      category: 'image',
+      visibility: 'public',
+      sourceTool: 'Manual',
+      sourceToolSlug: 'manual',
+      mediaUrl: 'https://cdn.example.com/legacy.png',
+      mediaKind: 'image',
+      mediaItems: [],
+      resourceBundleInput: {
+        accessMode: 'free',
+        previewText: 'Includes a reusable prompt and its supporting archive.',
+        resources: {
+          sections: [{
+            id: 'mixed-card',
+            title: 'Mixed resource kit',
+            publicTitle: 'Mixed resource kit',
+            kind: 'global',
+            sortOrder: 0,
+          }],
+          items: [{
+            id: 'mixed-prompt',
+            type: 'prompt',
+            title: 'Prompt',
+            textContent: 'Protected prompt',
+            sectionId: 'mixed-card',
+            sortOrder: 0,
+          }, {
+            id: 'mixed-file',
+            type: 'source_file',
+            title: 'archive.zip',
+            storagePath: 'user-123/archive.zip',
+            contentType: 'application/zip',
+            sectionId: 'mixed-card',
+            sortOrder: 1,
+          }],
+        },
+      },
+      hasPaidOrders: false,
+    };
+
+    const tree = await renderScreen();
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Edit Mixed resource kit').props.onPress());
+
+    expect(collectText(tree.root)).toContain('archive.zip');
+    expect(findPressableByAccessibilityLabel(tree.root, 'Remove archive.zip')).toBeTruthy();
+  });
+
   it('uses semantic accessibility names instead of placeholders', async () => {
     paramsState.params = {};
     const tree = await renderScreen();
@@ -463,6 +826,12 @@ describe('mobile external post composer', () => {
     expect(findTextInputByAccessibilityLabel(tree.root, 'Story, optional')).toBeTruthy();
     renderer.act(() => findPressableByText(tree.root, 'Text post').props.onPress());
     expect(findTextInputByAccessibilityLabel(tree.root, 'Post text, required')).toBeTruthy();
+    renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Title, required').props.onChangeText('Accessible resource post'));
+    renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Post text, required').props.onChangeText('A useful public text post with enough detail.'));
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
+    renderer.act(() => findPressableByText(tree.root, 'Share free').props.onPress());
+    expect(findTextInputByAccessibilityLabel(tree.root, 'Public package summary, optional')).toBeTruthy();
+    expect(findTextInputByAccessibilityLabel(tree.root, 'Package preview, required')).toBeTruthy();
   });
 
   it('supports a paid token price and shows estimated creator earnings', async () => {

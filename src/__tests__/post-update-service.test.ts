@@ -41,16 +41,21 @@ function createSupabaseMock({
     review_status: 'visible',
   },
   bundle = {
+    id: 'bundle-1',
     access_mode: 'paid',
     status: 'draft',
   },
   postMedia = [] as Array<Record<string, unknown>>,
+  purchasedMediaRows = [] as Array<Record<string, unknown>>,
+  pendingOrderRows = [] as Array<Record<string, unknown>>,
   downloadedMedia = null as Blob | null,
   stagedInfo = { size: 1024, contentType: 'image/jpeg' } as Record<string, unknown> | null,
 }: {
   post?: Record<string, unknown> | null;
   bundle?: Record<string, unknown> | null;
   postMedia?: Array<Record<string, unknown>>;
+  purchasedMediaRows?: Array<Record<string, unknown>>;
+  pendingOrderRows?: Array<Record<string, unknown>>;
   downloadedMedia?: Blob | null;
   /** Storage metadata for the staged object; the authoritative size check. */
   stagedInfo?: Record<string, unknown> | null;
@@ -76,11 +81,23 @@ function createSupabaseMock({
         in() {
           return query;
         },
+        not() {
+          return query;
+        },
         is() {
           return Promise.resolve({ error: null });
         },
         order() {
-          return Promise.resolve({ data: table === 'post_media' ? postMedia : [], error: null });
+          return Promise.resolve({
+            data: table === 'post_media'
+              ? postMedia
+              : table === 'post_resource_purchase_media'
+                ? purchasedMediaRows
+                : table === 'post_resource_bundle_orders'
+                  ? pendingOrderRows
+                : [],
+            error: null,
+          });
         },
         maybeSingle() {
           if (table === 'posts') {
@@ -282,6 +299,245 @@ describe('updateOwnerPostForRoute', () => {
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
+  // Both composers already refuse to edit a sold package, but that is a rule
+  // about what buyers paid for, so a stale client or a direct API call must not
+  // be able to rewrite, reprice, or retire it either.
+  describe('sold resource bundles', () => {
+    const SOLD_BUNDLE = { access_mode: 'paid', status: 'published', sales_count: 3 };
+
+    function createDependencies() {
+      return {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn<
+          NonNullable<PostUpdateDependencies['getMarketplaceQualityErrorForPostBundle']>
+        >(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn<
+          NonNullable<PostUpdateDependencies['updatePostWithResourceBundleAtomically']>
+        >(async () => ({
+          postId: 'post-1',
+          visibility: 'private' as const,
+          bundleId: 'bundle-1',
+          bundleStatus: 'published' as const,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      } satisfies PostUpdateDependencies;
+    }
+
+    it('rejects a bundle payload once the package has sales', async () => {
+      const { client } = createSupabaseMock({ bundle: SOLD_BUNDLE });
+      const dependencies = createDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          title: 'Helpful launch proof',
+          body: 'A draft post with an unlock package.',
+          visibility: 'private',
+          resourceBundle: {
+            accessMode: 'paid',
+            summary: 'A hollowed-out package.',
+            previewText: 'Nothing like what buyers paid for.',
+            priceUsdCents: 100,
+            resources: { promptText: 'Gutted.', attachments: [], allowRemix: false },
+          },
+        },
+        dependencies,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        status: 409,
+        body: {
+          error: 'People have already purchased this package, so its contents, price, and access mode are locked.',
+          code: 'RESOURCE_BUNDLE_LOCKED',
+        },
+      });
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+      expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    });
+
+    // Without this the delete is caught by a trigger that retires the bundle
+    // instead, so the storefront listing disappears with no error at all.
+    it('rejects retiring a sold package through an accessMode none payload', async () => {
+      const { client } = createSupabaseMock({ bundle: SOLD_BUNDLE });
+      const dependencies = createDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { visibility: 'private', resourceBundle: { accessMode: 'none' } },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({ ok: false, status: 409, body: { code: 'RESOURCE_BUNDLE_LOCKED' } });
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    });
+
+    // The guard freezes the package, not the post: everything else stays editable.
+    it('updates a sold post normally when no bundle payload is sent', async () => {
+      const { client } = createSupabaseMock({ bundle: SOLD_BUNDLE });
+      const dependencies = createDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { title: 'A retitled but still sold post', visibility: 'private' },
+        dependencies,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(
+        expect.objectContaining({ hasBundlePayload: false })
+      );
+    });
+
+    it('republishes a frozen sold package without resubmitting its content', async () => {
+      const { client } = createSupabaseMock({
+        bundle: { ...SOLD_BUNDLE, status: 'draft' },
+      });
+      const dependencies = createDependencies();
+      dependencies.updatePostWithResourceBundleAtomically.mockResolvedValueOnce({
+        postId: 'post-1',
+        visibility: 'public',
+        bundleId: 'bundle-1',
+        bundleStatus: 'published',
+      });
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { visibility: 'public' },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        body: { visibility: 'public', resourceBundleStatus: 'published' },
+      });
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(
+        expect.objectContaining({ hasBundlePayload: false, bundle: null })
+      );
+      expect(dependencies.getMarketplaceQualityErrorForPostBundle).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bundle: expect.objectContaining({ accessMode: 'paid' }),
+        }),
+      );
+    });
+
+    it('revalidates the frozen listing and creator profile before republishing it', async () => {
+      const { client } = createSupabaseMock({
+        bundle: {
+          ...SOLD_BUNDLE,
+          status: 'draft',
+          summary: 'Reusable launch package.',
+          preview_text: 'Includes the exact prompt and workflow.',
+          prompt_text: 'Build the launch proof sequence.',
+          attachments: [],
+          allow_remix: false,
+          price_usd_cents: 500,
+          resource_items: [],
+          resource_sections: [],
+        },
+      });
+      const dependencies = createDependencies();
+      dependencies.getMarketplaceQualityErrorForPostBundle.mockResolvedValueOnce(
+        'Complete your creator profile name or username before publishing a marketplace unlock.',
+      );
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { visibility: 'public' },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({ ok: false, status: 400 });
+      expect(dependencies.getMarketplaceQualityErrorForPostBundle).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bundle: expect.objectContaining({
+            accessMode: 'paid',
+            summary: 'Reusable launch package.',
+            priceUsdCents: 500,
+          }),
+        }),
+      );
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    });
+
+    it('maps a checkout race rejected by the database to a bundle conflict', async () => {
+      const { client } = createSupabaseMock({
+        // The stale route read saw no sale; the transaction-level guard wins.
+        bundle: { access_mode: 'paid', status: 'published', sales_count: 0 },
+      });
+      const dependencies = createDependencies();
+      dependencies.updatePostWithResourceBundleAtomically.mockRejectedValueOnce({
+        message: 'RESOURCE_BUNDLE_LOCKED: this package has already been purchased',
+        hint: 'RESOURCE_BUNDLE_LOCKED',
+      });
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          visibility: 'private',
+          resourceBundle: { accessMode: 'none' },
+        },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        status: 409,
+        body: { code: 'RESOURCE_BUNDLE_LOCKED' },
+      });
+      expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    });
+
+    it('keeps an unsold paid package editable', async () => {
+      const { client } = createSupabaseMock({
+        bundle: { access_mode: 'paid', status: 'published', sales_count: 0 },
+      });
+      const dependencies = createDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          title: 'Helpful launch proof',
+          body: 'A draft post with an unlock package.',
+          visibility: 'private',
+          resourceBundle: {
+            accessMode: 'paid',
+            summary: 'A reusable launch prompt for a proof-led product hook.',
+            previewText: 'Includes the prompt structure and CTA guidance buyers can reuse.',
+            priceUsdCents: 500,
+            resources: {
+              promptText: 'Use a before and after hook with one product proof frame and a short CTA.',
+              attachments: [],
+              allowRemix: false,
+            },
+          },
+        },
+        dependencies,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(
+        expect.objectContaining({ hasBundlePayload: true })
+      );
+    });
+  });
+
   it('rejects publishing an existing draft unlock unless the bundle payload is resubmitted', async () => {
     const { client } = createSupabaseMock();
     const dependencies = {
@@ -353,7 +609,9 @@ describe('updateOwnerPostForRoute', () => {
 
   it('invalidates the feed when follow-up metadata fails after the atomic post update commits', async () => {
     const { client } = createSupabaseMock({ bundle: null });
-    const updatePostWithResourceBundleAtomically = vi.fn(async () => ({
+    const updatePostWithResourceBundleAtomically = vi.fn<
+      NonNullable<PostUpdateDependencies['updatePostWithResourceBundleAtomically']>
+    >(async () => ({
       postId: 'post-1',
       visibility: 'private' as const,
       bundleId: null,
@@ -484,7 +742,14 @@ describe('updateOwnerPostForRoute', () => {
         review_status: 'visible',
       },
     });
-    const replacePostMediaItems = vi.fn(async () => undefined);
+    const updatePostWithResourceBundleAtomically = vi.fn<
+      NonNullable<PostUpdateDependencies['updatePostWithResourceBundleAtomically']>
+    >(async () => ({
+      postId: 'post-1',
+      visibility: 'private' as const,
+      bundleId: 'bundle-1',
+      bundleStatus: 'draft' as const,
+    }));
 
     const result = await updateOwnerPostForRoute({
       adminSupabase: client,
@@ -511,25 +776,132 @@ describe('updateOwnerPostForRoute', () => {
       dependencies: {
         listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
         getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
-        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
-          postId: 'post-1',
-          visibility: 'private' as const,
-          bundleId: 'bundle-1',
-          bundleStatus: 'draft' as const,
-        })),
+        updatePostWithResourceBundleAtomically,
         replacePostSourceTools: vi.fn(async () => undefined),
-        replacePostMediaItems,
+        replacePostMediaItems: vi.fn(async () => undefined),
         createPostMediaPreview: vi.fn(async () => null),
       },
     });
 
     expect(result.ok).toBe(true);
-    expect(replacePostMediaItems).toHaveBeenCalledWith(expect.objectContaining({
+    expect(updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
       mediaItems: [
         expect.objectContaining({ mediaKey: 'proof-b', sortOrder: 0 }),
         expect.objectContaining({ mediaKey: 'proof-a', sortOrder: 1 }),
       ],
     }));
+  });
+
+  it('rejects a new upload that reuses the stable key of removed proof media', async () => {
+    const postMedia = [{
+      id: 'media-old',
+      media_key: 'proof-old',
+      storage_path: 'posts/post-1/old.jpg',
+      external_url: null,
+      media_kind: 'image',
+      content_type: 'image/jpeg',
+      original_name: 'old.jpg',
+      width: null,
+      height: null,
+      duration_seconds: null,
+      sort_order: 0,
+    }];
+    const { client, copied } = createSupabaseMock({ bundle: null, postMedia });
+    const updatePostWithResourceBundleAtomically = vi.fn();
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        mediaItems: [{
+          mediaKey: 'proof-old',
+          storagePath: 'uploads/user-1/replacement.jpg',
+          contentType: 'image/jpeg',
+          originalName: 'replacement.jpg',
+        }],
+      },
+      dependencies: {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically,
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'New uploads must use a new post media key.' },
+    });
+    expect(copied).toEqual([]);
+    expect(updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  it('rolls back promoted storage when the atomic post, bundle, and media commit fails', async () => {
+    const oldStoragePath = 'posts/post-1/old.jpg';
+    const { client, copied, removals } = createSupabaseMock({
+      bundle: null,
+      stagedInfo: { size: 1024, contentType: 'video/mp4' },
+      postMedia: [{
+        id: 'media-old',
+        media_key: 'proof-old',
+        storage_path: oldStoragePath,
+        external_url: null,
+        media_kind: 'image',
+        content_type: 'image/jpeg',
+        original_name: 'old.jpg',
+        width: null,
+        height: null,
+        duration_seconds: null,
+        sort_order: 0,
+      }],
+    });
+    const updatePostWithResourceBundleAtomically = vi.fn(async () => {
+      throw new Error('replace_post_media rejected the write');
+    });
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        title: 'This must roll back with media',
+        mediaItems: [{
+          mediaKey: 'proof-new',
+          storagePath: 'uploads/user-1/replacement.mp4',
+          contentType: 'video/mp4',
+          originalName: 'replacement.mp4',
+        }],
+        resourceBundle: { accessMode: 'none' },
+      },
+      dependencies: {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically,
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 500,
+      body: { error: 'Failed to update post.' },
+    });
+    expect(updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(
+      expect.objectContaining({
+        patch: expect.objectContaining({ title: 'This must roll back with media' }),
+        mediaItems: [expect.objectContaining({ mediaKey: 'proof-new' })],
+      }),
+    );
+    expect(copied).toHaveLength(1);
+    expect(removals).toContainEqual([copied[0].to]);
+    expect(removals.flat()).not.toContain(oldStoragePath);
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
   it('removes a dropped video item together with its preview and feed rendition', async () => {
@@ -608,6 +980,159 @@ describe('updateOwnerPostForRoute', () => {
       'posts/post-1/a/clip.preview.webp',
       'posts/post-1/a/clip.feed.mp4',
     ]);
+  });
+
+  it('keeps original, preview, and rendition objects pinned by a purchased revision', async () => {
+    const purchasedPaths = {
+      storage_path: 'posts/post-1/a/clip.mp4',
+      preview_storage_path: 'posts/post-1/a/clip.preview.webp',
+      rendition_storage_path: 'posts/post-1/a/clip.feed.mp4',
+    };
+    const { client, removals } = createSupabaseMock({
+      bundle: null,
+      stagedInfo: { size: 13 * 1024 * 1024, contentType: 'video/mp4' },
+      purchasedMediaRows: [{ ...purchasedPaths, sort_order: 0 }],
+      postMedia: [{
+        id: 'media-old',
+        media_key: 'proof-old',
+        ...purchasedPaths,
+        external_url: null,
+        media_kind: 'video',
+        content_type: 'video/mp4',
+        original_name: 'clip.mp4',
+        width: null,
+        height: null,
+        duration_seconds: null,
+        sort_order: 0,
+      }],
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'private',
+        title: 'Proof post',
+        description: null,
+        prompt: null,
+        body: null,
+        category: 'video',
+        post_format: 'media',
+        source_tool: null,
+        source_tool_slug: null,
+        source_kind: 'external',
+        archived_at: null,
+        showcase_asset_path: purchasedPaths.storage_path,
+        output_url: null,
+        review_status: 'visible',
+      },
+    });
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        mediaItems: [{
+          mediaKey: 'proof-new',
+          storagePath: 'uploads/user-1/new.mp4',
+          contentType: 'video/mp4',
+          originalName: 'new.mp4',
+        }],
+        resourceBundle: { accessMode: 'none' },
+      },
+      dependencies: {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'private' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(removals.flat()).not.toEqual(expect.arrayContaining(Object.values(purchasedPaths)));
+  });
+
+  it('keeps order-quoted proof objects while a cash checkout is still pending', async () => {
+    const quotedPaths = {
+      storage_path: 'posts/post-1/a/quoted.mp4',
+      preview_storage_path: 'posts/post-1/a/quoted.preview.webp',
+      rendition_storage_path: 'posts/post-1/a/quoted.feed.mp4',
+    };
+    const { client, removals } = createSupabaseMock({
+      bundle: { id: 'bundle-1', access_mode: 'paid', status: 'draft' },
+      pendingOrderRows: [{
+        quoted_media: [{ ...quotedPaths, media_kind: 'video', sort_order: 0 }],
+      }],
+      postMedia: [{
+        id: 'media-old',
+        media_key: 'proof-old',
+        ...quotedPaths,
+        external_url: null,
+        media_kind: 'video',
+        content_type: 'video/mp4',
+        original_name: 'quoted.mp4',
+        width: null,
+        height: null,
+        duration_seconds: null,
+        sort_order: 0,
+      }],
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'private',
+        title: 'Proof post',
+        description: null,
+        prompt: null,
+        body: null,
+        category: 'video',
+        post_format: 'media',
+        source_tool: null,
+        source_tool_slug: null,
+        source_kind: 'external',
+        archived_at: null,
+        showcase_asset_path: quotedPaths.storage_path,
+        output_url: null,
+        review_status: 'visible',
+      },
+    });
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        mediaItems: [{
+          mediaKey: 'proof-new',
+          storagePath: 'uploads/user-1/new.mp4',
+          contentType: 'video/mp4',
+          originalName: 'new.mp4',
+        }],
+        resourceBundle: { accessMode: 'none' },
+      },
+      dependencies: {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'private' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(removals.flat()).not.toEqual(expect.arrayContaining(Object.values(quotedPaths)));
   });
 
   it('rejects edited media larger than its kind allows before it reaches the public bucket', async () => {
@@ -703,7 +1228,14 @@ describe('updateOwnerPostForRoute', () => {
         review_status: 'visible',
       },
     });
-    const replacePostMediaItems = vi.fn();
+    const updatePostWithResourceBundleAtomically = vi.fn<
+      NonNullable<PostUpdateDependencies['updatePostWithResourceBundleAtomically']>
+    >(async () => ({
+      postId: 'post-1',
+      visibility: 'private' as const,
+      bundleId: null,
+      bundleStatus: null,
+    }));
 
     const result = await updateOwnerPostForRoute({
       adminSupabase: client,
@@ -721,14 +1253,9 @@ describe('updateOwnerPostForRoute', () => {
       dependencies: {
         listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
         getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
-        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
-          postId: 'post-1',
-          visibility: 'private' as const,
-          bundleId: null,
-          bundleStatus: null,
-        })),
+        updatePostWithResourceBundleAtomically,
         replacePostSourceTools: vi.fn(async () => undefined),
-        replacePostMediaItems,
+        replacePostMediaItems: vi.fn(),
         createPostMediaPreview: vi.fn(async () => null),
       },
     });
@@ -744,7 +1271,8 @@ describe('updateOwnerPostForRoute', () => {
 
     // Omitted, not marked failed: replace_post_media defaults these to pending
     // with zero attempts, which is what the repair sweep acts on.
-    const [{ mediaItems }] = replacePostMediaItems.mock.calls[0];
+    const [{ mediaItems }] = updatePostWithResourceBundleAtomically.mock.calls[0];
+    if (!mediaItems) throw new Error('Expected media to be committed atomically');
     expect(mediaItems[0]).not.toHaveProperty('previewStatus');
     expect(mediaItems[0]).not.toHaveProperty('renditionStatus');
     expect(mediaItems[0]).toMatchObject({ mediaKind: 'video', contentType: 'video/mp4' });
@@ -775,7 +1303,14 @@ describe('updateOwnerPostForRoute', () => {
         review_status: 'visible',
       },
     });
-    const replacePostMediaItems = vi.fn();
+    const updatePostWithResourceBundleAtomically = vi.fn<
+      NonNullable<PostUpdateDependencies['updatePostWithResourceBundleAtomically']>
+    >(async () => ({
+      postId: 'post-1',
+      visibility: 'private' as const,
+      bundleId: null,
+      bundleStatus: null,
+    }));
 
     const result = await updateOwnerPostForRoute({
       adminSupabase: client,
@@ -793,14 +1328,9 @@ describe('updateOwnerPostForRoute', () => {
       dependencies: {
         listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
         getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
-        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
-          postId: 'post-1',
-          visibility: 'private' as const,
-          bundleId: null,
-          bundleStatus: null,
-        })),
+        updatePostWithResourceBundleAtomically,
         replacePostSourceTools: vi.fn(async () => undefined),
-        replacePostMediaItems,
+        replacePostMediaItems: vi.fn(),
         createPostMediaPreview: vi.fn(async () => ({
           previewStoragePath: 'posts/post-1/x/shot.preview.webp',
           previewThumbhash: 'hash',
@@ -816,7 +1346,8 @@ describe('updateOwnerPostForRoute', () => {
     // An image is small enough to read once, for its thumbhash placeholder.
     expect(downloads).toEqual(['user-1/shot.jpg']);
 
-    const [{ mediaItems }] = replacePostMediaItems.mock.calls[0];
+    const [{ mediaItems }] = updatePostWithResourceBundleAtomically.mock.calls[0];
+    if (!mediaItems) throw new Error('Expected media to be committed atomically');
     expect(mediaItems[0]).toMatchObject({
       previewStatus: 'ready',
       previewThumbhash: 'hash',

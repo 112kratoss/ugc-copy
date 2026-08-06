@@ -484,6 +484,290 @@ describe('PostResourceBundlePanel', () => {
     expect(screen.queryByText('private-client-filename.mov')).not.toBeInTheDocument();
   });
 
+  // Mobile has had an output filter for scoped resources for a while; web only
+  // printed a count, so a buyer could never tell which image a prompt belonged
+  // to.
+  describe('per-output filtering', () => {
+    const scopedMediaItems = [
+      { id: 'm1', mediaKey: 'media-1', url: '/a.png', mediaKind: 'image' as const },
+      { id: 'm2', mediaKey: 'media-2', url: '/b.png', mediaKind: 'image' as const },
+    ] as unknown as NonNullable<Parameters<typeof PostResourceBundlePanel>[0]['mediaItems']>;
+
+    it('filters locked cards down to the selected output', () => {
+      renderPanel({
+        resourceKinds: ['files', 'remix'],
+        lockedPreview: explicitCardPreview,
+        mediaItems: scopedMediaItems,
+      });
+
+      expect(screen.getByRole('button', { name: /all resources/i })).toBeInTheDocument();
+      expect(screen.getByText('Hook video references')).toBeInTheDocument();
+
+      // The card is scoped to media-1 and media-2, so a third output hides it.
+      fireEvent.click(screen.getByRole('button', { name: /show resources for output 1/i }));
+      expect(screen.getByText('Hook video references')).toBeInTheDocument();
+    });
+
+    it('stays hidden when nothing is scoped to a specific output', () => {
+      renderPanel({ mediaItems: scopedMediaItems });
+
+      expect(screen.queryByRole('button', { name: /all resources/i })).not.toBeInTheDocument();
+    });
+
+    it('stays hidden when the post has a single output', () => {
+      renderPanel({
+        resourceKinds: ['files', 'remix'],
+        lockedPreview: explicitCardPreview,
+        mediaItems: scopedMediaItems.slice(0, 1),
+      });
+
+      expect(screen.queryByRole('button', { name: /all resources/i })).not.toBeInTheDocument();
+    });
+
+    it('says so when the selected output has no resources at all', () => {
+      renderPanel({
+        resourceKinds: ['files', 'remix'],
+        lockedPreview: {
+          ...explicitCardPreview,
+          cardPreviews: [{
+            ...explicitCardPreview.cardPreviews![0]!,
+            scope: { kind: 'media', mediaKeys: ['media-2'] },
+          }],
+        },
+        mediaItems: scopedMediaItems,
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /show resources for output 1/i }));
+      expect(screen.queryByText('Hook video references')).not.toBeInTheDocument();
+      expect(screen.getByText(/no resources apply to this output/i)).toBeInTheDocument();
+    });
+
+    // A section carries a scope of its own, and its items may leave theirs at
+    // the default -- so filtering on items alone showed a narrowed section
+    // under every output.
+    it('hides a whole section whose own scope excludes the selected output', () => {
+      renderPanel({
+        viewerCanAccess: true,
+        resourceKinds: ['files'],
+        mediaItems: scopedMediaItems,
+        initialResources: {
+          promptText: null,
+          notesMarkdown: null,
+          workflowShareUrl: null,
+          attachments: [],
+          allowRemix: false,
+          sections: normalizePostResourceSections([
+            {
+              id: 'hero-output',
+              title: 'Hero output',
+              kind: 'scene',
+              publicTitle: 'Hero output',
+              scope: { kind: 'media', mediaKeys: ['media-1'] },
+            },
+          ]),
+          items: normalizePostResourceItems([
+            {
+              type: 'reference_video',
+              title: 'Motion reference',
+              externalUrl: 'https://example.com/motion-reference.mp4',
+              sectionId: 'hero-output',
+              scope: { kind: 'all' },
+            },
+          ]),
+        },
+      });
+
+      expect(screen.getByText('Hero output')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /show resources for output 2/i }));
+      expect(screen.queryByText('Hero output')).not.toBeInTheDocument();
+      expect(screen.getByText(/no resources apply to this output/i)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /show resources for output 1/i }));
+      expect(screen.getByText('Hero output')).toBeInTheDocument();
+      expect(screen.queryByText(/no resources apply to this output/i)).not.toBeInTheDocument();
+    });
+
+    it('narrows items inside a section that does match the selected output', () => {
+      renderPanel({
+        viewerCanAccess: true,
+        resourceKinds: ['files'],
+        mediaItems: scopedMediaItems,
+        initialResources: {
+          promptText: null,
+          notesMarkdown: null,
+          workflowShareUrl: null,
+          attachments: [],
+          allowRemix: false,
+          sections: normalizePostResourceSections([
+            {
+              id: 'hero-output',
+              title: 'Hero output',
+              kind: 'scene',
+              publicTitle: 'Hero output',
+              scope: { kind: 'media', mediaKeys: ['media-1', 'media-2'] },
+            },
+          ]),
+          items: normalizePostResourceItems([
+            {
+              type: 'reference_video',
+              title: 'Second output only',
+              externalUrl: 'https://example.com/second.mp4',
+              sectionId: 'hero-output',
+              scope: { kind: 'media', mediaKeys: ['media-2'] },
+            },
+            {
+              type: 'reference_audio',
+              title: 'Both outputs',
+              externalUrl: 'https://example.com/voice.mp3',
+              sectionId: 'hero-output',
+              scope: { kind: 'all' },
+            },
+          ]),
+        },
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /show resources for output 1/i }));
+      expect(screen.getByText('Hero output')).toBeInTheDocument();
+      expect(screen.getByText('Both outputs')).toBeInTheDocument();
+      expect(screen.queryByText('Second output only')).not.toBeInTheDocument();
+    });
+
+    // An empty media scope narrows nothing, so it must not hide itself under
+    // every filter -- the mobile panel normalizes it to "all" for this reason.
+    it('treats a media scope naming no output as applying to all of them', () => {
+      renderPanel({
+        resourceKinds: ['files', 'remix'],
+        lockedPreview: {
+          ...explicitCardPreview,
+          cardPreviews: [
+            { ...explicitCardPreview.cardPreviews![0]!, scope: { kind: 'media', mediaKeys: ['media-1'] } },
+            {
+              sectionId: 'everything',
+              publicTitle: 'Applies everywhere',
+              resourceType: 'note',
+              scope: { kind: 'media', mediaKeys: [] },
+              itemCount: 1,
+              hasRemix: false,
+            },
+          ],
+        },
+        mediaItems: scopedMediaItems,
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /show resources for output 2/i }));
+      expect(screen.getByText('Applies everywhere')).toBeInTheDocument();
+    });
+
+    it('switches to purchase-time proof outputs with the purchased revision', () => {
+      const currentMediaItems = [
+        ...scopedMediaItems,
+        { ...scopedMediaItems[0], id: 'm3', mediaKey: 'media-3', url: '/c.png' },
+      ];
+      renderPanel({
+        viewerCanAccess: true,
+        resourceKinds: ['prompt'],
+        mediaItems: currentMediaItems,
+        initialResources: {
+          promptText: null,
+          notesMarkdown: null,
+          workflowShareUrl: null,
+          attachments: [],
+          allowRemix: false,
+          sections: normalizePostResourceSections([{
+            id: 'latest', title: 'Latest output', kind: 'asset_group', scope: { kind: 'media', mediaKeys: ['media-3'] },
+          }]),
+          items: normalizePostResourceItems([{
+            type: 'prompt', title: 'Latest prompt', textContent: 'Latest', sectionId: 'latest', scope: { kind: 'all' },
+          }]),
+        },
+        purchasedRevision: {
+          revisionNumber: 1,
+          purchasedAt: '2026-07-01T00:00:00.000Z',
+          title: 'Purchased kit',
+          summary: 'Purchased summary',
+          previewText: 'Purchased preview',
+          accessMode: 'paid',
+          priceUsdCents: 500,
+          mediaItems: [
+            { ...scopedMediaItems[0], id: 'old-1', mediaKey: 'old-media-1' },
+            { ...scopedMediaItems[1], id: 'old-2', mediaKey: 'old-media-2' },
+          ],
+          resources: {
+            promptText: null,
+            notesMarkdown: null,
+            workflowShareUrl: null,
+            attachments: [],
+            allowRemix: false,
+            sections: normalizePostResourceSections([{
+              id: 'purchased', title: 'Purchased output', kind: 'asset_group', scope: { kind: 'media', mediaKeys: ['old-media-1'] },
+            }]),
+            items: normalizePostResourceItems([{
+              type: 'prompt', title: 'Purchased prompt', textContent: 'Purchased', sectionId: 'purchased', scope: { kind: 'all' },
+            }]),
+          },
+        },
+      });
+
+      expect(screen.getByRole('button', { name: /show resources for output 3/i })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /the version you unlocked/i }));
+
+      expect(screen.queryByRole('button', { name: /show resources for output 3/i })).not.toBeInTheDocument();
+      expect(screen.getByText('Purchased output')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /show resources for output 2/i }));
+      expect(screen.getByText(/no resources apply to this output/i)).toBeInTheDocument();
+    });
+  });
+
+  it('switches the purchased revision metadata together with its resources', () => {
+    renderPanel({
+      title: 'Latest launch kit',
+      summary: 'Latest summary',
+      previewText: 'Latest preview',
+      isFree: false,
+      priceLabel: '$9.00',
+      priceUsdCents: 900,
+      salesCount: 3,
+      viewerCanAccess: true,
+      initialResources: {
+        promptText: 'Latest prompt',
+        notesMarkdown: null,
+        workflowShareUrl: null,
+        attachments: [],
+        allowRemix: false,
+      },
+      purchasedRevision: {
+        revisionNumber: 2,
+        purchasedAt: '2026-07-01T00:00:00.000Z',
+        title: 'Original launch kit',
+        summary: 'Original summary',
+        previewText: 'Original preview',
+        accessMode: 'free',
+        priceUsdCents: 0,
+        resources: {
+          promptText: 'Original prompt',
+          notesMarkdown: null,
+          workflowShareUrl: null,
+          attachments: [],
+          allowRemix: false,
+        },
+      },
+    });
+
+    expect(screen.getByRole('heading', { name: 'Latest launch kit' })).toBeInTheDocument();
+    expect(screen.getByText('Latest prompt')).toBeInTheDocument();
+    expect(screen.getByText('Latest summary')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /the version you unlocked/i }));
+
+    expect(screen.getByRole('heading', { name: 'Original launch kit' })).toBeInTheDocument();
+    expect(screen.getByText('Original prompt')).toBeInTheDocument();
+    expect(screen.getByText('Original summary')).toBeInTheDocument();
+    expect(screen.getByText(/purchased version/i)).toHaveTextContent('Free');
+    expect(screen.queryByText('Latest prompt')).not.toBeInTheDocument();
+  });
+
   it('shows an explicit public card even for an otherwise prompt-only bundle', () => {
     renderPanel({
       lockedPreview: {

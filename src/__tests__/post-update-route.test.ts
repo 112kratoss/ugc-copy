@@ -587,15 +587,15 @@ describe('/api/posts/[postId] route', () => {
 
     expect(response.status).toBe(200);
     expect(data.success).toBe(true);
-    expect(sourceToolTableCalls.rpcCalls).toEqual(expect.arrayContaining([
+    expect(updatePostWithResourceBundleAtomicallyMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        p_post_id: 'post-1',
-        p_owner_user_id: 'user-1',
-        p_media_items: [
+        postId: 'post-1',
+        ownerUserId: 'user-1',
+        mediaItems: [
           expect.objectContaining({ storagePath: 'posts/post-1/second.jpg', sortOrder: 0 }),
           expect.objectContaining({ storagePath: 'posts/post-1/cover.jpg', sortOrder: 1 }),
         ],
       }),
-    ]));
+    );
   });
 });

@@ -39,8 +39,11 @@ import type {
   ReferralVisitRequest,
   ReferralVisitResponse,
   WelcomeCreditResponse,
-  PostResourceAttachment,
   PostResourceBundleInput,
+  PostResourceFileFinalizeRequest,
+  PostResourceFileFinalizeResponse,
+  PostResourceFileSignRequest,
+  PostResourceFileSignResponse,
   RemixSourceBundle,
   ShowcaseFeedEventRequest,
   ShowcaseFeedEventResponse,
@@ -805,10 +808,17 @@ export function createApiClient({
             ),
         }
       : {}),
-    uploadPostResourceFile: (body: FormData) =>
-      request<{ success: boolean; attachment: PostResourceAttachment }>('/api/posts/resource-files', {
+    signPostResourceFileUpload: (body: PostResourceFileSignRequest, signal?: AbortSignal) =>
+      request<PostResourceFileSignResponse>('/api/posts/resource-files/sign', {
         method: 'POST',
-        body,
+        body: JSON.stringify(body),
+        signal,
+      }),
+    finalizePostResourceFileUpload: (body: PostResourceFileFinalizeRequest, signal?: AbortSignal) =>
+      request<PostResourceFileFinalizeResponse>('/api/posts/resource-files/finalize', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        signal,
       }),
     createMediaUpload: (body: MediaUploadIntentRequest) =>
       request<MediaUploadIntentResponse>('/api/uploads/media/sign', {

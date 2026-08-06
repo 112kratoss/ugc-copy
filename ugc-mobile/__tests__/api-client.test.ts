@@ -939,13 +939,48 @@ describe('mobile api client caching', () => {
     });
   });
 
-  it('uploads post resource files as FormData without forcing a JSON content type', async () => {
+  // The multipart route these used to share is retired and answers 410, so
+  // resource files take the same sign/finalize path the web composer uses.
+  it('signs post resource file uploads as JSON', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({
+      success: true,
+      bucket: 'post_resource_files',
+      path: 'user-1/uuid-workflow.json',
+      token: 'signed-token',
+      signedUploadUrl: null,
+      expiresInSeconds: 7200,
+      expected: { fileName: 'workflow.json', contentType: 'application/json', sizeBytes: 128 },
+    }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.signPostResourceFileUpload({
+      fileName: 'workflow.json',
+      contentType: 'application/json',
+      sizeBytes: 128,
+    });
+
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(url).toBe('https://magicbooklet.test/api/posts/resource-files/sign');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({
+      fileName: 'workflow.json',
+      contentType: 'application/json',
+      sizeBytes: 128,
+    });
+    expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+  });
+
+  it('finalizes post resource file uploads with the signed path', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       success: true,
       attachment: {
         label: 'workflow.json',
         kind: 'file',
-        storagePath: 'user-1/workflow.json',
+        storagePath: 'user-1/uuid-workflow.json',
         contentType: 'application/json',
         sizeBytes: 128,
       },
@@ -955,17 +990,18 @@ describe('mobile api client caching', () => {
       getAccessToken: async () => 'token-1',
       fetcher: fetcher as unknown as typeof fetch,
     });
-    const formData = new FormData();
-    formData.append('file', new Blob(['{}'], { type: 'application/json' }), 'workflow.json');
 
-    await api.uploadPostResourceFile(formData);
+    await api.finalizePostResourceFileUpload({
+      path: 'user-1/uuid-workflow.json',
+      fileName: 'workflow.json',
+      contentType: 'application/json',
+      sizeBytes: 128,
+    });
 
     const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
-    expect(url).toBe('https://magicbooklet.test/api/posts/resource-files');
+    expect(url).toBe('https://magicbooklet.test/api/posts/resource-files/finalize');
     expect(init.method).toBe('POST');
-    expect(init.body).toBe(formData);
-    expect((init.headers as Headers).get('Content-Type')).toBeNull();
-    expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+    expect(JSON.parse(String(init.body)).path).toBe('user-1/uuid-workflow.json');
   });
 
   it('requests owner post detail', async () => {

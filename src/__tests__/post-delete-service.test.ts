@@ -44,12 +44,14 @@ function createSupabaseMock({
   generation,
   bundleError = null,
   purchases = [],
+  pendingOrders = [],
 }: {
   post: MockPost | null;
   bundle: MockBundle | null;
   generation?: { id: string; showcase_asset_path: string | null } | null;
   bundleError?: { message: string } | null;
   purchases?: Array<{ bundle_id: string }>;
+  pendingOrders?: Array<{ id: string }>;
 }) {
   const calls = {
     rpc: [] as Array<{ name: string; args: Record<string, unknown> }>,
@@ -85,9 +87,16 @@ function createSupabaseMock({
         filters[column] = value;
         return query;
       },
+      gt(column: string, value: unknown) {
+        filters[`${column}:gt`] = value;
+        return query;
+      },
       limit() {
         if (table === 'post_resource_bundle_purchases') {
           return Promise.resolve({ data: purchases, error: null });
+        }
+        if (table === 'post_resource_bundle_orders') {
+          return Promise.resolve({ data: pendingOrders, error: null });
         }
 
         return Promise.resolve({ data: [], error: null });
@@ -306,6 +315,60 @@ describe('deleteOwnerPostForRoute', () => {
     expect(calls.deletes).toHaveLength(0);
     expect(calls.removals).toHaveLength(0);
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('tombstones a post with a still-payable cash order so its frozen quote can settle', async () => {
+    const { client, calls } = createSupabaseMock({
+      purchases: [],
+      pendingOrders: [{ id: 'order-pending-1' }],
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'public',
+        title: 'Launch prompt',
+        source_kind: 'manual',
+        showcase_asset_path: 'posts/post-1/cover.jpg',
+      },
+      bundle: {
+        id: 'bundle-1',
+        access_mode: 'paid',
+        status: 'published',
+        price_usd_cents: 500,
+        sales_count: 0,
+        earnings_usd_cents: 0,
+        prompt_text: 'Reusable launch prompt',
+        notes_markdown: null,
+        workflow_share_url: null,
+        workflow_snapshot: null,
+        attachments: [],
+        allow_remix: false,
+      },
+    });
+
+    const result = await deleteOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      forceDelete: true,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      body: { success: true, deleted: true, tombstoned: true },
+    });
+    expect(calls.updates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        table: 'posts',
+        patch: expect.objectContaining({ visibility: 'private' }),
+      }),
+      expect.objectContaining({
+        table: 'post_resource_bundles',
+        patch: expect.objectContaining({ status: 'draft' }),
+      }),
+    ]));
+    expect(calls.deletes).toEqual([]);
+    expect(calls.removals).toEqual([]);
   });
 
   it('hard deletes a post whose unlock was never bought', async () => {

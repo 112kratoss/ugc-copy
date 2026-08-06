@@ -1,0 +1,1372 @@
+{
+  "schemaVersion": 1,
+  "description": "Resource-bundle authoring contract shared by the web and mobile post composers. Both clients author a bundle as a list of resource cards and must serialize identical PostResourceBundleInput payloads from identical card drafts, and hydrate identical card drafts from identical bundles. The two implementations are deliberately duplicated (ugc-mobile is a separate npm workspace with its own lockfile and tsconfig, so a shared TypeScript module is not available); this fixture is what keeps them honest. Card ids are explicit in every case because the factory otherwise mints random ids. See audits/post-resource-section-audit-2026-08-06.md for why the models were converged.",
+  "serializationCases": [
+    {
+      "name": "prompt card, free access",
+      "resource": {
+        "accessMode": "free",
+        "summary": "",
+        "previewText": "",
+        "allowRemix": false,
+        "priceTokens": "0",
+        "priceUsd": "0",
+        "cards": [
+          {
+            "id": "resource-prompt01",
+            "type": "prompt",
+            "title": "Hook prompt",
+            "preview": "The exact prompt.",
+            "textContent": "Cinematic hook, 35mm",
+            "externalUrl": "",
+            "attachments": [],
+            "appliesToAll": true,
+            "mediaKeys": []
+          }
+        ]
+      },
+      "validationOptions": { "ownerUserId": "user-1", "mediaKeys": ["media-1", "media-2"] },
+      "expectedBundle": {
+        "accessMode": "free",
+        "summary": "Hook prompt",
+        "previewText": "Includes Hook prompt.",
+        "priceUsdCents": 0,
+        "resources": {
+          "promptText": null,
+          "notesMarkdown": null,
+          "workflowShareUrl": null,
+          "attachments": [],
+          "allowRemix": false,
+          "sections": [
+            {
+              "id": "resource-prompt01",
+              "title": "Hook prompt",
+              "publicTitle": "Hook prompt",
+              "resourceType": "prompt",
+              "scope": { "kind": "all" },
+              "kind": "global",
+              "description": "The exact prompt.",
+              "sortOrder": 0
+            }
+          ],
+          "items": [
+            {
+              "id": "resource-prompt01-item-1",
+              "type": "prompt",
+              "role": "primary",
+              "title": "Hook prompt",
+              "description": null,
+              "textContent": "Cinematic hook, 35mm",
+              "externalUrl": null,
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": null,
+              "remixUse": "text_template",
+              "scope": { "kind": "all" },
+              "sectionId": "resource-prompt01",
+              "sortOrder": 0,
+              "isPrimary": true
+            }
+          ]
+        }
+      },
+      "expectedCardPreviews": [
+        { "publicTitle": "Hook prompt", "resourceType": "prompt", "itemCount": 1 }
+      ]
+    },
+    {
+      "name": "media-scoped reference card with image and video attachments, paid",
+      "resource": {
+        "accessMode": "paid",
+        "summary": "",
+        "previewText": "",
+        "allowRemix": false,
+        "priceTokens": "250",
+        "priceUsd": "2.5",
+        "cards": [
+          {
+            "id": "resource-ref0001",
+            "type": "reference_media",
+            "title": "Style refs",
+            "preview": "Two looks.",
+            "textContent": "",
+            "externalUrl": "",
+            "attachments": [
+              {
+                "id": "attachment-a",
+                "kind": "file",
+                "label": "look-a.png",
+                "storagePath": "user-1/11111111-1111-4111-8111-111111111111-look-a.png",
+                "contentType": "image/png",
+                "sizeBytes": 1024
+              },
+              {
+                "id": "attachment-b",
+                "kind": "file",
+                "label": "clip.mp4",
+                "storagePath": "user-1/22222222-2222-4222-8222-222222222222-clip.mp4",
+                "contentType": "video/mp4",
+                "sizeBytes": 2048
+              }
+            ],
+            "appliesToAll": false,
+            "mediaKeys": ["media-1", "media-2", "media-1"]
+          }
+        ]
+      },
+      "validationOptions": { "ownerUserId": "user-1", "mediaKeys": ["media-1", "media-2"] },
+      "expectedBundle": {
+        "accessMode": "paid",
+        "summary": "Style refs",
+        "previewText": "Includes Style refs.",
+        "priceUsdCents": 250,
+        "resources": {
+          "promptText": null,
+          "notesMarkdown": null,
+          "workflowShareUrl": null,
+          "attachments": [],
+          "allowRemix": false,
+          "sections": [
+            {
+              "id": "resource-ref0001",
+              "title": "Style refs",
+              "publicTitle": "Style refs",
+              "resourceType": "reference_image",
+              "scope": { "kind": "media", "mediaKeys": ["media-1", "media-2"] },
+              "kind": "asset_group",
+              "description": "Two looks.",
+              "sortOrder": 0
+            }
+          ],
+          "items": [
+            {
+              "id": "resource-ref0001-file-1",
+              "type": "reference_image",
+              "role": "style_reference",
+              "title": "look-a.png",
+              "description": null,
+              "textContent": null,
+              "externalUrl": null,
+              "storagePath": "user-1/11111111-1111-4111-8111-111111111111-look-a.png",
+              "contentType": "image/png",
+              "sizeBytes": 1024,
+              "workflowSnapshot": null,
+              "remixUse": "reference_only",
+              "scope": { "kind": "media", "mediaKeys": ["media-1", "media-2"] },
+              "sectionId": "resource-ref0001",
+              "sortOrder": 0,
+              "isPrimary": true
+            },
+            {
+              "id": "resource-ref0001-file-2",
+              "type": "reference_video",
+              "role": "style_reference",
+              "title": "clip.mp4",
+              "description": null,
+              "textContent": null,
+              "externalUrl": null,
+              "storagePath": "user-1/22222222-2222-4222-8222-222222222222-clip.mp4",
+              "contentType": "video/mp4",
+              "sizeBytes": 2048,
+              "workflowSnapshot": null,
+              "remixUse": "reference_only",
+              "scope": { "kind": "media", "mediaKeys": ["media-1", "media-2"] },
+              "sectionId": "resource-ref0001",
+              "sortOrder": 1,
+              "isPrimary": false
+            }
+          ]
+        }
+      },
+      "expectedCardPreviews": [
+        { "publicTitle": "Style refs", "resourceType": "reference_image", "itemCount": 2 }
+      ]
+    },
+    {
+      "name": "multi-card ordering pins the global sortOrder and item id scheme",
+      "comment": "Item ids use the running GLOBAL item count, not a per-card counter, so a card's items can be numbered non-contiguously (item-2 then item-4 below). Attachment ids use a per-card index instead. isPrimary is true only for the first item across the whole bundle.",
+      "resource": {
+        "accessMode": "free",
+        "summary": "",
+        "previewText": "",
+        "allowRemix": false,
+        "priceTokens": "0",
+        "priceUsd": "0",
+        "cards": [
+          {
+            "id": "resource-aaaa0001",
+            "type": "prompt",
+            "title": "Prompt",
+            "preview": "",
+            "textContent": "A prompt",
+            "externalUrl": "",
+            "attachments": [],
+            "appliesToAll": true,
+            "mediaKeys": []
+          },
+          {
+            "id": "resource-bbbb0002",
+            "type": "workflow",
+            "title": "Workflow",
+            "preview": "",
+            "textContent": "Steps here",
+            "externalUrl": "https://example.com/wf",
+            "attachments": [
+              {
+                "id": "attachment-c",
+                "kind": "file",
+                "label": "graph.json",
+                "storagePath": "user-1/33333333-3333-4333-8333-333333333333-graph.json",
+                "contentType": "application/json",
+                "sizeBytes": 512
+              }
+            ],
+            "appliesToAll": true,
+            "mediaKeys": []
+          },
+          {
+            "id": "resource-cccc0003",
+            "type": "remix_link",
+            "title": "Remix",
+            "preview": "",
+            "textContent": "",
+            "externalUrl": "https://example.com/remix",
+            "attachments": [],
+            "appliesToAll": true,
+            "mediaKeys": []
+          }
+        ]
+      },
+      "validationOptions": { "ownerUserId": "user-1", "mediaKeys": ["media-1"] },
+      "expectedBundle": {
+        "accessMode": "free",
+        "summary": "3 reusable resources",
+        "previewText": "Includes Prompt, Workflow, and Remix.",
+        "priceUsdCents": 0,
+        "resources": {
+          "promptText": null,
+          "notesMarkdown": null,
+          "workflowShareUrl": null,
+          "attachments": [],
+          "allowRemix": false,
+          "sections": [
+            {
+              "id": "resource-aaaa0001",
+              "title": "Prompt",
+              "publicTitle": "Prompt",
+              "resourceType": "prompt",
+              "scope": { "kind": "all" },
+              "kind": "global",
+              "description": null,
+              "sortOrder": 0
+            },
+            {
+              "id": "resource-bbbb0002",
+              "title": "Workflow",
+              "publicTitle": "Workflow",
+              "resourceType": "workflow",
+              "scope": { "kind": "all" },
+              "kind": "workflow_step",
+              "description": null,
+              "sortOrder": 1
+            },
+            {
+              "id": "resource-cccc0003",
+              "title": "Remix",
+              "publicTitle": "Remix",
+              "resourceType": "remix_link",
+              "scope": { "kind": "all" },
+              "kind": "global",
+              "description": null,
+              "sortOrder": 2
+            }
+          ],
+          "items": [
+            {
+              "id": "resource-aaaa0001-item-1",
+              "type": "prompt",
+              "role": "primary",
+              "title": "Prompt",
+              "description": null,
+              "textContent": "A prompt",
+              "externalUrl": null,
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": null,
+              "remixUse": "text_template",
+              "scope": { "kind": "all" },
+              "sectionId": "resource-aaaa0001",
+              "sortOrder": 0,
+              "isPrimary": true
+            },
+            {
+              "id": "resource-bbbb0002-item-2",
+              "type": "workflow",
+              "role": "primary",
+              "title": "Workflow",
+              "description": null,
+              "textContent": null,
+              "externalUrl": "https://example.com/wf",
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": null,
+              "remixUse": "import_source",
+              "scope": { "kind": "all" },
+              "sectionId": "resource-bbbb0002",
+              "sortOrder": 1,
+              "isPrimary": false
+            },
+            {
+              "id": "resource-bbbb0002-file-1",
+              "type": "workflow",
+              "role": "primary",
+              "title": "graph.json",
+              "description": null,
+              "textContent": null,
+              "externalUrl": null,
+              "storagePath": "user-1/33333333-3333-4333-8333-333333333333-graph.json",
+              "contentType": "application/json",
+              "sizeBytes": 512,
+              "workflowSnapshot": null,
+              "remixUse": "import_source",
+              "scope": { "kind": "all" },
+              "sectionId": "resource-bbbb0002",
+              "sortOrder": 2,
+              "isPrimary": false
+            },
+            {
+              "id": "resource-bbbb0002-item-4",
+              "type": "workflow",
+              "role": "primary",
+              "title": "Workflow",
+              "description": null,
+              "textContent": "Steps here",
+              "externalUrl": null,
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": null,
+              "remixUse": "import_source",
+              "scope": { "kind": "all" },
+              "sectionId": "resource-bbbb0002",
+              "sortOrder": 3,
+              "isPrimary": false
+            },
+            {
+              "id": "resource-cccc0003-item-5",
+              "type": "remix_link",
+              "role": "primary",
+              "title": "Remix",
+              "description": null,
+              "textContent": null,
+              "externalUrl": "https://example.com/remix",
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": null,
+              "remixUse": "none",
+              "scope": { "kind": "all" },
+              "sectionId": "resource-cccc0003",
+              "sortOrder": 4,
+              "isPrimary": false
+            }
+          ]
+        }
+      },
+      "expectedCardPreviews": [
+        { "publicTitle": "Prompt", "resourceType": "prompt", "itemCount": 1 },
+        { "publicTitle": "Workflow", "resourceType": "workflow", "itemCount": 3 },
+        { "publicTitle": "Remix", "resourceType": "remix_link", "itemCount": 1 }
+      ]
+    },
+    {
+      "name": "settings, guide, external link and source assets cards",
+      "resource": {
+        "accessMode": "free",
+        "summary": "",
+        "previewText": "",
+        "allowRemix": false,
+        "priceTokens": "0",
+        "priceUsd": "0",
+        "cards": [
+          {
+            "id": "resource-set00001",
+            "type": "settings",
+            "title": "Model settings",
+            "preview": "",
+            "textContent": "seed 42, cfg 7",
+            "externalUrl": "",
+            "attachments": [],
+            "appliesToAll": true,
+            "mediaKeys": []
+          },
+          {
+            "id": "resource-gui00002",
+            "type": "guide",
+            "title": "How to reuse",
+            "preview": "",
+            "textContent": "Step one, step two.",
+            "externalUrl": "",
+            "attachments": [],
+            "appliesToAll": true,
+            "mediaKeys": []
+          },
+          {
+            "id": "resource-ext00003",
+            "type": "external_link",
+            "title": "Docs",
+            "preview": "",
+            "textContent": "",
+            "externalUrl": "https://example.com/docs",
+            "attachments": [],
+            "appliesToAll": true,
+            "mediaKeys": []
+          },
+          {
+            "id": "resource-src00004",
+            "type": "source_assets",
+            "title": "Project files",
+            "preview": "",
+            "textContent": "",
+            "externalUrl": "",
+            "attachments": [
+              {
+                "id": "attachment-d",
+                "kind": "file",
+                "label": "project.zip",
+                "storagePath": "user-1/44444444-4444-4444-8444-444444444444-project.zip",
+                "contentType": "application/zip",
+                "sizeBytes": 4096
+              }
+            ],
+            "appliesToAll": true,
+            "mediaKeys": []
+          }
+        ]
+      },
+      "validationOptions": { "ownerUserId": "user-1", "mediaKeys": ["media-1"] },
+      "expectedBundle": {
+        "accessMode": "free",
+        "summary": "4 reusable resources",
+        "previewText": "Includes Model settings, How to reuse, and Docs and 1 more.",
+        "priceUsdCents": 0,
+        "resources": {
+          "promptText": null,
+          "notesMarkdown": null,
+          "workflowShareUrl": null,
+          "attachments": [],
+          "allowRemix": false,
+          "sections": [
+            {
+              "id": "resource-set00001",
+              "title": "Model settings",
+              "publicTitle": "Model settings",
+              "resourceType": "settings",
+              "scope": { "kind": "all" },
+              "kind": "global",
+              "description": null,
+              "sortOrder": 0
+            },
+            {
+              "id": "resource-gui00002",
+              "title": "How to reuse",
+              "publicTitle": "How to reuse",
+              "resourceType": "note",
+              "scope": { "kind": "all" },
+              "kind": "global",
+              "description": null,
+              "sortOrder": 1
+            },
+            {
+              "id": "resource-ext00003",
+              "title": "Docs",
+              "publicTitle": "Docs",
+              "resourceType": "external_link",
+              "scope": { "kind": "all" },
+              "kind": "global",
+              "description": null,
+              "sortOrder": 2
+            },
+            {
+              "id": "resource-src00004",
+              "title": "Project files",
+              "publicTitle": "Project files",
+              "resourceType": "source_file",
+              "scope": { "kind": "all" },
+              "kind": "asset_group",
+              "description": null,
+              "sortOrder": 3
+            }
+          ],
+          "items": [
+            {
+              "id": "resource-set00001-item-1",
+              "type": "settings",
+              "role": "primary",
+              "title": "Model settings",
+              "description": null,
+              "textContent": "seed 42, cfg 7",
+              "externalUrl": null,
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": null,
+              "remixUse": "none",
+              "scope": { "kind": "all" },
+              "sectionId": "resource-set00001",
+              "sortOrder": 0,
+              "isPrimary": true
+            },
+            {
+              "id": "resource-gui00002-item-2",
+              "type": "note",
+              "role": "primary",
+              "title": "How to reuse",
+              "description": null,
+              "textContent": "Step one, step two.",
+              "externalUrl": null,
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": null,
+              "remixUse": "none",
+              "scope": { "kind": "all" },
+              "sectionId": "resource-gui00002",
+              "sortOrder": 1,
+              "isPrimary": false
+            },
+            {
+              "id": "resource-ext00003-item-3",
+              "type": "external_link",
+              "role": "primary",
+              "title": "Docs",
+              "description": null,
+              "textContent": null,
+              "externalUrl": "https://example.com/docs",
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": null,
+              "remixUse": "none",
+              "scope": { "kind": "all" },
+              "sectionId": "resource-ext00003",
+              "sortOrder": 2,
+              "isPrimary": false
+            },
+            {
+              "id": "resource-src00004-file-1",
+              "type": "source_file",
+              "role": "primary",
+              "title": "project.zip",
+              "description": null,
+              "textContent": null,
+              "externalUrl": null,
+              "storagePath": "user-1/44444444-4444-4444-8444-444444444444-project.zip",
+              "contentType": "application/zip",
+              "sizeBytes": 4096,
+              "workflowSnapshot": null,
+              "remixUse": "none",
+              "scope": { "kind": "all" },
+              "sectionId": "resource-src00004",
+              "sortOrder": 3,
+              "isPrimary": false
+            }
+          ]
+        }
+      },
+      "expectedCardPreviews": [
+        { "publicTitle": "Model settings", "resourceType": "settings", "itemCount": 1 },
+        { "publicTitle": "How to reuse", "resourceType": "note", "itemCount": 1 },
+        { "publicTitle": "Docs", "resourceType": "external_link", "itemCount": 1 },
+        { "publicTitle": "Project files", "resourceType": "source_file", "itemCount": 1 }
+      ]
+    },
+    {
+      "name": "other card carries a link, a file and a note together",
+      "resource": {
+        "accessMode": "free",
+        "summary": "Custom summary",
+        "previewText": "Custom preview text.",
+        "allowRemix": false,
+        "priceTokens": "0",
+        "priceUsd": "0",
+        "cards": [
+          {
+            "id": "resource-oth00001",
+            "type": "other",
+            "title": "Extras",
+            "preview": "Anything else.",
+            "textContent": "A closing note.",
+            "externalUrl": "https://example.com/extra",
+            "attachments": [
+              {
+                "id": "attachment-e",
+                "kind": "link",
+                "label": "Mood board",
+                "url": "https://example.com/mood"
+              }
+            ],
+            "appliesToAll": true,
+            "mediaKeys": []
+          }
+        ]
+      },
+      "validationOptions": { "ownerUserId": "user-1", "mediaKeys": ["media-1"] },
+      "expectedBundle": {
+        "accessMode": "free",
+        "summary": "Custom summary",
+        "previewText": "Custom preview text.",
+        "priceUsdCents": 0,
+        "resources": {
+          "promptText": null,
+          "notesMarkdown": null,
+          "workflowShareUrl": null,
+          "attachments": [],
+          "allowRemix": false,
+          "sections": [
+            {
+              "id": "resource-oth00001",
+              "title": "Extras",
+              "publicTitle": "Extras",
+              "resourceType": "note",
+              "scope": { "kind": "all" },
+              "kind": "global",
+              "description": "Anything else.",
+              "sortOrder": 0
+            }
+          ],
+          "items": [
+            {
+              "id": "resource-oth00001-item-1",
+              "type": "external_link",
+              "role": "primary",
+              "title": "Extras",
+              "description": null,
+              "textContent": null,
+              "externalUrl": "https://example.com/extra",
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": null,
+              "remixUse": "none",
+              "scope": { "kind": "all" },
+              "sectionId": "resource-oth00001",
+              "sortOrder": 0,
+              "isPrimary": true
+            },
+            {
+              "id": "resource-oth00001-file-1",
+              "type": "external_link",
+              "role": "primary",
+              "title": "Mood board",
+              "description": null,
+              "textContent": null,
+              "externalUrl": "https://example.com/mood",
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": null,
+              "remixUse": "none",
+              "scope": { "kind": "all" },
+              "sectionId": "resource-oth00001",
+              "sortOrder": 1,
+              "isPrimary": false
+            },
+            {
+              "id": "resource-oth00001-item-3",
+              "type": "note",
+              "role": "primary",
+              "title": "Extras",
+              "description": null,
+              "textContent": "A closing note.",
+              "externalUrl": null,
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": null,
+              "remixUse": "none",
+              "scope": { "kind": "all" },
+              "sectionId": "resource-oth00001",
+              "sortOrder": 2,
+              "isPrimary": false
+            }
+          ]
+        }
+      },
+      "expectedCardPreviews": [
+        { "publicTitle": "Extras", "resourceType": "note", "itemCount": 3 }
+      ]
+    },
+    {
+      "name": "allow remix rides along on a card-bearing bundle",
+      "comment": "A remix_access item cannot survive as a card, so the permission is carried on resources.allowRemix instead. Both composers pass the flag through rather than hardcoding it, which is what stops an edit from revoking remix.",
+      "resource": {
+        "accessMode": "free",
+        "summary": "",
+        "previewText": "",
+        "allowRemix": true,
+        "priceTokens": "0",
+        "priceUsd": "0",
+        "cards": [
+          {
+            "id": "resource-rmx00001",
+            "type": "prompt",
+            "title": "Remixable prompt",
+            "preview": "",
+            "textContent": "Reusable prompt body",
+            "externalUrl": "",
+            "attachments": [],
+            "appliesToAll": true,
+            "mediaKeys": []
+          }
+        ]
+      },
+      "validationOptions": { "ownerUserId": "user-1", "mediaKeys": ["media-1"] },
+      "expectedBundle": {
+        "accessMode": "free",
+        "summary": "Remixable prompt",
+        "previewText": "Includes Remixable prompt.",
+        "priceUsdCents": 0,
+        "resources": {
+          "promptText": null,
+          "notesMarkdown": null,
+          "workflowShareUrl": null,
+          "attachments": [],
+          "allowRemix": true,
+          "sections": [
+            {
+              "id": "resource-rmx00001",
+              "title": "Remixable prompt",
+              "publicTitle": "Remixable prompt",
+              "resourceType": "prompt",
+              "scope": { "kind": "all" },
+              "kind": "global",
+              "description": null,
+              "sortOrder": 0
+            }
+          ],
+          "items": [
+            {
+              "id": "resource-rmx00001-item-1",
+              "type": "prompt",
+              "role": "primary",
+              "title": "Remixable prompt",
+              "description": null,
+              "textContent": "Reusable prompt body",
+              "externalUrl": null,
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": null,
+              "remixUse": "text_template",
+              "scope": { "kind": "all" },
+              "sectionId": "resource-rmx00001",
+              "sortOrder": 0,
+              "isPrimary": true
+            }
+          ]
+        }
+      },
+      "expectedCardPreviews": [
+        { "publicTitle": "Remixable prompt", "resourceType": "prompt", "itemCount": 1 }
+      ]
+    },
+    {
+      "name": "workflow card carries its saved graph back out",
+      "comment": "Only hydration sets workflowSnapshot. Re-serializing has to put it back on the workflow item or opening a bundle and pressing save would destroy the graph.",
+      "resource": {
+        "accessMode": "free",
+        "summary": "",
+        "previewText": "",
+        "allowRemix": false,
+        "priceTokens": "0",
+        "priceUsd": "0",
+        "cards": [
+          {
+            "id": "resource-wfg00001",
+            "type": "workflow",
+            "title": "Canvas graph",
+            "preview": "",
+            "textContent": "",
+            "externalUrl": "https://example.com/graph",
+            "attachments": [],
+            "appliesToAll": true,
+            "mediaKeys": [],
+            "workflowSnapshot": { "nodes": [], "edges": [] }
+          }
+        ]
+      },
+      "validationOptions": { "ownerUserId": "user-1", "mediaKeys": ["media-1"] },
+      "expectedBundle": {
+        "accessMode": "free",
+        "summary": "Canvas graph",
+        "previewText": "Includes Canvas graph.",
+        "priceUsdCents": 0,
+        "resources": {
+          "promptText": null,
+          "notesMarkdown": null,
+          "workflowShareUrl": null,
+          "attachments": [],
+          "allowRemix": false,
+          "sections": [
+            {
+              "id": "resource-wfg00001",
+              "title": "Canvas graph",
+              "publicTitle": "Canvas graph",
+              "resourceType": "workflow",
+              "scope": { "kind": "all" },
+              "kind": "workflow_step",
+              "description": null,
+              "sortOrder": 0
+            }
+          ],
+          "items": [
+            {
+              "id": "resource-wfg00001-item-1",
+              "type": "workflow",
+              "role": "primary",
+              "title": "Canvas graph",
+              "description": null,
+              "textContent": null,
+              "externalUrl": "https://example.com/graph",
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": { "nodes": [], "edges": [] },
+              "remixUse": "import_source",
+              "scope": { "kind": "all" },
+              "sectionId": "resource-wfg00001",
+              "sortOrder": 0,
+              "isPrimary": true
+            }
+          ]
+        }
+      },
+      "expectedCardPreviews": [
+        { "publicTitle": "Canvas graph", "resourceType": "workflow", "itemCount": 1 }
+      ]
+    }
+  ],
+  "hydrationCases": [
+    {
+      "name": "card-authored bundle round-trips back to the same card",
+      "bundle": {
+        "accessMode": "free",
+        "summary": "Hook prompt",
+        "previewText": "Includes Hook prompt.",
+        "priceUsdCents": 0,
+        "resources": {
+          "promptText": null,
+          "notesMarkdown": null,
+          "workflowShareUrl": null,
+          "attachments": [],
+          "allowRemix": false,
+          "sections": [
+            {
+              "id": "resource-prompt01",
+              "title": "Hook prompt",
+              "publicTitle": "Hook prompt",
+              "resourceType": "prompt",
+              "scope": { "kind": "all" },
+              "kind": "global",
+              "description": "The exact prompt.",
+              "sortOrder": 0
+            }
+          ],
+          "items": [
+            {
+              "id": "resource-prompt01-item-1",
+              "type": "prompt",
+              "role": "primary",
+              "title": "Hook prompt",
+              "description": null,
+              "textContent": "Cinematic hook, 35mm",
+              "externalUrl": null,
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": null,
+              "remixUse": "text_template",
+              "scope": { "kind": "all" },
+              "sectionId": "resource-prompt01",
+              "sortOrder": 0,
+              "isPrimary": true
+            }
+          ]
+        }
+      },
+      "expectedCards": [
+        {
+          "id": "resource-prompt01",
+          "type": "prompt",
+          "title": "Hook prompt",
+          "preview": "The exact prompt.",
+          "textContent": "Cinematic hook, 35mm",
+          "externalUrl": "",
+          "attachments": [],
+          "appliesToAll": true,
+          "mediaKeys": []
+        }
+      ]
+    },
+    {
+      "name": "media-scoped section hydrates its keys and turns off appliesToAll",
+      "bundle": {
+        "accessMode": "paid",
+        "summary": "Style refs",
+        "previewText": "Includes Style refs.",
+        "priceUsdCents": 250,
+        "resources": {
+          "promptText": null,
+          "notesMarkdown": null,
+          "workflowShareUrl": null,
+          "attachments": [],
+          "allowRemix": false,
+          "sections": [
+            {
+              "id": "resource-ref0001",
+              "title": "Style refs",
+              "publicTitle": "Style refs",
+              "resourceType": "reference_image",
+              "scope": { "kind": "media", "mediaKeys": ["media-1", "media-2"] },
+              "kind": "asset_group",
+              "description": "Two looks.",
+              "sortOrder": 0
+            }
+          ],
+          "items": [
+            {
+              "id": "resource-ref0001-file-1",
+              "type": "reference_image",
+              "role": "style_reference",
+              "title": "look-a.png",
+              "description": null,
+              "textContent": null,
+              "externalUrl": null,
+              "storagePath": "user-1/11111111-1111-4111-8111-111111111111-look-a.png",
+              "contentType": "image/png",
+              "sizeBytes": 1024,
+              "workflowSnapshot": null,
+              "remixUse": "reference_only",
+              "scope": { "kind": "media", "mediaKeys": ["media-1", "media-2"] },
+              "sectionId": "resource-ref0001",
+              "sortOrder": 0,
+              "isPrimary": true
+            },
+            {
+              "id": "resource-ref0001-file-2",
+              "type": "reference_video",
+              "role": "style_reference",
+              "title": "clip.mp4",
+              "description": null,
+              "textContent": null,
+              "externalUrl": null,
+              "storagePath": "user-1/22222222-2222-4222-8222-222222222222-clip.mp4",
+              "contentType": "video/mp4",
+              "sizeBytes": 2048,
+              "workflowSnapshot": null,
+              "remixUse": "reference_only",
+              "scope": { "kind": "media", "mediaKeys": ["media-1", "media-2"] },
+              "sectionId": "resource-ref0001",
+              "sortOrder": 1,
+              "isPrimary": false
+            }
+          ]
+        }
+      },
+      "expectedCards": [
+        {
+          "id": "resource-ref0001",
+          "type": "reference_media",
+          "title": "Style refs",
+          "preview": "Two looks.",
+          "textContent": "",
+          "externalUrl": "",
+          "attachments": [
+            {
+              "id": "resource-ref0001-file-1",
+              "kind": "file",
+              "label": "look-a.png",
+              "url": "",
+              "storagePath": "user-1/11111111-1111-4111-8111-111111111111-look-a.png",
+              "contentType": "image/png",
+              "sizeBytes": 1024,
+              "resourceType": "reference_image",
+              "role": "style_reference",
+              "remixUse": "reference_only"
+            },
+            {
+              "id": "resource-ref0001-file-2",
+              "kind": "file",
+              "label": "clip.mp4",
+              "url": "",
+              "storagePath": "user-1/22222222-2222-4222-8222-222222222222-clip.mp4",
+              "contentType": "video/mp4",
+              "sizeBytes": 2048,
+              "resourceType": "reference_video",
+              "role": "style_reference",
+              "remixUse": "reference_only"
+            }
+          ],
+          "appliesToAll": false,
+          "mediaKeys": ["media-1", "media-2"]
+        }
+      ]
+    },
+    {
+      "name": "flat legacy bundle without sections becomes one card per item",
+      "comment": "A bundle authored by the pre-convergence web composer has no sections and unsectioned items, so each item groups alone and becomes its own card. Structure is created where none existed; this is expected and lossless in payload terms.",
+      "bundle": {
+        "accessMode": "free",
+        "summary": "Legacy recipe",
+        "previewText": "Includes reusable resources.",
+        "priceUsdCents": 0,
+        "resources": {
+          "promptText": "Legacy prompt",
+          "notesMarkdown": "Legacy notes",
+          "workflowShareUrl": null,
+          "attachments": [],
+          "allowRemix": false,
+          "sections": [],
+          "items": [
+            {
+              "id": "item-1",
+              "type": "prompt",
+              "role": "primary",
+              "title": "Prompt",
+              "description": null,
+              "textContent": "Legacy prompt",
+              "externalUrl": null,
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": null,
+              "remixUse": "none",
+              "scope": { "kind": "all" },
+              "sectionId": null,
+              "sortOrder": 0,
+              "isPrimary": true
+            },
+            {
+              "id": "item-2",
+              "type": "note",
+              "role": "primary",
+              "title": "Notes",
+              "description": null,
+              "textContent": "Legacy notes",
+              "externalUrl": null,
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": null,
+              "remixUse": "none",
+              "scope": { "kind": "all" },
+              "sectionId": null,
+              "sortOrder": 1,
+              "isPrimary": false
+            }
+          ]
+        }
+      },
+      "expectedCards": [
+        {
+          "id": "item-1",
+          "type": "prompt",
+          "title": "Prompt",
+          "preview": "",
+          "textContent": "Legacy prompt",
+          "externalUrl": "",
+          "attachments": [],
+          "appliesToAll": true,
+          "mediaKeys": []
+        },
+        {
+          "id": "item-2",
+          "type": "guide",
+          "title": "Notes",
+          "preview": "",
+          "textContent": "Legacy notes",
+          "externalUrl": "",
+          "attachments": [],
+          "appliesToAll": true,
+          "mediaKeys": []
+        }
+      ]
+    },
+    {
+      "name": "a remix_access item becomes the bundle-level remix flag, not a card",
+      "comment": "A remix_access item carries no text, url or file. It used to hydrate into an empty 'other' card that the content gate then discarded, while the serializer hardcoded allowRemix:false — so editing a remix-enabled bundle silently revoked the permission. Both composers now read it back as a bundle-level flag and pass it through on save.",
+      "bundle": {
+        "accessMode": "free",
+        "summary": "Remixable",
+        "previewText": "Includes remix access.",
+        "priceUsdCents": 0,
+        "resources": {
+          "promptText": null,
+          "notesMarkdown": null,
+          "workflowShareUrl": null,
+          "attachments": [],
+          "allowRemix": true,
+          "sections": [],
+          "items": [
+            {
+              "id": "item-remix",
+              "type": "remix_access",
+              "role": "primary",
+              "title": "Remix access",
+              "description": null,
+              "textContent": null,
+              "externalUrl": null,
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": null,
+              "remixUse": "direct_remix",
+              "scope": { "kind": "all" },
+              "sectionId": null,
+              "sortOrder": 0,
+              "isPrimary": true
+            }
+          ]
+        }
+      },
+      "expectedCards": [],
+      "expectedAllowRemix": true
+    },
+    {
+      "name": "workflow snapshot survives hydration",
+      "bundle": {
+        "accessMode": "free",
+        "summary": "Canvas graph",
+        "previewText": "Includes Canvas graph.",
+        "priceUsdCents": 0,
+        "resources": {
+          "promptText": null,
+          "notesMarkdown": null,
+          "workflowShareUrl": null,
+          "attachments": [],
+          "allowRemix": false,
+          "sections": [
+            {
+              "id": "resource-wfg00001",
+              "title": "Canvas graph",
+              "publicTitle": "Canvas graph",
+              "resourceType": "workflow",
+              "scope": { "kind": "all" },
+              "kind": "workflow_step",
+              "description": null,
+              "sortOrder": 0
+            }
+          ],
+          "items": [
+            {
+              "id": "resource-wfg00001-item-1",
+              "type": "workflow",
+              "role": "primary",
+              "title": "Canvas graph",
+              "description": null,
+              "textContent": null,
+              "externalUrl": "https://example.com/graph",
+              "storagePath": null,
+              "contentType": null,
+              "sizeBytes": null,
+              "workflowSnapshot": { "nodes": [], "edges": [] },
+              "remixUse": "import_source",
+              "scope": { "kind": "all" },
+              "sectionId": "resource-wfg00001",
+              "sortOrder": 0,
+              "isPrimary": true
+            }
+          ]
+        }
+      },
+      "expectedCards": [
+        {
+          "id": "resource-wfg00001",
+          "type": "workflow",
+          "title": "Canvas graph",
+          "preview": "",
+          "textContent": "",
+          "externalUrl": "https://example.com/graph",
+          "attachments": [],
+          "appliesToAll": true,
+          "mediaKeys": [],
+          "workflowSnapshot": { "nodes": [], "edges": [] }
+        }
+      ],
+      "expectedAllowRemix": false
+    }
+  ],
+  "losslessCompatibilityCases": [
+    {
+      "name": "private legacy title remains private",
+      "summary": "Legacy prompt package",
+      "previewText": "Includes one protected prompt.",
+      "section": {
+        "id": "legacy-private-section",
+        "title": "Secret client launch prompt",
+        "publicTitle": null,
+        "resourceType": "prompt",
+        "scope": { "kind": "all" },
+        "kind": "global",
+        "description": null,
+        "sortOrder": 0
+      },
+      "items": [
+        {
+          "id": "legacy-private-prompt",
+          "type": "prompt",
+          "role": "primary",
+          "title": "Secret client launch prompt",
+          "textContent": "Keep the client name private.",
+          "remixUse": "text_template",
+          "scope": { "kind": "all" }
+        }
+      ],
+      "expectedCard": {
+        "type": "prompt",
+        "title": "Secret client launch prompt",
+        "publicTitleIntent": "legacy_private"
+      }
+    },
+    {
+      "name": "heterogeneous section preserves every item contract",
+      "summary": "Mixed production kit",
+      "previewText": "Includes prompts, notes, links, and source files.",
+      "section": {
+        "id": "legacy-mixed-section",
+        "title": "Internal production kit",
+        "publicTitle": "Production kit",
+        "resourceType": "prompt",
+        "scope": { "kind": "all" },
+        "kind": "asset_group",
+        "description": "A mixed legacy section.",
+        "sortOrder": 0
+      },
+      "items": [
+        {
+          "id": "mixed-prompt",
+          "type": "prompt",
+          "role": "primary",
+          "title": "Prompt",
+          "textContent": "A product launch prompt.",
+          "remixUse": "text_template",
+          "scope": { "kind": "media", "mediaKeys": ["media-a"] }
+        },
+        {
+          "id": "mixed-notes",
+          "type": "note",
+          "role": "other",
+          "title": "Usage notes",
+          "textContent": "Keep the product centered.",
+          "remixUse": "none",
+          "scope": { "kind": "all" }
+        },
+        {
+          "id": "mixed-source",
+          "type": "source_file",
+          "role": "product_reference",
+          "title": "project.zip",
+          "storagePath": "user-1/project.zip",
+          "contentType": "application/zip",
+          "sizeBytes": 4096,
+          "remixUse": "direct_remix",
+          "scope": { "kind": "media", "mediaKeys": ["media-b"] }
+        },
+        {
+          "id": "mixed-link",
+          "type": "external_link",
+          "role": "manual_import",
+          "title": "Setup docs",
+          "externalUrl": "https://example.com/private/setup",
+          "remixUse": "import_source",
+          "scope": { "kind": "media", "mediaKeys": ["media-c"] }
+        }
+      ],
+      "expectedCard": {
+        "type": "prompt",
+        "title": "Production kit",
+        "publicTitleIntent": "explicit"
+      }
+    },
+    {
+      "name": "snapshot-only and file-backed workflows remain intact",
+      "summary": "Workflow sources",
+      "previewText": "Includes reusable workflow graphs and project files.",
+      "section": {
+        "id": "legacy-workflows",
+        "title": "Private workflows",
+        "publicTitle": "Workflow sources",
+        "resourceType": "workflow",
+        "scope": { "kind": "all" },
+        "kind": "workflow_step",
+        "description": null,
+        "sortOrder": 0
+      },
+      "items": [
+        {
+          "id": "snapshot-only",
+          "type": "workflow",
+          "role": "supporting_workflow",
+          "title": "Canvas snapshot",
+          "workflowSnapshot": { "nodes": [{ "id": "node-a" }], "edges": [] },
+          "remixUse": "import_source",
+          "scope": { "kind": "all" }
+        },
+        {
+          "id": "workflow-file",
+          "type": "workflow",
+          "role": "manual_import",
+          "title": "workflow.json",
+          "storagePath": "user-1/workflow.json",
+          "contentType": "application/json",
+          "sizeBytes": 1024,
+          "workflowSnapshot": { "nodes": [{ "id": "node-b" }], "edges": [] },
+          "remixUse": "direct_remix",
+          "scope": { "kind": "media", "mediaKeys": ["media-a"] }
+        }
+      ],
+      "expectedCard": {
+        "type": "workflow",
+        "title": "Workflow sources",
+        "publicTitleIntent": "explicit"
+      }
+    },
+    {
+      "name": "file-backed preset remains a preset",
+      "summary": "Model preset",
+      "previewText": "Includes the exact reusable generation preset file.",
+      "section": {
+        "id": "legacy-preset",
+        "title": "Internal preset",
+        "publicTitle": "Model preset",
+        "resourceType": "preset",
+        "scope": { "kind": "media", "mediaKeys": ["media-a"] },
+        "kind": "asset_group",
+        "description": null,
+        "sortOrder": 0
+      },
+      "items": [
+        {
+          "id": "preset-file",
+          "type": "preset",
+          "role": "manual_import",
+          "title": "camera.preset",
+          "storagePath": "user-1/camera.preset",
+          "contentType": "application/octet-stream",
+          "sizeBytes": 512,
+          "remixUse": "import_source",
+          "scope": { "kind": "media", "mediaKeys": ["media-a"] }
+        }
+      ],
+      "expectedCard": {
+        "type": "settings",
+        "title": "Model preset",
+        "publicTitleIntent": "explicit"
+      }
+    }
+  ]
+}

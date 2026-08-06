@@ -9,6 +9,7 @@ import type {
   PostResourceBundleInput,
   PostResourceItem,
   PostResourceItemRole,
+  PostResourceItemScope,
   PostResourceItemType,
   PostResourceKind,
   PostResourceRemixUse,
@@ -85,6 +86,15 @@ export interface PostComposerResourceAttachmentDraft {
   remixUse?: PostResourceRemixUse;
 }
 
+export interface PostComposerResourceCardHydrationSource {
+  groupKey: string;
+  section: PostResourceSection | null;
+  items: PostResourceItem[];
+  textItemIndex: number | null;
+  urlItemIndex: number | null;
+  attachmentItemIndexes: number[];
+}
+
 export interface PostComposerResourceSectionDraft {
   id: string;
   title: string;
@@ -118,10 +128,23 @@ export interface PostComposerResourceCardDraft {
   attachments: PostComposerResourceAttachmentDraft[];
   appliesToAll: boolean;
   mediaKeys: string[];
+  publicTitleIntent?: 'explicit' | 'legacy_private';
+  hydrationSource?: PostComposerResourceCardHydrationSource;
+  /**
+   * Only ever set by hydration, so re-saving a bundle that carries a workflow
+   * graph does not silently drop it. Absent on cards the composer creates.
+   */
+  workflowSnapshot?: unknown | null;
 }
 
 export interface PostComposerResourceDraft {
   accessMode: PostResourceBundleAccessMode;
+  /**
+   * Selects the current card serializer even when the card list is empty.
+   * Missing values are treated as legacy drafts so an older persisted draft can
+   * still recover its flat prompt/files fields before the creator touches it.
+   */
+  cardAuthoringMode?: 'cards' | 'legacy';
   selectedKinds: PostComposerResourceSelections;
   promptText: string;
   notesMarkdown: string;
@@ -513,6 +536,7 @@ const MAX_MADE_WITH_ROWS = 5;
 export function getDefaultResourceDraft(): PostComposerResourceDraft {
   return {
     accessMode: 'none',
+    cardAuthoringMode: 'cards',
     selectedKinds: { ...DEFAULT_RESOURCE_SELECTIONS },
     promptText: '',
     notesMarkdown: '',
@@ -547,6 +571,90 @@ export function createPostComposerResourceCard(
     attachments: partial.attachments ?? [],
     appliesToAll: partial.appliesToAll ?? true,
     mediaKeys: partial.mediaKeys ?? [],
+    ...(partial.publicTitleIntent ? { publicTitleIntent: partial.publicTitleIntent } : {}),
+    ...(partial.hydrationSource ? { hydrationSource: partial.hydrationSource } : {}),
+    // Spread rather than defaulted to null: an absent snapshot must stay absent
+    // so cards without one compare equal to the web drafts.
+    ...(partial.workflowSnapshot ? { workflowSnapshot: partial.workflowSnapshot } : {}),
+  };
+}
+
+function resolveResourceCardScope(card: PostComposerResourceCardDraft): PostResourceItemScope {
+  return card.appliesToAll || card.mediaKeys.length === 0
+    ? { kind: 'all' }
+    : { kind: 'media', mediaKeys: [...new Set(card.mediaKeys)] };
+}
+
+function resourceScopesEqual(left: PostResourceItemScope, right: PostResourceItemScope): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === 'all' || right.kind === 'all') return true;
+  return left.mediaKeys.length === right.mediaKeys.length
+    && left.mediaKeys.every((key, index) => key === right.mediaKeys[index]);
+}
+
+function isSafeResourceUrl(value: string | null | undefined): boolean {
+  const trimmed = value?.trim();
+  if (!trimmed) return false;
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function inferReferenceType(contentType: string | null | undefined): PostResourceItemType {
+  if (contentType?.startsWith('video/')) return 'reference_video';
+  if (contentType?.startsWith('audio/')) return 'reference_audio';
+  return 'reference_image';
+}
+
+function getHydratedCardProjection(
+  source: PostComposerResourceCardHydrationSource
+): Omit<PostComposerResourceCardDraft, 'hydrationSource'> {
+  const { groupKey, items: groupItems, section } = source;
+  const first = groupItems[0]!;
+  const type = inferResourceCardType(groupItems);
+  const mediaKeys = [...new Set(groupItems.flatMap((item) => (item.scope?.kind === 'media'
+    ? item.scope.mediaKeys
+    : section?.scope?.kind === 'media'
+      ? section.scope.mediaKeys
+      : [])))];
+  const appliesToAll = (
+    groupItems.some((item) => !item.scope || item.scope.kind === 'all')
+    && section?.scope?.kind !== 'media'
+  ) || mediaKeys.length === 0;
+  const contentItem = source.textItemIndex == null ? undefined : groupItems[source.textItemIndex];
+  const urlItem = source.urlItemIndex == null ? undefined : groupItems[source.urlItemIndex];
+  const workflowSnapshot = groupItems.find((item) => item.workflowSnapshot)?.workflowSnapshot ?? null;
+  const attachments = source.attachmentItemIndexes.map((itemIndex, attachmentIndex): PostComposerResourceAttachmentDraft => {
+    const item = groupItems[itemIndex]!;
+    return {
+      id: item.id ?? `${groupKey}-attachment-${attachmentIndex + 1}`,
+      kind: item.storagePath ? 'file' : 'link',
+      label: item.title,
+      url: item.externalUrl ?? '',
+      storagePath: item.storagePath ?? '',
+      contentType: item.contentType,
+      sizeBytes: item.sizeBytes,
+      resourceType: item.type,
+      role: item.role,
+      remixUse: item.remixUse,
+    };
+  });
+
+  return {
+    id: section?.id ?? first.sectionId ?? first.id ?? groupKey,
+    type,
+    title: section?.publicTitle ?? section?.title ?? first.title,
+    preview: section?.description ?? '',
+    textContent: contentItem?.textContent ?? '',
+    externalUrl: urlItem?.externalUrl ?? '',
+    attachments,
+    appliesToAll,
+    mediaKeys,
+    publicTitleIntent: section?.publicTitle ? 'explicit' : 'legacy_private',
+    ...(workflowSnapshot ? { workflowSnapshot } : {}),
   };
 }
 
@@ -554,7 +662,10 @@ export function hydratePostComposerResourceCards(
   bundle: PostResourceBundleInput | null | undefined
 ): PostComposerResourceCardDraft[] {
   const resources = bundle?.resources;
-  const items = resources?.items ?? [];
+  // A remix_access item carries no text, link or file, so it can only ever
+  // hydrate into an empty card that the content gate then discards. It is read
+  // back by hydratePostComposerAllowRemix instead.
+  const items = (resources?.items ?? []).filter((item) => item.type !== 'remix_access');
   if (items.length === 0) {
     return [];
   }
@@ -568,46 +679,47 @@ export function hydratePostComposerResourceCards(
 
   return [...groups.entries()].map(([groupKey, groupItems]) => {
     const first = groupItems[0]!;
-    const section = first.sectionId ? sections.get(first.sectionId) : undefined;
+    const section = first.sectionId ? sections.get(first.sectionId) ?? null : null;
     const type = inferResourceCardType(groupItems);
-    const mediaKeys = [...new Set(groupItems.flatMap((item) => item.scope?.kind === 'media'
-      ? item.scope.mediaKeys
-      : section?.scope?.kind === 'media'
-        ? section.scope.mediaKeys
-        : []))];
-    const appliesToAll = groupItems.some((item) => !item.scope || item.scope.kind === 'all')
-      && section?.scope?.kind !== 'media'
-      || mediaKeys.length === 0;
-    const contentItem = groupItems.find((item) => item.textContent);
-    const urlItem = type === 'external_link' || type === 'remix_link' || type === 'workflow'
-      ? groupItems.find((item) => item.externalUrl)
-      : undefined;
-    const attachments = groupItems
-      .filter((item) => item.storagePath || (item.externalUrl && item !== urlItem))
-      .map((item, index): PostComposerResourceAttachmentDraft => ({
-        id: item.id ?? `${groupKey}-attachment-${index + 1}`,
-        kind: item.storagePath ? 'file' : 'link',
-        label: item.title,
-        url: item.externalUrl ?? '',
-        storagePath: item.storagePath ?? '',
-        contentType: item.contentType,
-        sizeBytes: item.sizeBytes,
-        resourceType: item.type,
-        role: item.role,
-        remixUse: item.remixUse,
-      }));
+    const textItemIndex = groupItems.findIndex((item) => Boolean(item.textContent));
+    const urlItemIndex = (
+      type === 'external_link' || type === 'remix_link' || type === 'workflow'
+    )
+      ? groupItems.findIndex((item) => Boolean(item.externalUrl))
+      : -1;
+    const attachmentItemIndexes = groupItems.flatMap((item, index) => (
+      item.storagePath || (item.externalUrl && index !== urlItemIndex) ? [index] : []
+    ));
+    const hydrationSource: PostComposerResourceCardHydrationSource = {
+      groupKey,
+      section,
+      items: groupItems.map((item) => ({ ...item })),
+      textItemIndex: textItemIndex >= 0 ? textItemIndex : null,
+      urlItemIndex: urlItemIndex >= 0 ? urlItemIndex : null,
+      attachmentItemIndexes,
+    };
+    const projection = getHydratedCardProjection(hydrationSource);
 
     return createPostComposerResourceCard(type, {
-      id: section?.id ?? first.sectionId ?? first.id ?? groupKey,
-      title: section?.publicTitle ?? section?.title ?? first.title,
-      preview: section?.description ?? '',
-      textContent: contentItem?.textContent ?? '',
-      externalUrl: urlItem?.externalUrl ?? '',
-      attachments,
-      appliesToAll,
-      mediaKeys,
+      ...projection,
+      hydrationSource,
     });
   });
+}
+
+/**
+ * Reads back whether a loaded bundle grants direct remix. A remix_access item
+ * carries no text, link or file of its own, so it cannot survive as a card —
+ * the permission lives at bundle level instead.
+ */
+export function hydratePostComposerAllowRemix(
+  bundle: PostResourceBundleInput | null | undefined
+): boolean {
+  const resources = bundle?.resources;
+  return Boolean(
+    resources?.allowRemix
+    || (resources?.items ?? []).some((item) => item.type === 'remix_access')
+  );
 }
 
 function inferResourceCardType(items: PostResourceItem[]): PostComposerResourceCardType {
@@ -780,8 +892,18 @@ export function validatePostComposerDraft(
       return { valid: false, message: 'Add at least one unlockable resource.' };
     }
 
-    if (!resourceBundle.previewText?.trim()) {
+    // The builder has a compatibility fallback for older callers, but the
+    // composer labels this author-written field as required. Validate the raw
+    // draft so an empty field cannot silently submit generated copy instead.
+    if (!draft.resource.previewText.trim()) {
       return { valid: false, message: 'Add a buyer preview for the unlock.' };
+    }
+
+    if (draft.visibility === 'public' && !hasUsefulBuyerPreview(draft.resource)) {
+      return {
+        valid: false,
+        message: 'Improve this recipe before publishing: Add a useful preview or summary that tells buyers what the recipe includes.',
+      };
     }
 
     if (draft.resource.accessMode === 'paid') {
@@ -1055,10 +1177,15 @@ export function buildPostResourceBundleInput(resource: PostComposerResourceDraft
   }
 
   const resourceCards = (resource.cards ?? []).filter((card) => resourceCardHasContent(card));
-  if (resourceCards.length > 0) {
+  const usesCardAuthoring = resource.cardAuthoringMode === 'cards' || resourceCards.length > 0;
+  if (usesCardAuthoring) {
     const sections = serializeResourceCardSections(resourceCards);
     const items = buildResourceCardItems(resourceCards);
-    if (items.length === 0) {
+    // Removing the final card is an explicit deletion. Never fall through to
+    // the stale flat compatibility fields and resurrect protected content. A
+    // deliberate remix-only package remains valid because its permission lives
+    // at bundle level and the server synthesizes the compatibility item.
+    if (items.length === 0 && !resource.allowRemix) {
       return null;
     }
 
@@ -1067,7 +1194,10 @@ export function buildPostResourceBundleInput(resource: PostComposerResourceDraft
       notesMarkdown: null,
       workflowShareUrl: null,
       attachments: [],
-      allowRemix: false,
+      // Carried through rather than hardcoded false: a remix_access item cannot
+      // survive as a card, so editing a remix-enabled bundle used to revoke the
+      // permission on save.
+      allowRemix: resource.allowRemix,
       sections,
       items,
     };
@@ -1075,7 +1205,13 @@ export function buildPostResourceBundleInput(resource: PostComposerResourceDraft
 
     return {
       accessMode: resource.accessMode,
-      summary: trimOrUndefined(resource.summary) ?? getResourceCardSummary(resourceCards),
+      // The author's preview stands in for the summary when they have not
+      // written a separate one. assessMarketplaceListingQuality reads whichever
+      // of the two is non-empty *first*, so deriving a short summary here would
+      // shadow what the author actually wrote and fail the listing for them.
+      summary: trimOrUndefined(resource.summary)
+        ?? trimOrUndefined(resource.previewText)
+        ?? getResourceCardSummary(resourceCards),
       previewText: trimOrUndefined(resource.previewText) ?? getResourceCardPreview(resourceCards),
       priceUsdCents: resource.accessMode === 'paid' ? getPriceTokens(resource) : 0,
       resources,
@@ -1119,6 +1255,45 @@ export function buildPostResourceBundleInput(resource: PostComposerResourceDraft
   };
 }
 
+/**
+ * Converts a persisted pre-card resource draft into the editor's visible card
+ * model. Publishing hidden legacy fields would be a trust failure, so the
+ * current UI calls this before showing a restored draft and clears the flat
+ * compatibility fields once their semantics have been projected into cards.
+ */
+export function migratePostComposerResourceDraftToCards(
+  resource: PostComposerResourceDraft,
+): PostComposerResourceDraft {
+  if (resource.cardAuthoringMode === 'cards') return resource;
+
+  const existingCards = resource.cards ?? [];
+  const legacyBundle = existingCards.length === 0
+    ? buildPostResourceBundleInput({ ...resource, cardAuthoringMode: 'legacy' })
+    : null;
+  const cards = existingCards.length > 0
+    ? existingCards
+    : hydratePostComposerResourceCards(legacyBundle);
+  const allowRemix = existingCards.length > 0
+    ? resource.allowRemix
+    : hydratePostComposerAllowRemix(legacyBundle);
+
+  return {
+    ...resource,
+    cardAuthoringMode: 'cards',
+    selectedKinds: { ...DEFAULT_RESOURCE_SELECTIONS },
+    promptText: '',
+    notesMarkdown: '',
+    workflowShareUrl: '',
+    attachmentUrl: '',
+    attachmentLabel: '',
+    attachments: [],
+    organizeSections: false,
+    sections: [],
+    cards,
+    allowRemix,
+  };
+}
+
 export function getPostComposerPreviewStatusLabel(
   draft: PostComposerDraft,
   selectedGeneration?: GenerationListItem | null
@@ -1146,7 +1321,9 @@ export function getPostComposerReadiness(
   const publicReady = isPublicPostReady(draft, selectedGeneration, skipGenerationSelection);
   const unlockBundle = buildPostResourceBundleInput(draft.resource);
   const unlockActive = draft.resource.accessMode !== 'none';
-  const unlockReady = !unlockActive || Boolean(unlockBundle && draft.resource.previewText.trim());
+  const buyerPreviewReady = Boolean(draft.resource.previewText.trim())
+    && (draft.visibility !== 'public' || hasUsefulBuyerPreview(draft.resource));
+  const unlockReady = !unlockActive || Boolean(unlockBundle && buyerPreviewReady);
   const validation = validatePostComposerDraft(draft);
 
   return [
@@ -1200,6 +1377,7 @@ export function applyCreationPromptResource(
       },
       resource: {
         ...draft.resource,
+        cardAuthoringMode: 'cards',
         cards: (draft.resource.cards ?? []).filter((card) => card.id !== 'creation-prompt'),
       },
     };
@@ -1215,6 +1393,7 @@ export function applyCreationPromptResource(
     },
     resource: {
       ...draft.resource,
+      cardAuthoringMode: 'cards',
       accessMode: draft.resource.accessMode === 'none' ? 'free' : draft.resource.accessMode,
       promptText: draft.resource.promptText.trim() ? draft.resource.promptText : prompt,
       previewText: draft.resource.previewText.trim() ? draft.resource.previewText : 'Includes the exact reusable prompt.',
@@ -1251,7 +1430,9 @@ export function getPostComposerPackageStatus(
   const referencesAttached = willAttachGenerationReferences(selectedGeneration, draft);
 
   if (resourceActive) {
-    const ready = Boolean(resourceBundle && draft.resource.previewText.trim());
+    const buyerPreviewReady = Boolean(draft.resource.previewText.trim())
+      && (draft.visibility !== 'public' || hasUsefulBuyerPreview(draft.resource));
+    const ready = Boolean(resourceBundle && buyerPreviewReady);
     const promptResource = getCreationPackageDraft(draft).attachPromptResource && draft.resource.promptText.trim();
     const priceTokens = getPriceTokens(draft.resource);
     const priceNeedsMinimum = draft.resource.accessMode === 'paid' && priceTokens < MIN_RESOURCE_PRICE_TOKENS;
@@ -1501,6 +1682,39 @@ function trimOrNull(value: string | null | undefined) {
   return trimOrUndefined(value) ?? null;
 }
 
+function isPlaceholderMarketplaceText(value: string): boolean {
+  const comparable = value
+    .trim()
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+  if (!comparable) return true;
+  const placeholderTokens = new Set([
+    'asdf', 'demo', 'draft', 'example', 'foo', 'ipsum', 'lorem',
+    'placeholder', 'sample', 'test', 'testing', 'todo', 'untitled',
+  ]);
+  const tokens = comparable.split(/\s+/).filter(Boolean);
+  if (tokens.some((token) => placeholderTokens.has(token))) return true;
+
+  const compact = comparable.replace(/\s+/g, '');
+  if (compact.length >= 6) {
+    if (new Set(compact).size <= 3) return true;
+    for (let size = 1; size <= 3; size += 1) {
+      const pattern = compact.slice(0, size);
+      if (pattern.repeat(Math.ceil(compact.length / size)).slice(0, compact.length) === compact) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function hasUsefulBuyerPreview(resource: PostComposerResourceDraft): boolean {
+  const preview = resource.summary.trim() || resource.previewText.trim();
+  return preview.length >= 18 && !isPlaceholderMarketplaceText(preview);
+}
+
 function slugifySourceValue(value: string | null | undefined) {
   const normalized = value
     ?.trim()
@@ -1619,7 +1833,16 @@ export function getPostComposerResourceCardErrors(
   if (!card.title.trim()) {
     errors.title = 'Add a resource title.';
   }
-  if (!resourceCardHasContent(card, { ignoreTitle: true })) {
+  const hasInvalidUrl = (
+    Boolean(card.externalUrl.trim())
+    && !isSafeResourceUrl(card.externalUrl)
+  ) || card.attachments.some((attachment) => (
+    Boolean(attachment.url?.trim())
+    && !isSafeResourceUrl(attachment.url)
+  ));
+  if (hasInvalidUrl) {
+    errors.content = 'Add a valid http:// or https:// link.';
+  } else if (!resourceCardHasContent(card, { ignoreTitle: true })) {
     errors.content = 'Add the protected content, link, or file for this resource.';
   }
   return errors;
@@ -1637,66 +1860,102 @@ function resourceCardHasContent(
     return false;
   }
   const hasText = Boolean(card.textContent.trim());
-  const hasUrl = Boolean(card.externalUrl.trim());
+  const hasUrl = isSafeResourceUrl(card.externalUrl);
   const hasAttachments = card.attachments.some((attachment) => (
     attachment.kind === 'file'
       ? Boolean(attachment.storagePath?.trim())
-      : Boolean(attachment.url?.trim())
+      : isSafeResourceUrl(attachment.url)
   ));
+  const hasWorkflowSnapshot = Boolean(card.workflowSnapshot);
+  const hasPreservedContent = Boolean(card.hydrationSource?.items.some((item) => (
+    item.textContent?.trim()
+    || isSafeResourceUrl(item.externalUrl)
+    || item.storagePath?.trim()
+    || item.workflowSnapshot
+    || item.remixUse !== 'none'
+  )));
 
   if (card.type === 'prompt' || card.type === 'settings' || card.type === 'guide') {
-    return hasText;
+    return hasText || hasAttachments || hasPreservedContent;
   }
   if (card.type === 'external_link' || card.type === 'remix_link') {
-    return hasUrl;
+    return hasUrl || hasPreservedContent;
   }
   if (card.type === 'reference_media' || card.type === 'source_assets') {
-    return hasAttachments;
+    return hasAttachments || hasPreservedContent;
   }
-  return hasText || hasUrl || hasAttachments;
+  return hasText || hasUrl || hasAttachments || hasWorkflowSnapshot || hasPreservedContent;
+}
+
+function serializeNewResourceCardSection(
+  card: PostComposerResourceCardDraft,
+  index: number,
+): PostResourceSection {
+  const title = card.title.trim()
+    || POST_COMPOSER_RESOURCE_CARD_OPTIONS.find((option) => option.id === card.type)?.label
+    || `Resource ${index + 1}`;
+  const referenceContentType = card.attachments.find((attachment) => attachment.contentType)?.contentType;
+  const resourceType: PostResourceItemType = card.type === 'prompt'
+    ? 'prompt'
+    : card.type === 'reference_media'
+      ? inferReferenceType(referenceContentType)
+      : card.type === 'settings'
+        ? 'settings'
+        : card.type === 'workflow'
+          ? 'workflow'
+          : card.type === 'source_assets'
+            ? 'source_file'
+            : card.type === 'external_link'
+              ? 'external_link'
+              : card.type === 'remix_link'
+                ? 'remix_link'
+                : 'note';
+
+  return {
+    id: card.id,
+    title,
+    publicTitle: title,
+    resourceType,
+    scope: resolveResourceCardScope(card),
+    kind: card.type === 'workflow'
+      ? 'workflow_step'
+      : card.type === 'reference_media' || card.type === 'source_assets'
+        ? 'asset_group'
+        : 'global',
+    description: trimOrNull(card.preview),
+    sortOrder: index,
+  };
 }
 
 function serializeResourceCardSections(cards: PostComposerResourceCardDraft[]): PostResourceSection[] {
-  return cards.map((card, index) => {
-    const title = card.title.trim() || POST_COMPOSER_RESOURCE_CARD_OPTIONS.find((option) => option.id === card.type)?.label || `Resource ${index + 1}`;
-    const referenceContentType = card.attachments.find((attachment) => attachment.contentType)?.contentType;
-    const resourceType: PostResourceItemType = card.type === 'prompt'
-      ? 'prompt'
-      : card.type === 'reference_media'
-        ? referenceContentType?.startsWith('video/')
-          ? 'reference_video'
-          : referenceContentType?.startsWith('audio/')
-            ? 'reference_audio'
-            : 'reference_image'
-        : card.type === 'settings'
-          ? 'settings'
-          : card.type === 'workflow'
-            ? 'workflow'
-            : card.type === 'source_assets'
-              ? 'source_file'
-              : card.type === 'external_link'
-                ? 'external_link'
-                : card.type === 'remix_link'
-                  ? 'remix_link'
-                  : 'note';
-    const scope = card.appliesToAll || card.mediaKeys.length === 0
-      ? { kind: 'all' as const }
-      : { kind: 'media' as const, mediaKeys: [...new Set(card.mediaKeys)] };
+  return cards.flatMap((card, index) => {
+    const source = card.hydrationSource;
+    if (!source) return [serializeNewResourceCardSection(card, index)];
 
-    return {
-      id: card.id,
-      title,
-      publicTitle: title,
-      resourceType,
-      scope,
-      kind: card.type === 'workflow'
-        ? 'workflow_step'
-        : card.type === 'reference_media' || card.type === 'source_assets'
-          ? 'asset_group'
-          : 'global',
-      description: trimOrNull(card.preview),
-      sortOrder: index,
-    };
+    const baseline = getHydratedCardProjection(source);
+    if (!source.section) {
+      if (card.publicTitleIntent === 'legacy_private' && card.title === baseline.title) {
+        return [];
+      }
+      return [serializeNewResourceCardSection(card, index)];
+    }
+
+    const section: PostResourceSection = { ...source.section };
+    if (card.title !== baseline.title || card.publicTitleIntent === 'explicit') {
+      section.publicTitle = trimOrNull(card.title);
+    }
+    if (card.preview !== baseline.preview) {
+      section.description = trimOrNull(card.preview);
+    }
+    if (!resourceScopesEqual(resolveResourceCardScope(card), resolveResourceCardScope(baseline))) {
+      section.scope = resolveResourceCardScope(card);
+    }
+    if (card.type !== baseline.type) {
+      const replacement = serializeNewResourceCardSection(card, index);
+      section.resourceType = replacement.resourceType;
+      section.kind = replacement.kind;
+    }
+    return [section];
   });
 }
 
@@ -1707,20 +1966,73 @@ function buildResourceCardItems(cards: PostComposerResourceCardDraft[]): PostRes
     card: PostComposerResourceCardDraft,
     item: Omit<PostResourceItem, 'sortOrder' | 'isPrimary' | 'sectionId'>,
   ) => {
-    const scope = card.appliesToAll || card.mediaKeys.length === 0
-      ? { kind: 'all' as const }
-      : { kind: 'media' as const, mediaKeys: [...new Set(card.mediaKeys)] };
     items.push({
       ...item,
       id: item.id ?? `${card.id}-item-${items.length + 1}`,
-      scope,
+      scope: resolveResourceCardScope(card),
       sectionId: card.id,
       sortOrder: items.length,
       isPrimary: items.length === 0,
     });
   };
 
-  cards.forEach((card) => {
+  const attachmentItem = (
+    card: PostComposerResourceCardDraft,
+    attachment: PostComposerResourceAttachmentDraft,
+    attachmentIndex: number,
+  ): Omit<PostResourceItem, 'sortOrder' | 'isPrimary' | 'sectionId'> => {
+    const isFile = attachment.kind === 'file';
+    const type: PostResourceItemType = attachment.resourceType
+      ?? (card.type === 'reference_media'
+        ? inferReferenceType(attachment.contentType)
+        : card.type === 'workflow'
+          ? 'workflow'
+          : card.type === 'source_assets'
+            ? 'source_file'
+            : isFile
+              ? 'source_file'
+              : 'external_link');
+    const defaultRole: PostResourceItemRole = card.type === 'reference_media'
+      ? 'style_reference'
+      : 'primary';
+    const defaultRemixUse: PostResourceRemixUse = card.type === 'reference_media'
+      ? 'reference_only'
+      : card.type === 'workflow'
+        ? 'import_source'
+        : 'none';
+
+    return {
+      id: `${card.id}-file-${attachmentIndex + 1}`,
+      type,
+      role: attachment.role ?? defaultRole,
+      title: attachment.label.trim() || `${card.title.trim() || 'Resource'} ${attachmentIndex + 1}`,
+      description: null,
+      textContent: null,
+      externalUrl: isFile ? null : attachment.url?.trim() || null,
+      storagePath: isFile ? attachment.storagePath?.trim() || null : null,
+      contentType: attachment.contentType ?? null,
+      sizeBytes: attachment.sizeBytes ?? null,
+      workflowSnapshot: null,
+      remixUse: attachment.remixUse ?? defaultRemixUse,
+    };
+  };
+
+  const attachmentDraftsEqual = (
+    left: PostComposerResourceAttachmentDraft,
+    right: PostComposerResourceAttachmentDraft,
+  ) => (
+    left.kind === right.kind
+    && left.label === right.label
+    && (left.url ?? '') === (right.url ?? '')
+    && (left.storagePath ?? '') === (right.storagePath ?? '')
+    && (left.contentType ?? null) === (right.contentType ?? null)
+    && (left.sizeBytes ?? null) === (right.sizeBytes ?? null)
+    && left.resourceType === right.resourceType
+    && left.role === right.role
+    && left.remixUse === right.remixUse
+  );
+
+  const pushFreshCardItems = (card: PostComposerResourceCardDraft) => {
     const title = card.title.trim() || 'Resource';
     const baseItem = {
       id: undefined,
@@ -1736,76 +2048,257 @@ function buildResourceCardItems(cards: PostComposerResourceCardDraft[]): PostRes
       remixUse: 'none' as const,
     };
 
-    if (card.type === 'prompt' || card.type === 'settings' || card.type === 'guide') {
+    if (
+      (card.type === 'prompt' || card.type === 'settings' || card.type === 'guide')
+      && card.textContent.trim()
+    ) {
       pushCardItem(card, {
         ...baseItem,
         type: card.type === 'prompt' ? 'prompt' : card.type === 'settings' ? 'settings' : 'note',
         textContent: card.textContent.trim(),
         remixUse: card.type === 'prompt' ? 'text_template' : 'none',
       });
-      return;
     }
 
-    if (card.type === 'external_link' || card.type === 'remix_link') {
+    if (
+      (card.type === 'external_link' || card.type === 'remix_link')
+      && card.externalUrl.trim()
+    ) {
       pushCardItem(card, {
         ...baseItem,
         type: card.type === 'remix_link' ? 'remix_link' : 'external_link',
         externalUrl: card.externalUrl.trim(),
         remixUse: 'none',
       });
-      return;
-    }
-
-    if (card.externalUrl.trim()) {
+    } else if (card.externalUrl.trim()) {
       pushCardItem(card, {
         ...baseItem,
         type: card.type === 'workflow' ? 'workflow' : 'external_link',
         externalUrl: card.externalUrl.trim(),
         remixUse: card.type === 'workflow' ? 'import_source' : 'none',
+        ...(card.type === 'workflow' && card.workflowSnapshot
+          ? { workflowSnapshot: card.workflowSnapshot }
+          : {}),
       });
     }
 
     card.attachments.forEach((attachment, attachmentIndex) => {
-      const isFile = attachment.kind === 'file';
-      const contentType = attachment.contentType ?? null;
-      const referenceType = contentType?.startsWith('video/')
-        ? 'reference_video'
-        : contentType?.startsWith('audio/')
-          ? 'reference_audio'
-          : 'reference_image';
-      const type: PostResourceItemType = card.type === 'reference_media'
-        ? referenceType
-        : card.type === 'workflow'
-          ? 'workflow'
-          : card.type === 'source_assets'
-            ? 'source_file'
-            : attachment.resourceType ?? (isFile ? 'source_file' : 'external_link');
-
-      pushCardItem(card, {
-        ...baseItem,
-        id: `${card.id}-file-${attachmentIndex + 1}`,
-        type,
-        role: card.type === 'reference_media' ? 'style_reference' : 'primary',
-        title: attachment.label.trim() || `${title} ${attachmentIndex + 1}`,
-        externalUrl: isFile ? null : attachment.url?.trim() || null,
-        storagePath: isFile ? attachment.storagePath?.trim() || null : null,
-        contentType,
-        sizeBytes: attachment.sizeBytes ?? null,
-        remixUse: card.type === 'reference_media'
-          ? 'reference_only'
-          : card.type === 'workflow'
-            ? 'import_source'
-            : 'none',
-      });
+      pushCardItem(card, attachmentItem(card, attachment, attachmentIndex));
     });
 
-    if (card.textContent.trim()) {
+    if (
+      card.textContent.trim()
+      && card.type !== 'prompt'
+      && card.type !== 'settings'
+      && card.type !== 'guide'
+    ) {
       pushCardItem(card, {
         ...baseItem,
         type: card.type === 'workflow' ? 'workflow' : 'note',
         textContent: card.textContent.trim(),
         remixUse: card.type === 'workflow' ? 'import_source' : 'none',
+        ...(card.type === 'workflow' && card.workflowSnapshot && !card.externalUrl.trim()
+          ? { workflowSnapshot: card.workflowSnapshot }
+          : {}),
       });
+    } else if (
+      card.type === 'workflow'
+      && card.workflowSnapshot
+      && !card.externalUrl.trim()
+      && !card.textContent.trim()
+      && card.attachments.length === 0
+    ) {
+      pushCardItem(card, {
+        ...baseItem,
+        type: 'workflow',
+        workflowSnapshot: card.workflowSnapshot,
+        remixUse: 'import_source',
+      });
+    }
+  };
+
+  const pushHydratedCardItems = (
+    card: PostComposerResourceCardDraft,
+    source: PostComposerResourceCardHydrationSource,
+  ) => {
+    const baseline = getHydratedCardProjection(source);
+    const next = source.items.map((item) => ({ ...item }));
+    const removed = new Set<number>();
+    const additions: Array<Omit<PostResourceItem, 'sortOrder' | 'isPrimary' | 'sectionId'>> = [];
+    const scopeChanged = !resourceScopesEqual(
+      resolveResourceCardScope(card),
+      resolveResourceCardScope(baseline),
+    );
+    const createsSection = !source.section
+      && (card.publicTitleIntent === 'explicit' || card.title !== baseline.title);
+
+    if (card.textContent !== baseline.textContent) {
+      if (source.textItemIndex != null) {
+        const item = next[source.textItemIndex]!;
+        item.textContent = trimOrNull(card.textContent);
+        if (
+          !item.textContent
+          && !item.externalUrl
+          && !item.storagePath
+          && !item.workflowSnapshot
+          && item.remixUse === 'none'
+        ) {
+          removed.add(source.textItemIndex);
+        }
+      } else if (card.textContent.trim()) {
+        additions.push({
+          id: undefined,
+          type: card.type === 'prompt'
+            ? 'prompt'
+            : card.type === 'settings'
+              ? 'settings'
+              : card.type === 'workflow'
+                ? 'workflow'
+                : 'note',
+          role: 'primary',
+          title: card.title.trim() || 'Resource',
+          description: null,
+          textContent: card.textContent.trim(),
+          externalUrl: null,
+          storagePath: null,
+          contentType: null,
+          sizeBytes: null,
+          workflowSnapshot: card.type === 'workflow' ? card.workflowSnapshot ?? null : null,
+          remixUse: card.type === 'prompt'
+            ? 'text_template'
+            : card.type === 'workflow'
+              ? 'import_source'
+              : 'none',
+        });
+      }
+    }
+
+    if (card.externalUrl !== baseline.externalUrl) {
+      if (source.urlItemIndex != null) {
+        const item = next[source.urlItemIndex]!;
+        item.externalUrl = trimOrNull(card.externalUrl);
+        if (
+          !item.textContent
+          && !item.externalUrl
+          && !item.storagePath
+          && !item.workflowSnapshot
+          && item.remixUse === 'none'
+        ) {
+          removed.add(source.urlItemIndex);
+        }
+      } else if (card.externalUrl.trim()) {
+        additions.push({
+          id: undefined,
+          type: card.type === 'remix_link'
+            ? 'remix_link'
+            : card.type === 'workflow'
+              ? 'workflow'
+              : 'external_link',
+          role: 'primary',
+          title: card.title.trim() || 'Resource',
+          description: null,
+          textContent: null,
+          externalUrl: card.externalUrl.trim(),
+          storagePath: null,
+          contentType: null,
+          sizeBytes: null,
+          workflowSnapshot: card.type === 'workflow' ? card.workflowSnapshot ?? null : null,
+          remixUse: card.type === 'workflow' ? 'import_source' : 'none',
+        });
+      }
+    }
+
+    const baselineAttachmentIds = new Set(baseline.attachments.map((attachment) => attachment.id));
+    source.attachmentItemIndexes.forEach((itemIndex, attachmentIndex) => {
+      const originalAttachment = baseline.attachments[attachmentIndex]!;
+      const attachment = card.attachments.find((candidate) => candidate.id === originalAttachment.id);
+      if (!attachment) {
+        const item = next[itemIndex]!;
+        const itemAlsoBacksVisibleContent = source.textItemIndex === itemIndex
+          || source.urlItemIndex === itemIndex
+          || Boolean(item.workflowSnapshot);
+        if (!itemAlsoBacksVisibleContent) {
+          removed.add(itemIndex);
+          return;
+        }
+
+        // One source item can feed two controls, such as a workflow URL plus
+        // its stored file. Removing the file clears only that projection and
+        // leaves the still-visible URL/text intact.
+        if (originalAttachment.kind === 'file') {
+          item.storagePath = null;
+          item.contentType = null;
+          item.sizeBytes = null;
+        } else {
+          item.externalUrl = null;
+        }
+        if (
+          !item.textContent
+          && !item.externalUrl
+          && !item.storagePath
+          && !item.workflowSnapshot
+          && item.remixUse === 'none'
+        ) {
+          removed.add(itemIndex);
+        }
+        return;
+      }
+      // A normalized item may carry a stored file plus an external fallback.
+      // The card UI projects that as a file, so retain the complete source item
+      // unless the creator explicitly edits this attachment.
+      if (attachmentDraftsEqual(attachment, originalAttachment)) {
+        return;
+      }
+      const item = next[itemIndex]!;
+      const replacement = attachmentItem(card, attachment, attachmentIndex);
+      item.type = replacement.type;
+      item.role = replacement.role;
+      item.title = replacement.title;
+      // Update only attachment fields the creator changed. This preserves
+      // source-only fallbacks carried by normalized records when, for example,
+      // the visible file label is the only edited value.
+      if ((attachment.url ?? '') !== (originalAttachment.url ?? '')) {
+        item.externalUrl = trimOrNull(attachment.url);
+      }
+      if ((attachment.storagePath ?? '') !== (originalAttachment.storagePath ?? '')) {
+        item.storagePath = trimOrNull(attachment.storagePath);
+      }
+      item.contentType = replacement.contentType;
+      item.sizeBytes = replacement.sizeBytes;
+      item.remixUse = replacement.remixUse;
+    });
+    card.attachments
+      .filter((attachment) => !baselineAttachmentIds.has(attachment.id))
+      .forEach((attachment, index) => additions.push(
+        attachmentItem(card, attachment, baseline.attachments.length + index),
+      ));
+
+    const retained = next.filter((_, index) => !removed.has(index));
+    if (scopeChanged) {
+      retained.forEach((item) => { item.scope = resolveResourceCardScope(card); });
+    }
+    if (createsSection) {
+      retained.forEach((item) => { item.sectionId = card.id; });
+    }
+
+    items.push(...retained);
+    additions.forEach((item) => {
+      items.push({
+        ...item,
+        id: item.id ?? `${card.id}-item-${items.length + 1}`,
+        scope: resolveResourceCardScope(card),
+        sectionId: source.section?.id ?? (createsSection ? card.id : null),
+        sortOrder: items.reduce((max, existing) => Math.max(max, existing.sortOrder), -1) + 1,
+        isPrimary: items.length === 0,
+      });
+    });
+  };
+
+  cards.forEach((card) => {
+    if (card.hydrationSource) {
+      pushHydratedCardItems(card, card.hydrationSource);
+    } else {
+      pushFreshCardItems(card);
     }
   });
 

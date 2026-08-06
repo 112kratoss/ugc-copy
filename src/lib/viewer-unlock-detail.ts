@@ -7,6 +7,8 @@ import {
   getPostResourceBundleDetailByPostId,
   type PostResourceBundleDetail,
 } from '@/lib/post-resource-bundles-server';
+import { loadPostMediaItemsMap } from '@/lib/post-media';
+import { loadPurchasedProofMedia } from '@/lib/purchased-proof-media';
 import {
   getPostResourceKinds,
   normalizePostResourceAttachments,
@@ -17,6 +19,7 @@ import {
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 import { normalizeWorkflowGraph, serializeWorkflowGraph } from '@/lib/workflow-canvas';
+import type { ShowcaseMediaItem } from '@/lib/showcase';
 
 type UnlockProjectionRow = {
   purchase_id: string;
@@ -65,6 +68,7 @@ export interface ViewerUnlockRevision {
   accessMode: PersistedPostResourceBundleAccessMode;
   priceUsdCents: number;
   resources: PostResourceBundleResources;
+  mediaItems: ShowcaseMediaItem[];
 }
 
 export interface ViewerUnlockDetail {
@@ -77,6 +81,8 @@ export interface ViewerUnlockDetail {
   accessMode: PersistedPostResourceBundleAccessMode;
   priceUsdCents: number;
   purchasePriceUsdCents: number;
+  /** Null after detachment because there is no live listing to count. */
+  salesCount: number | null;
   purchasedAt: string;
   creatorDisplayName: string;
   resourceKinds: PostResourceKind[];
@@ -88,6 +94,8 @@ export interface ViewerUnlockDetail {
   tombstoned: boolean;
   postVisibility: string | null;
   post: PostResourceBundleDetail['post'] | null;
+  /** Full proof-media order and stable keys power per-output resource scopes. */
+  mediaItems: ShowcaseMediaItem[];
 }
 
 function normalizeOptionalText(value: string | null | undefined): string | null {
@@ -166,6 +174,7 @@ async function loadPurchasedRevision(
       row,
       (supplementData as { resource_items?: unknown } | null)?.resource_items ?? [],
     ),
+    mediaItems: [],
   };
 }
 
@@ -216,6 +225,25 @@ export async function getViewerUnlockDetail({
   const summary = liveDetail?.summary ?? purchasedRevision.summary;
   const previewText = liveDetail?.previewText ?? purchasedRevision.previewText;
   const resourcesForKinds = currentResources ?? purchasedRevision.resources;
+  const currentMediaItems = projection.post_id
+    ? await loadPostMediaItemsMap(adminSupabase, [projection.post_id])
+      .then((itemsByPost) => itemsByPost.get(projection.post_id ?? '') ?? [])
+      .catch((mediaError) => {
+        logBackendError('viewer_unlock_proof_media_load_failed', { error: mediaError });
+        return [];
+      })
+    : [];
+  const purchasedMediaItems = await loadPurchasedProofMedia({
+    adminSupabase,
+    purchaseId: projection.purchase_id,
+    resources: purchasedRevision.resources,
+    includeStoredUrls: !detached,
+  });
+  purchasedRevision.mediaItems = purchasedMediaItems;
+  // An empty latest gallery is a valid edit, not a signal to borrow the old
+  // revision's outputs. Only detached purchases (which have no live resource
+  // version at all) fall back to the immutable purchase snapshot.
+  const mediaItems = currentResources ? currentMediaItems : purchasedMediaItems;
 
   return {
     unlockId: projection.purchase_id,
@@ -227,6 +255,7 @@ export async function getViewerUnlockDetail({
     accessMode: liveDetail?.accessMode ?? purchasedRevision.accessMode,
     priceUsdCents: liveDetail?.priceUsdCents ?? purchasedRevision.priceUsdCents,
     purchasePriceUsdCents: projection.purchase_price_usd_cents ?? 0,
+    salesCount: liveDetail?.salesCount ?? null,
     purchasedAt: projection.purchased_at,
     creatorDisplayName: liveDetail?.seller.name
       ?? normalizeOptionalText(projection.seller_display_name)
@@ -243,6 +272,7 @@ export async function getViewerUnlockDetail({
     tombstoned: Boolean(projection.post_tombstoned || liveDetail?.tombstoned),
     postVisibility: projection.post_visibility,
     post: liveDetail?.post ?? null,
+    mediaItems,
   };
 }
 

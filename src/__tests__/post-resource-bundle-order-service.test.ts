@@ -37,13 +37,41 @@ type BundlePurchaseRow = {
   buyer_user_id: string;
 };
 
+type CashQuote = {
+  status: string;
+  bundle_id?: string;
+  post_id?: string;
+  owner_user_id?: string;
+  title?: string;
+  price_usd_cents?: number;
+  revision_id?: string;
+  content_fingerprint?: string;
+};
+
+function createCashQuote(overrides?: Partial<CashQuote>): CashQuote {
+  return {
+    status: 'quoted',
+    bundle_id: 'bundle-1',
+    post_id: 'post-1',
+    owner_user_id: 'owner-1',
+    title: 'Launch Hook Pack',
+    price_usd_cents: 700,
+    revision_id: 'revision-1',
+    content_fingerprint: 'fingerprint-1',
+    ...overrides,
+  };
+}
+
 function createAdminSupabaseMock(options?: {
   purchases?: BundlePurchaseRow[];
   rateLimited?: boolean;
+  cashQuote?: CashQuote;
+  cashQuoteError?: { message: string } | null;
+  orderRecord?: { status: string; order_id?: string };
+  orderRecordError?: { message: string } | null;
 }) {
   const purchases = options?.purchases ?? [];
   const tableReads: string[] = [];
-  const inserts: Array<{ table: string; payload: Record<string, unknown> }> = [];
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
 
   function createQuery<T extends Record<string, unknown>>(table: string, rows: T[]) {
@@ -86,7 +114,12 @@ function createAdminSupabaseMock(options?: {
           error: null,
         };
       }
-
+      if (fn === 'get_post_resource_bundle_cash_quote') {
+        return {
+          data: options?.cashQuote ?? createCashQuote(),
+          error: options?.cashQuoteError ?? null,
+        };
+      }
       if (fn === 'claim_razorpay_checkout_intent') {
         return {
           data: {
@@ -110,27 +143,23 @@ function createAdminSupabaseMock(options?: {
       if (fn === 'abandon_razorpay_checkout_intent') {
         return { data: { status: 'abandoned' }, error: null };
       }
-
-      return { data: true, error: null };
-    },
-    from(table: string) {
-      if (table === 'post_resource_bundle_purchases') return createQuery(table, purchases);
-      if (table === 'post_resource_bundle_orders') {
+      if (fn === 'record_post_resource_bundle_cash_order') {
         return {
-          async insert(payload: Record<string, unknown>) {
-            inserts.push({ table, payload });
-            return { error: null };
-          },
+          data: options?.orderRecord ?? { status: 'created', order_id: 'local-order-1' },
+          error: options?.orderRecordError ?? null,
         };
       }
 
+      throw new Error(`Unexpected RPC: ${fn}`);
+    },
+    from(table: string) {
+      if (table === 'post_resource_bundle_purchases') return createQuery(table, purchases);
       throw new Error(`Unexpected table: ${table}`);
     },
   };
 
   return {
     client: client as unknown as SupabaseClient,
-    inserts,
     rpcCalls,
     tableReads,
   };
@@ -171,10 +200,7 @@ describe('createPostResourceBundleOrderForRoute', () => {
     expect(result).toMatchObject({
       ok: false,
       status: 429,
-      body: {
-        code: 'RATE_LIMITED',
-        retryAfterSeconds: 39,
-      },
+      body: { code: 'RATE_LIMITED', retryAfterSeconds: 39 },
     });
     expect(admin.rpcCalls).toEqual([
       {
@@ -192,10 +218,9 @@ describe('createPostResourceBundleOrderForRoute', () => {
     expect(getBundleForOrderByPostId).not.toHaveBeenCalled();
     expect(getPostResourceBundlePriceQuote).not.toHaveBeenCalled();
     expect(createRazorpayOrder).not.toHaveBeenCalled();
-    expect(admin.inserts).toEqual([]);
   });
 
-  it('returns existing purchases without pricing or provider work', async () => {
+  it('returns existing purchases without creating a database or provider quote', async () => {
     const admin = createAdminSupabaseMock({
       purchases: [{ bundle_id: 'bundle-1', buyer_user_id: 'buyer-1' }],
     });
@@ -218,12 +243,12 @@ describe('createPostResourceBundleOrderForRoute', () => {
       body: { success: true, alreadyPurchased: true },
     });
     expect(admin.tableReads).toEqual(['post_resource_bundle_purchases']);
+    expect(admin.rpcCalls.map((call) => call.fn)).not.toContain('get_post_resource_bundle_cash_quote');
     expect(getPostResourceBundlePriceQuote).not.toHaveBeenCalled();
     expect(createRazorpayOrder).not.toHaveBeenCalled();
-    expect(admin.inserts).toEqual([]);
   });
 
-  it('quotes, creates, and records paid resource bundle orders', async () => {
+  it('prices and records the exact authoritative revision returned under the bundle lock', async () => {
     const admin = createAdminSupabaseMock();
     const getPostResourceBundlePriceQuote = vi.fn(async () => ({
       amountSubunits: 58100,
@@ -270,21 +295,214 @@ describe('createPostResourceBundleOrderForRoute', () => {
         buyer_user_id: 'buyer-1',
         post_id: 'post-1',
         purchase_kind: 'post_resource',
+        revision_id: 'revision-1',
       },
     });
-    expect(admin.inserts).toEqual([
-      {
-        table: 'post_resource_bundle_orders',
-        payload: {
-          bundle_id: 'bundle-1',
-          buyer_user_id: 'buyer-1',
-          razorpay_order_id: 'order_bundle_123',
-          amount_subunits: 58100,
-          currency: 'INR',
-          status: 'created',
-        },
+    expect(admin.rpcCalls).toContainEqual({
+      fn: 'record_post_resource_bundle_cash_order',
+      args: {
+        p_post_id: 'post-1',
+        p_bundle_id: 'bundle-1',
+        p_buyer_user_id: 'buyer-1',
+        p_razorpay_order_id: 'order_bundle_123',
+        p_amount_subunits: 58100,
+        p_currency: 'INR',
+        p_expected_price_usd_cents: 700,
+        p_expected_revision_id: 'revision-1',
+        p_expected_content_fingerprint: 'fingerprint-1',
       },
-    ]);
+    });
+    expect(admin.rpcCalls).toContainEqual(expect.objectContaining({
+      fn: 'claim_razorpay_checkout_intent',
+      args: expect.objectContaining({ p_request_hash: expect.any(String) }),
+    }));
+  });
+
+  it('uses the authoritative database price if the preliminary bundle read was stale', async () => {
+    const admin = createAdminSupabaseMock({ cashQuote: createCashQuote({ price_usd_cents: 900 }) });
+    const getPostResourceBundlePriceQuote = vi.fn(async () => ({
+      amountSubunits: 900,
+      currency: 'USD' as const,
+      formatted: '$9.00',
+      note: null,
+    }));
+
+    await createPostResourceBundleOrderForRoute({
+      adminSupabase: admin.client,
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      countryHeader: 'US',
+      readBody: vi.fn(async () => ({})),
+      getBundleForOrderByPostId: vi.fn(async () => createBundle({ price_usd_cents: 700 })),
+      getPostResourceBundlePriceQuote,
+      createRazorpayOrder: vi.fn(async () => ({ id: 'order_bundle_900' })),
+    });
+
+    expect(getPostResourceBundlePriceQuote).toHaveBeenCalledWith(900, 'US');
+    expect(admin.rpcCalls).toContainEqual(expect.objectContaining({
+      fn: 'record_post_resource_bundle_cash_order',
+      args: expect.objectContaining({ p_expected_price_usd_cents: 900 }),
+    }));
+  });
+
+  it('rejects a listing edit that wins the race between provider creation and local recording', async () => {
+    const admin = createAdminSupabaseMock({ orderRecord: { status: 'quote_changed' } });
+
+    const result = await createPostResourceBundleOrderForRoute({
+      adminSupabase: admin.client,
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      countryHeader: 'US',
+      readBody: vi.fn(async () => ({})),
+      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      getPostResourceBundlePriceQuote: vi.fn(async () => ({
+        amountSubunits: 700,
+        currency: 'USD' as const,
+        formatted: '$7.00',
+        note: null,
+      })),
+      createRazorpayOrder: vi.fn(async () => ({ id: 'order_raced' })),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      body: {
+        error: 'This unlock changed while checkout was opening. Review the latest version and try again.',
+        code: 'RESOURCE_QUOTE_CHANGED',
+      },
+    });
+    expect(admin.rpcCalls).toContainEqual(expect.objectContaining({
+      fn: 'record_post_resource_bundle_cash_order',
+      args: expect.objectContaining({
+        p_razorpay_order_id: 'order_raced',
+        p_expected_revision_id: 'revision-1',
+        p_expected_content_fingerprint: 'fingerprint-1',
+      }),
+    }));
+  });
+
+  it('accepts an idempotent local-order replay only through the locked recorder', async () => {
+    const admin = createAdminSupabaseMock({
+      orderRecord: { status: 'replay', order_id: 'local-order-existing' },
+    });
+
+    const result = await createPostResourceBundleOrderForRoute({
+      adminSupabase: admin.client,
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      countryHeader: 'US',
+      readBody: vi.fn(async () => ({})),
+      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      getPostResourceBundlePriceQuote: vi.fn(async () => ({
+        amountSubunits: 700,
+        currency: 'USD' as const,
+        formatted: '$7.00',
+        note: null,
+      })),
+      createRazorpayOrder: vi.fn(async () => ({ id: 'order_replayed' })),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      body: { orderId: 'order_replayed', bundleId: 'bundle-1' },
+    });
+    expect(admin.rpcCalls.filter((call) => call.fn === 'record_post_resource_bundle_cash_order')).toHaveLength(1);
+  });
+
+  it('binds checkout-intent replay identity to the exact same-price revision', async () => {
+    const first = createAdminSupabaseMock({
+      cashQuote: createCashQuote({
+        revision_id: 'revision-1',
+        content_fingerprint: 'fingerprint-1',
+      }),
+    });
+    const second = createAdminSupabaseMock({
+      cashQuote: createCashQuote({
+        revision_id: 'revision-2',
+        content_fingerprint: 'fingerprint-2',
+      }),
+    });
+    const routeInput = {
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      countryHeader: 'US',
+      readBody: vi.fn(async () => ({})),
+      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      getPostResourceBundlePriceQuote: vi.fn(async () => ({
+        amountSubunits: 700,
+        currency: 'USD' as const,
+        formatted: '$7.00',
+        note: null,
+      })),
+    };
+
+    await createPostResourceBundleOrderForRoute({
+      ...routeInput,
+      adminSupabase: first.client,
+      createRazorpayOrder: vi.fn(async () => ({ id: 'order_revision_1' })),
+    });
+    await createPostResourceBundleOrderForRoute({
+      ...routeInput,
+      adminSupabase: second.client,
+      createRazorpayOrder: vi.fn(async () => ({ id: 'order_revision_2' })),
+    });
+
+    const firstClaim = first.rpcCalls.find((call) => call.fn === 'claim_razorpay_checkout_intent');
+    const secondClaim = second.rpcCalls.find((call) => call.fn === 'claim_razorpay_checkout_intent');
+    expect(firstClaim?.args.p_request_hash).toEqual(expect.any(String));
+    expect(secondClaim?.args.p_request_hash).toEqual(expect.any(String));
+    expect(firstClaim?.args.p_request_hash).not.toBe(secondClaim?.args.p_request_hash);
+  });
+
+  it('routes a paid-to-free race to the free unlock endpoint', async () => {
+    const admin = createAdminSupabaseMock({ cashQuote: { status: 'free' } });
+    const getPostResourceBundlePriceQuote = vi.fn();
+    const createRazorpayOrder = vi.fn();
+
+    const result = await createPostResourceBundleOrderForRoute({
+      adminSupabase: admin.client,
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      countryHeader: 'US',
+      readBody: vi.fn(async () => ({})),
+      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      getPostResourceBundlePriceQuote,
+      createRazorpayOrder,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'Use the free recipe access endpoint for this bundle.' },
+    });
+    expect(getPostResourceBundlePriceQuote).not.toHaveBeenCalled();
+    expect(createRazorpayOrder).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the locked quote cannot be obtained', async () => {
+    const admin = createAdminSupabaseMock({ cashQuoteError: { message: 'quote failed' } });
+    const getPostResourceBundlePriceQuote = vi.fn();
+    const createRazorpayOrder = vi.fn();
+
+    const result = await createPostResourceBundleOrderForRoute({
+      adminSupabase: admin.client,
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      countryHeader: 'US',
+      readBody: vi.fn(async () => ({})),
+      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      getPostResourceBundlePriceQuote,
+      createRazorpayOrder,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      body: { error: 'Failed to prepare a secure checkout quote.' },
+    });
+    expect(getPostResourceBundlePriceQuote).not.toHaveBeenCalled();
+    expect(createRazorpayOrder).not.toHaveBeenCalled();
   });
 
   it('keeps sub-dollar packages credit-only before quoting or provider work', async () => {
@@ -313,9 +531,9 @@ describe('createPostResourceBundleOrderForRoute', () => {
         cashMinimumTokens: 100,
       },
     });
+    expect(admin.rpcCalls.map((call) => call.fn)).not.toContain('get_post_resource_bundle_cash_quote');
     expect(getPostResourceBundlePriceQuote).not.toHaveBeenCalled();
     expect(createRazorpayOrder).not.toHaveBeenCalled();
-    expect(admin.inserts).toEqual([]);
   });
 
   it('maps payment provider timeouts without recording an order', async () => {
@@ -345,6 +563,6 @@ describe('createPostResourceBundleOrderForRoute', () => {
       status: 504,
       body: { error: 'Payment provider timed out. Please try again.' },
     });
-    expect(admin.inserts).toEqual([]);
+    expect(admin.rpcCalls.map((call) => call.fn)).not.toContain('record_post_resource_bundle_cash_order');
   });
 });

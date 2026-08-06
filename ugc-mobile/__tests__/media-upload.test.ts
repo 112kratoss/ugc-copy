@@ -51,6 +51,162 @@ describe('mobile media uploads', () => {
     expect(uploadState.uploadUriToSignedUrl).not.toHaveBeenCalled();
   });
 
+  it('uses a media-only picker for reference cards and the full safe allowlist elsewhere', async () => {
+    const DocumentPicker = await import('expo-document-picker');
+    vi.mocked(DocumentPicker.getDocumentAsync).mockResolvedValue({ canceled: true, assets: null });
+    const { pickResourceDocument } = await import('../lib/media');
+
+    await pickResourceDocument('reference_media');
+    const referenceTypes = vi.mocked(DocumentPicker.getDocumentAsync).mock.calls.at(-1)?.[0]?.type;
+    expect(referenceTypes).toContain('image/png');
+    expect(referenceTypes).toContain('video/mp4');
+    expect(referenceTypes).toContain('audio/mpeg');
+    expect(referenceTypes).not.toContain('application/pdf');
+
+    await pickResourceDocument('resource');
+    const resourceTypes = vi.mocked(DocumentPicker.getDocumentAsync).mock.calls.at(-1)?.[0]?.type;
+    expect(resourceTypes).toContain('application/pdf');
+    expect(resourceTypes).toContain('application/x-yaml');
+    expect(resourceTypes).toContain('application/x-gzip');
+    expect(resourceTypes).toContain('application/octet-stream');
+    expect(resourceTypes).not.toContain('*/*');
+  });
+
+  it('rejects a non-media file before signing a reference-media upload', async () => {
+    uploadState.inspectUriUpload.mockResolvedValueOnce({ mimeType: 'application/pdf', sizeBytes: 3 });
+    const signPostResourceFileUpload = vi.fn();
+    const finalizePostResourceFileUpload = vi.fn();
+    const { uploadResourceDocument } = await import('../lib/media');
+
+    await expect(uploadResourceDocument('file:///reference.pdf', {
+      api: { signPostResourceFileUpload, finalizePostResourceFileUpload },
+      fileName: 'reference.pdf',
+      mimeType: 'application/pdf',
+      mediaOnly: true,
+      sizeBytes: 3,
+    })).rejects.toThrow('Choose an image, video, or audio file for reference media.');
+
+    expect(signPostResourceFileUpload).not.toHaveBeenCalled();
+    expect(uploadState.uploadUriToSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('rejects reference-media extension and MIME-family mismatches before signing', async () => {
+    const signPostResourceFileUpload = vi.fn();
+    const finalizePostResourceFileUpload = vi.fn();
+    const { uploadResourceDocument } = await import('../lib/media');
+
+    await expect(uploadResourceDocument('file:///reference.pdf', {
+      api: { signPostResourceFileUpload, finalizePostResourceFileUpload },
+      fileName: 'reference.pdf',
+      mimeType: 'image/png',
+      mediaOnly: true,
+      sizeBytes: 3,
+    })).rejects.toThrow('Choose an image, video, or audio file for reference media.');
+
+    uploadState.inspectUriUpload.mockResolvedValueOnce({ mimeType: 'video/mp4', sizeBytes: 3 });
+    await expect(uploadResourceDocument('file:///reference.png', {
+      api: { signPostResourceFileUpload, finalizePostResourceFileUpload },
+      fileName: 'reference.png',
+      mimeType: 'video/mp4',
+      mediaOnly: true,
+      sizeBytes: 3,
+    })).rejects.toThrow('Choose an image, video, or audio file for reference media.');
+
+    expect(signPostResourceFileUpload).not.toHaveBeenCalled();
+    expect(uploadState.uploadUriToSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('accepts an octet-stream media pick by safe extension and forwards cancellation to sign and finalize', async () => {
+    uploadState.inspectUriUpload.mockResolvedValueOnce({ mimeType: 'application/octet-stream', sizeBytes: 3 });
+    const signPostResourceFileUpload = vi.fn(async () => ({
+      success: true,
+      bucket: 'post_resource_files' as const,
+      path: 'user-1/server-issued-reference.png',
+      token: 'upload-token',
+      signedUploadUrl: 'https://storage.example.com/storage/v1/object/upload/sign/post_resource_files/user-1/server-issued-reference.png?token=upload-token',
+      expiresInSeconds: 7200,
+      expected: {
+        fileName: 'reference.png',
+        contentType: 'image/png',
+        sizeBytes: 3,
+      },
+    }));
+    const finalizePostResourceFileUpload = vi.fn(async () => ({
+      success: true,
+      attachment: {
+        kind: 'file' as const,
+        label: 'reference.png',
+        storagePath: 'user-1/server-issued-reference.png',
+        contentType: 'image/png',
+        sizeBytes: 3,
+      },
+    }));
+    const controller = new AbortController();
+    const { uploadResourceDocument } = await import('../lib/media');
+
+    await expect(uploadResourceDocument('file:///reference.png', {
+      api: { signPostResourceFileUpload, finalizePostResourceFileUpload },
+      fileName: 'reference.png',
+      mimeType: 'application/octet-stream',
+      mediaOnly: true,
+      sizeBytes: 3,
+      signal: controller.signal,
+    })).resolves.toMatchObject({ storagePath: 'user-1/server-issued-reference.png' });
+
+    expect(signPostResourceFileUpload).toHaveBeenCalledWith({
+      fileName: 'reference.png',
+      contentType: 'application/octet-stream',
+      sizeBytes: 3,
+    }, controller.signal);
+    expect(finalizePostResourceFileUpload).toHaveBeenCalledWith({
+      path: 'user-1/server-issued-reference.png',
+      fileName: 'reference.png',
+      contentType: 'image/png',
+      sizeBytes: 3,
+    }, controller.signal);
+  });
+
+  it('does not sign a resource upload that was already cancelled', async () => {
+    const signPostResourceFileUpload = vi.fn();
+    const finalizePostResourceFileUpload = vi.fn();
+    const controller = new AbortController();
+    controller.abort();
+    const { uploadResourceDocument } = await import('../lib/media');
+
+    await expect(uploadResourceDocument('file:///reference.png', {
+      api: { signPostResourceFileUpload, finalizePostResourceFileUpload },
+      fileName: 'reference.png',
+      mimeType: 'image/png',
+      mediaOnly: true,
+      sizeBytes: 3,
+      signal: controller.signal,
+    })).rejects.toMatchObject({ name: 'UploadCancelledError' });
+
+    expect(signPostResourceFileUpload).not.toHaveBeenCalled();
+  });
+
+  it('normalizes an API abort during resource signing to upload cancellation', async () => {
+    const controller = new AbortController();
+    const signPostResourceFileUpload = vi.fn(() => {
+      controller.abort();
+      return Promise.reject(new Error('fetch aborted'));
+    });
+    const finalizePostResourceFileUpload = vi.fn();
+    const { uploadResourceDocument } = await import('../lib/media');
+
+    await expect(uploadResourceDocument('file:///reference.png', {
+      api: { signPostResourceFileUpload, finalizePostResourceFileUpload },
+      fileName: 'reference.png',
+      mimeType: 'image/png',
+      mediaOnly: true,
+      sizeBytes: 3,
+      signal: controller.signal,
+    })).rejects.toMatchObject({ name: 'UploadCancelledError' });
+
+    expect(uploadState.uploadUriToSignedUrl).not.toHaveBeenCalled();
+    expect(finalizePostResourceFileUpload).not.toHaveBeenCalled();
+  });
+
   it('streams picked media to an exact server-issued signed upload target', async () => {
     const createMediaUpload = vi.fn(async () => ({
       success: true,

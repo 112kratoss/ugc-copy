@@ -4,10 +4,11 @@ import {
   ExternalLink,
   FileText,
   Link2,
+  Lock,
   Repeat2,
   Settings2,
 } from 'lucide-react-native';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
@@ -49,6 +50,8 @@ type ResourceCard = {
   resourceType: PostResourceItemType;
   scope: PostResourceItemScope;
   title: string;
+  /** The author's own line about the section. The web panel renders it too. */
+  description?: string | null;
 };
 
 const ALL_SCOPE: PostResourceItemScope = { kind: 'all' };
@@ -67,6 +70,7 @@ export function PostResourceBundleContent({
   const [selectedMediaKey, setSelectedMediaKey] = useState<string | null>(null);
   const cards = useMemo(() => buildUnlockedResourceCards(resources), [resources]);
   const cardPreviews = lockedPreview?.cardPreviews ?? [];
+  const redactedAttachments = lockedPreview?.attachmentPreviews ?? [];
   const hasScopedContent = resources
     ? cards.some((card) => isMediaScope(card.scope) || card.items.some((item) => isMediaScope(item.scope)))
     : cardPreviews.some((card) => isMediaScope(card.scope));
@@ -74,13 +78,27 @@ export function PostResourceBundleContent({
     () => mediaItems.filter((item) => Boolean(resourceMediaKey(item))),
     [mediaItems]
   );
+  // Props can swap from the latest bundle to the purchased revision while
+  // this component stays mounted. Derive a valid selection synchronously so
+  // the old key cannot produce a one-frame false empty state before the effect
+  // commits the reset.
+  const activeSelectedMediaKey = selectedMediaKey
+    && selectableMedia.some((item) => resourceMediaKey(item) === selectedMediaKey)
+    ? selectedMediaKey
+    : null;
+  const visibleCardPreviews = cardPreviews.filter((card) => scopeMatches(card.scope, activeSelectedMediaKey));
+  useEffect(() => {
+    if (selectedMediaKey && activeSelectedMediaKey === null) {
+      setSelectedMediaKey(null);
+    }
+  }, [activeSelectedMediaKey, selectedMediaKey]);
   const showMediaSelector = hasScopedContent && selectableMedia.length > 1;
 
   const selector = showMediaSelector ? (
     <ResourceMediaSelector
       mediaItems={selectableMedia}
       onSelect={setSelectedMediaKey}
-      selectedMediaKey={selectedMediaKey}
+      selectedMediaKey={activeSelectedMediaKey}
     />
   ) : null;
 
@@ -88,31 +106,66 @@ export function PostResourceBundleContent({
     return (
       <View style={{ gap: 12 }}>
         {selector}
-        {cardPreviews.length > 0 ? (
+        {visibleCardPreviews.length > 0 ? (
           <View style={{ gap: 10 }}>
-            {cardPreviews
-              .filter((card) => scopeMatches(card.scope, selectedMediaKey))
-              .map((card) => (
-                <LockedResourceCard
-                  card={card}
-                  key={card.sectionId}
-                  mediaItems={selectableMedia}
-                />
-              ))}
+            {visibleCardPreviews.map((card) => (
+              <LockedResourceCard
+                card={card}
+                key={card.sectionId}
+                mediaItems={selectableMedia}
+              />
+            ))}
           </View>
-        ) : (
+        ) : null}
+        {/*
+          The server has already redacted these to "File 1" / "Link 1" with no
+          size or type. They are here so a locked package still communicates how
+          much is inside, which is what the web panel shows.
+        */}
+        {redactedAttachments.length > 0 ? (
+          <View style={{ gap: 7 }}>
+            {redactedAttachments.map((attachment, index) => (
+              <View
+                key={`${attachment.label}-${index}`}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 9,
+                  borderRadius: appTheme.radii.lg,
+                  borderCurve: 'continuous',
+                  borderWidth: 1,
+                  borderColor: appTheme.colors.borderSubtle,
+                  backgroundColor: appTheme.colors.surfaceInset,
+                  paddingHorizontal: 12,
+                  paddingVertical: 10,
+                }}
+              >
+                <Lock size={14} color={appTheme.colors.muted} />
+                <Text style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>
+                  {attachment.label}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+        {activeSelectedMediaKey && cardPreviews.length > 0 && visibleCardPreviews.length === 0 && redactedAttachments.length === 0 ? (
+          <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
+            No resources apply to this output.
+          </Text>
+        ) : null}
+        {cardPreviews.length === 0 && redactedAttachments.length === 0 ? (
           <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
             Resource details stay private until this package is unlocked.
           </Text>
-        )}
+        ) : null}
       </View>
     );
   }
 
   const visibleCards = cards.flatMap((card) => {
-    if (!scopeMatches(card.scope, selectedMediaKey)) return [];
-    const items = selectedMediaKey
-      ? card.items.filter((item) => scopeMatches(item.scope ?? card.scope, selectedMediaKey))
+    if (!scopeMatches(card.scope, activeSelectedMediaKey)) return [];
+    const items = activeSelectedMediaKey
+      ? card.items.filter((item) => scopeMatches(item.scope ?? card.scope, activeSelectedMediaKey))
       : card.items;
     return items.length > 0 ? [{ ...card, items }] : [];
   });
@@ -275,6 +328,11 @@ function UnlockedResourceCard({
           <Text style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>
             {resourceTypeLabel(card.resourceType)} · {formatItemCount(card.items.length)}
           </Text>
+          {card.description?.trim() ? (
+            <Text selectable style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>
+              {card.description.trim()}
+            </Text>
+          ) : null}
         </View>
       </View>
       <ScopeSummary mediaItems={mediaItems} scope={card.scope} />
@@ -501,6 +559,7 @@ function cardFromSection(section: PostResourceSection, items: PostResourceItem[]
     resourceType: section.resourceType ?? items[0]?.type ?? 'source_file',
     scope: normalizeScope(section.scope),
     title: section.title,
+    description: section.description ?? null,
   };
 }
 

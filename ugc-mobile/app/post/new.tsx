@@ -33,7 +33,7 @@ import { StableMediaImage } from '@/components/media-preview';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import { truncateInfiniteDataToFirstPage } from '@/lib/profile-media-query';
-import { pickMediaList, pickResourceDocument, uploadPickedMedia } from '@/lib/media';
+import { pickMediaList, pickResourceDocument, uploadPickedMedia, uploadResourceDocument } from '@/lib/media';
 import {
   clearPersistedPostComposerDraft,
   getPostComposerDraftSignature,
@@ -69,7 +69,9 @@ import {
   getPublishGenerationTitle,
   BODY_MAX_LENGTH,
   TITLE_MAX_LENGTH,
+  hydratePostComposerAllowRemix,
   hydratePostComposerResourceCards,
+  migratePostComposerResourceDraftToCards,
   isTemplateGeneration,
   isPostComposerResourceCardReady,
   POST_COMPOSER_CATEGORY_OPTIONS,
@@ -95,7 +97,7 @@ import { env } from '@/lib/env';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme, type ToolAccent } from '@/lib/theme';
 import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-file';
-import type { GenerationListItem, OwnerPostsResponse, PostResourceAttachment, PostResourceBundleAccessMode, SourceToolOption } from '@/lib/types';
+import type { GenerationListItem, OwnerPostsResponse, PostResourceAttachment, PostResourceBundleAccessMode, PostResourceItemType, SourceToolOption } from '@/lib/types';
 import { buildShareUrl } from '@/lib/viewer-actions';
 
 const getDefaultResourceDraft = () => ({
@@ -141,6 +143,21 @@ interface MediaUploadBatchProgress {
   percent: number;
   total: number;
   totalBytes: number;
+}
+
+type PickedResourceDocument = NonNullable<Awaited<ReturnType<typeof pickResourceDocument>>>;
+
+interface ResourceUploadProgress {
+  bytesSent: number;
+  cardId: string;
+  percent: number;
+  totalBytes: number;
+}
+
+interface PendingResourceUpload {
+  cardId: string;
+  cardType: PostComposerResourceCardType;
+  document: PickedResourceDocument;
 }
 
 function PostComposerHeader({
@@ -512,6 +529,24 @@ function PostResourcesPage({
   const resourceActive = draft.resource.accessMode !== 'none';
   const priceTokens = getPostComposerPriceTokens(draft.resource);
   const creatorEarnings = Math.floor(priceTokens * 0.85 * 100) / 100;
+  const packageListingCopyError = !publishValidation.valid
+    && publishValidation.message
+    && /useful preview or summary/i.test(publishValidation.message)
+      ? publishValidation.message
+      : undefined;
+  const packagePreviewRequiredError = !publishValidation.valid
+    && publishValidation.message
+    && /add a buyer preview/i.test(publishValidation.message)
+      ? publishValidation.message
+      : undefined;
+  // A non-empty summary is evaluated before preview text. Route marketplace
+  // feedback to the field that is actually deciding readiness instead of making
+  // a valid preview look broken because an old hidden summary shadows it.
+  const packageSummaryError = packageListingCopyError && draft.resource.summary.trim()
+    ? packageListingCopyError
+    : undefined;
+  const packagePreviewError = packagePreviewRequiredError
+    ?? (packageListingCopyError && !draft.resource.summary.trim() ? packageListingCopyError : undefined);
 
   if (isTemplateBacked) {
     return (
@@ -675,14 +710,45 @@ function PostResourcesPage({
             )}
           </View>
 
+          {/*
+            Remix permission cannot live on a card: a remix_access item carries
+            no text, link or file, so the content gate would drop it.
+          */}
+          <ComposerFieldShell>
+            <ToggleRow
+              label="Allow direct remix"
+              body="People who unlock this can remix the post directly."
+              value={draft.resource.allowRemix}
+              onValueChange={(allowRemix) => onResourceChange({ allowRemix })}
+              accent="workflow"
+            />
+          </ComposerFieldShell>
+
+          <ComposerFieldShell>
+            <CompactFieldLabel label="Public summary" optional valueLength={draft.resource.summary.length} maxLength={180} />
+            <ComposerInput
+              accessibilityLabel="Public package summary, optional"
+              accessibilityHint="When filled, this is the first package description buyers hear or read before unlock. Leave it blank to use the required package preview. Maximum 180 characters."
+              value={draft.resource.summary}
+              onChangeText={(summary) => onResourceChange({ summary: summary.slice(0, 180) })}
+              placeholder="A short public headline for this package"
+              maxLength={180}
+            />
+            <AppText variant="caption" color="faint">
+              When filled, this is the first package description buyers see before unlock.
+            </AppText>
+            <FieldErrorText message={packageSummaryError} />
+          </ComposerFieldShell>
+
           <ComposerFieldShell>
             <CompactFieldLabel label="Package preview" required valueLength={draft.resource.previewText.length} maxLength={180} />
             <ComposerInput
               accessibilityLabel="Package preview, required"
-              accessibilityHint="Describe publicly what people receive. Maximum 180 characters."
+              accessibilityHint="Required public detail saved with the package. If the public summary is blank, buyers see this as the listing description. Maximum 180 characters."
               value={draft.resource.previewText}
               onChangeText={(previewText) => onResourceChange({ previewText: previewText.slice(0, 180) })}
               placeholder="Tell people what they will receive"
+              maxLength={180}
               multiline
               minHeight={82}
             />
@@ -695,6 +761,7 @@ function PostResourcesPage({
                 <AppText variant="caption" color="primary">Use suggested preview</AppText>
               </Pressable>
             ) : null}
+            <FieldErrorText message={packagePreviewError} />
           </ComposerFieldShell>
 
           {draft.resource.accessMode === 'paid' ? (
@@ -1098,11 +1165,16 @@ function ResourceComposerSheet({
   mediaItems,
   bottomInset,
   isUploading,
+  uploadProgress,
+  uploadError,
+  canRetryUpload,
   onRequestClose,
   onSave,
   onChooseType,
   onChange,
   onPickFile,
+  onRetryUpload,
+  onCancelUpload,
   onRemoveAttachment,
 }: {
   mode: 'type' | 'editor' | null;
@@ -1110,11 +1182,16 @@ function ResourceComposerSheet({
   mediaItems: PostComposerMediaItem[];
   bottomInset: number;
   isUploading: boolean;
+  uploadProgress: ResourceUploadProgress | null;
+  uploadError: string | null;
+  canRetryUpload: boolean;
   onRequestClose: () => void;
   onSave: () => void;
   onChooseType: (type: PostComposerResourceCardType) => void;
   onChange: (patch: Partial<PostComposerResourceCardDraft>) => void;
   onPickFile: () => void;
+  onRetryUpload: () => void;
+  onCancelUpload: () => void;
   onRemoveAttachment: (id: string) => void;
 }) {
   const { height } = useWindowDimensions();
@@ -1122,7 +1199,14 @@ function ResourceComposerSheet({
   const option = card ? POST_COMPOSER_RESOURCE_CARD_OPTIONS.find((candidate) => candidate.id === card.type) : null;
   const textType = card?.type === 'prompt' || card?.type === 'settings' || card?.type === 'guide' || card?.type === 'other';
   const linkType = card?.type === 'external_link' || card?.type === 'remix_link' || card?.type === 'workflow';
-  const fileType = card?.type === 'reference_media' || card?.type === 'source_assets' || card?.type === 'workflow' || card?.type === 'other';
+  const fileType = card?.type === 'reference_media'
+    || card?.type === 'source_assets'
+    || card?.type === 'workflow'
+    || card?.type === 'other'
+    // Older sections can combine a prompt/guide/settings item with files. Keep
+    // those hydrated uploads visible and removable even though the card's
+    // inferred primary type is text-oriented.
+    || Boolean(card?.attachments.length);
   const cardErrors = card ? getPostComposerResourceCardErrors(card) : {};
   const isReady = card ? isPostComposerResourceCardReady(card) : false;
 
@@ -1152,7 +1236,13 @@ function ResourceComposerSheet({
             <View style={{ minHeight: 62, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
               <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
                 <AppText heading variant="sectionTitle">{mode === 'type' ? 'Add a resource' : option?.label ?? 'Edit resource'}</AppText>
-                <AppText variant="caption" color="muted">{mode === 'type' ? 'Choose what people will receive.' : 'Contents stay protected until unlock.'}</AppText>
+                <AppText variant="caption" color="muted">
+                  {mode === 'type'
+                    ? 'Choose what people will receive.'
+                    : isUploading
+                      ? 'Keep this editor open while the file uploads.'
+                      : 'Contents stay protected until unlock.'}
+                </AppText>
               </View>
               <HeaderIconButton label="Close resource editor" icon="close" onPress={onRequestClose} />
             </View>
@@ -1204,19 +1294,29 @@ function ResourceComposerSheet({
                   <CompactFieldLabel label="Resource title" required valueLength={card.title.length} maxLength={80} />
                   <ComposerInput
                     accessibilityLabel="Resource title, required"
-                    accessibilityHint="Enter a public title for this protected resource. Maximum 80 characters."
+                    accessibilityHint={card.publicTitleIntent === 'legacy_private'
+                      ? 'This existing title stays protected unless you edit it. Editing opts the updated title into the locked public package preview.'
+                      : 'Enter a public title for this protected resource. Maximum 80 characters.'}
                     value={card.title}
-                    onChangeText={(title) => onChange({ title: title.slice(0, 80) })}
+                    onChangeText={(title) => onChange({
+                      title: title.slice(0, 80),
+                      publicTitleIntent: 'explicit',
+                    })}
                     placeholder={option?.label ?? 'Resource title'}
                   />
                   <FieldErrorText message={cardErrors.title} />
-                  <CompactFieldLabel label="Short preview" optional valueLength={card.preview.length} maxLength={120} />
+                  {card.publicTitleIntent === 'legacy_private' ? (
+                    <AppText variant="caption" color="muted">
+                      This legacy title stays private. Editing it makes the updated title visible in the locked package preview.
+                    </AppText>
+                  ) : null}
+                  <CompactFieldLabel label="Unlocked description" optional valueLength={card.preview.length} maxLength={120} />
                   <ComposerInput
-                    accessibilityLabel="Short preview, optional"
-                    accessibilityHint="Summarize the resource publicly without revealing its protected contents."
+                    accessibilityLabel="Unlocked description, optional"
+                    accessibilityHint="Add a short note buyers see with this resource after they unlock the package. Maximum 120 characters."
                     value={card.preview}
                     onChangeText={(preview) => onChange({ preview: preview.slice(0, 120) })}
-                    placeholder="Public summary without revealing the contents"
+                    placeholder="Optional note shown after unlock"
                     multiline
                     minHeight={66}
                   />
@@ -1291,6 +1391,64 @@ function ResourceComposerSheet({
                       {isUploading ? <ActivityIndicator size="small" color={appTheme.colors.primary} /> : <Upload size={17} color={appTheme.colors.textSecondary} />}
                       <AppText variant="label" color="textSecondary">{isUploading ? 'Uploading' : 'Add file'}</AppText>
                     </Pressable>
+                    {isUploading ? (
+                      <View
+                        accessible
+                        accessibilityLabel="Resource file upload progress"
+                        accessibilityRole="progressbar"
+                        accessibilityValue={{ min: 0, max: 100, now: uploadProgress?.percent ?? 0 }}
+                        style={{ gap: 9 }}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                          <AppText variant="caption" color="muted">
+                            {uploadProgress
+                              ? `Uploading file · ${uploadProgress.percent}%`
+                              : 'Preparing file…'}
+                          </AppText>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Cancel resource upload"
+                            onPress={onCancelUpload}
+                            style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', opacity: pressed ? 0.7 : 1 })}
+                          >
+                            <AppText variant="caption" color="danger">Cancel</AppText>
+                          </Pressable>
+                        </View>
+                        <View style={{ height: 5, overflow: 'hidden', borderRadius: 3, backgroundColor: appTheme.colors.borderSubtle }}>
+                          <View
+                            style={{
+                              width: `${uploadProgress?.percent ?? 0}%`,
+                              height: '100%',
+                              borderRadius: 3,
+                              backgroundColor: appTheme.colors.primary,
+                            }}
+                          />
+                        </View>
+                        {uploadProgress && uploadProgress.totalBytes > 0 ? (
+                          <AppText variant="caption" color="faint">
+                            {`${formatUploadBytes(uploadProgress.bytesSent)} of ${formatUploadBytes(uploadProgress.totalBytes)}`}
+                          </AppText>
+                        ) : null}
+                      </View>
+                    ) : uploadError ? (
+                      <View
+                        accessibilityLiveRegion="polite"
+                        style={{ gap: 8, borderRadius: 14, backgroundColor: `${appTheme.colors.danger}12`, padding: 11 }}
+                      >
+                        <AppText variant="label" color="danger">Could not add file</AppText>
+                        <AppText variant="caption" color="muted">{uploadError}</AppText>
+                        {canRetryUpload ? (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Retry resource upload"
+                            onPress={onRetryUpload}
+                            style={({ pressed }) => ({ alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', opacity: pressed ? 0.7 : 1 })}
+                          >
+                            <AppText variant="caption" color="primary">Retry upload</AppText>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    ) : null}
                     {!linkType && !textType ? <FieldErrorText message={cardErrors.content} /> : null}
                   </ComposerFieldShell>
                 ) : null}
@@ -1303,8 +1461,8 @@ function ResourceComposerSheet({
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Save resource"
-                  accessibilityState={{ disabled: !isReady }}
-                  disabled={!isReady}
+                  accessibilityState={{ disabled: !isReady || isUploading }}
+                  disabled={!isReady || isUploading}
                   onPress={() => {
                     Keyboard.dismiss();
                     onSave();
@@ -1315,7 +1473,7 @@ function ResourceComposerSheet({
                     justifyContent: 'center',
                     borderRadius: 17,
                     backgroundColor: appTheme.colors.primary,
-                    opacity: !isReady ? appTheme.opacity.disabled : pressed ? 0.86 : 1,
+                    opacity: !isReady || isUploading ? appTheme.opacity.disabled : pressed ? 0.86 : 1,
                   })}
                 >
                   <AppText variant="button" color="onPrimary">Save resource</AppText>
@@ -1411,6 +1569,15 @@ function ResourceScopePicker({
   );
 }
 
+// Matches the inference the web composer applies to a freshly uploaded
+// attachment, so the same file produces the same resource type on both clients.
+function inferResourceAttachmentType(contentType: string | null): PostResourceItemType {
+  if (contentType?.startsWith('image/')) return 'reference_image';
+  if (contentType?.startsWith('video/')) return 'reference_video';
+  if (contentType?.startsWith('audio/')) return 'reference_audio';
+  return 'source_file';
+}
+
 function buildResourcePreviewFromCards(cards: PostComposerResourceCardDraft[]) {
   const labels = cards.slice(0, 3).map((card) => card.title.trim()).filter(Boolean);
   if (labels.length === 0) return 'Includes reusable resources from this creation.';
@@ -1470,6 +1637,9 @@ export default function NewPostScreen() {
   const [isPickingMedia, setIsPickingMedia] = useState(false);
   const [isRecoveringDraftMedia, setIsRecoveringDraftMedia] = useState(false);
   const [isPickingResourceFile, setIsPickingResourceFile] = useState(false);
+  const [resourceUploadProgress, setResourceUploadProgress] = useState<ResourceUploadProgress | null>(null);
+  const [resourceUploadError, setResourceUploadError] = useState<string | null>(null);
+  const [pendingResourceUpload, setPendingResourceUpload] = useState<PendingResourceUpload | null>(null);
   const [hasPrefilledEdit, setHasPrefilledEdit] = useState(false);
   const [hasHydratedPersistedDraft, setHasHydratedPersistedDraft] = useState(false);
   const [composerStep, setComposerStep] = useState<'details' | 'resources'>('details');
@@ -1492,6 +1662,7 @@ export default function NewPostScreen() {
   const titleInputRef = useRef<TextInput>(null);
   const contentInputRef = useRef<TextInput>(null);
   const mediaUploadAbortRef = useRef<AbortController | null>(null);
+  const resourceUploadAbortRef = useRef<AbortController | null>(null);
   /**
    * Every in-flight upload controller. Draft recovery and normal media picking
    * can overlap -- the picker blocks on the OS sheet while a resumed draft
@@ -1668,6 +1839,7 @@ export default function NewPostScreen() {
         creationPackage: getDefaultPostComposerDraft().creationPackage,
         resource: resourceBundleInput ? {
           accessMode: resourceBundleInput.accessMode || 'none',
+          cardAuthoringMode: 'cards',
           selectedKinds: deriveResourceSelections(resourceBundleInput),
           promptText: resourceBundleInput.resources?.promptText || '',
           notesMarkdown: resourceBundleInput.resources?.notesMarkdown || '',
@@ -1689,7 +1861,7 @@ export default function NewPostScreen() {
           organizeSections: Boolean(resourceBundleInput.resources?.sections?.length),
           sections: [],
           cards: hydratePostComposerResourceCards(resourceBundleInput),
-          allowRemix: resourceBundleInput.resources?.allowRemix || false,
+          allowRemix: hydratePostComposerAllowRemix(resourceBundleInput),
           summary: resourceBundleInput.summary || '',
           previewText: resourceBundleInput.previewText || '',
           priceUsd: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents / 100) : '9',
@@ -1722,9 +1894,13 @@ export default function NewPostScreen() {
     void loadPersistedPostComposerDraft(draftStorageId!).then((persisted) => {
       if (!active) return;
       if (persisted) {
-        const details = getPostComposerDetailErrors(persisted.draft, { grandfatheredTitle: initialTitleRef.current });
+        const restoredDraft: PostComposerDraft = {
+          ...persisted.draft,
+          resource: migratePostComposerResourceDraftToCards(persisted.draft.resource),
+        };
+        const details = getPostComposerDetailErrors(restoredDraft, { grandfatheredTitle: initialTitleRef.current });
         const canOpenReview = Object.keys(details).length === 0;
-        setDraft(persisted.draft);
+        setDraft(restoredDraft);
         setComposerStep(persisted.step === 'resources' && canOpenReview ? 'resources' : 'details');
         setDetailErrors(canOpenReview ? {} : details);
         setMessage({
@@ -1734,7 +1910,7 @@ export default function NewPostScreen() {
         });
         // Deliberately not awaited: the draft is already usable, and verifying
         // its uploads is a background repair the user should not wait behind.
-        void recoverRestoredDraftMedia(persisted.draft);
+        void recoverRestoredDraftMedia(restoredDraft);
       } else if (focusTarget === 'resources') {
         const details = getPostComposerDetailErrors(draft, { grandfatheredTitle: initialTitleRef.current });
         if (Object.keys(details).length === 0) {
@@ -2340,7 +2516,10 @@ export default function NewPostScreen() {
 
   const cancelMediaUploads = () => {
     for (const controller of activeUploadControllersRef.current) {
-      controller.abort();
+      // Resource uploads have their own in-sheet Cancel action and recovery
+      // state. A page-level media cancel must not silently stop that different
+      // transfer when draft recovery happens to overlap it.
+      if (controller !== resourceUploadAbortRef.current) controller.abort();
     }
   };
 
@@ -2453,39 +2632,119 @@ export default function NewPostScreen() {
     });
   };
 
-  const chooseResourceFile = async () => {
-    if (!resourceEditorCard || hasPaidOrders) return;
+  const uploadPendingResourceFile = async (pending: PendingResourceUpload) => {
+    if (isPickingResourceFile || hasPaidOrders || resourceEditorCard?.id !== pending.cardId) return;
+
+    const controller = new AbortController();
+    resourceUploadAbortRef.current = controller;
+    activeUploadControllersRef.current.add(controller);
     setIsPickingResourceFile(true);
-    setMessage(null);
+    setResourceUploadError(null);
+    setResourceUploadProgress({
+      bytesSent: 0,
+      cardId: pending.cardId,
+      percent: 0,
+      totalBytes: pending.document.size ?? 0,
+    });
+
     try {
-      const picked = await pickResourceDocument();
-      if (!picked) return;
-      const formData = new FormData();
-      formData.append('file', {
-        uri: picked.uri,
-        name: picked.name,
-        type: picked.mimeType ?? 'application/octet-stream',
-      } as unknown as Blob);
-      const response = await api.uploadPostResourceFile(formData);
+      const uploaded = await uploadResourceDocument(pending.document.uri, {
+        api,
+        fileName: pending.document.name,
+        mimeType: pending.document.mimeType,
+        sizeBytes: pending.document.size,
+        mediaOnly: pending.cardType === 'reference_media',
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (controller.signal.aborted) return;
+          setResourceUploadProgress((current) => current?.cardId === pending.cardId
+            ? {
+                bytesSent: progress.bytesSent,
+                cardId: pending.cardId,
+                percent: Math.round(progress.fraction * 100),
+                totalBytes: progress.totalBytes,
+              }
+            : current);
+        },
+      });
+
+      // Honor a cancellation that lands at the end of finalization, and never
+      // write its result into a different editor card.
+      if (controller.signal.aborted) {
+        setResourceUploadError('Upload cancelled. You can retry the selected file.');
+        return;
+      }
+
+      const contentType = uploaded.contentType ?? null;
       const attachment = {
         id: `att-${Date.now()}`,
         kind: 'file',
-        label: response.attachment.label,
-        storagePath: response.attachment.storagePath ?? '',
-        contentType: response.attachment.contentType ?? null,
-        sizeBytes: response.attachment.sizeBytes ?? null,
-        resourceType: response.attachment.resourceType ?? 'source_file',
-        role: response.attachment.role ?? 'primary',
-        remixUse: response.attachment.remixUse ?? 'import_source',
+        label: uploaded.label,
+        storagePath: uploaded.storagePath ?? '',
+        contentType,
+        sizeBytes: uploaded.sizeBytes ?? null,
+        // Finalize only reports what it verified in storage, so the editorial
+        // fields are inferred here. The card serializer overrides them for
+        // every card type except 'other', where these are the fallback.
+        resourceType: inferResourceAttachmentType(contentType),
+        role: 'primary',
+        remixUse: 'none',
       } satisfies PostComposerResourceCardDraft['attachments'][number];
-      setResourceEditorCard((current) => current
+      setResourceEditorCard((current) => current?.id === pending.cardId
         ? { ...current, attachments: [...current.attachments, attachment] }
         : current);
+      setPendingResourceUpload(null);
+      setResourceUploadError(null);
     } catch (error) {
-      setMessage({ tone: 'danger', title: 'Could not add file', body: error instanceof Error ? error.message : 'Try again.' });
+      setResourceUploadError(isUploadCancelledError(error)
+        ? 'Upload cancelled. You can retry the selected file.'
+        : error instanceof Error
+          ? error.message
+          : 'Try again.');
     } finally {
+      activeUploadControllersRef.current.delete(controller);
+      if (resourceUploadAbortRef.current === controller) {
+        resourceUploadAbortRef.current = null;
+      }
+      setResourceUploadProgress(null);
       setIsPickingResourceFile(false);
     }
+  };
+
+  const chooseResourceFile = async () => {
+    if (!resourceEditorCard || isPickingResourceFile || hasPaidOrders) return;
+    const targetCardId = resourceEditorCard.id;
+    const targetCardType = resourceEditorCard.type;
+    setIsPickingResourceFile(true);
+    setResourceUploadError(null);
+    setPendingResourceUpload(null);
+    try {
+      const picked = await pickResourceDocument(targetCardType === 'reference_media' ? 'reference_media' : 'resource');
+      if (!picked) return;
+      const pending = {
+        cardId: targetCardId,
+        cardType: targetCardType,
+        document: picked,
+      } satisfies PendingResourceUpload;
+      setPendingResourceUpload(pending);
+      // The picker phase and transfer share the same busy state. Clear it here
+      // so the upload helper can acquire and own the state/controller.
+      setIsPickingResourceFile(false);
+      await uploadPendingResourceFile(pending);
+    } catch (error) {
+      setResourceUploadError(error instanceof Error ? error.message : 'Could not open the file picker. Try again.');
+    } finally {
+      if (!resourceUploadAbortRef.current) setIsPickingResourceFile(false);
+    }
+  };
+
+  const retryResourceFileUpload = () => {
+    if (!pendingResourceUpload || isPickingResourceFile) return;
+    void uploadPendingResourceFile(pendingResourceUpload);
+  };
+
+  const cancelResourceFileUpload = () => {
+    resourceUploadAbortRef.current?.abort();
   };
 
   const updateResourceEditorCard = (patch: Partial<PostComposerResourceCardDraft>) => {
@@ -2494,12 +2753,16 @@ export default function NewPostScreen() {
   };
 
   const removeResourceCard = (id: string) => {
-    if (hasPaidOrders) return;
+    if (hasPaidOrders || (isPickingResourceFile && editingResourceId === id)) return;
     setDraft((current) => ({
       ...current,
       resource: {
         ...current.resource,
+        cardAuthoringMode: 'cards',
         cards: current.resource.cards.filter((card) => card.id !== id),
+        accessMode: current.resource.cards.length === 1 && !current.resource.allowRemix
+          ? 'none'
+          : current.resource.accessMode,
       },
     }));
     if (editingResourceId === id) {
@@ -2511,7 +2774,7 @@ export default function NewPostScreen() {
   };
 
   const startResourceCard = (type: PostComposerResourceCardType) => {
-    if (hasPaidOrders) return;
+    if (hasPaidOrders || isPickingResourceFile) return;
     const card = createPostComposerResourceCard(type);
     setEditingResourceId(card.id);
     setResourceEditorCard(cloneResourceCard(card));
@@ -2520,7 +2783,7 @@ export default function NewPostScreen() {
   };
 
   const openResourceCard = (id: string) => {
-    if (hasPaidOrders) return;
+    if (hasPaidOrders || isPickingResourceFile) return;
     const card = draft.resource.cards.find((candidate) => candidate.id === id);
     if (!card) return;
     setEditingResourceId(id);
@@ -2534,9 +2797,23 @@ export default function NewPostScreen() {
     setResourceEditorCard(null);
     setResourceEditorOriginal(null);
     setResourceSheetMode(null);
+    setResourceUploadProgress(null);
+    setResourceUploadError(null);
+    setPendingResourceUpload(null);
   };
 
   const requestCloseResourceSheet = () => {
+    if (isPickingResourceFile) {
+      Alert.alert(
+        'File upload in progress',
+        'Keep this resource editor open until the upload finishes, or cancel the upload first.',
+        [
+          { text: 'Keep uploading', style: 'cancel' },
+          { text: 'Cancel upload', style: 'destructive', onPress: cancelResourceFileUpload },
+        ],
+      );
+      return;
+    }
     if (resourceSheetMode !== 'editor' || !resourceEditorCard || !resourceEditorOriginal) {
       clearResourceEditor();
       return;
@@ -2557,7 +2834,7 @@ export default function NewPostScreen() {
   };
 
   const saveResourceEditor = () => {
-    if (!resourceEditorCard || !isPostComposerResourceCardReady(resourceEditorCard) || hasPaidOrders) return;
+    if (!resourceEditorCard || isPickingResourceFile || !isPostComposerResourceCardReady(resourceEditorCard) || hasPaidOrders) return;
     const savedCard = cloneResourceCard(resourceEditorCard);
     setDraft((current) => {
       const exists = current.resource.cards.some((card) => card.id === savedCard.id);
@@ -2569,7 +2846,7 @@ export default function NewPostScreen() {
         : buildResourcePreviewFromCards(cards);
       return {
         ...current,
-        resource: { ...current.resource, cards, previewText },
+        resource: { ...current.resource, cardAuthoringMode: 'cards', cards, previewText },
       };
     });
     clearResourceEditor();
@@ -2774,11 +3051,16 @@ export default function NewPostScreen() {
         mediaItems={draft.mediaItems}
         bottomInset={bottomInset}
         isUploading={isPickingResourceFile}
+        uploadProgress={resourceUploadProgress?.cardId === editingResource?.id ? resourceUploadProgress : null}
+        uploadError={resourceUploadError}
+        canRetryUpload={pendingResourceUpload?.cardId === editingResource?.id}
         onRequestClose={requestCloseResourceSheet}
         onSave={saveResourceEditor}
         onChooseType={startResourceCard}
         onChange={updateResourceEditorCard}
         onPickFile={() => void chooseResourceFile()}
+        onRetryUpload={retryResourceFileUpload}
+        onCancelUpload={cancelResourceFileUpload}
         onRemoveAttachment={(attachmentId) => {
           if (!editingResource) return;
           updateResourceEditorCard({
