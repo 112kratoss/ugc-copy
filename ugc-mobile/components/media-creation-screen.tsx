@@ -705,7 +705,12 @@ export function MediaCreationScreen({
   const isCompact = width < 380;
   const meta = TOOL_META[activeTool];
   const showFloatingReviewBar = insideTab && hasStartedCreationDraft(currentDraft) && !isPromptFocused;
-  const contentTopPadding = insideTab ? 10 : topInset + 8;
+  // Both branches must clear the status bar: the tab navigator does not apply a
+  // top inset for us, so a flat pad here renders the header under the system
+  // clock and battery — where it also can't be tapped. Content still scrolls
+  // beneath the opaque status-bar scrim below, which is what keeps that band
+  // readable.
+  const contentTopPadding = topInset + (insideTab ? 10 : 8);
   const contentBottomPadding = insideTab
     ? bottomInset + appTheme.spacing.section + (showFloatingReviewBar ? FLOATING_REVIEW_BAR_HEIGHT + appTheme.spacing.gap : 0)
     : bottomInset + 36;

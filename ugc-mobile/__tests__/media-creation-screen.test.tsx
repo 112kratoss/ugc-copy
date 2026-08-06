@@ -657,7 +657,10 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       marginBottom: expect.any(Number),
     }));
     expect(scrollView.props.contentContainerStyle.paddingBottom).toBeGreaterThan(100);
-    expect(scrollView.props.contentContainerStyle.paddingTop).toBe(10);
+    // Must clear the mocked 24pt top inset. Asserting the exact pad here is what
+    // let the header render under the status bar in a tab: the flat value looked
+    // intentional, so the regression read as expected behaviour.
+    expect(scrollView.props.contentContainerStyle.paddingTop).toBeGreaterThan(24);
     expect(collectText(tree!.root)).toContain('Calculating…');
     const basePaddingBottom = scrollView.props.contentContainerStyle.paddingBottom;
 
