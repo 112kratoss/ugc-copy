@@ -72,12 +72,12 @@ function createStatusClientMock(overrides: Record<string, unknown> = {}) {
 describe('getMotionGenerationStatusForRoute', () => {
   it('returns cached succeeded output without polling the provider', async () => {
     const userClient = createStatusClientMock();
-    const adminClient = {} as SupabaseClient;
+    const adminClient = createStatusClientMock();
     const dependencies = {
       resolveStoredMediaUrl: vi.fn(async (_client, value: string) => `signed:${value}`),
       fetchWithProviderTimeout: vi.fn(),
     } satisfies Partial<MotionGenerationStatusDependencies>;
-    const createAdminSupabase = vi.fn(() => adminClient);
+    const createAdminSupabase = vi.fn(() => adminClient.client);
 
     const result = await getMotionGenerationStatusForRoute({
       request: new Request('http://localhost/api/generate?id=task-motion-1'),
@@ -100,13 +100,17 @@ describe('getMotionGenerationStatusForRoute', () => {
         }),
       },
     });
-    expect(userClient.selects).toEqual([
+    // The lookup must run service-role: `authenticated` cannot SELECT output_url,
+    // model, completed_at or workflow_settings, so reading it as the user denies
+    // the row and the caller reports a phantom "Generation not found".
+    expect(adminClient.selects).toEqual([
       'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, creation_mode, workflow_settings, duration',
     ]);
-    expect(userClient.eqs).toEqual([
+    expect(adminClient.eqs).toEqual([
       { column: 'prediction_id', value: 'task-motion-1' },
       { column: 'user_id', value: 'user-1' },
     ]);
+    expect(userClient.selects).toEqual([]);
     expect(createAdminSupabase).toHaveBeenCalledTimes(1);
     expect(dependencies.resolveStoredMediaUrl).toHaveBeenCalledTimes(1);
     expect(dependencies.fetchWithProviderTimeout).not.toHaveBeenCalled();
@@ -114,11 +118,12 @@ describe('getMotionGenerationStatusForRoute', () => {
 
   it('rejects a plain video generation before reading output or polling the provider', async () => {
     const userClient = createStatusClientMock({ creation_mode: null });
+    const adminClient = createStatusClientMock({ creation_mode: null });
     const dependencies = {
       resolveStoredMediaUrl: vi.fn(),
       fetchWithProviderTimeout: vi.fn(),
     } satisfies Partial<MotionGenerationStatusDependencies>;
-    const createAdminSupabase = vi.fn(() => ({} as SupabaseClient));
+    const createAdminSupabase = vi.fn(() => adminClient.client);
 
     const result = await getMotionGenerationStatusForRoute({
       request: new Request('http://localhost/api/generate?id=task-motion-1'),
@@ -135,7 +140,9 @@ describe('getMotionGenerationStatusForRoute', () => {
       status: 404,
       body: { error: 'Generation not found' },
     });
-    expect(createAdminSupabase).not.toHaveBeenCalled();
+    // Only the ownership/kind lookup runs; the rejection still happens before any
+    // media resolution or provider poll, which is what this test guards.
+    expect(createAdminSupabase).toHaveBeenCalledTimes(1);
     expect(dependencies.resolveStoredMediaUrl).not.toHaveBeenCalled();
     expect(dependencies.fetchWithProviderTimeout).not.toHaveBeenCalled();
   });
