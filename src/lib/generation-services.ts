@@ -1390,14 +1390,19 @@ export async function startImageGeneration(params: {
     } else if (model === 'wan-2.7-image' || model === 'wan-2.7-image-pro') {
       input = {
         prompt: compiledPrompt,
-        input_urls: resolvedImageUrls,
         n: 1,
         enable_sequential: false,
         resolution,
         thinking_mode: false,
         watermark: false,
-        bbox_list: resolvedImageUrls.map(() => []),
       };
+      // Both keys are edit-mode only. Sending them empty on a text-to-image
+      // request makes the provider reject it with "bbox_list requires
+      // input_urls" — an empty bbox_list still reads as an edit intent.
+      if (resolvedImageUrls.length > 0) {
+        input.input_urls = resolvedImageUrls;
+        input.bbox_list = resolvedImageUrls.map(() => []);
+      }
     } else if (model === 'imagen-4-fast' || model === 'imagen-4' || model === 'imagen-4-ultra') {
       input = { prompt: compiledPrompt, aspect_ratio: aspectRatio };
     } else if (model === 'ideogram-v3') {
