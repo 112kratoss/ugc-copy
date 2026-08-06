@@ -140,6 +140,12 @@ describe('profile view model media cards', () => {
       bundle: null,
     };
 
+    // An image carried on `posts.output_url` is grid-ready even with no
+    // post_media descriptor. Publishing a generation produces exactly that shape
+    // -- output_url set, zero post_media rows, so no preview is ever generated --
+    // and requiring a descriptor here hid those posts from the mobile grid
+    // permanently while the web profile still listed them. This matches the
+    // showcase path, which treats a bare image mediaUrl as gridReady.
     expect(ownerPostToProfileMediaCard({
       ...base,
       id: 'image-post',
@@ -147,8 +153,15 @@ describe('profile view model media cards', () => {
       mediaKind: 'image',
     })).toMatchObject({
       previewState: 'image',
-      isGridReady: false,
+      isGridReady: true,
     });
+    // A video still needs a poster, so a bare mediaUrl is not enough.
+    expect(ownerPostToProfileMediaCard({
+      ...base,
+      id: 'video-post',
+      mediaUrl: 'https://cdn.example.com/post.mp4',
+      mediaKind: 'video',
+    }).isGridReady).toBe(false);
     expect(ownerPostToProfileMediaCard({
       ...base,
       id: 'text-post',

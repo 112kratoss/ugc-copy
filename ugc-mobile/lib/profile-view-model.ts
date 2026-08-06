@@ -271,9 +271,19 @@ export function ownerPostToProfileMediaCard(item: OwnerPostListItem): ProfileMed
       previewUrl,
     }),
     previewStatusLabel: item.mediaKind === 'video' && !previewUrl ? 'Preview unavailable' : undefined,
+    // An image post whose media lives on `posts.output_url` has no `post_media`
+    // row to carry a descriptor, so the old check saw no preview and dropped it
+    // -- hiding published posts from the grid entirely while the web profile
+    // still listed them. getProfilePreviewState already renders that case from
+    // `mediaUrl`, so the filter has to accept it too or it discards tiles the
+    // renderer could draw. Videos still require a poster, matching `gridReady`
+    // being defined as `mediaKind === 'image'` in showcase-media.
     isGridReady: !item.archivedAt && (isTextPost
       ? Boolean(previewText.trim())
-      : descriptor?.gridReady ?? primaryMedia?.gridReady ?? Boolean(previewUrl)),
+      : Boolean(
+        (descriptor?.gridReady ?? primaryMedia?.gridReady ?? previewUrl)
+        || (item.mediaKind === 'image' && item.mediaUrl),
+      )),
     isArchived: Boolean(item.archivedAt),
     badge: ownerPostBadge(item),
     statusLabel: item.archivedAt ? 'Archived' : 'Published',
