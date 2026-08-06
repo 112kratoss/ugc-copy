@@ -392,6 +392,7 @@ describe('/api/posts route', () => {
   it('creates text-only posts without uploading media', async () => {
     const { POST } = await import('@/app/api/posts/route');
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'text');
     formData.set('body', 'Three hook ideas that keep working.\nLead with tension.');
     formData.set('visibility', 'public');
@@ -415,8 +416,7 @@ describe('/api/posts route', () => {
       category: 'text',
       post_format: 'text',
       source_kind: 'manual',
-      body: 'Three hook ideas that keep working.\nLead with tension.',
-      title: 'Three hook ideas that keep working.',
+      body: 'Three hook ideas that keep working.\nLead with tension.',// Author-supplied, not derived from the body.	itle: 'Studio lighting reference',
     });
     expect(payload.success).toBe(true);
     expect(payload.resourceBundlePath).toBe(`/showcase/${payload.postId}#recipe`);
@@ -425,6 +425,7 @@ describe('/api/posts route', () => {
   it('creates mixed posts with media and note content', async () => {
     const { POST } = await import('@/app/api/posts/route');
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'mixed');
     formData.set('body', 'This cutdown worked because the hook hits in under two seconds.');
     formData.set('category', 'video');
@@ -441,14 +442,14 @@ describe('/api/posts route', () => {
       source_kind: 'external',
       source_tool: 'Runway',
       visibility: 'unlisted',
-      body: 'This cutdown worked because the hook hits in under two seconds.',
-      title: 'This cutdown worked because the hook hits in under two seconds.',
+      body: 'This cutdown worked because the hook hits in under two seconds.',// Author-supplied, not derived from the body.	itle: 'Studio lighting reference',
     });
   });
 
   it('persists structured source tools for media posts', async () => {
     const { POST } = await import('@/app/api/posts/route');
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'mixed');
     formData.set('body', 'This image was built with a specific external model.');
     formData.set('visibility', 'public');
@@ -496,6 +497,7 @@ describe('/api/posts route', () => {
   it('persists provisional catalog creation intent only after an image post is created', async () => {
     const { POST } = await import('@/app/api/posts/route');
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'media');
     formData.set('visibility', 'public');
     formData.set('media', new File(['image-bytes'], 'proof.png', { type: 'image/png' }));
@@ -534,6 +536,7 @@ describe('/api/posts route', () => {
   it('rejects invalid provisional catalog names before creating a post', async () => {
     const { POST } = await import('@/app/api/posts/route');
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'media');
     formData.set('visibility', 'public');
     formData.set('media', new File(['image-bytes'], 'proof.png', { type: 'image/png' }));
@@ -559,6 +562,7 @@ describe('/api/posts route', () => {
 
     const { POST } = await import('@/app/api/posts/route');
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'mixed');
     formData.set('body', 'This image should not publish with missing source metadata.');
     formData.set('visibility', 'public');
@@ -583,6 +587,7 @@ describe('/api/posts route', () => {
   it('creates mixed posts from an uploaded storage reference without raw multipart media', async () => {
     const { POST } = await import('@/app/api/posts/route');
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'mixed');
     formData.set('body', 'Keep the product benefit visible before the hook resolves.');
     formData.set('category', 'video');
@@ -611,8 +616,7 @@ describe('/api/posts route', () => {
       source_kind: 'external',
       source_tool: 'CapCut',
       visibility: 'public',
-      body: 'Keep the product benefit visible before the hook resolves.',
-      title: 'Keep the product benefit visible before the hook resolves.',
+      body: 'Keep the product benefit visible before the hook resolves.',// Author-supplied, not derived from the body.	itle: 'Studio lighting reference',
     });
     expect(postMediaRows).toEqual([
       expect.objectContaining({
@@ -633,6 +637,7 @@ describe('/api/posts route', () => {
 
     const { POST } = await import('@/app/api/posts/route');
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'mixed');
     formData.set('body', 'Cleanup failure must not lose track of the staged object.');
     formData.set('category', 'video');
@@ -653,6 +658,7 @@ describe('/api/posts route', () => {
   it('creates ordered multi-media posts from uploaded storage references', async () => {
     const { POST } = await import('@/app/api/posts/route');
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'media');
     formData.set('visibility', 'public');
     formData.set('category', 'image');
@@ -719,6 +725,7 @@ describe('/api/posts route', () => {
 
     const { POST } = await import('@/app/api/posts/route');
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'media');
     formData.set('visibility', 'public');
     formData.set('category', 'image');
@@ -750,6 +757,7 @@ describe('/api/posts route', () => {
   it('rejects manual posts with more than five media items', async () => {
     const { POST } = await import('@/app/api/posts/route');
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'media');
     formData.set('visibility', 'public');
     formData.set('mediaItems', JSON.stringify(
@@ -774,6 +782,7 @@ describe('/api/posts route', () => {
   it('rejects empty submissions', async () => {
     const { POST } = await import('@/app/api/posts/route');
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'text');
 
     const response = await POST(createRouteRequest(formData));
@@ -787,6 +796,7 @@ describe('/api/posts route', () => {
   it('rejects overlength text posts', async () => {
     const { POST } = await import('@/app/api/posts/route');
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'text');
     formData.set('body', 'a'.repeat(2001));
 
@@ -801,6 +811,7 @@ describe('/api/posts route', () => {
   it('rejects paid unlocks without any resource content', async () => {
     const { POST } = await import('@/app/api/posts/route');
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'text');
     formData.set('body', 'The hook works because it resolves the objection before the demo.');
     formData.set('visibility', 'public');
@@ -830,6 +841,7 @@ describe('/api/posts route', () => {
   it('rejects unlock file attachments outside the creator storage prefix', async () => {
     const { POST } = await import('@/app/api/posts/route');
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'text');
     formData.set('body', 'A short post with a gated workflow file.');
     formData.set('visibility', 'public');
@@ -929,6 +941,7 @@ describe('/api/posts route', () => {
 
     const { POST } = await import('@/app/api/posts/route');
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'text');
     formData.set('body', 'Hook first, then show the product payoff.');
     formData.set('visibility', 'public');
@@ -962,6 +975,7 @@ describe('/api/posts route', () => {
 
     const { POST } = await import('@/app/api/posts/route');
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'mixed');
     formData.set('body', 'This post should not survive a failed unlock save.');
     formData.set('category', 'image');

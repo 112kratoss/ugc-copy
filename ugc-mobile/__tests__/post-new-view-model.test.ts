@@ -226,17 +226,47 @@ describe('post new view model', () => {
     };
 
     expect(validatePostComposerDraft(draft)).toEqual({ valid: true });
-    // Titles are optional, matching the server (it derives one from the body
-    // for text posts) and the web composer.
-    expect(validatePostComposerDraft({ ...draft, title: ' ' })).toEqual({ valid: true });
+    // Titles are required, matching the server and the web composer. The body
+    // is no longer a fallback source for one.
+    expect(validatePostComposerDraft({ ...draft, title: ' ' })).toMatchObject({
+      valid: false,
+      message: 'Add a title for your post.',
+    });
     expect(validatePostComposerDraft({ ...draft, contentText: '', caption: '' })).toMatchObject({
       valid: false,
       message: 'Write the text post before continuing.',
     });
+    // Both are missing here, and the title is reported first because that is
+    // the field the author reaches first in the composer.
     expect(validatePostComposerDraft({ ...draft, title: '', contentText: '', caption: '' })).toMatchObject({
       valid: false,
-      message: 'Write the text post before continuing.',
+      message: 'Add a title for your post.',
     });
+  });
+
+  // Text posts used to inherit a title derived from their body on the server,
+  // so an author could publish one without naming it. Every format is named
+  // explicitly now, on both clients and the server.
+  it('requires a title on every post format', () => {
+    const textDraft = {
+      ...getDefaultPostComposerDraft(),
+      mode: 'text' as const,
+      proofMode: 'text' as const,
+      contentText: 'A reusable breakdown for product hooks.',
+      category: 'text' as const,
+    };
+
+    expect(getPostComposerDetailErrors(textDraft)).toMatchObject({
+      title: 'Add a title for your post.',
+    });
+    expect(validatePostComposerDraft(textDraft).valid).toBe(false);
+
+    // Whitespace is not a title.
+    expect(getPostComposerDetailErrors({ ...textDraft, title: '   ' })).toMatchObject({
+      title: 'Add a title for your post.',
+    });
+
+    expect(getPostComposerDetailErrors({ ...textDraft, title: 'Hook breakdown' }).title).toBeUndefined();
   });
 
   // Every title input slices to TITLE_MAX_LENGTH, so this branch is a backstop
@@ -295,6 +325,7 @@ describe('post new view model', () => {
     };
 
     expect(getPostComposerDetailErrors(draft)).toEqual({
+      title: 'Add a title for your post.',
       media: 'Add at least one image or video to continue.',
     });
   });

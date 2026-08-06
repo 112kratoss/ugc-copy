@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import { TITLE_MAX_LENGTH, deriveTitleFromBody } from '@/lib/posts-server';
+import { TITLE_MAX_LENGTH } from '@/lib/posts-server';
 import {
   isPostResourceBundleAccessMode,
   validatePostResourceBundleInput,
@@ -311,18 +311,6 @@ function normalizeBody(value: FormDataEntryValue | null): string | null {
   return normalized ? normalized : null;
 }
 
-function resolveTitle(title: string | null, body: string | null, postFormat: ShowcasePostFormat): string | null {
-  if (title) {
-    return title;
-  }
-
-  if (postFormat === 'text' || postFormat === 'mixed') {
-    return deriveTitleFromBody(body);
-  }
-
-  return null;
-}
-
 function parseResourceBundle(
   value: FormDataEntryValue | null,
   ownerUserId: string,
@@ -477,7 +465,15 @@ export async function preparePostCreationSubmission({
     return badRequest(`Titles are limited to ${TITLE_MAX_LENGTH} characters.`);
   }
 
-  const title = resolveTitle(submittedTitle, body, postFormat);
+  // Every new post is named by its author, on every format. Text posts used to
+  // fall back to a title derived from the body; that fallback is gone here, so
+  // there is nothing left to resolve. Posts written before this rule keep
+  // whatever title they were given.
+  if (!submittedTitle) {
+    return badRequest('Add a title for your post.', 'title');
+  }
+
+  const title = submittedTitle;
   const description = normalizeText(formData.get('description'));
   const sourceTool = hasSubmittedMedia ? normalizeText(formData.get('sourceTool')) : null;
   const sourceToolSlugRaw = normalizeText(formData.get('sourceToolSlug'));

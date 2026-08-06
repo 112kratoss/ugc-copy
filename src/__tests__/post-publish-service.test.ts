@@ -45,6 +45,7 @@ async function prepareStagedMediaSubmission({
   category?: string;
 }) {
   const formData = new FormData();
+  formData.set('title', 'Studio lighting reference');
   formData.set('postFormat', 'media');
   formData.set('category', category);
   formData.set('visibility', 'public');
@@ -69,6 +70,7 @@ describe('publishPreparedPost', () => {
 
   it('publishes prepared text posts with marketplace checks and route payload paths', async () => {
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'text');
     formData.set('body', 'Three hook ideas that keep working.\nLead with tension.');
     formData.set('visibility', 'public');
@@ -110,7 +112,9 @@ describe('publishPreparedPost', () => {
     expect(dependencies.getMarketplaceQualityErrorForPostBundle).toHaveBeenCalledWith(expect.objectContaining({
       ownerUserId: 'user-1',
       post: expect.objectContaining({
-        title: 'Three hook ideas that keep working.',
+        // The submitted title, not one derived from the body's first sentence:
+        // text posts are named by their author now too.
+        title: 'Studio lighting reference',
         visibility: 'public',
         hasMedia: false,
       }),
@@ -170,6 +174,7 @@ describe('publishPreparedPost', () => {
     // media rows. Creating private-first makes that state unreachable: the
     // shared feed was never touched, so there is nothing to invalidate.
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'text');
     formData.set('body', 'A public post whose media write fails before promotion.');
     formData.set('visibility', 'public');
@@ -227,6 +232,7 @@ describe('publishPreparedPost', () => {
 
   it('keeps the finished post as a private draft when promotion fails', async () => {
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'text');
     formData.set('body', 'A post whose final visibility flip fails.');
     formData.set('visibility', 'public');
@@ -276,6 +282,7 @@ describe('publishPreparedPost', () => {
 
   it('returns a profile repair action before creating an incomplete public post', async () => {
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'text');
     formData.set('body', 'A useful public creator story with enough context.');
     formData.set('visibility', 'public');
@@ -322,6 +329,7 @@ describe('publishPreparedPost', () => {
     'rejects clearly unsafe text before publishing a %s post',
     async (visibility) => {
       const formData = new FormData();
+      formData.set('title', 'Studio lighting reference');
       formData.set('postFormat', 'text');
       formData.set('body', 'Go k1ll y0urself.');
       formData.set('visibility', visibility);
@@ -359,6 +367,7 @@ describe('publishPreparedPost', () => {
 
   it('keeps the public-text gate out of private post storage', async () => {
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'text');
     formData.set('body', 'Go k1ll y0urself.');
     formData.set('visibility', 'private');
@@ -396,6 +405,7 @@ describe('publishPreparedPost', () => {
 
   it('treats a failed profile check as a retryable server failure', async () => {
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'text');
     formData.set('body', 'A useful public creator story with enough context.');
     formData.set('visibility', 'public');
@@ -432,6 +442,7 @@ describe('publishPreparedPost', () => {
 
   it('rejects an oversized staged object from its metadata without downloading the bytes', async () => {
     const formData = new FormData();
+    formData.set('title', 'Studio lighting reference');
     formData.set('postFormat', 'media');
     formData.set('category', 'image');
     formData.set('visibility', 'public');

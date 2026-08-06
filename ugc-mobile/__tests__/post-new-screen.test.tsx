@@ -154,6 +154,12 @@ vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ t
 vi.mock('expo-image', () => ({ Image: (props: MockProps) => React.createElement('image', props) }));
 vi.mock('expo-linear-gradient', () => ({ LinearGradient: ({ children, ...props }: MockProps) => React.createElement('linear-gradient', props, children) }));
 vi.mock('@/components/media-preview', () => ({ StableMediaImage: (props: MockProps) => React.createElement('stable-media-image', props) }));
+// The composer media lightbox pulls in expo-video, whose native module cannot
+// resolve under vitest.
+vi.mock('expo-video', () => ({
+  useVideoPlayer: () => ({ id: 'player' }),
+  VideoView: (props: MockProps) => React.createElement('video-view', props),
+}));
 vi.mock('expo-haptics', () => ({
   impactAsync: vi.fn(() => Promise.resolve()),
   ImpactFeedbackStyle: { Light: 'light', Medium: 'medium', Heavy: 'heavy' },
@@ -357,14 +363,19 @@ describe('mobile external post composer', () => {
     expect(queryOptionsState.options.find((options) => options.queryKey[0] === 'post-new-generations')?.enabled).toBe(false);
   });
 
-  it('advances past post details without a title once media is present', async () => {
-    // Titles are optional everywhere, matching the server and the web composer.
+  it('holds a media post at post details until it is given a title', async () => {
+    // Titles are required everywhere now, matching the server and the web
+    // composer. Media alone is no longer enough to move on.
     paramsState.params = {};
     await uploadManualMedia();
     const tree = await renderScreen();
     await choosePreparedMedia(tree);
     renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
-    expect(collectText(tree.root)).not.toContain('Add a title before continuing.');
+    expect(collectText(tree.root)).toContain('Add a title for your post.');
+    expect(collectText(tree.root)).not.toContain('Optional resources');
+
+    renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Neon skyline study'));
+    renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
     expect(collectText(tree.root)).toContain('Optional resources');
   });
 
@@ -384,9 +395,9 @@ describe('mobile external post composer', () => {
     const tree = await renderScreen();
     renderer.act(() => findPressableByText(tree.root, 'Text post').props.onPress());
     const labeledTextInputs = tree.root
-      .findAll((node) => String(node.type) === 'textinput' && ['Title, optional', 'Post text, required'].includes(node.props.accessibilityLabel))
+      .findAll((node) => String(node.type) === 'textinput' && ['Title, required', 'Post text, required'].includes(node.props.accessibilityLabel))
       .map((node) => node.props.accessibilityLabel);
-    expect(labeledTextInputs).toEqual(['Title, optional', 'Post text, required']);
+    expect(labeledTextInputs).toEqual(['Title, required', 'Post text, required']);
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'Share a prompt, idea, breakdown, or useful note...').props.onChangeText('A useful text breakdown'));
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Prompt teardown'));
     renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
@@ -448,7 +459,7 @@ describe('mobile external post composer', () => {
   it('uses semantic accessibility names instead of placeholders', async () => {
     paramsState.params = {};
     const tree = await renderScreen();
-    expect(findTextInputByAccessibilityLabel(tree.root, 'Title, optional')).toBeTruthy();
+    expect(findTextInputByAccessibilityLabel(tree.root, 'Title, required')).toBeTruthy();
     expect(findTextInputByAccessibilityLabel(tree.root, 'Story, optional')).toBeTruthy();
     renderer.act(() => findPressableByText(tree.root, 'Text post').props.onPress());
     expect(findTextInputByAccessibilityLabel(tree.root, 'Post text, required')).toBeTruthy();
