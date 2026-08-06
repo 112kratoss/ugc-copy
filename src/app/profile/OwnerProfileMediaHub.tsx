@@ -152,8 +152,13 @@ function appendUnique<T extends { id: string }>(current: T[], incoming: T[]): T[
 }
 
 function getGenerationTitle(generation: OwnerGeneration): string {
+  // Fall back to the prompt before giving up on a name. `title` is only
+  // populated once a creation is published, so without this every private
+  // creation in the workspace reads "Untitled creation" even though its prompt
+  // is already in the payload. The mobile studio feed has always done this.
   return generation.title?.trim()
     || generation.template?.templateTitle?.trim()
+    || generation.prompt?.trim()
     || (generation.origin === 'template' ? 'Template result' : 'Untitled creation');
 }
 
