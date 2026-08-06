@@ -171,7 +171,6 @@ export async function getImageGenerationForRoute(
       request: input.request,
       predictionId,
       userId,
-      supabase,
       createAdminSupabase: input.createAdminSupabase as () => ImageRouteSupabaseClient,
       kieApiKey: input.kieApiKey,
     });

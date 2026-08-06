@@ -167,7 +167,10 @@ async function persistMotionOutput({
     const videoBlob = await videoRes.blob();
 
     const fileName = `${userId}/generated_${predictionId}.mp4`;
-    const { error: uploadError } = await supabase.storage
+    // Service-role: generated_videos grants `authenticated` SELECT only, so an
+    // upload on the user client fails with "new row violates row-level security
+    // policy". Reads below stay on the user client, which the SELECT policy allows.
+    const { error: uploadError } = await settlementSupabase.storage
       .from('generated_videos')
       .upload(fileName, videoBlob, {
         contentType: 'video/mp4',

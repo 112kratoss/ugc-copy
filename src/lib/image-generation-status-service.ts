@@ -134,7 +134,6 @@ export async function getImageGenerationStatusForRoute({
   request,
   predictionId,
   userId,
-  supabase,
   createAdminSupabase,
   kieApiKey,
   dependencies,
@@ -142,7 +141,9 @@ export async function getImageGenerationStatusForRoute({
   request: Request;
   predictionId: string;
   userId: string;
-  supabase: SupabaseClient;
+  // No user client: every read and write here is service-role by necessity (see
+  // the lookup and persist calls below). Taking one would only invite a caller
+  // to reach for it and reintroduce the RLS failures this service had.
   createAdminSupabase: () => SupabaseClient;
   kieApiKey: string | undefined;
   dependencies?: Partial<ImageGenerationStatusDependencies>;
@@ -268,8 +269,13 @@ export async function getImageGenerationStatusForRoute({
             throw new Error('Missing local generation record for completed image run');
           }
 
+          // Both clients must be service-role. The first one performs the
+          // Storage upload, and the generated_* buckets grant `authenticated`
+          // SELECT only -- no INSERT -- so uploading as the user fails with
+          // "new row violates row-level security policy". Every other caller
+          // (generation-status-sync) already passes its service client twice.
           const persistedOutputs = await resolvedDependencies.persistGeneratedOutputList(
-            supabase,
+            admin,
             admin,
             {
               id: localGeneration.id,

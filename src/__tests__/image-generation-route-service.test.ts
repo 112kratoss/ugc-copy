@@ -188,7 +188,9 @@ describe('image generation route service', () => {
       request: expect.any(Request),
       predictionId: 'task-image-1',
       userId: 'user-1',
-      supabase: expect.any(Object),
+      // No user client is forwarded: the status service reads and writes
+      // service-role throughout, because the generations column grants and the
+      // generated_images bucket policies both deny `authenticated`.
       createAdminSupabase,
       kieApiKey: 'kie-key',
     });
