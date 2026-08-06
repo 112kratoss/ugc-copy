@@ -44,6 +44,7 @@ export default function UnlockDetail({ detail }: { detail: ViewerUnlockDetailMod
           <PostResourceBundlePanel
             postId={detail.postId ?? detail.unlockId}
             fileUrlEndpoint={`/api/me/unlocks/${detail.unlockId}/file-url`}
+            mediaItems={detail.mediaItems}
             title={detail.title}
             summary={detail.summary}
             previewText={detail.previewText}
@@ -56,13 +57,18 @@ export default function UnlockDetail({ detail }: { detail: ViewerUnlockDetailMod
             viewerIsOwner={false}
             resourceKinds={detail.resourceKinds}
             lockedPreview={buildPostResourceBundleLockedPreview(initialResources)}
-            salesCount={0}
+            salesCount={detail.salesCount}
             initialResources={initialResources}
             purchasedRevision={detail.hasNewerRevision && detail.currentResources
               ? {
                   revisionNumber: detail.purchasedRevision.revisionNumber,
                   purchasedAt: detail.purchasedAt,
                   title: detail.purchasedRevision.title,
+                  summary: detail.purchasedRevision.summary,
+                  previewText: detail.purchasedRevision.previewText,
+                  accessMode: detail.purchasedRevision.accessMode,
+                  priceUsdCents: detail.purchasedRevision.priceUsdCents,
+                  mediaItems: detail.purchasedRevision.mediaItems,
                   resources: detail.purchasedRevision.resources,
                 }
               : null}

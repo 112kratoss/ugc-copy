@@ -948,7 +948,10 @@ export default function ShowcaseReelViewer({
       const orderData = await orderResponse.json();
 
       if (!orderResponse.ok) {
-        if (orderData.code === 'CHECKOUT_PAYLOAD_MISMATCH') {
+        if (
+          orderData.code === 'CHECKOUT_PAYLOAD_MISMATCH'
+          || orderData.code === 'RESOURCE_QUOTE_CHANGED'
+        ) {
           clearRazorpayCheckoutIntentKey(checkoutIntentScope);
         }
         throw new Error(orderData.error || 'Failed to start checkout.');

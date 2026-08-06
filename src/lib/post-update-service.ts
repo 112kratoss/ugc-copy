@@ -32,6 +32,7 @@ import {
   markMediaUploadIntentsConsumed,
 } from '@/lib/media-upload-intents';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
+import { excludePurchasedProofMediaPaths } from '@/lib/purchased-proof-media';
 import {
   formatUploadByteLimit,
   getMaxUploadBytesForContentType,
@@ -92,8 +93,19 @@ type MutablePostRow = {
 };
 
 type BundleStatusRow = {
+  id?: string;
   access_mode: 'none' | 'free' | 'paid';
   status: 'draft' | 'published';
+  sales_count?: number | null;
+  summary?: string | null;
+  preview_text?: string | null;
+  prompt_text?: string | null;
+  notes_markdown?: string | null;
+  workflow_share_url?: string | null;
+  workflow_snapshot?: unknown;
+  attachments?: unknown;
+  allow_remix?: boolean | null;
+  price_usd_cents?: number | null;
   resource_items?: unknown;
   resource_sections?: unknown;
 };
@@ -179,6 +191,7 @@ export type PostUpdateRouteResult =
       body: {
         error: string;
         field?: string;
+        code?: string;
       };
     }
   | {
@@ -357,7 +370,9 @@ async function loadOwnedBundleStatus(
 ): Promise<BundleStatusRow | null> {
   const { data, error } = await adminSupabase
     .from('post_resource_bundles')
-    .select('access_mode, status, resource_items, resource_sections')
+    .select(
+      'id, access_mode, status, sales_count, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, resource_items, resource_sections',
+    )
     .eq('post_id', postId)
     .eq('owner_user_id', ownerUserId)
     .maybeSingle();
@@ -367,6 +382,25 @@ async function loadOwnedBundleStatus(
   }
 
   return (data as BundleStatusRow | null) ?? null;
+}
+
+function buildStoredBundleForQualityCheck(row: BundleStatusRow): PostResourceBundleInput {
+  return {
+    accessMode: row.access_mode,
+    summary: row.summary ?? null,
+    previewText: row.preview_text ?? null,
+    priceUsdCents: row.price_usd_cents ?? null,
+    resources: {
+      promptText: row.prompt_text ?? null,
+      notesMarkdown: row.notes_markdown ?? null,
+      workflowShareUrl: row.workflow_share_url ?? null,
+      workflowSnapshot: row.workflow_snapshot ?? null,
+      attachments: Array.isArray(row.attachments) ? row.attachments : [],
+      allowRemix: row.allow_remix === true,
+      sections: Array.isArray(row.resource_sections) ? row.resource_sections : [],
+      items: Array.isArray(row.resource_items) ? row.resource_items : [],
+    } as NonNullable<PostResourceBundleInput['resources']>,
+  };
 }
 
 async function loadOwnedPostMedia(
@@ -442,6 +476,9 @@ async function parseSubmittedEditMediaItems(params: {
 
   const existingRows = await loadOwnedPostMedia(params.adminSupabase, params.postId);
   const existingRowsMap = new Map(existingRows.map((row) => [row.id, row]));
+  const existingMediaKeys = new Set(existingRows.map((row) => (
+    normalizePostMediaKey(row.media_key) ?? defaultPostMediaKey(row.sort_order)
+  )));
   const submitted: SubmittedEditMediaItem[] = [];
   const submittedMediaKeys = new Set<string>();
 
@@ -475,6 +512,12 @@ async function parseSubmittedEditMediaItems(params: {
     }
     if (submittedMediaKeys.has(mediaKey)) {
       return { items: null, error: 'Post media keys must be unique.' };
+    }
+    // A stable key identifies the proof that resource scopes were authored
+    // against. Reusing a removed row's key for a different upload would make
+    // those scopes silently point at different content.
+    if (existingMediaKeys.has(mediaKey)) {
+      return { items: null, error: 'New uploads must use a new post media key.' };
     }
     submittedMediaKeys.add(mediaKey);
 
@@ -525,14 +568,109 @@ function createRateLimitResult(error: BackendRateLimitError): PostUpdateRouteRes
   };
 }
 
-async function replaceEditedPostMedia(params: {
+type PreparedEditedPostMedia = {
+  mediaItems: PostMediaPersistInput[];
+  newStoragePaths: string[];
+  removedStoragePaths: string[];
+  temporaryStoragePaths: string[];
+};
+
+async function rollbackPreparedEditedPostMedia(
+  adminSupabase: SupabaseClient,
+  prepared: PreparedEditedPostMedia,
+): Promise<void> {
+  if (prepared.newStoragePaths.length === 0) {
+    return;
+  }
+
+  try {
+    const cleanup = await adminSupabase.storage
+      .from(SHOWCASE_MEDIA_BUCKET)
+      .remove(prepared.newStoragePaths);
+    if (cleanup.error) {
+      logBackendWarning('failed_to_rollback_prepared_post_media', { error: cleanup.error });
+    }
+  } catch (error) {
+    logBackendWarning('failed_to_rollback_prepared_post_media', { error });
+  }
+}
+
+async function finalizePreparedEditedPostMedia(
+  adminSupabase: SupabaseClient,
+  prepared: PreparedEditedPostMedia,
+  bundleId: string | null = null,
+): Promise<void> {
+  if (prepared.temporaryStoragePaths.length > 0) {
+    try {
+      const temporaryCleanup = await adminSupabase.storage
+        .from(UPLOADS_BUCKET)
+        .remove(prepared.temporaryStoragePaths);
+      if (temporaryCleanup.error) {
+        logBackendWarning('failed_to_remove_temporary_post_media_after_edit', { error: temporaryCleanup.error });
+      }
+
+      // Only what storage confirmed deleted is marked cleared; the rest stays
+      // consumed-but-uncleared so the reclaim sweep retries it.
+      const removal = getConfirmedRemovedPaths(prepared.temporaryStoragePaths, temporaryCleanup);
+      if (removal.confirmed.length > 0) {
+        await markMediaUploadIntentsConsumed(adminSupabase, {
+          storagePaths: removal.confirmed,
+          consumedBy: 'post_update',
+          storageCleared: true,
+        });
+      }
+      if (removal.unconfirmed.length > 0) {
+        if (!temporaryCleanup.error) {
+          logBackendWarning('partially_removed_temporary_post_media_after_edit', {
+            requested: prepared.temporaryStoragePaths.length,
+            removed: removal.confirmed.length,
+          });
+        }
+        await markMediaUploadIntentsConsumed(adminSupabase, {
+          storagePaths: removal.unconfirmed,
+          consumedBy: 'post_update',
+          storageCleared: false,
+        });
+      }
+    } catch (error) {
+      // Database state is already committed. Cleanup is deliberately retryable
+      // rather than turning a successful edit into a misleading failure.
+      logBackendWarning('failed_to_finalize_temporary_post_media_after_edit', { error });
+    }
+  }
+
+  if (prepared.removedStoragePaths.length > 0) {
+    try {
+      const removableStoragePaths = await excludePurchasedProofMediaPaths(
+        adminSupabase,
+        prepared.removedStoragePaths,
+        { bundleId },
+      );
+      if (removableStoragePaths.length === 0) {
+        return;
+      }
+      const removedMediaCleanup = await adminSupabase.storage
+        .from(SHOWCASE_MEDIA_BUCKET)
+        .remove(removableStoragePaths);
+      if (removedMediaCleanup.error) {
+        logBackendWarning('failed_to_remove_deleted_post_media', { error: removedMediaCleanup.error });
+      }
+    } catch (error) {
+      logBackendWarning('failed_to_remove_deleted_post_media', { error });
+    }
+  }
+}
+
+async function prepareEditedPostMedia(params: {
   adminSupabase: SupabaseClient;
   ownerUserId: string;
   postId: string;
   submittedMediaItems: SubmittedEditMediaItem[];
   createPostMediaPreview: typeof createPostMediaPreview;
-  replacePostMediaItems: typeof replacePostMediaItems;
-}): Promise<PostUpdateRouteResult | null> {
+}): Promise<{
+  prepared: PreparedEditedPostMedia | null;
+  error: PostUpdateRouteResult | null;
+}> {
   const existingMediaRows = await loadOwnedPostMedia(params.adminSupabase, params.postId);
   const persistedMediaItems: PostMediaPersistInput[] = [];
   const newStoragePaths: string[] = [];
@@ -668,47 +806,6 @@ async function replaceEditedPostMedia(params: {
       });
     }
 
-    await params.replacePostMediaItems({
-      supabase: params.adminSupabase,
-      postId: params.postId,
-      ownerUserId: params.ownerUserId,
-      mediaItems: persistedMediaItems,
-    });
-
-    if (temporaryStoragePaths.length > 0) {
-      const temporaryCleanup = await params.adminSupabase.storage
-        .from(UPLOADS_BUCKET)
-        .remove(temporaryStoragePaths);
-      if (temporaryCleanup.error) {
-        logBackendWarning('failed_to_remove_temporary_post_media_after_edit', { error: temporaryCleanup.error });
-      }
-
-      // Only what storage confirmed deleted is marked cleared; the rest stays
-      // consumed-but-uncleared so the reclaim sweep retries it instead of
-      // ignoring the surviving object forever.
-      const removal = getConfirmedRemovedPaths(temporaryStoragePaths, temporaryCleanup);
-      if (removal.confirmed.length > 0) {
-        await markMediaUploadIntentsConsumed(params.adminSupabase, {
-          storagePaths: removal.confirmed,
-          consumedBy: 'post_update',
-          storageCleared: true,
-        });
-      }
-      if (removal.unconfirmed.length > 0) {
-        if (!temporaryCleanup.error) {
-          logBackendWarning('partially_removed_temporary_post_media_after_edit', {
-            requested: temporaryStoragePaths.length,
-            removed: removal.confirmed.length,
-          });
-        }
-        await markMediaUploadIntentsConsumed(params.adminSupabase, {
-          storagePaths: removal.unconfirmed,
-          consumedBy: 'post_update',
-          storageCleared: false,
-        });
-      }
-    }
-
     const retainedStoragePaths = new Set(
       persistedMediaItems
         .flatMap((item) => [item.storagePath, item.previewStoragePath, item.renditionStoragePath])
@@ -722,14 +819,16 @@ async function replaceEditedPostMedia(params: {
       .filter((storagePath): storagePath is string =>
         Boolean(storagePath) && !retainedStoragePaths.has(storagePath as string),
       );
-    if (removedStoragePaths.length > 0) {
-      const removedMediaCleanup = await params.adminSupabase.storage
-        .from(SHOWCASE_MEDIA_BUCKET)
-        .remove(removedStoragePaths);
-      if (removedMediaCleanup.error) {
-        logBackendWarning('failed_to_remove_deleted_post_media', { error: removedMediaCleanup.error });
-      }
-    }
+
+    return {
+      prepared: {
+        mediaItems: persistedMediaItems,
+        newStoragePaths,
+        removedStoragePaths,
+        temporaryStoragePaths,
+      },
+      error: null,
+    };
   } catch (mediaError) {
     if (newStoragePaths.length > 0) {
       await params.adminSupabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove(newStoragePaths);
@@ -738,14 +837,40 @@ async function replaceEditedPostMedia(params: {
     // A rejected upload is the caller's problem to fix, not a server fault, so
     // it neither logs as an error nor collapses into the generic 500.
     if (mediaError instanceof PostMediaTooLargeError) {
-      return { ok: false, status: 400, body: { error: mediaError.message } };
+      return {
+        prepared: null,
+        error: { ok: false, status: 400, body: { error: mediaError.message } },
+      };
     }
 
     logBackendError('failed_to_update_post_media', { error: mediaError });
-    return { ok: false, status: 500, body: { error: 'Failed to update post media.' } };
+    return {
+      prepared: null,
+      error: { ok: false, status: 500, body: { error: 'Failed to update post media.' } },
+    };
+  }
+}
+
+function isSoldResourceBundleMutationError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
   }
 
-  return null;
+  const candidate = error as { message?: unknown; details?: unknown; hint?: unknown };
+  return [candidate.message, candidate.details, candidate.hint].some((value) => (
+    typeof value === 'string' && /RESOURCE_BUNDLE_LOCKED|already been purchased/i.test(value)
+  ));
+}
+
+function createSoldResourceBundleLockedResult(): PostUpdateRouteResult {
+  return {
+    ok: false,
+    status: 409,
+    body: {
+      error: 'People have already purchased this package, so its contents, price, and access mode are locked.',
+      code: 'RESOURCE_BUNDLE_LOCKED',
+    },
+  };
 }
 
 export async function updateOwnerPostForRoute({
@@ -846,6 +971,20 @@ export async function updateOwnerPostForRoute({
       }
     }
 
+    // What someone paid for cannot be rewritten, repriced, or relabelled -- and
+    // an `accessMode: 'none'` payload would retire the listing outright. Both
+    // composers already omit the bundle for a sold post, so only a stale client
+    // or a direct API call reaches this; omitting it keeps every other edit
+    // (visibility, caption, media) working.
+    if (
+      hasResourceBundlePayload
+      && existingBundle
+      && existingBundle.access_mode === 'paid'
+      && (existingBundle.sales_count ?? 0) > 0
+    ) {
+      return createSoldResourceBundleLockedResult();
+    }
+
     const { bundle: resourceBundle, error: resourceBundleError } = parseBundleInput(
       body.resourceBundle,
       ownerUserId,
@@ -867,7 +1006,11 @@ export async function updateOwnerPostForRoute({
       !hasResourceBundlePayload &&
       existingBundle &&
       existingBundle.access_mode !== 'none' &&
-      existingBundle.status === 'draft'
+      existingBundle.status === 'draft' &&
+      // A sold bundle's content is frozen by the database. Its status may still
+      // follow the post between private and public without resubmitting (and
+      // therefore attempting to rewrite) the package payload.
+      (existingBundle.sales_count ?? 0) === 0
     ) {
       return {
         ok: false,
@@ -902,14 +1045,23 @@ export async function updateOwnerPostForRoute({
     const nextDescription = Object.prototype.hasOwnProperty.call(body, 'description')
       ? normalizeText(body.description)
       : post.description;
+    const frozenSoldBundleForRepublish = nextVisibility === 'public'
+      && !hasResourceBundlePayload
+      && existingBundle
+      && (existingBundle.sales_count ?? 0) > 0
+      ? buildStoredBundleForQualityCheck(existingBundle)
+      : null;
+    const bundleForPublicValidation = hasResourceBundlePayload
+      ? resourceBundle
+      : frozenSoldBundleForRepublish;
     const safetyViolation = nextVisibility !== 'private'
       ? getPublicUgcSafetyViolation({
           title: nextTitle,
           description: nextDescription,
           body: nextBody,
           prompt: post.prompt,
-          resourcePrompt: resourceBundle?.resources?.promptText ?? null,
-          resourceNotes: resourceBundle?.resources?.notesMarkdown ?? null,
+          resourcePrompt: bundleForPublicValidation?.resources?.promptText ?? null,
+          resourceNotes: bundleForPublicValidation?.resources?.notesMarkdown ?? null,
         })
       : null;
     if (safetyViolation) {
@@ -1013,7 +1165,7 @@ export async function updateOwnerPostForRoute({
             showcaseAssetPath: post.showcase_asset_path,
             outputUrl: post.output_url,
           },
-          bundle: hasResourceBundlePayload ? resourceBundle : null,
+          bundle: bundleForPublicValidation,
         })
       : null;
 
@@ -1025,28 +1177,42 @@ export async function updateOwnerPostForRoute({
       };
     }
 
-    const updatedPost = await resolvedDependencies.updatePostWithResourceBundleAtomically({
-      supabase: adminSupabase,
-      postId,
-      ownerUserId,
-      patch: updatePayload,
-      hasBundlePayload: hasResourceBundlePayload,
-      bundle: resourceBundle,
-    });
-    didMutate = true;
-
+    let preparedMedia: PreparedEditedPostMedia | null = null;
     if (submittedMediaItems) {
-      const mediaError = await replaceEditedPostMedia({
+      const preparedResult = await prepareEditedPostMedia({
         adminSupabase,
         ownerUserId,
         postId,
         submittedMediaItems,
         createPostMediaPreview: resolvedDependencies.createPostMediaPreview,
-        replacePostMediaItems: resolvedDependencies.replacePostMediaItems,
       });
-      if (mediaError) {
-        return mediaError;
+      if (preparedResult.error) {
+        return preparedResult.error;
       }
+      preparedMedia = preparedResult.prepared;
+    }
+
+    let updatedPost: Awaited<ReturnType<typeof updatePostWithResourceBundleAtomically>>;
+    try {
+      updatedPost = await resolvedDependencies.updatePostWithResourceBundleAtomically({
+        supabase: adminSupabase,
+        postId,
+        ownerUserId,
+        patch: updatePayload,
+        hasBundlePayload: hasResourceBundlePayload,
+        bundle: resourceBundle,
+        ...(preparedMedia ? { mediaItems: preparedMedia.mediaItems } : {}),
+      });
+      didMutate = true;
+    } catch (error) {
+      if (preparedMedia) {
+        await rollbackPreparedEditedPostMedia(adminSupabase, preparedMedia);
+      }
+      throw error;
+    }
+
+    if (preparedMedia) {
+      await finalizePreparedEditedPostMedia(adminSupabase, preparedMedia, existingBundle?.id ?? null);
     }
 
     if (hasSourceToolsPayload) {
@@ -1093,6 +1259,9 @@ export async function updateOwnerPostForRoute({
       },
     };
   } catch (error) {
+    if (isSoldResourceBundleMutationError(error)) {
+      return createSoldResourceBundleLockedResult();
+    }
     logBackendError('failed_to_update_owner_post', { error: error });
     if (isMissingPostResourceBundlesSchemaError(error)) {
       return {

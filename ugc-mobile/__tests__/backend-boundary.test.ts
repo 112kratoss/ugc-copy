@@ -52,7 +52,11 @@ describe('mobile backend boundary', () => {
     expect(mediaSource).toContain('createMediaUpload');
     expect(mediaSource).toContain('createMediaReadUrl');
     expect(mediaSource).toContain('createProfileMediaUpload');
-    expect(mediaSource.match(/await uploadUriToSignedUrl/g)).toHaveLength(3);
+    // Resource attachments go through the same server-signed path as every
+    // other mobile upload rather than posting bytes through the API.
+    expect(mediaSource).toContain('signPostResourceFileUpload');
+    expect(mediaSource).toContain('finalizePostResourceFileUpload');
+    expect(mediaSource.match(/await uploadUriToSignedUrl/g)).toHaveLength(4);
     expect(uploadSource).toContain("httpMethod: 'PUT'");
     expect(uploadSource).not.toContain('.arrayBuffer()');
     expect(mediaSource).not.toMatch(/\.upload\s*\(/);

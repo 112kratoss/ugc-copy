@@ -8,15 +8,19 @@ import {
   Download,
   ExternalLink,
   Loader2,
+  Play,
   ShoppingCart,
   Sparkles,
 } from 'lucide-react';
 
 import { useAuth } from '@/app/components/AuthProvider';
 import {
+  buildPostResourceBundleLockedPreview,
   describePostResourceKinds,
   formatPostResourceBundleCountSummary,
   formatUnlockCountLabel,
+  formatUsdCents,
+  getPostResourceKinds,
   getPostResourceItemTypeLabel,
   getPostResourceKindLabel,
   type PostResourceAttachment,
@@ -27,6 +31,7 @@ import {
   type PostResourceKind,
   type PostResourceSection,
 } from '@/lib/post-resource-bundles';
+import type { ShowcaseMediaItem } from '@/lib/showcase';
 import { getCurrentInternalPath } from '@/lib/share';
 import { trackProductEvent } from '@/lib/product-analytics';
 import {
@@ -46,6 +51,11 @@ declare global {
 
 interface PostResourceBundlePanelProps {
   postId: string;
+  /**
+   * The post's proof media, used to let a buyer filter a package down to one
+   * output. Scoped resources otherwise read as a bare count.
+   */
+  mediaItems?: ShowcaseMediaItem[];
   /** Buyer-library screens resolve files by purchase UUID, including after detachment. */
   fileUrlEndpoint?: string;
   /** Detached unlocks have no live version, so their pinned revision is the default. */
@@ -64,7 +74,7 @@ interface PostResourceBundlePanelProps {
   viewerIsOwner: boolean;
   resourceKinds: PostResourceKind[];
   lockedPreview: PostResourceBundleLockedPreview | null;
-  salesCount: number;
+  salesCount: number | null;
   initialResources: {
     promptText: string | null;
     notesMarkdown: string | null;
@@ -84,6 +94,12 @@ interface PostResourceBundlePanelProps {
     revisionNumber: number;
     purchasedAt: string;
     title: string;
+    summary: string;
+    previewText: string;
+    accessMode: 'free' | 'paid';
+    priceUsdCents: number;
+    /** Purchase-time proof outputs preserve scoped navigation after edits/deletion. */
+    mediaItems?: ShowcaseMediaItem[];
     resources: {
       promptText: string | null;
       notesMarkdown: string | null;
@@ -142,15 +158,19 @@ function groupResourceItemsBySection(items: PostResourceItem[], sections: PostRe
         id: 'global',
         title: 'Full post resources',
         description: null as string | null,
+        scope: null as PostResourceItemScope | null,
         items: globalItems,
       }]
     : [];
 
+  // A section carries its own scope, and its items may leave theirs at the
+  // default -- so the section's is the one that narrows the whole card.
   const sectionGroups = sections
     .map((section) => ({
       id: section.id,
       title: section.title,
       description: section.description,
+      scope: section.scope ?? null,
       items: items.filter((item) => item.sectionId === section.id),
     }))
     .filter((group) => group.items.length > 0);
@@ -161,6 +181,7 @@ function groupResourceItemsBySection(items: PostResourceItem[], sections: PostRe
         id: '__unassigned_resources__',
         title: 'Other resources',
         description: null as string | null,
+        scope: null as PostResourceItemScope | null,
         items: unassignedItems,
       }]
     : [];
@@ -189,8 +210,28 @@ function formatResourceScopeLabel(scope: PostResourceItemScope | null | undefine
   return `Applies to ${selectedOutputCount} selected ${selectedOutputCount === 1 ? 'output' : 'outputs'}`;
 }
 
+function scopeMatchesMediaKey(
+  scope: PostResourceItemScope | null | undefined,
+  selectedMediaKey: string | null
+): boolean {
+  if (!selectedMediaKey || !scope || scope.kind === 'all') {
+    return true;
+  }
+  // A media scope naming no output narrows nothing, the same way the mobile
+  // panel normalizes it -- otherwise it would hide itself under every filter.
+  if (scope.mediaKeys.length === 0) {
+    return true;
+  }
+  return scope.mediaKeys.includes(selectedMediaKey);
+}
+
+function isMediaScope(scope: PostResourceItemScope | null | undefined): boolean {
+  return scope?.kind === 'media' && scope.mediaKeys.length > 0;
+}
+
 export default function PostResourceBundlePanel({
   postId,
+  mediaItems = [],
   fileUrlEndpoint,
   defaultToPurchasedRevision = false,
   title,
@@ -215,35 +256,58 @@ export default function PostResourceBundlePanel({
   const [hasAccess, setHasAccess] = useState(viewerCanAccess || viewerIsOwner);
   const [resources, setResources] = useState(initialResources);
   const [showPurchasedRevision, setShowPurchasedRevision] = useState(defaultToPurchasedRevision);
+  const [selectedScopeMediaKey, setSelectedScopeMediaKey] = useState<string | null>(null);
   // The buyer sees the creator's latest by default -- honest improvements reach
   // them for free -- but never loses the version they paid for.
-  const activeResources = showPurchasedRevision && purchasedRevision
+  const showingPurchasedRevision = Boolean(showPurchasedRevision && purchasedRevision);
+  const activeResources = showingPurchasedRevision && purchasedRevision
     ? purchasedRevision.resources
     : resources;
+  const activeTitle = showingPurchasedRevision && purchasedRevision ? purchasedRevision.title : title;
+  const activeSummary = showingPurchasedRevision && purchasedRevision ? purchasedRevision.summary : summary;
+  const activePreviewText = showingPurchasedRevision && purchasedRevision ? purchasedRevision.previewText : previewText;
+  const activeIsFree = showingPurchasedRevision && purchasedRevision
+    ? purchasedRevision.accessMode === 'free'
+    : isFree;
+  const activePriceUsdCents = showingPurchasedRevision && purchasedRevision
+    ? purchasedRevision.priceUsdCents
+    : priceUsdCents;
+  const activePriceLabel = showingPurchasedRevision ? formatUsdCents(activePriceUsdCents) : priceLabel;
+  const activeResourceKinds = useMemo(
+    () => showingPurchasedRevision && activeResources
+      ? getPostResourceKinds(activeResources)
+      : resourceKinds,
+    [activeResources, resourceKinds, showingPurchasedRevision]
+  );
+  const activeMediaItems = showingPurchasedRevision && purchasedRevision?.mediaItems
+    ? purchasedRevision.mediaItems
+    : mediaItems;
   const [workingAction, setWorkingAction] = useState<'free' | 'razorpay' | 'credits' | 'file' | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [resourceFileUrls, setResourceFileUrls] = useState<Record<string, string>>({});
 
   const summaryLine = useMemo(
-    () => summary || previewText || describePostResourceKinds(resourceKinds),
-    [previewText, resourceKinds, summary]
+    () => activeSummary || activePreviewText || describePostResourceKinds(activeResourceKinds),
+    [activePreviewText, activeResourceKinds, activeSummary]
   );
   const preview = useMemo<PostResourceBundleLockedPreview>(() => (
-    lockedPreview ?? {
-      resourceKinds,
+    showingPurchasedRevision && activeResources
+      ? buildPostResourceBundleLockedPreview(activeResources)
+      : lockedPreview ?? {
+      resourceKinds: activeResourceKinds,
       attachmentPreviews: [],
       itemCounts: {},
       itemPreviews: [],
       sectionCount: 0,
       sectionPreviews: [],
-      hasPrompt: resourceKinds.includes('prompt'),
-      hasNotes: resourceKinds.includes('notes'),
-      hasWorkflow: resourceKinds.includes('workflow'),
-      hasRemix: resourceKinds.includes('remix'),
+      hasPrompt: activeResourceKinds.includes('prompt'),
+      hasNotes: activeResourceKinds.includes('notes'),
+      hasWorkflow: activeResourceKinds.includes('workflow'),
+      hasRemix: activeResourceKinds.includes('remix'),
       updatedAt: null,
     }
-  ), [lockedPreview, resourceKinds]);
+  ), [activeResourceKinds, activeResources, lockedPreview, showingPurchasedRevision]);
   const isPromptOnlyUnlock =
     preview.resourceKinds.length === 1 &&
     preview.resourceKinds[0] === 'prompt' &&
@@ -265,6 +329,27 @@ export default function PostResourceBundlePanel({
     () => groupResourceItemsBySection(activeResources?.items ?? [], activeResources?.sections ?? []),
     [activeResources?.items, activeResources?.sections]
   );
+  const visibleSectionResources = useMemo(
+    () => groupedSectionResources
+      // The section's own scope gates the whole card first; an item only
+      // narrows further, and falls back to its section when it has no scope.
+      .filter((group) => scopeMatchesMediaKey(group.scope, selectedScopeMediaKey))
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) => scopeMatchesMediaKey(item.scope ?? group.scope, selectedScopeMediaKey)),
+      }))
+      .filter((group) => group.items.length > 0),
+    [groupedSectionResources, selectedScopeMediaKey]
+  );
+  const visibleResourceItems = useMemo(
+    () => groupedResourceItems
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) => scopeMatchesMediaKey(item.scope, selectedScopeMediaKey)),
+      }))
+      .filter((group) => group.items.length > 0),
+    [groupedResourceItems, selectedScopeMediaKey]
+  );
   const hasSectionedResourceItems = (activeResources?.sections?.length ?? 0) > 0 && groupedSectionResources.length > 0;
   const hasStructuredResourceItems = groupedResourceItems.length > 0;
   const isRecipeVisible = isPublic || hasAccess || viewerIsOwner;
@@ -272,7 +357,67 @@ export default function PostResourceBundlePanel({
   const formattedCreditCost = creditCost.toLocaleString();
   const offersCashCheckout = !isFree && creditCost >= 100;
   const accessPriceLabel = offersCashCheckout ? priceLabel : `${formattedCreditCost} credits`;
-  const publicCardPreviews = (preview.cardPreviews ?? []).filter((card) => card.publicTitle.trim().length > 0);
+  const allPublicCardPreviews = (preview.cardPreviews ?? []).filter((card) => card.publicTitle.trim().length > 0);
+  const selectableMedia = useMemo(
+    () => activeMediaItems.filter((item) => Boolean(item.mediaKey)),
+    [activeMediaItems]
+  );
+  const hasScopedResources = activeResources
+    ? (activeResources.items ?? []).some((item) => isMediaScope(item.scope))
+      || (activeResources.sections ?? []).some((section) => isMediaScope(section.scope))
+    : allPublicCardPreviews.some((card) => isMediaScope(card.scope));
+  const showMediaScopeFilter = hasScopedResources && selectableMedia.length > 1;
+  const publicCardPreviews = selectedScopeMediaKey
+    ? allPublicCardPreviews.filter((card) => scopeMatchesMediaKey(card.scope, selectedScopeMediaKey))
+    : allPublicCardPreviews;
+  const mediaScopeFilter = showMediaScopeFilter ? (
+    <div>
+      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Resources for</div>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => setSelectedScopeMediaKey(null)}
+          aria-pressed={selectedScopeMediaKey === null}
+          className={`rounded-full border px-3 py-2 text-xs font-semibold transition ${
+            selectedScopeMediaKey === null
+              ? 'border-emerald-300/35 bg-emerald-400/15 text-emerald-50'
+              : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:text-white'
+          }`}
+        >
+          All resources
+        </button>
+        {selectableMedia.map((item, index) => {
+          const mediaKey = item.mediaKey!;
+          const selected = selectedScopeMediaKey === mediaKey;
+          return (
+            <button
+              key={mediaKey}
+              type="button"
+              onClick={() => setSelectedScopeMediaKey(selected ? null : mediaKey)}
+              aria-pressed={selected}
+              aria-label={`Show resources for output ${index + 1}`}
+              className={`flex items-center gap-2 rounded-full border py-1.5 pl-1.5 pr-3 text-xs font-semibold transition ${
+                selected
+                  ? 'border-emerald-300/35 bg-emerald-400/15 text-emerald-50'
+                  : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:text-white'
+              }`}
+            >
+              <span className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-full bg-black">
+                {item.previewUrl && item.mediaKind === 'image' ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={item.previewUrl} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  <Play className="h-3 w-3 text-zinc-400" />
+                )}
+              </span>
+              {index + 1}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  ) : null;
+
   const accessLabel = useMemo(() => {
     if (isPublic) {
       return 'This public recipe is available immediately.';
@@ -293,6 +438,13 @@ export default function PostResourceBundlePanel({
   const formattedCreditBalance = typeof credits === 'number' ? credits.toLocaleString() : null;
   const hasKnownInsufficientCredits = Boolean(session?.access_token && typeof credits === 'number' && credits < creditCost);
   const isAnyActionWorking = workingAction !== null;
+
+  useEffect(() => {
+    // Scope keys may differ between the live and purchased versions. Returning
+    // to the unfiltered view prevents a valid resource set from looking empty
+    // merely because the previous version's selected key no longer exists.
+    setSelectedScopeMediaKey(null);
+  }, [showPurchasedRevision]);
 
   const copyText = async (value: string, successMessage: string) => {
     try {
@@ -399,7 +551,10 @@ export default function PostResourceBundlePanel({
       const orderData = await orderResponse.json();
 
       if (!orderResponse.ok) {
-        if (orderData.code === 'CHECKOUT_PAYLOAD_MISMATCH') {
+        if (
+          orderData.code === 'CHECKOUT_PAYLOAD_MISMATCH'
+          || orderData.code === 'RESOURCE_QUOTE_CHANGED'
+        ) {
           clearRazorpayCheckoutIntentKey(checkoutIntentScope);
         }
         throw new Error(orderData.error || 'Failed to start checkout.');
@@ -797,14 +952,16 @@ export default function PostResourceBundlePanel({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-zinc-500">
         <span className="font-semibold uppercase tracking-[0.2em] text-emerald-300/80">Recipe</span>
         <span className="rounded-full border border-emerald-300/25 bg-emerald-300 px-2.5 py-0.5 font-bold text-slate-950">
-          {isPublic ? 'Public recipe' : isRecipeVisible ? (viewerIsOwner ? 'Owner access' : isFree ? 'Free recipe' : 'Unlocked') : isFree ? 'Free recipe' : accessPriceLabel}
+          {isPublic ? 'Public recipe' : isRecipeVisible ? (viewerIsOwner ? 'Owner access' : activeIsFree ? 'Free recipe' : 'Unlocked') : isFree ? 'Free recipe' : accessPriceLabel}
         </span>
-        <span>{formatUnlockCountLabel(isFree ? 'free' : 'paid', salesCount)}</span>
+        {typeof salesCount === 'number' ? (
+          <span>{formatUnlockCountLabel(activeIsFree ? 'free' : 'paid', salesCount)}</span>
+        ) : null}
         {formattedUpdatedAt ? <span>Updated {formattedUpdatedAt}</span> : null}
       </div>
 
       {!suppressTitle ? (
-        <h2 className="mt-3 text-lg font-semibold tracking-tight text-white">{title}</h2>
+        <h2 className="mt-3 text-lg font-semibold tracking-tight text-white">{activeTitle}</h2>
       ) : null}
 
       {!isRecipeVisible ? (
@@ -812,8 +969,10 @@ export default function PostResourceBundlePanel({
           <p className="max-w-2xl text-sm leading-7 text-zinc-300">{summaryLine}</p>
           <p className="text-sm leading-7 text-zinc-300">{accessLabel}</p>
 
+          {mediaScopeFilter}
+
           <div className="flex flex-wrap items-center gap-2">
-            {resourceKinds.map((kind) => (
+            {activeResourceKinds.map((kind) => (
               <span
                 key={kind}
                 className="inline-flex items-center rounded-full border border-emerald-300/20 bg-emerald-500/10 px-3 py-1 text-sm font-medium text-emerald-50"
@@ -828,6 +987,10 @@ export default function PostResourceBundlePanel({
               <span className="text-xs text-zinc-400">{priceNote}</span>
             ) : null}
           </div>
+
+          {allPublicCardPreviews.length > 0 && publicCardPreviews.length === 0 ? (
+            <p className="text-sm text-zinc-400">No resources apply to this output.</p>
+          ) : null}
 
           {publicCardPreviews.length > 0 ? (
             <div className="space-y-2">
@@ -988,13 +1151,31 @@ export default function PostResourceBundlePanel({
                   The version you unlocked
                 </button>
               </div>
+              <div className="mt-3 border-t border-amber-200/10 pt-3 text-xs leading-5 text-amber-50/75">
+                <p>{summaryLine}</p>
+                <p className="mt-1 font-medium text-amber-100">
+                  {showingPurchasedRevision ? 'Purchased version' : 'Latest version'}
+                  {' · '}
+                  {activeIsFree ? 'Free' : activePriceLabel}
+                </p>
+              </div>
             </div>
+          ) : null}
+
+          {mediaScopeFilter}
+
+          {hasStructuredResourceItems && (
+            hasSectionedResourceItems
+              ? visibleSectionResources.length === 0
+              : visibleResourceItems.length === 0
+          ) ? (
+            <p className="text-sm text-zinc-400">No resources apply to this output.</p>
           ) : null}
 
           {hasStructuredResourceItems ? (
             hasSectionedResourceItems ? (
               <>
-                {groupedSectionResources.map((sectionGroup) => (
+                {visibleSectionResources.map((sectionGroup) => (
                   <div key={sectionGroup.id}>
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
                       <h3 className="text-base font-semibold text-white">{sectionGroup.title}</h3>
@@ -1023,7 +1204,7 @@ export default function PostResourceBundlePanel({
               </>
             ) : (
               <>
-                {groupedResourceItems.map((group) => (
+                {visibleResourceItems.map((group) => (
                   <div key={group.type}>
                     <div className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
                       {getResourceItemGroupTitle(group.type, group.items.length)}
@@ -1091,11 +1272,11 @@ export default function PostResourceBundlePanel({
             </div>
           ) : null}
 
-          {!hasStructuredResourceItems && resources?.attachments.length ? (
+          {!hasStructuredResourceItems && activeResources?.attachments.length ? (
             <div className="border-t border-white/8 pt-4">
               <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Files and links</div>
               <div className="mt-3 flex flex-wrap gap-3">
-                {resources.attachments.map((attachment) => (
+                {activeResources.attachments.map((attachment) => (
                   attachment.kind === 'file' && attachment.storagePath ? (
                     <button
                       key={`${attachment.label}:${attachment.storagePath}`}
@@ -1123,7 +1304,7 @@ export default function PostResourceBundlePanel({
             </div>
           ) : null}
 
-          {!hasStructuredResourceItems && resources?.allowRemix ? (
+          {!hasStructuredResourceItems && activeResources?.allowRemix ? (
             <p className="border-t border-white/8 pt-4 text-sm leading-7 text-zinc-300">
               Remix access unlocked — use Remix on this post.
             </p>

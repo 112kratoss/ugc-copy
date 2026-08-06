@@ -78,6 +78,22 @@ type GenerationRow = {
   template_run_step_id?: string | null;
 };
 
+type StoredGenerationBundleRow = {
+  access_mode: 'none' | 'free' | 'paid';
+  sales_count: number | null;
+  summary: string | null;
+  preview_text: string | null;
+  prompt_text: string | null;
+  notes_markdown: string | null;
+  workflow_share_url: string | null;
+  workflow_snapshot: unknown;
+  attachments: unknown;
+  allow_remix: boolean | null;
+  price_usd_cents: number | null;
+  resource_sections: unknown;
+  resource_items: unknown;
+};
+
 export type ShowcasePublishRequestBody = {
   generationId: string;
   isPublic?: boolean;
@@ -108,6 +124,7 @@ export type ShowcasePublishServiceDependencies = {
   isMissingPostsSchemaError: typeof isMissingPostsSchemaError;
   isMissingPostResourceBundlesSchemaError: typeof isMissingPostResourceBundlesSchemaError;
   listSourceToolsCatalog: typeof listSourceToolsCatalog;
+  loadFrozenSoldGenerationBundleForQuality: typeof loadFrozenSoldGenerationBundleForQuality;
 };
 
 export type ShowcasePublishServiceResult =
@@ -127,10 +144,11 @@ export type ShowcasePublishServiceResult =
     }
   | {
       ok: false;
-      status: 400 | 403 | 404 | 500;
+      status: 400 | 403 | 404 | 409 | 500;
       body: {
         error: string;
         field?: string;
+        code?: string;
         actionHref?: string;
         actionLabel?: string;
       };
@@ -159,6 +177,8 @@ function resolveDependencies(
     isMissingPostResourceBundlesSchemaError:
       dependencies?.isMissingPostResourceBundlesSchemaError ?? isMissingPostResourceBundlesSchemaError,
     listSourceToolsCatalog: dependencies?.listSourceToolsCatalog ?? listSourceToolsCatalog,
+    loadFrozenSoldGenerationBundleForQuality:
+      dependencies?.loadFrozenSoldGenerationBundleForQuality ?? loadFrozenSoldGenerationBundleForQuality,
   };
 }
 
@@ -194,6 +214,17 @@ function normalizeRequestedVisibility(value: unknown, legacyIsPublic?: boolean):
   }
 
   return legacyIsPublic ? 'public' : 'private';
+}
+
+function isSoldResourceBundleMutationError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const candidate = error as { message?: unknown; details?: unknown; hint?: unknown };
+  return [candidate.message, candidate.details, candidate.hint].some((value) => (
+    typeof value === 'string' && /RESOURCE_BUNDLE_LOCKED|already been purchased/i.test(value)
+  ));
 }
 
 function inferShowcaseContentType(sourceName: string, category: ShowcaseCategory) {
@@ -330,6 +361,63 @@ async function loadOwnedGeneration({
     generation: generationQuery.data as GenerationRow | null,
     error: generationQuery.error,
     hasShowcaseAssetColumn,
+  };
+}
+
+async function loadFrozenSoldGenerationBundleForQuality({
+  generationId,
+  ownerUserId,
+  supabase,
+}: {
+  generationId: string;
+  ownerUserId: string;
+  supabase: SupabaseClient;
+}): Promise<PostResourceBundleInput | null> {
+  const { data: post, error: postError } = await supabase
+    .from('posts')
+    .select('id')
+    .eq('generation_id', generationId)
+    .eq('user_id', ownerUserId)
+    .maybeSingle();
+  if (postError) {
+    throw postError;
+  }
+  if (!post || typeof post.id !== 'string') {
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from('post_resource_bundles')
+    .select(
+      'access_mode, sales_count, summary, preview_text, prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix, price_usd_cents, resource_sections, resource_items',
+    )
+    .eq('post_id', post.id)
+    .eq('owner_user_id', ownerUserId)
+    .maybeSingle();
+  if (error) {
+    throw error;
+  }
+
+  const bundle = data as StoredGenerationBundleRow | null;
+  if (!bundle || (bundle.sales_count ?? 0) <= 0 || bundle.access_mode === 'none') {
+    return null;
+  }
+
+  return {
+    accessMode: bundle.access_mode,
+    summary: bundle.summary,
+    previewText: bundle.preview_text,
+    priceUsdCents: bundle.price_usd_cents,
+    resources: {
+      promptText: bundle.prompt_text,
+      notesMarkdown: bundle.notes_markdown,
+      workflowShareUrl: bundle.workflow_share_url,
+      workflowSnapshot: bundle.workflow_snapshot ?? null,
+      attachments: Array.isArray(bundle.attachments) ? bundle.attachments : [],
+      allowRemix: bundle.allow_remix === true,
+      sections: Array.isArray(bundle.resource_sections) ? bundle.resource_sections : [],
+      items: Array.isArray(bundle.resource_items) ? bundle.resource_items : [],
+    } as NonNullable<PostResourceBundleInput['resources']>,
   };
 }
 
@@ -498,7 +586,27 @@ export async function publishGenerationToShowcaseForRoute({
   if (resourceBundleValidationError) {
     return { ok: false, status: 400, body: { error: resourceBundleValidationError } };
   }
-  const shouldExposePromptPublic = requestBody.exposePromptPublic === true && !effectiveHasResourceBundlePayload;
+  let frozenSoldBundleForRepublish: PostResourceBundleInput | null = null;
+  if (effectiveVisibility === 'public' && !effectiveHasResourceBundlePayload && !isCanonicalTemplateResult) {
+    try {
+      frozenSoldBundleForRepublish = await resolvedDependencies.loadFrozenSoldGenerationBundleForQuality({
+        generationId,
+        ownerUserId: userId,
+        supabase: adminSupabase,
+      });
+    } catch (error) {
+      logBackendError('failed_to_load_frozen_generation_bundle_for_republish', { error });
+      return {
+        ok: false,
+        status: 500,
+        body: { error: 'Could not verify the existing package before publishing. Try again.' },
+      };
+    }
+  }
+  const bundleForPublicValidation = effectiveHasResourceBundlePayload
+    ? effectiveResourceBundle
+    : frozenSoldBundleForRepublish;
+  const shouldExposePromptPublic = requestBody.exposePromptPublic === true && !bundleForPublicValidation;
 
   if (shouldExposePost && (generation.category === 'audio' || isAudioModel(generation.model))) {
     return { ok: false, status: 400, body: { error: 'Audio generations are not publishable to the showcase yet' } };
@@ -511,8 +619,8 @@ export async function publishGenerationToShowcaseForRoute({
   }
 
   const normalizedBody = normalizeTextValue(body);
-  const hasRecipe = Boolean(effectiveResourceBundle && effectiveResourceBundle.accessMode !== 'none');
-  const isPaidRecipe = effectiveResourceBundle?.accessMode === 'paid';
+  const hasRecipe = Boolean(bundleForPublicValidation && bundleForPublicValidation.accessMode !== 'none');
+  const isPaidRecipe = bundleForPublicValidation?.accessMode === 'paid';
   const requestedDescription = normalizeTextValue(description);
   const descriptionCandidate = requestedDescription
     ?? (isPaidRecipe ? null : generation.description?.trim() ?? null);
@@ -578,7 +686,7 @@ export async function publishGenerationToShowcaseForRoute({
           outputUrl: generation.output_url,
           hasMedia: Boolean(generation.output_url),
         },
-        bundle: effectiveHasResourceBundlePayload ? effectiveResourceBundle : null,
+        bundle: bundleForPublicValidation,
       })
     : null;
 
@@ -722,6 +830,21 @@ export async function publishGenerationToShowcaseForRoute({
       if (cleanupResult.error) {
         logBackendError('failed_to_delete_private_generation_media_after_publish_failure', { error: cleanupResult.error });
       }
+    }
+
+    // The database performs this check while holding the bundle row lock, so a
+    // checkout racing this request cannot be bypassed by the generation route.
+    // In particular, an old composer that submits `{ accessMode: 'none' }`
+    // receives a conflict instead of silently delisting a sold package.
+    if (isSoldResourceBundleMutationError(postError)) {
+      return {
+        ok: false,
+        status: 409,
+        body: {
+          error: 'People have already purchased this package, so its contents, price, and access mode are locked.',
+          code: 'RESOURCE_BUNDLE_LOCKED',
+        },
+      };
     }
 
     if (resolvedDependencies.isMissingPostsSchemaError(postError)) {

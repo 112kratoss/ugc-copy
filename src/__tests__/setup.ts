@@ -7,3 +7,9 @@ vi.mock('next/cache', () => ({
   revalidateTag: vi.fn(),
   unstable_cache: (callback: (...args: unknown[]) => unknown) => callback,
 }));
+
+// jsdom does not implement scrollIntoView, and the composer scrolls section
+// anchors inside requestAnimationFrame callbacks that can fire after a test
+// completes -- an unstubbed call there fails the whole suite as an unhandled
+// error even when every test passes.
+Element.prototype.scrollIntoView ??= () => {};

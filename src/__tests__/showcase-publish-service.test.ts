@@ -87,6 +87,14 @@ function createAdminClientMock(generation: Record<string, unknown> | null = null
   return {
     client: {
       from(table: string) {
+        if (table === 'posts' || table === 'post_resource_bundles') {
+          const query = {
+            eq: vi.fn(() => query),
+            maybeSingle: vi.fn(async () => ({ data: null, error: null })),
+          };
+          return { select: vi.fn(() => query) };
+        }
+
         if (table !== 'generations') {
           throw new Error(`Unexpected admin table: ${table}`);
         }
@@ -490,6 +498,116 @@ describe('publishGenerationToShowcaseForRoute', () => {
 
     expect(result).toMatchObject({ ok: true });
     expect(publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps a sold-package mutation rejected inside the generation transaction to a conflict', async () => {
+    const generation = {
+      id: 'gen-sold',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: 'Purchased generation post',
+      description: null,
+      prompt: 'Original prompt',
+    };
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn(async () => {
+      throw {
+        message: 'RESOURCE_BUNDLE_LOCKED: this package has already been purchased',
+        hint: 'RESOURCE_BUNDLE_LOCKED',
+      };
+    });
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: createAdminClientMock(generation).client,
+      body: {
+        generationId: 'gen-sold',
+        visibility: 'private',
+        // A stale generation composer used to delist the package with this.
+        resourceBundle: { accessMode: 'none' },
+      },
+      userId: 'user-1',
+      dependencies: {
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+          outputUrl: mediaGeneration.outputUrl,
+          createdLocation: null,
+        })),
+        listSourceToolsCatalog: vi.fn(async () => [
+          {
+            slug: 'magicbooklet',
+            label: 'magicbooklet',
+            models: [],
+            supportedMediaKinds: ['image' as const, 'video' as const],
+          },
+        ]),
+        publishGenerationPostWithResourceBundleAtomically,
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      body: {
+        error: 'People have already purchased this package, so its contents, price, and access mode are locked.',
+        code: 'RESOURCE_BUNDLE_LOCKED',
+      },
+    });
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  it('revalidates a frozen sold generation package before status-only republish', async () => {
+    const generation = {
+      id: 'gen-sold',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: 'Purchased generation post',
+      description: null,
+      prompt: 'Original prompt',
+    };
+    const frozenBundle = {
+      accessMode: 'paid' as const,
+      summary: 'Reusable generation package.',
+      previewText: 'Includes the exact prompt and workflow.',
+      priceUsdCents: 500,
+      resources: {
+        promptText: 'Build the original proof sequence.',
+        attachments: [],
+        allowRemix: false,
+      },
+    };
+    const marketplaceQuality = vi.fn(async () => (
+      'Complete your creator profile name or username before publishing a marketplace unlock.'
+    ));
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn();
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: createAdminClientMock(generation).client,
+      body: {
+        generationId: 'gen-sold',
+        visibility: 'public',
+        exposePromptPublic: true,
+      },
+      userId: 'user-1',
+      dependencies: {
+        loadFrozenSoldGenerationBundleForQuality: vi.fn(async () => frozenBundle),
+        getMarketplaceQualityErrorForPostBundle: marketplaceQuality,
+        publishGenerationPostWithResourceBundleAtomically,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 400 });
+    expect(marketplaceQuality).toHaveBeenCalledWith(expect.objectContaining({
+      bundle: frozenBundle,
+    }));
+    expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
   });
 
   it('returns an actionable profile repair response for public publishing', async () => {

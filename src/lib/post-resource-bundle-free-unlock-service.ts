@@ -24,6 +24,12 @@ type BundleForFreeUnlock = {
   price_usd_cents: number;
 };
 
+type FreeUnlockResult = {
+  status: string;
+  bundle_id?: string;
+  owner_user_id?: string;
+};
+
 type NotifyPostResourceUnlockCompleted = typeof defaultNotifyPostResourceUnlockCompleted;
 type GetBundleForOrderByPostId = (postId: string) => Promise<BundleForFreeUnlock | null>;
 
@@ -52,6 +58,13 @@ function createRateLimitResult(error: BackendRateLimitError): PostResourceBundle
       resetAt: error.state.resetAt,
     },
   };
+}
+
+function rpcObject<T extends { status: string }>(value: unknown): T | null {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
+  const status = (candidate as { status?: unknown }).status;
+  return typeof status === 'string' ? candidate as T : null;
 }
 
 export async function unlockFreePostResourceBundleForRoute({
@@ -98,63 +111,53 @@ export async function unlockFreePostResourceBundleForRoute({
     return { ok: false, status: 400, body: { error: 'This bundle requires payment.' } };
   }
 
-  const { data: existingPurchase, error: existingPurchaseError } = await adminSupabase
-    .from('post_resource_bundle_purchases')
-    .select('bundle_id')
-    .eq('bundle_id', bundle.id)
-    .eq('buyer_user_id', buyerUserId)
-    .maybeSingle();
+  const freeOrderId = `free_bundle_${createId()}`;
+  let unlockResult: FreeUnlockResult;
+  try {
+    const { data, error } = await adminSupabase.rpc('unlock_free_post_resource_bundle', {
+      p_buyer_user_id: buyerUserId,
+      p_post_id: postId,
+      p_order_reference: freeOrderId,
+      p_payment_reference: `free_unlock_${createId()}`,
+    });
+    if (error) throw error;
 
-  if (existingPurchaseError) {
-    logBackendError('failed_to_check_post_resource_bundle_purchase', { error: existingPurchaseError });
-    return { ok: false, status: 500, body: { error: 'Failed to check purchase history.' } };
+    const result = rpcObject<FreeUnlockResult>(data);
+    if (!result) throw new Error('Invalid free post resource unlock response.');
+    unlockResult = result;
+  } catch (error) {
+    logBackendError('failed_to_unlock_free_post_resource_bundle', { error });
+    return { ok: false, status: 500, body: { error: 'Failed to get the free recipe.' } };
   }
 
-  if (existingPurchase) {
+  if (unlockResult.status === 'owned_by_user' || unlockResult.status === 'already_owned') {
     return { ok: true, body: { success: true, alreadyPurchased: true } };
   }
-
-  const freeOrderId = `free_bundle_${createId()}`;
-  const { error: orderError } = await adminSupabase
-    .from('post_resource_bundle_orders')
-    .insert({
-      bundle_id: bundle.id,
-      buyer_user_id: buyerUserId,
-      razorpay_order_id: freeOrderId,
-      razorpay_payment_id: `free_${createId()}`,
-      amount_subunits: 0,
-      currency: 'USD',
-      status: 'created',
-    });
-
-  if (orderError) {
-    logBackendError('failed_to_create_free_bundle_order', { error: orderError });
+  if (unlockResult.status === 'not_found') {
+    return { ok: false, status: 404, body: { error: 'Unlock not found.' } };
+  }
+  if (unlockResult.status === 'not_free') {
+    return { ok: false, status: 400, body: { error: 'This bundle requires payment.' } };
+  }
+  if (
+    unlockResult.status !== 'completed'
+    || typeof unlockResult.bundle_id !== 'string'
+    || unlockResult.bundle_id.length === 0
+    || typeof unlockResult.owner_user_id !== 'string'
+    || unlockResult.owner_user_id.length === 0
+  ) {
+    logBackendError('invalid_free_post_resource_unlock_result', { status: unlockResult.status });
     return { ok: false, status: 500, body: { error: 'Failed to get the free recipe.' } };
   }
 
-  const { data: completed, error: completionError } = await adminSupabase.rpc(
-    'complete_post_resource_bundle_purchase',
-    {
-      p_razorpay_order_id: freeOrderId,
-      p_razorpay_payment_id: `free_unlock_${createId()}`,
-    }
-  );
-
-  if (completionError) {
-    logBackendError('failed_to_complete_free_bundle_unlock', { error: completionError });
-    return { ok: false, status: 500, body: { error: 'Failed to get the free recipe.' } };
-  }
-
-  if (completed) {
-    invalidateMarketplaceResourceListCache();
-  }
+  invalidateMarketplaceResourceListCache();
 
   await notifyPostResourceUnlockCompleted(adminSupabase, {
     buyerUserId,
-    ownerUserId: bundle.owner_user_id,
+    ownerUserId: unlockResult.owner_user_id,
     postId,
-    bundleId: bundle.id,
-    alreadyProcessed: !completed,
+    bundleId: unlockResult.bundle_id,
+    alreadyProcessed: false,
   });
 
   return {
@@ -162,7 +165,7 @@ export async function unlockFreePostResourceBundleForRoute({
     body: {
       success: true,
       free: true,
-      alreadyProcessed: !completed,
+      alreadyProcessed: false,
     },
   };
 }

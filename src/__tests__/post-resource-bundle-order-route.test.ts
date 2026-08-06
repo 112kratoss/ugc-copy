@@ -19,7 +19,6 @@ const rpcMock = vi.fn(async (
   };
 });
 const fromMock = vi.fn();
-const orderInsertMock = vi.fn(async () => ({ error: null }));
 const adminClient = { from: fromMock, rpc: rpcMock };
 const createServiceClientFactory = vi.fn(() => adminClient);
 const getBundleForOrderByPostIdMock = vi.fn();
@@ -93,6 +92,21 @@ describe('/api/posts/[postId]/resource-bundle/order route', () => {
           error: null,
         };
       }
+      if (name === 'get_post_resource_bundle_cash_quote') {
+        return {
+          data: {
+            status: 'quoted',
+            bundle_id: 'bundle-1',
+            post_id: 'post-1',
+            owner_user_id: 'owner-1',
+            title: 'Launch Hook Pack',
+            price_usd_cents: 700,
+            revision_id: 'revision-1',
+            content_fingerprint: 'fingerprint-1',
+          },
+          error: null,
+        };
+      }
       if (name === 'complete_razorpay_checkout_intent') {
         return {
           data: { status: 'recorded', provider_order_id: args.p_provider_order_id },
@@ -101,6 +115,9 @@ describe('/api/posts/[postId]/resource-bundle/order route', () => {
       }
       if (name === 'abandon_razorpay_checkout_intent') {
         return { data: { status: 'abandoned' }, error: null };
+      }
+      if (name === 'record_post_resource_bundle_cash_order') {
+        return { data: { status: 'created', order_id: 'local-order-1' }, error: null };
       }
       return {
         data: {
@@ -116,15 +133,8 @@ describe('/api/posts/[postId]/resource-bundle/order route', () => {
     fromMock.mockReset();
     fromMock.mockImplementation((table: string) => {
       if (table === 'post_resource_bundle_purchases') return createQuery(purchaseRows);
-      if (table === 'post_resource_bundle_orders') {
-        return {
-          insert: orderInsertMock,
-        };
-      }
       throw new Error(`Unexpected table: ${table}`);
     });
-    orderInsertMock.mockClear();
-    orderInsertMock.mockResolvedValue({ error: null });
     getBundleForOrderByPostIdMock.mockClear();
     getBundleForOrderByPostIdMock.mockResolvedValue({
       id: 'bundle-1',
@@ -234,7 +244,7 @@ describe('/api/posts/[postId]/resource-bundle/order route', () => {
     expect(getBundleForOrderByPostIdMock).not.toHaveBeenCalled();
     expect(getPostResourceBundlePriceQuoteMock).not.toHaveBeenCalled();
     expect(providerFetchMock).not.toHaveBeenCalled();
-    expect(orderInsertMock).not.toHaveBeenCalled();
+    expect(rpcMock.mock.calls.map(([name]) => name)).not.toContain('record_post_resource_bundle_cash_order');
   });
 
   it('creates paid resource bundle orders after passing the backend rate limit', async () => {
@@ -279,13 +289,16 @@ describe('/api/posts/[postId]/resource-bundle/order route', () => {
       body: expect.stringContaining('"amount":58100'),
       signal: expect.any(AbortSignal),
     }));
-    expect(orderInsertMock).toHaveBeenCalledWith({
-      bundle_id: 'bundle-1',
-      buyer_user_id: 'buyer-1',
-      razorpay_order_id: 'order_bundle_123',
-      amount_subunits: 58100,
-      currency: 'INR',
-      status: 'created',
+    expect(rpcMock).toHaveBeenCalledWith('record_post_resource_bundle_cash_order', {
+      p_post_id: 'post-1',
+      p_bundle_id: 'bundle-1',
+      p_buyer_user_id: 'buyer-1',
+      p_razorpay_order_id: 'order_bundle_123',
+      p_amount_subunits: 58100,
+      p_currency: 'INR',
+      p_expected_price_usd_cents: 700,
+      p_expected_revision_id: 'revision-1',
+      p_expected_content_fingerprint: 'fingerprint-1',
     });
   });
 
@@ -323,6 +336,6 @@ describe('/api/posts/[postId]/resource-bundle/order route', () => {
       error: 'Payment provider timed out. Please try again.',
     });
     expect(providerFetchMock).toHaveBeenCalledTimes(2);
-    expect(orderInsertMock).not.toHaveBeenCalled();
+    expect(rpcMock.mock.calls.map(([name]) => name)).not.toContain('record_post_resource_bundle_cash_order');
   });
 });

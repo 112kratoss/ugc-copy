@@ -22,3 +22,13 @@ export function normalizePostMediaKey(value: unknown): string | null {
 export function defaultPostMediaKey(index: number): string {
   return `media-${Math.max(0, Math.round(index)) + 1}`;
 }
+
+/**
+ * Minted by a composer when it adds media, and submitted with that media, so a
+ * resource scope keeps pointing at the same output no matter how the composer
+ * reorders it. The positional default above only holds for media the server
+ * keys itself.
+ */
+export function createClientPostMediaKey(): string {
+  return `media-${crypto.randomUUID()}`;
+}

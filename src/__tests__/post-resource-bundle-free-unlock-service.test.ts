@@ -25,16 +25,12 @@ function createBundle(overrides?: Partial<BundleForUnlock>): BundleForUnlock {
 }
 
 function createAdminSupabaseMock(options?: {
-  existingPurchase?: { bundle_id: string } | null;
-  existingPurchaseError?: { message: string } | null;
   rateLimited?: boolean;
-  orderError?: { message: string } | null;
-  completionResult?: boolean;
-  completionError?: { message: string } | null;
+  unlockResult?: Record<string, unknown>;
+  unlockError?: { message: string } | null;
 }) {
-  const tableReads: string[] = [];
-  const inserts: Array<{ table: string; payload: Record<string, unknown> }> = [];
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
+  const tableCalls: string[] = [];
 
   const client = {
     async rpc(fn: string, args: Record<string, unknown>) {
@@ -53,59 +49,35 @@ function createAdminSupabaseMock(options?: {
         };
       }
 
-      if (fn === 'complete_post_resource_bundle_purchase') {
+      if (fn === 'unlock_free_post_resource_bundle') {
         return {
-          data: options?.completionResult ?? true,
-          error: options?.completionError ?? null,
+          data: options?.unlockResult ?? {
+            status: 'completed',
+            bundle_id: 'bundle-1',
+            owner_user_id: 'owner-1',
+            purchase_id: 'purchase-1',
+          },
+          error: options?.unlockError ?? null,
         };
       }
 
       throw new Error(`Unexpected RPC: ${fn}`);
     },
     from(table: string) {
-      if (table === 'post_resource_bundle_purchases') {
-        const query = {
-          select() {
-            return query;
-          },
-          eq() {
-            return query;
-          },
-          async maybeSingle() {
-            tableReads.push(table);
-            return {
-              data: options?.existingPurchase ?? null,
-              error: options?.existingPurchaseError ?? null,
-            };
-          },
-        };
-
-        return query;
-      }
-
-      if (table === 'post_resource_bundle_orders') {
-        return {
-          async insert(payload: Record<string, unknown>) {
-            inserts.push({ table, payload });
-            return { error: options?.orderError ?? null };
-          },
-        };
-      }
-
-      throw new Error(`Unexpected table: ${table}`);
+      tableCalls.push(table);
+      throw new Error(`Unexpected direct table access: ${table}`);
     },
   };
 
   return {
     client: client as unknown as SupabaseClient,
-    inserts,
     rpcCalls,
-    tableReads,
+    tableCalls,
   };
 }
 
 describe('unlockFreePostResourceBundleForRoute', () => {
-  it('rate limits before bundle lookup, purchase reads, order creation, or notifications', async () => {
+  it('rate limits before bundle lookup, atomic unlock, or notifications', async () => {
     const admin = createAdminSupabaseMock({ rateLimited: true });
     const getBundleForOrderByPostId = vi.fn();
     const notifyPostResourceUnlockCompleted = vi.fn();
@@ -122,10 +94,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     expect(result).toMatchObject({
       ok: false,
       status: 429,
-      body: {
-        code: 'RATE_LIMITED',
-        retryAfterSeconds: 29,
-      },
+      body: { code: 'RATE_LIMITED', retryAfterSeconds: 29 },
     });
     expect(admin.rpcCalls).toEqual([
       {
@@ -139,8 +108,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       },
     ]);
     expect(getBundleForOrderByPostId).not.toHaveBeenCalled();
-    expect(admin.tableReads).toEqual([]);
-    expect(admin.inserts).toEqual([]);
+    expect(admin.tableCalls).toEqual([]);
     expect(notifyPostResourceUnlockCompleted).not.toHaveBeenCalled();
   });
 
@@ -160,11 +128,11 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       status: 404,
       body: { error: 'Unlock not found.' },
     });
-    expect(admin.tableReads).toEqual([]);
-    expect(admin.inserts).toEqual([]);
+    expect(admin.rpcCalls.map((call) => call.fn)).not.toContain('unlock_free_post_resource_bundle');
+    expect(admin.tableCalls).toEqual([]);
   });
 
-  it('treats owner access as already purchased without writing an order', async () => {
+  it('treats owner access as already purchased without invoking the unlock transaction', async () => {
     const admin = createAdminSupabaseMock();
 
     const result = await unlockFreePostResourceBundleForRoute({
@@ -179,11 +147,11 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       ok: true,
       body: { success: true, alreadyPurchased: true },
     });
-    expect(admin.tableReads).toEqual([]);
-    expect(admin.inserts).toEqual([]);
+    expect(admin.rpcCalls.map((call) => call.fn)).not.toContain('unlock_free_post_resource_bundle');
+    expect(admin.tableCalls).toEqual([]);
   });
 
-  it('rejects paid bundles before purchase reads or order creation', async () => {
+  it('rejects a bundle already known to require payment', async () => {
     const admin = createAdminSupabaseMock();
 
     const result = await unlockFreePostResourceBundleForRoute({
@@ -202,57 +170,14 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       status: 400,
       body: { error: 'This bundle requires payment.' },
     });
-    expect(admin.tableReads).toEqual([]);
-    expect(admin.inserts).toEqual([]);
+    expect(admin.rpcCalls.map((call) => call.fn)).not.toContain('unlock_free_post_resource_bundle');
   });
 
-  it('returns existing purchases without creating another free order', async () => {
-    const admin = createAdminSupabaseMock({
-      existingPurchase: { bundle_id: 'bundle-1' },
-    });
-
-    const result = await unlockFreePostResourceBundleForRoute({
-      adminSupabase: admin.client,
-      postId: 'post-1',
-      buyerUserId: 'buyer-1',
-      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
-      notifyPostResourceUnlockCompleted: vi.fn(),
-    });
-
-    expect(result).toEqual({
-      ok: true,
-      body: { success: true, alreadyPurchased: true },
-    });
-    expect(admin.tableReads).toEqual(['post_resource_bundle_purchases']);
-    expect(admin.inserts).toEqual([]);
-  });
-
-  it('stops on purchase lookup errors instead of creating duplicate access rows', async () => {
-    const admin = createAdminSupabaseMock({
-      existingPurchaseError: { message: 'read failed' },
-    });
-
-    const result = await unlockFreePostResourceBundleForRoute({
-      adminSupabase: admin.client,
-      postId: 'post-1',
-      buyerUserId: 'buyer-1',
-      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
-      notifyPostResourceUnlockCompleted: vi.fn(),
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      status: 500,
-      body: { error: 'Failed to check purchase history.' },
-    });
-    expect(admin.inserts).toEqual([]);
-  });
-
-  it('creates, completes, and notifies free unlock orders', async () => {
+  it('creates the order and entitlement in one locked database transaction', async () => {
     const admin = createAdminSupabaseMock();
     const notifyPostResourceUnlockCompleted = vi.fn();
     const invalidateMarketplaceResourceListCache = vi.fn();
-    const idValues = ['order-id', 'order-payment-id', 'completion-payment-id'];
+    const idValues = ['order-id', 'payment-id'];
 
     const result = await unlockFreePostResourceBundleForRoute({
       adminSupabase: admin.client,
@@ -266,33 +191,19 @@ describe('unlockFreePostResourceBundleForRoute', () => {
 
     expect(result).toEqual({
       ok: true,
-      body: {
-        success: true,
-        free: true,
-        alreadyProcessed: false,
-      },
+      body: { success: true, free: true, alreadyProcessed: false },
     });
-    expect(admin.inserts).toEqual([
-      {
-        table: 'post_resource_bundle_orders',
-        payload: {
-          bundle_id: 'bundle-1',
-          buyer_user_id: 'buyer-1',
-          razorpay_order_id: 'free_bundle_order-id',
-          razorpay_payment_id: 'free_order-payment-id',
-          amount_subunits: 0,
-          currency: 'USD',
-          status: 'created',
-        },
-      },
-    ]);
     expect(admin.rpcCalls).toContainEqual({
-      fn: 'complete_post_resource_bundle_purchase',
+      fn: 'unlock_free_post_resource_bundle',
       args: {
-        p_razorpay_order_id: 'free_bundle_order-id',
-        p_razorpay_payment_id: 'free_unlock_completion-payment-id',
+        p_buyer_user_id: 'buyer-1',
+        p_post_id: 'post-1',
+        p_order_reference: 'free_bundle_order-id',
+        p_payment_reference: 'free_unlock_payment-id',
       },
     });
+    expect(admin.rpcCalls.map((call) => call.fn)).not.toContain('complete_post_resource_bundle_purchase');
+    expect(admin.tableCalls).toEqual([]);
     expect(notifyPostResourceUnlockCompleted).toHaveBeenCalledWith(admin.client, {
       buyerUserId: 'buyer-1',
       ownerUserId: 'owner-1',
@@ -303,8 +214,14 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     expect(invalidateMarketplaceResourceListCache).toHaveBeenCalledTimes(1);
   });
 
-  it('marks concurrent completions as already processed in the notification and response', async () => {
-    const admin = createAdminSupabaseMock({ completionResult: false });
+  it('returns an existing atomic entitlement without creating or notifying again', async () => {
+    const admin = createAdminSupabaseMock({
+      unlockResult: {
+        status: 'already_owned',
+        bundle_id: 'bundle-1',
+        owner_user_id: 'owner-1',
+      },
+    });
     const notifyPostResourceUnlockCompleted = vi.fn();
     const invalidateMarketplaceResourceListCache = vi.fn();
 
@@ -320,24 +237,17 @@ describe('unlockFreePostResourceBundleForRoute', () => {
 
     expect(result).toEqual({
       ok: true,
-      body: {
-        success: true,
-        free: true,
-        alreadyProcessed: true,
-      },
+      body: { success: true, alreadyPurchased: true },
     });
     expect(invalidateMarketplaceResourceListCache).not.toHaveBeenCalled();
-    expect(notifyPostResourceUnlockCompleted).toHaveBeenCalledWith(
-      admin.client,
-      expect.objectContaining({ alreadyProcessed: true })
-    );
+    expect(notifyPostResourceUnlockCompleted).not.toHaveBeenCalled();
+    expect(admin.tableCalls).toEqual([]);
   });
 
-  it('returns a stable error when free order creation fails', async () => {
-    const admin = createAdminSupabaseMock({
-      orderError: { message: 'insert failed' },
-    });
+  it('does not grant access if the seller switches from free to paid before the lock is acquired', async () => {
+    const admin = createAdminSupabaseMock({ unlockResult: { status: 'not_free' } });
     const notifyPostResourceUnlockCompleted = vi.fn();
+    const invalidateMarketplaceResourceListCache = vi.fn();
 
     const result = await unlockFreePostResourceBundleForRoute({
       adminSupabase: admin.client,
@@ -345,22 +255,22 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       buyerUserId: 'buyer-1',
       getBundleForOrderByPostId: vi.fn(async () => createBundle()),
       notifyPostResourceUnlockCompleted,
+      invalidateMarketplaceResourceListCache,
       createId: vi.fn(() => 'id'),
     });
 
     expect(result).toEqual({
       ok: false,
-      status: 500,
-      body: { error: 'Failed to get the free recipe.' },
+      status: 400,
+      body: { error: 'This bundle requires payment.' },
     });
-    expect(admin.rpcCalls.map((call) => call.fn)).toEqual(['check_backend_rate_limit']);
     expect(notifyPostResourceUnlockCompleted).not.toHaveBeenCalled();
+    expect(invalidateMarketplaceResourceListCache).not.toHaveBeenCalled();
+    expect(admin.tableCalls).toEqual([]);
   });
 
-  it('returns a stable error when free order completion fails', async () => {
-    const admin = createAdminSupabaseMock({
-      completionError: { message: 'rpc failed' },
-    });
+  it('returns a stable error when the atomic unlock RPC fails', async () => {
+    const admin = createAdminSupabaseMock({ unlockError: { message: 'rpc failed' } });
     const notifyPostResourceUnlockCompleted = vi.fn();
 
     const result = await unlockFreePostResourceBundleForRoute({
@@ -378,5 +288,25 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       body: { error: 'Failed to get the free recipe.' },
     });
     expect(notifyPostResourceUnlockCompleted).not.toHaveBeenCalled();
+    expect(admin.tableCalls).toEqual([]);
+  });
+
+  it('fails closed if the exact immutable free revision cannot be quoted', async () => {
+    const admin = createAdminSupabaseMock({ unlockResult: { status: 'quote_unavailable' } });
+
+    const result = await unlockFreePostResourceBundleForRoute({
+      adminSupabase: admin.client,
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      notifyPostResourceUnlockCompleted: vi.fn(),
+      createId: vi.fn(() => 'id'),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      body: { error: 'Failed to get the free recipe.' },
+    });
   });
 });

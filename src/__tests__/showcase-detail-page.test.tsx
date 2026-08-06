@@ -15,6 +15,7 @@ const getPublicPostDetailMock = vi.fn<(id?: string) => Promise<Record<string, un
 const recordPostShareEventMock = vi.fn(async (_payload: unknown) => {
   void _payload;
 });
+const postResourceBundlePanelPropsMock = vi.hoisted(() => vi.fn());
 
 vi.mock('next/headers', () => ({
   headers: () => mockHeaders(),
@@ -64,9 +65,10 @@ vi.mock('@/app/showcase/[id]/ShowcaseDetailActions', () => ({
 }));
 
 vi.mock('@/app/showcase/[id]/PostResourceBundlePanel', () => ({
-  default: ({ postId }: { postId: string }) => (
-    <div data-testid="post-resource-bundle-panel">{postId}</div>
-  ),
+  default: (props: { postId: string }) => {
+    postResourceBundlePanelPropsMock(props);
+    return <div data-testid="post-resource-bundle-panel">{props.postId}</div>;
+  },
 }));
 
 vi.mock('@/app/components/PostComments', () => ({
@@ -557,5 +559,78 @@ describe('Showcase detail page', () => {
         screen.getByTestId('canonical-post-recipe')
       ) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+  });
+
+  it('forwards purchase-time proof media when the buyer opens an older revision', async () => {
+    const purchasedMediaItems = [
+      { id: 'old-media-1', mediaKey: 'old-output-1', url: 'https://cdn.example.com/old-1.jpg', mediaKind: 'image', contentType: 'image/jpeg', originalName: 'old-1.jpg', width: 800, height: 1000, durationSeconds: null, sortOrder: 0 },
+      { id: 'old-media-2', mediaKey: 'old-output-2', url: 'https://cdn.example.com/old-2.jpg', mediaKind: 'image', contentType: 'image/jpeg', originalName: 'old-2.jpg', width: 800, height: 1000, durationSeconds: null, sortOrder: 1 },
+    ];
+    getPublicPostDetailMock.mockResolvedValue({
+      id: 'post-1',
+      generationId: 'gen-1',
+      visibility: 'public',
+      mediaUrl: 'https://cdn.example.com/current-1.jpg',
+      mediaKind: 'image',
+      mediaItems: [
+        { id: 'current-1', mediaKey: 'current-output-1', url: 'https://cdn.example.com/current-1.jpg', mediaKind: 'image', contentType: 'image/jpeg', originalName: 'current-1.jpg', width: 800, height: 1000, durationSeconds: null, sortOrder: 0 },
+        { id: 'current-2', mediaKey: 'current-output-2', url: 'https://cdn.example.com/current-2.jpg', mediaKind: 'image', contentType: 'image/jpeg', originalName: 'current-2.jpg', width: 800, height: 1000, durationSeconds: null, sortOrder: 1 },
+      ],
+      model: 'nano-banana-2',
+      title: 'Shared creation',
+      description: 'A polished showcase description.',
+      prompt: 'Prompt',
+      body: '',
+      category: 'image',
+      postFormat: 'media',
+      saveCount: 12,
+      remixCount: 3,
+      shareCount: 7,
+      shareVisitCount: 18,
+      createdAt: '2026-03-28T10:00:00.000Z',
+      sourceKind: 'magicbooklet',
+      sourceTool: null,
+      creator: { id: 'user-1', username: 'creator-name', name: 'Creator Name', avatar: null },
+      resourceBundle: {
+        id: 'bundle-1',
+        accessMode: 'paid',
+        priceQuote: { formatted: '$9.00', note: null },
+        resourceKinds: ['prompt'],
+        lockedPreview: null,
+        viewerCanAccess: true,
+        viewerIsOwner: false,
+        salesCount: 3,
+        resources: {
+          promptText: 'Latest prompt', notesMarkdown: null, workflowShareUrl: null,
+          workflowSnapshot: null, attachments: [], allowRemix: false, sections: [], items: [],
+        },
+        purchasedRevision: {
+          revisionNumber: 1,
+          purchasedAt: '2026-07-01T00:00:00.000Z',
+          title: 'Purchased recipe',
+          summary: 'Purchased summary',
+          previewText: 'Purchased preview',
+          accessMode: 'paid',
+          priceUsdCents: 500,
+          mediaItems: purchasedMediaItems,
+          resources: {
+            promptText: 'Purchased prompt', notesMarkdown: null, workflowShareUrl: null,
+            workflowSnapshot: null, attachments: [], allowRemix: false, sections: [], items: [],
+          },
+        },
+        title: 'Latest recipe',
+        summary: 'Latest summary',
+        previewText: 'Latest preview',
+        priceUsdCents: 900,
+        status: 'published',
+      },
+      canRemix: false,
+    });
+
+    render(await ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) }));
+
+    expect(postResourceBundlePanelPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      purchasedRevision: expect.objectContaining({ mediaItems: purchasedMediaItems }),
+    }));
   });
 });

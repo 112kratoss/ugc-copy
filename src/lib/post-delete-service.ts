@@ -141,6 +141,30 @@ async function countBundlePurchases(
   return (data ?? []).length > 0;
 }
 
+async function hasPendingBundleCashOrder(
+  adminSupabase: SupabaseClient,
+  bundleId: string,
+): Promise<boolean> {
+  const { data, error } = await adminSupabase
+    .from('post_resource_bundle_orders')
+    .select('id')
+    .eq('bundle_id', bundleId)
+    .eq('status', 'created')
+    .gt('amount_subunits', 0)
+    .limit(1);
+
+  if (error) {
+    if (isMissingPostResourceBundlesSchemaError(error)) {
+      return false;
+    }
+
+    logBackendError('failed_to_check_pending_bundle_cash_orders_before_delete', { error });
+    throw error;
+  }
+
+  return (data ?? []).length > 0;
+}
+
 async function loadPostBundleForDelete(
   adminSupabase: SupabaseClient,
   postId: string,
@@ -234,20 +258,28 @@ export async function deleteOwnerPostForRoute({
 
   let bundle: DeletableBundleRow | null;
   let hasPurchases = false;
+  let hasPendingCashOrder = false;
   try {
     bundle = await loadPostBundleForDelete(adminSupabase, postId);
-    hasPurchases = bundle ? await countBundlePurchases(adminSupabase, bundle.id) : false;
+    if (bundle) {
+      [hasPurchases, hasPendingCashOrder] = await Promise.all([
+        countBundlePurchases(adminSupabase, bundle.id),
+        hasPendingBundleCashOrder(adminSupabase, bundle.id),
+      ]);
+    }
   } catch {
     return { ok: false, status: 500, body: { error: 'Failed to delete post.' } };
   }
   const hasPaidOrders = Boolean(bundle && bundle.access_mode === 'paid' && bundle.sales_count > 0);
 
-  if (hasPurchases && !forceDelete) {
+  if ((hasPurchases || hasPendingCashOrder) && !forceDelete) {
     return {
       ok: false,
       status: 409,
       body: {
-        error: 'People have already unlocked this post. Deleting it removes it from your profile and every public surface, but buyers keep the version they unlocked. Archiving does the same and is reversible.',
+        error: hasPurchases
+          ? 'People have already unlocked this post. Deleting it removes it from your profile and every public surface, but buyers keep the version they unlocked. Archiving does the same and is reversible.'
+          : 'A paid checkout for this unlock is still pending. Deleting it removes it from your profile and public surfaces while retaining the quoted version so any captured payment can still be fulfilled.',
         requiresForceDelete: true,
       },
     };
@@ -297,12 +329,12 @@ export async function deleteOwnerPostForRoute({
     }
   }
 
-  // A post with buyers is tombstoned, never removed. The row keeps the title
-  // and cover that give a buyer's library entry its context, while private +
-  // archived takes it off every public read path (all of which already filter
-  // on both). The database refuses the hard delete too, so this is the
-  // agreeing half of an invariant rather than the only guard.
-  if (hasPurchases) {
+  // A post with buyers or a still-payable cash order is tombstoned, never
+  // removed. The row keeps the quoted checkout fulfillable, while private +
+  // archived takes it off every public read path. The database refuses the hard
+  // delete too, so this is the agreeing half of an invariant rather than the
+  // only guard.
+  if (hasPurchases || hasPendingCashOrder) {
     const tombstonedAt = new Date().toISOString();
     const { error: tombstoneError } = await adminSupabase
       .from('posts')

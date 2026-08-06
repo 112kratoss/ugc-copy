@@ -40,6 +40,22 @@ type BundleForOrder = {
   price_usd_cents: number;
 };
 
+type CashQuoteResult = {
+  status: string;
+  bundle_id?: string;
+  post_id?: string;
+  owner_user_id?: string;
+  title?: string;
+  price_usd_cents?: number;
+  revision_id?: string;
+  content_fingerprint?: string;
+};
+
+type CashOrderRecordResult = {
+  status: string;
+  order_id?: string;
+};
+
 type ReadOrderBody = () => Promise<{
   clientIntentKey?: string | null;
   locale?: string | null;
@@ -110,6 +126,59 @@ function createRateLimitResult(error: BackendRateLimitError): PostResourceBundle
       resetAt: error.state.resetAt,
     },
   };
+}
+
+function rpcObject<T extends { status: string }>(value: unknown): T | null {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
+  const status = (candidate as { status?: unknown }).status;
+  return typeof status === 'string' ? candidate as T : null;
+}
+
+async function getAuthoritativeCashQuote(
+  adminSupabase: SupabaseClient,
+  postId: string,
+  buyerUserId: string,
+): Promise<CashQuoteResult> {
+  const { data, error } = await adminSupabase.rpc('get_post_resource_bundle_cash_quote', {
+    p_post_id: postId,
+    p_buyer_user_id: buyerUserId,
+  });
+  if (error) throw error;
+  const result = rpcObject<CashQuoteResult>(data);
+  if (!result) throw new Error('Invalid post resource cash quote response.');
+  return result;
+}
+
+async function recordCashOrderQuote(
+  adminSupabase: SupabaseClient,
+  input: {
+    postId: string;
+    bundleId: string;
+    buyerUserId: string;
+    providerOrderId: string;
+    amountSubunits: number;
+    currency: string;
+    priceUsdCents: number;
+    revisionId: string;
+    contentFingerprint: string;
+  },
+): Promise<CashOrderRecordResult> {
+  const { data, error } = await adminSupabase.rpc('record_post_resource_bundle_cash_order', {
+    p_post_id: input.postId,
+    p_bundle_id: input.bundleId,
+    p_buyer_user_id: input.buyerUserId,
+    p_razorpay_order_id: input.providerOrderId,
+    p_amount_subunits: input.amountSubunits,
+    p_currency: input.currency,
+    p_expected_price_usd_cents: input.priceUsdCents,
+    p_expected_revision_id: input.revisionId,
+    p_expected_content_fingerprint: input.contentFingerprint,
+  });
+  if (error) throw error;
+  const result = rpcObject<CashOrderRecordResult>(data);
+  if (!result) throw new Error('Invalid post resource cash order response.');
+  return result;
 }
 
 export async function createPostResourceBundleOrderForRoute({
@@ -187,11 +256,70 @@ export async function createPostResourceBundleOrderForRoute({
     };
   }
 
+  let cashQuote: CashQuoteResult;
+  try {
+    cashQuote = await getAuthoritativeCashQuote(adminSupabase, postId, buyerUserId);
+  } catch (error) {
+    logBackendError('failed_to_quote_post_resource_bundle_order', { error });
+    return { ok: false, status: 500, body: { error: 'Failed to prepare a secure checkout quote.' } };
+  }
+
+  if (cashQuote.status === 'already_owned') {
+    return { ok: true, body: { success: true, alreadyPurchased: true } };
+  }
+  if (cashQuote.status === 'not_found') {
+    return { ok: false, status: 404, body: { error: 'Unlock not found.' } };
+  }
+  if (cashQuote.status === 'owned_by_user') {
+    return { ok: false, status: 400, body: { error: 'You already own this unlock.' } };
+  }
+  if (cashQuote.status === 'free') {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: 'Use the free recipe access endpoint for this bundle.' },
+    };
+  }
+  if (cashQuote.status === 'credits_only') {
+    const creditCost = typeof cashQuote.price_usd_cents === 'number'
+      ? cashQuote.price_usd_cents
+      : bundle.price_usd_cents;
+    return {
+      ok: false,
+      status: 400,
+      body: {
+        error: `Recipes below ${POST_RESOURCE_WEB_CASH_MIN_TOKENS} tokens can only be unlocked with credits.`,
+        code: 'CREDITS_ONLY_PRICE',
+        creditCost,
+        cashMinimumTokens: POST_RESOURCE_WEB_CASH_MIN_TOKENS,
+      },
+    };
+  }
+
+  const quoteIsComplete = cashQuote.status === 'quoted'
+    && typeof cashQuote.bundle_id === 'string'
+    && cashQuote.bundle_id.length > 0
+    && cashQuote.post_id === postId
+    && typeof cashQuote.owner_user_id === 'string'
+    && typeof cashQuote.title === 'string'
+    && typeof cashQuote.price_usd_cents === 'number'
+    && isPostResourceWebCashEligible(cashQuote.price_usd_cents)
+    && typeof cashQuote.revision_id === 'string'
+    && cashQuote.revision_id.length > 0
+    && typeof cashQuote.content_fingerprint === 'string'
+    && cashQuote.content_fingerprint.length > 0;
+  if (!quoteIsComplete) {
+    logBackendError('invalid_post_resource_bundle_cash_quote', { status: cashQuote.status });
+    return { ok: false, status: 500, body: { error: 'Failed to prepare a secure checkout quote.' } };
+  }
+
+  const authoritativeQuote = cashQuote as Required<Omit<CashQuoteResult, 'status'>> & { status: 'quoted' };
+
   const clientLocale = typeof body.locale === 'string' ? body.locale : null;
   const countryCode =
     countryHeader?.toUpperCase()
     ?? inferPostResourceBundleOrderCountryFromLocale(clientLocale);
-  const priceQuote = await getPostResourceBundlePriceQuote(bundle.price_usd_cents, countryCode);
+  const priceQuote = await getPostResourceBundlePriceQuote(authoritativeQuote.price_usd_cents, countryCode);
 
   let checkoutIntent: Awaited<ReturnType<typeof claimRazorpayCheckoutIntent>>;
   let razorpayOrder: RazorpayOrderResponse;
@@ -204,9 +332,12 @@ export async function createPostResourceBundleOrderForRoute({
         : '',
       requestPayload: {
         amount: priceQuote.amountSubunits,
-        bundleId: bundle.id,
+        bundleId: authoritativeQuote.bundle_id,
+        contentFingerprint: authoritativeQuote.content_fingerprint,
         currency: priceQuote.currency,
         postId,
+        priceUsdCents: authoritativeQuote.price_usd_cents,
+        revisionId: authoritativeQuote.revision_id,
       },
     });
     razorpayOrder = await createOrRecoverRazorpayCheckoutOrder({
@@ -225,10 +356,11 @@ export async function createPostResourceBundleOrderForRoute({
         currency: priceQuote.currency,
         receipt,
         notes: {
-          bundle_id: bundle.id,
+          bundle_id: authoritativeQuote.bundle_id,
           buyer_user_id: buyerUserId,
           post_id: postId,
           purchase_kind: 'post_resource',
+          revision_id: authoritativeQuote.revision_id,
         },
       }),
     });
@@ -255,84 +387,47 @@ export async function createPostResourceBundleOrderForRoute({
     return { ok: false, status: 500, body: { error: 'Failed to create Razorpay order.' } };
   }
 
-  if (checkoutIntent.status === 'replay') {
-    const { data: existingOrder, error: existingOrderError } = await adminSupabase
-      .from('post_resource_bundle_orders')
-      .select('bundle_id, buyer_user_id, amount_subunits, currency')
-      .eq('razorpay_order_id', razorpayOrder.id)
-      .maybeSingle();
-    if (existingOrderError) {
-      logBackendError('failed_to_load_replayed_bundle_order', { error: existingOrderError });
-      return { ok: false, status: 500, body: { error: 'Failed to load order.' } };
-    }
-    if (existingOrder) {
-      if (
-        existingOrder.bundle_id !== bundle.id
-        || existingOrder.buyer_user_id !== buyerUserId
-        || existingOrder.amount_subunits !== priceQuote.amountSubunits
-        || existingOrder.currency !== priceQuote.currency
-      ) {
-        return { ok: false, status: 409, body: { error: 'Checkout details conflict with the recorded order.' } };
-      }
-      return {
-        ok: true,
-        body: {
-          success: true,
-          postId,
-          bundleId: bundle.id,
-          orderId: razorpayOrder.id,
-          amount: priceQuote.amountSubunits,
-          currency: priceQuote.currency,
-          displayPrice: priceQuote.formatted,
-          note: priceQuote.note,
-          bundleTitle: bundle.title,
-        },
-      };
-    }
+  let orderRecord: CashOrderRecordResult;
+  try {
+    orderRecord = await recordCashOrderQuote(adminSupabase, {
+      postId,
+      bundleId: authoritativeQuote.bundle_id,
+      buyerUserId,
+      providerOrderId: razorpayOrder.id,
+      amountSubunits: priceQuote.amountSubunits,
+      currency: priceQuote.currency,
+      priceUsdCents: authoritativeQuote.price_usd_cents,
+      revisionId: authoritativeQuote.revision_id,
+      contentFingerprint: authoritativeQuote.content_fingerprint,
+    });
+  } catch (error) {
+    logBackendError('failed_to_record_bundle_order_quote', { error });
+    return { ok: false, status: 500, body: { error: 'Failed to record the secure checkout quote.' } };
   }
 
-  const { error: orderError } = await adminSupabase
-    .from('post_resource_bundle_orders')
-    .insert({
-      bundle_id: bundle.id,
-      buyer_user_id: buyerUserId,
-      razorpay_order_id: razorpayOrder.id,
-      amount_subunits: priceQuote.amountSubunits,
-      currency: priceQuote.currency,
-      status: 'created',
-    });
-
-  if (orderError) {
-    if (orderError.code === '23505') {
-      const { data: existingOrder } = await adminSupabase
-        .from('post_resource_bundle_orders')
-        .select('bundle_id, buyer_user_id, amount_subunits, currency')
-        .eq('razorpay_order_id', razorpayOrder.id)
-        .maybeSingle();
-      if (
-        existingOrder?.bundle_id === bundle.id
-        && existingOrder.buyer_user_id === buyerUserId
-        && existingOrder.amount_subunits === priceQuote.amountSubunits
-        && existingOrder.currency === priceQuote.currency
-      ) {
-        return {
-          ok: true,
-          body: {
-            success: true,
-            postId,
-            bundleId: bundle.id,
-            orderId: razorpayOrder.id,
-            amount: priceQuote.amountSubunits,
-            currency: priceQuote.currency,
-            displayPrice: priceQuote.formatted,
-            note: priceQuote.note,
-            bundleTitle: bundle.title,
-          },
-        };
-      }
-    }
-    logBackendError('failed_to_record_bundle_order', { error: orderError });
-    return { ok: false, status: 500, body: { error: 'Failed to record order.' } };
+  if (orderRecord.status === 'already_owned') {
+    return { ok: true, body: { success: true, alreadyPurchased: true } };
+  }
+  if (orderRecord.status === 'quote_changed' || orderRecord.status === 'not_found') {
+    return {
+      ok: false,
+      status: 409,
+      body: {
+        error: 'This unlock changed while checkout was opening. Review the latest version and try again.',
+        code: 'RESOURCE_QUOTE_CHANGED',
+      },
+    };
+  }
+  if (orderRecord.status === 'order_conflict') {
+    return {
+      ok: false,
+      status: 409,
+      body: { error: 'Checkout details conflict with the recorded order.' },
+    };
+  }
+  if (orderRecord.status !== 'created' && orderRecord.status !== 'replay') {
+    logBackendError('invalid_post_resource_bundle_order_record', { status: orderRecord.status });
+    return { ok: false, status: 500, body: { error: 'Failed to record the secure checkout quote.' } };
   }
 
   return {
@@ -340,13 +435,13 @@ export async function createPostResourceBundleOrderForRoute({
     body: {
       success: true,
       postId,
-      bundleId: bundle.id,
+      bundleId: authoritativeQuote.bundle_id,
       orderId: razorpayOrder.id,
       amount: priceQuote.amountSubunits,
       currency: priceQuote.currency,
       displayPrice: priceQuote.formatted,
       note: priceQuote.note,
-      bundleTitle: bundle.title,
+      bundleTitle: authoritativeQuote.title,
     },
   };
 }

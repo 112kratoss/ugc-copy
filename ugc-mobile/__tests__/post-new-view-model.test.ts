@@ -24,6 +24,7 @@ import {
   getPostComposerSubmitLabel,
   getPublishableGenerations,
   hydratePostComposerResourceCards,
+  migratePostComposerResourceDraftToCards,
   isPostComposerResourceCardReady,
   isTemplateGeneration,
   getPublishGenerationMediaKind,
@@ -449,6 +450,7 @@ describe('post new view model', () => {
     expect(buildPostResourceBundleInput({
       ...getDefaultPostComposerDraft().resource,
       accessMode: 'paid',
+      cardAuthoringMode: 'legacy',
       promptText: 'Exact prompt',
       notesMarkdown: 'Usage notes',
       workflowShareUrl: 'https://workflow.example.com',
@@ -604,6 +606,191 @@ describe('post new view model', () => {
     });
   });
 
+  it('preserves a stored attachment external fallback when its visible label changes', () => {
+    const resource = {
+      ...getDefaultPostComposerDraft().resource,
+      accessMode: 'free' as const,
+      summary: 'Project files',
+      previewText: 'Includes the project archive.',
+      cards: [createPostComposerResourceCard('source_assets', {
+        id: 'dual-location-card',
+        attachments: [{
+          id: 'dual-location-file',
+          kind: 'file',
+          label: 'Project archive',
+          storagePath: 'user-1/project.zip',
+          contentType: 'application/zip',
+          sizeBytes: 42,
+        }],
+      })],
+    };
+    const original = buildPostResourceBundleInput(resource);
+    const originalItem = original?.resources?.items?.[0];
+    expect(originalItem).toBeTruthy();
+    originalItem!.externalUrl = 'https://downloads.example.com/project.zip';
+
+    const [hydratedCard] = hydratePostComposerResourceCards(original);
+    const rebuilt = buildPostResourceBundleInput({
+      ...resource,
+      cards: [{
+        ...hydratedCard!,
+        attachments: hydratedCard!.attachments.map((attachment) => ({
+          ...attachment,
+          label: 'Renamed project archive',
+        })),
+      }],
+    });
+
+    expect(rebuilt?.resources?.items?.[0]).toMatchObject({
+      ...originalItem,
+      title: 'Renamed project archive',
+      externalUrl: 'https://downloads.example.com/project.zip',
+    });
+  });
+
+  it('removes only the file fields from a workflow item that also backs a visible URL', () => {
+    const resource = {
+      ...getDefaultPostComposerDraft().resource,
+      accessMode: 'free' as const,
+      summary: 'Workflow files',
+      previewText: 'Includes the shared workflow and its import file.',
+      cards: [createPostComposerResourceCard('workflow', {
+        id: 'combined-workflow',
+        externalUrl: 'https://workflow.example.com/share/combined',
+        attachments: [{
+          id: 'combined-workflow-file',
+          kind: 'file',
+          label: 'workflow.json',
+          storagePath: 'user-1/workflow.json',
+          contentType: 'application/json',
+          sizeBytes: 84,
+        }],
+      })],
+    };
+    const original = buildPostResourceBundleInput(resource);
+    const [urlItem, fileItem] = original?.resources?.items ?? [];
+    expect(urlItem).toBeTruthy();
+    expect(fileItem).toBeTruthy();
+    original!.resources!.items = [{
+      ...urlItem!,
+      storagePath: fileItem!.storagePath,
+      contentType: fileItem!.contentType,
+      sizeBytes: fileItem!.sizeBytes,
+    }];
+    const [hydratedCard] = hydratePostComposerResourceCards(original);
+
+    const rebuilt = buildPostResourceBundleInput({
+      ...resource,
+      cards: [{ ...hydratedCard!, attachments: [] }],
+    });
+
+    expect(rebuilt?.resources?.items).toHaveLength(1);
+    expect(rebuilt?.resources?.items?.[0]).toMatchObject({
+      externalUrl: 'https://workflow.example.com/share/combined',
+      storagePath: null,
+      contentType: null,
+      sizeBytes: null,
+    });
+  });
+
+  it('treats an empty explicit card list as deletion without reviving legacy fields', () => {
+    const staleLegacyResource = {
+      ...getDefaultPostComposerDraft().resource,
+      accessMode: 'free' as const,
+      cardAuthoringMode: 'cards' as const,
+      selectedKinds: {
+        prompt: true,
+        workflow: false,
+        files: false,
+        notes: false,
+        remix: false,
+      },
+      promptText: 'Old protected prompt that the creator removed',
+      summary: 'A useful public package summary.',
+      previewText: 'Includes the reusable prompt and setup guidance.',
+      cards: [],
+    };
+
+    expect(buildPostResourceBundleInput(staleLegacyResource)).toBeNull();
+
+    const remixOnly = buildPostResourceBundleInput({
+      ...staleLegacyResource,
+      allowRemix: true,
+    });
+    expect(remixOnly).toMatchObject({
+      accessMode: 'free',
+      resources: {
+        promptText: null,
+        allowRemix: true,
+        items: [],
+      },
+    });
+    expect(JSON.stringify(remixOnly)).not.toContain('Old protected prompt');
+
+    // A recovered pre-card draft has no marker (or an explicit legacy marker),
+    // so its flat fields remain readable until the creator enters card mode.
+    expect(buildPostResourceBundleInput({
+      ...staleLegacyResource,
+      cardAuthoringMode: 'legacy',
+    })?.resources?.promptText).toBe('Old protected prompt that the creator removed');
+  });
+
+  it('migrates a restored legacy draft into visible cards before it can be submitted', () => {
+    const legacyDraft = {
+      ...getDefaultPostComposerDraft(),
+      resource: {
+        ...getDefaultPostComposerDraft().resource,
+        accessMode: 'free' as const,
+        promptText: 'A protected prompt from an older saved draft.',
+        summary: 'A reusable prompt package.',
+        previewText: 'Includes the reusable prompt.',
+        cards: [],
+        cardAuthoringMode: undefined,
+        selectedKinds: {
+          prompt: true,
+          workflow: false,
+          files: false,
+          notes: false,
+          remix: false,
+        },
+      },
+    };
+
+    const migrated = migratePostComposerResourceDraftToCards(legacyDraft.resource);
+    expect(migrated.cardAuthoringMode).toBe('cards');
+    expect(migrated.cards).toHaveLength(1);
+    expect(migrated.cards[0]).toMatchObject({ textContent: 'A protected prompt from an older saved draft.' });
+    expect(migrated.promptText).toBe('');
+    expect(buildPostResourceBundleInput(migrated)?.resources?.items?.[0]).toMatchObject({
+      textContent: 'A protected prompt from an older saved draft.',
+    });
+  });
+
+  it('requires the author-written package preview instead of accepting a generated fallback', () => {
+    const draft = {
+      ...getDefaultPostComposerDraft(),
+      mode: 'upload' as const,
+      title: 'External creation',
+      visibility: 'public' as const,
+      upload: { uri: 'file:///tmp/image.jpg', name: 'image.jpg', type: 'image/jpeg' },
+      resource: {
+        ...getDefaultPostComposerDraft().resource,
+        accessMode: 'free' as const,
+        summary: 'A detailed reusable lighting prompt for product photography.',
+        previewText: '   ',
+        cards: [createPostComposerResourceCard('prompt', {
+          title: 'Lighting prompt',
+          textContent: 'Use a large softbox at camera left and a negative fill at camera right.',
+        })],
+      },
+    };
+
+    expect(validatePostComposerDraft(draft)).toEqual({
+      valid: false,
+      message: 'Add a buyer preview for the unlock.',
+    });
+  });
+
   it('enforces token pricing in ten-token increments from a ten-token minimum', () => {
     const baseDraft = {
       ...getDefaultPostComposerDraft(),
@@ -645,6 +832,7 @@ describe('post new view model', () => {
     expect(buildPostResourceBundleInput({
       ...getDefaultPostComposerDraft().resource,
       accessMode: 'paid',
+      cardAuthoringMode: 'legacy',
       selectedKinds: {
         prompt: true,
         workflow: true,
@@ -733,6 +921,7 @@ describe('post new view model', () => {
       resource: {
         ...getDefaultPostComposerDraft().resource,
         accessMode: 'free',
+        cardAuthoringMode: 'legacy',
         promptText: 'Use a stadium broadcast lens.',
         previewText: 'Prompt included.',
       },
@@ -878,7 +1067,10 @@ describe('post new view model', () => {
     expect(draft.resource.previewText).toBe('Includes the exact reusable prompt.');
     expect(buildPublishGenerationPostPayload(item, draft).resourceBundle).toMatchObject({
       accessMode: 'free',
-      summary: 'Exact generation prompt',
+      // With no author-written summary, the author's preview stands in for it.
+      // The marketplace quality gate reads whichever is non-empty first, so a
+      // short derived summary would otherwise shadow the real preview.
+      summary: 'Includes the exact reusable prompt.',
       previewText: 'Includes the exact reusable prompt.',
       priceUsdCents: 0,
       resources: {
@@ -971,6 +1163,7 @@ describe('post new view model', () => {
       resource: {
         ...getDefaultPostComposerDraft().resource,
         accessMode: 'paid' as const,
+        cardAuthoringMode: 'legacy' as const,
         promptText: 'Exact prompt',
         previewText: 'Prompt, notes, and usage included.',
         priceUsd: '9',
@@ -1115,6 +1308,7 @@ describe('post new view model', () => {
         resource: {
           ...getDefaultPostComposerDraft().resource,
           accessMode: 'free' as const,
+          cardAuthoringMode: 'legacy' as const,
           promptText: 'New Prompt',
           previewText: 'New Preview',
         },
@@ -1168,6 +1362,7 @@ describe('post new view model', () => {
         resource: {
           ...getDefaultPostComposerDraft().resource,
           accessMode: 'free' as const,
+          cardAuthoringMode: 'legacy' as const,
           promptText: 'New Prompt',
           previewText: 'New Preview',
         },

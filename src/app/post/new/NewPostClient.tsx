@@ -27,34 +27,47 @@ import {
   getPublicPostQualityError,
   isCreatorProfileReadinessError,
 } from '@/lib/marketplace-trust';
+import { createClientPostMediaKey, defaultPostMediaKey } from '@/lib/post-media-key';
 import { getCurrentInternalPath, getSafeInternalReturnPath } from '@/lib/share';
 import { trackProductEvent } from '@/lib/product-analytics';
 import {
-  formatUsdCents,
   getPostResourceKindLabel,
+  getPostResourceKinds,
+  normalizePostResourceItems,
   normalizePostResourceBundleAccessMode,
   POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS,
   POST_RESOURCE_PRICE_INCREMENT_USD_CENTS,
   type PostResourceAttachment,
   type PostResourceBundleInput,
   type PostResourceBundleAccessMode,
-  type PostResourceItem,
-  type PostResourceItemRole,
-  type PostResourceItemType,
-  type PostResourceRemixUse,
   type PostResourceKind,
-  type PostResourceSection,
-  type PostResourceSectionKind,
 } from '@/lib/post-resource-bundles';
 import {
   POST_RESOURCE_WEB_CASH_MIN_TOKENS,
 } from '@/lib/post-resource-commerce';
 import { slugifySourceTool, type SourceToolOption } from '@/lib/source-tools';
-import { supabase } from '@/lib/supabase';
+import {
+  resolveSignedUploadUrl,
+  uploadFileToSignedUrl,
+  type SignedUrlUploadProgress,
+} from '@/lib/signed-url-upload';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
-import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-queue';
+import { isUploadCancelledError, runWeightedUploadQueue, UploadCancelledError } from '@/lib/upload-queue';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
+import {
+  buildResourceCardBundleInput,
+  buildResourceCardItems,
+  createPostComposerResourceCard,
+  getResourceCardPreview,
+  hydratePostComposerAllowRemix,
+  hydratePostComposerResourceCards,
+  resourceCardHasContent,
+  type PostComposerResourceCardDraft,
+  type PostComposerResourceCardType,
+} from '@/lib/post-composer-resource-cards';
 import ComposerMediaLightbox, { getComposerMediaLabel } from './ComposerMediaLightbox';
+import ResourceCardEditorDialog from './ResourceCardEditorDialog';
+import ResourceCardsSection from './ResourceCardsSection';
 import CreatableCombobox, { type CreatableComboboxOption } from './CreatableCombobox';
 import type { EditablePostDraft } from './post-editor-types';
 
@@ -93,6 +106,13 @@ interface ComposerError {
 interface ComposerMediaItem {
   id: string;
   existingId: string | null;
+  /**
+   * The key a resource scope points at. Minted here for new media and submitted
+   * with it, so scoping survives reordering; media already on the post keeps
+   * the key the server stored, or the positional one the server derives for
+   * rows written before keys existed.
+   */
+  mediaKey: string;
   file: File | null;
   existingUrl: string | null;
   mediaKind: 'image' | 'video';
@@ -168,32 +188,6 @@ function getSubmissionError(
   );
 }
 
-interface AttachmentRow {
-  id: string;
-  label: string;
-  kind: 'link' | 'file';
-  url: string;
-  storagePath: string;
-  contentType: string;
-  sizeBytes: number | null;
-  resourceType: PostResourceItemType;
-  role: PostResourceItemRole;
-  remixUse: PostResourceRemixUse;
-  isUploading?: boolean;
-}
-
-interface ResourceSectionRow {
-  id: string;
-  title: string;
-  kind: PostResourceSectionKind;
-  description: string;
-  promptText: string;
-  workflowShareUrl: string;
-  notesMarkdown: string;
-  attachments: AttachmentRow[];
-  allowRemix: boolean;
-}
-
 interface GenerationDraft {
   id: string;
   title: string;
@@ -229,89 +223,26 @@ const RESOURCE_KIND_OPTIONS: Array<{
   { value: 'remix', label: 'Remix access', description: 'Require recipe access before someone can remix.' },
 ];
 
-const RESOURCE_ITEM_TYPE_OPTIONS: Array<{
-  value: PostResourceItemType;
-  label: string;
-}> = [
-  { value: 'reference_image', label: 'Reference image' },
-  { value: 'workflow', label: 'Workflow' },
-  { value: 'source_file', label: 'Source file' },
-  { value: 'preset', label: 'Preset' },
-  { value: 'external_link', label: 'Link' },
-];
-
-const RESOURCE_ITEM_ROLE_OPTIONS: Array<{
-  value: PostResourceItemRole;
-  label: string;
-}> = [
-  { value: 'primary', label: 'Primary' },
-  { value: 'style_reference', label: 'Style reference' },
-  { value: 'product_reference', label: 'Product reference' },
-  { value: 'composition_reference', label: 'Composition reference' },
-  { value: 'character_reference', label: 'Character reference' },
-  { value: 'before_input', label: 'Before/input' },
-  { value: 'supporting_workflow', label: 'Supporting workflow' },
-  { value: 'manual_import', label: 'Manual import' },
-  { value: 'other', label: 'Other' },
-];
-
-const RESOURCE_SECTION_KIND_OPTIONS: Array<{
-  value: PostResourceSectionKind;
-  label: string;
-}> = [
-  { value: 'scene', label: 'Scene' },
-  { value: 'shot', label: 'Shot' },
-  { value: 'frame', label: 'Frame' },
-  { value: 'variation', label: 'Variation' },
-  { value: 'workflow_step', label: 'Workflow step' },
-  { value: 'asset_group', label: 'Asset group' },
-  { value: 'chapter', label: 'Chapter' },
-  { value: 'other', label: 'Other' },
-];
-
-
-const EMPTY_RESOURCE_SELECTIONS: Record<PostResourceKind, boolean> = {
-  prompt: false,
-  workflow: false,
-  files: false,
-  notes: false,
-  remix: false,
-};
-
-let attachmentIdCounter = 0;
-let resourceSectionIdCounter = 0;
-
-function createAttachmentRow(partial?: Partial<Omit<AttachmentRow, 'id'>>): AttachmentRow {
-  attachmentIdCounter += 1;
+/**
+ * A bundle written before structured items existed carries its content only in
+ * the flat `promptText` / `notesMarkdown` / `workflowShareUrl` / `attachments`
+ * fields. Running the same legacy synthesis the server uses turns those into
+ * items, so the card composer can open an old recipe instead of showing it as
+ * empty and dropping it on save.
+ */
+function withSynthesizedResourceItems(
+  bundle: PostResourceBundleInput | null | undefined
+): PostResourceBundleInput | null {
+  if (!bundle?.resources) {
+    return bundle ?? null;
+  }
 
   return {
-    id: `attachment-${attachmentIdCounter}`,
-    label: partial?.label ?? '',
-    kind: partial?.kind ?? 'link',
-    url: partial?.url ?? '',
-    storagePath: partial?.storagePath ?? '',
-    contentType: partial?.contentType ?? '',
-    sizeBytes: partial?.sizeBytes ?? null,
-    resourceType: partial?.resourceType ?? 'external_link',
-    role: partial?.role ?? 'primary',
-    remixUse: partial?.remixUse ?? 'none',
-  };
-}
-
-function createResourceSectionRow(partial?: Partial<Omit<ResourceSectionRow, 'id'>> & { id?: string }): ResourceSectionRow {
-  resourceSectionIdCounter += 1;
-  const id = partial?.id ?? `section-${resourceSectionIdCounter}`;
-
-  return {
-    id,
-    title: partial?.title ?? `Section ${resourceSectionIdCounter}`,
-    kind: partial?.kind ?? 'scene',
-    description: partial?.description ?? '',
-    promptText: partial?.promptText ?? '',
-    workflowShareUrl: partial?.workflowShareUrl ?? '',
-    notesMarkdown: partial?.notesMarkdown ?? '',
-    attachments: partial?.attachments ?? [createAttachmentRow()],
-    allowRemix: partial?.allowRemix ?? false,
+    ...bundle,
+    resources: {
+      ...bundle.resources,
+      items: normalizePostResourceItems(bundle.resources.items, bundle.resources),
+    },
   };
 }
 
@@ -335,6 +266,7 @@ function createComposerMediaItem(file: File, index: number): ComposerMediaItem {
   return {
     id: `new-${Date.now()}-${index}-${file.name}`,
     existingId: null,
+    mediaKey: createClientPostMediaKey(),
     file,
     existingUrl: null,
     mediaKind: file.type.startsWith('video/') ? 'video' : 'image',
@@ -342,286 +274,6 @@ function createComposerMediaItem(file: File, index: number): ComposerMediaItem {
     originalName: file.name,
     storagePath: null,
   };
-}
-
-function serializeAttachmentRows(rows: AttachmentRow[]): PostResourceAttachment[] {
-  return rows
-    .map((row): PostResourceAttachment | null => {
-      if (row.kind === 'file') {
-        const storagePath = row.storagePath.trim();
-        if (!storagePath) {
-          return null;
-        }
-
-        return {
-          label: row.label.trim() || storagePath.split('/').pop() || 'File',
-          kind: 'file' as const,
-          storagePath,
-          contentType: row.contentType || null,
-          sizeBytes: row.sizeBytes,
-          resourceType: row.resourceType,
-          role: row.role,
-          remixUse: row.remixUse,
-        };
-      }
-
-      const url = row.url.trim();
-      if (!url) {
-        return null;
-      }
-
-      return {
-        label: row.label.trim() || url,
-        kind: 'link' as const,
-        url,
-        resourceType: row.resourceType,
-        role: row.role,
-        remixUse: row.remixUse,
-      };
-    })
-    .filter((row): row is PostResourceAttachment => row !== null);
-}
-
-function sectionHasContent(section: ResourceSectionRow): boolean {
-  return Boolean(
-    section.title.trim() ||
-    section.description.trim() ||
-    section.promptText.trim() ||
-    section.workflowShareUrl.trim() ||
-    section.notesMarkdown.trim() ||
-    serializeAttachmentRows(section.attachments).length > 0 ||
-    section.allowRemix
-  );
-}
-
-function serializeResourceSectionRows(rows: ResourceSectionRow[]): PostResourceSection[] {
-  return rows
-    .filter(sectionHasContent)
-    .map((row, index) => ({
-      id: row.id,
-      title: row.title.trim() || `Section ${index + 1}`,
-      kind: row.kind,
-      description: row.description.trim() || null,
-      sortOrder: index,
-    }));
-}
-
-function buildResourceItems(params: {
-  selectedKinds: PostResourceKind[];
-  promptText: string;
-  notesMarkdown: string;
-  workflowShareUrl: string;
-  attachments: PostResourceAttachment[];
-  allowRemix: boolean;
-}): PostResourceItem[] {
-  const items: PostResourceItem[] = [];
-  const pushItem = (item: Omit<PostResourceItem, 'sortOrder' | 'isPrimary'>) => {
-    items.push({
-      ...item,
-      sortOrder: items.length,
-      isPrimary: items.length === 0,
-    });
-  };
-
-  if (params.selectedKinds.includes('prompt') && params.promptText.trim()) {
-    pushItem({
-      type: 'prompt',
-      role: 'primary',
-      sectionId: null,
-      title: 'Prompt',
-      description: null,
-      textContent: params.promptText.trim(),
-      externalUrl: null,
-      storagePath: null,
-      contentType: null,
-      sizeBytes: null,
-      workflowSnapshot: null,
-      remixUse: 'none',
-    });
-  }
-
-  if (params.selectedKinds.includes('workflow') && params.workflowShareUrl.trim()) {
-    pushItem({
-      type: 'workflow',
-      role: 'primary',
-      sectionId: null,
-      title: 'Workflow',
-      description: null,
-      textContent: null,
-      externalUrl: params.workflowShareUrl.trim(),
-      storagePath: null,
-      contentType: null,
-      sizeBytes: null,
-      workflowSnapshot: null,
-      remixUse: 'import_source',
-    });
-  }
-
-  if (params.selectedKinds.includes('files')) {
-    for (const attachment of params.attachments) {
-      const type = attachment.resourceType ?? (attachment.kind === 'file' ? 'source_file' : 'external_link');
-      pushItem({
-        type,
-        role: attachment.role ?? (type === 'reference_image' ? 'style_reference' : 'primary'),
-        sectionId: null,
-        title: attachment.label,
-        description: null,
-        textContent: null,
-        externalUrl: attachment.kind === 'file' ? null : attachment.url ?? null,
-        storagePath: attachment.kind === 'file' ? attachment.storagePath ?? null : null,
-        contentType: attachment.contentType ?? null,
-        sizeBytes: attachment.sizeBytes ?? null,
-        workflowSnapshot: null,
-        remixUse: attachment.remixUse ?? (type === 'reference_image' ? 'reference_only' : type === 'workflow' ? 'import_source' : 'none'),
-      });
-    }
-  }
-
-  if (params.selectedKinds.includes('notes') && params.notesMarkdown.trim()) {
-    pushItem({
-      type: 'note',
-      role: 'primary',
-      sectionId: null,
-      title: 'Notes',
-      description: null,
-      textContent: params.notesMarkdown.trim(),
-      externalUrl: null,
-      storagePath: null,
-      contentType: null,
-      sizeBytes: null,
-      workflowSnapshot: null,
-      remixUse: 'none',
-    });
-  }
-
-  if (params.allowRemix) {
-    pushItem({
-      type: 'remix_access',
-      role: 'primary',
-      sectionId: null,
-      title: 'Remix access',
-      description: null,
-      textContent: null,
-      externalUrl: null,
-      storagePath: null,
-      contentType: null,
-      sizeBytes: null,
-      workflowSnapshot: null,
-      remixUse: 'direct_remix',
-    });
-  }
-
-  return items;
-}
-
-function buildSectionResourceItems(sections: ResourceSectionRow[], startingSortOrder: number): PostResourceItem[] {
-  const items: PostResourceItem[] = [];
-  const pushItem = (
-    section: ResourceSectionRow,
-    item: Omit<PostResourceItem, 'sortOrder' | 'isPrimary'>
-  ) => {
-    items.push({
-      ...item,
-      sectionId: section.id,
-      sortOrder: startingSortOrder + items.length,
-      isPrimary: startingSortOrder + items.length === 0,
-    });
-  };
-
-  for (const section of sections.filter(sectionHasContent)) {
-    const sectionTitle = section.title.trim() || 'Section';
-    const promptText = section.promptText.trim();
-    const workflowShareUrl = section.workflowShareUrl.trim();
-    const notesMarkdown = section.notesMarkdown.trim();
-
-    if (promptText) {
-      pushItem(section, {
-        type: 'prompt',
-        role: 'primary',
-        sectionId: section.id,
-        title: `${sectionTitle} prompt`,
-        description: null,
-        textContent: promptText,
-        externalUrl: null,
-        storagePath: null,
-        contentType: null,
-        sizeBytes: null,
-        workflowSnapshot: null,
-        remixUse: 'none',
-      });
-    }
-
-    if (workflowShareUrl) {
-      pushItem(section, {
-        type: 'workflow',
-        role: 'primary',
-        sectionId: section.id,
-        title: `${sectionTitle} workflow`,
-        description: null,
-        textContent: null,
-        externalUrl: workflowShareUrl,
-        storagePath: null,
-        contentType: null,
-        sizeBytes: null,
-        workflowSnapshot: null,
-        remixUse: 'import_source',
-      });
-    }
-
-    for (const attachment of serializeAttachmentRows(section.attachments)) {
-      const type = attachment.resourceType ?? (attachment.kind === 'file' ? 'source_file' : 'external_link');
-      pushItem(section, {
-        type,
-        role: attachment.role ?? (type === 'reference_image' ? 'style_reference' : 'primary'),
-        sectionId: section.id,
-        title: attachment.label,
-        description: null,
-        textContent: null,
-        externalUrl: attachment.kind === 'file' ? null : attachment.url ?? null,
-        storagePath: attachment.kind === 'file' ? attachment.storagePath ?? null : null,
-        contentType: attachment.contentType ?? null,
-        sizeBytes: attachment.sizeBytes ?? null,
-        workflowSnapshot: null,
-        remixUse: attachment.remixUse ?? (type === 'reference_image' ? 'reference_only' : type === 'workflow' ? 'import_source' : 'none'),
-      });
-    }
-
-    if (notesMarkdown) {
-      pushItem(section, {
-        type: 'note',
-        role: 'primary',
-        sectionId: section.id,
-        title: `${sectionTitle} notes`,
-        description: null,
-        textContent: notesMarkdown,
-        externalUrl: null,
-        storagePath: null,
-        contentType: null,
-        sizeBytes: null,
-        workflowSnapshot: null,
-        remixUse: 'none',
-      });
-    }
-
-    if (section.allowRemix) {
-      pushItem(section, {
-        type: 'remix_access',
-        role: 'primary',
-        sectionId: section.id,
-        title: `${sectionTitle} remix access`,
-        description: null,
-        textContent: null,
-        externalUrl: null,
-        storagePath: null,
-        contentType: null,
-        sizeBytes: null,
-        workflowSnapshot: null,
-        remixUse: 'direct_remix',
-      });
-    }
-  }
-
-  return items;
 }
 
 function formatGeneratedCategory(value: string | null | undefined): PostMediaCategory {
@@ -646,181 +298,98 @@ function getVisibilityStatusLabel(v: PostVisibility): string {
   return 'Saved privately in Studio';
 }
 
-function buildDefaultResourceSummary(selectedKinds: PostResourceKind[], mode: PostResourceBundleAccessMode): string {
-  if (mode === 'none') {
-    return '';
-  }
-
-  const kindSummary = selectedKinds.length > 0
-    ? getLockedSummary(selectedKinds).toLowerCase()
-    : 'reusable process';
-
-  return `Unlock the ${kindSummary} behind this public post.`;
-}
-
-function buildDefaultResourcePreview(selectedKinds: PostResourceKind[]): string {
-  if (selectedKinds.length === 0) {
-    return 'Includes reusable resources buyers can open after access.';
-  }
-
-  return `Includes ${getLockedSummary(selectedKinds).toLowerCase()} for reuse after access.`;
-}
-
-function getInitialResourceSelections(bundle: PostResourceBundleInput | null | undefined): Record<PostResourceKind, boolean> {
-  const resources = bundle?.resources;
-  const items = resources?.items ?? [];
-  return {
-    prompt: Boolean(resources?.promptText?.trim() || items.some((item) => item.type === 'prompt')),
-    workflow: Boolean(resources?.workflowShareUrl?.trim() || resources?.workflowSnapshot || items.some((item) => item.type === 'workflow')),
-    files: Boolean((Array.isArray(resources?.attachments) && resources.attachments.length > 0) || items.some((item) => item.type === 'reference_image' || item.type === 'source_file' || item.type === 'preset' || item.type === 'external_link')),
-    notes: Boolean(resources?.notesMarkdown?.trim() || items.some((item) => item.type === 'note' || item.type === 'settings')),
-    remix: Boolean(resources?.allowRemix || items.some((item) => item.type === 'remix_access' || item.remixUse === 'direct_remix')),
-  };
-}
-
-function getInitialAttachmentRows(bundle: PostResourceBundleInput | null | undefined): AttachmentRow[] {
-  const attachments = Array.isArray(bundle?.resources?.attachments) && bundle.resources.attachments.length > 0
-    ? bundle.resources.attachments
-    : (bundle?.resources?.items ?? [])
-      .filter((item) => !item.sectionId)
-      .filter((item) => item.type === 'reference_image' || item.type === 'source_file' || item.type === 'preset' || item.type === 'external_link' || item.type === 'workflow')
-      .filter((item) => item.storagePath || item.externalUrl)
-      .map((item): PostResourceAttachment => ({
-        label: item.title,
-        kind: item.storagePath ? 'file' : 'link',
-        url: item.externalUrl,
-        storagePath: item.storagePath,
-        contentType: item.contentType,
-        sizeBytes: item.sizeBytes,
-        resourceType: item.type,
-        role: item.role,
-        remixUse: item.remixUse,
-      }));
-  if (!attachments || attachments.length === 0) {
-    return [createAttachmentRow()];
-  }
-
-    return attachments.map((attachment) =>
-      createAttachmentRow({
-        label: attachment.label,
-        kind: attachment.kind === 'file' ? 'file' : 'link',
-        url: attachment.url ?? '',
-        storagePath: attachment.storagePath ?? '',
-        contentType: attachment.contentType ?? '',
-        sizeBytes: attachment.sizeBytes ?? null,
-        resourceType: attachment.resourceType ?? (attachment.kind === 'file' ? 'source_file' : 'external_link'),
-        role: attachment.role ?? 'primary',
-        remixUse: attachment.remixUse ?? 'none',
-      })
-    );
-}
-
-function getInitialResourceSectionRows(bundle: PostResourceBundleInput | null | undefined): ResourceSectionRow[] {
-  const sections = bundle?.resources?.sections ?? [];
-  const items = bundle?.resources?.items ?? [];
-
-  if (!Array.isArray(sections) || sections.length === 0) {
-    return [];
-  }
-
-  return sections.map((section) => {
-    const sectionItems = items.filter((item) => item.sectionId === section.id);
-    const promptItem = sectionItems.find((item) => item.type === 'prompt');
-    const workflowItem = sectionItems.find((item) => item.type === 'workflow');
-    const notesItem = sectionItems.find((item) => item.type === 'note' || item.type === 'settings');
-    const attachmentItems = sectionItems
-      .filter((item) =>
-        item.type === 'reference_image' ||
-        item.type === 'source_file' ||
-        item.type === 'preset' ||
-        item.type === 'external_link'
-      )
-      .filter((item) => item.storagePath || item.externalUrl)
-      .map((item): AttachmentRow => createAttachmentRow({
-        label: item.title,
-        kind: item.storagePath ? 'file' : 'link',
-        url: item.externalUrl ?? '',
-        storagePath: item.storagePath ?? '',
-        contentType: item.contentType ?? '',
-        sizeBytes: item.sizeBytes ?? null,
-        resourceType: item.type,
-        role: item.role,
-        remixUse: item.remixUse,
-      }));
-
-    return createResourceSectionRow({
-      id: section.id,
-      title: section.title,
-      kind: section.kind,
-      description: section.description ?? '',
-      promptText: promptItem?.textContent ?? '',
-      workflowShareUrl: workflowItem?.externalUrl ?? '',
-      notesMarkdown: notesItem?.textContent ?? '',
-      attachments: attachmentItems.length > 0 ? attachmentItems : [createAttachmentRow()],
-      allowRemix: sectionItems.some((item) => item.type === 'remix_access' || item.remixUse === 'direct_remix'),
+async function uploadResourceFile(
+  file: File,
+  accessToken: string,
+  options: {
+    signal?: AbortSignal;
+    onProgress?: (progress: SignedUrlUploadProgress) => void;
+  } = {},
+): Promise<PostResourceAttachment> {
+  try {
+    if (options.signal?.aborted) throw new UploadCancelledError();
+    const contentType = file.type || 'application/octet-stream';
+    const signResponse = await fetch('/api/posts/resource-files/sign', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        fileName: file.name,
+        contentType,
+        sizeBytes: file.size,
+      }),
+      signal: options.signal,
     });
-  });
-}
+    const uploadIntent = await signResponse.json() as {
+      bucket?: 'post_resource_files';
+      path?: string;
+      token?: string;
+      signedUploadUrl?: string | null;
+      expected?: { fileName?: string; contentType?: string; sizeBytes?: number };
+      error?: string;
+    };
 
-async function uploadResourceFile(file: File, accessToken: string): Promise<PostResourceAttachment> {
-  const contentType = file.type || 'application/octet-stream';
-  const signResponse = await fetch('/api/posts/resource-files/sign', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({
-      fileName: file.name,
-      contentType,
-      sizeBytes: file.size,
-    }),
-  });
-  const uploadIntent = await signResponse.json() as {
-    bucket?: 'post_resource_files';
-    path?: string;
-    token?: string;
-    error?: string;
-  };
+    if (
+      !signResponse.ok
+      || uploadIntent.bucket !== 'post_resource_files'
+      || !uploadIntent.path
+      || !uploadIntent.token
+    ) {
+      throw new Error(uploadIntent.error || 'Failed to prepare resource upload.');
+    }
 
-  if (
-    !signResponse.ok
-    || uploadIntent.bucket !== 'post_resource_files'
-    || !uploadIntent.path
-    || !uploadIntent.token
-  ) {
-    throw new Error(uploadIntent.error || 'Failed to prepare resource upload.');
+    // The server resolves the content type from the extension when the browser
+    // cannot name one, and finalize compares the stored object against that
+    // resolution -- so the upload has to carry the server's answer, not ours.
+    const resolvedContentType = uploadIntent.expected?.contentType || contentType;
+    await uploadFileToSignedUrl(
+      file,
+      resolveSignedUploadUrl({
+        bucket: uploadIntent.bucket,
+        path: uploadIntent.path,
+        token: uploadIntent.token,
+        signedUploadUrl: uploadIntent.signedUploadUrl,
+      }),
+      {
+        mimeType: resolvedContentType,
+        onProgress: options.onProgress,
+        signal: options.signal,
+      },
+    );
+
+    if (options.signal?.aborted) throw new UploadCancelledError();
+    const finalizeResponse = await fetch('/api/posts/resource-files/finalize', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        path: uploadIntent.path,
+        fileName: file.name,
+        contentType: resolvedContentType,
+        sizeBytes: file.size,
+      }),
+      signal: options.signal,
+    });
+    const finalized = await finalizeResponse.json() as {
+      attachment?: PostResourceAttachment;
+      error?: string;
+    };
+    if (!finalizeResponse.ok || !finalized.attachment) {
+      throw new Error(finalized.error || 'Failed to verify resource upload.');
+    }
+
+    if (options.signal?.aborted) throw new UploadCancelledError();
+    return finalized.attachment;
+  } catch (error) {
+    if (options.signal?.aborted && !isUploadCancelledError(error)) {
+      throw new UploadCancelledError();
+    }
+    throw error;
   }
-
-  const { error: uploadError } = await supabase.storage
-    .from(uploadIntent.bucket)
-    .uploadToSignedUrl(uploadIntent.path, uploadIntent.token, file, { contentType });
-  if (uploadError) {
-    throw new Error(`Resource upload failed: ${uploadError.message}`);
-  }
-
-  const finalizeResponse = await fetch('/api/posts/resource-files/finalize', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({
-      path: uploadIntent.path,
-      fileName: file.name,
-      contentType,
-      sizeBytes: file.size,
-    }),
-  });
-  const finalized = await finalizeResponse.json() as {
-    attachment?: PostResourceAttachment;
-    error?: string;
-  };
-  if (!finalizeResponse.ok || !finalized.attachment) {
-    throw new Error(finalized.error || 'Failed to verify resource upload.');
-  }
-
-  return finalized.attachment;
 }
 
 const DEFAULT_PRICE_TOKENS = 900;
@@ -890,7 +459,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const isCreationPaywallManagementIntent =
     isEditMode && entrySurface === 'creations' && requestedFocusTarget === 'price';
   const initialBundle = initialPost?.resourceBundle ?? { accessMode: 'none' as const };
-  const initialResourceSelections = getInitialResourceSelections(initialBundle);
   const initialCategory =
     initialPost?.category && initialPost.category !== 'text'
       ? initialPost.category
@@ -904,9 +472,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     }
 
     if (initialPost?.mediaItems?.length) {
-      return initialPost.mediaItems.map((item) => ({
+      return initialPost.mediaItems.map((item, index) => ({
         id: `existing-${item.id}`,
         existingId: item.id,
+        // Rows written before media keys existed have none stored, and the
+        // server derives the same positional key for them on every read.
+        mediaKey: item.mediaKey ?? defaultPostMediaKey(index),
         file: null,
         existingUrl: item.url,
         mediaKind: item.mediaKind,
@@ -920,6 +491,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       return [{
         id: 'existing-cover',
         existingId: `${initialPost.id}:cover`,
+        mediaKey: defaultPostMediaKey(0),
         file: null,
         existingUrl: initialPost.mediaUrl,
         mediaKind: initialPost.mediaKind,
@@ -985,25 +557,19 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   const [category, setCategory] = useState<PostMediaCategory>(initialCategory);
   const [isDetailsOpen, setIsDetailsOpen] = useState(Boolean(initialPost?.description));
   const [resourceAccessMode, setResourceAccessMode] = useState<PostResourceBundleAccessMode>(initialResourceAccessMode);
-  const [resourceSelections, setResourceSelections] = useState<Record<PostResourceKind, boolean>>(
-    Object.values(initialResourceSelections).some(Boolean)
-      ? initialResourceSelections
-      : EMPTY_RESOURCE_SELECTIONS
+  // One card is one thing a buyer receives. The serialization lives in
+  // post-composer-resource-cards.ts, which the mobile composer mirrors.
+  const [resourceCards, setResourceCards] = useState<PostComposerResourceCardDraft[]>(
+    () => hydratePostComposerResourceCards(withSynthesizedResourceItems(initialBundle))
   );
-  const [resourceSummary] = useState(initialBundle.summary ?? '');
-  const [resourcePreviewText] = useState(initialBundle.previewText ?? '');
-  const [resourcePromptText, setResourcePromptText] = useState(initialBundle.resources?.promptText ?? '');
-  const [resourceNotes, setResourceNotes] = useState(initialBundle.resources?.notesMarkdown ?? '');
-  const [resourceWorkflowUrl, setResourceWorkflowUrl] = useState(initialBundle.resources?.workflowShareUrl ?? '');
-  const [resourceAttachmentRows, setResourceAttachmentRows] = useState<AttachmentRow[]>(() => getInitialAttachmentRows(initialBundle));
-  const [resourceSectionRows, setResourceSectionRows] = useState<ResourceSectionRow[]>(() => getInitialResourceSectionRows(initialBundle));
-  const [organizeResourceSections, setOrganizeResourceSections] = useState(() =>
-    (initialBundle.resources?.sections?.length ?? 0) > 0
+  const [resourceAllowRemix, setResourceAllowRemix] = useState(
+    () => hydratePostComposerAllowRemix(initialBundle)
   );
+  const [resourceSummary, setResourceSummary] = useState(initialBundle.summary ?? '');
+  const [resourcePreviewText, setResourcePreviewText] = useState(initialBundle.previewText ?? '');
   const [resourcePriceTokens, setResourcePriceTokens] = useState(() => getInitialPriceTokens(initialBundle));
-  const [resourceSelectionsTouched, setResourceSelectionsTouched] = useState(false);
-  const [resourcePromptTouched, setResourcePromptTouched] = useState(false);
-  const [resourceNotesTouched, setResourceNotesTouched] = useState(false);
+  const [editingResourceCard, setEditingResourceCard] = useState<PostComposerResourceCardDraft | null>(null);
+  const [isChoosingResourceType, setIsChoosingResourceType] = useState(false);
   const [didApplyGenerationPaywallPrefill, setDidApplyGenerationPaywallPrefill] = useState(false);
   const [didFocusPriceInput, setDidFocusPriceInput] = useState(false);
   const [error, setError] = useState<ComposerError | null>(null);
@@ -1106,109 +672,91 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     mediaCardLeftsRef.current = nextLefts;
   }, [mediaPreviewItems]);
   const hasGeneratedProof = Boolean(prefilledGeneration);
-  const selectedResourceKinds = useMemo(
-    () => RESOURCE_KIND_OPTIONS.filter((option) => resourceSelections[option.value]).map((option) => option.value),
-    [resourceSelections]
-  );
   const trimmedBody = body.trim();
   const bodyCount = body.length;
   const titleCount = title.trim().length;
   const hasMediaProof = proofMode === 'media' && (mediaItems.length > 0 || hasGeneratedProof);
   const postFormat: PostFormat = hasMediaProof ? (trimmedBody ? 'mixed' : 'media') : 'text';
   const displayVisibility = visibility;
-  const attachments = useMemo(() => serializeAttachmentRows(resourceAttachmentRows), [resourceAttachmentRows]);
   const generationPaywallPrefill = prefilledGeneration?.paywallPrefill ?? null;
   const hasGenerationPaywallPrefill = hasUsableGenerationPaywallPrefill(generationPaywallPrefill);
   const shouldFocusPriceInput =
     requestedFocusTarget === 'price' && (isGeneratedPaywallIntent || isCreationPaywallManagementIntent);
-  const hasResourceContent = Boolean(
-    (resourceSelections.prompt && resourcePromptText.trim()) ||
-    (resourceSelections.notes && resourceNotes.trim()) ||
-    (resourceSelections.workflow && resourceWorkflowUrl.trim()) ||
-    (resourceSelections.files && attachments.length > 0) ||
-    resourceSelections.remix ||
-    (organizeResourceSections && resourceSectionRows.some(sectionHasContent))
+  // A bundle a buyer has already paid for is frozen: its access mode, price and
+  // contents stay as sold. Visibility edits still flow through.
+  const isResourceEditingLocked = Boolean(initialPost?.hasPaidOrders);
+  const readyResourceCards = useMemo(
+    () => resourceCards.filter((card) => resourceCardHasContent(card)),
+    [resourceCards]
   );
+  const hasResourceContent = readyResourceCards.length > 0;
   const parsedResourcePriceTokens = Number.parseInt(resourcePriceTokens.trim() || '0', 10);
   const resourcePriceUsdCents = resourceAccessMode === 'paid' && Number.isFinite(parsedResourcePriceTokens)
     ? Math.round(parsedResourcePriceTokens)
     : 0;
-  const defaultResourceSummary = useMemo(
-    () => buildDefaultResourceSummary(selectedResourceKinds, resourceAccessMode),
-    [resourceAccessMode, selectedResourceKinds]
+  // Clamped rather than guarded at the render site, so an empty or nonsense
+  // price reads "You earn ~0 tokens" the way the mobile composer does instead
+  // of hiding the split entirely.
+  const creatorEarningsTokens = Math.floor(
+    Math.max(0, Number.isFinite(parsedResourcePriceTokens) ? parsedResourcePriceTokens : 0) * 0.85 * 100
+  ) / 100;
+  const suggestedResourcePreview = useMemo(
+    () => getResourceCardPreview(readyResourceCards),
+    [readyResourceCards]
   );
-  const defaultResourcePreview = useMemo(
-    () => buildDefaultResourcePreview(selectedResourceKinds),
-    [selectedResourceKinds]
+  /**
+   * Each item carries the key it will be submitted with, so a scope points at
+   * the media itself rather than its position -- reordering after scoping keeps
+   * the resource attached to the same output, and a scope on media added during
+   * an edit still names a key the server accepts.
+   */
+  const resourceScopeMediaOptions = useMemo(
+    () => mediaPreviewItems.map((item, index) => ({
+      mediaKey: item.mediaKey,
+      label: getComposerMediaLabel(index),
+      previewUrl: item.previewUrl ?? null,
+      mediaKind: item.mediaKind,
+    })),
+    [mediaPreviewItems]
   );
-  const resourceItems = useMemo(
-    () => {
-      const globalItems = buildResourceItems({
-        selectedKinds: selectedResourceKinds,
-        promptText: resourcePromptText,
-        notesMarkdown: resourceNotes,
-        workflowShareUrl: resourceWorkflowUrl,
-        attachments,
-        allowRemix: resourceSelections.remix,
-      });
-
-      return organizeResourceSections
-        ? [
-            ...globalItems,
-            ...buildSectionResourceItems(resourceSectionRows, globalItems.length),
-          ]
-        : globalItems;
-    },
+  const selectedResourceKinds = useMemo(
+    () => getPostResourceKinds({ items: buildResourceCardItems(readyResourceCards), allowRemix: resourceAllowRemix }),
+    [readyResourceCards, resourceAllowRemix]
+  );
+  const resourceBundleDraft = useMemo<PostResourceBundleInput | null>(
+    () => buildResourceCardBundleInput({
+      accessMode: resourceAccessMode,
+      cards: resourceCards,
+      allowRemix: resourceAllowRemix,
+      summary: resourceSummary,
+      previewText: resourcePreviewText,
+      priceTokens: resourcePriceUsdCents,
+    }),
     [
-      attachments,
-      organizeResourceSections,
-      resourceNotes,
-      resourcePromptText,
-      resourceSectionRows,
-      resourceSelections.remix,
-      resourceWorkflowUrl,
-      selectedResourceKinds,
+      resourceAccessMode,
+      resourceAllowRemix,
+      resourceCards,
+      resourcePreviewText,
+      resourcePriceUsdCents,
+      resourceSummary,
     ]
   );
-  const resourceSections = useMemo(
-    () => organizeResourceSections ? serializeResourceSectionRows(resourceSectionRows) : [],
-    [organizeResourceSections, resourceSectionRows]
-  );
-  const resourceBundleDraft = useMemo<PostResourceBundleInput | null>(() => {
-    if (resourceAccessMode === 'none') {
-      return null;
-    }
-
-    return {
-      accessMode: resourceAccessMode,
-      summary: resourceSummary.trim() || defaultResourceSummary,
-      previewText: resourcePreviewText.trim() || defaultResourcePreview,
-      priceUsdCents: resourceAccessMode === 'paid' ? resourcePriceUsdCents : 0,
-      resources: {
-        promptText: resourceSelections.prompt ? resourcePromptText.trim() || null : null,
-        notesMarkdown: resourceSelections.notes ? resourceNotes.trim() || null : null,
-        workflowShareUrl: resourceSelections.workflow ? resourceWorkflowUrl.trim() || null : null,
-        attachments: resourceSelections.files ? attachments : [],
-        allowRemix: resourceSelections.remix,
-        sections: resourceSections,
-        items: resourceItems,
-      },
-    };
-  }, [
-    attachments,
-    defaultResourcePreview,
-    defaultResourceSummary,
-    resourceAccessMode,
-    resourceNotes,
-    resourcePreviewText,
-    resourcePriceUsdCents,
-    resourcePromptText,
-    resourceSections,
-    resourceItems,
-    resourceSelections,
-    resourceSummary,
-    resourceWorkflowUrl,
-  ]);
+  const resourcePreviewRequiredError = error?.section === 'resources'
+    && /add a package preview/i.test(error.message)
+      ? error.message
+      : null;
+  const resourceListingCopyError = error?.section === 'resources'
+    && /useful preview or summary/i.test(error.message)
+      ? error.message
+      : null;
+  // Marketplace quality reads a non-empty summary before preview text. Put its
+  // feedback beside the field that is actually controlling that decision, so a
+  // legacy short/placeholder summary cannot invisibly shadow a valid preview.
+  const resourceSummaryError = resourceListingCopyError && resourceSummary.trim()
+    ? resourceListingCopyError
+    : null;
+  const resourcePreviewError = resourcePreviewRequiredError
+    ?? (resourceListingCopyError && !resourceSummary.trim() ? resourceListingCopyError : null);
   const publicPostTitle = title.trim() || (trimmedBody ? trimmedBody.split(/[.!?\n]/)[0]?.trim() ?? '' : '');
   const hasTitle = title.trim().length > 0;
   const completionChecklist = [
@@ -1231,8 +779,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     },
     {
       label: 'Recipe optional',
-      complete: resourceAccessMode === 'none' || hasResourceContent,
-      detail: resourceAccessMode === 'none' ? 'No recipe selected' : hasResourceContent ? getLockedSummary(selectedResourceKinds) : 'Add one asset',
+      complete: resourceAccessMode === 'none' || isResourceEditingLocked || hasResourceContent || resourceAllowRemix,
+      detail: resourceAccessMode === 'none'
+        ? 'No recipe selected'
+        : isResourceEditingLocked
+          ? 'Sold package stays as sold'
+          : hasResourceContent || resourceAllowRemix ? getLockedSummary(selectedResourceKinds) : 'Add one asset',
     },
   ];
   const stepBadgeLabel = hasGeneratedProof ? 'Generated media attached' : proofMode === 'text' ? 'Text post' : 'Media post';
@@ -1252,31 +804,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   }, [generationId, isCreationPaywallManagementIntent, isGeneratedPaywallIntent]);
 
   useEffect(() => {
-    if (resourceAccessMode === 'none') {
-      return;
-    }
-
-    if (!Object.values(resourceSelections).some(Boolean)) {
-      // Enabling an unlock requires at least one resource kind.
-      setResourceSelections((current) => ({
-        ...current,
-        prompt: true,
-      }));
-    }
-  }, [resourceAccessMode, resourceSelections]);
-
-  useEffect(() => {
-    if (!resourceSelections.files) {
-      return;
-    }
-
-    if (resourceAttachmentRows.length === 0) {
-      // Selecting files materializes the first editable attachment row.
-      setResourceAttachmentRows([createAttachmentRow()]);
-    }
-  }, [resourceAttachmentRows.length, resourceSelections.files]);
-
-  useEffect(() => {
     if (!isGeneratedPaywallIntent || didApplyGenerationPaywallPrefill || !prefilledGeneration) {
       return;
     }
@@ -1288,22 +815,30 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       return;
     }
 
-    if (!resourceSelectionsTouched) {
-      setResourceSelections((current) => {
-        const nextSelections = { ...current };
-        for (const kind of paywallPrefill.resourceKinds) {
-          nextSelections[kind] = true;
-        }
-        return nextSelections;
-      });
-    }
+    // The saved generation seeds the package as cards rather than loose fields,
+    // so a prefilled recipe is editable in exactly the same way as a hand-built
+    // one.
+    setResourceCards((current) => {
+      if (current.length > 0) {
+        return current;
+      }
 
-    if (!resourcePromptTouched && !resourcePromptText.trim() && paywallPrefill.promptText) {
-      setResourcePromptText(paywallPrefill.promptText);
-    }
+      const prefilledCards: PostComposerResourceCardDraft[] = [];
+      if (paywallPrefill.promptText) {
+        prefilledCards.push(createPostComposerResourceCard('prompt', {
+          textContent: paywallPrefill.promptText,
+        }));
+      }
+      if (paywallPrefill.notesMarkdown) {
+        prefilledCards.push(createPostComposerResourceCard('guide', {
+          textContent: paywallPrefill.notesMarkdown,
+        }));
+      }
+      return prefilledCards;
+    });
 
-    if (!resourceNotesTouched && !resourceNotes.trim() && paywallPrefill.notesMarkdown) {
-      setResourceNotes(paywallPrefill.notesMarkdown);
+    if (paywallPrefill.resourceKinds.includes('remix')) {
+      setResourceAllowRemix(true);
     }
 
     setDidApplyGenerationPaywallPrefill(true);
@@ -1311,11 +846,6 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     didApplyGenerationPaywallPrefill,
     isGeneratedPaywallIntent,
     prefilledGeneration,
-    resourceNotes,
-    resourceNotesTouched,
-    resourcePromptText,
-    resourcePromptTouched,
-    resourceSelectionsTouched,
   ]);
 
   useEffect(() => {
@@ -1744,7 +1274,34 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
   };
 
   const removeMediaItem = (id: string) => {
+    // Read from the render snapshot rather than inside the updater: a scope
+    // left pointing at removed media fails validation on publish, and with one
+    // output left the scope picker is hidden, so it could not be cleared by hand.
+    const removed = mediaItems.find((item) => item.id === id);
     setMediaItems((current) => current.filter((item) => item.id !== id));
+    if (removed) {
+      setResourceCards((current) => current.map((card) => {
+        if (!card.mediaKeys.includes(removed.mediaKey)) {
+          return card;
+        }
+        const mediaKeys = card.mediaKeys.filter((key) => key !== removed.mediaKey);
+        return { ...card, mediaKeys, appliesToAll: card.appliesToAll || mediaKeys.length === 0 };
+      }));
+    }
+    resetFeedback();
+  };
+
+  const switchToTextProof = () => {
+    setProofMode('text');
+    setMediaItems([]);
+    // With no proof media left, every resource necessarily applies to the post
+    // as a whole. Clearing all keys here mirrors removing the media one by one
+    // and prevents an invisible, stale scope from failing publish validation.
+    setResourceCards((current) => current.map((card) => (
+      card.mediaKeys.length > 0 || !card.appliesToAll
+        ? { ...card, appliesToAll: true, mediaKeys: [] }
+        : card
+    )));
     resetFeedback();
   };
 
@@ -1949,12 +1506,16 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     // attempt that failed on a sibling -- re-uploading them would duplicate the
     // staged object and burn the sign rate limit for nothing.
     const pending = items.filter((item) => !item.existingId && !item.storagePath);
+    // Media already on the post deliberately sends no mediaKey: the server
+    // derives the stored one, and submitting a key it disagrees with is a hard
+    // error. New media sends the key its scopes already point at.
     const describeItem = (item: ComposerMediaItem) => {
       if (item.existingId) {
         return { existingId: item.existingId };
       }
       if (item.storagePath) {
         return {
+          mediaKey: item.mediaKey,
           storagePath: item.storagePath,
           contentType: item.contentType ?? item.file?.type ?? '',
           originalName: item.originalName ?? item.file?.name ?? '',
@@ -2067,7 +1628,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         if (!result) {
           throw new Error('A selected media item is no longer available.');
         }
-        return result;
+        return { mediaKey: item.mediaKey, ...result };
       });
     } finally {
       if (uploadAbortRef.current === controller) {
@@ -2133,254 +1694,76 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     );
   };
 
-  const updateResourceSelection = (kind: PostResourceKind) => {
-    setResourceSelectionsTouched(true);
-    setResourceSelections((current) => ({
-      ...current,
-      [kind]: !current[kind],
-    }));
+  const openResourceTypePicker = () => {
+    setEditingResourceCard(null);
+    setIsChoosingResourceType(true);
     resetFeedback();
   };
 
+  const chooseResourceCardType = (type: PostComposerResourceCardType) => {
+    setIsChoosingResourceType(false);
+    setEditingResourceCard(createPostComposerResourceCard(type));
+  };
 
-  const updateAttachmentRow = (
-    id: string,
-    field: 'label' | 'url' | 'resourceType' | 'role' | 'remixUse',
-    value: string
-  ) => {
-    setResourceAttachmentRows((current) =>
-      current.map((row) => {
-        if (row.id !== id) {
-          return row;
-        }
-
-        if (field === 'resourceType') {
-          return { ...row, resourceType: value as PostResourceItemType };
-        }
-
-        if (field === 'role') {
-          return { ...row, role: value as PostResourceItemRole };
-        }
-
-        if (field === 'remixUse') {
-          return { ...row, remixUse: value as PostResourceRemixUse };
-        }
-
-        return { ...row, [field]: value };
-      })
-    );
+  const editResourceCard = (id: string) => {
+    const card = resourceCards.find((candidate) => candidate.id === id);
+    if (!card) {
+      return;
+    }
+    setIsChoosingResourceType(false);
+    setEditingResourceCard({ ...card });
     resetFeedback();
   };
 
-  const updateResourceSection = (
-    id: string,
-    field: 'title' | 'kind' | 'description' | 'promptText' | 'workflowShareUrl' | 'notesMarkdown' | 'allowRemix',
-    value: string | boolean
-  ) => {
-    setResourceSectionRows((current) =>
-      current.map((section) => section.id === id ? { ...section, [field]: value } : section)
-    );
-    resetFeedback();
+  // Edits stay on a private copy until Save, so abandoning the editor cannot
+  // half-apply a change to the package.
+  const updateEditingResourceCard = (patch: Partial<PostComposerResourceCardDraft>) => {
+    setEditingResourceCard((current) => current ? { ...current, ...patch } : current);
   };
 
-  const addResourceSection = () => {
-    setOrganizeResourceSections(true);
-    setResourceSectionRows((current) => [...current, createResourceSectionRow()]);
-    resetFeedback();
+  const closeResourceEditor = () => {
+    setEditingResourceCard(null);
+    setIsChoosingResourceType(false);
   };
 
-  const duplicateResourceSection = (id: string) => {
-    setResourceSectionRows((current) => {
-      const section = current.find((row) => row.id === id);
-      if (!section) {
-        return current;
-      }
-
-      return [
-        ...current,
-        createResourceSectionRow({
-          ...section,
-          id: undefined,
-          title: `${section.title || 'Section'} copy`,
-          attachments: section.attachments.map((attachment) => createAttachmentRow({ ...attachment })),
-        }),
-      ];
-    });
-    resetFeedback();
-  };
-
-  const removeResourceSection = (id: string) => {
-    setResourceSectionRows((current) => current.filter((section) => section.id !== id));
-    resetFeedback();
-  };
-
-  const applySectionToFullPost = (id: string) => {
-    const section = resourceSectionRows.find((row) => row.id === id);
-    if (!section) {
+  const saveResourceCard = () => {
+    const card = editingResourceCard;
+    if (!card) {
       return;
     }
 
-    if (section.promptText.trim()) {
-      setResourcePromptText(section.promptText);
-      setResourcePromptTouched(true);
-      setResourceSelections((current) => ({ ...current, prompt: true }));
-    }
-
-    if (section.workflowShareUrl.trim()) {
-      setResourceWorkflowUrl(section.workflowShareUrl);
-      setResourceSelections((current) => ({ ...current, workflow: true }));
-    }
-
-    if (section.notesMarkdown.trim()) {
-      setResourceNotes(section.notesMarkdown);
-      setResourceNotesTouched(true);
-      setResourceSelections((current) => ({ ...current, notes: true }));
-    }
-
-    const sectionAttachments = serializeAttachmentRows(section.attachments);
-    if (sectionAttachments.length > 0) {
-      setResourceAttachmentRows(sectionAttachments.map((attachment) => createAttachmentRow({
-        label: attachment.label,
-        kind: attachment.kind === 'file' ? 'file' : 'link',
-        url: attachment.url ?? '',
-        storagePath: attachment.storagePath ?? '',
-        contentType: attachment.contentType ?? '',
-        sizeBytes: attachment.sizeBytes ?? null,
-        resourceType: attachment.resourceType ?? (attachment.kind === 'file' ? 'source_file' : 'external_link'),
-        role: attachment.role ?? 'primary',
-        remixUse: attachment.remixUse ?? 'none',
-      })));
-      setResourceSelections((current) => ({ ...current, files: true }));
-    }
-
-    if (section.allowRemix) {
-      setResourceSelections((current) => ({ ...current, remix: true }));
-    }
-
+    setResourceCards((current) => (current.some((candidate) => candidate.id === card.id)
+      ? current.map((candidate) => candidate.id === card.id ? card : candidate)
+      : [...current, card]));
+    closeResourceEditor();
     resetFeedback();
   };
 
-  const updateSectionAttachmentRow = (
-    sectionId: string,
-    attachmentId: string,
-    field: 'label' | 'url' | 'resourceType' | 'role' | 'remixUse',
-    value: string
+  const removeResourceCard = (id: string) => {
+    const nextCards = resourceCards.filter((card) => card.id !== id);
+    setResourceCards(nextCards);
+    // Removing the final content card is an explicit request to remove the
+    // package. Keep remix-only packages alive, but do not leave the form in a
+    // paid/free mode that cannot be submitted without a second hidden action.
+    if (nextCards.length === 0 && !resourceAllowRemix) {
+      setResourceAccessMode('none');
+    }
+    resetFeedback();
+  };
+
+  const uploadResourceCardFile = async (
+    file: File,
+    options?: {
+      signal?: AbortSignal;
+      onProgress?: (progress: SignedUrlUploadProgress) => void;
+    },
   ) => {
-    setResourceSectionRows((current) =>
-      current.map((section) => {
-        if (section.id !== sectionId) {
-          return section;
-        }
-
-        return {
-          ...section,
-          attachments: section.attachments.map((attachment) => {
-            if (attachment.id !== attachmentId) {
-              return attachment;
-            }
-
-            if (field === 'resourceType') {
-              return { ...attachment, resourceType: value as PostResourceItemType };
-            }
-
-            if (field === 'role') {
-              return { ...attachment, role: value as PostResourceItemRole };
-            }
-
-            if (field === 'remixUse') {
-              return { ...attachment, remixUse: value as PostResourceRemixUse };
-            }
-
-            return { ...attachment, [field]: value };
-          }),
-        };
-      })
-    );
-    resetFeedback();
-  };
-
-  const addSectionAttachmentRow = (sectionId: string) => {
-    setResourceSectionRows((current) =>
-      current.map((section) =>
-        section.id === sectionId
-          ? { ...section, attachments: [...section.attachments, createAttachmentRow()] }
-          : section
-      )
-    );
-    resetFeedback();
-  };
-
-  const removeSectionAttachmentRow = (sectionId: string, attachmentId: string) => {
-    setResourceSectionRows((current) =>
-      current.map((section) => {
-        if (section.id !== sectionId) {
-          return section;
-        }
-
-        const nextAttachments = section.attachments.filter((attachment) => attachment.id !== attachmentId);
-        return {
-          ...section,
-          attachments: nextAttachments.length > 0 ? nextAttachments : [createAttachmentRow()],
-        };
-      })
-    );
-    resetFeedback();
-  };
-
-  const handleAttachmentFileUpload = async (id: string, fileToUpload: File | null) => {
-    if (!fileToUpload || !session?.access_token) {
-      return;
+    if (!session?.access_token) {
+      throw new Error('Sign in again to upload resource files.');
     }
-
-    setResourceAttachmentRows((current) =>
-      current.map((row) => row.id === id ? { ...row, isUploading: true } : row)
-    );
-    resetFeedback();
-
-    try {
-      const uploaded = await uploadResourceFile(fileToUpload, session.access_token);
-      setResourceAttachmentRows((current) =>
-        current.map((row) =>
-          row.id === id
-            ? {
-                ...row,
-                label: uploaded.label,
-                kind: 'file',
-                url: '',
-                storagePath: uploaded.storagePath ?? '',
-                contentType: uploaded.contentType ?? '',
-                sizeBytes: uploaded.sizeBytes ?? null,
-                resourceType: uploaded.contentType?.startsWith('image/') ? 'reference_image' : row.resourceType === 'external_link' ? 'source_file' : row.resourceType,
-                role: uploaded.contentType?.startsWith('image/') ? 'style_reference' : row.role,
-                remixUse: uploaded.contentType?.startsWith('image/') ? 'reference_only' : row.remixUse,
-                isUploading: false,
-              }
-            : row
-        )
-      );
-    } catch (uploadError) {
-      setError({
-        section: 'resources',
-        message: uploadError instanceof Error ? uploadError.message : 'Failed to upload resource file.',
-      });
-      setResourceAttachmentRows((current) =>
-        current.map((row) => row.id === id ? { ...row, isUploading: false } : row)
-      );
-    }
+    return uploadResourceFile(file, session.access_token, options);
   };
 
-  const addAttachmentRow = () => {
-    setResourceAttachmentRows((current) => [...current, createAttachmentRow()]);
-    resetFeedback();
-  };
-
-  const removeAttachmentRow = (id: string) => {
-    setResourceAttachmentRows((current) => {
-      const nextRows = current.filter((row) => row.id !== id);
-      return nextRows.length > 0 ? nextRows : [createAttachmentRow()];
-    });
-    resetFeedback();
-  };
 
   const completePublish = (nextPost: CreatedPostState, options: { redirect?: boolean } = {}) => {
     setCreatedPost(nextPost);
@@ -2465,7 +1848,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     }
 
     let resourceBundle: PostResourceBundleInput | undefined;
-    if (resourceAccessMode !== 'none') {
+    // A sold package is never sent (see the update payload below), so validating
+    // it would only block edits to everything else on the post -- a sold bundle
+    // that grants remix and nothing else has no cards to satisfy these checks.
+    if (resourceAccessMode !== 'none' && !isResourceEditingLocked) {
       if (selectedResourceKinds.length === 0) {
         stopWithError('Choose at least one item to include in the recipe.', 'resources');
         return;
@@ -2486,8 +1872,15 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         return;
       }
 
-      if (!hasResourceContent) {
+      if (!hasResourceContent && !resourceAllowRemix) {
         stopWithError('Add content for at least one selected recipe item before publishing.', 'resources');
+        return;
+      }
+
+      // The package preview is required buyer-facing copy, so it is the
+      // author's to write rather than a generated line.
+      if (!resourcePreviewText.trim()) {
+        stopWithError('Add a package preview so buyers know what they receive.', 'resources');
         return;
       }
 
@@ -2546,7 +1939,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             'Content-Type': 'application/json',
             Authorization: `Bearer ${session.access_token}`,
           },
-            body: JSON.stringify({
+          body: JSON.stringify({
             generationId,
             visibility: effectiveVisibility,
             title: title.trim() || undefined,
@@ -2554,7 +1947,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             body: trimmedBody || undefined,
             category: inferredCategory ?? undefined,
             sourceTools: sourceToolsForSubmit.length > 0 ? sourceToolsForSubmit : undefined,
-            resourceBundle: resourceBundle ?? { accessMode: 'none' },
+            // A missing bundle key means "preserve what is stored". Sending
+            // accessMode:none for a sold generation-backed post would retire
+            // its live package during an unrelated caption/visibility edit.
+            ...(isResourceEditingLocked
+              ? {}
+              : { resourceBundle: resourceBundle ?? { accessMode: 'none' } }),
           }),
         });
 
@@ -2594,7 +1992,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
             visibility: effectiveVisibility,
             category: inferredCategory ?? undefined,
             mediaItems: mediaItemsForSubmit,
-            resourceBundle: resourceBundle ?? { accessMode: 'none' },
+            // A sold package is frozen, and the update path treats an absent
+            // key as "keep what is stored" — sending `{accessMode:'none'}` here
+            // would delete a bundle people have already paid for.
+            ...(isResourceEditingLocked
+              ? {}
+              : { resourceBundle: resourceBundle ?? { accessMode: 'none' } }),
           }),
         });
 
@@ -3073,11 +2476,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       </button>
                       <button
                         type="button"
-                        onClick={() => {
-                          setProofMode('text');
-                          setMediaItems([]);
-                          resetFeedback();
-                        }}
+                        onClick={switchToTextProof}
                         className={`rounded-full px-4 py-2 text-sm font-medium transition ${
                           proofMode === 'text'
                             ? 'bg-sky-300 text-slate-950'
@@ -3521,35 +2920,60 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                   <input
                     type="checkbox"
                     checked={resourceAccessMode !== 'none'}
+                    disabled={isResourceEditingLocked}
                     onChange={(e) => {
-                      const checked = e.target.checked;
-                      if (checked) {
-                        setResourceAccessMode('free');
-                        setResourceSelections((prev) => {
-                          const hasAny = Object.values(prev).some(Boolean);
-                          return hasAny ? prev : { ...prev, prompt: true };
-                        });
-                      } else {
-                        setResourceAccessMode('none');
-                      }
+                      setResourceAccessMode(e.target.checked ? 'free' : 'none');
                       resetFeedback();
                     }}
-                    className="h-4 w-4 rounded border-white/10 bg-white/[0.03] text-emerald-400 focus:ring-0 focus:ring-offset-0"
+                    className="h-4 w-4 rounded border-white/10 bg-white/[0.03] text-emerald-400 focus:ring-0 focus:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50"
                   />
                   <span className="text-sm font-semibold text-white">Add a reusable recipe</span>
                 </label>
 
-                {resourceAccessMode !== 'none' && (
+                {isResourceEditingLocked ? (
+                  <div className="mt-5 space-y-5">
+                    <div className="rounded-[24px] border border-white/8 bg-black/25 p-4">
+                      <div className="text-sm font-semibold text-white">Purchased resources are protected</div>
+                      <p className="mt-1.5 text-xs leading-5 text-zinc-400">
+                        People have already unlocked this package, so its access mode, price, and contents
+                        cannot be changed. Visibility changes still apply to the post.
+                      </p>
+                      <div className="mt-3 text-xs font-medium text-zinc-300">
+                        {resourceAccessMode === 'paid'
+                          ? `${resourcePriceUsdCents} token paid package`
+                          : 'Resource package'}
+                        {' · '}
+                        {resourceCards.length} {resourceCards.length === 1 ? 'resource' : 'resources'}
+                      </div>
+                    </div>
+                    <ResourceCardsSection
+                      cards={resourceCards}
+                      mediaCount={mediaPreviewItems.length}
+                      disabled
+                      allowRemix={resourceAllowRemix}
+                      summary={resourceSummary}
+                      previewText={resourcePreviewText}
+                      suggestedPreview={suggestedResourcePreview}
+                      summaryError={null}
+                      previewError={null}
+                      onAddCard={openResourceTypePicker}
+                      onEditCard={editResourceCard}
+                      onRemoveCard={removeResourceCard}
+                      onAllowRemixChange={setResourceAllowRemix}
+                      onSummaryChange={setResourceSummary}
+                      onPreviewTextChange={setResourcePreviewText}
+                    />
+                  </div>
+                ) : resourceAccessMode !== 'none' ? (
                   <div className="mt-5 space-y-5">
                     <div className="rounded-[24px] border border-white/8 bg-black/25 p-4 space-y-4">
-                      {/* Access Mode and Pricing */}
                       <div className="flex flex-wrap items-center gap-4 sm:justify-between">
                         <div className="flex items-center gap-3">
                           <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Access Mode:</span>
                           <div className="inline-flex rounded-full border border-white/10 bg-black/30 p-1">
                             {([
                               { value: 'free', label: 'Free' },
-                              { value: 'paid', label: 'Paid ($)' }
+                              { value: 'paid', label: 'Paid' },
                             ] as const).map((mode) => {
                               const active = (resourceAccessMode === 'paid' ? 'paid' : 'free') === mode.value;
                               return (
@@ -3598,11 +3022,9 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                               />
                               <span className="pointer-events-none absolute right-3 text-xs text-zinc-500">tokens</span>
                             </div>
-                            {Number.isFinite(parsedResourcePriceTokens) && parsedResourcePriceTokens > 0 ? (
-                              <span className="text-xs text-zinc-500">
-                                ≈ {formatUsdCents(parsedResourcePriceTokens)}
-                              </span>
-                            ) : null}
+                            <span className="text-xs text-emerald-200">
+                              You earn ~{creatorEarningsTokens} tokens
+                            </span>
                           </div>
                         ) : null}
                       </div>
@@ -3610,9 +3032,8 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                       <div className="rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-3 text-xs leading-5 text-zinc-400">
                         {resourceAccessMode === 'paid' ? (
                           <>
-                            Buyers see the full price before payment. Your sales appear in Seller Dashboard;
-                            payment processing may affect the final payout. Before purchase, only the recipe
-                            summary and included resource types are visible.
+                            Buyers see the full price before payment, and you keep 85% of it. Before purchase,
+                            your public summary, package preview, and the resource titles below are visible.
                             {Number.isFinite(parsedResourcePriceTokens)
                               && parsedResourcePriceTokens > 0
                               && parsedResourcePriceTokens < POST_RESOURCE_WEB_CASH_MIN_TOKENS ? (
@@ -3626,437 +3047,36 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                           <>People can add a free recipe to their library with one click.</>
                         )}
                       </div>
-
-                      {/* Resource Kind Selection */}
-                      <div className="border-t border-white/5 pt-4">
-                        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500 mb-3">Resource Types to Include</div>
-                        <div className="flex flex-wrap gap-2">
-                          {RESOURCE_KIND_OPTIONS.map((option) => {
-                            const active = resourceSelections[option.value];
-
-                            return (
-                              <button
-                                key={option.value}
-                                type="button"
-                                onClick={() => updateResourceSelection(option.value)}
-                                title={option.description}
-                                className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold transition ${
-                                  active
-                                    ? 'border-emerald-300/35 bg-emerald-400/15 text-emerald-50'
-                                    : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:border-white/20 hover:bg-white/[0.06] hover:text-white'
-                                }`}
-                              >
-                                {active ? <Check className="h-4 w-4 text-emerald-200" /> : null}
-                                {option.label}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {/* Section Layout Option */}
-                      <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-4">
-                        <span className="text-xs text-zinc-500">Need section-based structure?</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const nextValue = !organizeResourceSections;
-                            setOrganizeResourceSections(nextValue);
-                            if (nextValue && resourceSectionRows.length === 0) {
-                              setResourceSectionRows([createResourceSectionRow()]);
-                            }
-                            resetFeedback();
-                          }}
-                          className="text-xs font-semibold text-emerald-300 hover:text-emerald-200 transition"
-                        >
-                          {organizeResourceSections ? 'Remove section layout' : 'Enable section layout'}
-                        </button>
-                      </div>
                     </div>
 
-                    {resourceSelections.prompt ? (
-                      <label className="block">
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Prompt</div>
-                        <textarea
-                          value={resourcePromptText}
-                          onChange={(event) => {
-                            setResourcePromptTouched(true);
-                            setResourcePromptText(event.target.value);
-                            resetFeedback();
-                          }}
-                          rows={6}
-                          placeholder="Paste the exact prompt included in the recipe."
-                          className="w-full rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-white/[0.05]"
-                        />
-                      </label>
-                    ) : null}
-
-                    {resourceSelections.notes ? (
-                      <label className="block">
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Notes</div>
-                        <textarea
-                          value={resourceNotes}
-                          onChange={(event) => {
-                            setResourceNotesTouched(true);
-                            setResourceNotes(event.target.value);
-                            resetFeedback();
-                          }}
-                          rows={6}
-                          placeholder="Add the steps, settings, or instructions that make this reusable."
-                          className="w-full rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-white/[0.05]"
-                        />
-                      </label>
-                    ) : null}
-
-                    {resourceSelections.workflow ? (
-                      <label className="block">
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Workflow / setup link</div>
-                        <input
-                          value={resourceWorkflowUrl}
-                          onChange={(event) => {
-                            setResourceWorkflowUrl(event.target.value);
-                            resetFeedback();
-                          }}
-                          placeholder="https://..."
-                          className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-white/[0.05]"
-                        />
-                      </label>
-                    ) : null}
-
-                    {resourceSelections.files ? (
-                      <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Files / links</div>
-                            <p className="mt-1 text-sm leading-6 text-zinc-400">
-                              Add gated workflow files or labeled links people should open after unlocking. Resource file uploads must be 50MB or smaller.
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={addAttachmentRow}
-                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                          >
-                            <Plus className="h-4 w-4" />
-                            Add link
-                          </button>
-                        </div>
-
-                        <div className="mt-4 space-y-3">
-                          {resourceAttachmentRows.map((row, index) => (
-                            <div key={row.id} className="grid gap-3 rounded-[20px] border border-white/8 bg-white/[0.03] p-3 md:grid-cols-[minmax(0,180px)_1fr_auto]">
-                              <input
-                                value={row.label}
-                                onChange={(event) => updateAttachmentRow(row.id, 'label', event.target.value)}
-                                placeholder={`Label ${index + 1}`}
-                                className="rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-black/45"
-                              />
-                              <div className="grid gap-2">
-                                <div className="grid gap-2 sm:grid-cols-3">
-                                  <label>
-                                    <span className="sr-only">Resource type</span>
-                                    <select
-                                      value={row.resourceType}
-                                      onChange={(event) => updateAttachmentRow(row.id, 'resourceType', event.target.value)}
-                                      className="w-full rounded-2xl border border-white/10 bg-black/35 px-3 py-2.5 text-xs font-medium text-white outline-none transition focus:border-emerald-400/35"
-                                    >
-                                      {RESOURCE_ITEM_TYPE_OPTIONS.map((option) => (
-                                        <option key={option.value} value={option.value} className="bg-zinc-950 text-white">
-                                          {option.label}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                  <label>
-                                    <span className="sr-only">Resource role</span>
-                                    <select
-                                      value={row.role}
-                                      onChange={(event) => updateAttachmentRow(row.id, 'role', event.target.value)}
-                                      className="w-full rounded-2xl border border-white/10 bg-black/35 px-3 py-2.5 text-xs font-medium text-white outline-none transition focus:border-emerald-400/35"
-                                    >
-                                      {RESOURCE_ITEM_ROLE_OPTIONS.map((option) => (
-                                        <option key={option.value} value={option.value} className="bg-zinc-950 text-white">
-                                          {option.label}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                  <label>
-                                    <span className="sr-only">Reuse mode</span>
-                                    <select
-                                      value={row.remixUse}
-                                      onChange={(event) => updateAttachmentRow(row.id, 'remixUse', event.target.value)}
-                                      className="w-full rounded-2xl border border-white/10 bg-black/35 px-3 py-2.5 text-xs font-medium text-white outline-none transition focus:border-emerald-400/35"
-                                    >
-                                      <option value="none" className="bg-zinc-950 text-white">Download/use</option>
-                                      <option value="reference_only" className="bg-zinc-950 text-white">Use as reference</option>
-                                      <option value="import_source" className="bg-zinc-950 text-white">Import source</option>
-                                    </select>
-                                  </label>
-                                </div>
-                                <div className="grid gap-2 md:grid-cols-[1fr_auto]">
-                                {row.kind === 'file' && row.storagePath ? (
-                                  <div className="rounded-2xl border border-emerald-300/15 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-50">
-                                    {row.label || row.storagePath}
-                                    {row.sizeBytes ? (
-                                      <span className="ml-2 text-xs text-emerald-50/65">{Math.ceil(row.sizeBytes / 1024)} KB</span>
-                                    ) : null}
-                                  </div>
-                                ) : (
-                                  <input
-                                    value={row.url}
-                                    onChange={(event) => updateAttachmentRow(row.id, 'url', event.target.value)}
-                                    placeholder="https://..."
-                                    className="rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-black/45"
-                                  />
-                                )}
-                                <label className="inline-flex cursor-pointer items-center justify-center rounded-2xl border border-white/10 bg-black/35 px-3 py-3 text-sm font-medium text-zinc-200 transition hover:bg-black/45 hover:text-white">
-                                  {row.isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Upload file'}
-                                  <input
-                                    type="file"
-                                    className="sr-only"
-                                    disabled={row.isUploading}
-                                    onChange={(event) => {
-                                      void handleAttachmentFileUpload(row.id, event.target.files?.[0] ?? null);
-                                      event.target.value = '';
-                                    }}
-                                  />
-                                </label>
-                                </div>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => removeAttachmentRow(row.id)}
-                                className="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-black/35 px-3 py-3 text-zinc-300 transition hover:bg-black/45 hover:text-white"
-                                aria-label={`Remove link ${index + 1}`}
-                              >
-                                <X className="h-4 w-4" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {resourceSelections.remix ? (
-                      <div className="rounded-[24px] border border-white/8 bg-black/30 p-4">
-                        <div className="text-sm font-semibold text-white">Remix access is included in this recipe</div>
-                        <p className="mt-1 text-sm leading-6 text-zinc-400">
-                          People will need to unlock this recipe before remixing the post.
-                        </p>
-                      </div>
-                    ) : null}
-
-                    {organizeResourceSections ? (
-                      <div className="rounded-[24px] border border-emerald-300/18 bg-black/30 p-4">
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                          <div>
-                            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100/75">Resource sections</div>
-                            <p className="mt-2 text-sm leading-6 text-zinc-400">
-                              Full post resources stay above. Add sections only for grouped prompts, references, workflows, or notes.
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={addResourceSection}
-                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] hover:text-white"
-                          >
-                            <Plus className="h-4 w-4" />
-                            Add section
-                          </button>
-                        </div>
-
-                        <div className="mt-4 rounded-[20px] border border-white/8 bg-white/[0.025] p-3">
-                          <div className="text-sm font-semibold text-white">Full post resources</div>
-                          <p className="mt-1 text-xs leading-5 text-zinc-500">
-                            Anything entered in the prompt, workflow, files, notes, or remix controls above applies to the whole post.
-                          </p>
-                        </div>
-
-                        <div className="mt-4 space-y-4">
-                          {resourceSectionRows.map((section, sectionIndex) => (
-                            <div key={section.id} className="rounded-[22px] border border-white/8 bg-white/[0.03] p-4">
-                              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                                <div className="grid flex-1 gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
-                                  <label className="block">
-                                    <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                                      Section title {sectionIndex + 1}
-                                    </span>
-                                    <input
-                                      aria-label={`Section title ${sectionIndex + 1}`}
-                                      value={section.title}
-                                      onChange={(event) => updateResourceSection(section.id, 'title', event.target.value)}
-                                      placeholder="Hook, Look 1, Step 3..."
-                                      className="w-full rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-black/45"
-                                    />
-                                  </label>
-                                  <label className="block">
-                                    <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                                      Section kind {sectionIndex + 1}
-                                    </span>
-                                    <select
-                                      aria-label={`Section kind ${sectionIndex + 1}`}
-                                      value={section.kind}
-                                      onChange={(event) => updateResourceSection(section.id, 'kind', event.target.value as PostResourceSectionKind)}
-                                      className="w-full rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35"
-                                    >
-                                      {RESOURCE_SECTION_KIND_OPTIONS.map((option) => (
-                                        <option key={option.value} value={option.value} className="bg-zinc-950 text-white">
-                                          {option.label}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                </div>
-
-                                <div className="flex flex-wrap gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => applySectionToFullPost(section.id)}
-                                    className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
-                                  >
-                                    Apply to full post
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => duplicateResourceSection(section.id)}
-                                    className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
-                                  >
-                                    Duplicate section
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => removeResourceSection(section.id)}
-                                    className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
-                                  >
-                                    Remove
-                                  </button>
-                                </div>
-                              </div>
-
-                              <label className="mt-3 block">
-                                <span className="sr-only">Section description {sectionIndex + 1}</span>
-                                <input
-                                  aria-label={`Section description ${sectionIndex + 1}`}
-                                  value={section.description}
-                                  onChange={(event) => updateResourceSection(section.id, 'description', event.target.value)}
-                                  placeholder="Optional section description"
-                                  className="w-full rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-black/45"
-                                />
-                              </label>
-
-                              <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                                <label className="block">
-                                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                                    Section prompt {sectionIndex + 1}
-                                  </span>
-                                  <textarea
-                                    aria-label={`Section prompt ${sectionIndex + 1}`}
-                                    value={section.promptText}
-                                    onChange={(event) => updateResourceSection(section.id, 'promptText', event.target.value)}
-                                    rows={4}
-                                    placeholder="Prompt for this section."
-                                    className="w-full rounded-[20px] border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-black/45"
-                                  />
-                                </label>
-                                <label className="block">
-                                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                                    Section notes {sectionIndex + 1}
-                                  </span>
-                                  <textarea
-                                    aria-label={`Section notes ${sectionIndex + 1}`}
-                                    value={section.notesMarkdown}
-                                    onChange={(event) => updateResourceSection(section.id, 'notesMarkdown', event.target.value)}
-                                    rows={4}
-                                    placeholder="Settings, direction, or usage notes for this section."
-                                    className="w-full rounded-[20px] border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-black/45"
-                                  />
-                                </label>
-                              </div>
-
-                              <label className="mt-3 block">
-                                <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                                  Section workflow link {sectionIndex + 1}
-                                </span>
-                                <input
-                                  aria-label={`Section workflow link ${sectionIndex + 1}`}
-                                  value={section.workflowShareUrl}
-                                  onChange={(event) => updateResourceSection(section.id, 'workflowShareUrl', event.target.value)}
-                                  placeholder="https://..."
-                                  className="w-full rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-black/45"
-                                />
-                              </label>
-
-                              <div className="mt-3 rounded-[18px] border border-white/8 bg-black/25 p-3">
-                                <div className="flex items-center justify-between gap-3">
-                                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
-                                    Section files / links
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => addSectionAttachmentRow(section.id)}
-                                    className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-semibold text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
-                                  >
-                                    Add link
-                                  </button>
-                                </div>
-                                <div className="mt-3 space-y-2">
-                                  {section.attachments.map((attachment, attachmentIndex) => (
-                                    <div key={attachment.id} className="grid gap-2 md:grid-cols-[150px_1fr_140px_auto]">
-                                      <input
-                                        value={attachment.label}
-                                        onChange={(event) => updateSectionAttachmentRow(section.id, attachment.id, 'label', event.target.value)}
-                                        placeholder={`Label ${attachmentIndex + 1}`}
-                                        className="rounded-2xl border border-white/10 bg-black/35 px-3 py-2.5 text-sm text-white outline-none transition focus:border-emerald-400/35"
-                                      />
-                                      <input
-                                        value={attachment.url}
-                                        onChange={(event) => updateSectionAttachmentRow(section.id, attachment.id, 'url', event.target.value)}
-                                        placeholder="https://..."
-                                        className="rounded-2xl border border-white/10 bg-black/35 px-3 py-2.5 text-sm text-white outline-none transition focus:border-emerald-400/35"
-                                      />
-                                      <select
-                                        value={attachment.resourceType}
-                                        onChange={(event) => updateSectionAttachmentRow(section.id, attachment.id, 'resourceType', event.target.value)}
-                                        className="rounded-2xl border border-white/10 bg-black/35 px-3 py-2.5 text-xs font-medium text-white outline-none transition focus:border-emerald-400/35"
-                                      >
-                                        {RESOURCE_ITEM_TYPE_OPTIONS.map((option) => (
-                                          <option key={option.value} value={option.value} className="bg-zinc-950 text-white">
-                                            {option.label}
-                                          </option>
-                                        ))}
-                                      </select>
-                                      <button
-                                        type="button"
-                                        onClick={() => removeSectionAttachmentRow(section.id, attachment.id)}
-                                        className="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-black/35 px-3 py-2.5 text-zinc-300 transition hover:bg-black/45 hover:text-white"
-                                        aria-label={`Remove section ${sectionIndex + 1} link ${attachmentIndex + 1}`}
-                                      >
-                                        <X className="h-4 w-4" />
-                                      </button>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-
-                              <label className="mt-3 inline-flex items-center gap-3 rounded-full border border-white/10 bg-black/25 px-3 py-2 text-sm font-medium text-zinc-200">
-                                <input
-                                  type="checkbox"
-                                  checked={section.allowRemix}
-                                  onChange={(event) => updateResourceSection(section.id, 'allowRemix', event.target.checked)}
-                                  className="h-4 w-4 accent-emerald-300"
-                                />
-                                Include remix access for this section
-                              </label>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {/* Price field has been moved to the top Access Mode area */}
+                    <ResourceCardsSection
+                      cards={resourceCards}
+                      mediaCount={mediaPreviewItems.length}
+                      disabled={isResourceEditingLocked}
+                      allowRemix={resourceAllowRemix}
+                      summary={resourceSummary}
+                      previewText={resourcePreviewText}
+                      suggestedPreview={suggestedResourcePreview}
+                      summaryError={resourceSummaryError}
+                      previewError={resourcePreviewError}
+                      onAddCard={openResourceTypePicker}
+                      onEditCard={editResourceCard}
+                      onRemoveCard={removeResourceCard}
+                      onAllowRemixChange={(nextAllowRemix) => {
+                        setResourceAllowRemix(nextAllowRemix);
+                        resetFeedback();
+                      }}
+                      onSummaryChange={(nextSummary) => {
+                        setResourceSummary(nextSummary);
+                        resetFeedback();
+                      }}
+                      onPreviewTextChange={(nextPreviewText) => {
+                        setResourcePreviewText(nextPreviewText);
+                        resetFeedback();
+                      }}
+                    />
                   </div>
-                )}
+                ) : null}
               </div>
 
               {createdPost ? (
@@ -4226,6 +3246,21 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         activeIndex={previewMediaIndex}
         onClose={() => setPreviewMediaIndex(null)}
         onNavigate={setPreviewMediaIndex}
+      />
+
+      <ResourceCardEditorDialog
+        card={editingResourceCard}
+        isChoosingType={isChoosingResourceType}
+        mediaOptions={resourceScopeMediaOptions}
+        // A generation-backed publish validates scopes against a single
+        // synthetic media key, so per-output scoping is only offered when the
+        // composer owns the media itself.
+        canScopeToMedia={!generationId}
+        onChooseType={chooseResourceCardType}
+        onChange={updateEditingResourceCard}
+        onSave={saveResourceCard}
+        onClose={closeResourceEditor}
+        onUploadFile={uploadResourceCardFile}
       />
     </div>
   );

@@ -154,6 +154,7 @@ export default function ShowcaseDetailBody({
   const resourceBundlePanel = bundle ? (
     <PostResourceBundlePanel
       postId={detail.id}
+      mediaItems={detailMediaItems}
       title={bundle.title}
       suppressTitle={normalizeComparableText(bundle.title) === normalizeComparableText(displayTitle)}
       summary={bundle.summary}
@@ -184,6 +185,11 @@ export default function ShowcaseDetailBody({
             revisionNumber: bundle.purchasedRevision.revisionNumber,
             purchasedAt: bundle.purchasedRevision.purchasedAt,
             title: bundle.purchasedRevision.title,
+            summary: bundle.purchasedRevision.summary,
+            previewText: bundle.purchasedRevision.previewText,
+            accessMode: bundle.purchasedRevision.accessMode,
+            priceUsdCents: bundle.purchasedRevision.priceUsdCents,
+            mediaItems: bundle.purchasedRevision.mediaItems,
             resources: {
               promptText: bundle.purchasedRevision.resources.promptText,
               notesMarkdown: bundle.purchasedRevision.resources.notesMarkdown,

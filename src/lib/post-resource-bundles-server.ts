@@ -79,7 +79,8 @@ import {
 } from '@/lib/generation-input-media';
 import { slugifySourceTool } from '@/lib/source-tools';
 import { getStoredMediaLocation } from '@/lib/media-urls';
-import { loadPostMediaItemsMap } from '@/lib/post-media';
+import { loadPostMediaItemsMap, type PostMediaPersistInput } from '@/lib/post-media';
+import { loadPurchasedProofMedia } from '@/lib/purchased-proof-media';
 import {
   MARKETPLACE_DEFAULT_PAGE_SIZE,
   shouldCacheMarketplaceResourceListBasePage,
@@ -92,6 +93,7 @@ import {
   type RawShowcaseSourceKind,
   type ShowcaseItemCategory,
   type ShowcaseMediaKind,
+  type ShowcaseMediaItem,
   type ShowcasePostFormat,
   type ShowcaseSourceKind,
   type ShowcaseVisibility,
@@ -304,9 +306,12 @@ export interface PurchasedPostResourceBundleRevision {
   revisionNumber: number;
   purchasedAt: string;
   title: string;
+  summary: string;
   previewText: string;
+  accessMode: PersistedPostResourceBundleAccessMode;
   priceUsdCents: number;
   resources: PostResourceBundleResources;
+  mediaItems: ShowcaseMediaItem[];
 }
 
 export interface PostResourceBundleDetail extends MarketplaceResourceListItem {
@@ -1422,14 +1427,25 @@ export async function updatePostWithResourceBundleAtomically(params: {
   patch: Record<string, unknown>;
   hasBundlePayload: boolean;
   bundle: PostResourceBundleInput | null | undefined;
+  /**
+   * When present, proof media is replaced in the same database transaction as
+   * the post and bundle. Storage promotion still happens before this call; an
+   * RPC failure therefore leaves every existing database row untouched.
+   */
+  mediaItems?: PostMediaPersistInput[];
 }): Promise<PostResourceBundleMutationResult> {
-  const { data, error } = await params.supabase.rpc('update_post_with_resource_bundle', {
+  const rpcName = params.mediaItems === undefined
+    ? 'update_post_with_resource_bundle'
+    : 'update_post_with_resource_bundle_and_media';
+  const rpcParams = {
     p_post_id: params.postId,
     p_owner_user_id: params.ownerUserId,
     p_post_patch: params.patch,
     p_has_bundle: params.hasBundlePayload,
     p_bundle: params.hasBundlePayload ? buildBundleMutationPayload(params.bundle, params.ownerUserId) : null,
-  });
+    ...(params.mediaItems === undefined ? {} : { p_media_items: params.mediaItems }),
+  };
+  const { data, error } = await params.supabase.rpc(rpcName, rpcParams);
 
   if (error) {
     throw error;
@@ -1938,7 +1954,9 @@ type PurchasedRevisionRow = {
   revision_number: number;
   is_latest: boolean;
   title: string;
+  summary: string;
   preview_text: string;
+  access_mode: PersistedPostResourceBundleAccessMode;
   price_usd_cents: number;
   prompt_text: string | null;
   notes_markdown: string | null;
@@ -2002,12 +2020,15 @@ function toPurchasedRevision(
     revisionNumber: row.revision_number,
     purchasedAt: row.created_at,
     title: normalizeBundleDisplayTitle(row.title),
+    summary: row.summary ?? '',
     previewText: row.preview_text,
+    accessMode: row.access_mode === 'paid' ? 'paid' : 'free',
     priceUsdCents: row.price_usd_cents,
     resources: {
       ...legacyResources,
       items: normalizePostResourceItems(row.resource_items, legacyResources),
     },
+    mediaItems: [],
   };
 }
 
@@ -2056,10 +2077,11 @@ export async function getPostResourceBundleDetailByPostId(
   // retired bundle must still open for the people who bought it -- that is the
   // whole promise of a purchase surviving the creator removing the unlock.
   let viewerHasPurchased = false;
+  let viewerPurchaseId: string | null = null;
   if (viewerUserId && viewerUserId !== row.owner_user_id) {
     const { data: purchaseData, error: purchaseError } = await adminSupabase
       .from('post_resource_bundle_purchases')
-      .select('bundle_id, buyer_user_id')
+      .select('id, bundle_id, buyer_user_id')
       .eq('bundle_id', row.id)
       .eq('buyer_user_id', viewerUserId)
       .maybeSingle();
@@ -2068,6 +2090,7 @@ export async function getPostResourceBundleDetailByPostId(
       logBackendError('post_resource_purchase_state_load_failed', { error: purchaseError });
     } else {
       viewerHasPurchased = Boolean(purchaseData);
+      viewerPurchaseId = (purchaseData as { id?: string } | null)?.id ?? null;
     }
   }
 
@@ -2104,9 +2127,18 @@ export async function getPostResourceBundleDetailByPostId(
   // What the buyer actually paid for. Later edits reach them as improvements,
   // but the revision pinned at checkout stays available so a creator cannot
   // hollow out a sold unlock.
-  const purchasedRevision = viewerHasPurchased && viewerUserId
+  const purchasedRevisionRow = viewerHasPurchased && viewerUserId
     ? await loadPurchasedBundleRevision(adminSupabase, row.id, viewerUserId)
     : null;
+  const purchasedRevision = viewerCanAccess ? toPurchasedRevision(purchasedRevisionRow) : null;
+  if (purchasedRevision && viewerPurchaseId) {
+    purchasedRevision.mediaItems = await loadPurchasedProofMedia({
+      adminSupabase,
+      purchaseId: viewerPurchaseId,
+      resources: purchasedRevision.resources,
+      includeStoredUrls: true,
+    });
+  }
 
   // Bundles do not persist the creation's reference media as items; the saved
   // references live in generation_input_media and are surfaced here at read
@@ -2181,7 +2213,7 @@ export async function getPostResourceBundleDetailByPostId(
     viewerHasPurchased,
     viewerIsOwner,
     viewerCanAccess,
-    purchasedRevision: viewerCanAccess ? toPurchasedRevision(purchasedRevision) : null,
+    purchasedRevision,
     retiredAt: row.retired_at ?? null,
     tombstoned: Boolean(hydrated.post?.tombstoned),
     remixCapability: remix.capability,
