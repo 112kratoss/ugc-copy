@@ -189,18 +189,22 @@ function sandboxMobilePurchasesAllowed(environment: NodeJS.ProcessEnv = process.
  * or not owned by this user" *after* StoreKit had already charged the reviewer,
  * and got the IAPs rejected under guideline 2.1(b).
  *
- * They settle against the `sandbox` provider instead of `app_store`/
- * `play_store`, so they grant credits but are never counted as revenue and stay
- * identifiable as a group.
+ * They settle against the reporting store (`app_store`/`play_store`), the same
+ * way sandbox receipts were recorded before the drop-filter existed.
+ *
+ * They are deliberately NOT relabelled to the `sandbox` provider. Settlement is
+ * deduped on `(provider, store_transaction_id)` OR `external_order_id`, while
+ * the table's uniqueness is on `store_transaction_id` alone. Changing the
+ * provider for an id already on file therefore conflicts on insert, misses the
+ * idempotency lookup, and returns `transaction_conflict` — which surfaced as
+ * "Mobile purchase does not match the server-issued intent." on every restore
+ * for an account holding a pre-filter sandbox purchase, the demo account
+ * included. Relabelling needs the dedupe key widened in the RPC first.
  */
 function settledPurchaseProvider(
   purchase: RevenueCatPurchase,
   fallback: MobilePurchaseProvider,
 ): MobilePurchaseProvider {
-  if (purchase.is_sandbox === true) {
-    return 'sandbox';
-  }
-
   if (purchase.store === 'app_store' || purchase.store === 'play_store') {
     return purchase.store;
   }
