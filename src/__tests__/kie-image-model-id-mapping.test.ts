@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { getKieImageModelId } from '@/lib/generation-services';
+import {
+  buildCodeGenerationModelOperations,
+  resolveProviderModelId,
+} from '@/lib/generation-model-runtime';
 import { IMAGE_MODELS, type ImageModelId } from '@/lib/models';
 
 /**
@@ -62,5 +66,47 @@ describe('kie image model id mapping', () => {
     const registered = Object.keys(IMAGE_MODELS).sort();
     const covered = Object.keys(VERIFIED_PROVIDER_IDS).sort();
     expect(covered).toEqual(registered);
+  });
+});
+
+/**
+ * The suite above pins `getKieImageModelId`, which is only ever consulted as the
+ * *fallback* in `resolveProviderModelId(config, variant, fallback)` — i.e. when no
+ * catalog entry exists. With `GENERATION_MODEL_CATALOG_SOURCE=code` (the default
+ * off production) an entry always exists, so the request is built from
+ * IMAGE_PROVIDER_MODELS and the fallback is dead code.
+ *
+ * That gap is exactly how the Wan ids stayed broken after the 2026-07-25 fix:
+ * the fallback and the database catalog were both corrected and asserted, while
+ * the table the code path actually reads kept sending the dotted app id and Kie
+ * answered 422 "The model name you specified is not supported".
+ */
+describe('code-catalog provider model map', () => {
+  const imageOperations = new Map(
+    buildCodeGenerationModelOperations()
+      .filter((operation) => operation.kind === 'image')
+      .map((operation) => [operation.modelId, operation]),
+  );
+
+  // A deliberately invalid fallback: if resolution ever silently drops through to
+  // it, the assertion fails loudly instead of passing on the fallback's correct
+  // value — which is the precise failure mode this suite exists to catch.
+  const POISONED_FALLBACK = 'fallback-must-not-be-used';
+
+  it.each(Object.entries(VERIFIED_PROVIDER_IDS))(
+    'resolves %s from the catalog entry the request is actually built from',
+    (modelId, expected) => {
+      const config = imageOperations.get(modelId);
+      expect(config).toBeDefined();
+      expect(resolveProviderModelId(config, 'text', POISONED_FALLBACK)).toBe(expected.text);
+      expect(resolveProviderModelId(config, 'reference', POISONED_FALLBACK)).toBe(expected.reference);
+    },
+  );
+
+  it('never emits a dotted major.minor version on the code-catalog path either', () => {
+    for (const modelId of Object.keys(IMAGE_MODELS) as ImageModelId[]) {
+      const config = imageOperations.get(modelId);
+      expect(resolveProviderModelId(config, 'text', POISONED_FALLBACK)).not.toMatch(/\d\.\d/);
+    }
   });
 });

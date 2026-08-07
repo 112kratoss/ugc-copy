@@ -1390,14 +1390,19 @@ export async function startImageGeneration(params: {
     } else if (model === 'wan-2.7-image' || model === 'wan-2.7-image-pro') {
       input = {
         prompt: compiledPrompt,
-        input_urls: resolvedImageUrls,
         n: 1,
         enable_sequential: false,
         resolution,
         thinking_mode: false,
         watermark: false,
-        bbox_list: resolvedImageUrls.map(() => []),
       };
+      // Both keys are edit-mode only. Sending them empty on a text-to-image
+      // request makes the provider reject it with "bbox_list requires
+      // input_urls" — an empty bbox_list still reads as an edit intent.
+      if (resolvedImageUrls.length > 0) {
+        input.input_urls = resolvedImageUrls;
+        input.bbox_list = resolvedImageUrls.map(() => []);
+      }
     } else if (model === 'imagen-4-fast' || model === 'imagen-4' || model === 'imagen-4-ultra') {
       input = { prompt: compiledPrompt, aspect_ratio: aspectRatio };
     } else if (model === 'ideogram-v3') {
@@ -1935,9 +1940,12 @@ export async function startVideoGeneration(params: {
         firstFrameUrl ? 'image' : 'text',
         firstFrameUrl ? 'kling/v3-turbo-image-to-video' : 'kling/v3-turbo-text-to-video',
       );
+      // Kling v3 Turbo types `duration` as a string ('5'), where grok-imagine
+      // types the same field as an integer. Every other Kling branch already
+      // sends String(...); this one passed the raw number straight through.
       const input: Record<string, unknown> = {
         prompt: compiledPrompt,
-        duration,
+        duration: String(duration),
         resolution,
       };
       if (firstFrameUrl) {
@@ -2136,10 +2144,17 @@ export async function startVideoGeneration(params: {
         mode === 'veo3' || mode === 'veo3_lite' ? mode : 'veo3_fast',
         mode === 'veo3' || mode === 'veo3_lite' ? mode : 'veo3_fast',
       );
+      // The veo endpoint names this field `aspect_ratio`, unlike its camelCase
+      // neighbours (`imageUrls`, `generationType`, `callBackUrl`). Sending
+      // `aspectRatio` meant veo never saw a ratio and silently fell back to its
+      // 16:9 default, so the picker had no effect on the rendered video.
+      // `resolution` (720p/1080p/4k) is a valid veo request field.
+      // NOTE: model_api_references/veo-3-1.md is stale on both points — verify
+      // against https://docs.kie.ai/veo3-api/generate-veo-3-video.md instead.
       body = {
         prompt: compiledPrompt,
         model: providerModelId,
-        aspectRatio,
+        aspect_ratio: aspectRatio,
         resolution,
         generationType: referenceImageUrls.length > 0
           ? 'REFERENCE_2_VIDEO'

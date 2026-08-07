@@ -109,8 +109,15 @@ const IMAGE_PROVIDER_MODELS: Record<ImageModelId, Record<string, string>> = {
     text: 'seedream/5-lite-text-to-image',
     reference: 'seedream/5-lite-image-to-image',
   },
-  'wan-2.7-image': { default: 'wan-2.7-image' },
-  'wan-2.7-image-pro': { default: 'wan-2.7-image-pro' },
+  // Wan publishes its image models under a slashed, dash-separated id. Sending
+  // the dotted app id here is what Kie rejects with "The model name you
+  // specified is not supported" (422) — the same correction the 2026-07-25
+  // release applied to the database catalog and to the fallback in
+  // generation-services.ts, which this table shadows whenever a catalog entry
+  // exists (i.e. always). VIDEO_PROVIDER_MODELS['wan-2.7'] already carries the
+  // slashed form.
+  'wan-2.7-image': { default: 'wan/2-7-image' },
+  'wan-2.7-image-pro': { default: 'wan/2-7-image-pro' },
   'imagen-4-fast': { default: 'google/imagen4-fast' },
   'imagen-4': { default: 'google/imagen4' },
   'imagen-4-ultra': { default: 'google/imagen4-ultra' },

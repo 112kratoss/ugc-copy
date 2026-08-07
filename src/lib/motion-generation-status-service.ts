@@ -167,7 +167,10 @@ async function persistMotionOutput({
     const videoBlob = await videoRes.blob();
 
     const fileName = `${userId}/generated_${predictionId}.mp4`;
-    const { error: uploadError } = await supabase.storage
+    // Service-role: generated_videos grants `authenticated` SELECT only, so an
+    // upload on the user client fails with "new row violates row-level security
+    // policy". Reads below stay on the user client, which the SELECT policy allows.
+    const { error: uploadError } = await settlementSupabase.storage
       .from('generated_videos')
       .upload(fileName, videoBlob, {
         contentType: 'video/mp4',
@@ -292,12 +295,22 @@ export async function getMotionGenerationStatusForRoute({
     return adminSupabase;
   };
 
-  const { data: generationData } = await supabase
+  // Service-role read: `authenticated` has no SELECT on output_url, model,
+  // completed_at or workflow_settings, so running this as the user denies the
+  // whole row and the miss surfaces as a phantom "Generation not found". The
+  // user_id filter plus the ownership check below are the access boundary here.
+  const { data: generationData, error: generationLookupError } = await getAdminSupabase()
     .from('generations')
     .select(MOTION_STATUS_GENERATION_SELECT)
     .eq('prediction_id', predictionId)
     .eq('user_id', userId)
     .single();
+  if (generationLookupError && generationLookupError.code !== 'PGRST116') {
+    logBackendError('generation_status_lookup_failed', {
+      error: generationLookupError,
+      kind: 'motion',
+    });
+  }
   const localGeneration = generationData as MotionStatusGenerationRow | null;
 
   if (!localGeneration || localGeneration.user_id !== userId) {

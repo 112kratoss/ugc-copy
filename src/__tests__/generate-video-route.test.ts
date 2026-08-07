@@ -429,6 +429,55 @@ describe('/api/generate-video route', () => {
     expect(((providerBody as { input?: Record<string, unknown> } | null)?.input ?? {}).multi_prompt).toBeUndefined();
   });
 
+  it('sends Kling v3 Turbo duration as a string, which its spec requires', async () => {
+    let providerBody: Record<string, unknown> | null = null;
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        providerBody = JSON.parse(String(init?.body));
+        return {
+          ok: true,
+          json: async () => ({ code: 200, data: { taskId: 'task-turbo-1' } }),
+        };
+      })
+    );
+
+    const { POST } = await import('@/app/api/generate-video/route');
+    const response = await POST(
+      new Request('http://localhost/api/generate-video', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token',
+          'Idempotency-Key': 'video-turbo-duration-1',
+          'x-request-id': 'video-turbo-duration-1',
+        },
+        body: JSON.stringify({
+          model: 'kling-3.0-turbo',
+          prompt: 'A slow dolly across a neon alley',
+          duration: 5,
+          aspectRatio: '16:9',
+          resolution: '720p',
+        }),
+      }) as never
+    );
+
+    expect(response.status).toBe(200);
+    // Kling types duration as a string ('5'); grok-imagine types the same field
+    // as an integer. This branch forwarded the raw number, so the guard is the
+    // type, not just the value.
+    expect(providerBody).toMatchObject({
+      model: 'kling/v3-turbo-text-to-video',
+      input: {
+        prompt: 'A slow dolly across a neon alley',
+        duration: '5',
+        resolution: '720p',
+        aspect_ratio: '16:9',
+      },
+    });
+  });
+
   it('rate limits video starts before deducting credits or calling the provider', async () => {
     currentSupabaseMock = createSupabaseMock(null, null, true, false);
     const providerFetch = vi.fn();
