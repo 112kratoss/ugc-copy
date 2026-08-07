@@ -104,7 +104,7 @@ interface RevenueCatResponse {
 
 interface RestorableMobileCreditPurchase {
   productId: string;
-  provider: Exclude<MobilePurchaseProvider, 'sandbox'>;
+  provider: MobilePurchaseProvider;
   transactionId: string;
 }
 
@@ -172,17 +172,40 @@ function providerStoreMatches(provider: MobilePurchaseProvider, store: string | 
 }
 
 /**
- * Sandbox purchases (TestFlight, Play internal testing, RevenueCat sandbox
- * receipts) must never grant production entitlements. Staging/QA environments
- * opt in explicitly with MOBILE_COMMERCE_ALLOW_SANDBOX=1.
+ * A client-declared `provider: 'sandbox'` payload is a claim that no store ever
+ * validated, so it stays a staging/QA affordance behind
+ * MOBILE_COMMERCE_ALLOW_SANDBOX=1 and can never mint credits in production.
  */
 function sandboxMobilePurchasesAllowed(environment: NodeJS.ProcessEnv = process.env) {
   return !isProductionDeployment(environment)
     && environment.MOBILE_COMMERCE_ALLOW_SANDBOX === '1';
 }
 
-function isDisallowedSandboxPurchase(purchase: RevenueCatPurchase) {
-  return purchase.is_sandbox === true && !sandboxMobilePurchasesAllowed();
+/**
+ * A receipt RevenueCat reports with `is_sandbox: true` is a different thing:
+ * Apple or Google really did validate it, only in their sandbox environment.
+ * Production must settle those, because App Review completes every In-App
+ * Purchase in the sandbox — dropping them is what returned "receipt is invalid
+ * or not owned by this user" *after* StoreKit had already charged the reviewer,
+ * and got the IAPs rejected under guideline 2.1(b).
+ *
+ * They settle against the `sandbox` provider instead of `app_store`/
+ * `play_store`, so they grant credits but are never counted as revenue and stay
+ * identifiable as a group.
+ */
+function settledPurchaseProvider(
+  purchase: RevenueCatPurchase,
+  fallback: MobilePurchaseProvider,
+): MobilePurchaseProvider {
+  if (purchase.is_sandbox === true) {
+    return 'sandbox';
+  }
+
+  if (purchase.store === 'app_store' || purchase.store === 'play_store') {
+    return purchase.store;
+  }
+
+  return fallback;
 }
 
 function isProviderTimeoutError(error: unknown) {
@@ -199,6 +222,16 @@ function isProviderTimeoutError(error: unknown) {
 
 function latestPurchase(purchases: RevenueCatPurchase[]) {
   return [...purchases].sort((first, second) => {
+    // A real purchase outranks a sandbox one even when the sandbox receipt is
+    // newer. Both are now settleable, so without this a tester who later bought
+    // for real would settle against the `sandbox` provider and drop that real
+    // money out of revenue reporting.
+    const firstSandbox = first.is_sandbox === true;
+    const secondSandbox = second.is_sandbox === true;
+    if (firstSandbox !== secondSandbox) {
+      return firstSandbox ? 1 : -1;
+    }
+
     const firstTime = Date.parse(first.purchase_date ?? '') || 0;
     const secondTime = Date.parse(second.purchase_date ?? '') || 0;
     return secondTime - firstTime;
@@ -215,10 +248,6 @@ function findRevenueCatPurchase(
   const productPurchases = subscriber?.non_subscriptions?.[productId] ?? [];
   const validPurchases = productPurchases.filter((purchase) => {
     if (purchase.refunded_at) {
-      return false;
-    }
-
-    if (isDisallowedSandboxPurchase(purchase)) {
       return false;
     }
 
@@ -278,8 +307,8 @@ async function fetchRevenueCatSubscriber({
   return response.json() as Promise<RevenueCatResponse>;
 }
 
-function revenueCatStoreProvider(store: string | null | undefined): RestorableMobileCreditPurchase['provider'] {
-  return store === 'app_store' || store === 'play_store' ? store : 'revenuecat';
+function revenueCatStoreProvider(purchase: RevenueCatPurchase): RestorableMobileCreditPurchase['provider'] {
+  return settledPurchaseProvider(purchase, 'revenuecat');
 }
 
 function revenueCatPurchaseTransactionId(productId: string, purchase: RevenueCatPurchase) {
@@ -307,10 +336,6 @@ function listRestorableMobileCreditPurchases(response: RevenueCatResponse): Rest
         continue;
       }
 
-      if (isDisallowedSandboxPurchase(purchase)) {
-        continue;
-      }
-
       const transactionId = revenueCatPurchaseTransactionId(productId, purchase);
       if (!transactionId) {
         continue;
@@ -318,7 +343,7 @@ function listRestorableMobileCreditPurchases(response: RevenueCatResponse): Rest
 
       purchases.push({
         productId,
-        provider: revenueCatStoreProvider(purchase.store),
+        provider: revenueCatStoreProvider(purchase),
         transactionId,
       });
     }
@@ -378,7 +403,7 @@ export async function verifyMobilePurchase({
   }
 
   return {
-    provider: purchase.store === 'app_store' || purchase.store === 'play_store' ? purchase.store : provider,
+    provider: settledPurchaseProvider(purchase, provider),
     transactionId: verifiedTransactionId,
     raw: purchase,
   };

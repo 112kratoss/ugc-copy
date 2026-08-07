@@ -3,7 +3,11 @@ import Purchases, { LOG_LEVEL, type PurchasesPackage } from 'react-native-purcha
 import { env } from './env';
 import { normalizePurchasedPackage, type NormalizedNativePurchase } from './iap-purchase';
 export { resolveCreditEntitlement, type MobilePurchaseEntitlement } from './iap-entitlements';
-export { normalizePurchasedPackage, type NormalizedNativePurchase } from './iap-purchase';
+export {
+  isUserCancelledPurchase,
+  normalizePurchasedPackage,
+  type NormalizedNativePurchase,
+} from './iap-purchase';
 
 let hasInstalledRevenueCatLogHandler = false;
 

@@ -1,6 +1,27 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizePurchasedPackage } from '../lib/iap-purchase';
+import { isUserCancelledPurchase, normalizePurchasedPackage } from '../lib/iap-purchase';
+
+describe('purchase cancellation classification', () => {
+  it('treats a dismissed purchase sheet as a cancellation, not a failure', () => {
+    expect(isUserCancelledPurchase(Object.assign(new Error('Purchase was cancelled'), {
+      userCancelled: true,
+    }))).toBe(true);
+  });
+
+  it('treats a real purchase failure as a failure', () => {
+    expect(isUserCancelledPurchase(Object.assign(new Error('Network error'), {
+      userCancelled: false,
+    }))).toBe(false);
+    // RevenueCat types the flag as nullable, and a null must not read as a cancel.
+    expect(isUserCancelledPurchase(Object.assign(new Error('Store error'), {
+      userCancelled: null,
+    }))).toBe(false);
+    expect(isUserCancelledPurchase(new Error('Store unreachable'))).toBe(false);
+    expect(isUserCancelledPurchase(null)).toBe(false);
+    expect(isUserCancelledPurchase('cancelled')).toBe(false);
+  });
+});
 
 describe('RevenueCat purchase normalization', () => {
   it('uses the iOS transaction identifier for App Store purchases', () => {

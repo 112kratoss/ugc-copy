@@ -9,6 +9,19 @@ export interface NormalizedNativePurchase {
   customerInfo: CustomerInfo;
 }
 
+/**
+ * RevenueCat surfaces a dismissed purchase sheet as a thrown error carrying
+ * `userCancelled`. Treating it like a failure puts a red banner on screen for
+ * someone who simply changed their mind — which is part of what App Review saw
+ * when it flagged the purchase flow under guideline 2.1(b).
+ */
+export function isUserCancelledPurchase(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'userCancelled' in error
+    && (error as { userCancelled?: boolean | null }).userCancelled === true;
+}
+
 export function normalizePurchasedPackage(
   result: MakePurchaseResult,
   os: 'ios' | 'android'

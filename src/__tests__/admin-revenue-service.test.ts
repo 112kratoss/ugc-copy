@@ -8,7 +8,9 @@ type TableRows = Record<string, Array<Record<string, unknown>>>;
 /**
  * Minimal PostgREST query-builder stand-in. It records which filters a table
  * query applied so the tests can assert on the `.is('mobile_product_id', null)`
- * guard that keeps mobile purchases off the web rail.
+ * guard that keeps mobile purchases off the web rail, and the
+ * `.neq('provider', 'sandbox')` guard that keeps store-sandbox settlements out
+ * of revenue.
  */
 function createClient(rows: TableRows, filterLog: Record<string, string[]> = {}) {
   return {
@@ -21,6 +23,10 @@ function createClient(rows: TableRows, filterLog: Record<string, string[]> = {})
         limit: () => Promise.resolve({ data: rows[table] ?? [], error: null }),
         is: (column: string, value: unknown) => {
           filterLog[table].push(`is:${column}=${String(value)}`);
+          return builder;
+        },
+        neq: (column: string, value: unknown) => {
+          filterLog[table].push(`neq:${column}=${String(value)}`);
           return builder;
         },
       };
@@ -61,6 +67,8 @@ describe('admin revenue report', () => {
     const mobile = report.rails.find((rail) => rail.key === 'mobile-iap');
 
     expect(filterLog.transactions).toContain('is:mobile_product_id=null');
+    // App Review / TestFlight settlements grant credits but are not money.
+    expect(filterLog.mobile_store_transactions).toContain('neq:provider=sandbox');
     expect(web?.totalsByCurrency).toEqual([]);
     expect(mobile?.totalsByCurrency).toEqual([
       { currency: 'INR', grossSubunits: 830000, succeededCount: 1 },
