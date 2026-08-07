@@ -159,6 +159,10 @@ export async function collectAdminRevenueReport(
     client
       .from('mobile_store_transactions')
       .select('id, user_id, status, amount_subunits, currency, credits, created_at, product_id')
+      // Store-sandbox settlements (App Review, TestFlight, Play internal
+      // testing) grant credits but are not money. See `settledPurchaseProvider`
+      // in mobile-commerce.ts for why they reach this table at all.
+      .neq('provider', 'sandbox')
       .gte('created_at', since)
       .order('created_at', { ascending: false })
       .limit(2000),

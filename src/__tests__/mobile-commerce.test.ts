@@ -511,40 +511,7 @@ describe('mobile commerce helpers', () => {
     });
   });
 
-  it('rejects sandbox RevenueCat receipts so TestFlight purchases never grant real credits', async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({
-      subscriber: {
-        non_subscriptions: {
-          'magicbooklet.credits.creator': [
-            {
-              id: 'rc-sandbox-1',
-              store: 'app_store',
-              store_transaction_id: '2000000123456789',
-              purchase_date: '2026-05-12T12:00:00Z',
-              is_sandbox: true,
-            },
-          ],
-        },
-      },
-    }), {
-      headers: { 'content-type': 'application/json' },
-      status: 200,
-    }));
-
-    await expect(verifyMobilePurchase({
-      userId,
-      productId: 'magicbooklet.credits.creator',
-      provider: 'app_store',
-      fetcher: fetcher as unknown as typeof fetch,
-      revenueCatApiKey: 'rc-secret',
-    })).rejects.toMatchObject({
-      status: 400,
-      message: 'Mobile purchase receipt is invalid or not owned by this user.',
-    });
-  });
-
-  it('verifies sandbox receipts when MOBILE_COMMERCE_ALLOW_SANDBOX=1 is set for staging QA', async () => {
-    vi.stubEnv('MOBILE_COMMERCE_ALLOW_SANDBOX', '1');
+  it('settles a store-validated sandbox receipt against the sandbox provider', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
       subscriber: {
         non_subscriptions: {
@@ -571,13 +538,47 @@ describe('mobile commerce helpers', () => {
       fetcher: fetcher as unknown as typeof fetch,
       revenueCatApiKey: 'rc-secret',
     })).resolves.toMatchObject({
-      provider: 'app_store',
+      provider: 'sandbox',
       transactionId: '2000000123456789',
     });
   });
 
-  it('ignores the sandbox opt-in when the server is a production deployment', async () => {
-    vi.stubEnv('MOBILE_COMMERCE_ALLOW_SANDBOX', '1');
+  it('settles store-validated sandbox receipts without the staging opt-in', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      subscriber: {
+        non_subscriptions: {
+          'magicbooklet.credits.creator': [
+            {
+              id: 'rc-sandbox-1',
+              store: 'app_store',
+              store_transaction_id: '2000000123456789',
+              purchase_date: '2026-05-12T12:00:00Z',
+              is_sandbox: true,
+            },
+          ],
+        },
+      },
+    }), {
+      headers: { 'content-type': 'application/json' },
+      status: 200,
+    }));
+
+    await expect(verifyMobilePurchase({
+      userId,
+      productId: 'magicbooklet.credits.creator',
+      provider: 'app_store',
+      fetcher: fetcher as unknown as typeof fetch,
+      revenueCatApiKey: 'rc-secret',
+    })).resolves.toMatchObject({
+      provider: 'sandbox',
+      transactionId: '2000000123456789',
+    });
+  });
+
+  // App Review completes every In-App Purchase in the store sandbox against the
+  // production backend. Rejecting these is what showed the reviewer an error
+  // after StoreKit had already charged them (guideline 2.1(b)).
+  it('settles sandbox receipts on a production deployment so App Review can purchase', async () => {
     vi.stubEnv('VERCEL_ENV', 'production');
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
       subscriber: {
@@ -604,13 +605,13 @@ describe('mobile commerce helpers', () => {
       provider: 'app_store',
       fetcher: fetcher as unknown as typeof fetch,
       revenueCatApiKey: 'rc-secret',
-    })).rejects.toMatchObject({
-      status: 400,
-      message: 'Mobile purchase receipt is invalid or not owned by this user.',
+    })).resolves.toMatchObject({
+      provider: 'sandbox',
+      transactionId: '2000000123456789',
     });
   });
 
-  it('still verifies the production purchase when a sandbox sibling shares the product', async () => {
+  it('still verifies the production purchase when a newer sandbox sibling shares the product', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
       subscriber: {
         non_subscriptions: {
@@ -1161,7 +1162,7 @@ describe('mobile commerce helpers', () => {
     expect(fakeSupabase.transactions).toHaveLength(2);
   });
 
-  it('excludes sandbox purchases from restore so TestFlight receipts do not mint credits', async () => {
+  it('restores sandbox purchases under the sandbox provider so they stay out of revenue', async () => {
     const fakeSupabase = createCreditSupabase({ credits: 100 });
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
       subscriber: {
@@ -1194,14 +1195,16 @@ describe('mobile commerce helpers', () => {
       revenueCatApiKey: 'rc-secret',
     })).resolves.toMatchObject({
       success: true,
-      credits: 600,
-      restoredCreditPurchases: 1,
+      credits: 1100,
+      restoredCreditPurchases: 2,
       alreadyProcessedCreditPurchases: 0,
     });
-    expect(fakeSupabase.transactions).toHaveLength(1);
-    expect(fakeSupabase.transactions[0]?.razorpay_order_id).toBe(
-      buildMobileExternalOrderId('app_store', '1000000123456700'),
-    );
+    expect(fakeSupabase.transactions).toHaveLength(2);
+    const orderIds = fakeSupabase.transactions.map((row) => row?.razorpay_order_id);
+    expect(orderIds).toContain(buildMobileExternalOrderId('app_store', '1000000123456700'));
+    // The sandbox receipt settles, but under `sandbox` rather than `app_store`,
+    // which is what keeps it off the revenue rail.
+    expect(orderIds).toContain(buildMobileExternalOrderId('sandbox', '2000000123456700'));
   });
 
   it('restores sandbox purchases when MOBILE_COMMERCE_ALLOW_SANDBOX=1 is set for staging QA', async () => {

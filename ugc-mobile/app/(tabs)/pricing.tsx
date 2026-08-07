@@ -19,6 +19,7 @@ import {
   configureIapForUser,
   getCreditPackages,
   isIapConfigured,
+  isUserCancelledPurchase,
   purchasePackage,
   resolveCreditEntitlement,
 } from '@/lib/iap';
@@ -228,16 +229,23 @@ export default function PricingScreen() {
     setBusyProductId(productId);
     setNotice(null);
     setNoticeTone('neutral');
+    // Once the store returns, the money has moved. Nothing after that point may
+    // tell the buyer their purchase failed.
+    let charged = false;
     try {
       if (os !== 'ios' && os !== 'android') {
         throw new Error('Native purchases are only available on iOS and Android.');
       }
 
-      const purchase = await purchasePackage(nativePackage, os);
+      // Resolved before charging: this used to throw 'Unknown credit product.'
+      // *after* the store had already taken payment.
       const entitlement = resolveCreditEntitlement(productId);
       if (!entitlement || entitlement.type !== 'credits') {
         throw new Error('Unknown credit product.');
       }
+
+      const purchase = await purchasePackage(nativePackage, os);
+      charged = true;
 
       await api.syncMobilePurchase({
         provider: purchase.provider,
@@ -249,10 +257,37 @@ export default function PricingScreen() {
       setNotice(`${entitlement.credits} credits are synced to your account.`);
       setNoticeTone('success');
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Purchase could not be completed.');
-      setNoticeTone('danger');
+      if (isUserCancelledPurchase(error)) {
+        setNotice(null);
+        setNoticeTone('neutral');
+      } else if (charged) {
+        await recoverChargedPurchase();
+      } else {
+        setNotice(error instanceof Error ? error.message : 'Purchase could not be completed.');
+        setNoticeTone('danger');
+      }
     } finally {
       setBusyProductId(null);
+    }
+  };
+
+  /**
+   * The store charged the buyer but crediting the account did not land. Retry
+   * through the restore path, which re-reads the receipt from the store, and
+   * failing that say plainly that the payment succeeded — never that it failed.
+   */
+  const recoverChargedPurchase = async () => {
+    try {
+      await api.restoreMobilePurchases();
+      await refreshProfile();
+      setNotice('Your purchase went through and your credits are now up to date.');
+      setNoticeTone('success');
+    } catch {
+      setNotice(
+        'Your payment went through. Your credits have not landed yet — reopen this screen '
+        + 'or tap Restore purchases in a moment and they will appear. You have not been charged twice.'
+      );
+      setNoticeTone('neutral');
     }
   };
 
