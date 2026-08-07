@@ -511,7 +511,7 @@ describe('mobile commerce helpers', () => {
     });
   });
 
-  it('settles a store-validated sandbox receipt against the sandbox provider', async () => {
+  it('settles a store-validated sandbox receipt against the reporting store', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
       subscriber: {
         non_subscriptions: {
@@ -538,7 +538,7 @@ describe('mobile commerce helpers', () => {
       fetcher: fetcher as unknown as typeof fetch,
       revenueCatApiKey: 'rc-secret',
     })).resolves.toMatchObject({
-      provider: 'sandbox',
+      provider: 'app_store',
       transactionId: '2000000123456789',
     });
   });
@@ -570,7 +570,7 @@ describe('mobile commerce helpers', () => {
       fetcher: fetcher as unknown as typeof fetch,
       revenueCatApiKey: 'rc-secret',
     })).resolves.toMatchObject({
-      provider: 'sandbox',
+      provider: 'app_store',
       transactionId: '2000000123456789',
     });
   });
@@ -606,7 +606,7 @@ describe('mobile commerce helpers', () => {
       fetcher: fetcher as unknown as typeof fetch,
       revenueCatApiKey: 'rc-secret',
     })).resolves.toMatchObject({
-      provider: 'sandbox',
+      provider: 'app_store',
       transactionId: '2000000123456789',
     });
   });
@@ -1162,7 +1162,7 @@ describe('mobile commerce helpers', () => {
     expect(fakeSupabase.transactions).toHaveLength(2);
   });
 
-  it('restores sandbox purchases under the sandbox provider so they stay out of revenue', async () => {
+  it('restores store-validated sandbox purchases instead of dropping them', async () => {
     const fakeSupabase = createCreditSupabase({ credits: 100 });
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
       subscriber: {
@@ -1202,9 +1202,57 @@ describe('mobile commerce helpers', () => {
     expect(fakeSupabase.transactions).toHaveLength(2);
     const orderIds = fakeSupabase.transactions.map((row) => row?.razorpay_order_id);
     expect(orderIds).toContain(buildMobileExternalOrderId('app_store', '1000000123456700'));
-    // The sandbox receipt settles, but under `sandbox` rather than `app_store`,
-    // which is what keeps it off the revenue rail.
-    expect(orderIds).toContain(buildMobileExternalOrderId('sandbox', '2000000123456700'));
+    // The sandbox receipt settles under the reporting store, so an id already on
+    // file keeps the same external order id and stays idempotent on restore.
+    expect(orderIds).toContain(buildMobileExternalOrderId('app_store', '2000000123456700'));
+  });
+
+  // Regression: sandbox receipts were settled under `app_store` long before the
+  // drop-filter existed, so production holds rows for sandbox transaction ids.
+  // Settling such an id under a different provider conflicts on the
+  // single-column UNIQUE(store_transaction_id), misses the
+  // `(provider, store_transaction_id)` idempotency lookup, and returns
+  // `transaction_conflict` -- which reached users as "Mobile purchase does not
+  // match the server-issued intent." on every restore.
+  it('treats an already-settled sandbox receipt as already processed on restore', async () => {
+    const externalOrderId = buildMobileExternalOrderId('app_store', '2000000123456700');
+    const fakeSupabase = createCreditSupabase({
+      credits: 100,
+      transactions: [{
+        id: 'txn-existing',
+        user_id: userId,
+        razorpay_order_id: externalOrderId,
+        credits: 500,
+        status: 'success',
+      }],
+    });
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      subscriber: {
+        non_subscriptions: {
+          'magicbooklet.credits.starter': [
+            {
+              id: 'rc-sandbox',
+              store: 'app_store',
+              store_transaction_id: '2000000123456700',
+              purchase_date: '2026-05-13T12:00:00Z',
+              is_sandbox: true,
+            },
+          ],
+        },
+      },
+    }), { headers: { 'content-type': 'application/json' }, status: 200 }));
+
+    await expect(restoreMobileEntitlements(fakeSupabase.client, userId, {
+      fetcher: fetcher as unknown as typeof fetch,
+      revenueCatApiKey: 'rc-secret',
+    })).resolves.toMatchObject({
+      success: true,
+      restoredCreditPurchases: 0,
+      alreadyProcessedCreditPurchases: 1,
+    });
+    // No second row, and no credits re-granted for a purchase already on file.
+    expect(fakeSupabase.transactions).toHaveLength(1);
+    expect(fakeSupabase.credits).toBe(100);
   });
 
   it('restores sandbox purchases when MOBILE_COMMERCE_ALLOW_SANDBOX=1 is set for staging QA', async () => {
