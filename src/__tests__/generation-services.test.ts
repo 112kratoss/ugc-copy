@@ -2779,6 +2779,40 @@ describe('generation services', () => {
     expect(generations[0].cost).toBe(35);
   });
 
+  it('refuses reference images on Veo Quality, which cannot do REFERENCE_2_VIDEO', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    vi.mocked(fetch).mockClear();
+
+    const { supabase } = createSupabaseMock();
+    // Only veo3_fast and veo3_lite accept REFERENCE_2_VIDEO; the flagship veo3
+    // does not. The catalog declares this rule, but nothing pinned it on the
+    // start path, so this asserts the request is actually refused end to end
+    // rather than reaching the provider as a paid-for request.
+    await expect(startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Use the supplied character reference.',
+      model: 'veo-3.1',
+      mode: 'veo3',
+      aspectRatio: '16:9',
+      resolution: '720p',
+      references: [
+        {
+          url: 'asset-image-1',
+          handle: '@hero',
+          displayName: 'Hero',
+          storagePath: 'uploads/user-1/hero.png',
+          sourceGenerationId: null,
+        },
+      ],
+    })).rejects.toThrow('Reusable references require Veo Lite or Fast.');
+
+    // Rejected before any provider call, so no hold is placed for a request the
+    // provider would refuse.
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
   it('syncs processing audio generations into succeeded storage-backed outputs', async () => {
     const { syncGenerationStatuses } = await import('@/lib/generation-status-sync');
     const statusSignal = AbortSignal.abort();
