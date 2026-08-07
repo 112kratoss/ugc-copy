@@ -2766,7 +2766,16 @@ describe('generation services', () => {
       resolution: '1080p',
     });
 
-    expect(providerBody).toMatchObject({ model: 'veo3_lite', resolution: '1080p', generationType: 'TEXT_2_VIDEO' });
+    // veo names this field `aspect_ratio`, unlike its camelCase neighbours.
+    // Sending `aspectRatio` meant veo never received a ratio and silently used
+    // its 16:9 default, so assert the wire key and not just the value.
+    expect(providerBody).toMatchObject({
+      model: 'veo3_lite',
+      resolution: '1080p',
+      generationType: 'TEXT_2_VIDEO',
+      aspect_ratio: '16:9',
+    });
+    expect(providerBody).not.toHaveProperty('aspectRatio');
     expect(generations[0].cost).toBe(35);
   });
 

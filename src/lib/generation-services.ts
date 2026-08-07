@@ -2144,10 +2144,20 @@ export async function startVideoGeneration(params: {
         mode === 'veo3' || mode === 'veo3_lite' ? mode : 'veo3_fast',
         mode === 'veo3' || mode === 'veo3_lite' ? mode : 'veo3_fast',
       );
+      // The veo endpoint names this field `aspect_ratio`, unlike its camelCase
+      // neighbours (`imageUrls`, `generationType`, `callBackUrl`). Sending
+      // `aspectRatio` meant veo never saw a ratio and silently fell back to its
+      // 16:9 default, so the picker had no effect on the rendered video.
+      //
+      // `resolution` is NOT a veo request field — it appears only in the
+      // response schema — so it is inert here. Left in place deliberately:
+      // removing it changes no provider behaviour, and the pricing table still
+      // charges per resolution, which needs resolving as a product decision
+      // rather than silently here.
       body = {
         prompt: compiledPrompt,
         model: providerModelId,
-        aspectRatio,
+        aspect_ratio: aspectRatio,
         resolution,
         generationType: referenceImageUrls.length > 0
           ? 'REFERENCE_2_VIDEO'
