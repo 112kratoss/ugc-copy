@@ -54,16 +54,16 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 
 | ID | Finding | Sev | Phase | Status | Landed |
 |---|---|---|---|---|---|
-| F4 | Spend cap posture + egress monitoring | Critical | 0 | TODO | |
-| F1 | Watch surfaces stream full-bitrate source | Critical | 0 | TODO | |
+| F4 | Spend cap posture + egress monitoring | Critical | 0 | IN PROGRESS | Cap recorded 2026-08-08; egress metric rides F15a |
+| F1 | Watch surfaces stream full-bitrate source | Critical | 0 | IN PROGRESS | Mobile half, pkg 1, 2026-08-08; web half open |
 | F2 | AI posts skip transcode; sweep 5/hour | Critical | 0 | TODO | |
-| F3 | Derivative cache TTL — needs decision #5 | Critical | 0 | TODO | |
+| F3 | Derivative cache TTL — decision #5 resolved | Critical | 0 | IN PROGRESS | Mobile upload header, pkg 1, 2026-08-08; server constants open |
 | F11 | Web `/feed` drops the ranking cursor | Critical | 0 | TODO | |
 | F13 | v2 stats refresh starves past 1,000 rows | High | 0 | TODO | |
 | F7a | Facts for all candidates; unbatched events | High | 0 | TODO | |
 | F6 | Unthrottled hot GETs incl. full-catalog scan | Medium | 0 | TODO | |
 | F15a | Monitoring truncates silently; biased rates | Medium | 0 | TODO | |
-| F10 | Assorted small leaks | Low | 0 | TODO | |
+| F10 | Assorted small leaks | Low | 0 | IN PROGRESS | Mobile 404 fallback, pkg 1, 2026-08-08 |
 | F12 | Workflow runs non-durable, non-idempotent | Critical | 1 | TODO | |
 | F14 | Shared-fate cron; no provider admission control | High | 1 | TODO | |
 | F5 | For-you RPC materializes whole catalog | High | 1 | TODO | |
@@ -152,7 +152,18 @@ The mobile package goes **first** because it's the **store-release train**: it m
 
 **Verify.** Cap setting recorded below; a calendar reminder or ops task exists for the weekly usage check.
 
-**Record here:** cap setting as of ____________ = ____________
+**Record here:** cap setting as of **2026-08-08** = **ON**, and staying on.
+
+**Owner decision (2026-08-08).** The audit recommended off-with-billing-alerts. The owner chose to **leave the cap on**, accepting a mid-month storage degradation as the failure mode rather than an uncapped bill. Recorded as deliberate, not as an oversight.
+
+Two consequences follow, and both are load-bearing for the rest of Phase 0:
+
+1. **The ~350 MAU hard line in the executive verdict is live, not hypothetical.** With the cap on there is no overage to absorb — exhausting the 250 GB egress quota degrades storage service. F1, F2 and F3 are therefore not cost-tuning; they are what moves the outage line.
+2. **Egress monitoring becomes the early-warning system.** With no bill to notice, the usage meter is the only signal that arrives before degradation does. Step 3 is mandatory, not opportunistic.
+
+The Supabase Management API does not expose the spend cap — `get_organization` returns plan and opt-in tags only — so this setting cannot be read or asserted from code. It stays a recorded human observation, and should be re-confirmed at every re-certification.
+
+**Where step 3 lands.** Measured egress bytes go into `src/lib/backend-cost-report.ts` alongside F15a in work package 3, not as a separate pass: F15a replaces that file's entire raw-query layer with database-side aggregates, so adding an egress metric to the old layer first would mean writing it twice.
 
 ---
 
@@ -175,6 +186,14 @@ The mobile package goes **first** because it's the **store-release train**: it m
 **Verify.** Play a video on each surface with devtools network open and confirm the request path contains `.feed.<hash>.mp4`. On mobile, confirm via a proxy or by checking the resolved URI in the player config.
 
 **Gotcha.** The web half ships on the next push; the mobile half needs a store release. Do the mobile half first and bundle the other mobile-side items onto the same store train (F3's upload header, F10's 404 fallback).
+
+**Mobile half landed 2026-08-08 (work package 1).** `ugc-mobile/lib/showcase-media.ts` now exposes `getShowcasePlaybackUrl` — renamed from `getShowcaseFeedPlaybackUrl`, since it is no longer feed-only — and `viewer.tsx` resolves through it. Three notes for whoever does the web half:
+
+- **The old policy was explicit, and was overridden deliberately.** `showcase-media.ts` carried the comment *"Only for muted, scroll-by playback. The full viewer must keep using `url`"*, and `showcase-feed-rendition.test.ts` asserted exactly that. Both were rewritten rather than worked around, so no file is left documenting a rule the code no longer follows. Expect the same class of conflict on the web side.
+- **There were two full-source paths in the viewer, not one.** Besides the cited `ActiveVideo`, the inactive-slide branch renders `FeedVideoPreview` on `mediaItem.url`. Both now resolve through the helper. Grep for the raw field rather than trusting the cited line alone.
+- **The helper had no production callers whatsoever** — only tests. That independently corroborates the finding: the rendition plumbing was built, tested, and then never wired to a watch surface.
+
+**Residual worth knowing.** The rendition encodes audio at 64k mono (`video-rendition.ts:22-44`). That is unremarkable under a muted feed row, but the immersive viewer plays unmuted, so this trades some audio quality for the egress win. If it proves audible on real content, the answer is a second higher-bitrate rendition tier for the viewer — not a return to full sources.
 
 ---
 
@@ -215,10 +234,15 @@ The mobile package goes **first** because it's the **store-release train**: it m
 - `next.config.ts:143` — `images.minimumCacheTTL` also 300, same rationale.
 - Hashed derivative naming: `src/lib/post-media-rendition.ts:31-37` (`.feed.<hash>.mp4`), `src/lib/post-media-preview.ts:18-24` (`.preview.<hash>.webp`).
 
-**Fix.** Resolve decision #5 first, then split the constant:
-- Mutable originals: keep a short TTL (300s is fine).
-- Content-hashed derivatives: the decision-#5 TTL. Recommended: `public, max-age=86400, stale-while-revalidate=604800` — a 288× cut in revalidation churn while bounding takedown exposure to one day. If the owner accepts the already-served-browser residual, `public, max-age=31536000, immutable` maximizes the caching win.
-- Raise `images.minimumCacheTTL` to match the chosen derivative TTL.
+**Fix — decision #5 resolved 2026-08-08 as the 1-day compromise.** Three things found while implementing changed the shape of the fix from what this section originally prescribed. All three are recorded because each would otherwise be re-derived:
+
+1. **There is no mutable-versus-immutable split to make — one TTL covers the whole bucket.** The original plan assumed originals are mutable and must therefore stay short. They are not. Every public showcase path is written once and never overwritten: initial publish keys on post id and media index (`post-publish-service.ts:254`), edits mint a fresh `randomUUID()` segment (`post-update-service.ts:740`), generation publishes carry a 12-char source-version hash (`showcase-publish-service.ts:316`), and derivatives carry a content hash. A long TTL cannot serve stale bytes anywhere here. Holding originals at 300s would also have bought nothing on the risk side — after F1 a taken-down video replays from its cached *rendition* regardless, so the exposure window is one day either way. One uniform ceiling gives one explainable invariant: **any public showcase object stays replayable for at most one day after takedown.**
+
+2. **`stale-while-revalidate` is unreachable and has been dropped.** `storage-js` builds the header itself — `headers['cache-control'] = ` + `` `max-age=${options.cacheControl}` `` — so `cacheControl` may only carry a seconds count. Passing the recommended directive string would emit the malformed `max-age=public, max-age=86400, stale-while-revalidate=604800`. The shipped value is `max-age=86400`, which is the half that delivers the 288× revalidation cut; SWR was a refinement, not the win. Reaching it would mean bypassing the SDK on every write path — not worth it for Phase 0.
+
+3. **The `.copy()` inheritance chain is real, but not where this section said.** `showcase-publish-service.ts:318` is an `.upload()` that sets `cacheControl` explicitly. The copies that inherit the client's upload header are `post-publish-service.ts:302` and `post-update-service.ts:750`, both `UPLOADS_BUCKET → SHOWCASE_MEDIA_BUCKET` with no cache option. So the client upload headers really do decide the public TTL for every device upload on both web and mobile — the gotcha stands, the line reference does not.
+
+Raise `images.minimumCacheTTL` to match.
 
 **Verify.** Upload a new post, then check the `cache-control` response header on its `.preview.<hash>.webp`.
 
@@ -291,7 +315,13 @@ The mobile package goes **first** because it's the **store-release train**: it m
 
 **Verify.** Watch one reel end-to-end and count the resulting API calls and inserted rows; both should drop by roughly an order of magnitude.
 
-**Decision needed before implementing:** raw fact retention of 30 vs 90 days. Ninety days gives a full quarter of experiment lookback; thirty cuts storage roughly threefold. This shapes the partition and aggregate design in F7b. **Owner's call.**
+**Decision resolved 2026-08-08 — 30 days.** The owner delegated the call rather than picking. The reasoning is recorded here so F7b does not relitigate it:
+
+- The stated case for 90 days is a quarter of experiment lookback — but F7b keeps **daily aggregates** for exactly that window. Raw facts are not the lookback mechanism. They are what you need to re-derive a metric under a changed definition, or to debug one specific ranking decision, and both are day-to-week activities.
+- The arithmetic already in this document makes 90 days marginal on its own terms: ~60,000 facts/day at 5,000 MAU is 5.4M rows over 90 days, on the order of 5.4–10.8 GiB with indexes, against an **8 GiB included quota** — before any other table is counted. Thirty days lands near 1.8M rows and 1.8–3.6 GiB.
+- The error is asymmetric. Lengthening retention later is a configuration change; recovering from an exhausted database quota is an incident. That asymmetry matters more than usual now that decision #1 has left the spend cap on.
+
+F7b partitions monthly, so a 30-day raw window is three partitions deep at any time.
 
 ---
 
@@ -337,7 +367,7 @@ The mobile package goes **first** because it's the **store-release train**: it m
 
 - **Owner studio grid** *(web package)* — `src/app/creations/CreationMediaFrame.tsx:117-128`: 36 `<video preload="metadata">` tiles with `src` always attached and no viewport gating, against *signed* URLs which cache poorly (uncached egress is 3× cached). Use posters plus `preload="none"`.
 - **Unoptimized full-res images** *(web package)* — `src/app/creators/[username]/page.tsx:84-104` renders cover and avatar as raw eager `<img>` at full source; detail/reel images bypass `next/image` at `ShowcaseMediaCarousel.tsx:489-514`.
-- **Mobile 404 fallback** *(mobile package — store train)* — `ugc-mobile/lib/api-client.ts:611-613` refetches a 48-item feed to locate one post.
+- **Mobile 404 fallback** *(mobile package — store train)* — **DONE 2026-08-08.** `ugc-mobile/lib/api-client.ts` refetched a feed page to locate one post after a detail 404. Removed outright rather than shrunk, for three reasons found on inspection: it requested 48 items but the server clamps feed `limit` to 24 (`showcase-feed-route-adapter-service.ts:91`), so it never searched what it claimed to; its own regression test named it the *legacy* fallback and existed only because it had to forward auth by hand or become a way around user blocks; and every caller already tolerates failure. A detail 404 is now authoritative.
 - **Webhook import budget** *(transcode package)* — the finished-video download and re-upload runs via `after()` inside `/api/webhooks/kie`, whose `maxDuration` is 60 s, with a 60 s fetch timeout. Large videos always fall through to the 10-minute cron. Raise the duration or hand off to the queue unconditionally.
 - **Web feed DOM growth** *(unassigned — opportunistic)* — `/feed` keeps every loaded card mounted and serializes the whole accumulated feed to `sessionStorage` on change; approaches browser limits around 50–100 cards. Window the list and debounce the snapshot to an idle callback.
 - **Payload weight** *(unassigned — opportunistic)* — decoded HTML runs 447–641 KiB with roughly 246 KB of duplicated inline CSS/Flight data from `experimental.inlineCss` (`next.config.ts:107-109`). Add both compressed and decoded budgets, and A/B disabling inlining.
@@ -481,11 +511,11 @@ Two independent audits produced different headline numbers. Both were right abou
 
 | # | Decision | Owner | Needed by | Answer |
 |---|---|---|---|---|
-| 1 | Spend cap: on (outage risk) or off (bill risk) | owner | immediately | |
-| 2 | Raw feed-fact retention: 30 or 90 days | owner | before F7a (F11 does not need it) | |
+| 1 | Spend cap: on (outage risk) or off (bill risk) | owner | immediately | **ON, and staying on** — 2026-08-08. Outage risk accepted over bill risk; consequences in F4. |
+| 2 | Raw feed-fact retention: 30 or 90 days | owner | before F7a (F11 does not need it) | **30 days** — 2026-08-08. Owner delegated the call; rationale in F7a. |
 | 3 | Confirm Vercel plan is Pro (10-min cron implies it) | — | before F14 | |
 | 4 | Confirm Supabase compute tier and capture CPU/IO/pool baselines | — | before Phase 1 | |
-| 5 | Derivative cache TTL: 1-day compromise vs 1-year immutable — a takedown-exposure trade, see F3's constraint note | owner | before F3 | |
+| 5 | Derivative cache TTL: 1-day compromise vs 1-year immutable — a takedown-exposure trade, see F3's constraint note | owner | before F3 | **1-day compromise** — 2026-08-08. Lands as `max-age=86400`; see F3 for why `stale-while-revalidate` could not come with it. |
 
 ---
 
@@ -495,3 +525,4 @@ Two independent audits produced different headline numbers. Both were right abou
 |---|---|---|
 | 2026-08-08 | Initial audit; all items TODO. Baseline commit `63b9a3b`. | Claude Code |
 | 2026-08-08 | Pre-work review amendments: F3 reframed against the documented moderation TTL constraint (new decision #5); every-push-deploys warning added; mobile items consolidated onto the store-release train; workflow rewritten for one-conversation-per-phase sequential execution (no worktrees); evidence re-verified at `8a69de5`. | Claude Code |
+| 2026-08-08 | Decisions recorded: #1 spend cap **ON and staying on** (owner), #5 derivative TTL **1-day compromise** (owner), #2 raw fact retention **30 days** (owner delegated the call). Work package 1 landed — F1 mobile viewer, F3 mobile upload header, F10 mobile 404 fallback. Corrections to the audit as written: no mutable/immutable TTL split is needed because every public showcase path is write-once; `stale-while-revalidate` is unreachable through supabase-js; the `.copy()` cache-control inheritance lives in `post-publish-service`/`post-update-service`, not `showcase-publish-service`; and the mobile viewer had two full-source paths, not the one cited. | Claude Code |

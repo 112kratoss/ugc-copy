@@ -70,6 +70,7 @@ import {
   removeShowcaseFeedItemsFromInfiniteData,
   type ShowcaseFeedEventDetails,
 } from '@/lib/showcase-feed-events';
+import { getShowcasePlaybackUrl } from '@/lib/showcase-media';
 import {
   createShowcaseMediaProgressTracker,
   reportShowcaseMediaProgress,
@@ -1633,7 +1634,7 @@ function ImmersiveMedia({
   if (mediaItem.mediaKind === 'video') {
     if (active && mediaItem.url) {
       return <ActiveVideo
-        url={mediaItem.url}
+        url={getShowcasePlaybackUrl(mediaItem)}
         previewUrl={mediaItem.previewUrl}
         previewCacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
         previewThumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
@@ -1675,7 +1676,7 @@ function ImmersiveMedia({
         style={{ width, height, backgroundColor: '#020203' }}
       >
         <FeedVideoPreview
-          url={mediaItem.url}
+          url={getShowcasePlaybackUrl(mediaItem)}
           active={false}
           height={height}
           radius={0}

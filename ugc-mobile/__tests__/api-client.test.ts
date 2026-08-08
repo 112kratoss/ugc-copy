@@ -348,16 +348,12 @@ describe('mobile api client caching', () => {
     expect(getInstallationId).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps authentication on the legacy showcase-detail fallback so blocks cannot be bypassed', async () => {
+  it('surfaces a showcase-detail 404 instead of scanning a feed page for the post', async () => {
     const fetcher = vi
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Post not found.' }), {
         status: 404,
         headers: { 'Content-Type': 'application/json' },
-      }))
-      .mockResolvedValueOnce(jsonResponse({
-        items: [{ id: 'post-1', title: 'Fallback post' }],
-        pageInfo: { hasMore: false },
       }));
     const api = createApiClient({
       baseUrl: 'https://magicbooklet.test',
@@ -365,12 +361,11 @@ describe('mobile api client caching', () => {
       fetcher: fetcher as unknown as typeof fetch,
     });
 
-    await expect(api.getShowcasePost('post-1')).resolves.toMatchObject({
-      success: true,
-      item: { id: 'post-1' },
-    });
-    const [, fallbackInit] = fetcher.mock.calls[1] as unknown as [RequestInfo | URL, RequestInit];
-    expect((fallbackInit.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+    await expect(api.getShowcasePost('post-1')).rejects.toMatchObject({ status: 404 });
+    // The retired fallback fetched a whole feed page here. It cost a full feed
+    // round trip per miss, only searched the newest page, and had to forward
+    // auth by hand or it leaked posts the viewer had blocked.
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
   it('loads authenticated remix source bundles with post context', async () => {

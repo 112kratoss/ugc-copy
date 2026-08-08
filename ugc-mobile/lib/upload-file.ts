@@ -130,9 +130,14 @@ export async function uploadUriToSignedUrl(
       headers: {
         // Matches SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL on the web side. Publish
         // copies this object server-side into the public bucket, and a copy
-        // carries the source's cache-control with no way to override it -- so
-        // staging at an hour would put a taken-down object an hour out of reach.
-        'cache-control': 'max-age=300',
+        // carries the source's cache-control with no way to override it, so
+        // whatever is set here is what public viewers eventually receive.
+        //
+        // One day, per the 2026-08 scaling audit's decision #5. Every public
+        // showcase path is written once and never overwritten, so a long TTL
+        // cannot serve stale bytes; the ceiling exists purely to bound how long
+        // an already-served viewer can replay a post moderation has removed.
+        'cache-control': 'max-age=86400',
         'content-type': mimeType,
         'x-upsert': 'false',
       },

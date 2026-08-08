@@ -601,25 +601,12 @@ export function createApiClient({
       }),
     getSavedMedia: (params?: Record<string, QueryValue>) =>
       request<ShowcaseFeedResponse>(`/api/showcase/saved-media${buildQuery(params)}`),
-    getShowcasePost: async (postId: string) => {
-      try {
-        return await request<ShowcasePostResponse>(`/api/showcase/posts/${postId}`);
-      } catch (error) {
-        if (!isNotFoundError(error)) {
-          throw error;
-        }
-
-        const feed = await request<ShowcaseFeedResponse>(
-          `/api/showcase/feed${buildQuery({ limit: 48, sort: 'recent' })}`
-        );
-        const item = feed.items.find((candidate) => candidate.id === postId);
-        if (!item) {
-          throw error;
-        }
-
-        return { success: true, item };
-      }
-    },
+    // A 404 here is authoritative. This used to fall back to scanning a recent
+    // feed page for the post, which cost a full feed fetch on every genuine
+    // miss, only ever covered the newest page the server would return, and had
+    // to forward auth by hand or it became a way around user blocks.
+    getShowcasePost: (postId: string) =>
+      request<ShowcasePostResponse>(`/api/showcase/posts/${postId}`),
     listPostComments: (postId: string, params?: Record<string, QueryValue>) =>
       request<PostCommentsResponse>(
         `/api/showcase/posts/${encodeURIComponent(postId)}/comments${buildQuery(params)}`

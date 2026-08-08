@@ -33,20 +33,25 @@ export function getShowcaseMediaPreviewUrl(item: ShowcaseMediaItem) {
 
 /**
  * The small feed copy, or null when the backend has not produced one. Callers
- * that need a guaranteed URL should use getShowcaseFeedPlaybackUrl.
+ * that need a guaranteed URL should use getShowcasePlaybackUrl.
  */
 export function getShowcaseMediaRenditionUrl(item: ShowcaseMediaItem): string | null {
   return item.preview?.renditionUrl ?? item.renditionUrl ?? null;
 }
 
 /**
- * What an autoplaying feed row should stream. Prefers the small rendition and
- * falls back to the source, so posts published before the rendition pipeline —
- * and ones that legitimately skipped it — still play.
+ * What any surface that plays a clip should stream — the scrolling feed row and
+ * the immersive viewer alike. Prefers the small rendition and falls back to the
+ * source, so posts published before the rendition pipeline — and ones that
+ * legitimately skipped it — still play.
  *
- * Only for muted, scroll-by playback. The full viewer must keep using `url`.
+ * The viewer deliberately insisted on `url` for full quality until the 2026-08
+ * scaling audit measured the cost: sources run ~23 Mbps against a 720p/1.4 Mbps
+ * rendition, and the watch surfaces are 80-90% of all storage egress. On Indian
+ * mobile networks the source was also simply worse to watch. `url` stays the
+ * source of record for downloads and remixes, where quality is the point.
  */
-export function getShowcaseFeedPlaybackUrl(item: ShowcaseMediaItem): string {
+export function getShowcasePlaybackUrl(item: ShowcaseMediaItem): string {
   return getShowcaseMediaRenditionUrl(item) ?? item.url;
 }
 

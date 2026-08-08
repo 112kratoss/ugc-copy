@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  getShowcaseFeedPlaybackUrl,
+  getShowcasePlaybackUrl,
   getShowcaseMediaRenditionUrl,
 } from '@/lib/showcase-media';
 import type { ShowcaseMediaItem } from '@/lib/types';
@@ -21,11 +21,11 @@ function mediaItem(overrides: Partial<ShowcaseMediaItem> = {}): ShowcaseMediaIte
   };
 }
 
-describe('showcase feed playback source', () => {
+describe('showcase playback source', () => {
   it('streams the rendition when one exists', () => {
     const item = mediaItem({ renditionUrl: 'https://cdn.test/showcase/clip.feed.abc.mp4' });
 
-    expect(getShowcaseFeedPlaybackUrl(item)).toBe('https://cdn.test/showcase/clip.feed.abc.mp4');
+    expect(getShowcasePlaybackUrl(item)).toBe('https://cdn.test/showcase/clip.feed.abc.mp4');
   });
 
   it('prefers the descriptor rendition over the flat field', () => {
@@ -48,13 +48,13 @@ describe('showcase feed playback source', () => {
       },
     });
 
-    expect(getShowcaseFeedPlaybackUrl(item)).toBe('https://cdn.test/descriptor.mp4');
+    expect(getShowcasePlaybackUrl(item)).toBe('https://cdn.test/descriptor.mp4');
   });
 
   it('falls back to the source for posts published before renditions existed', () => {
     // Old clients and old rows simply have no rendition; playback must not break.
-    expect(getShowcaseFeedPlaybackUrl(mediaItem())).toBe('https://cdn.test/showcase/clip.mp4');
-    expect(getShowcaseFeedPlaybackUrl(mediaItem({ renditionUrl: null })))
+    expect(getShowcasePlaybackUrl(mediaItem())).toBe('https://cdn.test/showcase/clip.mp4');
+    expect(getShowcasePlaybackUrl(mediaItem({ renditionUrl: null })))
       .toBe('https://cdn.test/showcase/clip.mp4');
   });
 
@@ -64,11 +64,13 @@ describe('showcase feed playback source', () => {
       .toBe('https://cdn.test/r.mp4');
   });
 
-  it('never returns the rendition for the full-quality source url', () => {
+  it('leaves the source url intact for downloads and remixes', () => {
     const item = mediaItem({ renditionUrl: 'https://cdn.test/showcase/clip.feed.abc.mp4' });
 
-    // The viewer and downloads must keep getting the original.
+    // Playback surfaces — the feed row and the immersive viewer alike — take
+    // the rendition. `url` stays reachable for the paths where full quality is
+    // the point, so resolving playback must never overwrite it.
     expect(item.url).toBe('https://cdn.test/showcase/clip.mp4');
-    expect(getShowcaseFeedPlaybackUrl(item)).not.toBe(item.url);
+    expect(getShowcasePlaybackUrl(item)).not.toBe(item.url);
   });
 });
