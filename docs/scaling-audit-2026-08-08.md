@@ -698,7 +698,28 @@ Recovery ceilings today: generation completion fallback 25 per 10 min (150/hour)
 - The dedicated routes already enforced `isAuthorizedCronRequest`, so no auth change was needed — they were previously invoked in-process by the scheduler rather than over HTTP.
 - Deploy note: cron configuration is deployment-scoped and activates on promotion, so there is a brief window where the retiring deployment's schedule may still fire. Job locks already make a double-dispatch harmless.
 
-**Still open in F14:** byte-based admission control on media claims, the hard wall-clock ffmpeg kill (`RENDITION_TIMEOUT_MS` is 120 s with `killSignal: 'SIGKILL'` — verify it bounds the whole invocation, not just one spawn), queue-age SLOs, and the whole of part two (global provider token bucket, `Retry-After`, circuit breaker, `submission_unknown` reconciliation).
+**Verified in production, 2026-08-09.** `backend_job_runs.started_at` is the proof, because the scheduler stamps every job it dispatches with one shared `startedAtMs` — so a batch sharing a timestamp is one invocation, and a distinct timestamp is a distinct instance:
+
+```
+20:01:36   6 jobs, one timestamp        <- pre-promotion, everything in one invocation
+20:10:29   4 jobs, one timestamp        <- scheduler batch; both dedicated jobs absent
+20:10:44   generation-completions alone <- its own cron, its own instance
+```
+
+The scheduler batch dropped from six to four and the media-heavy job moved out. Anyone re-checking this later should use the shared-timestamp signature rather than job presence: presence alone cannot distinguish "ran in its own instance" from "ran inside the scheduler".
+
+**The hard wall-clock ffmpeg kill the audit asks for already exists — nothing to build.** `runFfmpeg` spawns with `{ timeout: RENDITION_TIMEOUT_MS, killSignal: 'SIGKILL' }` (`video-rendition.ts:152-182`). Node's `spawn` timeout is wall-clock from spawn and SIGKILL is uncatchable, so a wedged ffmpeg cannot outlive 120 s. Mark this sub-item satisfied rather than re-implementing it.
+
+**But the per-row worst case is larger than F2 recorded, and the split is what makes it safe.** `createVideoRenditionFromFile` invokes ffmpeg more than once (probe, then transcode), and the 120 s bound is *per spawn*. Two timeouts is 240 s, so with F2's 60 s pre-row budget check the true worst case per invocation is 300 s — exactly the function limit, with no margin. F2's note says "60 s plus one timeout", which assumed a single spawn. This is now survivable precisely because `media-preview-repair` has its own instance: it can burn its whole invocation without touching completions, alerts or retention. Before the split it would have taken them all down.
+
+**Byte-based admission control needs a size signal that does not exist yet — this is the real work in the sub-item.** `post_media` has `rendition_bytes` (the *output* size, written after transcoding) but **no source-size column**, so the claim at `media-preview-repair.ts:296-302` cannot admit by bytes today; it only knows row counts. Two routes:
+
+1. **Join `storage.objects` at claim time.** `post_media.storage_path` maps to `storage.objects.name`, and `metadata->>'size'` carries the byte count. A claim RPC can admit rows until a byte budget is reached, with no schema change or backfill. Preferred — the size stays authoritative rather than a copy that can drift.
+2. Add a `source_bytes` column and backfill it. Faster to read, but introduces a denormalised copy of something Storage already owns.
+
+Either way the claim must move into an RPC, because the budget has to be applied while selecting rather than after — admitting 12 rows and then discovering they total 2 GB is the bug being fixed.
+
+**Still open in F14:** byte-based admission control on media claims (above), queue-age SLOs, and the whole of part two — global provider token bucket, `Retry-After` handling, circuit breaker, and the `submission_unknown` state that reconciles against the provider before refunding. **Part two contains the second money bug in this audit:** Kie task creation has a 30 s timeout and no retry (`provider-fetch.ts:7`), so the provider can accept a task the app believes failed; the app refunds and then discards the later callback.
 
 ---
 
