@@ -5,7 +5,7 @@ import { CircleAlert, ChevronLeft, ChevronRight, Images, Maximize2, Play, Rotate
 
 import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
 import { useMediaLoadingPreferences } from '@/app/components/useMediaLoadingPreferences';
-import { resolveFeedPlaybackUrl } from '@/lib/media-descriptor';
+import { resolvePlaybackUrl } from '@/lib/media-descriptor';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import type { ShowcaseMediaItem } from '@/lib/showcase';
 
@@ -100,18 +100,19 @@ export default function ShowcaseMediaCarousel({
     && (isInteracting || (requestedAutoPlay && isInViewport))
   );
   const activeItem = items[activeIndex] ?? items[0] ?? null;
-  // Feed surfaces autoplay muted on scroll, so they stream the small rendition
-  // when one exists. Detail and reel are the full viewer and keep the source.
+  // Every mode streams the small rendition when one exists — feed, detail and
+  // reel alike. Detail and reel used to keep the source for full quality, which
+  // the 2026-08 scaling audit measured as the bulk of all storage egress at
+  // ~23 Mbps a stream. Downloads and remixes still read `url` directly.
+  //
   // Keying on the played URL matters: a rendition can appear mid-session, and
   // reusing the source key would leave the element's terminal error state
   // attached to what is now a different source.
   const activePlaybackUrl = activeItem
-    ? mode === 'feed'
-      ? resolveFeedPlaybackUrl({
-        url: activeItem.url,
-        renditionUrl: activeItem.preview?.renditionUrl ?? activeItem.renditionUrl ?? null,
-      })
-      : activeItem.url
+    ? resolvePlaybackUrl({
+      url: activeItem.url,
+      renditionUrl: activeItem.preview?.renditionUrl ?? activeItem.renditionUrl ?? null,
+    })
     : '';
   const activeSourceKey = activeItem ? JSON.stringify([activeItem.id, activePlaybackUrl]) : '';
   const activeLoadAttempt = activeSourceKey ? loadAttempts[activeSourceKey] ?? 0 : 0;
@@ -487,17 +488,21 @@ export default function ShowcaseMediaCarousel({
               className={frameFit === 'cover' ? 'object-cover' : 'object-contain'}
             />
           ) : (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
+            // Detail and reel used to render the source through a raw <img>,
+            // shipping the uploaded original at full resolution whatever the
+            // frame measured. This is the same optimizer the feed already uses;
+            // it keeps the source as the input rather than the 720px preview,
+            // so the served image is resized but not downgraded.
+            <OptimizedPreviewImage
               key={activeLoadKey}
-              src={renderedActiveItem.url}
+              previewSrc={renderedActiveItem.url}
               alt={title}
+              sizes={sizes ?? '(min-width: 1280px) 60vw, 100vw'}
               loading={isDetail ? 'eager' : 'lazy'}
-              decoding="async"
               // A cached image can finish before React attaches `onLoad`, which
               // would strand the frame on its fallback ratio and letterbox the
               // media in black. `complete` is the only signal for that case.
-              ref={(image) => {
+              imageRef={(image) => {
                 if (!image?.complete || activeIndex !== 0) return;
                 if (image.naturalWidth && image.naturalHeight) {
                   setCoverAspectRatio(image.naturalWidth / image.naturalHeight);
@@ -510,7 +515,7 @@ export default function ShowcaseMediaCarousel({
                 reportMediaReady(renderedActiveItem, activeLoadKey);
               }}
               onError={reportActiveMediaError}
-              className="h-full w-full object-contain"
+              className="object-contain"
             />
           )}
         </div>

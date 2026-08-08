@@ -162,7 +162,7 @@ describe('uploadMediaToTemporaryStorage', () => {
       headers: {
         // Publish copies staged objects into the public bucket carrying this
         // header, so it has to match the public 300s policy.
-        'cache-control': 'max-age=300',
+        'cache-control': 'max-age=86400',
         'content-type': 'image/png',
         'x-upsert': 'false',
       },

@@ -72,7 +72,7 @@ describe('post media image previews', () => {
     expect(upload).toHaveBeenCalledTimes(1);
     expect(upload.mock.calls[0]?.[0]).toBe(result?.previewStoragePath);
     expect(upload.mock.calls[0]?.[2]).toMatchObject({
-      cacheControl: '300',
+      cacheControl: '86400',
       contentType: 'image/webp',
       upsert: true,
     });
@@ -130,7 +130,7 @@ describe('post media image previews', () => {
     expect(upload.mock.calls[0]?.[0]).toBe(result?.previewStoragePath);
     expect(upload.mock.calls[0]?.[1]).toEqual(await videoPosterState.createVideoPosterBuffer.mock.results[0]?.value);
     expect(upload.mock.calls[0]?.[2]).toMatchObject({
-      cacheControl: '300',
+      cacheControl: '86400',
       contentType: 'image/webp',
       upsert: true,
     });

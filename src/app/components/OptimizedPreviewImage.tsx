@@ -15,6 +15,13 @@ interface OptimizedPreviewImageProps {
   priority?: boolean;
   fallbackToUnoptimized?: boolean;
   onLoad?: (event: SyntheticEvent<HTMLImageElement>) => void;
+  /** Fires once every source has been tried and none rendered. */
+  onError?: () => void;
+  /**
+   * The underlying element, for callers that must read `naturalWidth` or
+   * `complete` — a cached image can finish before React attaches `onLoad`.
+   */
+  imageRef?: (image: HTMLImageElement | null) => void;
 }
 
 /**
@@ -32,6 +39,8 @@ export function OptimizedPreviewImage({
   priority = false,
   fallbackToUnoptimized = false,
   onLoad,
+  onError,
+  imageRef,
 }: OptimizedPreviewImageProps) {
   const [failedPreviewSrc, setFailedPreviewSrc] = useState<string | null>(null);
   const [failedRenderedSrc, setFailedRenderedSrc] = useState<string | null>(null);
@@ -51,9 +60,11 @@ export function OptimizedPreviewImage({
   const handleError = () => {
     if (canFallback) {
       setFailedPreviewSrc(previewSrc);
-    } else {
-      setFailedRenderedSrc(src);
+      return;
     }
+
+    setFailedRenderedSrc(src);
+    onError?.();
   };
 
   if (renderedSrcFailed) {
@@ -64,6 +75,7 @@ export function OptimizedPreviewImage({
     return (
       <Image
         key={src}
+        ref={imageRef}
         src={src}
         alt={alt}
         fill
@@ -83,6 +95,7 @@ export function OptimizedPreviewImage({
     // eslint-disable-next-line @next/next/no-img-element
     <img
       key={src}
+      ref={imageRef}
       src={src}
       alt={alt}
       loading={priority ? 'eager' : loading}

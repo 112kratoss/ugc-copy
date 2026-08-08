@@ -7,9 +7,9 @@ export interface VisualMediaDescriptor {
   kind: VisualMediaKind;
   url: string;
   /**
-   * Small faststart copy for autoplaying surfaces (the showcase feed). Null
-   * when none exists yet or the source was already lean enough. Never use it
-   * where the user expects full quality — `url` stays the source of record.
+   * Small faststart copy, streamed by every surface that plays the clip. Null
+   * when none exists yet or the source was already lean enough. `url` stays the
+   * source of record, and is what downloads and remixes must use.
    */
   renditionUrl: string | null;
   previewUrl: string | null;
@@ -56,11 +56,18 @@ export function buildVisualMediaDescriptor(input: {
 }
 
 /**
- * What an autoplaying feed surface should stream. Prefers the rendition and
- * falls back to the source so posts published before the rendition pipeline
- * (or ones that legitimately skipped it) still play.
+ * What any surface that plays a clip should stream — the autoplaying feed, the
+ * detail and reel viewers, and profile hover previews alike. Prefers the
+ * rendition and falls back to the source, so posts published before the
+ * rendition pipeline (or ones that legitimately skipped it) still play.
+ *
+ * The viewers deliberately streamed `url` for full quality until the 2026-08
+ * scaling audit measured the cost: sources run ~23 Mbps against a 720p/1.4 Mbps
+ * rendition, and the watch surfaces account for 80-90% of all storage egress.
+ * `url` stays the source of record for downloads and remixes, where full
+ * quality is the point.
  */
-export function resolveFeedPlaybackUrl(media: {
+export function resolvePlaybackUrl(media: {
   url: string;
   renditionUrl?: string | null;
 }): string {

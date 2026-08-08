@@ -70,8 +70,9 @@ export interface ShowcaseMediaItem {
     mediaKey?: string;
     url: string;
     /**
-     * Small faststart copy for autoplaying feed surfaces. Absent until the
-     * rendition pipeline has produced one, so clients must fall back to `url`.
+     * Small faststart copy, streamed by every surface that plays the clip.
+     * Absent until the rendition pipeline has produced one, so clients must
+     * fall back to `url` — which also stays what downloads and remixes use.
      */
     renditionUrl?: string | null;
     previewUrl?: string | null;

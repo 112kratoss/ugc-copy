@@ -9,6 +9,7 @@ interface CreationMediaFrameProps {
     id: string;
     mediaKind: CreationMediaKind;
     src: string;
+    posterSrc?: string | null;
     alt: string;
     outputCount?: number;
     onOpen: () => void;
@@ -20,13 +21,27 @@ export default function CreationMediaFrame({
     id,
     mediaKind,
     src,
+    posterSrc,
     alt,
     outputCount = 1,
     onOpen,
     onRestore,
     isRestoring = false,
 }: CreationMediaFrameProps) {
-    const [loadState, setLoadState] = useState<'loading' | 'loaded' | 'error'>('loading');
+    // The studio grid puts up to 36 of these on screen at once, and `src` is a
+    // signed URL, which caches far worse than a public one. At preload
+    // "metadata" that is 36 range requests for bytes nobody asked to watch. A
+    // poster shows the same thing for the price of one image, so when we have
+    // one the video fetches nothing until the pointer asks for playback.
+    //
+    // Without a poster the element still needs metadata to render a first
+    // frame, so those tiles keep today's behaviour rather than going black.
+    const defersVideoBytes = mediaKind === 'video' && Boolean(posterSrc);
+    // Nothing will load, so nothing can report itself loaded -- start settled
+    // or the spinner would sit over the poster forever.
+    const [loadState, setLoadState] = useState<'loading' | 'loaded' | 'error'>(
+        defersVideoBytes ? 'loaded' : 'loading',
+    );
 
     const safelyPlayVideo = (event: MouseEvent<HTMLVideoElement>) => {
         const playback = event.currentTarget.play();
@@ -116,10 +131,11 @@ export default function CreationMediaFrame({
                 >
                     <video
                         src={src}
+                        poster={posterSrc ?? undefined}
                         muted
                         loop
                         playsInline
-                        preload="metadata"
+                        preload={defersVideoBytes ? 'none' : 'metadata'}
                         onLoadedMetadata={() => setLoadState('loaded')}
                         onError={() => setLoadState('error')}
                         onMouseEnter={safelyPlayVideo}

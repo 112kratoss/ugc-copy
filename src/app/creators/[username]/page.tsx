@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
+import Image from 'next/image';
 import { headers } from 'next/headers';
 import { notFound } from 'next/navigation';
 import {
@@ -80,11 +81,15 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
         <section className="overflow-hidden rounded-[28px] border border-white/8 bg-[#111215] shadow-[0_24px_80px_-60px_rgba(255,122,89,0.32)]">
           <div className="relative h-40 overflow-hidden bg-[#0b0c10] sm:h-52 lg:h-60">
             {data.profile.coverUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
+              // Full-bleed banner: served at viewport width rather than at
+              // whatever the creator uploaded, which was previously the raw
+              // source at full resolution on every profile view.
+              <Image
                 src={data.profile.coverUrl}
                 alt={`${data.profile.displayName} cover`}
-                className="h-full w-full object-cover"
+                fill
+                sizes="(min-width: 1560px) 1560px, 100vw"
+                className="object-cover"
               />
             ) : (
               <div className="h-full w-full bg-[linear-gradient(120deg,rgba(255,122,89,0.15),rgba(17,18,21,0.92)_44%,rgba(242,185,94,0.08))]" />
@@ -96,10 +101,14 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
             <div className="-mt-12 flex flex-col gap-5 lg:-mt-14 lg:flex-row lg:items-end lg:justify-between">
               <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-end">
                 {data.profile.avatarUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
+                  // Renders at 96-112px, so there is no reason to ship the
+                  // uploaded original here.
+                  <Image
                     src={data.profile.avatarUrl}
                     alt={`${data.profile.displayName} avatar`}
+                    width={112}
+                    height={112}
+                    sizes="(min-width: 640px) 112px, 96px"
                     className="h-24 w-24 shrink-0 rounded-[24px] border-4 border-[#111215] bg-zinc-900 object-cover shadow-xl sm:h-28 sm:w-28"
                   />
                 ) : (

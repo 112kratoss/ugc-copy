@@ -592,15 +592,32 @@ describe('ShowcaseMediaCarousel', () => {
       expect(playInFeed(item)).toHaveAttribute('src', RENDITION);
     });
 
-    it('keeps the full viewer on the source in reel and detail modes', () => {
-      // These play unmuted at full size, where the rendition's lower bitrate
-      // would be visible. `url` stays the source of record.
+    it('streams the rendition in reel and detail modes too', () => {
+      // These play unmuted at full size and used to insist on the source for
+      // quality. The 2026-08 scaling audit measured that preference as the
+      // bulk of all storage egress -- ~23 Mbps a stream against a 720p/1.4
+      // Mbps rendition -- so every playback surface now takes the rendition.
+      // `url` remains the source of record for downloads and remixes.
       for (const mode of ['reel', 'detail'] as const) {
         const { container, unmount } = render(
           <ShowcaseMediaCarousel
             title="Campaign clip"
             mode={mode}
             mediaItems={[createVideoItem({ renditionUrl: RENDITION })]}
+          />
+        );
+        expect(container.querySelector('video')).toHaveAttribute('src', RENDITION);
+        unmount();
+      }
+    });
+
+    it('falls back to the source in reel and detail when no rendition exists', () => {
+      for (const mode of ['reel', 'detail'] as const) {
+        const { container, unmount } = render(
+          <ShowcaseMediaCarousel
+            title="Campaign clip"
+            mode={mode}
+            mediaItems={[createVideoItem({ renditionUrl: null })]}
           />
         );
         expect(container.querySelector('video'))

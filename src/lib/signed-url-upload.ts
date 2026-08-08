@@ -1,3 +1,4 @@
+import { SHOWCASE_PUBLIC_MEDIA_CACHE_TTL_SECONDS } from '@/lib/showcase-media-cache';
 import { UploadCancelledError } from '@/lib/upload-queue';
 
 /**
@@ -136,11 +137,11 @@ export function uploadFileToSignedUrl(
     // sends cacheControl as a multipart field instead; Storage accepts both, but
     // the raw PUT needs it as a header.
     //
-    // Matches SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL: publish copies this object
-    // server-side into the public bucket, and a copy carries the source's
-    // cache-control with no way to override it -- so staging at an hour would
-    // put a taken-down object an hour out of reach.
-    request.setRequestHeader('cache-control', 'max-age=300');
+    // Publish copies this object server-side into the public bucket, and a copy
+    // carries the source's cache-control with no way to override it, so this
+    // header is what public viewers ultimately receive. It tracks the public
+    // policy rather than sitting at a value of its own.
+    request.setRequestHeader('cache-control', `max-age=${SHOWCASE_PUBLIC_MEDIA_CACHE_TTL_SECONDS}`);
     request.setRequestHeader('content-type', mimeType);
     request.setRequestHeader('x-upsert', 'false');
     request.send(file);

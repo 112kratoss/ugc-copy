@@ -55,15 +55,15 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 | ID | Finding | Sev | Phase | Status | Landed |
 |---|---|---|---|---|---|
 | F4 | Spend cap posture + egress monitoring | Critical | 0 | IN PROGRESS | Cap recorded 2026-08-08; egress metric rides F15a |
-| F1 | Watch surfaces stream full-bitrate source | Critical | 0 | IN PROGRESS | Mobile half, pkg 1, 2026-08-08; web half open |
+| F1 | Watch surfaces stream full-bitrate source | Critical | 0 | DONE | Mobile pkg 1 + web pkg 2, 2026-08-08 — mobile still needs a store release to reach phones |
 | F2 | AI posts skip transcode; sweep 5/hour | Critical | 0 | TODO | |
-| F3 | Derivative cache TTL — decision #5 resolved | Critical | 0 | IN PROGRESS | Mobile upload header, pkg 1, 2026-08-08; server constants open |
+| F3 | Derivative cache TTL — decision #5 resolved | Critical | 0 | DONE | Constants, upload headers and backfill migration, pkg 1–2, 2026-08-08 |
 | F11 | Web `/feed` drops the ranking cursor | Critical | 0 | TODO | |
 | F13 | v2 stats refresh starves past 1,000 rows | High | 0 | TODO | |
 | F7a | Facts for all candidates; unbatched events | High | 0 | TODO | |
 | F6 | Unthrottled hot GETs incl. full-catalog scan | Medium | 0 | TODO | |
 | F15a | Monitoring truncates silently; biased rates | Medium | 0 | TODO | |
-| F10 | Assorted small leaks | Low | 0 | IN PROGRESS | Mobile 404 fallback, pkg 1, 2026-08-08 |
+| F10 | Assorted small leaks | Low | 0 | IN PROGRESS | Mobile 404 pkg 1; studio grid + images pkg 2, 2026-08-08. Webhook budget rides pkg 3; two web-perf items stay unassigned |
 | F12 | Workflow runs non-durable, non-idempotent | Critical | 1 | TODO | |
 | F14 | Shared-fate cron; no provider admission control | High | 1 | TODO | |
 | F5 | For-you RPC materializes whole catalog | High | 1 | TODO | |
@@ -193,6 +193,10 @@ The Supabase Management API does not expose the spend cap — `get_organization`
 - **There were two full-source paths in the viewer, not one.** Besides the cited `ActiveVideo`, the inactive-slide branch renders `FeedVideoPreview` on `mediaItem.url`. Both now resolve through the helper. Grep for the raw field rather than trusting the cited line alone.
 - **The helper had no production callers whatsoever** — only tests. That independently corroborates the finding: the rendition plumbing was built, tested, and then never wired to a watch surface.
 
+**Web half landed 2026-08-08 (work package 2).** `resolveFeedPlaybackUrl` is renamed `resolvePlaybackUrl` for the same reason as its mobile twin, and `ShowcaseMediaCarousel` resolves through it in every mode instead of only in `feed`. The predicted documented-intent conflict did appear, and was handled the same way: the carousel comment claimed *"Detail and reel are the full viewer and keep the source"* and `showcase-media-carousel.test.tsx` asserted it in a test named *"keeps the full viewer on the source in reel and detail modes"*. Both were rewritten, and a companion test now pins the no-rendition fallback so the change cannot silently break posts published before the pipeline existed.
+
+`OwnerProfileMediaHub`'s `HoverVideo` also streamed the full source and now takes a threaded `renditionUrl`. Generations carry no rendition, so that third call site passes nothing and falls back exactly as before.
+
 **Residual worth knowing.** The rendition encodes audio at 64k mono (`video-rendition.ts:22-44`). That is unremarkable under a muted feed row, but the immersive viewer plays unmuted, so this trades some audio quality for the egress win. If it proves audible on real content, the answer is a second higher-bitrate rendition tier for the viewer — not a return to full sources.
 
 ---
@@ -246,7 +250,23 @@ Raise `images.minimumCacheTTL` to match.
 
 **Verify.** Upload a new post, then check the `cache-control` response header on its `.preview.<hash>.webp`.
 
-**Gotcha — this will otherwise look like the fix did nothing.** `cacheControl` is stored as object metadata **at upload time**. Changing the constant only affects newly written objects; the existing 439 objects keep `max-age=300` until rewritten. Budget a backfill pass over `showcase_media` in the same PR — the repo already has `backfill:*` scripts for media/preview work that are the natural place to hang it.
+**Gotcha — this will otherwise look like the fix did nothing.** `cacheControl` is stored as object metadata **at upload time**. Changing the constant only affects newly written objects; existing objects keep their stored TTL until rewritten. Budget a backfill pass over `showcase_media` in the same PR.
+
+**Measured production state, 2026-08-08 — the bucket held three generations of policy, not one.** Querying `storage.objects` for `showcase_media` (99 objects; the 439 in the baseline table counts every bucket):
+
+| Stored `cacheControl` | Objects | Written | What they are |
+|---|---:|---|---|
+| `max-age=31536000` | 60 | 2026-06-14 → 07-16 | every one a content-hashed derivative |
+| `max-age=3600` | 29 | 2026-03-19 → 07-16 | originals, on supabase-js's default |
+| `max-age=300` | 10 | 2026-07-29 → 08-06 | written since the constant landed |
+
+Two corrections follow. **"300s everywhere" describes new writes only** — nine in ten stored objects were never at 300s, so the revalidation churn was smaller than the finding implies. And more importantly, **the repo already had immutable derivative caching and deliberately gave it up**: derivatives were written at a full year until the 300s constant landed on 2026-07-29 and applied the moderation rationale to everything. Decision #5 was therefore never "should we cache?" but "how much of that year do we restore?"
+
+That also makes the backfill two-directional, and its larger half is a **safety improvement the audit did not anticipate**: 60 objects move *down* from a year to a day, bounding a takedown exposure that is live in production right now. The remaining 39 move up.
+
+**Backfill mechanism.** A migration — `supabase/migrations/20260808120000_showcase_media_cache_ttl_backfill.sql` — rewriting `storage.objects.metadata->>'cacheControl'`, rather than one of the `backfill:*` scripts. Storage exposes no metadata-only write through supabase-js, so a script would have to download and re-upload all 615 MB purely to change a header, churning every object's version; the paths are write-once, so the bytes and ETags are already correct. This project's migrations already cover the `storage` schema.
+
+**Verify after deploy** — this is the step that catches a wrong assumption about where Storage reads the header from. `curl -I` a `.preview.<hash>.webp` and confirm `cache-control: max-age=86400`. Supabase's CDN may keep serving a previously cached header until its own entry expires, so pick a path that has not just been fetched.
 
 **Related.** Supabase's Smart CDN guidance notes that fresh signed tokens create distinct cache keys, which is a second reason to prefer public immutable derivatives over signed URLs for public media.
 
@@ -365,8 +385,8 @@ F7b partitions monthly, so a 30-day raw window is three partitions deep at any t
 **Status:** TODO · **Severity:** Low
 **Landed:**
 
-- **Owner studio grid** *(web package)* — `src/app/creations/CreationMediaFrame.tsx:117-128`: 36 `<video preload="metadata">` tiles with `src` always attached and no viewport gating, against *signed* URLs which cache poorly (uncached egress is 3× cached). Use posters plus `preload="none"`.
-- **Unoptimized full-res images** *(web package)* — `src/app/creators/[username]/page.tsx:84-104` renders cover and avatar as raw eager `<img>` at full source; detail/reel images bypass `next/image` at `ShowcaseMediaCarousel.tsx:489-514`.
+- **Owner studio grid** *(web package)* — **DONE 2026-08-08.** `CreationMediaFrame` took a `posterSrc` and now uses `preload="none"` with the poster whenever one exists, so a grid of 36 tiles issues no video range requests at all. Two things were needed to make that safe: the tile's load state has to start settled, or the spinner would sit over the poster forever waiting for a `loadedmetadata` that will never fire; and tiles *without* a poster keep `preload="metadata"` rather than rendering black, so the change is strictly an improvement instead of a trade. The poster is the generation's existing `preview_url`, which the API already returns but the page's local `Generation` type had not declared — when it is absent the tile simply behaves as it does today.
+- **Unoptimized full-res images** *(web package)* — **DONE 2026-08-08.** The creator cover and avatar are `next/image` now (the avatar renders at 96–112px and was shipping the uploaded original). Detail and reel images route through the existing `OptimizedPreviewImage` rather than a raw `<img>`, which also gets them the host-allowlist fallback that component already encapsulates. It gained optional `onError` and `imageRef` props to do this: the carousel needs the failure signal for its recovery overlay, and needs the element to read `complete`/`naturalWidth`, because a cached image can finish before React attaches `onLoad` and would otherwise strand the frame on its fallback aspect ratio. Note it passes the **source** as `previewSrc`, not the 720px preview — the intent is to resize the original, not to downgrade it.
 - **Mobile 404 fallback** *(mobile package — store train)* — **DONE 2026-08-08.** `ugc-mobile/lib/api-client.ts` refetched a feed page to locate one post after a detail 404. Removed outright rather than shrunk, for three reasons found on inspection: it requested 48 items but the server clamps feed `limit` to 24 (`showcase-feed-route-adapter-service.ts:91`), so it never searched what it claimed to; its own regression test named it the *legacy* fallback and existed only because it had to forward auth by hand or become a way around user blocks; and every caller already tolerates failure. A detail 404 is now authoritative.
 - **Webhook import budget** *(transcode package)* — the finished-video download and re-upload runs via `after()` inside `/api/webhooks/kie`, whose `maxDuration` is 60 s, with a 60 s fetch timeout. Large videos always fall through to the 10-minute cron. Raise the duration or hand off to the queue unconditionally.
 - **Web feed DOM growth** *(unassigned — opportunistic)* — `/feed` keeps every loaded card mounted and serializes the whole accumulated feed to `sessionStorage` on change; approaches browser limits around 50–100 cards. Window the list and debounce the snapshot to an idle callback.
@@ -526,3 +546,4 @@ Two independent audits produced different headline numbers. Both were right abou
 | 2026-08-08 | Initial audit; all items TODO. Baseline commit `63b9a3b`. | Claude Code |
 | 2026-08-08 | Pre-work review amendments: F3 reframed against the documented moderation TTL constraint (new decision #5); every-push-deploys warning added; mobile items consolidated onto the store-release train; workflow rewritten for one-conversation-per-phase sequential execution (no worktrees); evidence re-verified at `8a69de5`. | Claude Code |
 | 2026-08-08 | Decisions recorded: #1 spend cap **ON and staying on** (owner), #5 derivative TTL **1-day compromise** (owner), #2 raw fact retention **30 days** (owner delegated the call). Work package 1 landed — F1 mobile viewer, F3 mobile upload header, F10 mobile 404 fallback. Corrections to the audit as written: no mutable/immutable TTL split is needed because every public showcase path is write-once; `stale-while-revalidate` is unreachable through supabase-js; the `.copy()` cache-control inheritance lives in `post-publish-service`/`post-update-service`, not `showcase-publish-service`; and the mobile viewer had two full-source paths, not the one cited. | Claude Code |
+| 2026-08-08 | Work package 2 landed — F1 web (carousel every mode, profile hover video), F3 server constants plus a backfill migration over `storage.objects`, F10 studio grid and unoptimized images. **F1 and F3 are now DONE.** Material correction from measuring production: `showcase_media` held three generations of cache policy, not the single 300s the finding described — 60 content-hashed derivatives at a **full year**, 29 originals at supabase-js's default 3600, and only 10 at 300s. The repo had immutable derivative caching until 2026-07-29 and gave it up for moderation, so decision #5 was really about how much of that year to restore, and the backfill moves 60 objects *down* (a live takedown exposure) as well as 39 up. | Claude Code |

@@ -38,7 +38,7 @@ describe('generation media previews', () => {
     expect(upload).toHaveBeenCalledWith(
       expect.stringMatching(/^user-1\/output\.preview\.[a-f0-9]{16}\.webp$/),
       expect.any(Buffer),
-      expect.objectContaining({ cacheControl: '300', upsert: true })
+      expect.objectContaining({ cacheControl: '86400', upsert: true })
     );
   });
 });

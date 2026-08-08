@@ -35,6 +35,7 @@ import ProfileShareButton from '@/app/components/ProfileShareButton';
 import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
 import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
+import { resolvePlaybackUrl } from '@/lib/media-descriptor';
 import { getBundleAccessLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
@@ -236,6 +237,7 @@ function MediaCard({
   subtitle,
   mediaUrl,
   previewUrl,
+  renditionUrl,
   mediaKind,
   textBody,
   badges,
@@ -247,6 +249,7 @@ function MediaCard({
   subtitle: string;
   mediaUrl: string | null;
   previewUrl?: string | null;
+  renditionUrl?: string | null;
   mediaKind: 'image' | 'video' | 'audio' | null;
   textBody?: string;
   badges?: string[];
@@ -260,7 +263,7 @@ function MediaCard({
       <div className="relative aspect-[4/5] overflow-hidden bg-zinc-950">
         {mediaKind === 'video' && mediaUrl ? (
           <HoverVideo
-            src={mediaUrl}
+            src={resolvePlaybackUrl({ url: mediaUrl, renditionUrl })}
             poster={previewUrl}
             className="absolute inset-0 h-full w-full object-cover opacity-90 transition duration-300 group-hover:scale-[1.015] group-hover:opacity-100"
           />
@@ -836,6 +839,7 @@ export default function OwnerProfileMediaHub({
                     subtitle={`${post.visibility} · ${formatShortDate(post.updatedAt)}`}
                     mediaUrl={post.mediaUrl}
                     previewUrl={post.mediaItems?.[0]?.previewUrl}
+                    renditionUrl={post.mediaItems?.[0]?.preview?.renditionUrl ?? post.mediaItems?.[0]?.renditionUrl}
                     mediaKind={post.mediaKind}
                     textBody={post.postFormat === 'text' ? post.body || post.description : undefined}
                     badges={[post.visibility, ...(recipeLabel ? [recipeLabel] : [])]}
@@ -853,6 +857,7 @@ export default function OwnerProfileMediaHub({
                     subtitle={`${item.creator.name} · ${formatShortDate(item.savedAt || item.createdAt)}`}
                     mediaUrl={cover?.url || item.mediaUrl}
                     previewUrl={cover?.previewUrl}
+                    renditionUrl={cover?.preview?.renditionUrl ?? cover?.renditionUrl}
                     mediaKind={cover?.mediaKind || item.mediaKind}
                     textBody={item.postFormat === 'text' ? item.body || item.prompt : undefined}
                     badges={item.asset ? ['Recipe attached'] : undefined}

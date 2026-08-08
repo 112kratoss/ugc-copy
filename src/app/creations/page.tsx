@@ -29,6 +29,8 @@ import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
 interface Generation {
     id: string;
     output_url: string | null;
+    /** Poster for the studio grid, so video tiles need not preload metadata. */
+    preview_url?: string | null;
     output_urls?: string[] | null;
     output_count?: number | null;
     input_media?: GenerationInputMediaItem[] | null;
@@ -1962,6 +1964,7 @@ export default function CreationsPage() {
                                                     id={gen.id}
                                                     mediaKind={mediaKind}
                                                     src={primaryMediaUrl}
+                                                    posterSrc={gen.preview_url}
                                                     alt={isImage ? 'Generated image' : `${badgeLabel} generation`}
                                                     outputCount={Math.max(outputUrls.length, gen.output_count ?? 0)}
                                                     onOpen={() => void openPreviewModal(gen)}
