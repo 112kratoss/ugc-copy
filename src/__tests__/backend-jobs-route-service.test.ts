@@ -9,6 +9,9 @@ function backendJob(name: BackendJobDefinition['name']): BackendJobDefinition {
     name,
     route: `/api/cron/${name}`,
     schedule: '*/10 * * * *',
+    // These fixtures are handed straight to the scheduler, so they model
+    // scheduler-dispatched jobs; dedicated ones never reach it.
+    dispatch: 'scheduler',
     cadenceMinutes: 10,
     dailyInvocations: 144,
     maxDurationSeconds: 300,

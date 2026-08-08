@@ -290,7 +290,7 @@ describe('collectBackendHealth', () => {
       schedule: '*/10 * * * *',
       cadenceMinutes: 10,
       dailyInvocations: 144,
-      dailyInvocationBudget: 180,
+      dailyInvocationBudget: 456,
       logicalDailyInvocations: 795,
       coveredJobCount: 11,
       coveredJobs: expect.arrayContaining([

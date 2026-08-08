@@ -191,22 +191,19 @@ describe('/api/cron/backend-jobs route', () => {
       ...expectedOptions,
       requestId: 'iad1::scheduler-1:backend-alert-delivery',
     });
-    expect(mocks.runGenerationCompletionsBackendJob).toHaveBeenCalledWith({
-      ...expectedOptions,
-      requestId: 'iad1::scheduler-1:generation-completions',
-    });
-    expect(mocks.runMediaPreviewRepairBackendJob).toHaveBeenCalledWith({
-      ...expectedOptions,
-      requestId: 'iad1::scheduler-1:media-preview-repair',
-    });
     expect(mocks.runMobilePushReceiptsBackendJob).toHaveBeenCalledWith({
       ...expectedOptions,
       requestId: 'iad1::scheduler-1:mobile-push-receipts',
     });
+    // F14: both are dedicated crons now. Vercel invokes their routes directly,
+    // so the shared scheduler must leave them alone -- running them here too
+    // would put the memory-heavy work straight back into this invocation.
+    expect(mocks.runGenerationCompletionsBackendJob).not.toHaveBeenCalled();
+    expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       scheduler: '/api/cron/backend-jobs',
-      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'generation-completions', 'media-preview-repair', 'mobile-push-receipts', 'workflow-run-steps'],
+      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'mobile-push-receipts', 'workflow-run-steps'],
     });
   });
 
@@ -219,21 +216,6 @@ describe('/api/cron/backend-jobs route', () => {
       skipped: true as const,
       reason: 'alert_delivery_not_configured',
     };
-    const generationResult = {
-      success: true as const,
-      job: 'generation-completions',
-      route: '/api/cron/generation-completions',
-      status: 'succeeded' as const,
-      summary: { completed: 1 },
-    };
-    const repairResult = {
-      success: true as const,
-      job: 'media-preview-repair',
-      route: '/api/cron/media-preview-repair',
-      status: 'skipped' as const,
-      skipped: true as const,
-      reason: 'no_repairable_media',
-    };
     const receiptsResult = {
       success: true as const,
       job: 'mobile-push-receipts',
@@ -241,14 +223,19 @@ describe('/api/cron/backend-jobs route', () => {
       status: 'succeeded' as const,
       summary: { updatedCount: 1 },
     };
+    const workflowResult = {
+      success: true as const,
+      job: 'workflow-run-steps',
+      route: '/api/cron/workflow-run-steps',
+      status: 'succeeded' as const,
+      summary: { claimed: 1 },
+    };
     const alerts = deferredResult<typeof alertResult>();
-    const generation = deferredResult<typeof generationResult>();
-    const repair = deferredResult<typeof repairResult>();
     const receipts = deferredResult<typeof receiptsResult>();
+    const workflow = deferredResult<typeof workflowResult>();
     mocks.runBackendAlertDeliveryJob.mockReturnValueOnce(alerts.promise);
-    mocks.runGenerationCompletionsBackendJob.mockReturnValueOnce(generation.promise);
-    mocks.runMediaPreviewRepairBackendJob.mockReturnValueOnce(repair.promise);
     mocks.runMobilePushReceiptsBackendJob.mockReturnValueOnce(receipts.promise);
+    mocks.runWorkflowRunStepsBackendJob.mockReturnValueOnce(workflow.promise);
 
     const { GET } = await import('@/app/api/cron/backend-jobs/route');
     const responsePromise = GET(new Request('http://localhost/api/cron/backend-jobs', {
@@ -262,14 +249,12 @@ describe('/api/cron/backend-jobs route', () => {
 
     expect(mocks.runBackendAlertDeliveryJob).toHaveBeenCalledTimes(1);
     expect(mocks.runAccountDeletionResweepsBackendJob).toHaveBeenCalledTimes(1);
-    expect(mocks.runGenerationCompletionsBackendJob).toHaveBeenCalledTimes(1);
-    expect(mocks.runMediaPreviewRepairBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runMobilePushReceiptsBackendJob).toHaveBeenCalledTimes(1);
+    expect(mocks.runWorkflowRunStepsBackendJob).toHaveBeenCalledTimes(1);
 
     alerts.resolve(alertResult);
-    generation.resolve(generationResult);
-    repair.resolve(repairResult);
     receipts.resolve(receiptsResult);
+    workflow.resolve(workflowResult);
 
     const response = await responsePromise;
 
@@ -279,10 +264,8 @@ describe('/api/cron/backend-jobs route', () => {
       results: [
         expect.objectContaining({ job: 'account-deletion-resweeps', status: 'skipped' }),
         expect.objectContaining({ job: 'backend-alert-delivery', status: 'skipped' }),
-        expect.objectContaining({ job: 'generation-completions', status: 'succeeded' }),
-        expect.objectContaining({ job: 'media-preview-repair', status: 'skipped' }),
         expect.objectContaining({ job: 'mobile-push-receipts', status: 'succeeded' }),
-        expect.objectContaining({ job: 'workflow-run-steps', status: 'skipped' }),
+        expect.objectContaining({ job: 'workflow-run-steps', status: 'succeeded' }),
       ],
     });
   });
@@ -299,11 +282,11 @@ describe('/api/cron/backend-jobs route', () => {
     expect(mocks.runAccountDeletionResweepsBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runBackendAlertDeliveryJob).toHaveBeenCalledTimes(1);
     expect(mocks.runFeedMaintenanceBackendJob).not.toHaveBeenCalled();
-    expect(mocks.runGenerationCompletionsBackendJob).toHaveBeenCalledTimes(1);
+    expect(mocks.runGenerationCompletionsBackendJob).not.toHaveBeenCalled();
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     expect(mocks.runMobilePushReceiptsBackendJob).toHaveBeenCalledTimes(1);
     await expect(response.json()).resolves.toMatchObject({
-      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'generation-completions', 'mobile-push-receipts', 'workflow-run-steps'],
+      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'mobile-push-receipts', 'workflow-run-steps'],
     });
   });
 
@@ -328,7 +311,7 @@ describe('/api/cron/backend-jobs route', () => {
     });
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
-      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-maintenance', 'generation-completions', 'mobile-push-receipts', 'workflow-run-steps'],
+      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-maintenance', 'mobile-push-receipts', 'workflow-run-steps'],
     });
   });
 
@@ -357,7 +340,6 @@ describe('/api/cron/backend-jobs route', () => {
       dueJobs: [
         'account-deletion-resweeps',
         'backend-alert-delivery',
-        'generation-completions',
         'mobile-push-receipts',
         'referral-reward-reconciliation',
         'workflow-run-steps',
@@ -366,12 +348,12 @@ describe('/api/cron/backend-jobs route', () => {
   });
 
   it('returns a failed scheduler invocation when any due job fails', async () => {
-    mocks.runGenerationCompletionsBackendJob.mockResolvedValueOnce({
+    mocks.runMobilePushReceiptsBackendJob.mockResolvedValueOnce({
       success: false,
-      job: 'generation-completions',
-      route: '/api/cron/generation-completions',
+      job: 'mobile-push-receipts',
+      route: '/api/cron/mobile-push-receipts',
       status: 'failed',
-      error: 'provider timeout',
+      error: 'expo unavailable',
     });
 
     const { GET } = await import('@/app/api/cron/backend-jobs/route');
@@ -382,17 +364,13 @@ describe('/api/cron/backend-jobs route', () => {
     expect(response.status).toBe(500);
     expect(mocks.runAccountDeletionResweepsBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runBackendAlertDeliveryJob).toHaveBeenCalledTimes(1);
-    expect(mocks.runGenerationCompletionsBackendJob).toHaveBeenCalledTimes(1);
-    expect(mocks.runMediaPreviewRepairBackendJob).toHaveBeenCalledTimes(1);
     expect(mocks.runMobilePushReceiptsBackendJob).toHaveBeenCalledTimes(1);
     await expect(response.json()).resolves.toMatchObject({
       success: false,
       results: [
         expect.objectContaining({ job: 'account-deletion-resweeps', status: 'skipped' }),
         expect.objectContaining({ status: 'skipped' }),
-        expect.objectContaining({ status: 'failed' }),
-        expect.objectContaining({ status: 'succeeded' }),
-        expect.objectContaining({ status: 'succeeded' }),
+        expect.objectContaining({ job: 'mobile-push-receipts', status: 'failed' }),
         expect.objectContaining({ job: 'workflow-run-steps', status: 'skipped' }),
       ],
     });

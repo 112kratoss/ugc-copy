@@ -19,10 +19,27 @@ export type BackendJobSchedulerDefinition = {
   maxDurationSeconds: number;
 };
 
+/**
+ * How a logical job reaches a function instance (F14).
+ *
+ * `scheduler` — dispatched inside the shared `/api/cron/backend-jobs`
+ * invocation alongside every other due job. Cheap, and fine for work that is
+ * bounded and light.
+ *
+ * `dedicated` — Vercel cron calls the job's own route, so it runs in its own
+ * function instance. This is the only thing that provides real *memory*
+ * isolation: bounded concurrency and time budgets stop a job monopolising the
+ * 300 seconds, but an OOM or a hard crash takes down every job sharing the
+ * invocation. Reserved for the media-heavy jobs, which stage videos up to
+ * 250 MB and shell out to ffmpeg.
+ */
+export type BackendJobDispatch = 'scheduler' | 'dedicated';
+
 export type BackendJobDefinition = {
   name: BackendJobName;
   route: `/api/cron/${string}`;
   schedule: string;
+  dispatch: BackendJobDispatch;
   cadenceMinutes: number;
   dailyInvocations: number;
   maxDurationSeconds: number;
@@ -32,7 +49,16 @@ export type BackendJobDefinition = {
   healthExpectedMaxAgeMinutes: number;
 };
 
-export const BACKEND_JOB_DAILY_INVOCATION_BUDGET = 180;
+/**
+ * Ceiling on *Vercel cron* invocations per day, not logical job runs.
+ *
+ * Currently 144 (scheduler) + 144 (generation-completions) + 24
+ * (media-preview-repair) = 312, leaving room for one more ten-minute dedicated
+ * cron before this needs revisiting. Vercel Pro allows 40 cron entries, so the
+ * binding constraint is cost rather than the plan — and under Fluid compute
+ * billing follows CPU time, so a mostly-idle extra cron is close to free.
+ */
+export const BACKEND_JOB_DAILY_INVOCATION_BUDGET = 456;
 
 function parseSupportedCronSchedule(schedule: string): {
   minute: string;
@@ -146,12 +172,20 @@ export function isCronScheduleDueAt(
 }
 
 function defineBackendJob(
-  definition: Omit<BackendJobDefinition, 'cadenceMinutes' | 'dailyInvocations' | 'healthExpectedMaxAgeMinutes'>,
+  definition:
+    & Omit<
+      BackendJobDefinition,
+      'cadenceMinutes' | 'dailyInvocations' | 'healthExpectedMaxAgeMinutes' | 'dispatch'
+    >
+    & { dispatch?: BackendJobDispatch },
 ): BackendJobDefinition {
   const cadenceMinutes = getCronScheduleCadenceMinutes(definition.schedule);
   const dailyInvocations = getCronScheduleDailyInvocations(definition.schedule);
   return {
     ...definition,
+    // Shared dispatch stays the default: isolation costs a cron entry, so a job
+    // has to earn it by being able to take the invocation down.
+    dispatch: definition.dispatch ?? 'scheduler',
     cadenceMinutes,
     dailyInvocations,
     healthExpectedMaxAgeMinutes: cadenceMinutes * definition.maxMissedRunsBeforeDegraded,
@@ -195,9 +229,14 @@ export const BACKEND_JOB_REGISTRY = [
     maxMissedRunsBeforeDegraded: 2,
   }),
   defineBackendJob({
+    // F14: dedicated. Four completion workers each staging a video up to 250 MB
+    // can need ~1 GB of function temp space, so this is the job most able to
+    // OOM an invocation and take completions, push receipts, alerts and
+    // retention down with it.
     name: 'generation-completions',
     route: '/api/cron/generation-completions',
     schedule: '*/10 * * * *',
+    dispatch: 'dedicated',
     maxDurationSeconds: 300,
     lockTtlSeconds: 14 * 60,
     noWorkSkipReason: 'no_due_jobs',
@@ -213,9 +252,13 @@ export const BACKEND_JOB_REGISTRY = [
     maxMissedRunsBeforeDegraded: 2,
   }),
   defineBackendJob({
+    // F14: dedicated. Shells out to ffmpeg, which is memory-hungry and was the
+    // reason F2's sweep concurrency had to stay at one while this shared an
+    // invocation with everything else.
     name: 'media-preview-repair',
     route: '/api/cron/media-preview-repair',
     schedule: '0 * * * *',
+    dispatch: 'dedicated',
     maxDurationSeconds: 300,
     lockTtlSeconds: 14 * 60,
     noWorkSkipReason: 'no_repairable_media',
@@ -280,10 +323,40 @@ export const BACKEND_JOBS_BY_NAME = Object.fromEntries(
   BACKEND_JOB_REGISTRY.map((job) => [job.name, job]),
 ) as Record<BackendJobName, BackendJobDefinition>;
 
+/**
+ * Jobs the shared scheduler is responsible for on this tick.
+ *
+ * Dedicated jobs are excluded deliberately: Vercel cron calls their own routes,
+ * and dispatching them here too would run them in the shared invocation as
+ * well, which is exactly the isolation F14 exists to create. The job lock would
+ * make the duplicate harmless but pointless.
+ */
 export function getDueBackendJobs(timestampMs: number): BackendJobDefinition[] {
   return BACKEND_JOB_REGISTRY.filter((job) => (
-    isCronScheduleDueAt(job.schedule, timestampMs, {
+    job.dispatch === 'scheduler'
+    && isCronScheduleDueAt(job.schedule, timestampMs, {
       windowMinutes: BACKEND_JOB_SCHEDULER.cadenceMinutes,
     })
   ));
+}
+
+/** Logical jobs that Vercel cron invokes directly, in their own instance. */
+export const BACKEND_JOB_DEDICATED_CRONS = BACKEND_JOB_REGISTRY
+  .filter((job) => job.dispatch === 'dedicated');
+
+/**
+ * Every Vercel cron entry this repo expects, scheduler included. `vercel.json`
+ * is asserted against this so the two cannot drift.
+ */
+export const BACKEND_JOB_VERCEL_CRONS: readonly { path: string; schedule: string }[] = [
+  { path: BACKEND_JOB_SCHEDULER.route, schedule: BACKEND_JOB_SCHEDULER.schedule },
+  ...BACKEND_JOB_DEDICATED_CRONS.map((job) => ({ path: job.route, schedule: job.schedule })),
+];
+
+/** Actual Vercel cron invocations per day — the thing the budget bounds. */
+export function getBackendJobVercelDailyInvocations(): number {
+  return BACKEND_JOB_VERCEL_CRONS.reduce(
+    (total, cron) => total + getCronScheduleDailyInvocations(cron.schedule),
+    0,
+  );
 }
