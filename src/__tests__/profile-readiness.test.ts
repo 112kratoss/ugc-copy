@@ -37,6 +37,21 @@ describe('creator profile readiness', () => {
       .toBeUndefined();
   });
 
+  it('requires a display name on every save while leaving the bio optional', () => {
+    expect(validateProfileUpdate({ username: 'custom-creator' }).fieldErrors.displayName)
+      .toMatch(/display name/i);
+    expect(validateProfileUpdate({ username: 'custom-creator', displayName: '   ' }).fieldErrors.displayName)
+      .toMatch(/display name/i);
+
+    // A blank bio must stay saveable: most existing profiles have none, and an
+    // unrelated edit cannot start demanding one.
+    const named = validateProfileUpdate({ username: 'custom-creator', displayName: 'Custom Creator' });
+    expect(named.fieldErrors.displayName).toBeUndefined();
+    expect(named.fieldErrors.bio).toBeUndefined();
+    expect(validateProfileUpdate({ username: 'custom-creator', displayName: 'Custom Creator', bio: '' }).fieldErrors)
+      .toEqual({});
+  });
+
   it('requires HTTPS profile media and app-controlled hosts in production', () => {
     expect(validateProfileUpdate({
       username: 'custom-creator',
@@ -53,6 +68,7 @@ describe('creator profile readiness', () => {
     }).fieldErrors.avatarUrl).toMatch(/Magicbooklet/i);
     expect(validateProfileUpdate({
       username: 'custom-creator',
+      displayName: 'Custom Creator',
       avatarUrl: 'https://project.supabase.co/storage/v1/object/public/profiles/avatar.png',
       coverUrl: 'https://cdn.magicbooklet.com/cover.png',
     }).fieldErrors).toEqual({});

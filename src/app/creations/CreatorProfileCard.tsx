@@ -721,7 +721,10 @@ export default function CreatorProfileCard({
     } else if (onboardingMode && !submissionReadiness.hasClaimedHandle) {
       clientErrors.username = 'Use 3–24 lowercase letters, numbers, or hyphens.';
     }
-    if (onboardingMode && !submissionReadiness.hasDisplayName) {
+    // Not onboarding-only: the field is labelled Required everywhere, and the
+    // server rejects a blank one on every save, so catching it here keeps that
+    // rejection from costing a round trip.
+    if (!submissionReadiness.hasDisplayName) {
       clientErrors.displayName = 'Add the name you want people to see.';
     }
 
@@ -1334,6 +1337,7 @@ export default function CreatorProfileCard({
                 placeholder="Your creator name"
                 className="ui-focus-ring w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 py-3 text-[var(--ui-text-primary)] outline-none transition focus:border-[var(--ui-focus)]"
                 autoComplete="name"
+                required
                 aria-invalid={Boolean(fieldErrors.displayName)}
                 aria-describedby={fieldErrors.displayName ? 'profile-display-name-help profile-display-name-error' : 'profile-display-name-help'}
               />

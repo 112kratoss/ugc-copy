@@ -369,7 +369,12 @@ export function validateProfileUpdate(payload: ProfileUpdatePayload): ValidatedP
     fieldErrors.username = 'Choose a custom handle instead of the reserved creator-xxxxxxxx format.';
   }
 
-  if (displayName && displayName.length > MAX_DISPLAY_NAME_LENGTH) {
+  // Required like the username above: every surface that renders a creator
+  // falls back to the handle when this is blank, so a profile without one
+  // reads as half-finished. Bio stays optional.
+  if (!displayName) {
+    fieldErrors.displayName = 'Add a display name for your public profile.';
+  } else if (displayName.length > MAX_DISPLAY_NAME_LENGTH) {
     fieldErrors.displayName = `Display name must be ${MAX_DISPLAY_NAME_LENGTH} characters or fewer.`;
   }
 

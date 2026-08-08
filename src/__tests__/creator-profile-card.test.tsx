@@ -163,6 +163,51 @@ describe('CreatorProfileCard', () => {
     expect(screen.getByRole('link', { name: /preview profile/i })).toHaveAttribute('href', '/creators/updated-name');
   });
 
+  it('blocks an ordinary save when the display name is blank, but not for a blank bio', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <CreatorProfileCard
+        initialProfile={{ ...profile, displayName: '', bio: '' }}
+        isLoading={false}
+        loadError={null}
+      />
+    );
+
+    const form = screen.getByRole('button', { name: /save changes/i }).closest('form')!;
+    fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(screen.getByText(/add the name you want people to see/i)).toBeInTheDocument();
+    });
+    // The field is labelled Required outside onboarding too, so nothing may
+    // reach the API until it is filled in.
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByPlaceholderText('Your creator name'), {
+      target: { value: 'Named Creator' },
+    });
+    fireEvent.submit(form);
+
+    // An empty bio is still perfectly saveable.
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled();
+    });
+  });
+
+  it('marks the display name as a required field', () => {
+    render(
+      <CreatorProfileCard
+        initialProfile={profile}
+        isLoading={false}
+        loadError={null}
+      />
+    );
+
+    expect(screen.getByPlaceholderText('Your creator name')).toBeRequired();
+  });
+
   it('shows first-run setup progress when used for onboarding', () => {
     render(
       <CreatorProfileCard
