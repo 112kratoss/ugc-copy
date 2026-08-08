@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getPublicGenerationStartFailure,
+  markHeldProviderSubmission,
   requiresReplacementGenerationInput,
 } from '@/lib/generation-public-failure';
 
@@ -59,5 +60,51 @@ describe('public generation failure classification', () => {
     expect(requiresReplacementGenerationInput({
       message: 'The generation provider timed out.',
     })).toBe(false);
+  });
+
+  describe('held provider submissions (F14)', () => {
+    it('never tells the user to retry a submission whose credits are still held', () => {
+      // A retry here starts a second generation and places a second hold while
+      // the first submission may still be accepted and billed. This is the whole
+      // reason the held case needs copy of its own rather than reusing the
+      // provider_unavailable timeout copy.
+      const error = new Error('KIE task creation request timed out after 30000ms.');
+      error.name = 'ExternalServiceTimeoutError';
+      markHeldProviderSubmission(error);
+
+      const failure = getPublicGenerationStartFailure(error);
+      expect(failure.code).toBe('submission_pending');
+      expect(failure.message).not.toMatch(/retry/i);
+      expect(failure.message).not.toMatch(/refund/i);
+      expect(failure.message).toMatch(/credits stay reserved/i);
+    });
+
+    it('keeps the retry-friendly timeout copy when the generation was refunded', () => {
+      // The same error type is refunded on the template path and held on every
+      // other one. Keying the copy on the error shape instead of on the tag
+      // would promise reserved credits to a user who has already been refunded.
+      const error = new Error('KIE task creation request timed out after 30000ms.');
+      error.name = 'ExternalServiceTimeoutError';
+
+      const failure = getPublicGenerationStartFailure(error);
+      expect(failure.code).toBe('provider_unavailable');
+      expect(failure.message).toMatch(/retry/i);
+    });
+
+    it('does not leak the hold marker into a serialized error payload', () => {
+      const error = new Error('timed out');
+      markHeldProviderSubmission(error);
+      expect(Object.keys(error)).not.toContain('__magicbookletHeldSubmission');
+      expect(JSON.stringify({ ...error })).not.toMatch(/HeldSubmission/);
+    });
+
+    it('ignores non-object errors rather than throwing', () => {
+      // A primitive cannot carry the tag, so it must never be classified as
+      // held -- that copy promises reserved credits.
+      expect(() => markHeldProviderSubmission('timed out')).not.toThrow();
+      expect(() => markHeldProviderSubmission(null)).not.toThrow();
+      expect(getPublicGenerationStartFailure('timed out').code).not.toBe('submission_pending');
+      expect(getPublicGenerationStartFailure(null).code).not.toBe('submission_pending');
+    });
   });
 });

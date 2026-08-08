@@ -66,6 +66,51 @@ async function attachCallbackGenerationId(
   return 'skipped';
 }
 
+/**
+ * Record the residual race the F14 grace window cannot close.
+ *
+ * A callback can always land after the window expired and the reaper refunded.
+ * The provider did the work and will bill for it, so the discrepancy has to
+ * outlive this request: the warning above is not queryable against money, and
+ * log retention is finite while F15b's log drain is still open.
+ *
+ * The shape test lives in the RPC, not here. This same `already_settled` path
+ * is reached by ordinary duplicate callbacks on generations that succeeded
+ * normally, and a ledger full of benign duplicates is one nobody reads.
+ */
+async function recordLateCallbackAfterRefund(
+  serviceClient: SupabaseClient,
+  params: { generationId: string | null; predictionId: string },
+): Promise<void> {
+  const generationId = params.generationId?.trim();
+  if (!generationId) return;
+
+  try {
+    const { data, error } = await serviceClient.rpc('record_provider_submission_reconciliation', {
+      p_generation_id: generationId,
+      p_prediction_id: params.predictionId,
+    });
+    if (error) throw error;
+
+    const status = isRecord(data) && typeof data.status === 'string' ? data.status : null;
+    if (status === 'recorded') {
+      logBackendError('provider_submission_reconciliation_recorded', {
+        generationId,
+        predictionId: params.predictionId,
+        refundedCredits: isRecord(data) ? data.refunded_credits : undefined,
+      });
+    }
+  } catch (error) {
+    // Never fail the webhook over bookkeeping: the provider retries on a
+    // non-200 and the completion payload is already lost either way.
+    logBackendWarning('provider_submission_reconciliation_record_failed', {
+      generationId,
+      predictionId: params.predictionId,
+      error,
+    });
+  }
+}
+
 function buildCompletionJobPayload(
   payload: unknown,
   params: { generationId: string | null },
@@ -147,6 +192,10 @@ export async function handleKieWebhookForRoute(input: KieWebhookRouteInput): Pro
   });
 
   if (attachStatus === 'skipped') {
+    await recordLateCallbackAfterRefund(serviceClient, {
+      generationId: callbackGenerationId,
+      predictionId,
+    });
     return {
       body: { received: true, predictionId },
       status: 200,

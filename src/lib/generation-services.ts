@@ -57,6 +57,7 @@ import { buildKieWebhookCallbackUrl } from '@/lib/kie-webhook';
 import type { GenerationStartResult } from '@/lib/generation-start-idempotency';
 import {
   getPublicGenerationStartFailure,
+  markHeldProviderSubmission,
   type GenerationStartFailureCode,
   type PublicGenerationStartFailure,
 } from '@/lib/generation-public-failure';
@@ -78,11 +79,12 @@ import {
 } from '@/lib/generation-settlement';
 export { settleGenerationFailed, settleGenerationSucceeded };
 export type { GenerationTerminalSettlementStatus };
-import { logBackendError } from '@/lib/backend-logger';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
 const TEMPLATE_START_FAILED_EVENT = 'template_generation_start_failed_after_reservation';
 import {
   fetchWithProviderTimeout,
+  isExternalServiceTimeoutError,
   PROVIDER_TASK_CREATE_TIMEOUT_MS,
   withProviderModel,
 } from '@/lib/provider-fetch';
@@ -517,6 +519,87 @@ async function settleTemplateGenerationStartFailureQuietly(params: {
   }
 }
 
+/**
+ * Hold an ambiguous submission instead of refunding it.
+ *
+ * Task creation times out at 30s with no retry, so a timeout leaves
+ * `predictionId` undefined exactly as a definitive provider rejection does --
+ * but Kie may have accepted the task. Refunding here loses the money twice:
+ * once on the refund, and again on the output the provider will still bill for
+ * and whose callback we would then discard as already-settled.
+ *
+ * Holding needs no new recovery mechanism, because the row keeps the shape both
+ * existing paths already match. A callback attaches through
+ * `attach_generation_provider_task` and rescues the generation; if none arrives,
+ * `reapStalledGenerations` settles it after its 45-minute window. That window is
+ * deliberately the *only* clock on this row -- a second timer would give one
+ * credit hold two owners racing to write the terminal state.
+ */
+type AmbiguousSubmissionHold =
+  /** Held or already running: skip the refund, and the credits really are reserved. */
+  | 'reserved'
+  /** Something else already settled this row: skip the refund, but say nothing about reserved credits. */
+  | 'settled'
+  /** The hold could not be recorded; fall back to the pre-existing refund. */
+  | 'unrecorded';
+
+async function holdAmbiguousGenerationSubmission(params: {
+  creditSupabase: SupabaseClient;
+  generationId: string;
+  userId: string;
+  cost: number;
+}): Promise<AmbiguousSubmissionHold> {
+  try {
+    const { data, error } = await params.creditSupabase.rpc('mark_generation_submission_unknown', {
+      p_generation_id: params.generationId,
+    });
+    const status = data && typeof data === 'object' && 'status' in data
+      ? String((data as { status?: unknown }).status)
+      : null;
+
+    // `provider_task_attached` means the callback beat this write -- the
+    // provider had 30 seconds to accept and call back while we were still
+    // waiting. That generation is running, so its credits are genuinely spent
+    // on live work, which is what the reserved-credits copy describes.
+    if (!error && (status === 'held' || status === 'already_marked' || status === 'provider_task_attached')) {
+      logBackendWarning('generation_submission_unknown_held', {
+        generationId: params.generationId,
+        userId: params.userId,
+        cost: params.cost,
+        mark: status,
+      });
+      return 'reserved';
+    }
+
+    // Already settled by some other path. Refunding again would be wrong, but
+    // so would telling the user their credits are reserved -- they may have
+    // just been returned.
+    if (!error && status === 'already_settled') {
+      logBackendWarning('generation_submission_unknown_superseded', {
+        generationId: params.generationId,
+        mark: status,
+      });
+      return 'settled';
+    }
+
+    // Fall through to the refund only when the hold could not be recorded at
+    // all. An unmarked held row is invisible to reconciliation, so the
+    // pre-existing behaviour is the safer residual.
+    logBackendError('generation_submission_unknown_mark_failed', {
+      generationId: params.generationId,
+      markStatus: status,
+      error: supabaseErrorMessage(error, 'Unexpected submission-unknown mark status.'),
+    });
+    return 'unrecorded';
+  } catch (markError) {
+    logBackendError('generation_submission_unknown_mark_failed', {
+      generationId: params.generationId,
+      error: supabaseErrorMessage(markError, 'Failed to mark an ambiguous provider submission.'),
+    });
+    return 'unrecorded';
+  }
+}
+
 async function settleGenerationStartFailureQuietly(params: {
   creditSupabase: SupabaseClient;
   error: unknown;
@@ -524,6 +607,26 @@ async function settleGenerationStartFailureQuietly(params: {
   userId: string;
   cost: number;
 }) {
+  // Only the ambiguous class is held. A provider that answered -- with an HTTP
+  // error or a non-200 body code -- has definitively rejected the request, and
+  // refunding it immediately stays correct.
+  if (isExternalServiceTimeoutError(params.error)) {
+    const hold = await holdAmbiguousGenerationSubmission({
+      creditSupabase: params.creditSupabase,
+      generationId: params.generationId,
+      userId: params.userId,
+      cost: params.cost,
+    });
+
+    if (hold !== 'unrecorded') {
+      // Tagged only when the credits really are still reserved, so the copy the
+      // caller renders can say so without the risk of promising it to someone
+      // who has already been refunded.
+      if (hold === 'reserved') markHeldProviderSubmission(params.error);
+      return;
+    }
+  }
+
   const failure = getPublicGenerationStartFailure(params.error);
   try {
     // The atomic settlement RPC is deployed everywhere; it refunds and marks

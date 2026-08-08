@@ -26,7 +26,17 @@ import { syncGenerationStatusByPredictionId } from '@/lib/generation-status-sync
  *    through the atomic `settle_generation_start_failed` RPC (the same
  *    pgTAP-covered path the start services use), refunding the credit hold
  *    at most once. The RPC refuses rows that gained a provider task or
- *    already settled, so a late webhook can never be double-settled.
+ *    already settled, so a late webhook can never be double-settled. Template
+ *    generations route to the template variant so the run step fails with the
+ *    generation instead of stranding the run in `processing`.
+ *
+ * This second pass is also the single settlement point for ambiguous provider
+ * submissions (F14). A task-creation timeout cannot tell acceptance from
+ * rejection, so the start services hold the generation rather than refunding it
+ * on the spot; a held row has exactly the shape this pass already selects, and
+ * its `submission_unknown_at` marker is what distinguishes "the provider may
+ * have run and billed for this" from a clean start failure. The window here is
+ * deliberately the only clock on those rows.
  *
  * One bad row never aborts the batch: per-row failures are logged, counted,
  * and retried naturally on a later tick because the row stays eligible.
@@ -59,7 +69,27 @@ type StalledGenerationRow = {
   prediction_id: string | null;
   status: string;
   created_at: string;
+  template_run_id?: string | null;
+  template_run_step_id?: string | null;
+  submission_unknown_at?: string | null;
 };
+
+/**
+ * A template generation carries a run step whose status has to move with it.
+ * `settle_generation_start_failed` refunds the credit hold but never touches
+ * `template_run_steps`, so settling a template row through it leaves the step
+ * stuck in `processing` and the run unable to finish.
+ *
+ * This was previously near-unreachable -- template starts settle synchronously,
+ * so a row only arrived here when that settlement had itself failed. Holding
+ * ambiguous submissions makes rows reaching the reaper ordinary rather than
+ * exceptional, so the branch has to be right before it carries real traffic.
+ */
+function startFailureSettlementRpc(row: StalledGenerationRow): string {
+  return row.template_run_id && row.template_run_step_id
+    ? 'settle_template_generation_start_failed'
+    : 'settle_generation_start_failed';
+}
 
 export type StalledGenerationReapSummary = {
   providerSync: {
@@ -76,6 +106,8 @@ export type StalledGenerationReapSummary = {
     skipped: number;
     failed: number;
     deferred: number;
+    /** Subset of `settled` whose submission outcome was never confirmed. */
+    submissionUnknown: number;
   };
 };
 
@@ -156,7 +188,7 @@ async function loadStalledStartFailureRows(
 ): Promise<StalledGenerationRow[]> {
   const { data, error } = await client
     .from('generations')
-    .select('id, prediction_id, status, created_at')
+    .select('id, prediction_id, status, created_at, template_run_id, template_run_step_id, submission_unknown_at')
     .eq('status', 'pending')
     .is('prediction_id', null)
     .lt('created_at', startFailureCutoffIso(params.nowMs))
@@ -193,7 +225,7 @@ export async function reapStalledGenerations(params: {
   const deadlineMs = Date.now() + timeBudgetMs;
   const summary: StalledGenerationReapSummary = {
     providerSync: { eligible: 0, reconciled: 0, stillActive: 0, skipped: 0, failed: 0, deferred: 0 },
-    startFailures: { eligible: 0, settled: 0, skipped: 0, failed: 0, deferred: 0 },
+    startFailures: { eligible: 0, settled: 0, skipped: 0, failed: 0, deferred: 0, submissionUnknown: 0 },
   };
 
   const syncRows = await loadStalledProviderSyncRows(params.supabase, { nowMs, limit: syncLimit });
@@ -253,7 +285,7 @@ export async function reapStalledGenerations(params: {
     }
 
     try {
-      const { data, error } = await params.creditSupabase.rpc('settle_generation_start_failed', {
+      const { data, error } = await params.creditSupabase.rpc(startFailureSettlementRpc(row), {
         p_generation_id: row.id,
         p_error_message: failureMessage,
       });
@@ -265,10 +297,20 @@ export async function reapStalledGenerations(params: {
 
       if (status === 'failed' || status === 'already_failed') {
         summary.startFailures.settled += 1;
+        // An ambiguous submission that expired is materially different from a
+        // generation that never reached the provider: Kie may have run and
+        // billed for this task, so the settlement is a candidate discrepancy
+        // rather than a clean refund.
+        const submissionUnknown = Boolean(row.submission_unknown_at);
+        if (submissionUnknown) {
+          summary.startFailures.submissionUnknown += 1;
+        }
         logBackendInfo('stalled_generation_start_failure_settled', {
           generationId: row.id,
           settlement: status,
           createdAt: row.created_at,
+          submissionUnknown,
+          ...(row.template_run_id ? { templateRunId: row.template_run_id } : {}),
         });
       } else if (status === 'provider_task_attached' || status === 'already_succeeded') {
         // A provider task or terminal settlement raced in after our read; the

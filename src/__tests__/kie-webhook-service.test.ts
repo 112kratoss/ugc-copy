@@ -41,7 +41,8 @@ function signedKieRequest(
 }
 
 describe('kie webhook service', () => {
-  const serviceClient = { service: 'supabase' };
+  const rpc = vi.fn(async () => ({ data: { status: 'not_applicable' }, error: null }));
+  const serviceClient = { service: 'supabase', rpc };
   const createServiceClient = vi.fn(() => serviceClient);
   const scheduleAfter = vi.fn((callback: () => Promise<void> | void) => callback());
 
@@ -49,6 +50,7 @@ describe('kie webhook service', () => {
     vi.resetModules();
     createServiceClient.mockClear();
     scheduleAfter.mockClear();
+    rpc.mockClear();
     mocks.attachGenerationProviderTask.mockReset();
     mocks.enqueueGenerationCompletionJob.mockReset();
     mocks.processGenerationCompletionJobs.mockReset();
@@ -168,5 +170,82 @@ describe('kie webhook service', () => {
     });
     expect(mocks.enqueueGenerationCompletionJob).not.toHaveBeenCalled();
     expect(scheduleAfter).not.toHaveBeenCalled();
+  });
+
+  it('offers a skipped callback for reconciliation before dropping it', async () => {
+    // The residual F14 race: the grace window shrinks it but cannot remove it.
+    // A callback that lands after the reaper refunded is a real discrepancy --
+    // the provider ran the task and will bill for it -- so it has to leave an
+    // artifact that outlives the request, not just a log line.
+    mocks.attachGenerationProviderTask.mockResolvedValueOnce('already_settled');
+    rpc.mockResolvedValueOnce({
+      data: { status: 'recorded', refunded_credits: 40 },
+      error: null,
+    } as never);
+
+    const { handleKieWebhookForRoute } = await import('@/lib/kie-webhook-service');
+    const result = await handleKieWebhookForRoute({
+      createServiceClient,
+      env: { KIE_WEBHOOK_HMAC_KEY: 'hmac-key' },
+      nowSeconds: 1782039000,
+      request: signedKieRequest(
+        { data: { taskId: 'task-1', state: 'success' } },
+        '1782039000',
+        'http://localhost/api/webhooks/kie?generationId=gen-1',
+      ),
+      scheduleAfter,
+    });
+
+    expect(rpc).toHaveBeenCalledWith('record_provider_submission_reconciliation', {
+      p_generation_id: 'gen-1',
+      p_prediction_id: 'task-1',
+    });
+    // Still a 200: the provider must not retry a payload we can no longer use.
+    expect(result.status).toBe(200);
+    expect(mocks.enqueueGenerationCompletionJob).not.toHaveBeenCalled();
+  });
+
+  it('never fails the webhook when reconciliation bookkeeping errors', async () => {
+    mocks.attachGenerationProviderTask.mockResolvedValueOnce('already_settled');
+    rpc.mockRejectedValueOnce(new Error('ledger unavailable') as never);
+
+    const { handleKieWebhookForRoute } = await import('@/lib/kie-webhook-service');
+    const result = await handleKieWebhookForRoute({
+      createServiceClient,
+      env: { KIE_WEBHOOK_HMAC_KEY: 'hmac-key' },
+      nowSeconds: 1782039000,
+      request: signedKieRequest(
+        { data: { taskId: 'task-1', state: 'success' } },
+        '1782039000',
+        'http://localhost/api/webhooks/kie?generationId=gen-1',
+      ),
+      scheduleAfter,
+    });
+
+    expect(result).toEqual({
+      body: { received: true, predictionId: 'task-1' },
+      status: 200,
+    });
+  });
+
+  it('leaves the normal completion path free of reconciliation work', async () => {
+    // A callback that attaches cleanly is not a discrepancy. Pinned because the
+    // reconciliation call sits on the shared webhook path: if it ever fired here
+    // it would add an RPC round-trip to every successful generation.
+    const { handleKieWebhookForRoute } = await import('@/lib/kie-webhook-service');
+    await handleKieWebhookForRoute({
+      createServiceClient,
+      env: { KIE_WEBHOOK_HMAC_KEY: 'hmac-key' },
+      nowSeconds: 1782039000,
+      request: signedKieRequest(
+        { data: { taskId: 'task-1', state: 'success' } },
+        '1782039000',
+        'http://localhost/api/webhooks/kie?generationId=gen-1',
+      ),
+      scheduleAfter,
+    });
+
+    expect(mocks.enqueueGenerationCompletionJob).toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
   });
 });

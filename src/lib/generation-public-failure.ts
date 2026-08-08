@@ -4,7 +4,8 @@ export type GenerationStartFailureCode =
   | 'service_misconfigured'
   | 'provider_busy'
   | 'provider_unavailable'
-  | 'provider_rejected';
+  | 'provider_rejected'
+  | 'submission_pending';
 
 export type PublicGenerationStartFailure = Readonly<{
   code: GenerationStartFailureCode;
@@ -18,7 +19,39 @@ const GENERATION_START_FAILURE_CODES = new Set<GenerationStartFailureCode>([
   'provider_busy',
   'provider_unavailable',
   'provider_rejected',
+  'submission_pending',
 ]);
+
+/**
+ * Marks an error whose generation was *held* rather than refunded (F14).
+ *
+ * The copy has to follow what actually happened to the money, not the shape of
+ * the error. The same `ExternalServiceTimeoutError` is refunded on the template
+ * path and held on every other one, so telling them apart by error type would
+ * promise "your credits stay reserved" to a user who has already been refunded.
+ * The start service tags the error only once the hold is recorded.
+ *
+ * Non-enumerable so the flag never leaks into a serialized error payload.
+ */
+const HELD_SUBMISSION_FLAG = '__magicbookletHeldSubmission';
+
+export function markHeldProviderSubmission(error: unknown): void {
+  if (!error || typeof error !== 'object') return;
+  Object.defineProperty(error, HELD_SUBMISSION_FLAG, {
+    value: true,
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
+}
+
+function isHeldProviderSubmission(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && (error as Record<string, unknown>)[HELD_SUBMISSION_FLAG] === true,
+  );
+}
 
 function recordValue(error: unknown, keys: string[]): unknown {
   if (!error || typeof error !== 'object') return undefined;
@@ -86,6 +119,17 @@ export function requiresReplacementGenerationInput(input: {
 /** Consumer-safe provider failure copy. Never returns provider payloads, URLs,
  * private prompts, or model identifiers. */
 export function getPublicGenerationStartFailure(error: unknown): PublicGenerationStartFailure {
+  // First, because it is the only branch that describes what happened to the
+  // user's credits rather than what the provider said. Deliberately never says
+  // "retry": a retry here starts a second generation and places a second hold
+  // while the first submission may still be accepted and billed.
+  if (isHeldProviderSubmission(error)) {
+    return {
+      code: 'submission_pending',
+      message: 'We could not confirm this request with the generation provider in time. It may still be running — check Studio in a few minutes. Your credits stay reserved until it resolves, and are returned automatically if it does not.',
+    };
+  }
+
   const status = errorStatus(error);
   const message = normalizedSignal(errorMessage(error));
   const code = normalizedSignal(errorCode(error));

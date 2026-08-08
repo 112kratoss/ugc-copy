@@ -20,12 +20,17 @@ type GenerationRow = {
   error_message?: string | null;
   template_run_id?: string | null;
   template_run_step_id?: string | null;
+  submission_unknown_at?: string | null;
 };
 
 type SupabaseMockOptions = {
   generationInsertErrors?: Error[];
   generationUpdateErrors?: Error[];
   sharedGenerations?: GenerationRow[];
+  /** Force a named RPC to fail, for testing fallback paths. */
+  rpcErrors?: Record<string, { message: string }>;
+  /** Force a named RPC to return a specific payload, for testing race outcomes. */
+  rpcResults?: Record<string, unknown>;
 };
 
 function createSupabaseMock(initialRows: GenerationRow[] = [], options: SupabaseMockOptions = {}) {
@@ -39,6 +44,15 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
   const supabase = {
     rpc: vi.fn(async (fn: string, args: Record<string, unknown>) => {
       rpcCalls.push({ fn, args });
+
+      const forcedError = options.rpcErrors?.[fn];
+      if (forcedError) {
+        return { data: null, error: forcedError };
+      }
+
+      if (options.rpcResults && Object.hasOwn(options.rpcResults, fn)) {
+        return { data: options.rpcResults[fn], error: null };
+      }
 
       if (fn === 'start_generation' || fn === 'start_template_generation') {
         const insertError = generationInsertErrors.shift();
@@ -136,6 +150,23 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
             output_url: row.output_url,
             refunded: false,
           },
+          error: null,
+        };
+      }
+
+      if (fn === 'mark_generation_submission_unknown') {
+        const row = generations.find((generation) => generation.id === args.p_generation_id);
+        if (!row) return { data: { status: 'missing' }, error: null };
+        if (row.prediction_id) {
+          return { data: { status: 'provider_task_attached', generation_id: row.id }, error: null };
+        }
+        if (row.status !== 'pending' || Boolean(row.refunded)) {
+          return { data: { status: 'already_settled', generation_id: row.id }, error: null };
+        }
+        const alreadyMarked = Boolean(row.submission_unknown_at);
+        row.submission_unknown_at = row.submission_unknown_at ?? new Date().toISOString();
+        return {
+          data: { status: alreadyMarked ? 'already_marked' : 'held', generation_id: row.id },
           error: null,
         };
       }
@@ -1263,6 +1294,144 @@ describe('generation services', () => {
       client_request_key_hash: null,
     });
     expect(generations[0].completed_at).toEqual(expect.any(String));
+  });
+
+  it('holds an image generation instead of refunding when task creation times out', async () => {
+    // The F14 money bug: a 30s timeout leaves predictionId undefined exactly as
+    // a definitive rejection does, but Kie may have accepted the task. Refunding
+    // here loses the money twice -- on the refund, and again on the output the
+    // provider bills for and whose callback we would discard as already-settled.
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const { ExternalServiceTimeoutError } = await import('@/lib/provider-fetch');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockRejectedValue(new ExternalServiceTimeoutError('KIE task creation', 30_000));
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    await expect(startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'd'.repeat(64),
+      prompt: 'An ambiguous submission.',
+      model: 'nano-banana-2',
+    })).rejects.toThrow('timed out');
+
+    const calledRpcs = rpcCalls.map((call) => call.fn);
+    expect(calledRpcs).toContain('mark_generation_submission_unknown');
+    expect(calledRpcs).not.toContain('settle_generation_start_failed');
+
+    expect(generations[0]).toMatchObject({
+      status: 'pending',
+      prediction_id: null,
+      submission_unknown_at: expect.any(String),
+    });
+    expect(generations[0].refunded).toBeFalsy();
+    expect(generations[0].completed_at).toBeNull();
+    // Left set deliberately: the row stays in ACTIVE_START_STATUSES, so a
+    // same-key resubmit replays the held generation instead of charging twice.
+    expect(generations[0].client_request_key_hash).toBe('d'.repeat(64));
+  });
+
+  it('still refunds an image generation when the provider definitively rejects it', async () => {
+    // The other half of the split: a provider that answered has decided, and
+    // holding its rejection for 45 minutes would be a regression.
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({
+      ok: false,
+      json: async () => ({ code: 400, msg: 'Prompt rejected' }),
+    } as Response);
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    await expect(startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'A definitively rejected prompt.',
+      model: 'nano-banana-2',
+    })).rejects.toThrow('Prompt rejected');
+
+    const calledRpcs = rpcCalls.map((call) => call.fn);
+    expect(calledRpcs).toContain('settle_generation_start_failed');
+    expect(calledRpcs).not.toContain('mark_generation_submission_unknown');
+    expect(generations[0]).toMatchObject({ status: 'failed', refunded: true });
+  });
+
+  it('holds a voiceover generation on timeout too, not only the image path', async () => {
+    // The refund branch is duplicated across all seven start paths. The fix
+    // lives in the shared settle helper precisely so none of them can be missed;
+    // a second path proves the helper is really the shared seam.
+    const { startVoiceoverGeneration } = await import('@/lib/generation-services');
+    const { ExternalServiceTimeoutError } = await import('@/lib/provider-fetch');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockRejectedValue(new ExternalServiceTimeoutError('KIE task creation', 30_000));
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    await expect(startVoiceoverGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      model: 'text-to-speech-turbo-2-5',
+      text: 'This start should be held, not refunded.',
+      voice: 'Rachel',
+    })).rejects.toThrow('timed out');
+
+    expect(rpcCalls.map((call) => call.fn)).toContain('mark_generation_submission_unknown');
+    expect(generations[0]).toMatchObject({ status: 'pending', prediction_id: null });
+    expect(generations[0].refunded).toBeFalsy();
+  });
+
+  it('does not promise reserved credits when something else already settled the row', async () => {
+    // 'already_settled' means another path got there first, and it may have
+    // refunded. Skipping the second refund is right; telling the user their
+    // credits are still reserved is not.
+    const { startImageGeneration, getPublicGenerationStartFailure } = await import('@/lib/generation-services');
+    const { ExternalServiceTimeoutError } = await import('@/lib/provider-fetch');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockRejectedValue(new ExternalServiceTimeoutError('KIE task creation', 30_000));
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock([], {
+      rpcResults: { mark_generation_submission_unknown: { status: 'already_settled' } },
+    });
+
+    const caught = await startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'A row settled by another path.',
+      model: 'nano-banana-2',
+    }).catch((error: unknown) => error);
+
+    // No second refund...
+    expect(rpcCalls.map((call) => call.fn)).not.toContain('settle_generation_start_failed');
+    expect(generations[0].refunded).toBeFalsy();
+    // ...but the copy falls back to the retry-friendly timeout wording rather
+    // than claiming credits are reserved.
+    expect(getPublicGenerationStartFailure(caught).code).toBe('provider_unavailable');
+  });
+
+  it('refunds when the hold cannot be recorded, rather than losing track of the row', async () => {
+    // An unmarked held row is invisible to reconciliation and to the reaper's
+    // ambiguity reporting, so the pre-existing refund is the safer residual.
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const { ExternalServiceTimeoutError } = await import('@/lib/provider-fetch');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockRejectedValue(new ExternalServiceTimeoutError('KIE task creation', 30_000));
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock([], {
+      rpcErrors: { mark_generation_submission_unknown: { message: 'mark unavailable' } },
+    });
+
+    await expect(startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'A hold that could not be recorded.',
+      model: 'nano-banana-2',
+    })).rejects.toThrow('timed out');
+
+    expect(rpcCalls.map((call) => call.fn)).toContain('settle_generation_start_failed');
+    expect(generations[0]).toMatchObject({ status: 'failed', refunded: true });
   });
 
   it('uses the backend client to mark backend-reserved image starts failed when provider submission fails', async () => {

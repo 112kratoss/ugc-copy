@@ -152,7 +152,7 @@ describe('stalled generation reaper', () => {
       nowMs: NOW_MS,
     })).resolves.toEqual({
       providerSync: { eligible: 4, reconciled: 1, stillActive: 1, skipped: 1, failed: 1, deferred: 0 },
-      startFailures: { eligible: 0, settled: 0, skipped: 0, failed: 0, deferred: 0 },
+      startFailures: { eligible: 0, settled: 0, skipped: 0, failed: 0, deferred: 0, submissionUnknown: 0 },
     });
 
     expect(client.lt).toHaveBeenNthCalledWith(1, 'created_at', '2026-06-21T09:30:00.000Z');
@@ -195,7 +195,7 @@ describe('stalled generation reaper', () => {
       nowMs: NOW_MS,
     })).resolves.toEqual({
       providerSync: { eligible: 0, reconciled: 0, stillActive: 0, skipped: 0, failed: 0, deferred: 0 },
-      startFailures: { eligible: 4, settled: 1, skipped: 1, failed: 2, deferred: 0 },
+      startFailures: { eligible: 4, settled: 1, skipped: 1, failed: 2, deferred: 0, submissionUnknown: 0 },
     });
 
     expect(client.lt).toHaveBeenNthCalledWith(2, 'created_at', '2026-06-21T09:15:00.000Z');
@@ -233,11 +233,109 @@ describe('stalled generation reaper', () => {
       timeBudgetMs: 0,
     })).resolves.toEqual({
       providerSync: { eligible: 2, reconciled: 0, stillActive: 0, skipped: 0, failed: 0, deferred: 2 },
-      startFailures: { eligible: 1, settled: 0, skipped: 0, failed: 0, deferred: 1 },
+      startFailures: { eligible: 1, settled: 0, skipped: 0, failed: 0, deferred: 1, submissionUnknown: 0 },
     });
 
     expect(syncGenerationStatusByPredictionId).not.toHaveBeenCalled();
     expect(client.rpc).not.toHaveBeenCalled();
+  });
+
+  it('counts settled ambiguous submissions separately from clean start failures', async () => {
+    // A held submission that expired is a candidate money discrepancy: Kie may
+    // have run and billed for the task. A generation that never reached the
+    // provider is a clean refund. The reaper is where the two become
+    // indistinguishable unless the marker is carried through.
+    const client = createGenerationsClient(
+      [
+        { data: [], error: null },
+        {
+          data: [
+            {
+              id: 'gen-held',
+              prediction_id: null,
+              status: 'pending',
+              created_at: '2026-06-21T08:00:00.000Z',
+              submission_unknown_at: '2026-06-21T08:00:30.000Z',
+            },
+            {
+              id: 'gen-clean',
+              prediction_id: null,
+              status: 'pending',
+              created_at: '2026-06-21T08:05:00.000Z',
+              submission_unknown_at: null,
+            },
+          ],
+          error: null,
+        },
+      ],
+      [
+        { data: { status: 'failed', refunded: true }, error: null },
+        { data: { status: 'failed', refunded: true }, error: null },
+      ],
+    );
+
+    await expect(reapStalledGenerations({
+      supabase: client as never,
+      creditSupabase: client as never,
+      nowMs: NOW_MS,
+    })).resolves.toMatchObject({
+      startFailures: { eligible: 2, settled: 2, submissionUnknown: 1 },
+    });
+  });
+
+  it('routes template generations to the settlement RPC that also fails the run step', async () => {
+    // settle_generation_start_failed refunds the hold but never touches
+    // template_run_steps, so settling a template row through it strands the run
+    // in `processing`. Previously near-unreachable because template starts
+    // settled synchronously; holding ambiguous submissions makes these rows
+    // ordinary, so the branch has to be right before it carries real traffic.
+    const client = createGenerationsClient(
+      [
+        { data: [], error: null },
+        {
+          data: [
+            {
+              id: 'gen-template',
+              prediction_id: null,
+              status: 'pending',
+              created_at: '2026-06-21T08:00:00.000Z',
+              template_run_id: 'run-1',
+              template_run_step_id: 'step-1',
+            },
+            {
+              id: 'gen-direct',
+              prediction_id: null,
+              status: 'pending',
+              created_at: '2026-06-21T08:05:00.000Z',
+              template_run_id: null,
+              template_run_step_id: null,
+            },
+          ],
+          error: null,
+        },
+      ],
+      [
+        { data: { status: 'failed', refunded: true }, error: null },
+        { data: { status: 'failed', refunded: true }, error: null },
+      ],
+    );
+
+    await reapStalledGenerations({
+      supabase: client as never,
+      creditSupabase: client as never,
+      nowMs: NOW_MS,
+    });
+
+    expect(client.rpc).toHaveBeenNthCalledWith(
+      1,
+      'settle_template_generation_start_failed',
+      expect.objectContaining({ p_generation_id: 'gen-template' }),
+    );
+    expect(client.rpc).toHaveBeenNthCalledWith(
+      2,
+      'settle_generation_start_failed',
+      expect.objectContaining({ p_generation_id: 'gen-direct' }),
+    );
   });
 
   it('propagates batch query failures so the job-run ledger records the error', async () => {
