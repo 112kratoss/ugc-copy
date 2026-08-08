@@ -74,6 +74,20 @@ const objectLimit = readLimitArgument(process.argv.slice(2));
  */
 const verifyOnly = process.argv.slice(2).includes('--verify');
 
+/**
+ * There is deliberately NO remediation mode for stale ranged entries, because
+ * none was found to work. Full and ranged requests hold separate edge entries
+ * and a Storage write purges only the full one — verified on a controlled
+ * scratch object and on live media, where a second rewrite left the ranged
+ * entry serving a 7.7-day-old header against a 300s TTL. Delete looked like
+ * the invalidator (the entry answers 4xx while the object is gone) but it
+ * GATES rather than evicts: re-uploading to the same path brought the old
+ * ranged variant back verbatim, twice, on live objects. Takedowns still work —
+ * deleted content stops serving and stays deleted — but nothing available to
+ * this script resets a warm ranged entry's headers while the object lives.
+ * The full account is in F3 of docs/scaling-audit-2026-08-08.md.
+ */
+
 type StorageEntry = {
   path: string;
   mimeType: string | null;
@@ -175,32 +189,41 @@ async function main() {
   if (verifyOnly) {
     console.log('');
     console.log('Requesting each object to see what the CDN actually serves...');
+    console.log('Both request shapes, because they hold separate edge entries: a full');
+    console.log('GET and a ranged GET can answer differently for the same object, and');
+    console.log('video players request with Range almost exclusively — a verify that');
+    console.log('only sends full GETs reported this backfill green while playback was');
+    console.log('still being served the old header.');
     const servedCounts = new Map<string, number>();
     const offTarget: string[] = [];
 
     for (const entry of entries) {
-      const response = await fetch(
-        `${supabaseUrl}/storage/v1/object/public/${BUCKET}/${entry.path}`,
-        { cache: 'no-store' },
-      );
-      const served = response.headers.get('cache-control') ?? '(none)';
-      servedCounts.set(served, (servedCounts.get(served) ?? 0) + 1);
-      if (!served.includes(`max-age=${TARGET_CACHE_CONTROL}`)) {
-        offTarget.push(`${entry.path} -> ${served}`);
+      const objectUrl = `${supabaseUrl}/storage/v1/object/public/${BUCKET}/${entry.path}`;
+      for (const [mode, headers] of [
+        ['full', {}],
+        ['ranged', { Range: 'bytes=0-0' }],
+      ] as const) {
+        const response = await fetch(objectUrl, { cache: 'no-store', headers });
+        const served = response.headers.get('cache-control') ?? '(none)';
+        const key = `${mode}: ${served}`;
+        servedCounts.set(key, (servedCounts.get(key) ?? 0) + 1);
+        if (!served.includes(`max-age=${TARGET_CACHE_CONTROL}`)) {
+          offTarget.push(`${entry.path} [${mode}] -> ${served}`);
+        }
       }
     }
 
-    console.log('Served cache-control:');
+    console.log('Served cache-control by request shape:');
     for (const [value, count] of [...servedCounts].sort((left, right) => right[1] - left[1])) {
       console.log(`  ${value}: ${count}`);
     }
     if (offTarget.length > 0) {
-      console.log(`${offTarget.length} object(s) not at the target:`);
+      console.log(`${offTarget.length} probe(s) not at the target:`);
       for (const line of offTarget.slice(0, 10)) console.log(`  ${line}`);
       process.exitCode = 1;
       return;
     }
-    console.log(`All ${entries.length} objects serve max-age=${TARGET_CACHE_CONTROL}.`);
+    console.log(`All ${entries.length} objects serve max-age=${TARGET_CACHE_CONTROL} on full and ranged requests.`);
     return;
   }
 
