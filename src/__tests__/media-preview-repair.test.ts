@@ -335,6 +335,57 @@ describe('showcase feed rendition repair', () => {
     ]));
   });
 
+  it('stops taking new videos once the time budget is spent', async () => {
+    // The sweep shares one 300s invocation with every other due job. A row
+    // count bounds nothing useful, because each transcode may run for the full
+    // ffmpeg timeout -- the old flat five rows could occupy 600s of those 300.
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    const rows = [1, 2, 3, 4].map((index) => ({
+      ...pendingVideoRow,
+      id: `media-video-${index}`,
+      storage_path: `posts/user/clip-${index}.mp4`,
+    }));
+    const { supabase } = createRenditionClient(rows);
+    const readyRendition = {
+      status: 'ready' as const,
+      renditionStoragePath: 'posts/user/clip.feed.abc123.mp4',
+      renditionBytes: 2_031_616,
+      width: 610,
+      height: 1280,
+      durationSeconds: 11.4,
+    };
+
+    let clock = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    // Each transcode burns 40s of the 60s budget.
+    renditionMocks.createPostMediaRendition.mockImplementation(async () => {
+      clock += 40_000;
+      return readyRendition;
+    });
+
+    try {
+      const summary = await repairPostMediaRenditions(supabase as never, { timeBudgetMs: 60_000 });
+
+      // Two rows fit. The budget is only consulted before starting a row, so
+      // the second begins at 40s and the third is refused at 80s.
+      expect(summary).toEqual({ attempted: 2, completed: 2, failed: 0 });
+    } finally {
+      // mockClear in afterEach keeps the implementation, which would otherwise
+      // move a fake clock nothing else installed.
+      renditionMocks.createPostMediaRendition.mockReset();
+      renditionMocks.createPostMediaRendition.mockResolvedValue(readyRendition);
+    }
+  });
+
+  it('always attempts one video even with no budget, so a slow queue head still drains', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    const { supabase } = createRenditionClient([pendingVideoRow, { ...pendingVideoRow, id: 'media-video-2' }]);
+
+    const summary = await repairPostMediaRenditions(supabase as never, { timeBudgetMs: 0 });
+
+    expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
+  });
+
   it('records a skipped rendition terminally so it is not retried', async () => {
     const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
     renditionMocks.createPostMediaRendition.mockResolvedValue({

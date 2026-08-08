@@ -56,7 +56,7 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 |---|---|---|---|---|---|
 | F4 | Spend cap posture + egress monitoring | Critical | 0 | IN PROGRESS | Cap recorded 2026-08-08; egress metric rides F15a |
 | F1 | Watch surfaces stream full-bitrate source | Critical | 0 | DONE | Mobile pkg 1 + web pkg 2, 2026-08-08 — mobile still needs a store release to reach phones |
-| F2 | AI posts skip transcode; sweep 5/hour | Critical | 0 | TODO | |
+| F2 | AI posts skip transcode; sweep 5/hour | Critical | 0 | DONE | Publish-time repair kick + wall-clock sweep budget, pkg 3, 2026-08-08 |
 | F3 | Derivative cache TTL — decision #5 resolved | Critical | 0 | DONE | Constants, upload headers and backfill migration, pkg 1–2, 2026-08-08 |
 | F11 | Web `/feed` drops the ranking cursor | Critical | 0 | TODO | |
 | F13 | v2 stats refresh starves past 1,000 rows | High | 0 | TODO | |
@@ -219,6 +219,13 @@ The Supabase Management API does not expose the spend cap — `get_organization`
 **Verify.** Publish a generated video and confirm a `.feed.<hash>.mp4` object appears without waiting for the hourly sweep.
 
 **Gotcha.** Raising sweep concurrency interacts with F14 — the sweep runs inside the shared 300 s cron invocation alongside every other job, and ffmpeg is memory-hungry. Do not raise concurrency past 2–3 until the queues are split in Phase 1.
+
+**Landed 2026-08-08 (work package 3).** Two halves, and the diagnosis sharpened on the way:
+
+- **The gap was one missing call, precisely locatable.** `repairMediaForPost` already exists and is already scheduled after the response by both sibling publish paths — `posts-route-adapter-service.ts:87` for device uploads and `owner-post-route-adapter-service.ts:63` for edits. `showcase-publish-route-adapter-service.ts` scheduled nothing at all. It now does, using the same `after`-seam, the same swallow-everything error posture (the post is already published; the sweep is the backstop) and skipping when the publish produced no post. Generation publishes do create `post_media` rows, so the existing pipeline needed no new machinery.
+- **The sweep is now bounded by a wall clock rather than a row count**, and this is a deviation from "raise the batch size with bounded concurrency" worth recording. Concurrency is the thing the gotcha above warns about, so it stayed at one. But a *count* was never bounding the risk it appeared to: at a 120 s ffmpeg timeout, five sequential rows can occupy **600 s of a 300 s invocation**. `RENDITION_REPAIR_TIME_BUDGET_MS` (60 s, checked before each row, so the true worst case is 60 s plus one timeout) bounds it properly, and the row ceiling rose 5 → 12 so short clips no longer queue behind an arbitrary limit. The first row always runs, or a slow queue head would never drain.
+
+**Measured before changing anything:** all six video `post_media` rows in production are `rendition_status = 'ready'` (four from generations, two from device uploads). There is no backlog today — F2 is a burst-and-latency fix, not a repair of existing damage. The publish-time kick is what removes the window; the sweep change is recovery throughput.
 
 ---
 

@@ -1,7 +1,7 @@
 import 'server-only';
-import { logBackendRouteError } from '@/lib/backend-logger';
+import { logBackendRouteError, logBackendWarning } from '@/lib/backend-logger';
 
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders, getApiRequestId } from '@/lib/api-cache';
 import {
@@ -10,6 +10,7 @@ import {
   createBackendRateLimitResponse,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { repairMediaForPost } from '@/lib/media-preview-repair';
 import {
   fetchWithProviderTimeout,
   withProviderFetchRequestId,
@@ -27,6 +28,9 @@ type ShowcasePublishRouteDependencies = {
   fetchWithProviderTimeout?: typeof fetchWithProviderTimeout;
   logError?: typeof logBackendRouteError;
   publishGenerationToShowcaseForRoute?: typeof publishGenerationToShowcaseForRoute;
+  repairMediaForPost?: typeof repairMediaForPost;
+  /** Seam over `after` so tests can drive the post-response work directly. */
+  schedulePostMediaRepair?: (callback: () => Promise<void>) => void;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
 
@@ -39,6 +43,9 @@ function resolveDependencies(dependencies: ShowcasePublishRouteDependencies | un
     logError: dependencies?.logError ?? logBackendRouteError,
     publishGenerationToShowcaseForRoute:
       dependencies?.publishGenerationToShowcaseForRoute ?? publishGenerationToShowcaseForRoute,
+    repairMediaForPost: dependencies?.repairMediaForPost ?? repairMediaForPost,
+    schedulePostMediaRepair: dependencies?.schedulePostMediaRepair
+      ?? ((callback: () => Promise<void>) => after(callback)),
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
   };
 }
@@ -99,6 +106,30 @@ async function handleShowcasePublishPOST(
 
     if (!result.ok) {
       return NextResponse.json(result.body, { status: result.status });
+    }
+
+    // Publishing a generation copies the provider's file into the public bucket
+    // untranscoded, so until this the only thing that ever built a rendition for
+    // it was the hourly sweep -- and that sweep does five videos an hour. A
+    // burst of publishes therefore served ~23 Mbps sources for hours. The two
+    // sibling publish paths already kick the same repair; this one did not.
+    //
+    // Both layers swallow deliberately. The post is already published and the
+    // sweep repairs exactly this work, so neither a scheduling failure nor a
+    // repair failure may turn a successful publish into an error.
+    const { postId } = result.body;
+    if (postId) {
+      try {
+        dependencies.schedulePostMediaRepair(async () => {
+          try {
+            await dependencies.repairMediaForPost(adminSupabase, postId);
+          } catch (error) {
+            logBackendWarning('showcase_publish_async_repair_failed', { error, postId });
+          }
+        });
+      } catch (error) {
+        logBackendWarning('showcase_publish_async_repair_not_scheduled', { error, postId });
+      }
     }
 
     return NextResponse.json(result.body);

@@ -16,10 +16,27 @@ export const MAX_RENDITION_ATTEMPTS = 3;
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 /**
  * Transcoding is far heavier than a poster frame, and this job shares a 300s
- * budget with the preview sweep, so renditions take a much smaller bite and run
- * one at a time. Backfill is expected to span several hourly runs.
+ * invocation with every other due job, so renditions take a small bite and run
+ * one at a time. Backfill may still span several hourly runs.
+ *
+ * The bite used to be a flat five rows. That capped recovery at five videos an
+ * hour however short they were, and — because each transcode may run for the
+ * full 120s ffmpeg timeout — it did not actually bound anything: five rows
+ * could occupy 600s of a 300s invocation. The wall clock below is the real
+ * limit now, and the count is only a ceiling on how many rows to fetch.
+ *
+ * Still deliberately sequential. Concurrent ffmpeg would contend for the same
+ * one or two cores, and memory is what genuinely bites — that is the shared-fate
+ * cron risk owned by F14 in `docs/scaling-audit-2026-08-08.md`. Raising
+ * concurrency is blocked on splitting those queues in Phase 1.
  */
-export const RENDITION_REPAIR_BATCH_SIZE = 5;
+export const RENDITION_REPAIR_BATCH_SIZE = 12;
+/**
+ * Checked before starting each row, so the true worst case is this plus one
+ * full ffmpeg timeout. At 60s that leaves well over a third of the shared
+ * invocation for the jobs queued behind this one.
+ */
+export const RENDITION_REPAIR_TIME_BUDGET_MS = 60_000;
 const UNRESOLVED_STATUSES = ['pending', 'processing', 'failed'] as const;
 
 type RepairSummary = {
@@ -270,9 +287,10 @@ async function repairPostMediaRendition(
 
 export async function repairPostMediaRenditions(
   supabase: SupabaseClient,
-  options: { batchSize?: number } = {},
+  options: { batchSize?: number; timeBudgetMs?: number } = {},
 ): Promise<RepairSummary> {
   const batchSize = Math.max(1, Math.min(options.batchSize ?? RENDITION_REPAIR_BATCH_SIZE, 50));
+  const timeBudgetMs = Math.max(0, options.timeBudgetMs ?? RENDITION_REPAIR_TIME_BUDGET_MS);
   const { data, error } = await supabase
     .from('post_media')
     .select('id, storage_path, content_type, rendition_attempt_count')
@@ -295,14 +313,26 @@ export async function repairPostMediaRenditions(
 
   // Sequential on purpose: concurrent ffmpeg processes would contend for the
   // same one or two cores and push the job past its duration budget.
+  //
+  // Stopping on elapsed time rather than a row count is what actually protects
+  // the shared invocation, since one 30 MB clip can cost as much as ten short
+  // ones. The first row always runs: otherwise a queue whose head is slow would
+  // never drain, and rows are taken oldest-first.
+  const startedAt = Date.now();
+  let attempted = 0;
   let completed = 0;
   for (const row of rows) {
+    if (attempted > 0 && Date.now() - startedAt >= timeBudgetMs) {
+      break;
+    }
+
+    attempted += 1;
     if (await repairPostMediaRendition(supabase, row)) {
       completed += 1;
     }
   }
 
-  return { attempted: rows.length, completed, failed: rows.length - completed };
+  return { attempted, completed, failed: attempted - completed };
 }
 
 /**

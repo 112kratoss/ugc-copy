@@ -6,6 +6,23 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import { postShowcasePublishRouteResponse } from '@/lib/showcase-publish-route-adapter-service';
 
+function publishSuccess(postId: string | null) {
+  return {
+    ok: true as const,
+    body: {
+      success: true as const,
+      isPublic: true,
+      visibility: 'public' as const,
+      postId,
+      showcasePath: postId ? `/showcase/${postId}` : null,
+      ownerPath: null,
+      resourceBundlePath: null,
+      resourceBundleStatus: null,
+      message: 'Published.',
+    },
+  };
+}
+
 function createUserClient(userId: string | null = 'user-1') {
   return {
     auth: {
@@ -199,5 +216,84 @@ describe('showcase publish route adapter service', () => {
       },
       userId: 'user-1',
     });
+  });
+
+  it('kicks the rendition repair after a successful publish instead of waiting for the sweep', async () => {
+    // Publishing copies the provider's file in untranscoded. Without this kick
+    // the only thing that ever builds a rendition is the hourly sweep, so a
+    // burst of publishes serves full-bitrate sources for hours.
+    const adminSupabase = { kind: 'admin' } as unknown as SupabaseClient;
+    const repairMediaForPost = vi.fn(async () => ({ attempted: 1, completed: 1, failed: 0 }));
+    const scheduled: Array<() => Promise<void>> = [];
+
+    const response = await postShowcasePublishRouteResponse({
+      request: new Request('http://localhost/api/showcase/publish', {
+        method: 'POST',
+        body: JSON.stringify({ generationId: 'gen-1' }),
+      }),
+      dependencies: {
+        createServiceClient: () => adminSupabase,
+        createUserClient: () => createUserClient('user-1'),
+        enforceBackendRateLimit: vi.fn(),
+        publishGenerationToShowcaseForRoute: vi.fn(async () => publishSuccess('post-1')),
+        repairMediaForPost,
+        schedulePostMediaRepair: (callback) => { scheduled.push(callback); },
+        withProviderFetchRequestId: mockRequestIdPassthrough(),
+      },
+    });
+
+    expect(response.status).toBe(200);
+    // Scheduled, not awaited -- the publish response must not wait on a transcode.
+    expect(repairMediaForPost).not.toHaveBeenCalled();
+    expect(scheduled).toHaveLength(1);
+
+    await scheduled[0]();
+    expect(repairMediaForPost).toHaveBeenCalledWith(adminSupabase, 'post-1');
+  });
+
+  it('never turns a successful publish into an error when the repair fails', async () => {
+    // The post is already published and the hourly sweep repairs exactly this
+    // work, so a repair failure must stay invisible to the caller.
+    const scheduled: Array<() => Promise<void>> = [];
+
+    const response = await postShowcasePublishRouteResponse({
+      request: new Request('http://localhost/api/showcase/publish', {
+        method: 'POST',
+        body: JSON.stringify({ generationId: 'gen-1' }),
+      }),
+      dependencies: {
+        createServiceClient: () => ({ kind: 'admin' } as unknown as SupabaseClient),
+        createUserClient: () => createUserClient('user-1'),
+        enforceBackendRateLimit: vi.fn(),
+        publishGenerationToShowcaseForRoute: vi.fn(async () => publishSuccess('post-1')),
+        repairMediaForPost: vi.fn(async () => { throw new Error('ffmpeg exploded'); }),
+        schedulePostMediaRepair: (callback) => { scheduled.push(callback); },
+        withProviderFetchRequestId: mockRequestIdPassthrough(),
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(scheduled[0]()).resolves.toBeUndefined();
+  });
+
+  it('schedules nothing when the publish produced no post', async () => {
+    const schedulePostMediaRepair = vi.fn();
+
+    await postShowcasePublishRouteResponse({
+      request: new Request('http://localhost/api/showcase/publish', {
+        method: 'POST',
+        body: JSON.stringify({ generationId: 'gen-1' }),
+      }),
+      dependencies: {
+        createServiceClient: () => ({ kind: 'admin' } as unknown as SupabaseClient),
+        createUserClient: () => createUserClient('user-1'),
+        enforceBackendRateLimit: vi.fn(),
+        publishGenerationToShowcaseForRoute: vi.fn(async () => publishSuccess(null)),
+        schedulePostMediaRepair,
+        withProviderFetchRequestId: mockRequestIdPassthrough(),
+      },
+    });
+
+    expect(schedulePostMediaRepair).not.toHaveBeenCalled();
   });
 });
