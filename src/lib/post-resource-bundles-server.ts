@@ -1852,18 +1852,26 @@ const getCachedMarketplaceResourceListBase = unstable_cache(
     resource: MarketplaceResourceKindFilter,
     sort: MarketplaceResourceSort,
     limit: number,
+    tool: string | null,
   ) => getMarketplaceResourceListBase({
     filter,
     resource,
-    tool: null,
+    tool,
     q: null,
     sort,
     offset: 0,
     limit,
   }),
-  ['marketplace-resource-list-base-v3'],
+  ['marketplace-resource-list-base-v4'],
   {
     revalidate: 60,
+    // SHOWCASE_FEED_CACHE_TAG is load-bearing, not incidental. The listing
+    // joins `posts`, and the moderation take-down path
+    // (`admin-moderation-service.ts:98`) invalidates *only* the feed tag —
+    // never the marketplace one. Dropping it here to stop unrelated events
+    // busting this cache would leave taken-down content listed in the
+    // marketplace for up to the revalidate window. Narrowing it means first
+    // making every post-visibility path invalidate the marketplace tag too.
     tags: [MARKETPLACE_RESOURCE_LIST_CACHE_TAG, SHOWCASE_FEED_CACHE_TAG],
   },
 );
@@ -1877,15 +1885,16 @@ async function loadCachedMarketplaceResourceListBase(
   resource: MarketplaceResourceKindFilter,
   sort: MarketplaceResourceSort,
   limit: number,
+  tool: string | null,
 ) {
   try {
-    return await getCachedMarketplaceResourceListBase(filter, resource, sort, limit);
+    return await getCachedMarketplaceResourceListBase(filter, resource, sort, limit, tool);
   } catch (error) {
     if (isMissingIncrementalCacheError(error)) {
       return getMarketplaceResourceListBase({
         filter,
         resource,
-        tool: null,
+        tool,
         q: null,
         sort,
         offset: 0,
@@ -1936,7 +1945,13 @@ export async function getMarketplaceResourceList(
     tool: normalizedToolFilter,
     query: normalizedQuery,
   })
-    ? await loadCachedMarketplaceResourceListBase(filter, resource, sort, limit)
+    ? await loadCachedMarketplaceResourceListBase(
+      filter,
+      resource,
+      sort,
+      limit,
+      normalizedToolFilter || null,
+    )
     : await getMarketplaceResourceListBase({
       filter,
       resource,

@@ -18,6 +18,18 @@ function isCacheableMarketplacePageLimit(limit: number) {
     || limit === MARKETPLACE_DEFAULT_PAGE_SIZE;
 }
 
+/**
+ * F5b: a tool-filtered first page is cacheable, a searched one is not.
+ *
+ * The distinction is key-space, not correctness. Tool slugs come from the
+ * source-tool catalog and arrive already normalised through
+ * `slugifySourceTool`, so the number of distinct cache keys is bounded by that
+ * catalog. A free-text query is unbounded and one visitor could mint an
+ * arbitrary number of entries, so search stays uncached deliberately.
+ *
+ * Continuation pages stay uncached too: their key space grows with catalog
+ * depth, and they are a small share of requests next to first-page loads.
+ */
 export function shouldCacheMarketplaceResourceListBasePage(
   options: MarketplaceResourceListCachePolicyOptions,
 ) {
@@ -25,7 +37,6 @@ export function shouldCacheMarketplaceResourceListBasePage(
     !options.bypassCache
     && options.offset === 0
     && isCacheableMarketplacePageLimit(options.limit)
-    && !options.tool
     && !options.query
   );
 }

@@ -673,9 +673,16 @@ describe('showcase feed', () => {
 
     expect(nextCacheState.definitions).toEqual([
       {
-        keyParts: ['marketplace-resource-list-base-v3'],
+        // v4: the key gained a `tool` argument when F5b widened caching to
+        // tool-filtered first pages. Bumping the version keeps entries written
+        // under the old four-argument key from being read back against the new
+        // five-argument one.
+        keyParts: ['marketplace-resource-list-base-v4'],
         options: {
           revalidate: 60,
+          // SHOWCASE_FEED_CACHE_TAG stays: the moderation take-down path
+          // invalidates only the feed tag, so it is what keeps taken-down
+          // content out of the marketplace listing.
           tags: [MARKETPLACE_RESOURCE_LIST_CACHE_TAG, SHOWCASE_FEED_CACHE_TAG],
         },
       },
