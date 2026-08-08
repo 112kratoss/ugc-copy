@@ -18,6 +18,9 @@ function dependencies(
 ) {
   return {
     recentEvents: Object.values(byService).reduce((a, b) => a + b, 0),
+    // Only failures and slow calls are ever persisted, so this is not a
+    // denominator for a failure rate.
+    population: 'failures-and-slow-calls' as const,
     failedCount: Object.values(failuresByService).reduce((a, b) => a + b, 0),
     slowCount: 0,
     maxDurationMs: 0,

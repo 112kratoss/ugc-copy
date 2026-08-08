@@ -431,4 +431,67 @@ describe('collectBackendCostReport', () => {
       expect.objectContaining({ code: 'STORAGE_GROWTH_ELEVATED', severity: 'warning' }),
     ]));
   });
+
+  it('says so when a source was capped, instead of reporting a sample as the population', async () => {
+    // The failure this prevents is the report getting *more* optimistic as
+    // traffic grows: past the cap every figure silently became a lower bound
+    // with nothing anywhere indicating it.
+    const now = new Date('2026-08-08T10:00:00.000Z');
+    const overflowing = Array.from({ length: 5_001 }, (_, index) => ({
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      cost: 1,
+      created_at: '2026-08-08T09:00:00.000Z',
+      output_url: `generated_images/user/image-${index}.png`,
+    }));
+    const db = createClient({
+      generations: { error: null, data: overflowing },
+      ai_usage_events: { error: null, data: [] },
+      provider_dependency_events: { error: null, data: [] },
+      backend_rate_limits: { error: null, data: [] },
+      'storage.objects': { error: null, data: [] },
+    });
+
+    const report = await collectBackendCostReport(db.client as never, now);
+
+    expect(report.sampling.truncated).toBe(true);
+    expect(report.sampling.sources).toEqual(expect.arrayContaining([
+      { source: 'generations', rows: 5_000, truncated: true },
+      { source: 'ai_usage_events', rows: 0, truncated: false },
+    ]));
+    // The extra probe row is dropped rather than counted, so totals stay
+    // consistent with the cap the report reports.
+    expect(report.generationSpend.recentRuns).toBe(5_000);
+    expect(report.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'COST_REPORT_TRUNCATED', severity: 'warning' }),
+    ]));
+  });
+
+  it('labels the provider event population so nothing computes a failure rate from it', async () => {
+    // provider-fetch persists an event only for failures and slow calls, so
+    // failedCount / recentEvents approaches 1 however healthy the provider is.
+    const now = new Date('2026-08-08T10:00:00.000Z');
+    const db = createClient({
+      generations: { error: null, data: [] },
+      ai_usage_events: { error: null, data: [] },
+      provider_dependency_events: {
+        error: null,
+        data: [{
+          service_name: 'kie',
+          outcome: 'error',
+          duration_ms: 900,
+          created_at: '2026-08-08T09:30:00.000Z',
+          model_id: 'veo-3.1',
+        }],
+      },
+      backend_rate_limits: { error: null, data: [] },
+      'storage.objects': { error: null, data: [] },
+    });
+
+    const report = await collectBackendCostReport(db.client as never, now);
+
+    expect(report.providerDependencies.population).toBe('failures-and-slow-calls');
+    expect(report.providerDependencies.recentEvents).toBe(1);
+    expect(report.providerDependencies.failedCount).toBe(1);
+  });
 });

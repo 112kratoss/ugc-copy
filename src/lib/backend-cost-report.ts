@@ -74,6 +74,21 @@ export type BackendCostBudgetPolicy = {
   storageGrowthDegradedBytes: number;
 };
 
+/**
+ * Whether each raw query returned everything in the window or only the first
+ * QUERY_LIMIT rows.
+ *
+ * Without this the report gets quietly *more* optimistic as traffic grows:
+ * every figure below is computed from whatever the cap returned, so past the
+ * cap a sample is presented as the population with no indication anywhere. A
+ * truncated source means the numbers drawn from it are lower bounds.
+ */
+export type BackendCostSampling = {
+  limit: number;
+  truncated: boolean;
+  sources: Array<{ source: string; rows: number; truncated: boolean }>;
+};
+
 export type BackendCostReport = {
   status: BackendCostReportStatus;
   checkedAt: string;
@@ -81,6 +96,7 @@ export type BackendCostReport = {
     recentHours: number;
     since: string;
   };
+  sampling: BackendCostSampling;
   budgetPolicy: BackendCostBudgetPolicy;
   generationSpend: {
     recentRuns: number;
@@ -99,7 +115,19 @@ export type BackendCostReport = {
     byStatus: Record<string, number>;
   };
   providerDependencies: {
+    /**
+     * NOT total provider calls. `provider-fetch.ts` persists an event only when
+     * a call failed or ran past the slow threshold, so this counts exceptions,
+     * not attempts. `failedCount / recentEvents` is therefore not a failure
+     * rate — it approaches 1 no matter how healthy the provider is.
+     *
+     * A real rate needs an attempt counter that does not write a row per call;
+     * see F15a in `docs/scaling-audit-2026-08-08.md`. Until then this field is
+     * a volume signal only, and `population` says so to anything consuming it.
+     */
     recentEvents: number;
+    /** What `recentEvents` actually counted, so a consumer cannot mistake it. */
+    population: 'failures-and-slow-calls';
     failedCount: number;
     slowCount: number;
     maxDurationMs: number;
@@ -500,6 +528,9 @@ function buildProviderDependencies(rows: ProviderDependencyCostRow[]) {
 
   return {
     recentEvents: rows.length,
+    // Stated rather than implied: these rows are the exceptions, so nothing
+    // downstream should divide by them and call the result a failure rate.
+    population: 'failures-and-slow-calls' as const,
     failedCount,
     slowCount,
     maxDurationMs,
@@ -702,29 +733,29 @@ export async function collectBackendCostReport(
       .from('generations')
       .select('status,model,cost,created_at,output_url')
       .gte('created_at', since)
-      .limit(QUERY_LIMIT),
+      .limit(QUERY_LIMIT + 1),
     client
       .from('ai_usage_events')
       .select('feature,status,cost,created_at')
       .gte('created_at', since)
-      .limit(QUERY_LIMIT),
+      .limit(QUERY_LIMIT + 1),
     client
       .from('provider_dependency_events')
       .select('service_name,outcome,duration_ms,created_at,model_id')
       .gte('created_at', since)
-      .limit(QUERY_LIMIT),
+      .limit(QUERY_LIMIT + 1),
     client
       .from('backend_rate_limits')
       .select('scope,request_count,window_start,updated_at')
       .gte('window_start', since)
-      .limit(QUERY_LIMIT),
+      .limit(QUERY_LIMIT + 1),
     client
       .schema('storage')
       .from('objects')
       .select('bucket_id,name,metadata,created_at')
       .in('bucket_id', GENERATED_STORAGE_BUCKETS)
       .gte('created_at', since)
-      .limit(QUERY_LIMIT),
+      .limit(QUERY_LIMIT + 1),
   ]);
 
   if (generationsResult.error) throw generationsResult.error;
@@ -736,15 +767,40 @@ export async function collectBackendCostReport(
   );
   if (storageObjectsResult.error && !storageGrowthUnavailable) throw storageObjectsResult.error;
 
-  const generationSpend = buildGenerationSpend((generationsResult.data ?? []) as GenerationCostRow[]);
-  const aiUsageSpend = buildAiUsageSpend((aiUsageResult.data ?? []) as AiUsageCostRow[]);
+  // Each query asked for one row past the cap, so an overflow is visible
+  // without paying for a COUNT over the window -- which is exactly the sort of
+  // query that gets expensive at the traffic where this matters.
+  const samplingSources: BackendCostSampling['sources'] = [];
+  function sample<TRow>(source: string, rows: TRow[]): TRow[] {
+    const truncated = rows.length > QUERY_LIMIT;
+    const kept = truncated ? rows.slice(0, QUERY_LIMIT) : rows;
+    samplingSources.push({ source, rows: kept.length, truncated });
+    return kept;
+  }
+
+  const generationSpend = buildGenerationSpend(
+    sample('generations', (generationsResult.data ?? []) as GenerationCostRow[]),
+  );
+  const aiUsageSpend = buildAiUsageSpend(
+    sample('ai_usage_events', (aiUsageResult.data ?? []) as AiUsageCostRow[]),
+  );
   const providerDependencies = buildProviderDependencies(
-    (providerDependenciesResult.data ?? []) as ProviderDependencyCostRow[],
+    sample('provider_dependency_events', (providerDependenciesResult.data ?? []) as ProviderDependencyCostRow[]),
   );
-  const rateLimitPressure = buildRateLimitPressure((rateLimitsResult.data ?? []) as RateLimitCostRow[]);
+  const rateLimitPressure = buildRateLimitPressure(
+    sample('backend_rate_limits', (rateLimitsResult.data ?? []) as RateLimitCostRow[]),
+  );
   const storageGrowth = buildStorageGrowth(
-    storageGrowthUnavailable ? [] : (storageObjectsResult.data ?? []) as StorageObjectCostRow[],
+    sample(
+      'storage.objects',
+      storageGrowthUnavailable ? [] : (storageObjectsResult.data ?? []) as StorageObjectCostRow[],
+    ),
   );
+  const sampling: BackendCostSampling = {
+    limit: QUERY_LIMIT,
+    truncated: samplingSources.some((source) => source.truncated),
+    sources: samplingSources,
+  };
   const issues = buildCostIssues({
     generationSpend,
     aiUsageSpend,
@@ -753,6 +809,20 @@ export async function collectBackendCostReport(
     storageGrowth,
     budgetPolicy,
   });
+  if (sampling.truncated) {
+    // Deliberately an issue rather than a footnote: every figure drawn from a
+    // truncated source is a lower bound, and the failure mode this prevents is
+    // the report looking healthier precisely as load grows.
+    const truncatedSources = sampling.sources
+      .filter((source) => source.truncated)
+      .map((source) => source.source)
+      .join(', ');
+    issues.push({
+      severity: 'warning',
+      code: 'COST_REPORT_TRUNCATED',
+      message: `Cost report read only the first ${QUERY_LIMIT} rows from: ${truncatedSources}. Every figure derived from them is a lower bound.`,
+    });
+  }
   if (storageGrowthUnavailable) {
     issues.push({
       severity: 'warning',
@@ -790,6 +860,7 @@ export async function collectBackendCostReport(
       recentHours: RECENT_WINDOW_HOURS,
       since,
     },
+    sampling,
     budgetPolicy,
     generationSpend,
     aiUsageSpend,

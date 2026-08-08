@@ -54,7 +54,7 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 
 | ID | Finding | Sev | Phase | Status | Landed |
 |---|---|---|---|---|---|
-| F4 | Spend cap posture + egress monitoring | Critical | 0 | IN PROGRESS | Cap recorded 2026-08-08; egress metric rides F15a |
+| F4 | Spend cap posture + egress monitoring | Critical | 0 | IN PROGRESS | Cap recorded 2026-08-08; egress metric BLOCKED — egress is not in the database, needs Supabase billing/usage data |
 | F1 | Watch surfaces stream full-bitrate source | Critical | 0 | DONE | Mobile pkg 1 + web pkg 2, 2026-08-08 — mobile still needs a store release to reach phones |
 | F2 | AI posts skip transcode; sweep 5/hour | Critical | 0 | DONE | Publish-time repair kick + wall-clock sweep budget, pkg 3, 2026-08-08 |
 | F3 | Derivative cache TTL — decision #5 resolved | Critical | 0 | DONE | Constants, upload headers, migration and SDK-write backfill, 2026-08-08 — verified 99/99 objects serving `max-age=86400` |
@@ -62,7 +62,7 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 | F13 | v2 stats refresh starves past 1,000 rows | High | 0 | DONE | Migration + fact index, pkg 5, 2026-08-08 |
 | F7a | Facts for all candidates; unbatched events | High | 0 | DONE | Served-slice facts + batched events, 2026-08-08 — single-transaction insert deferred to F7b |
 | F6 | Unthrottled hot GETs incl. full-catalog scan | Medium | 0 | IN PROGRESS | Limits on all 5 GETs, pkg 3, 2026-08-08; `top-sales` precompute still open |
-| F15a | Monitoring truncates silently; biased rates | Medium | 0 | TODO | |
+| F15a | Monitoring truncates silently; biased rates | Medium | 0 | IN PROGRESS | Truncation flagged + biased population labelled, 2026-08-08; DB-side aggregates, attempt counter and health collectors open |
 | F10 | Assorted small leaks | Low | 0 | IN PROGRESS | Mobile 404 pkg 1; studio grid + images pkg 2, 2026-08-08. Webhook budget rides pkg 3; two web-perf items stay unassigned |
 | F12 | Workflow runs non-durable, non-idempotent | Critical | 1 | TODO | |
 | F14 | Shared-fate cron; no provider admission control | High | 1 | TODO | |
@@ -477,6 +477,18 @@ Deliberately generous — these stop a script, not normal browsing. `/api/genera
 
 **Verify.** Force a window with more than 5,000 rows and confirm the report flags truncation rather than under-reporting.
 
+**Partly landed 2026-08-08 — the silence is fixed; the aggregates are not.**
+
+- **Truncation is now explicit.** Each of the five raw queries asks for `QUERY_LIMIT + 1` rows, keeps the first `QUERY_LIMIT`, and reports per-source `{ rows, truncated }` plus a `COST_REPORT_TRUNCATED` warning naming the capped sources. The overflow probe is deliberate: an exact `COUNT` over the window would be exactly the sort of query that gets expensive at the traffic where truncation starts happening, so the report detects the cap without paying to measure past it. Covered by a test that feeds 5,001 rows and asserts both the flag and that totals stay at 5,000.
+- **The biased failure rate is labelled rather than computed.** `providerDependencies.recentEvents` counts only failures and slow calls, because `provider-fetch.ts` persists nothing else — so `failedCount / recentEvents` approaches 1 no matter how healthy the provider is. The field now carries `population: 'failures-and-slow-calls'` and a comment saying it is a volume signal, not a denominator. Removing a wrong number costs nothing; producing a right one does not.
+
+**Still open in F15a, and each for a stated reason:**
+
+1. **Database-side time-bucketed aggregates.** The report still downloads raw rows. Replacing that means new SQL aggregate functions plus a rewrite of most of `backend-cost-report.ts` (~800 lines); the truncation flag removes the *harm* in the meantime, since the report can no longer mislead about its own coverage.
+2. **A real provider attempt counter.** Every option has a cost worth deciding deliberately: a bucketed upsert per call adds a write to the provider hot path and concentrates contention on one row per service; sampling successes needs extrapolation; an in-process counter loses whatever a recycled function was holding. Not a change to make in passing.
+3. **The health collectors** (generations and provider events at 1,000, completion queue at 200) still truncate silently — only the cost report was fixed.
+4. **F4's measured egress bytes.** Blocked on something the audit did not anticipate: **egress is not in the database at all.** `storage.objects.metadata` gives stored bytes, not bytes served. A real figure has to come from Supabase's billing/usage surface, so this is an ops integration rather than another collector — which also means the F4 monthly-review step cannot be satisfied from `backend-cost-report.ts` as that item assumed.
+
 ---
 
 ### F10 — Assorted small leaks
@@ -646,6 +658,7 @@ Two independent audits produced different headline numbers. Both were right abou
 | 2026-08-08 | Pre-work review amendments: F3 reframed against the documented moderation TTL constraint (new decision #5); every-push-deploys warning added; mobile items consolidated onto the store-release train; workflow rewritten for one-conversation-per-phase sequential execution (no worktrees); evidence re-verified at `8a69de5`. | Claude Code |
 | 2026-08-08 | Decisions recorded: #1 spend cap **ON and staying on** (owner), #5 derivative TTL **1-day compromise** (owner), #2 raw fact retention **30 days** (owner delegated the call). Work package 1 landed — F1 mobile viewer, F3 mobile upload header, F10 mobile 404 fallback. Corrections to the audit as written: no mutable/immutable TTL split is needed because every public showcase path is write-once; `stale-while-revalidate` is unreachable through supabase-js; the `.copy()` cache-control inheritance lives in `post-publish-service`/`post-update-service`, not `showcase-publish-service`; and the mobile viewer had two full-source paths, not the one cited. | Claude Code |
 | 2026-08-08 | **F11 DONE** (ranked feed continues by cursor; three call sites needed it, the `sessionStorage` snapshot being the subtle one). **F13 DONE** (v2 refreshes ported to v1's staleness-ordered candidate selection — the v1 audit this called for found v1 was already correct and v2 had regressed it — plus the missing `feed_delivery_facts` index). | Claude Code |
+| 2026-08-08 | **F7a DONE** — delivery facts now only for the served slice, and feed telemetry batched into one request per flush. Batching every event type was a regression: `not_interested` restores an optimistically hidden post when its request fails, so only telemetry is queued and state-changing events stay synchronous. **F15a partly done** — truncation is now explicit via an overflow probe rather than a costly COUNT, and the exception-biased provider population is labelled instead of divided by. F15a's aggregates, attempt counter and health collectors remain, and **F4's egress metric is blocked: egress is not in the database at all**, so it needs Supabase's billing surface rather than another collector. | Claude Code |
 | 2026-08-08 | **F3 DONE.** `backfill:showcase-media-cache` re-wrote all 99 objects through the Storage API; `--verify` confirms 99/99 now serve `public, max-age=86400`. The SDK-write diagnosis was right, but invalidation lags a write by ~60s, so the first canary looked like a second failure — the canary is what kept that from being misread across the whole bucket. Also corrects the transfer estimate: 148.6 MB in `showcase_media`, ~297 MB round trip, not the ~615 MB quoted earlier (that was every bucket). | Claude Code |
 | 2026-08-08 | **F3 reopened after post-deploy verification.** The metadata backfill applied — all 99 objects read `max-age=86400` in `storage.objects` — but every object still *serves* its old header, and neither `no-cache` nor a novel query string can force revalidation. Supabase's Smart CDN only purges an edge entry when the object is written through the Storage API, so a SQL metadata update is invisible to it. The audit's original "hang it off the `backfill:*` scripts" instruction was right for a reason this document had dismissed: re-writing through the SDK is not a slower way to set metadata, it is the only way to invalidate the cache. Needs a `backfill:showcase-media-cache` script. | Claude Code |
 | 2026-08-08 | Work package 3, part one — **F2 DONE** (publish-time repair kick; sweep bounded by a 60s wall clock rather than a five-row count, which bounded nothing: five rows at a 120s ffmpeg timeout could occupy 600s of a 300s invocation). **F6 partly done** — read limits on all five cited GETs; the `top-sales` precompute is still open, so F6 stays IN PROGRESS. **F10 webhook budget DONE** — `/api/webhooks/kie` was the only media route left at `maxDuration = 60` while its own download timeout was also 60s. | Claude Code |
