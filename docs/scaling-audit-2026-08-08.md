@@ -2,7 +2,7 @@
 
 Date: 2026-08-08
 Document type: **living working document** — the findings are dated evidence, the status board is updated as work lands.
-Baseline commit: `63b9a3b` (main)
+Baseline commit: `63b9a3b` · evidence re-verified at `8a69de5` on 2026-08-08 — none of the 45 cited files were touched by the commits in between.
 
 This file is the single source of truth for scaling work. It is written to be **self-contained**: a fresh conversation should be able to open this file, pick one item, and execute it without any other context beyond `CLAUDE.md`.
 
@@ -18,6 +18,8 @@ This file is the single source of truth for scaling work. It is written to be **
 4. When it lands, set the status to `DONE`, fill in the **Landed** line (PR/commit + date), and add a line to the *Change log* at the bottom.
 
 **Status values:** `TODO` · `IN PROGRESS` · `DONE` · `BLOCKED` · `WONTFIX`
+
+> **Every push to `main` deploys to production.** The Quality workflow runs on push, and a green run auto-triggers `production-release.yml` — the production environment has no required-reviewer gate. Fold status-board and change-log edits into the same commit as the code they describe; a doc-only push costs a full deploy cycle.
 
 **Do not** re-derive the audit. The findings below were each verified against the code at `63b9a3b`. If a file has moved since, re-locate the symbol rather than assuming the finding is stale — but if the code no longer matches the description, say so and mark the item `WONTFIX` with a note rather than inventing a fix.
 
@@ -55,7 +57,7 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 | F4 | Spend cap posture + egress monitoring | Critical | 0 | TODO | |
 | F1 | Watch surfaces stream full-bitrate source | Critical | 0 | TODO | |
 | F2 | AI posts skip transcode; sweep 5/hour | Critical | 0 | TODO | |
-| F3 | Immutable media cached for 300s | Critical | 0 | TODO | |
+| F3 | Derivative cache TTL — needs decision #5 | Critical | 0 | TODO | |
 | F11 | Web `/feed` drops the ranking cursor | Critical | 0 | TODO | |
 | F13 | v2 stats refresh starves past 1,000 rows | High | 0 | TODO | |
 | F7a | Facts for all candidates; unbatched events | High | 0 | TODO | |
@@ -70,7 +72,7 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 | F9 | Comments scan loop; unindexed top sort | Medium | 1 | TODO | |
 | F15b | Error tracking, PITR, log drain | Medium | 1 | TODO | |
 | — | Phase 1 certification load test | — | 1 | TODO | |
-| F16+ | Phase 2 items | — | 2 | TODO | |
+| — | Phase 2 backlog (unnumbered — see the Phase 2 section) | — | 2 | TODO | |
 
 ---
 
@@ -106,14 +108,14 @@ Environment: Supabase Pro, org `kwabcsifvkvelvoyrjel`, project `ildfmhozpibwiope
 
 Read `CLAUDE.md` first — it carries the commands, layering rules and migration conventions. The audit-specific constraints that are *not* in `CLAUDE.md`:
 
-- **Only one local Supabase stack exists**, on fixed ports 54321/54322/54323. Any worktree running `supabase db reset --local` or `supabase test db` contends with every other one. **Do all migration work in one checkout at a time.**
-- **Worktrees are the right unit for concurrent PRs, not for phases.** Phases are sequential. Cap concurrency at ~3 PRs, and pin migration work to a single checkout.
+- **Work sequentially in the primary checkout — one conversation per phase, no worktrees** (owner's working style). The work packages in each phase are commit groupings by file collision and a suggested order, not parallel tracks.
+- **Only one local Supabase stack exists** (fixed ports 54321/54322/54323) — a second reason everything stays in one checkout; never run two processes that touch the local database at once.
 - **Mobile ships separately.** Merging mobile changes to `main` never reaches phones — that needs a manual `mobile-store-release` dispatch plus store review. Mobile-side work has a multi-week lead time, so **start mobile items first even though they land last**.
 - Supabase CLI must be pinned: `npx --yes supabase@2.75.0`. Start with `-x edge-runtime --ignore-health-check`. Use `docker exec` for psql.
 - Never run `npm run build` while a dev server is running — they share `.next`.
 - Every new migration needs a matching `*-migration.test.ts` asserting its SQL content.
 
-**Definition of done for any item:** `npm test`, `npm run lint`, `npm run typecheck` pass; migrations additionally pass `npx supabase db reset --local` and `npx supabase test db`; the status board above is updated; the change log has an entry.
+**Definition of done for any item:** `npm test`, `npm run lint`, `npm run typecheck` pass; migrations additionally pass `npx supabase db reset --local` and `npx supabase test db`; the status board above is updated and the change log has an entry — **in the same commit as the code** (every push deploys; see the note at the top).
 
 ---
 
@@ -121,15 +123,17 @@ Read `CLAUDE.md` first — it carries the commands, layering rules and migration
 
 **Goal:** safe at 2,000 MAU, red-line 5,000. **Estimated effort:** ~1 week.
 
-Suggested PR grouping (grouped by file collision, not by ID):
+The phase runs **sequentially in the primary checkout** — the packages below are commit groupings by file collision and a suggested order, not parallel tracks:
 
-| PR | Contents | Where |
+| Order | Work package | Contents |
 |---|---|---|
-| 1. Media delivery — web | F1 web, F3, F10 studio grid | worktree |
-| 2. Media delivery — mobile | F1 mobile viewer | worktree, **start first** |
-| 3. Publish-time transcode | F2, with F6 and F15a as riders | worktree |
-| 4. Feed write path | F11, F7a | worktree |
-| 5. Migrations | F13, missing fact index | **primary checkout only** |
+| 1st | Media delivery — mobile | F1 mobile viewer · F3 mobile upload header (`upload-file.ts:135`) · F10 mobile 404 fallback |
+| 2nd | Media delivery — web | F1 web · F3 server constants + backfill · F10 studio grid + unoptimized images |
+| 3rd | Publish-time transcode | F2 · riders: F6, F15a, F10 webhook-import budget |
+| 4th | Feed write path | F11 (needs no decision) · F7a (needs decision #2 — land F11 alone if it's still open) |
+| 5th | Migrations | F13 + missing fact index — migration conventions apply (new file + `*-migration.test.ts` + local replay) |
+
+The mobile package goes **first** because it's the **store-release train**: it merges to `main` immediately but only reaches phones via a manual `mobile-store-release` dispatch plus store review — a multi-week pipeline that should start filling while the web work proceeds. Every mobile-side item in this phase rides that one train. F10's two web-perf leftovers (DOM growth, payload weight) are deliberately unassigned; schedule them opportunistically.
 
 ---
 
@@ -170,7 +174,7 @@ Suggested PR grouping (grouped by file collision, not by ID):
 
 **Verify.** Play a video on each surface with devtools network open and confirm the request path contains `.feed.<hash>.mp4`. On mobile, confirm via a proxy or by checking the resolved URI in the player config.
 
-**Gotcha.** Split into two PRs: web ships in the next release, mobile needs a store release. Start the mobile half first.
+**Gotcha.** The web half ships on the next push; the mobile half needs a store release. Do the mobile half first and bundle the other mobile-side items onto the same store train (F3's upload header, F10's 404 fallback).
 
 ---
 
@@ -195,21 +199,26 @@ Suggested PR grouping (grouped by file collision, not by ID):
 
 ---
 
-### F3 — Immutable, content-hashed media is cached for 300 seconds
+### F3 — Derivative cache TTL: 300s everywhere — but the short TTL is a documented moderation decision
 
-**Status:** TODO · **Severity:** Critical · **Surface:** server
+**Status:** TODO · **Severity:** Critical · **Surface:** server + mobile · **Blocked on:** decision #5
 **Landed:**
 
-**Problem.** A single constant sets a 5-minute TTL on every public media write, including derivatives whose filenames embed a content hash and therefore can never change. Returning visitors re-download posters and clips they already have, and the CDN revalidates constantly.
+**Problem.** A single constant sets a 5-minute TTL on every public media write, including content-hashed derivatives that can never change. Returning visitors re-download posters and clips they already have, and the CDN revalidates constantly.
+
+**The constraint the initial audit missed.** The file's own header documents the 300s as deliberate, not an oversight: showcase objects are *"user-generated content that may need to be revoked after a moderation decision. Keep the browser and Next image-cache window short enough that a deleted Storage object cannot remain usable from a year-long client cache"* (`src/lib/showcase-media-cache.ts:1-8`). CDN copies are purged on delete; browser caches cannot be. A long TTL therefore extends how long an already-served viewer can keep replaying taken-down content. Do **not** ship a mechanical "1 year immutable" without resolving that trade — that is **Open decision #5**.
 
 **Evidence.**
-- `src/lib/showcase-media-cache.ts:10` — `SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL = '300'`.
+- `src/lib/showcase-media-cache.ts:9` — `SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL = '300'` (rationale comment at `:1-8`).
 - Applied at: `src/lib/post-media-preview.ts:59` and `:109`, `src/lib/post-media-rendition.ts:83`, `src/lib/post-publish-service.ts:376`, `src/lib/showcase-publish-service.ts:321`, `src/lib/generation-media-preview.ts:90`.
-- Client-side upload headers: `src/lib/signed-url-upload.ts:143`, `ugc-mobile/lib/upload-file.ts:135`.
-- `next.config.ts:143` — `images.minimumCacheTTL` also 300.
+- Client-side upload headers: `src/lib/signed-url-upload.ts:143` (web), `ugc-mobile/lib/upload-file.ts:135` (mobile — the server-side `storage.copy()` inherits this header, so the mobile half must ride the store-release train or device uploads stay on 300s).
+- `next.config.ts:143` — `images.minimumCacheTTL` also 300, same rationale.
 - Hashed derivative naming: `src/lib/post-media-rendition.ts:31-37` (`.feed.<hash>.mp4`), `src/lib/post-media-preview.ts:18-24` (`.preview.<hash>.webp`).
 
-**Fix.** Split the constant. Use `public, max-age=31536000, immutable` for content-hashed derivatives; keep a short TTL only for mutable originals. Raise `images.minimumCacheTTL` correspondingly.
+**Fix.** Resolve decision #5 first, then split the constant:
+- Mutable originals: keep a short TTL (300s is fine).
+- Content-hashed derivatives: the decision-#5 TTL. Recommended: `public, max-age=86400, stale-while-revalidate=604800` — a 288× cut in revalidation churn while bounding takedown exposure to one day. If the owner accepts the already-served-browser residual, `public, max-age=31536000, immutable` maximizes the caching win.
+- Raise `images.minimumCacheTTL` to match the chosen derivative TTL.
 
 **Verify.** Upload a new post, then check the `cache-control` response header on its `.preview.<hash>.webp`.
 
@@ -326,12 +335,12 @@ Suggested PR grouping (grouped by file collision, not by ID):
 **Status:** TODO · **Severity:** Low
 **Landed:**
 
-- **Owner studio grid** — `src/app/creations/CreationMediaFrame.tsx:117-128`: 36 `<video preload="metadata">` tiles with `src` always attached and no viewport gating, against *signed* URLs which cache poorly (uncached egress is 3× cached). Use posters plus `preload="none"`.
-- **Unoptimized full-res images** — `src/app/creators/[username]/page.tsx:84-104` renders cover and avatar as raw eager `<img>` at full source; detail/reel images bypass `next/image` at `ShowcaseMediaCarousel.tsx:489-514`.
-- **Mobile 404 fallback** — `ugc-mobile/lib/api-client.ts:611-613` refetches a 48-item feed to locate one post.
-- **Webhook import budget** — the finished-video download and re-upload runs via `after()` inside `/api/webhooks/kie`, whose `maxDuration` is 60 s, with a 60 s fetch timeout. Large videos always fall through to the 10-minute cron. Raise the duration or hand off to the queue unconditionally.
-- **Web feed DOM growth** — `/feed` keeps every loaded card mounted and serializes the whole accumulated feed to `sessionStorage` on change; approaches browser limits around 50–100 cards. Window the list and debounce the snapshot to an idle callback.
-- **Payload weight** — decoded HTML runs 447–641 KiB with roughly 246 KB of duplicated inline CSS/Flight data from `experimental.inlineCss` (`next.config.ts:107-109`). Add both compressed and decoded budgets, and A/B disabling inlining.
+- **Owner studio grid** *(web package)* — `src/app/creations/CreationMediaFrame.tsx:117-128`: 36 `<video preload="metadata">` tiles with `src` always attached and no viewport gating, against *signed* URLs which cache poorly (uncached egress is 3× cached). Use posters plus `preload="none"`.
+- **Unoptimized full-res images** *(web package)* — `src/app/creators/[username]/page.tsx:84-104` renders cover and avatar as raw eager `<img>` at full source; detail/reel images bypass `next/image` at `ShowcaseMediaCarousel.tsx:489-514`.
+- **Mobile 404 fallback** *(mobile package — store train)* — `ugc-mobile/lib/api-client.ts:611-613` refetches a 48-item feed to locate one post.
+- **Webhook import budget** *(transcode package)* — the finished-video download and re-upload runs via `after()` inside `/api/webhooks/kie`, whose `maxDuration` is 60 s, with a 60 s fetch timeout. Large videos always fall through to the 10-minute cron. Raise the duration or hand off to the queue unconditionally.
+- **Web feed DOM growth** *(unassigned — opportunistic)* — `/feed` keeps every loaded card mounted and serializes the whole accumulated feed to `sessionStorage` on change; approaches browser limits around 50–100 cards. Window the list and debounce the snapshot to an idle callback.
+- **Payload weight** *(unassigned — opportunistic)* — decoded HTML runs 447–641 KiB with roughly 246 KB of duplicated inline CSS/Flight data from `experimental.inlineCss` (`next.config.ts:107-109`). Add both compressed and decoded budgets, and A/B disabling inlining.
 
 ---
 
@@ -473,9 +482,10 @@ Two independent audits produced different headline numbers. Both were right abou
 | # | Decision | Owner | Needed by | Answer |
 |---|---|---|---|---|
 | 1 | Spend cap: on (outage risk) or off (bill risk) | owner | immediately | |
-| 2 | Raw feed-fact retention: 30 or 90 days | owner | before F7a | |
+| 2 | Raw feed-fact retention: 30 or 90 days | owner | before F7a (F11 does not need it) | |
 | 3 | Confirm Vercel plan is Pro (10-min cron implies it) | — | before F14 | |
 | 4 | Confirm Supabase compute tier and capture CPU/IO/pool baselines | — | before Phase 1 | |
+| 5 | Derivative cache TTL: 1-day compromise vs 1-year immutable — a takedown-exposure trade, see F3's constraint note | owner | before F3 | |
 
 ---
 
@@ -484,3 +494,4 @@ Two independent audits produced different headline numbers. Both were right abou
 | Date | Change | By |
 |---|---|---|
 | 2026-08-08 | Initial audit; all items TODO. Baseline commit `63b9a3b`. | Claude Code |
+| 2026-08-08 | Pre-work review amendments: F3 reframed against the documented moderation TTL constraint (new decision #5); every-push-deploys warning added; mobile items consolidated onto the store-release train; workflow rewritten for one-conversation-per-phase sequential execution (no worktrees); evidence re-verified at `8a69de5`. | Claude Code |
