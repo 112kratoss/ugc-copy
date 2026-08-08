@@ -18,8 +18,15 @@ class FakeQueryBuilder {
   limit = vi.fn(() => this);
   in = vi.fn(() => this);
   lt = vi.fn(() => this);
+  lte = vi.fn(() => this);
   not = vi.fn(() => this);
   range = vi.fn(() => this);
+
+  /** The queue-age probes read the single oldest due row rather than a sample. */
+  maybeSingle = vi.fn(async () => ({
+    data: Array.isArray(this.result.data) ? (this.result.data[0] ?? null) : (this.result.data ?? null),
+    error: this.result.error,
+  }));
 
   constructor(private readonly result: QueryResult) {}
 
@@ -102,6 +109,15 @@ function createClient(
     }
     return { ...result, data: rows };
   };
+  const withQueueAgeProbe = (
+    provided: QueryResult | QueryResult[] | undefined,
+    fallback: QueryResult[],
+  ): QueryResult[] => {
+    const base = provided === undefined
+      ? fallback
+      : Array.isArray(provided) ? provided : [provided];
+    return [...base, { error: null, data: [] }];
+  };
   const backendJobRuns = results.backend_job_runs;
   // `posts` is read twice: the remix-source sample, then the orphaned shell-post
   // probe. A test that only cares about the first passes a single result and
@@ -119,14 +135,23 @@ function createClient(
       { error: null, data: [] },
       { error: null, data: [] },
     ],
-    generation_completion_jobs: { error: null, data: [] },
-    // Two reads: unresolved video renditions, then unresolved previews.
-    post_media: [
-      { error: null, data: [] },
-      { error: null, data: [] },
-    ],
     provider_dependency_events: { error: null, data: [] },
     ...results,
+    // The queue-age collector adds one targeted "oldest due row" read per
+    // queue, after every sampled read. Appended here rather than spelled out in
+    // each test because a healthy fixture means an empty queue, and a test that
+    // forgot it would fail as QUEUE_AGE_UNREADABLE instead of on its own claim.
+    generation_completion_jobs: withQueueAgeProbe(
+      results.generation_completion_jobs,
+      [{ error: null, data: [] }],
+    ),
+    workflow_run_step_jobs: withQueueAgeProbe(results.workflow_run_step_jobs, []),
+    // post_media is read three times now: unresolved video renditions, then
+    // unresolved previews, then the queue-age probe.
+    post_media: withQueueAgeProbe(
+      results.post_media,
+      [{ error: null, data: [] }, { error: null, data: [] }],
+    ),
     // Remix-source sample for the data-access probe, then the shell-post probe.
     // Empty by default: with no remixable posts the probe reports ok without
     // issuing its follow-up generations read, so tests that do not care about

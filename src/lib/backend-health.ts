@@ -14,6 +14,11 @@ import {
   GENERATION_MODEL_CATALOG_V1_SCHEMA_VERSION,
 } from '@/lib/generation-model-catalog';
 import { loadPublishedGenerationModelCatalog } from '@/lib/generation-model-catalog-store';
+import {
+  collectBackendQueueAgeHealth,
+  type BackendQueueAgeHealth,
+  type QueueClient,
+} from '@/lib/backend-queue-age';
 import { getMediaUploadReclaimPolicy } from '@/lib/media-upload-reclaim-policy';
 import { PAYMENT_WEBHOOK_PROCESSING_SERVICE_NAMES } from '@/lib/provider-dependency-telemetry';
 
@@ -320,6 +325,7 @@ export type BackendHealth = {
   jobs: BackendJobHealth[];
   generations: BackendGenerationHealth;
   completionQueue: BackendCompletionQueueHealth;
+  queueAge: BackendQueueAgeHealth;
   mediaPipeline: BackendMediaPipelineHealth;
   aiUsage: BackendAiUsageHealth;
   providerDependencies: BackendProviderDependencyHealth;
@@ -1420,12 +1426,19 @@ export async function collectBackendHealth(
     code: 'HEALTH_SAMPLE_TRUNCATED',
     message: `Health collectors read only their first sample of rows from: ${truncatedHealthSamples.join(', ')}. Counts and rates derived from them describe the sample, not the window.`,
   }] : [];
+  // Collected separately from the sampled reads above, and deliberately so: a
+  // queue's age has to come from a targeted "oldest due row" probe, because
+  // deriving it from a capped sample understates it exactly when the queue is
+  // deep enough to matter.
+  const queueAgeResult = await collectBackendQueueAgeHealth(client as unknown as QueueClient, now);
+
   const issues = [
     ...healthSampleIssues,
     ...schedulerResult.issues,
     ...jobResults.flatMap((result) => result.issues),
     ...generationResult.issues,
     ...completionQueueResultHealth.issues,
+    ...queueAgeResult.issues,
     ...mediaPipelineResult.issues,
     ...aiUsageResult.issues,
     ...providerDependencyResult.issues,
@@ -1438,6 +1451,7 @@ export async function collectBackendHealth(
     ...jobResults.map((result) => result.health.status),
     generationResult.health.status,
     completionQueueResultHealth.health.status,
+    queueAgeResult.health.status,
     mediaPipelineResult.health.status,
     aiUsageResult.health.status,
     providerDependencyResult.health.status,
@@ -1462,6 +1476,7 @@ export async function collectBackendHealth(
     jobs: jobResults.map((result) => result.health),
     generations: generationResult.health,
     completionQueue: completionQueueResultHealth.health,
+    queueAge: queueAgeResult.health,
     mediaPipeline: mediaPipelineResult.health,
     aiUsage: aiUsageResult.health,
     providerDependencies: providerDependencyResult.health,
