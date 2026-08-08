@@ -46,11 +46,8 @@
  * this closure explicit so public-only component utilities are not rescanned. */
 @source "./components/CreatorStudio.tsx";
 @source "./components/CreatorToolPreview.tsx";
-@source "./components/DeferredHomeShowcasePreviewGrid.tsx";
 @source "./components/EnhancePromptButton.tsx";
 @source "./components/FeatureLandingPage.tsx";
-@source "./components/HomeShowcasePreviewGrid.tsx";
-@source "./components/HomeShowcasePreviewGridIsland.tsx";
 @source "./components/MediaDetailsPreviewModal.tsx";
 @source "./components/NavbarClient.tsx";
 @source "./components/ProfileShareButton.tsx";

@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import DeferredAppShellAccount from '@/app/components/DeferredAppShellAccount';
 import DeferredGenerationNotifications from '@/app/components/DeferredGenerationNotifications';
-import DeferredHomeShowcasePreviewGrid from '@/app/components/DeferredHomeShowcasePreviewGrid';
 import {
   publishAppShellAuthentication,
   readAppShellAuthentication,
@@ -98,18 +97,5 @@ describe('deferred app shell islands', () => {
     flushIdleCallbacks();
 
     expect(screen.queryByTestId('dynamic-island')).not.toBeInTheDocument();
-  });
-
-  it('loads the homepage showcase island immediately so save state can resolve', () => {
-    render(
-      <DeferredHomeShowcasePreviewGrid
-        items={[]}
-        initialSession={null}
-        initialCredits={null}
-      />
-    );
-
-    expect(screen.getByTestId('dynamic-island')).toBeInTheDocument();
-    expect(idleCallbacks).toHaveLength(0);
   });
 });
