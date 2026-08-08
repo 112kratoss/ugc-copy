@@ -8,7 +8,8 @@ export type BackendJobName =
   | 'media-upload-reclaim'
   | 'mobile-push-receipts'
   | 'operational-data-retention'
-  | 'referral-reward-reconciliation';
+  | 'referral-reward-reconciliation'
+  | 'workflow-run-steps';
 
 export type BackendJobSchedulerDefinition = {
   route: '/api/cron/backend-jobs';
@@ -260,6 +261,18 @@ export const BACKEND_JOB_REGISTRY = [
     lockTtlSeconds: 14 * 60,
     noWorkSkipReason: 'no_unsettled_referral_rewards',
     maxMissedRunsBeforeDegraded: 2,
+  }),
+  defineBackendJob({
+    // F12: before this entry the registry had no workflow job at all, so a
+    // recycled function stranded a run permanently -- the only things advancing
+    // it were a process-local monitor map and a state-mutating GET.
+    name: 'workflow-run-steps',
+    route: '/api/cron/workflow-run-steps',
+    schedule: '*/10 * * * *',
+    maxDurationSeconds: 300,
+    lockTtlSeconds: 14 * 60,
+    noWorkSkipReason: 'no_due_workflow_run_steps',
+    maxMissedRunsBeforeDegraded: 3,
   }),
 ] as const satisfies readonly BackendJobDefinition[];
 

@@ -64,9 +64,10 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 | F6 | Unthrottled hot GETs incl. full-catalog scan | Medium | 0 | DONE | Limits on all 5 GETs; filtered top-sales scan replaced by RPC unlock filter + ordered streaming, 2026-08-08 |
 | F15a | Monitoring truncates silently; biased rates | Medium | 0 | DONE | Truncation flagged (cost + health), attempt-counter denominator landed, 2026-08-08; DB-side aggregates deferred into F15b with reasoning |
 | F10 | Assorted small leaks | Low | 0 | IN PROGRESS | Mobile 404 pkg 1; studio grid + images pkg 2, 2026-08-08. Webhook budget rides pkg 3; two web-perf items stay unassigned |
-| F12 | Workflow runs non-durable, non-idempotent | Critical | 1 | TODO | |
+| F12 | Workflow runs non-durable, non-idempotent | Critical | 1 | IN PROGRESS | Idempotent run creation + durable step queue + cron recovery + pure GET, 2026-08-09 — per-node executor deferred with reasoning |
 | F14 | Shared-fate cron; no provider admission control | High | 1 | TODO | |
 | F5 | For-you RPC materializes whole catalog | High | 1 | TODO | |
+| F5b | `list_marketplace_resource_bundles` is 47% of RPC time | High | 1 | TODO | Found by the decision-#4 baseline, not by the original audit |
 | F7b | Fact retention + partitioning | High | 1 | TODO | |
 | F8 | Per-request GoTrue round-trip | Medium | 1 | TODO | |
 | F9 | Comments scan loop; unindexed top sort | Medium | 1 | TODO | |
@@ -101,6 +102,59 @@ Production snapshot taken during the audit. Re-measure these when re-certifying.
 The load test covers **anonymous GETs on `sort=recent` only**. It excludes auth, writes, the personalized feed, generation, uploads and webhooks — i.e. every path identified as binding. It proves the cheap path is cheap; it is not evidence of mixed-workload capacity.
 
 Environment: Supabase Pro, org `kwabcsifvkvelvoyrjel`, project `ildfmhozpibwiopeavfg`, region `ap-south-1`, Postgres 17, Micro compute. Vercel region `bom1`, Fluid compute, one cron every 10 minutes.
+
+### Phase 1 entry baseline — compute, CPU, IO and pool (captured 2026-08-08)
+
+Decision #4's deliverable. Captured before any Phase 1 code, so the certification test has a real "before" to compare against. Re-capture at certification.
+
+**Compute tier: Micro — confirmed by fingerprint, not by API.** `get_project` returns region, status and Postgres version but **no compute size**, so the tier cannot be asserted from the Management API any more than the spend cap can (F4 hit the same wall). The memory settings identify it unambiguously:
+
+| Setting | Value | Note |
+|---|---|---|
+| `shared_buffers` | 224 MB (28,672 × 8 kB) | Micro's 1 GB RAM allocation |
+| `effective_cache_size` | 384 MB | |
+| `work_mem` | **2.1 MB** | the number that decides when Phase 1's ranking work spills |
+| `maintenance_work_mem` | 32 MB | bounds F7b's partition/index builds |
+| `max_connections` | 60 (3 superuser-reserved) | |
+| `max_worker_processes` / `max_parallel_workers` / `per_gather` | 6 / 2 / 1 | near-zero parallelism headroom |
+| Postgres | 17.6.1.063, `ACTIVE_HEALTHY` | |
+
+**Pool: 47% consumed at idle — the certification gate has ~23 points of headroom, not 70.** 36 `pg_stat_activity` rows, of which 8 are background workers and **28 are client backends against the 60 limit**. At 13 MAU with no meaningful traffic, and essentially all of it idle infrastructure:
+
+| Holder | Conns | State |
+|---|---:|---|
+| `authenticator` (PostgREST) | 11 | idle |
+| `supabase_storage_admin` + storage via pgbouncer | 13 | idle |
+| `postgres_exporter`, `pgbouncer`, `supabase_admin`, `mgmt-api` | 4 | 1 active, 3 idle |
+
+0 idle-in-transaction, 0 lock waits, longest transaction 0.0 s. **The Phase 1 certification criterion "connection pool below 70%" must be read against a 47% floor** — the budget for actual request-serving connections is ~14, not ~42. If Phase 1 adds any connection-holding worker (F12's step queue, F14's split queues), this is the ceiling it competes for. Direct-connection work should go through the pooler, not `max_connections`.
+
+**IO: not a constraint today, and not measurable.** Buffer cache hit **99.998%** (369,179,228 hits against 7,348 reads) — the 61 MB database fits entirely inside 224 MB of shared buffers, so there is effectively no read IO to tune. Zero deadlocks; rollback rate 0.21% (22,764 of 10.9 M transactions).
+
+Two gaps worth naming rather than leaving as blanks:
+- **`track_io_timing` is `off`**, so `blk_read_time` and `blk_write_time` are both 0. There is no IO-latency baseline to capture and none will exist during the load test either. Turning it on is a small F15b item; without it, "IO" during certification can only be inferred from cache-hit ratio and temp-file volume.
+- **`log_temp_files` is `-1`** (off), so spills are invisible in logs.
+
+**Temp spill: 429 GB cumulative, and it is not the app.** 168,411 temp files / 429 GB since project creation (~2.4 GB/day; `stats_reset` is null, so counters run from 2026-02-07). This looks alarming and is not: attributing by `temp_blks_written` shows every top writer is *catalog introspection* — `pg_stat_statements` self-queries, `pg_get_functiondef` walks, dashboard and audit tooling. **Every application RPC reports `temp_blks_written = 0`.** Nothing in the hot path spills at 34 posts. That is a statement about catalog size, not about the queries: with `work_mem` at 2.1 MB, F5's unbounded `eligible AS MATERIALIZED` CTE will spill as soon as the catalog is large enough to matter, and there is no logging configured to notice when it starts.
+
+**CPU: the audit ranked by mean latency and missed the top consumer.** The baseline table above cites "slowest production RPCs — 493 ms and 140 ms mean," which are the two `refresh_*` stats jobs. Ranked by *total* time actually consumed (`pg_stat_statements`), the picture is different:
+
+| RPC | % of RPC time | % of all statement time | Calls | Mean |
+|---|---:|---:|---:|---:|
+| `list_marketplace_resource_bundles` | **47.3%** | 16.4% | 47,877 | 17.0 ms |
+| `refresh_post_feed_engagement_stats` | 7.8% | 2.7% | 263 | 508.7 ms |
+| `get_ranked_feed_candidates` | 7.6% | 2.6% | 2,542 | 51.5 ms |
+| `check_backend_rate_limit` | 6.6% | 2.3% | 10,519 | 10.7 ms |
+| `refresh_post_feed_stats` | 5.6% | 1.9% | 681 | 140.2 ms |
+| `record_post_share_event` | 4.3% | 1.5% | 3,859 | 19.3 ms |
+| `refresh_user_interest_weights` | 3.4% | 1.2% | 681 | 84.6 ms |
+
+Four consequences for Phase 1, all of them new information:
+
+1. **`list_marketplace_resource_bundles` is the single largest database consumer in production and appears nowhere in this audit.** Nearly half of all RPC time, on volume rather than per-call cost. F5 — a Phase 1 High — targets `get_ranked_feed_candidates` at one sixth of that. This does not make F5 wrong (F5 is about catalog-size *scaling*, and 34 posts hides it), but the marketplace listing needs its own look before certification. Logged as **F5b** in the Phase 1 section.
+2. **Connection and session overhead is ~25% of all database time.** `pgbouncer.get_auth` alone is 15.6% (324,055 calls), and the PostgREST `set_config` family adds ~9% across ~1.45 M calls. This is the per-request cost of the stateless model, and it is the strongest quantitative argument for F8 — which the audit files as Medium and "a resilience fix more than a latency one."
+3. **`check_backend_rate_limit` is already 6.6% of RPC time**, and F6 just extended it to five more GETs. The doc's own warning that "the limiter is its own load generator under abuse" now has a number attached at 13 MAU.
+4. **`SELECT name FROM pg_timezone_names` costs 3.3% of all statement time** — 368 calls at a 442.9 ms mean. That is a known-expensive catalog scan being issued by tooling, not the app. Harmless at this volume, but it is 1.5× the total cost of the entire ranked feed.
 
 ---
 
@@ -139,8 +193,8 @@ The mobile package goes **first** because it's the **store-release train**: it m
 
 ### F4 — Spend cap posture and egress monitoring
 
-**Status:** TODO · **Severity:** Critical · **Surface:** dashboard + ops
-**Landed:**
+**Status:** DONE · **Severity:** Critical · **Surface:** dashboard + ops
+**Landed:** Cap recorded; weekly dashboard egress read documented as the mechanism (egress is not in the database) — automation noted in F15b, 2026-08-08
 
 **Problem.** Supabase Pro enables the spend cap by default. With it on, exhausting the 250 GB egress quota degrades storage service rather than billing overage — at current media weight that is the literal outage line. Separately, the ops layer (`src/lib/backend-cost-report.ts`) budgets media-read *requests* and storage *growth* but never egress *bytes*, so the one meter that binds first is unmonitored.
 
@@ -182,8 +236,8 @@ Automating this requires a Management API token with usage scope wired into the 
 
 ### F1 — Watch surfaces stream the full-bitrate source, never the rendition
 
-**Status:** TODO · **Severity:** Critical · **Surface:** web + mobile
-**Landed:**
+**Status:** DONE · **Severity:** Critical · **Surface:** web + mobile
+**Landed:** Mobile pkg 1 + web pkg 2, 2026-08-08 — mobile still needs a store release to reach phones
 
 **Problem.** The 720p/≤1.4 Mbps rendition exists and is used by feeds, but every surface where people actually *watch* resolves the raw source instead. This is 80–90% of all egress, and it means ~23 Mbps playback on Indian mobile networks.
 
@@ -216,8 +270,8 @@ Automating this requires a Management API token with usage scope wired into the 
 
 ### F2 — AI-generated posts skip transcoding; the repair sweep does 5 videos/hour
 
-**Status:** TODO · **Severity:** Critical · **Surface:** server
-**Landed:**
+**Status:** DONE · **Severity:** Critical · **Surface:** server
+**Landed:** Publish-time repair kick + wall-clock sweep budget, pkg 3, 2026-08-08
 
 **Problem.** Publishing a generation to the showcase copies the raw provider MP4 (~23 Mbps) into the public bucket with no transcode. The only rendition path for these posts is the hourly repair sweep, which processes 5 videos sequentially — roughly 120/day. A burst of posts serves full-bitrate sources for hours or days.
 
@@ -244,8 +298,8 @@ Automating this requires a Management API token with usage scope wired into the 
 
 ### F3 — Derivative cache TTL: 300s everywhere — but the short TTL is a documented moderation decision
 
-**Status:** TODO · **Severity:** Critical · **Surface:** server + mobile · **Blocked on:** decision #5
-**Landed:**
+**Status:** DONE · **Severity:** Critical · **Surface:** server + mobile · **Blocked on:** decision #5 (resolved)
+**Landed:** Full pipeline verified; reopened for ranged edge entries and re-closed 2026-08-08 — takedown delete verified working, finite stale-ranged residual recorded and accepted in step 3 below
 
 **Problem.** A single constant sets a 5-minute TTL on every public media write, including content-hashed derivatives that can never change. Returning visitors re-download posters and clips they already have, and the CDN revalidates constantly.
 
@@ -348,8 +402,8 @@ That delay is also why the canary mattered. Running all 99 objects first and the
 
 ### F11 — Web `/feed` drops the ranking cursor
 
-**Status:** TODO · **Severity:** Critical · **Surface:** web
-**Landed:**
+**Status:** DONE · **Severity:** Critical · **Surface:** web
+**Landed:** Cursor threaded through load-more, retry and snapshot, pkg 4, 2026-08-08
 
 **Problem.** Feed pagination sends offset only, so any page loaded outside the server's short session-reuse window re-runs the full ranking RPC and persists a brand-new session (1 `feed_sessions` row + up to 60 `feed_session_items` + up to 60 `feed_delivery_facts` = up to 121 rows). Three pages can write ~363 rows instead of 121. Offset-into-a-fresh-ranking is also why items repeat across pages — the client already dedupes this symptom.
 
@@ -377,8 +431,8 @@ That delay is also why the canary mattered. Running all 99 objects first and the
 
 ### F13 — v2 stats refresh permanently starves rows past the first 1,000
 
-**Status:** TODO · **Severity:** High · **Surface:** migration
-**Landed:**
+**Status:** DONE · **Severity:** High · **Surface:** migration
+**Landed:** Migration + fact index, pkg 5, 2026-08-08
 
 **Problem.** The v2 aggregation functions select candidates ordered by UUID with a fixed limit, so every hourly run processes the *same* first 1,000 creators/posts. Once there are 1,001 active rows, the remainder never refreshes and their `quality_rate` freezes permanently.
 
@@ -410,8 +464,8 @@ That delay is also why the canary mattered. Running all 99 objects first and the
 
 ### F7a — Facts are written for all ranked candidates; events are unbatched
 
-**Status:** TODO · **Severity:** High · **Surface:** server + clients
-**Landed:**
+**Status:** DONE · **Severity:** High · **Surface:** server + clients
+**Landed:** Served-slice facts + batched events, 2026-08-08 — single-transaction insert deferred to F7b
 
 **Problem.** Two compounding write amplifiers. First, a ranked session persists delivery facts for the whole 60-candidate pool while a page serves only 2–12 items; recording only served items would cut this path by roughly 5–30×. Second, a fully-watched reel produces around seven independent API calls (open, impression, dwell, four progress milestones), each re-running auth and a database-backed rate-limit write transaction.
 
@@ -460,8 +514,8 @@ F7b partitions monthly, so a 30-day raw window is three partitions deep at any t
 
 ### F6 — Unthrottled hot GETs, including a full-catalog scan
 
-**Status:** TODO · **Severity:** Medium · **Surface:** server
-**Landed:**
+**Status:** DONE · **Severity:** Medium · **Surface:** server
+**Landed:** Limits on all 5 GETs; filtered top-sales scan replaced by RPC unlock filter + ordered streaming, 2026-08-08
 
 **Problem.** The rate-limit framework covers writes well but leaves expensive reads open. Notably `sort=top-sales` scans *every* public post per call.
 
@@ -502,8 +556,8 @@ The fix text said "precompute the top-sales ranking into `post_feed_stats`". Imp
 
 ### F15a — Monitoring truncates silently and computes biased failure rates
 
-**Status:** TODO · **Severity:** Medium · **Surface:** server
-**Landed:**
+**Status:** DONE · **Severity:** Medium · **Surface:** server
+**Landed:** Truncation flagged (cost + health), attempt-counter denominator landed, 2026-08-08; DB-side aggregates deferred into F15b with reasoning
 
 **Problem.** Monitoring becomes *more optimistic* precisely as traffic grows. Cost and health collectors cap their raw queries with no truncation signal, so past the cap the reports silently describe a sample as if it were the population. Separately, provider failure percentages are computed over a table that only records failures and slow calls, so the rate is structurally wrong.
 
@@ -538,8 +592,8 @@ The fix text said "precompute the top-sales ranking into `post_feed_stats`". Imp
 
 ### F10 — Assorted small leaks
 
-**Status:** TODO · **Severity:** Low
-**Landed:**
+**Status:** IN PROGRESS · **Severity:** Low
+**Landed:** Mobile 404 pkg 1; studio grid + images pkg 2, 2026-08-08. Webhook budget rides pkg 3; the two web-perf items below stay unassigned and are **carried past Phase 0 deliberately** — Phase 0 closed around them (see the change log), they are not a Phase 1 prerequisite.
 
 - **Owner studio grid** *(web package)* — **DONE 2026-08-08.** `CreationMediaFrame` took a `posterSrc` and now uses `preload="none"` with the poster whenever one exists, so a grid of 36 tiles issues no video range requests at all. Two things were needed to make that safe: the tile's load state has to start settled, or the spinner would sit over the poster forever waiting for a `loadedmetadata` that will never fire; and tiles *without* a poster keep `preload="metadata"` rather than rendering black, so the change is strictly an improvement instead of a trade. The poster is the generation's existing `preview_url`, which the API already returns but the page's local `Generation` type had not declared — when it is absent the tile simply behaves as it does today.
 - **Unoptimized full-res images** *(web package)* — **DONE 2026-08-08.** The creator cover and avatar are `next/image` now (the avatar renders at 96–112px and was shipping the uploaded original). Detail and reel images route through the existing `OptimizedPreviewImage` rather than a raw `<img>`, which also gets them the host-allowlist fallback that component already encapsulates. It gained optional `onError` and `imageRef` props to do this: the carousel needs the failure signal for its recovery overlay, and needs the element to read `complete`/`naturalWidth`, because a cached image can finish before React attaches `onLoad` and would otherwise strand the frame on its fallback aspect ratio. Note it passes the **source** as `previewSrc`, not the 720px preview — the intent is to resize the original, not to downgrade it.
@@ -558,7 +612,8 @@ The fix text said "precompute the top-sales ranking into `post_feed_stats`". Imp
 
 ### F12 — Workflow runs are non-durable and non-idempotent
 
-**Status:** TODO · **Severity:** Critical · **Surface:** server
+**Status:** IN PROGRESS · **Severity:** Critical · **Surface:** server
+**Landed:** Idempotent run creation, durable step queue, cron recovery worker and a pure GET — 2026-08-09. The per-node executor is deliberately still open; see *Still open* below.
 
 **Problem.** This is a money bug. Run creation has no idempotency binding, so a timed-out client retry creates a duplicate run that re-charges every node's generation. Per-generation idempotency does not help, because each new run legitimately starts new generations. Progress depends on a process-local map plus client polling, and the cron registry contains **no workflow job** — so a recycled function strands the run with no server-side recovery. A GET can also advance workflow state, meaning polling is not read-only.
 
@@ -568,6 +623,31 @@ The fix text said "precompute the top-sales ranking into `post_feed_stats`". Imp
 - `src/lib/backend-jobs.ts:168-264` — the job registry has no workflow entry.
 
 **Fix.** Unique `(canvas_id, idempotency_key)` on run creation. Move execution to a durable step queue: one idempotent job per node and attempt, unique `(run_id, node_id, attempt)`, `SKIP LOCKED` claims, heartbeats, retry timestamps, completion events enqueuing dependents transactionally. Make GET endpoints pure reads. **The in-repo pattern to copy is `generation_completion_jobs`** (`supabase/migrations/20260621111546_generation_completion_jobs.sql` plus `src/lib/generation-completion-jobs.ts`) — it already does claims, backoff, attempt caps and refund-on-exhaustion correctly.
+
+**Landed 2026-08-09** — migration `20260808160000_workflow_run_durability.sql`, plus `workflow-run-jobs.ts`, `workflow-run-jobs-processor.ts` and the `workflow-run-steps` cron job.
+
+**Production context measured before starting, because it changes the urgency and not the diagnosis:** 11 workflow runs exist in total and the last one was **2026-04-02**, four months ago. The feature is effectively dormant. The bug is real and correctly rated Critical for scale, but no damage is accruing today and the migration had essentially no data to carry. That is why the scoping decision below was affordable.
+
+**The early return is the fix, not the unique index.** Worth stating plainly because it is easy to add the constraint and still charge twice. `start_workflow_canvas_run` resolves the key inside one statement (`ON CONFLICT … DO NOTHING`, then read), but `executeWorkflowRun` must also **return before executing the graph** when the RPC reports `reused`. The index only stops a second *row*; the early return is what stops the second *spend*. A test asserts that a replayed key inserts no steps, updates no run and enqueues no job.
+
+Four things found while implementing, each of which would otherwise be re-derived:
+
+1. **The conflict path deliberately is not an upsert.** `supabase-js`'s `.upsert()` sends `resolution=merge-duplicates`, which does `DO UPDATE SET` on every column provided — so a replay would rewrite `graph_snapshot` on a run that may already be mid-flight. The RPC exists partly to get exact conflict semantics that PostgREST cannot express.
+2. **The old insert never read its error.** `const runId = runInsert.data?.id as string` left `runId` undefined on failure, and the loop then wrote every step row against a null run. Now it throws. This was a latent second bug, unrelated to idempotency.
+3. **A deferral had to become its own verb.** A run still waiting on a provider generation has not failed, so releasing its ticket must not consume the attempt budget — otherwise a slow video generation "retries" itself to exhaustion while nothing is wrong. `defer_workflow_run_step_job` reschedules the same row at the same attempt; only genuine failures go through `finish_…(succeeded => false)`. Deferral is bounded by a 24h run lifetime, after which the queue stops polling and the existing stalled-generation reaper is what closes the underlying task.
+4. **Reclaim keys on `coalesce(heartbeat_at, locked_at)`.** Heartbeat alone would strand a worker that died between claiming and its first heartbeat; `locked_at` alone would steal a legitimately long-running node out from under itself.
+
+**The GET is now a pure read, and that removed more than a write.** `getWorkflowRunDetails` used to call `advanceWorkflowRunOnce` whenever the run was processing, so a client poll executed nodes, inserted step rows, ran `syncGenerationStatuses` (which polls the provider **and settles credits**) and updated run status. A refresh could start paid work. It now hydrates from `generations` as the webhook left it, with `syncGenerationState: false` — the fallback poll for missed callbacks moved to the worker, where it belongs. Five existing runner tests were rewritten to drive `advanceWorkflowRunOnce` directly rather than reaching it through a GET, and a new test pins the pure-read contract.
+
+**Still open in F12 — the per-node executor, deferred deliberately with the owner's agreement:**
+
+The queue is per `(run_id, node_id, attempt)` as the audit specifies, and it carries claims, leases, heartbeats, attempt caps, backoff and poison isolation. But a claimed job currently drives a **run-scoped** advance (`advanceWorkflowRunOnce`) rather than executing exactly one node. Both bugs this item was filed for are closed by what landed — the double-charge dies with the idempotency key, and stranding dies with cron-driven adoption of runs that have no live job. What a per-node executor would add on top:
+
+- Poison-**node** isolation, rather than poison-run. One bad node currently fails its run's ticket, not just itself.
+- Per-node retry accounting instead of per-run.
+- Dependent enqueue driven by each node's terminal state rather than by re-running the run's execution order.
+
+It was scoped out because the existing engine sequences a run as a whole and nodes that launch a generation sit in `processing` awaiting a provider webhook, so a per-node executor is a rewrite of the 1,300-line runner with real regression risk across approval gates and generation polling — against a feature with 11 lifetime runs. **Do it before workflow usage becomes material, and before the Phase 1 certification test exercises workflow fan-out**, or the test will certify a fan-out path that has not been restructured.
 
 ---
 
@@ -596,6 +676,37 @@ Recovery ceilings today: generation completion fallback 25 per 10 min (150/hour)
 **Evidence.** `supabase/migrations/20260711064036_feed_personalization_system.sql:765-798` (v1) and `supabase/migrations/20260728181000_feed_ranking_v2.sql:626-661` (v2). Pool limits at `src/lib/showcase-feed-personalization.ts:258-262`.
 
 **Fix.** Index-driven, LIMIT-first pools per lane (recent, trending, following, affinity, exploration), using `posts_public_review_recent_idx`. Cache anonymous and cohort candidate pools.
+
+---
+
+### F5b — `list_marketplace_resource_bundles` reads ~1,000 buffers per call and is 47% of RPC time
+
+**Status:** TODO · **Severity:** High · **Surface:** migration + server
+
+**Provenance.** Not in the original audit. Found capturing the decision-#4 CPU baseline, which ranked RPCs by *total* time consumed rather than by mean latency — the axis on which this function is invisible (17 ms looks healthy) and dominant (47.3% of all RPC time, 16.4% of all statement time) at the same time.
+
+**Problem.** The marketplace listing does ~1,000 shared-buffer reads per call to return one page. It is the same defect F5 describes — scan the world, filter and paginate afterwards — but on a path with **19× the call volume** of the ranked feed it sits next to in this phase. It is not slow *today* only because the entire 61 MB database fits in 224 MB of `shared_buffers`, so every one of those reads is a memory hit. That property expires with catalog growth, and when it does this is the first thing to fall over.
+
+**Evidence** (`pg_stat_statements`, production, 2026-08-08):
+
+| Metric | Value | Reading |
+|---|---:|---|
+| Calls | 47,880 | vs 2,542 for `get_ranked_feed_candidates` |
+| Mean / max / stddev | 17.0 / 879.9 / 34.1 ms | variance ≫ mean — already unstable |
+| `shared_blks_hit` | 47,990,116 | **1,002 blocks ≈ 7.8 MB per call** |
+| `shared_blks_read` | 58 (lifetime) | fully cache-resident — the reason it looks cheap |
+| `temp_blks_written` | 0 | does not spill yet at `work_mem` 2.1 MB |
+| Rows returned | 1 per call | PostgREST scalar — one JSON document |
+
+- Caller: `src/lib/post-resource-bundles-server.ts:1773`, on a service-role client, with a JS fallback (`getMarketplaceResourceListFallback`) for databases missing the RPC.
+- **Two live overloads.** A 6-arg signature is a back-compat shim delegating to the 7-arg one with `p_query => NULL`; the app calls the 7-arg form. Named-argument dispatch keeps this unambiguous today, but it is the same latent PostgREST overload hazard F6 hit and deliberately removed — *"PostgREST would match a four-argument call against both functions and reject it as ambiguous."* Fold the shim's removal into this item unless a caller for it turns up.
+- Defined across six migrations, most recently `20260723120000_post_resource_media_scope.sql`; `20260621103236_restrict_backend_owned_rpcs.sql` set its grants.
+
+**Fix.** Same shape as F5: make the row source LIMIT-first and index-driven instead of materialize-then-filter, so per-call buffer traffic scales with page size rather than catalog size. Confirm with `EXPLAIN (ANALYZE, BUFFERS)` that a page costs buffers proportional to `p_limit`. Drop the 6-arg shim in the same migration if nothing calls it.
+
+**Verify.** Re-read `shared_blks_hit / calls` from `pg_stat_statements` after deploy; the target is a per-call figure that does not move when the bundle catalog grows. Seed a large bundle catalog locally and confirm the plan does not regress to a full scan.
+
+**Sequencing note.** This lands *after* F12 and F14 — those are correctness and money bugs, this is a scaling bug that is not yet biting. But it should land **before** the certification test, or the test will certify a number that the marketplace path cannot hold once the catalog grows past `shared_buffers`.
 
 ---
 
@@ -689,8 +800,8 @@ Two independent audits produced different headline numbers. Both were right abou
 |---|---|---|---|---|
 | 1 | Spend cap: on (outage risk) or off (bill risk) | owner | immediately | **ON, and staying on** — 2026-08-08. Outage risk accepted over bill risk; consequences in F4. |
 | 2 | Raw feed-fact retention: 30 or 90 days | owner | before F7a (F11 does not need it) | **30 days** — 2026-08-08. Owner delegated the call; rationale in F7a. |
-| 3 | Confirm Vercel plan is Pro (10-min cron implies it) | — | before F14 | |
-| 4 | Confirm Supabase compute tier and capture CPU/IO/pool baselines | — | before Phase 1 | |
+| 3 | Confirm Vercel plan is Pro (10-min cron implies it) | — | before F14 | **Pro (`planIteration: plus`), active** — 2026-08-08. Read from the Vercel API team billing record, not inferred from the cron cadence. F14 may assume Pro limits. |
+| 4 | Confirm Supabase compute tier and capture CPU/IO/pool baselines | — | before Phase 1 | **Micro, confirmed by memory fingerprint** — 2026-08-08. Full CPU/IO/pool baseline recorded in *Phase 1 entry baseline* above. Headlines: pool floor 47% at idle, `track_io_timing` off so no IO-latency baseline exists, and the top RPC by total time is `list_marketplace_resource_bundles` (47% of RPC time) which this audit never listed → new item **F5b**. |
 | 5 | Derivative cache TTL: 1-day compromise vs 1-year immutable — a takedown-exposure trade, see F3's constraint note | owner | before F3 | **1-day compromise** — 2026-08-08. Lands as `max-age=86400`; see F3 for why `stale-while-revalidate` could not come with it. |
 
 ---
@@ -711,3 +822,5 @@ Two independent audits produced different headline numbers. Both were right abou
 | 2026-08-08 | **F3 reopened after post-deploy verification.** The metadata backfill applied — all 99 objects read `max-age=86400` in `storage.objects` — but every object still *serves* its old header, and neither `no-cache` nor a novel query string can force revalidation. Supabase's Smart CDN only purges an edge entry when the object is written through the Storage API, so a SQL metadata update is invisible to it. The audit's original "hang it off the `backfill:*` scripts" instruction was right for a reason this document had dismissed: re-writing through the SDK is not a slower way to set metadata, it is the only way to invalidate the cache. Needs a `backfill:showcase-media-cache` script. | Claude Code |
 | 2026-08-08 | Work package 3, part one — **F2 DONE** (publish-time repair kick; sweep bounded by a 60s wall clock rather than a five-row count, which bounded nothing: five rows at a 120s ffmpeg timeout could occupy 600s of a 300s invocation). **F6 partly done** — read limits on all five cited GETs; the `top-sales` precompute is still open, so F6 stays IN PROGRESS. **F10 webhook budget DONE** — `/api/webhooks/kie` was the only media route left at `maxDuration = 60` while its own download timeout was also 60s. | Claude Code |
 | 2026-08-08 | Work package 2 landed — F1 web (carousel every mode, profile hover video), F3 server constants plus a backfill migration over `storage.objects`, F10 studio grid and unoptimized images. **F1 and F3 are now DONE.** Material correction from measuring production: `showcase_media` held three generations of cache policy, not the single 300s the finding described — 60 content-hashed derivatives at a **full year**, 29 originals at supabase-js's default 3600, and only 10 at 300s. The repo had immutable derivative caching until 2026-07-29 and gave it up for moderation, so decision #5 was really about how much of that year to restore, and the backfill moves 60 objects *down* (a live takedown exposure) as well as 39 up. | Claude Code |
+| 2026-08-09 | **F12 mostly landed.** Run creation is idempotent (`start_workflow_canvas_run` + a partial unique index on `(canvas_id, idempotency_key)`, key read from the `Idempotency-Key` header or the body), a durable `workflow_run_step_jobs` queue carries claims/leases/heartbeats/attempt caps/backoff modelled on `generation_completion_jobs`, a new `workflow-run-steps` cron job drains it and **adopts runs left unfinished with no live job**, and `getWorkflowRunDetails` is now a pure read. The key insight worth keeping: **the unique index does not stop the double-charge on its own** — `executeWorkflowRun` has to return *before* executing the graph when the RPC reports `reused`, or the second request still spends. Three further findings: the conflict path deliberately is not an upsert, because supabase-js's `merge-duplicates` would rewrite `graph_snapshot` on a run that may be mid-flight; the old insert never read its error, so a failed insert silently wrote every step against a null run; and deferral had to become its own verb, since a run waiting on a provider generation has not failed and charging that wait against the retry cap would exhaust a slow generation for no reason. Making the GET pure removed more than a write — it used to run `syncGenerationStatuses`, which polls the provider *and settles credits*, so a client refresh could start paid work. **Per-node executor deferred** (owner's call): the queue is keyed per node/attempt as specified, but a claimed job drives a run-scoped advance, so poison isolation is per-run rather than per-node. Both bugs the item was filed for are closed. Measured first: 11 lifetime runs, last on 2026-04-02, so nothing is accruing damage. | Claude Code |
+| 2026-08-08 | **Phase 1 entry.** Phase 0 re-verified independently against the source (not the change log) before starting: all nine DONE rows check out. Fixed a board defect this pass — **every per-section `**Status:**` line still read TODO** while the board table said DONE, and the `**Landed:**` lines were empty; only the table had been maintained. Sections now carry their real status. F10 stays IN PROGRESS by design, with the carry-past-Phase-0 made explicit in the section so it does not read as an unfinished prerequisite. **Decision #3 resolved: Vercel plan is Pro** (`planIteration: plus`), read from the Vercel team billing API rather than inferred from the 10-minute cron. **Decision #4 resolved and recorded** as a new *Phase 1 entry baseline* section: Micro compute confirmed by memory fingerprint (the Management API exposes no compute size, the same blind spot F4 hit on the spend cap); connection pool sits at a **47% floor while idle**, so the certification gate's "below 70%" has ~23 points of real headroom, not 70; `track_io_timing` is **off**, so no IO-latency baseline exists or can be captured during the load test; and 429 GB of lifetime temp spill attributes entirely to catalog introspection, with every application RPC at zero temp blocks. The baseline also produced a finding the audit did not have: ranking RPCs by *total* time instead of mean shows **`list_marketplace_resource_bundles` is 47% of all RPC time** at ~1,000 shared-buffer reads per call — 19× the feed's call volume, invisible at 17 ms mean, and cheap today only because the whole database fits in `shared_buffers`. Filed as **F5b** (High, Phase 1), sequenced after F12/F14 but before certification. | Claude Code |

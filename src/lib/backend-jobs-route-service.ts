@@ -14,6 +14,7 @@ import {
   runMobilePushReceiptsBackendJob,
   runOperationalDataRetentionBackendJob,
   runReferralRewardReconciliationBackendJob,
+  runWorkflowRunStepsBackendJob,
   type BackendJobExecutionResult,
 } from '@/lib/backend-job-executions';
 import {
@@ -38,6 +39,7 @@ type BackendJobsRouteDependencies = {
   runMobilePushReceiptsBackendJob?: typeof runMobilePushReceiptsBackendJob;
   runOperationalDataRetentionBackendJob?: typeof runOperationalDataRetentionBackendJob;
   runReferralRewardReconciliationBackendJob?: typeof runReferralRewardReconciliationBackendJob;
+  runWorkflowRunStepsBackendJob?: typeof runWorkflowRunStepsBackendJob;
 };
 
 export type BackendJobsSchedulerRouteResult =
@@ -88,6 +90,8 @@ function resolveDependencies(dependencies: BackendJobsRouteDependencies | undefi
     runReferralRewardReconciliationBackendJob:
       dependencies?.runReferralRewardReconciliationBackendJob
       ?? runReferralRewardReconciliationBackendJob,
+    runWorkflowRunStepsBackendJob: dependencies?.runWorkflowRunStepsBackendJob
+      ?? runWorkflowRunStepsBackendJob,
   };
 }
 
@@ -128,6 +132,8 @@ async function runDueBackendJob(
       return options.dependencies.runOperationalDataRetentionBackendJob(runOptions);
     case 'referral-reward-reconciliation':
       return options.dependencies.runReferralRewardReconciliationBackendJob(runOptions);
+    case 'workflow-run-steps':
+      return options.dependencies.runWorkflowRunStepsBackendJob(runOptions);
     default: {
       const exhaustiveJobName: never = job.name;
       throw new Error(`Unsupported backend job: ${exhaustiveJobName}`);

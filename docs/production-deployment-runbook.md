@@ -408,9 +408,11 @@ disable it in the already-built deployment.
 
 ## Durable Queue Graduation Decision
 
-Current decision: keep the Vercel cron orchestrator for `account-deletion-resweeps`, `backend-alert-delivery`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `media-preview-repair`, `media-upload-reclaim`, `mobile-push-receipts`, `operational-data-retention`, and `referral-reward-reconciliation`.
+Current decision: keep the Vercel cron orchestrator for `account-deletion-resweeps`, `backend-alert-delivery`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `media-preview-repair`, `media-upload-reclaim`, `mobile-push-receipts`, `operational-data-retention`, `referral-reward-reconciliation`, and `workflow-run-steps`.
 
 This is the cost-efficient production baseline for the current workload because the jobs are idempotent, lock-protected in Supabase, bounded by 300-second function limits, and tolerant of the current ten-minute or hourly cadence. The single `/api/cron/backend-jobs` scheduler keeps Vercel cron invocations at 144 per day while logical jobs can still run at their own cadence.
+
+Two jobs have **already graduated their work** to a durable Supabase queue and use the cron only as a dispatcher, so read them against the thresholds below differently from the rest: `generation-completions` drains `generation_completion_jobs`, and `workflow-run-steps` drains `workflow_run_step_jobs`. Both carry per-item claims with `SKIP LOCKED`, lease TTLs, attempt caps with backoff, and poison-item isolation — the fourth graduation condition below, met in-place rather than by moving to an external queue service. `workflow-run-steps` exists because workflow runs previously had no server-side recovery at all: progress depended on a process-local monitor map in a single function instance plus a `GET` that advanced state as a side effect of polling, so a recycled instance stranded a paid run permanently.
 
 Graduate a job to a durable queue or workflow service only when one of these conditions is repeatedly true after provider incidents and obvious configuration faults are ruled out:
 

@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { logBackendError } from '@/lib/backend-logger';
+import { enqueueWorkflowRunStepJob } from '@/lib/workflow-run-jobs';
 import {
   startImageGeneration,
   startMotionGeneration,
@@ -51,6 +53,12 @@ import { quotePublishedGenerationModel } from '@/lib/generation-model-catalog-st
 export interface WorkflowRunExecutionResult {
   runId: string;
   status: 'processing' | 'awaiting_approval' | 'succeeded' | 'failed';
+  /**
+   * True when an idempotency key matched an existing run and the graph was
+   * deliberately NOT executed again. Callers should treat this as success --
+   * the run the caller asked for exists -- not as a rejected request.
+   */
+  reused?: boolean;
 }
 
 export class WorkflowRunApprovalError extends Error {
@@ -422,7 +430,10 @@ function buildWorkflowRunResponse(run: WorkflowRunRow, steps: HydratedRunStep[])
   };
 }
 
-async function advanceWorkflowRunOnce(params: {
+// Exported for the durable queue worker (F12). The in-process dedupe map below
+// still collapses concurrent advances inside one function instance; it is no
+// longer the only thing that moves a run forward.
+export async function advanceWorkflowRunOnce(params: {
   supabase: SupabaseClient;
   canvasId: string;
   runId: string;
@@ -882,8 +893,18 @@ export async function executeWorkflowRun(params: {
   startNodeId: string;
   mode: 'node' | 'branch';
   catalogRevision?: string | null;
+  idempotencyKey?: string | null;
 }): Promise<WorkflowRunExecutionResult> {
-  const { supabase, userId, canvasId, graph, startNodeId, mode, catalogRevision = null } = params;
+  const {
+    supabase,
+    userId,
+    canvasId,
+    graph,
+    startNodeId,
+    mode,
+    catalogRevision = null,
+    idempotencyKey = null,
+  } = params;
   // A canvas can still have an in-memory overlay from a previous run. Start
   // every execution from the editable graph only so stale generation outputs
   // can never satisfy dependencies in a new run.
@@ -892,21 +913,49 @@ export async function executeWorkflowRun(params: {
   );
   const executionOrder = getExecutionOrder(executionGraph, startNodeId, mode);
 
-  const runInsert = await supabase
-    .from('workflow_canvas_runs')
-    .insert({
-      canvas_id: canvasId,
-      user_id: userId,
-      start_node_id: startNodeId,
-      mode,
-      status: 'processing',
-      catalog_revision: catalogRevision,
-      graph_snapshot: serializeWorkflowGraph(executionGraph, { mode: 'client-save' }),
-    })
-    .select('id')
-    .single();
+  // F12: run creation goes through an RPC so the idempotency key is enforced by
+  // a unique index inside one statement. A timed-out client retry used to
+  // create a second run here and re-charge every node's generation; per
+  // generation idempotency cannot catch that, because each new run legitimately
+  // starts new generations.
+  const runStart = await supabase.rpc('start_workflow_canvas_run', {
+    p_canvas_id: canvasId,
+    p_user_id: userId,
+    p_start_node_id: startNodeId,
+    p_mode: mode,
+    p_catalog_revision: catalogRevision,
+    p_graph_snapshot: serializeWorkflowGraph(executionGraph, { mode: 'client-save' }),
+    p_idempotency_key: idempotencyKey,
+  });
 
-  const runId = runInsert.data?.id as string;
+  if (runStart.error) {
+    throw runStart.error;
+  }
+
+  const startedRun = (Array.isArray(runStart.data) ? runStart.data[0] : runStart.data) as {
+    run_id?: string;
+    run_status?: WorkflowRunExecutionResult['status'];
+    reused?: boolean;
+  } | null;
+  const runId = startedRun?.run_id;
+
+  // Previously the insert's error was never read, so a failed insert left runId
+  // undefined and every step below was written against a null run.
+  if (!runId) {
+    throw new Error('Workflow run could not be created.');
+  }
+
+  // The early return is the actual double-charge fix. Executing the graph again
+  // for a key that already names a run is exactly the spend the key exists to
+  // prevent, so a replay returns the existing run in whatever state it reached.
+  if (startedRun?.reused) {
+    return {
+      runId,
+      status: startedRun.run_status ?? 'processing',
+      reused: true,
+    };
+  }
+
   let workingGraph = executionGraph;
   let encounteredFailure = false;
   let hasProcessingWork = false;
@@ -1048,9 +1097,31 @@ export async function executeWorkflowRun(params: {
     })
     .eq('id', runId);
 
+  // F12: hand the run to the durable queue. The in-request monitor scheduled by
+  // the route is still the fast path; this is the recovery guarantee that did
+  // not exist before, because the cron registry had no workflow entry at all
+  // and a recycled function stranded the run with nothing watching it.
+  //
+  // node_id carries the start node because this job is currently a run-advance
+  // ticket rather than a single-node executor -- see the F12 notes in the
+  // scaling audit for what the per-node executor would change.
+  if (nextRunStatus === 'processing') {
+    try {
+      await enqueueWorkflowRunStepJob(createServiceClient(), {
+        runId,
+        nodeId: startNodeId,
+      });
+    } catch (error) {
+      // The run is persisted and the in-request monitor still advances it, so
+      // losing the recovery ticket must not fail the caller's request.
+      logBackendError('workflow_run_step_enqueue_failed', { error });
+    }
+  }
+
   return {
     runId,
     status: nextRunStatus,
+    reused: false,
   };
 }
 
@@ -1302,14 +1373,16 @@ export async function getWorkflowRunDetails(params: {
     runId,
   });
 
-  if (run.status === 'processing') {
-    return advanceWorkflowRunOnce({
-      supabase,
-      canvasId,
-      runId,
-    });
-  }
-
+  // F12: this is a pure read. It used to call advanceWorkflowRunOnce whenever
+  // the run was processing, which meant a poll executed nodes, inserted step
+  // rows, ran the provider status sync and settled credits -- a GET that both
+  // mutated state and made forward progress depend on someone watching.
+  // Advancing is the cron worker's job now.
+  //
+  // syncGenerationState stays false for the same reason: syncGenerationStatuses
+  // writes. Reading `generations` as the webhook left it is the accurate view
+  // on the normal path; the fallback poll for missed callbacks belongs in the
+  // worker, not in every client refresh.
   const hydratedSteps = await hydrateRunSteps({
     steps,
     syncGenerationState: false,

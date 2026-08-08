@@ -52,6 +52,15 @@ import {
   reapStalledGenerations,
 } from '@/lib/stalled-generation-reaper';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import {
+  findStalledWorkflowRuns,
+  hasDueWorkflowRunStepJobs,
+  maybePruneWorkflowRunStepJobs,
+} from '@/lib/workflow-run-jobs';
+import {
+  WORKFLOW_RUN_STEP_BATCH_LIMIT,
+  processWorkflowRunStepJobs,
+} from '@/lib/workflow-run-jobs-processor';
 
 const GENERATION_COMPLETION_BATCH_LIMIT = 25;
 
@@ -602,5 +611,46 @@ export function runReferralRewardReconciliationBackendJob(options: {
     run: (client) => reconcileReferralPurchaseRewards(client, {
       limit: REFERRAL_REWARD_RECONCILIATION_BATCH_LIMIT,
     }),
+  });
+}
+
+export function runWorkflowRunStepsBackendJob(options: {
+  requestId?: string;
+  startedAtMs?: number;
+  serviceClient?: SupabaseClient;
+  triggerRoute?: string;
+} = {}) {
+  const job = BACKEND_JOBS_BY_NAME['workflow-run-steps'];
+  return runManagedBackendJob({
+    ...options,
+    job,
+    messages: {
+      started: 'workflow_run_steps_started',
+      skippedNoWork: 'workflow_run_steps_skipped_no_due_jobs',
+      skippedLocked: 'workflow_run_steps_skipped',
+      completed: 'workflow_run_steps_completed',
+      failed: 'workflow_run_steps_failed',
+    },
+    // Two independent sources of work: queued step jobs, and runs left
+    // unfinished with no live job at all. The second is the strand F12 exists
+    // to fix, and it is invisible to a queue-only probe -- a stranded run has
+    // no job by definition.
+    hasWork: async (client, context) => (
+      await hasDueWorkflowRunStepJobs(client, { nowMs: context.startedAtMs })
+      || (await findStalledWorkflowRuns(client, { nowMs: context.startedAtMs, limit: 1 })).length > 0
+    ),
+    onNoWork: async (client, context) => ({
+      pruned: await maybePruneWorkflowRunStepJobs(client, { nowMs: context.startedAtMs }),
+    }),
+    run: async (client, context) => {
+      const summary = await processWorkflowRunStepJobs({
+        supabase: client,
+        lockedBy: context.lockOwner,
+        limit: WORKFLOW_RUN_STEP_BATCH_LIMIT,
+        nowMs: context.startedAtMs,
+      });
+      const pruned = await maybePruneWorkflowRunStepJobs(client, { nowMs: context.startedAtMs });
+      return { ...summary, pruned };
+    },
   });
 }

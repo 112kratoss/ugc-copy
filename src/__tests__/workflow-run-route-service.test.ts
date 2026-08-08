@@ -206,6 +206,7 @@ describe('startWorkflowRunForRoute', () => {
       startNodeId: 'node-1',
       mode: 'node',
       catalogRevision: 'catalog-rev-1',
+      idempotencyKey: null,
     });
     expect(scheduleMonitor).toHaveBeenCalledTimes(1);
     expect(monitorRun).toHaveBeenCalledWith({

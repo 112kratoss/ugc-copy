@@ -72,6 +72,22 @@ function createClient(
     }
     if (!rows.some((row) => (
       row && typeof row === 'object'
+      && (row as { job_name?: unknown }).job_name === 'workflow-run-steps'
+    ))) {
+      rows.push(
+        {
+          job_name: 'workflow-run-steps',
+          status: 'skipped',
+          started_at: '2026-06-21T09:50:00.000Z',
+          finished_at: '2026-06-21T09:50:01.000Z',
+          duration_ms: 1000,
+          skip_reason: 'no_due_workflow_run_steps',
+          error_message: null,
+        },
+      );
+    }
+    if (!rows.some((row) => (
+      row && typeof row === 'object'
       && (row as { job_name?: unknown }).job_name === 'generation-model-verification'
     ))) {
       rows.push({
@@ -275,8 +291,8 @@ describe('collectBackendHealth', () => {
       cadenceMinutes: 10,
       dailyInvocations: 144,
       dailyInvocationBudget: 180,
-      logicalDailyInvocations: 651,
-      coveredJobCount: 10,
+      logicalDailyInvocations: 795,
+      coveredJobCount: 11,
       coveredJobs: expect.arrayContaining([
         expect.objectContaining({
           name: 'account-deletion-resweeps',
@@ -315,7 +331,7 @@ describe('collectBackendHealth', () => {
         }),
       ]),
     });
-    expect(health.jobs).toHaveLength(10);
+    expect(health.jobs).toHaveLength(11);
     expect(health.jobs.find((job) => job.name === 'media-upload-reclaim')).toMatchObject({
       status: 'ok',
       dailyInvocations: 1,

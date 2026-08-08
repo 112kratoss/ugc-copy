@@ -88,6 +88,7 @@ describe('workflow run route adapter service', () => {
       userId: 'user-1',
       canvasId: 'canvas-1',
       body,
+      idempotencyKeyHeader: null,
       scheduleMonitor,
     });
   });

@@ -60,6 +60,7 @@ describe('backend job registry', () => {
       'mobile-push-receipts',
       'operational-data-retention',
       'referral-reward-reconciliation',
+      'workflow-run-steps',
     ]);
   });
 
@@ -87,9 +88,10 @@ describe('backend job registry', () => {
     expect(getCronScheduleDailyInvocations('*/10 * * * *')).toBe(144);
     expect(getCronScheduleDailyInvocations('0 * * * *')).toBe(24);
     // 505 from the seven original jobs, one daily retention sweep, one daily
-    // staged-upload reclaim sweep, and the ten-minute durable
-    // account-deletion cleanup worker.
-    expect(logicalDailyRuns).toBe(651);
+    // staged-upload reclaim sweep, the ten-minute durable account-deletion
+    // cleanup worker, and the ten-minute workflow run step worker added by F12
+    // (+144) -- before it, no registry entry watched workflow runs at all.
+    expect(logicalDailyRuns).toBe(795);
     expect(BACKEND_JOB_SCHEDULER.dailyInvocations).toBe(144);
     expect(BACKEND_JOB_SCHEDULER.dailyInvocations).toBeLessThanOrEqual(BACKEND_JOB_DAILY_INVOCATION_BUDGET);
     expect(
@@ -110,12 +112,14 @@ describe('backend job registry', () => {
       'generation-completions',
       'media-preview-repair',
       'mobile-push-receipts',
+      'workflow-run-steps',
     ]);
     expect(getDueBackendJobs(Date.parse('2026-06-22T10:10:00.000Z')).map((job) => job.name)).toEqual([
       'account-deletion-resweeps',
       'backend-alert-delivery',
       'generation-completions',
       'mobile-push-receipts',
+      'workflow-run-steps',
     ]);
     expect(getDueBackendJobs(Date.parse('2026-06-22T10:20:00.000Z')).map((job) => job.name)).toEqual([
       'account-deletion-resweeps',
@@ -123,6 +127,7 @@ describe('backend job registry', () => {
       'feed-maintenance',
       'generation-completions',
       'mobile-push-receipts',
+      'workflow-run-steps',
     ]);
     expect(getDueBackendJobs(Date.parse('2026-06-22T10:40:00.000Z')).map((job) => job.name)).toEqual([
       'account-deletion-resweeps',
@@ -130,6 +135,7 @@ describe('backend job registry', () => {
       'generation-completions',
       'mobile-push-receipts',
       'referral-reward-reconciliation',
+      'workflow-run-steps',
     ]);
   });
 

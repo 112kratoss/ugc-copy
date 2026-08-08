@@ -85,6 +85,7 @@ async function handleWorkflowRunPOST(
     userId: auth.userId,
     canvasId,
     body,
+    idempotencyKeyHeader: request.headers.get('idempotency-key'),
     scheduleMonitor: dependencies.scheduleMonitor,
   }));
 }

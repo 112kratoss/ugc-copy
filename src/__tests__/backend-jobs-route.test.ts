@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   runMediaPreviewRepairBackendJob: vi.fn(),
   runMobilePushReceiptsBackendJob: vi.fn(),
   runReferralRewardReconciliationBackendJob: vi.fn(),
+  runWorkflowRunStepsBackendJob: vi.fn(),
 }));
 
 function deferredResult<T>() {
@@ -51,6 +52,9 @@ vi.mock('@/lib/backend-job-executions', async () => {
     ),
     runReferralRewardReconciliationBackendJob: (...args: unknown[]) => (
       mocks.runReferralRewardReconciliationBackendJob(...args)
+    ),
+    runWorkflowRunStepsBackendJob: (...args: unknown[]) => (
+      mocks.runWorkflowRunStepsBackendJob(...args)
     ),
   };
 });
@@ -126,6 +130,15 @@ describe('/api/cron/backend-jobs route', () => {
       status: 'succeeded',
       summary: { processed: 1, settled: 1, failed: 0, failures: [] },
     });
+    mocks.runWorkflowRunStepsBackendJob.mockReset();
+    mocks.runWorkflowRunStepsBackendJob.mockResolvedValue({
+      success: true,
+      job: 'workflow-run-steps',
+      route: '/api/cron/workflow-run-steps',
+      status: 'skipped',
+      skipped: true,
+      reason: 'no_due_workflow_run_steps',
+    });
   });
 
   afterEach(() => {
@@ -193,7 +206,7 @@ describe('/api/cron/backend-jobs route', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       scheduler: '/api/cron/backend-jobs',
-      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'generation-completions', 'media-preview-repair', 'mobile-push-receipts'],
+      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'generation-completions', 'media-preview-repair', 'mobile-push-receipts', 'workflow-run-steps'],
     });
   });
 
@@ -269,6 +282,7 @@ describe('/api/cron/backend-jobs route', () => {
         expect.objectContaining({ job: 'generation-completions', status: 'succeeded' }),
         expect.objectContaining({ job: 'media-preview-repair', status: 'skipped' }),
         expect.objectContaining({ job: 'mobile-push-receipts', status: 'succeeded' }),
+        expect.objectContaining({ job: 'workflow-run-steps', status: 'skipped' }),
       ],
     });
   });
@@ -289,7 +303,7 @@ describe('/api/cron/backend-jobs route', () => {
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     expect(mocks.runMobilePushReceiptsBackendJob).toHaveBeenCalledTimes(1);
     await expect(response.json()).resolves.toMatchObject({
-      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'generation-completions', 'mobile-push-receipts'],
+      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'generation-completions', 'mobile-push-receipts', 'workflow-run-steps'],
     });
   });
 
@@ -314,7 +328,7 @@ describe('/api/cron/backend-jobs route', () => {
     });
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
-      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-maintenance', 'generation-completions', 'mobile-push-receipts'],
+      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-maintenance', 'generation-completions', 'mobile-push-receipts', 'workflow-run-steps'],
     });
   });
 
@@ -346,6 +360,7 @@ describe('/api/cron/backend-jobs route', () => {
         'generation-completions',
         'mobile-push-receipts',
         'referral-reward-reconciliation',
+        'workflow-run-steps',
       ],
     });
   });
@@ -378,6 +393,7 @@ describe('/api/cron/backend-jobs route', () => {
         expect.objectContaining({ status: 'failed' }),
         expect.objectContaining({ status: 'succeeded' }),
         expect.objectContaining({ status: 'succeeded' }),
+        expect.objectContaining({ job: 'workflow-run-steps', status: 'skipped' }),
       ],
     });
   });

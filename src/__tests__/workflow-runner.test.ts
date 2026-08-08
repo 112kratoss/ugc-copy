@@ -487,7 +487,11 @@ describe('workflow-runner recovery', () => {
     }));
   });
 
-  it('advances a processing run so queued downstream nodes resume on poll', async () => {
+  // F12 moved advancing off the read path. These tests exercise the runner's
+  // advance logic, so they drive advanceWorkflowRunOnce directly -- which is
+  // what the durable queue worker calls. The pure-read contract of
+  // getWorkflowRunDetails is pinned separately below.
+  it('advances a processing run so queued downstream nodes resume when the worker claims it', async () => {
     const state = createQueuedWorkflowState();
     const supabase = createSupabaseMock(state);
     startVideoGenerationMock.mockResolvedValue({
@@ -497,8 +501,8 @@ describe('workflow-runner recovery', () => {
       generationId: 'gen-video',
     });
 
-    const { getWorkflowRunDetails } = await import('@/lib/workflow-runner');
-    const run = await getWorkflowRunDetails({
+    const { advanceWorkflowRunOnce } = await import('@/lib/workflow-runner');
+    const run = await advanceWorkflowRunOnce({
       supabase: supabase as never,
       canvasId: state.run.canvas_id,
       runId: state.run.id,
@@ -540,8 +544,8 @@ describe('workflow-runner recovery', () => {
     });
     const supabase = createSupabaseMock(state);
 
-    const { getWorkflowRunDetails } = await import('@/lib/workflow-runner');
-    await getWorkflowRunDetails({
+    const { advanceWorkflowRunOnce } = await import('@/lib/workflow-runner');
+    await advanceWorkflowRunOnce({
       supabase: supabase as never,
       canvasId: state.run.canvas_id,
       runId: state.run.id,
@@ -587,8 +591,8 @@ describe('workflow-runner recovery', () => {
     state.run.graph_snapshot = normalizeWorkflowGraph(state.graph);
     const supabase = createSupabaseMock(state);
 
-    const { getWorkflowRunDetails } = await import('@/lib/workflow-runner');
-    await getWorkflowRunDetails({
+    const { advanceWorkflowRunOnce } = await import('@/lib/workflow-runner');
+    await advanceWorkflowRunOnce({
       supabase: supabase as never,
       canvasId: state.run.canvas_id,
       runId: state.run.id,
@@ -613,8 +617,8 @@ describe('workflow-runner recovery', () => {
     const state = createQueuedWorkflowState();
     const supabase = createSupabaseMock(state);
 
-    const { getWorkflowRunDetails } = await import('@/lib/workflow-runner');
-    await getWorkflowRunDetails({
+    const { advanceWorkflowRunOnce } = await import('@/lib/workflow-runner');
+    await advanceWorkflowRunOnce({
       supabase: supabase as never,
       canvasId: state.run.canvas_id,
       runId: state.run.id,
@@ -628,6 +632,38 @@ describe('workflow-runner recovery', () => {
     expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
       quotedCostCredits: 77,
     }));
+  });
+
+  it('reads a processing run without advancing it, charging it, or syncing the provider', async () => {
+    // F12: getWorkflowRunDetails used to call advanceWorkflowRunOnce whenever
+    // the run was processing, so polling a run executed nodes, inserted steps,
+    // ran the provider status sync and settled credits. A client refresh could
+    // therefore start paid work, and forward progress depended on someone
+    // watching. Advancing belongs to the durable queue worker now.
+    const state = createQueuedWorkflowState();
+    const supabase = createSupabaseMock(state);
+    const stepsBefore = JSON.parse(JSON.stringify(state.steps));
+    const runStatusBefore = state.run.status;
+
+    const { getWorkflowRunDetails } = await import('@/lib/workflow-runner');
+    const run = await getWorkflowRunDetails({
+      supabase: supabase as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+
+    expect(startVideoGenerationMock).not.toHaveBeenCalled();
+    expect(quoteGenerationModelMock).not.toHaveBeenCalled();
+    // syncGenerationStatuses writes -- it polls the provider and settles
+    // credits -- so a pure read must not reach it.
+    expect(syncGenerationStatusesMock).not.toHaveBeenCalled();
+    expect(state.steps).toEqual(stepsBefore);
+    expect(state.run.status).toBe(runStatusBefore);
+    // It still has to be a useful read: the queued node is reported as queued
+    // rather than omitted.
+    expect(run.steps?.find((step) => step.node_id === state.videoNodeId)).toMatchObject({
+      status: 'queued',
+    });
   });
 
   it('approves a checkpoint and resumes its queued downstream branch', async () => {
@@ -670,13 +706,13 @@ describe('workflow-runner recovery', () => {
         })
     );
 
-    const { getWorkflowRunDetails } = await import('@/lib/workflow-runner');
-    const firstPoll = getWorkflowRunDetails({
+    const { advanceWorkflowRunOnce } = await import('@/lib/workflow-runner');
+    const firstPoll = advanceWorkflowRunOnce({
       supabase: supabase as never,
       canvasId: state.run.canvas_id,
       runId: state.run.id,
     });
-    const secondPoll = getWorkflowRunDetails({
+    const secondPoll = advanceWorkflowRunOnce({
       supabase: supabase as never,
       canvasId: state.run.canvas_id,
       runId: state.run.id,

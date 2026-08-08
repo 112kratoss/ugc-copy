@@ -41,6 +41,7 @@ type ExecuteWorkflowRunForRoute = (params: {
   startNodeId: string;
   mode: WorkflowCanvasRunMode;
   catalogRevision?: string | null;
+  idempotencyKey?: string | null;
 }) => Promise<WorkflowRunExecutionResult>;
 
 type MonitorWorkflowRunForRoute = (params: {
@@ -68,6 +69,12 @@ type StartWorkflowRunForRouteInput = {
   userId: string;
   canvasId: string;
   body: unknown;
+  /**
+   * Value of the `Idempotency-Key` request header, if the client sent one. It
+   * wins over the body field: a proxy or SDK that retries a request replays the
+   * header, which is exactly the case the key has to catch.
+   */
+  idempotencyKeyHeader?: string | null;
   executeRun?: ExecuteWorkflowRunForRoute;
   monitorRun?: MonitorWorkflowRunForRoute;
   scheduleMonitor?: ScheduleWorkflowMonitor;
@@ -83,13 +90,26 @@ function resolveAdminClient(adminSupabase: WorkflowRunRateLimitInput) {
   return typeof adminSupabase === 'function' ? adminSupabase() : adminSupabase;
 }
 
+// An idempotency key longer than this is far more likely to be a bug or an
+// abuse attempt than a real key; the column is unbounded text and the index
+// entry is per (canvas, key).
+const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
+
+function readIdempotencyKey(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > MAX_IDEMPOTENCY_KEY_LENGTH) return null;
+  return trimmed;
+}
+
 function readRunRequest(body: unknown): {
   startNodeId: string | null;
   mode: WorkflowCanvasRunMode;
   catalogRevision: string | null;
+  idempotencyKey: string | null;
 } {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
-    return { startNodeId: null, mode: 'branch', catalogRevision: null };
+    return { startNodeId: null, mode: 'branch', catalogRevision: null, idempotencyKey: null };
   }
 
   const record = body as Record<string, unknown>;
@@ -101,6 +121,7 @@ function readRunRequest(body: unknown): {
     catalogRevision: typeof record.catalogRevision === 'string' && record.catalogRevision.trim()
       ? record.catalogRevision.trim()
       : null,
+    idempotencyKey: readIdempotencyKey(record.idempotencyKey),
   };
 }
 
@@ -142,11 +163,13 @@ export async function startWorkflowRunForRoute({
   userId,
   canvasId,
   body,
+  idempotencyKeyHeader = null,
   executeRun = defaultExecuteWorkflowRunForRoute,
   monitorRun = defaultMonitorWorkflowRunForRoute,
   scheduleMonitor,
 }: StartWorkflowRunForRouteInput): Promise<WorkflowRunRouteResult> {
   const request = readRunRequest(body);
+  const idempotencyKey = readIdempotencyKey(idempotencyKeyHeader) ?? request.idempotencyKey;
   if (!request.startNodeId) {
     return {
       ok: false,
@@ -183,9 +206,13 @@ export async function startWorkflowRunForRoute({
       startNodeId: request.startNodeId,
       mode: request.mode,
       catalogRevision: request.catalogRevision,
+      idempotencyKey,
     });
 
-    if (result.status === 'processing' && scheduleMonitor) {
+    // A replayed key returns the run it already names without re-executing the
+    // graph, so there is nothing new to monitor -- whatever started the
+    // original run is already watching it, and the cron adopts it otherwise.
+    if (result.status === 'processing' && !result.reused && scheduleMonitor) {
       scheduleMonitor(async () => {
         try {
           await monitorRun({
