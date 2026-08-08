@@ -352,6 +352,15 @@ const MEDIA_PREVIEW_MAX_ATTEMPTS = 3;
 const MEDIA_RENDITION_MAX_ATTEMPTS = 3;
 // Several hourly repair windows. Anything older is not "waiting its turn".
 const MEDIA_PIPELINE_STALE_AFTER_MINUTES = 360;
+/**
+ * Caps on the recency samples (recent generations, AI usage, provider events)
+ * and the completion queue. Queries ask for one row past the cap so overflow is
+ * detectable without a COUNT — past it, every rate computed from the sample
+ * describes the sample, not the window, and the report must say so instead of
+ * quietly getting more optimistic as traffic grows.
+ */
+const HEALTH_RECENCY_SAMPLE_LIMIT = 1000;
+const COMPLETION_QUEUE_SAMPLE_LIMIT = 200;
 const MEDIA_PIPELINE_SAMPLE_LIMIT = 500;
 const DATA_ACCESS_REMIX_SAMPLE_LIMIT = 25;
 // A publish that is still writing its media rows is not a shell. One hour is
@@ -1211,7 +1220,7 @@ export async function collectBackendHealth(
       .from('generations')
       .select('status,created_at,cost')
       .gte('created_at', recentGenerationSince)
-      .limit(1000),
+      .limit(HEALTH_RECENCY_SAMPLE_LIMIT + 1),
     client
       .from('generations')
       .select('created_at,cost')
@@ -1232,7 +1241,7 @@ export async function collectBackendHealth(
       .select('status,created_at,next_attempt_at,locked_at')
       .in('status', ['pending', 'processing', 'failed'])
       .order('created_at', { ascending: true })
-      .limit(200),
+      .limit(COMPLETION_QUEUE_SAMPLE_LIMIT + 1),
     // Only unresolved rows: a backlog that cannot clear is the signal, and
     // filtering to it keeps failures from being pushed out of the sample by
     // however many derivatives have already succeeded.
@@ -1253,7 +1262,7 @@ export async function collectBackendHealth(
       .from('ai_usage_events')
       .select('feature,status,medium,cost,created_at')
       .gte('created_at', recentAiUsageSince)
-      .limit(1000),
+      .limit(HEALTH_RECENCY_SAMPLE_LIMIT + 1),
     client
       .from('ai_usage_events')
       .select('feature,status,medium,cost,created_at')
@@ -1266,7 +1275,7 @@ export async function collectBackendHealth(
       .select('service_name,outcome,duration_ms,timeout_ms,status,created_at,model_id')
       .gte('created_at', recentProviderDependencySince)
       .order('created_at', { ascending: true })
-      .limit(1000),
+      .limit(HEALTH_RECENCY_SAMPLE_LIMIT + 1),
     // Same filter findPublicPostReferenceByIdOrGenerationId applies, so the
     // sample is exactly the set a viewer could press Remix on.
     client
@@ -1290,15 +1299,24 @@ export async function collectBackendHealth(
   if (stalePendingAiUsageResult.error) throw stalePendingAiUsageResult.error;
   if (recentProviderDependencyResult.error) throw recentProviderDependencyResult.error;
 
+  // The extra probe row is dropped before any builder sees it, so counts stay
+  // consistent with the caps; what survives is the knowledge that a cap hit.
+  const truncatedHealthSamples: string[] = [];
+  function healthSample<TRow>(source: string, rows: TRow[], cap: number): TRow[] {
+    if (rows.length <= cap) return rows;
+    truncatedHealthSamples.push(source);
+    return rows.slice(0, cap);
+  }
+
   const jobResults = BACKEND_JOB_REGISTRY.map((job) => buildJobHealth(job, jobRows, now));
   const schedulerResult = buildSchedulerHealth();
   const generationResult = buildGenerationHealth(
-    (recentGenerationsResult.data ?? []) as GenerationStatusRow[],
+    healthSample('generations', (recentGenerationsResult.data ?? []) as GenerationStatusRow[], HEALTH_RECENCY_SAMPLE_LIMIT),
     (stalledGenerationsResult.data ?? []) as StalledGenerationRow[],
     (pendingWithoutProviderTaskResult.data ?? []) as PendingGenerationWithoutProviderTaskRow[],
   );
   const completionQueueResultHealth = buildCompletionQueueHealth(
-    (completionQueueResult.data ?? []) as GenerationCompletionQueueRow[],
+    healthSample('generation_completion_jobs', (completionQueueResult.data ?? []) as GenerationCompletionQueueRow[], COMPLETION_QUEUE_SAMPLE_LIMIT),
     now,
   );
   const mediaPipelineResult = buildMediaPipelineHealth(
@@ -1307,11 +1325,11 @@ export async function collectBackendHealth(
     now,
   );
   const aiUsageResult = buildAiUsageHealth(
-    (recentAiUsageResult.data ?? []) as AiUsageEventRow[],
+    healthSample('ai_usage_events', (recentAiUsageResult.data ?? []) as AiUsageEventRow[], HEALTH_RECENCY_SAMPLE_LIMIT),
     (stalePendingAiUsageResult.data ?? []) as AiUsageEventRow[],
   );
   const providerDependencyResult = buildProviderDependencyHealth(
-    (recentProviderDependencyResult.data ?? []) as ProviderDependencyEventRow[],
+    healthSample('provider_dependency_events', (recentProviderDependencyResult.data ?? []) as ProviderDependencyEventRow[], HEALTH_RECENCY_SAMPLE_LIMIT),
   );
 
   // Deliberately not thrown like its siblings: a failure to read this
@@ -1397,7 +1415,13 @@ export async function collectBackendHealth(
     platform: 'web',
     schemaVersion: GENERATION_MODEL_CATALOG_V1_SCHEMA_VERSION,
   });
+  const healthSampleIssues: BackendHealthIssue[] = truncatedHealthSamples.length > 0 ? [{
+    severity: 'warning',
+    code: 'HEALTH_SAMPLE_TRUNCATED',
+    message: `Health collectors read only their first sample of rows from: ${truncatedHealthSamples.join(', ')}. Counts and rates derived from them describe the sample, not the window.`,
+  }] : [];
   const issues = [
+    ...healthSampleIssues,
     ...schedulerResult.issues,
     ...jobResults.flatMap((result) => result.issues),
     ...generationResult.issues,

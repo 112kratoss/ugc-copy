@@ -310,7 +310,11 @@ describe('/api/razorpay/verify route', () => {
     );
     expect(mocks.firstEq).toHaveBeenCalledWith('razorpay_order_id', 'order_123');
     expect(mocks.secondEq).toHaveBeenCalledWith('user_id', 'user_123');
-    expect(mocks.createServiceClient).toHaveBeenCalledTimes(1);
+    // Called at least once for the route's own work. Not an exact count:
+    // the provider-fetch attempt counter builds its own memoized service
+    // client on the first provider call a test file makes, so an exact
+    // count here would depend on test order within the file.
+    expect(mocks.createServiceClient).toHaveBeenCalled();
     expect(mocks.rpc).toHaveBeenCalledWith('add_credits', {
       p_credits: 500,
       p_payment_id: 'pay_123',

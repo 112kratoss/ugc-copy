@@ -352,44 +352,132 @@ function isMissingShowcaseTopSalesRpcError(error: unknown): boolean {
   );
 }
 
+/** Stays within the RPC's own LIMIT clamp of 101. */
+const TOP_SALES_FILTER_SCAN_BATCH = 100;
+
 async function getShowcaseTopSalesPage(params: {
   adminSupabase: ReturnType<typeof createServiceClient>;
   category: ShowcaseCategory;
   limit: number;
   offset: number;
   toolSlug: string | null;
+  unlockFilter: ShowcaseUnlockFilter;
+  resourceFilter: ShowcaseResourceFilter;
+  hydrationCache?: ShowcaseFeedHydrationCache;
 }): Promise<ShowcaseFeedPage | null> {
-  const { adminSupabase, category, limit, offset, toolSlug } = params;
+  const {
+    adminSupabase,
+    category,
+    limit,
+    offset,
+    toolSlug,
+    unlockFilter,
+    resourceFilter,
+    hydrationCache,
+  } = params;
   if (typeof (adminSupabase as unknown as { rpc?: unknown }).rpc !== 'function') return null;
-  const { data, error } = await adminSupabase.rpc('list_showcase_top_sales_post_ids', {
-    p_category: category,
-    p_tool_slug: toolSlug,
-    p_offset: offset,
-    p_limit: limit + 1,
-  });
 
-  if (error) {
-    if (isMissingShowcaseTopSalesRpcError(error)) return null;
-    throw error;
+  if (resourceFilter === 'all') {
+    // The unlock filter rides the RPC: it is pure column predicates on the
+    // bundle join the function already makes.
+    const { data, error } = await adminSupabase.rpc('list_showcase_top_sales_post_ids', {
+      p_category: category,
+      p_tool_slug: toolSlug,
+      p_offset: offset,
+      p_limit: limit + 1,
+      p_unlock_filter: unlockFilter,
+    });
+
+    if (error) {
+      if (isMissingShowcaseTopSalesRpcError(error)) return null;
+      throw error;
+    }
+
+    const postIds = ((data ?? []) as Array<{ post_id?: string | null }>)
+      .map((row) => row.post_id)
+      .filter((postId): postId is string => Boolean(postId));
+    const hasMore = postIds.length > limit;
+    const pagePostIds = postIds.slice(0, limit);
+    const rows = await fetchPostRowsByIds(pagePostIds, adminSupabase);
+    if (rows === null) return null;
+
+    const resolvedItems = await resolvePostRowsToFeedItems(rows, adminSupabase, hydrationCache);
+    const itemById = new Map(resolvedItems.map((item) => [item.id, item]));
+    const items = pagePostIds.flatMap((postId) => {
+      const item = itemById.get(postId);
+      return item ? [item] : [];
+    });
+    return {
+      items,
+      availableTools: buildAvailableTools(items),
+      pageInfo: {
+        hasMore,
+        nextOffset: hasMore ? offset + limit : null,
+        limit,
+        offset,
+      },
+    };
   }
 
-  const postIds = ((data ?? []) as Array<{ post_id?: string | null }>)
-    .map((row) => row.post_id)
-    .filter((postId): postId is string => Boolean(postId));
-  const hasMore = postIds.length > limit;
-  const pagePostIds = postIds.slice(0, limit);
-  const rows = await fetchPostRowsByIds(pagePostIds, adminSupabase);
-  if (rows === null) return null;
+  // Resource-kind filtering stays in JS — getPostResourceKinds is a
+  // multi-fallback derivation over the bundle's resource JSON, and duplicating
+  // it in SQL would fork business logic. What changed is why that no longer
+  // forces a catalog scan: the old path had to fetch and hydrate every public
+  // post because it sorted AFTER filtering. The RPC already returns ids in
+  // global sales order, so filtering preserves that order and this loop can
+  // stop as soon as it has a page worth of matches. The worst case (a filter
+  // matching nothing) walks the same catalog the old scan always walked; the
+  // common case reads a batch or two.
+  const targetMatchCount = offset + limit + 1;
+  const matchedItems: ShowcaseFeedItem[] = [];
+  let scanOffset = 0;
 
-  const resolvedItems = await resolvePostRowsToFeedItems(rows, adminSupabase);
-  const itemById = new Map(resolvedItems.map((item) => [item.id, item]));
-  const items = pagePostIds.flatMap((postId) => {
-    const item = itemById.get(postId);
-    return item ? [item] : [];
-  });
+  for (;;) {
+    const { data, error } = await adminSupabase.rpc('list_showcase_top_sales_post_ids', {
+      p_category: category,
+      p_tool_slug: toolSlug,
+      p_offset: scanOffset,
+      p_limit: TOP_SALES_FILTER_SCAN_BATCH,
+      p_unlock_filter: unlockFilter,
+    });
+
+    if (error) {
+      if (isMissingShowcaseTopSalesRpcError(error)) return null;
+      throw error;
+    }
+
+    const batchIds = ((data ?? []) as Array<{ post_id?: string | null }>)
+      .map((row) => row.post_id)
+      .filter((postId): postId is string => Boolean(postId));
+    if (batchIds.length === 0) break;
+    scanOffset += batchIds.length;
+
+    const rows = await fetchPostRowsByIds(batchIds, adminSupabase);
+    if (rows === null) return null;
+
+    const resolvedItems = await resolvePostRowsToFeedItems(rows, adminSupabase, hydrationCache);
+    const itemById = new Map(resolvedItems.map((item) => [item.id, item]));
+    for (const postId of batchIds) {
+      const item = itemById.get(postId);
+      // Re-checks category and unlock too. Both are already applied in SQL, so
+      // this changes nothing for them — it keeps the one JS predicate as the
+      // single place the filter semantics live.
+      if (item && itemMatchesFeedFilters(item, category, unlockFilter, resourceFilter)) {
+        matchedItems.push(item);
+      }
+    }
+
+    if (matchedItems.length >= targetMatchCount) break;
+    if (batchIds.length < TOP_SALES_FILTER_SCAN_BATCH) break;
+  }
+
+  const items = matchedItems.slice(offset, offset + limit);
+  const hasMore = matchedItems.length > offset + limit;
   return {
     items,
-    availableTools: buildAvailableTools(items),
+    // Built from the matches scanned so far, not the whole catalog — same
+    // page-scoped property the unfiltered RPC path already has.
+    availableTools: buildAvailableTools(matchedItems),
     pageInfo: {
       hasMore,
       nextOffset: hasMore ? offset + limit : null,
@@ -732,13 +820,19 @@ async function getShowcaseFeedPageBase(
   hydrationCache?: ShowcaseFeedHydrationCache,
 ): Promise<ShowcaseFeedPage> {
   const adminSupabase = createServiceClient();
-  if (sort === 'top-sales' && unlockFilter === 'all' && resourceFilter === 'all') {
+  // Every top-sales variant goes through the RPC now, filters included. A null
+  // means the database has not applied the function yet, and the legacy scan
+  // below still serves those.
+  if (sort === 'top-sales') {
     const topSalesPage = await getShowcaseTopSalesPage({
       adminSupabase,
       category,
       limit,
       offset,
       toolSlug,
+      unlockFilter,
+      resourceFilter,
+      hydrationCache,
     });
     if (topSalesPage) return topSalesPage;
   }

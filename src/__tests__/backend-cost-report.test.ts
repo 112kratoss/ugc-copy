@@ -493,5 +493,45 @@ describe('collectBackendCostReport', () => {
     expect(report.providerDependencies.population).toBe('failures-and-slow-calls');
     expect(report.providerDependencies.recentEvents).toBe(1);
     expect(report.providerDependencies.failedCount).toBe(1);
+    // No counter table in this fixture: the report must say null, not zero — a
+    // zero denominator would read as "no attempts" rather than "unknown".
+    expect(report.providerDependencies.recentAttempts).toBeNull();
+    expect(report.providerDependencies.attemptsByService).toBeNull();
+  });
+
+  it('sums the attempt counters into the failure-rate denominator', async () => {
+    const now = new Date('2026-08-08T10:00:00.000Z');
+    const db = createClient({
+      generations: { error: null, data: [] },
+      ai_usage_events: { error: null, data: [] },
+      provider_dependency_events: {
+        error: null,
+        data: [{
+          service_name: 'kie',
+          outcome: 'error',
+          duration_ms: 900,
+          created_at: '2026-08-08T09:30:00.000Z',
+          model_id: 'veo-3.1',
+        }],
+      },
+      backend_rate_limits: { error: null, data: [] },
+      'storage.objects': { error: null, data: [] },
+      provider_fetch_attempt_counters: {
+        error: null,
+        data: [
+          { service_name: 'kie', attempt_count: 40 },
+          { service_name: 'kie', attempt_count: 8 },
+          { service_name: 'razorpay', attempt_count: 5 },
+        ],
+      },
+    });
+
+    const report = await collectBackendCostReport(db.client as never, now);
+
+    // failedCount / recentAttempts is now a real rate: 1 failure over 48 kie
+    // attempts, not 1 over 1.
+    expect(report.providerDependencies.recentAttempts).toBe(53);
+    expect(report.providerDependencies.attemptsByService).toEqual({ kie: 48, razorpay: 5 });
+    expect(report.providerDependencies.failedCount).toBe(1);
   });
 });

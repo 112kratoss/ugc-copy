@@ -128,6 +128,17 @@ export type BackendCostReport = {
     recentEvents: number;
     /** What `recentEvents` actually counted, so a consumer cannot mistake it. */
     population: 'failures-and-slow-calls';
+    /**
+     * Total call attempts in the window, from the hourly counters every
+     * provider fetch increments — the denominator the event table cannot
+     * provide. `failedCount / recentAttempts` is a real failure rate. Null when
+     * the counter table is unavailable (a database without the migration).
+     * Bucketed hourly, so the window is floored to the hour and may include up
+     * to one extra hour of attempts — a slight overcount, which for a failure
+     * denominator errs conservative.
+     */
+    recentAttempts: number | null;
+    attemptsByService: Record<string, number> | null;
     failedCount: number;
     slowCount: number;
     maxDurationMs: number;
@@ -801,10 +812,43 @@ export async function collectBackendCostReport(
     truncated: samplingSources.some((source) => source.truncated),
     sources: samplingSources,
   };
+
+  // Attempt counters are the failure-rate denominator; fail soft because a
+  // database without the migration must still produce a report. The whole
+  // block is inside the try: a client can throw synchronously on an unknown
+  // table.
+  let providerAttempts: { total: number; byService: Record<string, number> } | null = null;
+  try {
+    const sinceHourFloor = new Date(
+      Math.floor((now.getTime() - RECENT_WINDOW_HOURS * 60 * 60 * 1000) / (60 * 60 * 1000)) * 60 * 60 * 1000,
+    ).toISOString();
+    const attemptsResult = await client
+      .from('provider_fetch_attempt_counters')
+      .select('service_name,attempt_count')
+      .gte('bucket_start', sinceHourFloor);
+    if (!attemptsResult.error) {
+      const byService: Record<string, number> = {};
+      let total = 0;
+      for (const row of (attemptsResult.data ?? []) as Array<{ service_name: string | null; attempt_count: number | string | null }>) {
+        const count = numericValue(row.attempt_count);
+        const service = row.service_name ?? 'unknown';
+        byService[service] = (byService[service] ?? 0) + count;
+        total += count;
+      }
+      providerAttempts = { total, byService };
+    }
+  } catch {
+    // Counter table unavailable; the report says null rather than guessing.
+  }
+  const providerDependenciesWithAttempts = {
+    ...providerDependencies,
+    recentAttempts: providerAttempts?.total ?? null,
+    attemptsByService: providerAttempts?.byService ?? null,
+  };
   const issues = buildCostIssues({
     generationSpend,
     aiUsageSpend,
-    providerDependencies,
+    providerDependencies: providerDependenciesWithAttempts,
     rateLimitPressure,
     storageGrowth,
     budgetPolicy,
@@ -864,7 +908,7 @@ export async function collectBackendCostReport(
     budgetPolicy,
     generationSpend,
     aiUsageSpend,
-    providerDependencies,
+    providerDependencies: providerDependenciesWithAttempts,
     rateLimitPressure,
     storageGrowth,
     operationalTableGrowth,

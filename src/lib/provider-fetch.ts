@@ -1,6 +1,7 @@
 import { logBackendWarning } from '@/lib/backend-logger';
 import { getActiveRequestTrace } from '@/lib/request-trace';
 import { recordProviderDependencyEvent } from '@/lib/provider-dependency-telemetry';
+import { recordProviderFetchAttempt } from '@/lib/provider-fetch-attempts';
 import { withRequestTrace } from '@/lib/request-trace';
 
 export const PROVIDER_TASK_CREATE_TIMEOUT_MS = 30_000;
@@ -197,6 +198,11 @@ async function fetchWithTelemetry({
 }) {
   const requestInit = timeoutSignal ? { ...init, signal: timeoutSignal } : init;
   const startedAtMs = performance.now();
+
+  // Counted at the start, whatever the outcome: this is the denominator the
+  // exception-only event table cannot provide. Fire-and-forget — it must never
+  // slow down or fail the call it counts.
+  recordProviderFetchAttempt(serviceName);
 
   try {
     const response = await fetcher(input, requestInit);

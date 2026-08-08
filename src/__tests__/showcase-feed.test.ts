@@ -144,6 +144,9 @@ let postsSchemaMissingState = false;
 let lastPurchaseBundleIds: unknown[] | null = null;
 let tableAccesses: string[] = [];
 let rpcAccesses: string[] = [];
+// Forces the fake to answer the top-sales RPC as missing, so the legacy
+// scan fallback for un-migrated databases stays covered.
+let topSalesRpcMissingState = false;
 
 function createPostRow(overrides: Partial<PostRow> & { id: string; created_at: string }): PostRow {
   return {
@@ -184,8 +187,36 @@ function compareValues(left: string | number | null | undefined, right: string |
 
 function createServiceClientMock() {
   return {
-    async rpc(name: string) {
+    async rpc(name: string, args?: Record<string, unknown>) {
       rpcAccesses.push(name);
+      if (name === 'list_showcase_top_sales_post_ids' && !topSalesRpcMissingState) {
+        // Sales order with the migration's exact tie-breaks, honoring the
+        // unlock filter the way the SQL predicates do.
+        const unlock = String(args?.p_unlock_filter ?? 'all');
+        const publishedByPost = new Map(
+          resourceBundlesState
+            .filter((bundle) => bundle.status === 'published')
+            .map((bundle) => [bundle.post_id, bundle]),
+        );
+        const ordered = [...postsState]
+          .filter((post) => {
+            const bundle = publishedByPost.get(post.id);
+            if (unlock === 'all') return true;
+            if (unlock === 'with-unlock') return Boolean(bundle);
+            return bundle?.access_mode === unlock;
+          })
+          .sort((left, right) => (
+            ((publishedByPost.get(right.id)?.sales_count ?? 0) - (publishedByPost.get(left.id)?.sales_count ?? 0))
+            || String(right.created_at).localeCompare(String(left.created_at))
+            || right.id.localeCompare(left.id)
+          ));
+        const offset = Number(args?.p_offset ?? 0);
+        const limit = Number(args?.p_limit ?? 25);
+        return {
+          data: ordered.slice(offset, offset + limit).map((post) => ({ post_id: post.id })),
+          error: null,
+        };
+      }
       if (name === 'get_public_post_resource_bundle_summaries') {
         return {
           data: resourceBundlesState.map((row) => (
@@ -627,6 +658,7 @@ describe('showcase feed', () => {
     lastPurchaseBundleIds = null;
     tableAccesses = [];
     rpcAccesses = [];
+    topSalesRpcMissingState = false;
     nextCacheState.invocations = [];
   });
 
@@ -1423,6 +1455,109 @@ describe('showcase feed', () => {
 
     expect(page.items.map((item) => item.id)).toEqual(['older-best-seller']);
     expect(page.items[0].asset?.salesCount).toBe(42);
+  });
+
+  function seedTopSalesResourceFixture() {
+    postsState = [
+      ...Array.from({ length: 3 }, (_, index) => createPostRow({
+        id: `low-sale-${index}`,
+        created_at: `2026-03-20T10:${String(55 - index).padStart(2, '0')}:00.000Z`,
+      })),
+      createPostRow({ id: 'older-best-seller', created_at: '2026-03-19T10:00:00.000Z' }),
+    ];
+    generationModelsState = [];
+    resourceBundlesState = [
+      ...postsState
+        .filter((post) => post.id.startsWith('low-sale-'))
+        .map((post) => ({
+          id: `bundle-${post.id}`,
+          post_id: post.id,
+          title: `Bundle ${post.id}`,
+          access_mode: 'paid' as const,
+          price_usd_cents: 900,
+          preview_text: 'A smaller seller.',
+          notes_markdown: 'Setup notes for the shot.',
+          allow_remix: false,
+          sales_count: 1,
+          status: 'published' as const,
+        })),
+      {
+        id: 'bundle-best',
+        post_id: 'older-best-seller',
+        title: 'Best seller',
+        access_mode: 'paid' as const,
+        price_usd_cents: 1900,
+        preview_text: 'The winning workflow.',
+        prompt_text: 'The winning prompt.',
+        allow_remix: false,
+        sales_count: 42,
+        status: 'published' as const,
+      },
+    ];
+  }
+
+  it('filters top-sales by resource kind on top of the RPC order, not via the catalog scan', async () => {
+    // Resource kinds are derived in JS, so this half of the filter cannot ride
+    // the RPC — but the RPC's global sales order means filtering preserves
+    // order and stops at a page, instead of fetching and sorting everything.
+    seedTopSalesResourceFixture();
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'top-sales',
+      offset: 0,
+      limit: 2,
+      resource: 'notes',
+    });
+
+    // The rank-1 best seller only has a prompt, so it must drop out while the
+    // order of the remaining sellers is preserved.
+    expect(page.items.map((item) => item.id)).toEqual(['low-sale-0', 'low-sale-1']);
+    expect(page.pageInfo.hasMore).toBe(true);
+    expect(rpcAccesses.filter((name) => name === 'list_showcase_top_sales_post_ids').length)
+      .toBeGreaterThan(0);
+  });
+
+  it('pushes the unlock filter into the top-sales RPC', async () => {
+    seedTopSalesResourceFixture();
+    resourceBundlesState = resourceBundlesState.map((bundle) => (
+      bundle.post_id === 'low-sale-1'
+        ? { ...bundle, access_mode: 'free' as const, price_usd_cents: 0 }
+        : bundle
+    ));
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'top-sales',
+      offset: 0,
+      limit: 2,
+      unlock: 'free',
+    });
+
+    // Only the free bundle survives, despite two higher-or-equal sellers.
+    expect(page.items.map((item) => item.id)).toEqual(['low-sale-1']);
+    expect(page.pageInfo.hasMore).toBe(false);
+  });
+
+  it('still serves filtered top-sales through the legacy scan when the RPC is missing', async () => {
+    // Databases that have not applied the migration keep working; only the
+    // cost profile differs.
+    topSalesRpcMissingState = true;
+    seedTopSalesResourceFixture();
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'top-sales',
+      offset: 0,
+      limit: 2,
+      resource: 'notes',
+    });
+
+    expect(page.items.map((item) => item.id)).toEqual(['low-sale-0', 'low-sale-1']);
+    expect(page.pageInfo.hasMore).toBe(true);
   });
 
   it('returns legacy generation video preview urls in fallback feed items', async () => {

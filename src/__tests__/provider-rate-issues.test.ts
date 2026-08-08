@@ -21,6 +21,9 @@ function dependencies(
     // Only failures and slow calls are ever persisted, so this is not a
     // denominator for a failure rate.
     population: 'failures-and-slow-calls' as const,
+    // The real denominator, absent in these fixtures: null means unknown.
+    recentAttempts: null,
+    attemptsByService: null,
     failedCount: Object.values(failuresByService).reduce((a, b) => a + b, 0),
     slowCount: 0,
     maxDurationMs: 0,

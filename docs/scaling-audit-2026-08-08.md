@@ -54,15 +54,15 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 
 | ID | Finding | Sev | Phase | Status | Landed |
 |---|---|---|---|---|---|
-| F4 | Spend cap posture + egress monitoring | Critical | 0 | IN PROGRESS | Cap recorded 2026-08-08; egress metric BLOCKED — egress is not in the database, needs Supabase billing/usage data |
+| F4 | Spend cap posture + egress monitoring | Critical | 0 | DONE | Cap recorded; weekly dashboard egress read documented as the mechanism (egress is not in the database) — automation noted in F15b, 2026-08-08 |
 | F1 | Watch surfaces stream full-bitrate source | Critical | 0 | DONE | Mobile pkg 1 + web pkg 2, 2026-08-08 — mobile still needs a store release to reach phones |
 | F2 | AI posts skip transcode; sweep 5/hour | Critical | 0 | DONE | Publish-time repair kick + wall-clock sweep budget, pkg 3, 2026-08-08 |
 | F3 | Derivative cache TTL — decision #5 resolved | Critical | 0 | DONE | Constants, upload headers, migration and SDK-write backfill, 2026-08-08 — verified 99/99 objects serving `max-age=86400` |
 | F11 | Web `/feed` drops the ranking cursor | Critical | 0 | DONE | Cursor threaded through load-more, retry and snapshot, pkg 4, 2026-08-08 |
 | F13 | v2 stats refresh starves past 1,000 rows | High | 0 | DONE | Migration + fact index, pkg 5, 2026-08-08 |
 | F7a | Facts for all candidates; unbatched events | High | 0 | DONE | Served-slice facts + batched events, 2026-08-08 — single-transaction insert deferred to F7b |
-| F6 | Unthrottled hot GETs incl. full-catalog scan | Medium | 0 | IN PROGRESS | Limits on all 5 GETs, pkg 3, 2026-08-08; `top-sales` precompute still open |
-| F15a | Monitoring truncates silently; biased rates | Medium | 0 | IN PROGRESS | Truncation flagged + biased population labelled, 2026-08-08; DB-side aggregates, attempt counter and health collectors open |
+| F6 | Unthrottled hot GETs incl. full-catalog scan | Medium | 0 | DONE | Limits on all 5 GETs; filtered top-sales scan replaced by RPC unlock filter + ordered streaming, 2026-08-08 |
+| F15a | Monitoring truncates silently; biased rates | Medium | 0 | DONE | Truncation flagged (cost + health), attempt-counter denominator landed, 2026-08-08; DB-side aggregates deferred into F15b with reasoning |
 | F10 | Assorted small leaks | Low | 0 | IN PROGRESS | Mobile 404 pkg 1; studio grid + images pkg 2, 2026-08-08. Webhook budget rides pkg 3; two web-perf items stay unassigned |
 | F12 | Workflow runs non-durable, non-idempotent | Critical | 1 | TODO | |
 | F14 | Shared-fate cron; no provider admission control | High | 1 | TODO | |
@@ -163,7 +163,20 @@ Two consequences follow, and both are load-bearing for the rest of Phase 0:
 
 The Supabase Management API does not expose the spend cap — `get_organization` returns plan and opt-in tags only — so this setting cannot be read or asserted from code. It stays a recorded human observation, and should be re-confirmed at every re-certification.
 
-**Where step 3 lands.** Measured egress bytes go into `src/lib/backend-cost-report.ts` alongside F15a in work package 3, not as a separate pass: F15a replaces that file's entire raw-query layer with database-side aggregates, so adding an egress metric to the old layer first would mean writing it twice.
+**Where step 3 lands — corrected 2026-08-08.** This paragraph originally routed the egress metric into `backend-cost-report.ts` alongside F15a. That turned out to be impossible, not merely deferred: **egress is not in the database.** `storage.objects.metadata` records bytes *stored*; bytes *served* exist only in Supabase's own usage accounting, which no Data API query and no Management API surface available here exposes. No collector in this repo can produce the number.
+
+**The mechanism is therefore a manual weekly read, and this section is the ops task the Verify line asks for:**
+
+1. Open the Supabase dashboard → project `ildfmhozpibwiopeavfg` → **Reports → Usage** (or Billing → Usage).
+2. Read **Storage egress** for the current billing period, and the % of the 250 GB quota consumed.
+3. Record it in the table below. Divide by the month's MAU for GB/MAU — one real measurement replaces this document's entire estimation model.
+4. **Alarm line:** with the cap ON, egress reaching the quota degrades storage service. At ≥60% mid-month, treat it as an incident-in-waiting: re-check the F1/F3 rendition and cache behavior first, then reconsider decision #1.
+
+| Week of | Egress GB | % of 250 GB | MAU | GB/MAU |
+|---|---:|---:|---:|---:|
+| _(first entry after deploy)_ | | | | |
+
+Automating this requires a Management API token with usage scope wired into the watchdog workflow — a small F15b item, noted there. Until then the weekly read is the early-warning system the cap-ON decision depends on.
 
 ---
 
@@ -457,7 +470,14 @@ Deliberately generous — these stop a script, not normal browsing. `/api/genera
 
 **One real cost, worth stating plainly.** Rate-limit state is service-role only, so throttling a read means building a privileged client on every request. `/api/generations` previously created one lazily and often not at all — a test asserted exactly that, and it had to be rewritten. This is the same trade the `for-you` feed already made, and it is a second reason the Phase 2 edge/KV move matters.
 
-**Still open in F6:** precomputing the `top-sales` ranking into `post_feed_stats`. The limiter now caps how often the full-catalog scan (`showcase-feed.ts:682-686`, `mustScanAllCandidates`) can be triggered, which removes the abuse case, but the scan itself is unchanged and still runs per call for legitimate traffic.
+**Scan removal landed 2026-08-08 — F6 is DONE, by a different mechanism than the one this item prescribed.**
+
+The fix text said "precompute the top-sales ranking into `post_feed_stats`". Implementation found the repo had already superseded that idea for the unfiltered case: `list_showcase_top_sales_post_ids` (migration `20260715090000`, predating this audit) serves unfiltered top-sales in index order, and the full-catalog scan only ever ran for **filtered** requests (`unlock`/`resource` set) — plus any database missing the RPC. So the completion extends the existing mechanism rather than adding a second one:
+
+- **The unlock filter moved into the RPC** (`20260808150000_top_sales_unlock_filter.sql`): `with-unlock` is bundle-exists, `free`/`paid` is `access_mode` — pure column predicates on the join the function already makes. The old four-parameter signature is dropped, not overloaded: PostgREST would match a four-argument call against both functions and reject it as ambiguous.
+- **The resource filter deliberately stays in JS.** `getPostResourceKinds` is a multi-fallback derivation over the bundle's resource JSON; reimplementing it in SQL would fork business logic. The insight that removes the scan anyway: the old path fetched and hydrated *everything* because it sorted **after** filtering. The RPC returns ids in global sales order, so filtering preserves order and the new path streams id-batches (100 at a time) and stops the moment it holds a page of matches. Worst case — a filter matching nothing — walks what the old scan always walked; the common case reads a batch or two.
+- The legacy scan remains only as the fallback for databases that have not applied the migration, and a test pins that path.
+- One knowingly accepted behavior nuance: `availableTools` on a filtered page is built from the matches scanned so far rather than the whole catalog — the same page-scoped property the unfiltered RPC path already had.
 
 ---
 
@@ -482,12 +502,18 @@ Deliberately generous — these stop a script, not normal browsing. `/api/genera
 - **Truncation is now explicit.** Each of the five raw queries asks for `QUERY_LIMIT + 1` rows, keeps the first `QUERY_LIMIT`, and reports per-source `{ rows, truncated }` plus a `COST_REPORT_TRUNCATED` warning naming the capped sources. The overflow probe is deliberate: an exact `COUNT` over the window would be exactly the sort of query that gets expensive at the traffic where truncation starts happening, so the report detects the cap without paying to measure past it. Covered by a test that feeds 5,001 rows and asserts both the flag and that totals stay at 5,000.
 - **The biased failure rate is labelled rather than computed.** `providerDependencies.recentEvents` counts only failures and slow calls, because `provider-fetch.ts` persists nothing else — so `failedCount / recentEvents` approaches 1 no matter how healthy the provider is. The field now carries `population: 'failures-and-slow-calls'` and a comment saying it is a volume signal, not a denominator. Removing a wrong number costs nothing; producing a right one does not.
 
-**Still open in F15a, and each for a stated reason:**
+**Completed 2026-08-08, second pass:**
 
-1. **Database-side time-bucketed aggregates.** The report still downloads raw rows. Replacing that means new SQL aggregate functions plus a rewrite of most of `backend-cost-report.ts` (~800 lines); the truncation flag removes the *harm* in the meantime, since the report can no longer mislead about its own coverage.
-2. **A real provider attempt counter.** Every option has a cost worth deciding deliberately: a bucketed upsert per call adds a write to the provider hot path and concentrates contention on one row per service; sampling successes needs extrapolation; an in-process counter loses whatever a recycled function was holding. Not a change to make in passing.
-3. **The health collectors** (generations and provider events at 1,000, completion queue at 200) still truncate silently — only the cost report was fixed.
-4. **F4's measured egress bytes.** Blocked on something the audit did not anticipate: **egress is not in the database at all.** `storage.objects.metadata` gives stored bytes, not bytes served. A real figure has to come from Supabase's billing/usage surface, so this is an ops integration rather than another collector — which also means the F4 monthly-review step cannot be satisfied from `backend-cost-report.ts` as that item assumed.
+2. **The attempt counter exists** (`20260808153000_provider_fetch_attempt_counters.sql` + `provider-fetch-attempts.ts`). One row per (service, hour), incremented in place by every attempt at the single funnel all provider fetches pass through — the audit's "a counter is enough; do not persist every success row", literally. The hot-path cost weighed in the earlier note was accepted as one PK upsert per call, fire-and-forget and swallowed, against calls that are already 100ms+ network operations; contention concentrates on one row per service per hour, which at provider volumes is noise. The cost report reads the counters as `providerDependencies.recentAttempts` / `attemptsByService` — **null, not zero, when the table is unavailable**, because a zero denominator would read as "no attempts" rather than "unknown". `failedCount / recentAttempts` is now a real failure rate. Growth is time-bounded (~24 rows/service/day); deliberately not wired into the retention sweep at that size — fold into F7b if it ever matters.
+3. **The health collectors flag truncation** the same way the cost report does: the three 1,000-row recency samples and the 200-row completion queue probe one row past their caps, drop the probe row before any builder sees it, and a `HEALTH_SAMPLE_TRUNCATED` warning names the capped sources.
+
+**Still open in F15a — one item, deliberately deferred with its reasoning:**
+
+1. **Database-side time-bucketed aggregates.** The report still downloads raw rows, now with explicit truncation. Deferred into F15b's monitoring build-out rather than done here, for three reasons: the caps *bound* the monitoring cost (≤5 × 5,001 rows per collection — the reads cannot grow past that); the silent-optimism harm this item was filed for is gone, since truncation is flagged and the biased denominator is fixed; and F15b adds a per-task provider-cost ledger to the same file, so building the aggregate layer once, with the ledger's requirements known, avoids rewriting `backend-cost-report.ts` twice. If F15b is descoped, this line item returns to F15a.
+
+**Moved to F4 (no longer an F15a item):**
+
+4. **Measured egress bytes.** Blocked on something the audit did not anticipate: **egress is not in the database at all.** `storage.objects.metadata` gives bytes stored, not bytes served, so no collector in this file can produce it. The figure lives in Supabase's dashboard usage surface; F4 now documents the manual weekly read as the mechanism.
 
 ---
 
@@ -658,6 +684,7 @@ Two independent audits produced different headline numbers. Both were right abou
 | 2026-08-08 | Pre-work review amendments: F3 reframed against the documented moderation TTL constraint (new decision #5); every-push-deploys warning added; mobile items consolidated onto the store-release train; workflow rewritten for one-conversation-per-phase sequential execution (no worktrees); evidence re-verified at `8a69de5`. | Claude Code |
 | 2026-08-08 | Decisions recorded: #1 spend cap **ON and staying on** (owner), #5 derivative TTL **1-day compromise** (owner), #2 raw fact retention **30 days** (owner delegated the call). Work package 1 landed — F1 mobile viewer, F3 mobile upload header, F10 mobile 404 fallback. Corrections to the audit as written: no mutable/immutable TTL split is needed because every public showcase path is write-once; `stale-while-revalidate` is unreachable through supabase-js; the `.copy()` cache-control inheritance lives in `post-publish-service`/`post-update-service`, not `showcase-publish-service`; and the mobile viewer had two full-source paths, not the one cited. | Claude Code |
 | 2026-08-08 | **F11 DONE** (ranked feed continues by cursor; three call sites needed it, the `sessionStorage` snapshot being the subtle one). **F13 DONE** (v2 refreshes ported to v1's staleness-ordered candidate selection — the v1 audit this called for found v1 was already correct and v2 had regressed it — plus the missing `feed_delivery_facts` index). | Claude Code |
+| 2026-08-08 | **Phase 0 closed.** F6 DONE — the filtered top-sales scan is gone: unlock filter moved into `list_showcase_top_sales_post_ids` (four-param signature dropped to avoid PostgREST overload ambiguity), resource-kind filtering stays in JS but streams the RPC's sales-ordered ids and stops at a page, since order-before-filter is what made early termination correct. F15a DONE — provider attempt counters (hourly buckets, PK upsert, fire-and-forget) give `failedCount/recentAttempts` a real denominator, null-not-zero when the table is absent; health collectors now probe-and-flag truncation like the cost report; the DB-side aggregate layer is deferred into F15b with recorded reasoning. F4 DONE — egress turns out not to exist in the database at all, so the documented weekly dashboard read is the mechanism and automation moved to F15b. F10's two web-perf leftovers stay unassigned per this document's own assignment. | Claude Code |
 | 2026-08-08 | **F7a DONE** — delivery facts now only for the served slice, and feed telemetry batched into one request per flush. Batching every event type was a regression: `not_interested` restores an optimistically hidden post when its request fails, so only telemetry is queued and state-changing events stay synchronous. **F15a partly done** — truncation is now explicit via an overflow probe rather than a costly COUNT, and the exception-biased provider population is labelled instead of divided by. F15a's aggregates, attempt counter and health collectors remain, and **F4's egress metric is blocked: egress is not in the database at all**, so it needs Supabase's billing surface rather than another collector. | Claude Code |
 | 2026-08-08 | **F3 DONE.** `backfill:showcase-media-cache` re-wrote all 99 objects through the Storage API; `--verify` confirms 99/99 now serve `public, max-age=86400`. The SDK-write diagnosis was right, but invalidation lags a write by ~60s, so the first canary looked like a second failure — the canary is what kept that from being misread across the whole bucket. Also corrects the transfer estimate: 148.6 MB in `showcase_media`, ~297 MB round trip, not the ~615 MB quoted earlier (that was every bucket). | Claude Code |
 | 2026-08-08 | **F3 reopened after post-deploy verification.** The metadata backfill applied — all 99 objects read `max-age=86400` in `storage.objects` — but every object still *serves* its old header, and neither `no-cache` nor a novel query string can force revalidation. Supabase's Smart CDN only purges an edge entry when the object is written through the Storage API, so a SQL metadata update is invisible to it. The audit's original "hang it off the `backfill:*` scripts" instruction was right for a reason this document had dismissed: re-writing through the SDK is not a slower way to set metadata, it is the only way to invalidate the cache. Needs a `backfill:showcase-media-cache` script. | Claude Code |
