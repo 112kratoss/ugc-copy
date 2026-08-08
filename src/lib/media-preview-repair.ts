@@ -37,6 +37,18 @@ export const RENDITION_REPAIR_BATCH_SIZE = 12;
  * invocation for the jobs queued behind this one.
  */
 export const RENDITION_REPAIR_TIME_BUDGET_MS = 60_000;
+
+/**
+ * Bytes of source video a single sweep will admit (F14).
+ *
+ * 256 MB is roughly one 250 MB worst-case object, or a couple of dozen typical
+ * feed clips at the measured ~7.6 MB average. The wall clock still bounds the
+ * run; this bounds what gets *committed to* before the clock starts, which is
+ * the decision the old count-only claim could not make. The queue head is
+ * always admitted regardless, so a single oversized object cannot wedge the
+ * sweep permanently.
+ */
+export const RENDITION_REPAIR_BYTE_BUDGET = 256 * 1024 * 1024;
 const UNRESOLVED_STATUSES = ['pending', 'processing', 'failed'] as const;
 
 type RepairSummary = {
@@ -285,12 +297,41 @@ async function repairPostMediaRendition(
   }
 }
 
-export async function repairPostMediaRenditions(
+function isMissingRenditionAdmissionRpcError(error: { message?: string } | null): boolean {
+  const message = error?.message ?? '';
+  return message.includes('list_media_rendition_repair_candidates')
+    || message.includes('schema cache');
+}
+
+/**
+ * Claim rendition work bounded by bytes, not just row count (F14).
+ *
+ * Twelve short clips and twelve 30 MB clips looked identical to the old
+ * count-only claim. The wall clock added by F2 stops the invocation
+ * overrunning, but only after the bytes are already committed to -- it aborts
+ * mid-batch rather than declining to admit the work. Falls back to the previous
+ * count-only query on a database that has not applied the migration.
+ */
+async function claimRenditionRepairRows(
   supabase: SupabaseClient,
-  options: { batchSize?: number; timeBudgetMs?: number } = {},
-): Promise<RepairSummary> {
-  const batchSize = Math.max(1, Math.min(options.batchSize ?? RENDITION_REPAIR_BATCH_SIZE, 50));
-  const timeBudgetMs = Math.max(0, options.timeBudgetMs ?? RENDITION_REPAIR_TIME_BUDGET_MS);
+  batchSize: number,
+  byteBudget: number,
+): Promise<PostMediaRenditionRepairRow[] | null> {
+  const admitted = await supabase.rpc('list_media_rendition_repair_candidates', {
+    p_limit: batchSize,
+    p_byte_budget: byteBudget,
+    p_max_attempts: MAX_RENDITION_ATTEMPTS,
+  });
+
+  if (!admitted.error) {
+    return (admitted.data ?? []) as PostMediaRenditionRepairRow[];
+  }
+
+  if (!isMissingRenditionAdmissionRpcError(admitted.error)) {
+    if (isMissingRenditionColumnError(admitted.error)) return null;
+    throw admitted.error;
+  }
+
   const { data, error } = await supabase
     .from('post_media')
     .select('id, storage_path, content_type, rendition_attempt_count')
@@ -302,14 +343,27 @@ export async function repairPostMediaRenditions(
     .limit(batchSize);
 
   if (error) {
-    if (isMissingRenditionColumnError(error)) {
-      return { attempted: 0, completed: 0, failed: 0 };
-    }
+    if (isMissingRenditionColumnError(error)) return null;
     throw error;
   }
 
-  const rows = ((data ?? []) as PostMediaRenditionRepairRow[])
-    .filter((row) => canRepairRendition(row.rendition_attempt_count));
+  return (data ?? []) as PostMediaRenditionRepairRow[];
+}
+
+export async function repairPostMediaRenditions(
+  supabase: SupabaseClient,
+  options: { batchSize?: number; timeBudgetMs?: number; byteBudget?: number } = {},
+): Promise<RepairSummary> {
+  const batchSize = Math.max(1, Math.min(options.batchSize ?? RENDITION_REPAIR_BATCH_SIZE, 50));
+  const timeBudgetMs = Math.max(0, options.timeBudgetMs ?? RENDITION_REPAIR_TIME_BUDGET_MS);
+  const byteBudget = Math.max(1, options.byteBudget ?? RENDITION_REPAIR_BYTE_BUDGET);
+
+  const claimed = await claimRenditionRepairRows(supabase, batchSize, byteBudget);
+  if (claimed === null) {
+    return { attempted: 0, completed: 0, failed: 0 };
+  }
+
+  const rows = claimed.filter((row) => canRepairRendition(row.rendition_attempt_count));
 
   // Sequential on purpose: concurrent ffmpeg processes would contend for the
   // same one or two cores and push the job past its duration budget.

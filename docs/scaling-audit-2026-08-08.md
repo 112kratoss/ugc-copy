@@ -712,14 +712,23 @@ The scheduler batch dropped from six to four and the media-heavy job moved out. 
 
 **But the per-row worst case is larger than F2 recorded, and the split is what makes it safe.** `createVideoRenditionFromFile` invokes ffmpeg more than once (probe, then transcode), and the 120 s bound is *per spawn*. Two timeouts is 240 s, so with F2's 60 s pre-row budget check the true worst case per invocation is 300 s — exactly the function limit, with no margin. F2's note says "60 s plus one timeout", which assumed a single spawn. This is now survivable precisely because `media-preview-repair` has its own instance: it can burn its whole invocation without touching completions, alerts or retention. Before the split it would have taken them all down.
 
-**Byte-based admission control needs a size signal that does not exist yet — this is the real work in the sub-item.** `post_media` has `rendition_bytes` (the *output* size, written after transcoding) but **no source-size column**, so the claim at `media-preview-repair.ts:296-302` cannot admit by bytes today; it only knows row counts. Two routes:
+**Byte-based admission control landed 2026-08-09** — migration `20260809110000_media_rendition_byte_admission.sql` plus `RENDITION_REPAIR_BYTE_BUDGET` (256 MB) and an RPC-backed claim in `media-preview-repair.ts`.
 
-1. **Join `storage.objects` at claim time.** `post_media.storage_path` maps to `storage.objects.name`, and `metadata->>'size'` carries the byte count. A claim RPC can admit rows until a byte budget is reached, with no schema change or backfill. Preferred — the size stays authoritative rather than a copy that can drift.
-2. Add a `source_bytes` column and backfill it. Faster to read, but introduces a denormalised copy of something Storage already owns.
+**The size had to come from `storage.objects`, because `post_media` does not record it.** The table has `rendition_bytes` — the *output* size, written after transcoding — and nothing for the source, so the old claim genuinely could not tell twelve short clips from twelve 30 MB ones. `post_media.storage_path` maps to `storage.objects.name` in the `showcase_media` bucket and `metadata->>'size'` carries the count; joining keeps Storage authoritative instead of adding a denormalised column that can drift from the object it describes. Verified on production data first: 6/6 video rows matched, 3.4 MB–32 MB.
 
-Either way the claim must move into an RPC, because the budget has to be applied while selecting rather than after — admitting 12 rows and then discovering they total 2 GB is the bug being fixed.
+**Why the claim had to become an RPC, and why the wall clock was not already enough.** F2's time budget stops the invocation overrunning, but only *after* the bytes are committed to — it aborts mid-batch rather than declining to admit the work. A byte budget has to be applied while selecting. Admitting twelve rows and then discovering they total 2 GB is the bug.
 
-**Still open in F14:** byte-based admission control on media claims (above), queue-age SLOs, and the whole of part two — global provider token bucket, `Retry-After` handling, circuit breaker, and the `submission_unknown` state that reconciles against the provider before refunding. **Part two contains the second money bug in this audit:** Kie task creation has a 30 s timeout and no retry (`provider-fetch.ts:7`), so the provider can accept a task the app believes failed; the app refunds and then discards the later callback.
+Three behaviours worth knowing, each verified against the local database rather than reasoned about:
+
+- **Admission is a running total in queue order, not a best-fit pack.** With rows of 10/200/10/10 MB and a 100 MB budget, only the first is admitted — the 200 MB row exceeds the running sum and everything behind it waits. Reordering to fill the budget would starve the oldest rows, and the sweep depends on oldest-first to drain.
+- **The queue head is always admitted, even when it alone exceeds the budget.** Otherwise a single object larger than the budget would never be selected and would wedge the queue permanently. Its cost is still bounded by the sweep's wall clock and ffmpeg's own SIGKILL timeout.
+- **A row whose storage object is missing counts as zero bytes.** It will fail on download without reaching ffmpeg, so it costs no transcode budget; charging it would block the queue behind a phantom cost.
+
+Also found while building the fixture, and worth recording because it constrains any future media test: **`post_media.sort_order` is `CHECK (>= 0 AND < 5)`, so a post holds at most five media items**, and `rendition_status = 'ready'` carries a NOT NULL rendition-path constraint (use `'skipped'` for a terminal state in fixtures).
+
+The claim falls back to the previous count-only query when the RPC is absent, matching the repo's existing missing-RPC idiom, and the app still applies the attempt cap to whatever the RPC returns rather than trusting a database function to enforce a spend cap.
+
+**Still open in F14:** queue-age SLOs, and the whole of part two — global provider token bucket, `Retry-After` handling, circuit breaker, and the `submission_unknown` state that reconciles against the provider before refunding. **Part two contains the second money bug in this audit:** Kie task creation has a 30 s timeout and no retry (`provider-fetch.ts:7`), so the provider can accept a task the app believes failed; the app refunds and then discards the later callback.
 
 ---
 

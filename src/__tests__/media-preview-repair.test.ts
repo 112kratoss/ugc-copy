@@ -97,6 +97,95 @@ function createRepairableProbeClient(results: Array<{ data: unknown[] | null; er
   };
 }
 
+/**
+ * F14 added a byte-admission RPC in front of the rendition claim, with a
+ * fallback to the previous count-only query for databases that have not applied
+ * the migration. These fixtures model exactly that database, so every
+ * assertion below keeps testing the fallback path it was written for; the
+ * admission path has its own coverage.
+ */
+function withAdmissionFallback<T extends object>(client: T) {
+  return {
+    ...client,
+    rpc: async () => ({
+      data: null,
+      error: {
+        message:
+          'Could not find the function public.list_media_rendition_repair_candidates in the schema cache',
+      },
+    }),
+  };
+}
+
+describe('rendition byte admission (F14)', () => {
+  function createAdmissionClient(rows: unknown[]) {
+    const rpcCalls: { fn: string; args: Record<string, unknown> }[] = [];
+    const selects: string[] = [];
+    return {
+      rpcCalls,
+      selects,
+      client: {
+        rpc: async (fn: string, args: Record<string, unknown>) => {
+          rpcCalls.push({ fn, args });
+          return { data: rows, error: null };
+        },
+        from: (table: string) => ({
+          select: (columns: string) => {
+            selects.push(`${table}:${columns}`);
+            return createSelectChain({ data: [], error: null });
+          },
+          update: () => ({ eq: async () => ({ error: null }) }),
+        }),
+        storage: { from: () => ({ download: async () => ({ data: null, error: new Error('no') }) }) },
+      },
+    };
+  }
+
+  it('claims through the admission RPC with the byte budget, not a bare row query', async () => {
+    // The whole point is that the budget is applied while selecting. Admitting
+    // twelve rows and only then discovering they total 2GB is the bug.
+    const { repairPostMediaRenditions, RENDITION_REPAIR_BYTE_BUDGET, MAX_RENDITION_ATTEMPTS } =
+      await import('@/lib/media-preview-repair');
+    const { client, rpcCalls, selects } = createAdmissionClient([]);
+
+    await repairPostMediaRenditions(client as never, { batchSize: 7 });
+
+    expect(rpcCalls).toHaveLength(1);
+    expect(rpcCalls[0]).toEqual({
+      fn: 'list_media_rendition_repair_candidates',
+      args: {
+        p_limit: 7,
+        p_byte_budget: RENDITION_REPAIR_BYTE_BUDGET,
+        p_max_attempts: MAX_RENDITION_ATTEMPTS,
+      },
+    });
+    // No fallback query when the RPC answers.
+    expect(selects).toHaveLength(0);
+  });
+
+  it('honours an explicit byte budget', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    const { client, rpcCalls } = createAdmissionClient([]);
+
+    await repairPostMediaRenditions(client as never, { byteBudget: 1024 });
+
+    expect(rpcCalls[0].args.p_byte_budget).toBe(1024);
+  });
+
+  it('still applies the attempt cap to whatever the RPC returns', async () => {
+    // Defence in depth: the RPC filters by attempts, but the app must not
+    // depend on a database function to enforce a spend cap.
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    const { client } = createAdmissionClient([
+      { id: 'm1', storage_path: 'a.mp4', content_type: 'video/mp4', rendition_attempt_count: 3 },
+    ]);
+
+    const summary = await repairPostMediaRenditions(client as never);
+
+    expect(summary.attempted).toBe(0);
+  });
+});
+
 describe('media preview repair retries', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -126,7 +215,7 @@ describe('media preview repair retries', () => {
       { data: [{ id: 'media-1' }], error: null },
     ]);
 
-    await expect(hasRepairableMediaPreviews(supabase as never)).resolves.toBe(true);
+    await expect(hasRepairableMediaPreviews(withAdmissionFallback(supabase) as never)).resolves.toBe(true);
 
     expect(supabase.from).toHaveBeenNthCalledWith(1, 'generations');
     expect(supabase.eq).toHaveBeenCalledWith('status', 'succeeded');
@@ -170,7 +259,7 @@ describe('media preview repair retries', () => {
     };
     const invalidateFeedCache = vi.fn();
 
-    const summary = await repairMediaPreviews(supabase as never, {
+    const summary = await repairMediaPreviews(withAdmissionFallback(supabase) as never, {
       batchSize: 10,
       invalidateFeedCache,
     });
@@ -232,7 +321,7 @@ describe('media preview repair retries', () => {
     };
     const invalidateFeedCache = vi.fn();
 
-    const summary = await repairMediaPreviews(supabase as never, {
+    const summary = await repairMediaPreviews(withAdmissionFallback(supabase) as never, {
       batchSize: 10,
       invalidateFeedCache,
     });
@@ -261,7 +350,7 @@ describe('media preview repair retries', () => {
     };
     const invalidateFeedCache = vi.fn();
 
-    await expect(repairMediaPreviews(supabase as never, {
+    await expect(repairMediaPreviews(withAdmissionFallback(supabase) as never, {
       batchSize: 10,
       invalidateFeedCache,
     })).resolves.toEqual({ attempted: 0, completed: 0, failed: 0 });
@@ -314,7 +403,7 @@ describe('showcase feed rendition repair', () => {
     const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
     const { supabase, updates, download, storageFrom } = createRenditionClient([pendingVideoRow]);
 
-    const summary = await repairPostMediaRenditions(supabase as never);
+    const summary = await repairPostMediaRenditions(withAdmissionFallback(supabase) as never);
 
     expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
     expect(storageFrom).toHaveBeenCalledWith('showcase_media');
@@ -364,7 +453,7 @@ describe('showcase feed rendition repair', () => {
     });
 
     try {
-      const summary = await repairPostMediaRenditions(supabase as never, { timeBudgetMs: 60_000 });
+      const summary = await repairPostMediaRenditions(withAdmissionFallback(supabase) as never, { timeBudgetMs: 60_000 });
 
       // Two rows fit. The budget is only consulted before starting a row, so
       // the second begins at 40s and the third is refused at 80s.
@@ -381,7 +470,7 @@ describe('showcase feed rendition repair', () => {
     const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
     const { supabase } = createRenditionClient([pendingVideoRow, { ...pendingVideoRow, id: 'media-video-2' }]);
 
-    const summary = await repairPostMediaRenditions(supabase as never, { timeBudgetMs: 0 });
+    const summary = await repairPostMediaRenditions(withAdmissionFallback(supabase) as never, { timeBudgetMs: 0 });
 
     expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
   });
@@ -394,7 +483,7 @@ describe('showcase feed rendition repair', () => {
     } as never);
     const { supabase, updates } = createRenditionClient([pendingVideoRow]);
 
-    const summary = await repairPostMediaRenditions(supabase as never);
+    const summary = await repairPostMediaRenditions(withAdmissionFallback(supabase) as never);
 
     // Counted as completed: declining is the correct terminal answer here.
     expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
@@ -412,7 +501,7 @@ describe('showcase feed rendition repair', () => {
     renditionMocks.createPostMediaRendition.mockRejectedValue(new Error('ffmpeg exited with code 1'));
     const { supabase, updates } = createRenditionClient([pendingVideoRow]);
 
-    const summary = await repairPostMediaRenditions(supabase as never);
+    const summary = await repairPostMediaRenditions(withAdmissionFallback(supabase) as never);
 
     expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
     expect(updates).toEqual(expect.arrayContaining([
@@ -436,7 +525,7 @@ describe('showcase feed rendition repair', () => {
       content_type: 'image/png',
     }]);
 
-    await expect(repairPostMediaRenditions(supabase as never))
+    await expect(repairPostMediaRenditions(withAdmissionFallback(supabase) as never))
       .resolves.toEqual({ attempted: 0, completed: 0, failed: 0 });
     expect(renditionMocks.createPostMediaRendition).not.toHaveBeenCalled();
   });
@@ -455,7 +544,7 @@ describe('showcase feed rendition repair', () => {
       storage: { from: vi.fn() },
     };
 
-    await expect(repairPostMediaRenditions(supabase as never))
+    await expect(repairPostMediaRenditions(withAdmissionFallback(supabase) as never))
       .resolves.toEqual({ attempted: 0, completed: 0, failed: 0 });
     expect(renditionMocks.createPostMediaRendition).not.toHaveBeenCalled();
   });
@@ -550,7 +639,7 @@ describe('per-post media repair', () => {
     ]);
     const invalidateFeedCache = vi.fn();
 
-    const summary = await repairMediaForPost(supabase as never, 'post-1', { invalidateFeedCache });
+    const summary = await repairMediaForPost(withAdmissionFallback(supabase) as never, 'post-1', { invalidateFeedCache });
 
     // Two rows exist, but only post-1's is in scope for both passes.
     expect(summary).toEqual({ attempted: 2, completed: 2, failed: 0 });
@@ -569,7 +658,7 @@ describe('per-post media repair', () => {
     const { supabase } = createPostRepairClient([]);
     const invalidateFeedCache = vi.fn();
 
-    const summary = await repairMediaForPost(supabase as never, 'post-1', { invalidateFeedCache });
+    const summary = await repairMediaForPost(withAdmissionFallback(supabase) as never, 'post-1', { invalidateFeedCache });
 
     expect(summary).toEqual({ attempted: 0, completed: 0, failed: 0 });
     expect(invalidateFeedCache).not.toHaveBeenCalled();
@@ -612,7 +701,7 @@ describe('per-post media repair', () => {
     };
     const invalidateFeedCache = vi.fn();
 
-    const summary = await repairMediaForPost(supabase as never, 'post-1', { invalidateFeedCache });
+    const summary = await repairMediaForPost(withAdmissionFallback(supabase) as never, 'post-1', { invalidateFeedCache });
 
     expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
     expect(updates).toEqual(expect.arrayContaining([
