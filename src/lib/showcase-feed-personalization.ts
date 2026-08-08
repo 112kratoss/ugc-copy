@@ -457,7 +457,16 @@ async function loadPersistedPage({
       .from('feed_session_items')
       .update({ served_at: new Date().toISOString() })
       .in('id', pageRows.map(({ row }) => row.id));
-    await markDeliveryFactsServed(serviceClient, pageRows.map(({ row }) => row.id));
+    await recordServedDeliveryFacts(
+      serviceClient,
+      session.id,
+      pageRows.map(({ item, row }) => ({
+        deliveryId: row.id,
+        postId: row.post_id,
+        creatorUserId: item.creator.id || null,
+        row,
+      })),
+    );
   }
 
   return buildPage({
@@ -488,6 +497,8 @@ async function persistRankedSession({
   experimentId,
   experimentVariantId,
   filters,
+  limit,
+  offset,
   ranked,
   serviceClient,
   viewerUserId,
@@ -498,6 +509,9 @@ async function persistRankedSession({
   experimentId: string | null;
   experimentVariantId: string | null;
   filters: RankedFeedFilters;
+  /** The slice this request will actually return; only it gets delivery facts. */
+  limit: number;
+  offset: number;
   ranked: RankedShowcaseItem[];
   serviceClient: SupabaseClient;
   viewerUserId: string | null;
@@ -544,10 +558,22 @@ async function persistRankedSession({
 
   // Durable exposure facts mirror the session items but survive session
   // pruning; outcome columns are filled by database triggers as events arrive.
+  //
+  // Only for the slice actually being returned. A ranked session holds up to 60
+  // candidates while a page serves 2-12, so writing a fact per candidate wrote
+  // roughly 5-30x more rows than anything was ever exposed to, and inflated the
+  // retention ceiling that sets the 5,000 MAU gate. A continuation page mints
+  // its own facts as it is served, in loadPersistedPage.
+  //
+  // served_at is set here rather than stamped afterwards: a fact now exists
+  // because the delivery was served, so its creation IS the serve marker.
+  const servedPositions = new Set(
+    ranked.slice(offset, offset + limit).map((_, index) => offset + index),
+  );
   const factRows = ((itemData ?? []) as Array<{ id: string | number; position: number }>)
     .flatMap((row) => {
       const entry = ranked[row.position];
-      if (!entry) return [];
+      if (!entry || !servedPositions.has(row.position)) return [];
       return [{
         delivery_id: row.id,
         session_id: sessionId,
@@ -572,6 +598,7 @@ async function persistRankedSession({
         surface: 'showcase',
         mode: 'for-you',
         ranked_at: now.toISOString(),
+        served_at: now.toISOString(),
       }];
     });
   const { error: factError } = await serviceClient
@@ -592,20 +619,75 @@ async function persistRankedSession({
 }
 
 /**
- * Write-once serve marker: served_at is the denominator for qualified-view
- * rates, so it must record the first time a delivery was actually returned in
- * a page, and never move afterwards.
+ * Mint delivery facts for a continuation page as it is served.
+ *
+ * Facts used to be written for every ranked candidate up front, so a later page
+ * only had to stamp `served_at`. They are now created per served slice, which
+ * means a cursor page has to create its own.
+ *
+ * Every dimension a fact needs beyond the session item is constant across the
+ * session, so the session's first fact — written when page one was served — is
+ * the template. That avoids widening `feed_sessions` just to carry experiment
+ * columns to a path that already has a row holding them.
+ *
+ * `delivery_id` is the primary key and this ignores duplicates, so re-requesting
+ * the same cursor page cannot double-write or move `served_at`: the marker stays
+ * write-once, which matters because it is the denominator for qualified-view
+ * rates.
+ *
+ * Facts are telemetry. A failure here must never fail the page, so everything is
+ * swallowed and the caller is not told.
  */
-async function markDeliveryFactsServed(
+async function recordServedDeliveryFacts(
   serviceClient: SupabaseClient,
-  deliveryIds: Array<string | number>,
+  sessionId: string,
+  served: Array<{ deliveryId: string | number; postId: string; creatorUserId: string | null; row: FeedSessionItemRow }>,
 ) {
-  if (deliveryIds.length === 0) return;
-  await serviceClient
-    .from('feed_delivery_facts')
-    .update({ served_at: new Date().toISOString() })
-    .in('delivery_id', deliveryIds)
-    .is('served_at', null);
+  if (served.length === 0) return;
+
+  try {
+    const { data: templateData } = await serviceClient
+      .from('feed_delivery_facts')
+      .select(
+        'algorithm_version_id, experiment_assignment_id, experiment_id, experiment_variant_id, viewer_user_id, anonymous_key_hash, surface, mode, ranked_at',
+      )
+      .eq('session_id', sessionId)
+      .limit(1)
+      .maybeSingle();
+    if (!templateData) return;
+
+    const template = templateData as Record<string, unknown>;
+    const servedAt = new Date().toISOString();
+    await serviceClient
+      .from('feed_delivery_facts')
+      .upsert(
+        served.map(({ deliveryId, postId, creatorUserId, row }) => ({
+          delivery_id: deliveryId,
+          session_id: sessionId,
+          algorithm_version_id: template.algorithm_version_id,
+          experiment_assignment_id: template.experiment_assignment_id,
+          experiment_id: template.experiment_id,
+          experiment_variant_id: template.experiment_variant_id,
+          viewer_user_id: template.viewer_user_id,
+          anonymous_key_hash: template.anonymous_key_hash,
+          post_id: postId,
+          creator_user_id: creatorUserId,
+          position: row.position,
+          candidate_source: row.candidate_source,
+          is_exploration: row.candidate_source === 'exploration',
+          exploration_propensity: row.candidate_source === 'exploration' ? 1 : 0,
+          final_score: row.final_score,
+          score_components: row.score_components,
+          surface: template.surface,
+          mode: template.mode,
+          ranked_at: template.ranked_at,
+          served_at: servedAt,
+        })),
+        { onConflict: 'delivery_id', ignoreDuplicates: true },
+      );
+  } catch {
+    // Intentionally silent; see the note above.
+  }
 }
 
 async function loadCandidateFeatures({
@@ -881,6 +963,8 @@ export async function getPersonalizedShowcaseFeedPage({
     experimentId,
     experimentVariantId,
     filters,
+    limit,
+    offset,
     ranked,
     serviceClient,
     viewerUserId,
@@ -895,14 +979,9 @@ export async function getPersonalizedShowcaseFeedPage({
   // leaves it with no anonymous key, which skips persistence — and that silently
   // turned "we could not open a session" into "there is nothing more to show".
   const hasMore = ranked.length > offset + limit;
-  if (persisted && pageEntries.length > 0) {
-    await markDeliveryFactsServed(
-      serviceClient,
-      pageEntries
-        .map((_, index) => persisted.deliveryIdsByPosition.get(offset + index))
-        .filter((id): id is string => Boolean(id)),
-    );
-  }
+  // Nothing to stamp: persistRankedSession created facts for exactly this slice
+  // with served_at already set, because a fact now exists only because the
+  // delivery was served.
   const items = persisted
     ? attachRecommendations(
       pageEntries,

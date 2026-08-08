@@ -713,4 +713,121 @@ describe('showcase feed personalization candidate filling', () => {
     expect(page.feedSessionId).toBe('session-v2');
     expect(page.algorithmVersion).toBe('for-you-rules-v2');
   });
+
+  it('writes delivery facts only for the slice it actually serves', async () => {
+    // A ranked session holds up to 60 candidates while a page serves 2-12, so
+    // a fact per candidate wrote roughly 5-30x more rows than were ever exposed
+    // and inflated the retention ceiling that sets the 5,000 MAU gate.
+    const CANDIDATES = 20;
+    const PAGE_SIZE = 3;
+    const factInserts: Array<Record<string, unknown>> = [];
+    const sessionItemInserts: Array<Record<string, unknown>> = [];
+    let sessionReads = 0;
+
+    const fluent = ({
+      awaitedData = null,
+      maybeSingleData = null,
+      singleData = null,
+      onInsert,
+    }: {
+      awaitedData?: unknown;
+      maybeSingleData?: unknown;
+      singleData?: unknown;
+      onInsert?: (value: unknown) => void;
+    } = {}) => {
+      const query: Record<string, unknown> = {};
+      for (const method of ['select', 'or', 'order', 'limit', 'contains', 'gt', 'gte', 'in', 'is', 'update', 'delete', 'eq']) {
+        query[method] = vi.fn(() => query);
+      }
+      query.insert = vi.fn((value: unknown) => {
+        onInsert?.(value);
+        return query;
+      });
+      query.maybeSingle = vi.fn(async () => ({ data: maybeSingleData, error: null }));
+      query.single = vi.fn(async () => ({ data: singleData, error: null }));
+      query.then = (
+        resolve: (value: unknown) => unknown,
+        reject: (reason: unknown) => unknown,
+      ) => Promise.resolve({ data: awaitedData, error: null }).then(resolve, reject);
+      return query;
+    };
+
+    const postIds = Array.from({ length: CANDIDATES }, (_, index) => `post-${index}`);
+    const from = vi.fn((table: string) => {
+      if (table === 'feed_experiments') return fluent({ maybeSingleData: null });
+      if (table === 'feed_algorithm_versions') {
+        return fluent({
+          maybeSingleData: {
+            id: 'algorithm-v1',
+            algorithm_version: 'for-you-rules-v1',
+            status: 'active',
+            candidate_limit: 300,
+            eligible_item_limit: 60,
+            score_weights: {},
+            retrieval_config: {},
+            diversity_config: {},
+          },
+        });
+      }
+      if (table === 'feed_sessions') {
+        sessionReads += 1;
+        return sessionReads === 1
+          ? fluent({ maybeSingleData: null })
+          : fluent({ singleData: { id: 'session-slice' } });
+      }
+      if (table === 'feed_user_post_feedback' || table === 'feed_user_creator_feedback') {
+        return fluent({ awaitedData: [] });
+      }
+      if (table === 'feed_session_items') {
+        // Every ranked candidate still gets a session item: the cursor pages
+        // through them by position, so they cannot be trimmed to the page.
+        return fluent({
+          awaitedData: postIds.map((_, position) => ({ id: 500 + position, position })),
+          onInsert: (value) => {
+            sessionItemInserts.push(...(value as Array<Record<string, unknown>>));
+          },
+        });
+      }
+      if (table === 'feed_delivery_facts') {
+        return fluent({
+          onInsert: (value) => {
+            factInserts.push(...(value as Array<Record<string, unknown>>));
+          },
+        });
+      }
+      throw new Error(`Unexpected table ${table}`);
+    });
+    const rpc = vi.fn(async () => ({
+      data: postIds.map((postId) => ({
+        post_id: postId,
+        freshness: 0.5,
+        exploration_ucb: 0.1,
+        candidate_source: 'recent',
+        seen_recently: false,
+      })),
+      error: null,
+    }));
+
+    await getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: null,
+      cursor: null,
+      fallbackItems: vi.fn(async () => []),
+      filters: { category: 'all', toolSlug: null, unlockFilter: 'all', resourceFilter: 'all' },
+      hydratePostIds: vi.fn(async () => postIds.map(item)),
+      limit: PAGE_SIZE,
+      offset: 0,
+      serviceClient: { from, rpc } as unknown as SupabaseClient,
+      viewerUserId: 'viewer-1',
+    });
+
+    expect(sessionItemInserts).toHaveLength(CANDIDATES);
+    expect(factInserts).toHaveLength(PAGE_SIZE);
+    // Positions are the served slice, not an arbitrary subset.
+    expect(factInserts.map((row) => row.position)).toEqual([0, 1, 2]);
+    // A fact exists because the delivery was served, so its creation is the
+    // serve marker rather than something stamped afterwards.
+    for (const row of factInserts) {
+      expect(row.served_at).toEqual(expect.any(String));
+    }
+  });
 });

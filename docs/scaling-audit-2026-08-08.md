@@ -60,7 +60,7 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 | F3 | Derivative cache TTL — decision #5 resolved | Critical | 0 | DONE | Constants, upload headers, migration and SDK-write backfill, 2026-08-08 — verified 99/99 objects serving `max-age=86400` |
 | F11 | Web `/feed` drops the ranking cursor | Critical | 0 | DONE | Cursor threaded through load-more, retry and snapshot, pkg 4, 2026-08-08 |
 | F13 | v2 stats refresh starves past 1,000 rows | High | 0 | DONE | Migration + fact index, pkg 5, 2026-08-08 |
-| F7a | Facts for all candidates; unbatched events | High | 0 | TODO | |
+| F7a | Facts for all candidates; unbatched events | High | 0 | IN PROGRESS | Facts now only for the served slice, 2026-08-08; event batching still open |
 | F6 | Unthrottled hot GETs incl. full-catalog scan | Medium | 0 | IN PROGRESS | Limits on all 5 GETs, pkg 3, 2026-08-08; `top-sales` precompute still open |
 | F15a | Monitoring truncates silently; biased rates | Medium | 0 | TODO | |
 | F10 | Assorted small leaks | Low | 0 | IN PROGRESS | Mobile 404 pkg 1; studio grid + images pkg 2, 2026-08-08. Webhook budget rides pkg 3; two web-perf items stay unassigned |
@@ -395,6 +395,19 @@ That delay is also why the canary mattered. Running all 99 objects first and the
 **Fix.** Persist facts only when items are actually served or rendered. Batch feed events client-side (10–25 per flush) and process them in one server transaction. Note that F11 compounds this — fixing the cursor reduces session creation, so the two belong in the same PR.
 
 **Verify.** Watch one reel end-to-end and count the resulting API calls and inserted rows; both should drop by roughly an order of magnitude.
+
+**Half one landed 2026-08-08 — facts are written only for the slice actually served.** The event-batching half is still open, so F7a stays IN PROGRESS.
+
+`persistRankedSession` now takes the request's `offset`/`limit` and inserts `feed_delivery_facts` for exactly those positions instead of all 60 candidates. Design notes:
+
+- **`feed_session_items` still persists every ranked candidate** and deliberately so — the cursor pages through them by position, so trimming them to the page would break the F11 continuation that just landed. The amplification being removed is the fact table, which is the one with the 400-day retention and the prune ceiling behind the 5,000 MAU arithmetic.
+- **`served_at` is set at insert rather than stamped afterwards.** A fact now exists *because* the delivery was served, so its creation is the serve marker. The old write-once `UPDATE ... WHERE served_at IS NULL` pass is gone.
+- **A continuation page mints its own facts**, in `recordServedDeliveryFacts`. Every dimension a fact needs beyond the session item is constant across the session, so it copies them from the session's first fact rather than widening `feed_sessions` with experiment columns just to reach that path. `delivery_id` is the primary key and the upsert ignores duplicates, so re-requesting a cursor page cannot double-write or move `served_at`.
+- **Fact writes are swallowed on the continuation path.** They are telemetry; a failure there must never fail a page render.
+
+A regression test ranks 20 candidates, serves 3, and asserts 20 session items against 3 facts — the differential that would have been 20 and 20 before.
+
+**Still open in F7a:** batching feed events client-side (10–25 per flush) into one server transaction. A fully-watched reel still produces around seven independent API calls, each re-running auth and a database-backed rate-limit write.
 
 **Decision resolved 2026-08-08 — 30 days.** The owner delegated the call rather than picking. The reasoning is recorded here so F7b does not relitigate it:
 
