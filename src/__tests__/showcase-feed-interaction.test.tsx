@@ -111,21 +111,31 @@ describe('showcase feed interactions', () => {
       await Promise.resolve();
     });
 
+    // Qualification happened, but events are queued and flushed together now.
+    expect(fetch).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(2_000);
+      await Promise.resolve();
+    });
+
     expect(fetch).toHaveBeenCalledTimes(1);
     const [, request] = vi.mocked(fetch).mock.calls[0];
     expect(request).toEqual(expect.objectContaining({
       method: 'POST',
       headers: expect.objectContaining({ Authorization: 'Bearer token-1' }),
     }));
-    expect(JSON.parse(String(request?.body))).toEqual(expect.objectContaining({
-      feedSessionId: 'session-1',
-      deliveryId: 'delivery-1',
-      postId: 'post-1',
-      eventType: 'impression',
-      position: 7,
-      sourceSurface: 'showcase',
-      metadata: expect.objectContaining({ algorithmVersion: 'feed-v1' }),
-    }));
+    expect(JSON.parse(String(request?.body))).toEqual({
+      events: [expect.objectContaining({
+        feedSessionId: 'session-1',
+        deliveryId: 'delivery-1',
+        postId: 'post-1',
+        eventType: 'impression',
+        position: 7,
+        sourceSurface: 'showcase',
+        metadata: expect.objectContaining({ algorithmVersion: 'feed-v1' }),
+      })],
+    });
 
     act(() => {
       observerCallback?.([

@@ -60,7 +60,7 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 | F3 | Derivative cache TTL — decision #5 resolved | Critical | 0 | DONE | Constants, upload headers, migration and SDK-write backfill, 2026-08-08 — verified 99/99 objects serving `max-age=86400` |
 | F11 | Web `/feed` drops the ranking cursor | Critical | 0 | DONE | Cursor threaded through load-more, retry and snapshot, pkg 4, 2026-08-08 |
 | F13 | v2 stats refresh starves past 1,000 rows | High | 0 | DONE | Migration + fact index, pkg 5, 2026-08-08 |
-| F7a | Facts for all candidates; unbatched events | High | 0 | IN PROGRESS | Facts now only for the served slice, 2026-08-08; event batching still open |
+| F7a | Facts for all candidates; unbatched events | High | 0 | DONE | Served-slice facts + batched events, 2026-08-08 — single-transaction insert deferred to F7b |
 | F6 | Unthrottled hot GETs incl. full-catalog scan | Medium | 0 | IN PROGRESS | Limits on all 5 GETs, pkg 3, 2026-08-08; `top-sales` precompute still open |
 | F15a | Monitoring truncates silently; biased rates | Medium | 0 | TODO | |
 | F10 | Assorted small leaks | Low | 0 | IN PROGRESS | Mobile 404 pkg 1; studio grid + images pkg 2, 2026-08-08. Webhook budget rides pkg 3; two web-perf items stay unassigned |
@@ -407,7 +407,14 @@ That delay is also why the canary mattered. Running all 99 objects first and the
 
 A regression test ranks 20 candidates, serves 3, and asserts 20 session items against 3 facts — the differential that would have been 20 and 20 before.
 
-**Still open in F7a:** batching feed events client-side (10–25 per flush) into one server transaction. A fully-watched reel still produces around seven independent API calls, each re-running auth and a database-backed rate-limit write.
+**Half two landed 2026-08-08 — events are batched.** The endpoint now accepts `{ events: [...] }` up to 25, and the web client queues telemetry and flushes at 10 events, after 2s, or on `pagehide`/`visibilitychange`.
+
+- **Only telemetry is batched, and finding out why cost a regression.** The first pass queued every event type; four tests failed, and the cause was real rather than cosmetic. `not_interested` optimistically hides a post and **restores it when the event request fails** — batching resolved the send before the server had answered, so the rollback could never fire. `impression`, `open`, `dwell`, `media_progress` and `quick_skip` are queued; everything that changes state the UI reacts to stays synchronous and keeps throwing.
+- **State-changing events post a bare event, not a one-item batch.** A batch reports a rejected event *inside a 200*, which would have hidden exactly the failure those callers depend on.
+- **The single-event shape is permanent, not deprecated.** Mobile ships on its own store train, so builds sending one event per request stay in the wild indefinitely. The adapter answers them byte-identically and the batch shape is additive; the contract file only pins method, path and auth, so nothing there changed.
+- **A malformed event in a batch does not discard the flush.** The client has already released those events from its queue, so there is nothing to retry — valid events are recorded and the response reports the count.
+
+**Not done: the single server transaction.** Events are processed in a loop within the one request, so a flush is one HTTP round trip, one auth check and one rate-limit write instead of seven — which is where the cost was. Making the seven inserts one transaction needs a Postgres function reproducing `recordShowcaseFeedEvent`'s branching (an RPC for media progress, a plain insert, and feedback upserts by type). Worth doing alongside F7b's partitioning rather than on its own.
 
 **Decision resolved 2026-08-08 — 30 days.** The owner delegated the call rather than picking. The reasoning is recorded here so F7b does not relitigate it:
 

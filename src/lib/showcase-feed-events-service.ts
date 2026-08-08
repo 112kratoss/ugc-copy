@@ -68,6 +68,63 @@ export type ShowcaseFeedEventParseResult =
   | { ok: true; payload: ShowcaseFeedEventPayload }
   | { ok: false; status: 400; body: { error: string } };
 
+/**
+ * A fully-watched reel produces around seven events. Sent one per request that
+ * is seven auth round-trips and seven rate-limit write transactions for one
+ * viewer watching one clip.
+ */
+export const SHOWCASE_FEED_EVENT_BATCH_LIMIT = 25;
+
+export type ShowcaseFeedEventBatchParseResult =
+  | { ok: true; batched: boolean; payloads: ShowcaseFeedEventPayload[] }
+  | { ok: false; status: 400; body: { error: string } };
+
+/**
+ * Accepts either `{ events: [...] }` or a bare single event.
+ *
+ * The single form is not legacy support to be removed later: mobile clients
+ * ship on their own multi-week store train, so a build sending one event per
+ * request stays in the wild indefinitely after the server learns to batch.
+ * `batched` is returned so the caller can keep answering old clients in exactly
+ * the shape they expect.
+ */
+export function parseShowcaseFeedEventBatchPayload(value: unknown): ShowcaseFeedEventBatchParseResult {
+  const events = isRecord(value) && Array.isArray(value.events) ? value.events : null;
+
+  if (events === null) {
+    const single = parseShowcaseFeedEventPayload(value);
+    return single.ok
+      ? { ok: true, batched: false, payloads: [single.payload] }
+      : single;
+  }
+
+  if (events.length === 0) {
+    return { ok: false, status: 400, body: { error: 'Feed event batch is empty.' } };
+  }
+  if (events.length > SHOWCASE_FEED_EVENT_BATCH_LIMIT) {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: `Feed event batch exceeds ${SHOWCASE_FEED_EVENT_BATCH_LIMIT} events.` },
+    };
+  }
+
+  const payloads: ShowcaseFeedEventPayload[] = [];
+  for (const event of events) {
+    const parsed = parseShowcaseFeedEventPayload(event);
+    // One malformed event must not discard the rest of a watch session. The
+    // batch is telemetry, and a client cannot retry what it has already
+    // dropped from its queue.
+    if (parsed.ok) payloads.push(parsed.payload);
+  }
+
+  if (payloads.length === 0) {
+    return { ok: false, status: 400, body: { error: 'Feed event batch contained no valid events.' } };
+  }
+
+  return { ok: true, batched: true, payloads };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }

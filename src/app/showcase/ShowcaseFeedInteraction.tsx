@@ -81,6 +81,121 @@ export function getShowcaseRecommendation(item: ShowcaseFeedItem): ShowcaseRecom
   return recommendation && typeof recommendation === 'object' ? recommendation : null;
 }
 
+/**
+ * Watching one reel to the end produces roughly seven events -- open,
+ * impression, dwell and four progress milestones. Sent one per request that was
+ * seven round trips, each re-running auth and a database-backed rate-limit write
+ * for a single viewer watching a single clip. They are queued and flushed
+ * together instead.
+ *
+ * Kept small and time-bounded: these feed live ranking signals, so holding them
+ * for long would make the feed react late to what someone just watched.
+ */
+const FEED_EVENT_FLUSH_SIZE = 10;
+const FEED_EVENT_FLUSH_DELAY_MS = 2_000;
+/** Matches SHOWCASE_FEED_EVENT_BATCH_LIMIT, which the server enforces. */
+const FEED_EVENT_MAX_BATCH = 25;
+
+/**
+ * Only pure telemetry is queued — precisely the events a watch session emits in
+ * bulk, which is where the seven-requests-per-reel cost came from.
+ *
+ * Everything else changes state the UI reacts to and must stay synchronous. The
+ * not-interested flow optimistically hides a post and restores it when this
+ * request fails, so batching those would silently break the rollback: the send
+ * would resolve before the server had said anything.
+ */
+const BATCHED_EVENT_TYPES = new Set<ShowcaseFeedEventType>([
+  'impression',
+  'open',
+  'dwell',
+  'media_progress',
+  'quick_skip',
+]);
+
+type QueuedFeedEvent = { accessToken: string | null; body: Record<string, unknown> };
+
+let pendingFeedEvents: QueuedFeedEvent[] = [];
+let feedEventFlushTimer: ReturnType<typeof setTimeout> | null = null;
+let feedEventUnloadBound = false;
+
+function postFeedEvents(accessToken: string | null, body: unknown) {
+  return fetch('/api/showcase/feed/events', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
+    body: JSON.stringify(body),
+    // A flush often happens as the page goes away; without this the browser
+    // cancels it and a whole batch is lost rather than one event.
+    keepalive: true,
+  });
+}
+
+/**
+ * Send everything queued now. Exported so a surface that is about to unmount,
+ * or a test, can drain deterministically rather than waiting on the timer.
+ */
+export function flushShowcaseFeedEvents(): Promise<void> {
+  if (feedEventFlushTimer !== null) {
+    clearTimeout(feedEventFlushTimer);
+    feedEventFlushTimer = null;
+  }
+  if (pendingFeedEvents.length === 0) return Promise.resolve();
+
+  const queued = pendingFeedEvents;
+  pendingFeedEvents = [];
+
+  // One request carries one Authorization header, and a viewer can sign in or
+  // out mid-session, so events travel with the token they were queued under.
+  const byToken = new Map<string, QueuedFeedEvent[]>();
+  for (const event of queued) {
+    const key = event.accessToken ?? '';
+    const bucket = byToken.get(key);
+    if (bucket) bucket.push(event);
+    else byToken.set(key, [event]);
+  }
+
+  const requests: Array<Promise<unknown>> = [];
+  for (const bucket of byToken.values()) {
+    for (let index = 0; index < bucket.length; index += FEED_EVENT_MAX_BATCH) {
+      const chunk = bucket.slice(index, index + FEED_EVENT_MAX_BATCH);
+      // Swallowed on purpose: these are telemetry, and the queue has already
+      // released them, so there is nothing a caller could usefully retry.
+      requests.push(postFeedEvents(chunk[0].accessToken, { events: chunk.map((entry) => entry.body) })
+        .catch(() => undefined));
+    }
+  }
+
+  return Promise.all(requests).then(() => undefined);
+}
+
+/**
+ * The queue is module state, so it would otherwise leak across tests: events a
+ * test queued and never flushed would ride along into the next one's assertions.
+ */
+export function resetShowcaseFeedEventQueueForTests() {
+  if (feedEventFlushTimer !== null) {
+    clearTimeout(feedEventFlushTimer);
+    feedEventFlushTimer = null;
+  }
+  pendingFeedEvents = [];
+}
+
+function bindFeedEventUnloadFlush() {
+  if (feedEventUnloadBound || typeof window === 'undefined') return;
+  feedEventUnloadBound = true;
+
+  // pagehide rather than unload: it fires for the back/forward cache, which
+  // `unload` does not, and losing a watch session to a back navigation is the
+  // common case on a feed.
+  window.addEventListener('pagehide', () => { void flushShowcaseFeedEvents(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') void flushShowcaseFeedEvents();
+  });
+}
+
 export async function sendShowcaseFeedEvent({
   item,
   eventType,
@@ -99,35 +214,50 @@ export async function sendShowcaseFeedEvent({
   const position = typeof recommendation?.position === 'number'
     ? recommendation.position
     : fallbackPosition;
-  const response = await fetch('/api/showcase/feed/events', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-    },
-    body: JSON.stringify({
-      clientEventId: createClientEventId(),
-      feedSessionId: feedSessionId ?? undefined,
-      deliveryId: recommendation?.deliveryId ?? undefined,
-      postId: item.id,
-      eventType,
-      position,
-      durationMs,
-      progress,
-      sourceSurface,
-      metadata: {
-        ...(recommendation?.reason ? { recommendationReason: recommendation.reason } : {}),
-        ...(recommendation?.algorithmVersion
-          ? { algorithmVersion: recommendation.algorithmVersion }
-          : {}),
-        ...metadata,
-      },
-    }),
-    keepalive: true,
-  });
 
-  if (!response.ok) {
-    throw new Error(`Feed event request failed with ${response.status}`);
+  const body = {
+    clientEventId: createClientEventId(),
+    feedSessionId: feedSessionId ?? undefined,
+    deliveryId: recommendation?.deliveryId ?? undefined,
+    postId: item.id,
+    eventType,
+    position,
+    durationMs,
+    progress,
+    sourceSurface,
+    metadata: {
+      ...(recommendation?.reason ? { recommendationReason: recommendation.reason } : {}),
+      ...(recommendation?.algorithmVersion
+        ? { algorithmVersion: recommendation.algorithmVersion }
+        : {}),
+      ...metadata,
+    },
+  };
+
+  if (!BATCHED_EVENT_TYPES.has(eventType)) {
+    // Sent as a bare event, not a one-item batch: the batch response reports a
+    // rejected event inside a 200, and callers here depend on a non-ok status
+    // to roll back optimistic UI.
+    const response = await postFeedEvents(accessToken ?? null, body);
+    if (!response.ok) {
+      throw new Error(`Feed event request failed with ${response.status}`);
+    }
+    return;
+  }
+
+  bindFeedEventUnloadFlush();
+  pendingFeedEvents.push({ accessToken: accessToken ?? null, body });
+
+  if (pendingFeedEvents.length >= FEED_EVENT_FLUSH_SIZE) {
+    await flushShowcaseFeedEvents();
+    return;
+  }
+
+  if (feedEventFlushTimer === null) {
+    feedEventFlushTimer = setTimeout(() => {
+      feedEventFlushTimer = null;
+      void flushShowcaseFeedEvents();
+    }, FEED_EVENT_FLUSH_DELAY_MS);
   }
 }
 

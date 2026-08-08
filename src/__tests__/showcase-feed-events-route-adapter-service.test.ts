@@ -159,4 +159,110 @@ describe('showcase feed events route adapter', () => {
       durationMs: -1,
     })).toMatchObject({ ok: false, status: 400 });
   });
+
+  function batchEvent(index: number) {
+    return {
+      clientEventId: `event-${index}`,
+      postId: 'post-1',
+      eventType: 'impression',
+      sourceSurface: 'showcase',
+      position: index,
+    };
+  }
+
+  // Generic so each mock's precise call signature survives into the dependency
+  // object; a widened vi.fn type stops matching the adapter's contract.
+  function batchDependencies<TRecord, TLimit>(recordShowcaseFeedEvent: TRecord, enforceBackendRateLimit: TLimit) {
+    return {
+      createUserClient: vi.fn(() => createUserClient('viewer-1')),
+      createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+      enforceBackendRateLimit,
+      getFeedAnonymousKeyHash: vi.fn(() => 'anon-hash'),
+      getFeedNetworkKeyHash: vi.fn(() => 'network-hash'),
+      recordShowcaseFeedEvent,
+    };
+  }
+
+  function batchRequest(body: unknown) {
+    return new Request('http://localhost/api/showcase/feed/events', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer token', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('charges one auth and one rate-limit write for a whole batch', async () => {
+    // A fully-watched reel produced ~7 requests, each re-running auth and a
+    // rate-limit write transaction. That per-request overhead, not the inserts,
+    // is what batching removes.
+    const recordShowcaseFeedEvent = vi.fn(async () => ({ ok: true as const, body: { success: true as const } }));
+    const enforceBackendRateLimit = vi.fn(async () => ({
+      allowed: true, limit: 300, remaining: 299, retryAfterSeconds: 0, resetAt: new Date().toISOString(),
+    }));
+    const dependencies = batchDependencies(recordShowcaseFeedEvent, enforceBackendRateLimit);
+
+    const response = await postShowcaseFeedEventRouteResponse({
+      request: batchRequest({ events: [0, 1, 2, 3, 4, 5, 6].map(batchEvent) }),
+      dependencies,
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ success: true, recorded: 7, rejected: 0 });
+    expect(recordShowcaseFeedEvent).toHaveBeenCalledTimes(7);
+    expect(enforceBackendRateLimit).toHaveBeenCalledTimes(1);
+    expect(dependencies.createUserClient).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers a single event in the original shape, for clients that cannot be updated yet', async () => {
+    // Mobile ships on its own store train, so builds sending one event per
+    // request stay in the wild long after the server learns to batch.
+    const recordShowcaseFeedEvent = vi.fn(async () => ({ ok: true as const, body: { success: true as const } }));
+    const enforceBackendRateLimit = vi.fn(async () => ({
+      allowed: true, limit: 300, remaining: 299, retryAfterSeconds: 0, resetAt: new Date().toISOString(),
+    }));
+
+    const response = await postShowcaseFeedEventRouteResponse({
+      request: batchRequest(batchEvent(0)),
+      dependencies: batchDependencies(recordShowcaseFeedEvent, enforceBackendRateLimit),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ success: true });
+    expect(recordShowcaseFeedEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('records the valid events in a batch that also contains a malformed one', async () => {
+    // The client has already dropped these from its queue, so discarding the
+    // whole flush over one bad entry loses telemetry that cannot be re-sent.
+    const recordShowcaseFeedEvent = vi.fn(async () => ({ ok: true as const, body: { success: true as const } }));
+    const enforceBackendRateLimit = vi.fn(async () => ({
+      allowed: true, limit: 300, remaining: 299, retryAfterSeconds: 0, resetAt: new Date().toISOString(),
+    }));
+
+    const response = await postShowcaseFeedEventRouteResponse({
+      request: batchRequest({ events: [batchEvent(0), { eventType: 'nonsense' }, batchEvent(2)] }),
+      dependencies: batchDependencies(recordShowcaseFeedEvent, enforceBackendRateLimit),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ success: true, recorded: 2, rejected: 0 });
+    expect(recordShowcaseFeedEvent).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects an oversized batch instead of accepting unbounded work per request', async () => {
+    const recordShowcaseFeedEvent = vi.fn(async () => ({ ok: true as const, body: { success: true as const } }));
+    const enforceBackendRateLimit = vi.fn(async () => ({
+      allowed: true, limit: 300, remaining: 299, retryAfterSeconds: 0, resetAt: new Date().toISOString(),
+    }));
+
+    const response = await postShowcaseFeedEventRouteResponse({
+      request: batchRequest({ events: Array.from({ length: 26 }, (_, index) => batchEvent(index)) }),
+      dependencies: batchDependencies(recordShowcaseFeedEvent, enforceBackendRateLimit),
+    });
+
+    expect(response.status).toBe(400);
+    // Rejected before auth or any privileged work.
+    expect(enforceBackendRateLimit).not.toHaveBeenCalled();
+    expect(recordShowcaseFeedEvent).not.toHaveBeenCalled();
+  });
 });

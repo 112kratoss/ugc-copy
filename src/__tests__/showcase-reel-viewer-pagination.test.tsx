@@ -426,9 +426,21 @@ describe('ShowcaseReelViewer pagination', () => {
       });
       unmount();
 
+      // Drain the event queue. dwell and quick_skip are emitted as the reel
+      // closes, so this has to come after unmount or they are never queued.
+      await act(async () => {
+        vi.advanceTimersByTime(2_000);
+        await Promise.resolve();
+      });
+
+      // Feed events are queued and flushed together, so one request carries
+      // several events rather than one request carrying one.
       const eventBodies = fetchMock.mock.calls
         .filter(([input]) => String(input) === '/api/showcase/feed/events')
-        .map(([, request]) => JSON.parse(String(request?.body)) as Record<string, unknown>);
+        .flatMap(([, request]) => {
+          const body = JSON.parse(String(request?.body)) as { events?: Array<Record<string, unknown>> };
+          return body.events ?? [];
+        });
       expect(eventBodies.map((body) => body.eventType)).toEqual(['open', 'impression', 'dwell']);
       expect(eventBodies).toEqual(expect.arrayContaining([
         expect.objectContaining({
@@ -490,9 +502,21 @@ describe('ShowcaseReelViewer pagination', () => {
       });
       unmount();
 
+      // Drain the event queue. dwell and quick_skip are emitted as the reel
+      // closes, so this has to come after unmount or they are never queued.
+      await act(async () => {
+        vi.advanceTimersByTime(2_000);
+        await Promise.resolve();
+      });
+
+      // Feed events are queued and flushed together, so one request carries
+      // several events rather than one request carrying one.
       const eventBodies = fetchMock.mock.calls
         .filter(([input]) => String(input) === '/api/showcase/feed/events')
-        .map(([, request]) => JSON.parse(String(request?.body)) as Record<string, unknown>);
+        .flatMap(([, request]) => {
+          const body = JSON.parse(String(request?.body)) as { events?: Array<Record<string, unknown>> };
+          return body.events ?? [];
+        });
       expect(eventBodies.map((body) => body.eventType)).toEqual(['open', 'quick_skip']);
       expect(eventBodies).toContainEqual(expect.objectContaining({
         eventType: 'quick_skip',

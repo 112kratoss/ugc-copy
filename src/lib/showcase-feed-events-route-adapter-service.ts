@@ -12,7 +12,7 @@ import {
 } from '@/lib/backend-rate-limit';
 import {
   getFeedAnonymousKeyHash,
-  parseShowcaseFeedEventPayload,
+  parseShowcaseFeedEventBatchPayload,
   recordShowcaseFeedEvent,
 } from '@/lib/showcase-feed-events-service';
 import {
@@ -31,7 +31,7 @@ type ShowcaseFeedEventsRouteDependencies = {
   getFeedAnonymousKeyHash?: typeof getFeedAnonymousKeyHash;
   getFeedNetworkKeyHash?: typeof getFeedNetworkKeyHash;
   resolveFeedAnonymousIdentity?: typeof resolveFeedAnonymousIdentity;
-  parseShowcaseFeedEventPayload?: typeof parseShowcaseFeedEventPayload;
+  parseShowcaseFeedEventBatchPayload?: typeof parseShowcaseFeedEventBatchPayload;
   recordShowcaseFeedEvent?: typeof recordShowcaseFeedEvent;
   logError?: typeof logBackendRouteError;
 };
@@ -44,7 +44,8 @@ function resolveDependencies(dependencies: ShowcaseFeedEventsRouteDependencies |
     getFeedAnonymousKeyHash: dependencies?.getFeedAnonymousKeyHash ?? getFeedAnonymousKeyHash,
     getFeedNetworkKeyHash: dependencies?.getFeedNetworkKeyHash ?? getFeedNetworkKeyHash,
     resolveFeedAnonymousIdentity: dependencies?.resolveFeedAnonymousIdentity ?? resolveFeedAnonymousIdentity,
-    parseShowcaseFeedEventPayload: dependencies?.parseShowcaseFeedEventPayload ?? parseShowcaseFeedEventPayload,
+    parseShowcaseFeedEventBatchPayload:
+      dependencies?.parseShowcaseFeedEventBatchPayload ?? parseShowcaseFeedEventBatchPayload,
     recordShowcaseFeedEvent: dependencies?.recordShowcaseFeedEvent ?? recordShowcaseFeedEvent,
     logError: dependencies?.logError ?? logBackendRouteError,
   };
@@ -88,7 +89,7 @@ async function handleShowcaseFeedEventPOST(
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
   try {
-    const parsed = dependencies.parseShowcaseFeedEventPayload(await request.json());
+    const parsed = dependencies.parseShowcaseFeedEventBatchPayload(await request.json());
     if (!parsed.ok) return NextResponse.json(parsed.body, { status: parsed.status });
 
     const actor = await getOptionalActorUserId(request, dependencies);
@@ -115,14 +116,39 @@ async function handleShowcaseFeedEventPOST(
       return NextResponse.json({ error: 'Failed to check feed event limits.' }, { status: 500 });
     }
 
-    const result = await dependencies.recordShowcaseFeedEvent({
-      actorUserId,
-      anonymousKeyHash,
-      payload: parsed.payload,
-      serviceClient,
-    });
+    // Auth and the rate-limit write happen once above, whatever the batch size:
+    // that, rather than the inserts, is what a fully-watched reel was paying
+    // seven times over.
+    const results = [];
+    for (const payload of parsed.payloads) {
+      results.push(await dependencies.recordShowcaseFeedEvent({
+        actorUserId,
+        anonymousKeyHash,
+        payload,
+        serviceClient,
+      }));
+    }
+
+    if (!parsed.batched) {
+      // Answer a single-event request exactly as before. Mobile builds sending
+      // one event per request stay in the wild for as long as their store train
+      // takes, and they parse this body.
+      const [result] = results;
+      return attachAnonymousFeedCookie(
+        NextResponse.json(result.body, { status: result.ok ? 200 : result.status }),
+        anonymousIdentity,
+      );
+    }
+
+    // A batch is telemetry a client has already dropped from its queue, so a
+    // rejected event is reported rather than retried and never fails the flush.
+    const recorded = results.filter((result) => result.ok).length;
     return attachAnonymousFeedCookie(
-      NextResponse.json(result.body, { status: result.ok ? 200 : result.status }),
+      NextResponse.json({
+        success: true,
+        recorded,
+        rejected: parsed.payloads.length - recorded,
+      }),
       anonymousIdentity,
     );
   } catch (error) {
