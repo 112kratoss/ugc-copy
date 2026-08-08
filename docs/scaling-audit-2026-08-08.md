@@ -58,7 +58,7 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 | F1 | Watch surfaces stream full-bitrate source | Critical | 0 | DONE | Mobile pkg 1 + web pkg 2, 2026-08-08 — mobile still needs a store release to reach phones |
 | F2 | AI posts skip transcode; sweep 5/hour | Critical | 0 | DONE | Publish-time repair kick + wall-clock sweep budget, pkg 3, 2026-08-08 |
 | F3 | Derivative cache TTL — decision #5 resolved | Critical | 0 | DONE | Constants, upload headers and backfill migration, pkg 1–2, 2026-08-08 |
-| F11 | Web `/feed` drops the ranking cursor | Critical | 0 | TODO | |
+| F11 | Web `/feed` drops the ranking cursor | Critical | 0 | DONE | Cursor threaded through load-more, retry and snapshot, pkg 4, 2026-08-08 |
 | F13 | v2 stats refresh starves past 1,000 rows | High | 0 | TODO | |
 | F7a | Facts for all candidates; unbatched events | High | 0 | TODO | |
 | F6 | Unthrottled hot GETs incl. full-catalog scan | Medium | 0 | IN PROGRESS | Limits on all 5 GETs, pkg 3, 2026-08-08; `top-sales` precompute still open |
@@ -296,6 +296,15 @@ That also makes the backfill two-directional, and its larger half is a **safety 
 **Fix.** Thread `pageInfo`'s continuation cursor through `/feed` load-more for the ranked lanes (`for-you`, `unlocks`), falling back to offset for non-ranked sorts.
 
 **Verify.** Scroll `/feed` past three pages with more than two minutes elapsed, then confirm in the database that only one `feed_sessions` row was created for the scroll.
+
+**Landed 2026-08-08 (work package 4).** `FeedClient` carries a `nextCursor` beside `nextOffset` and sends `cursor` instead of `offset` whenever the previous page returned one; non-ranked sorts never produce a cursor and page by offset exactly as before. Points worth knowing:
+
+- **The server side already worked** — no change was needed there, though it does not look that way at first. Every `pageInfo` built in `showcase-feed.ts` omits `nextCursor`, which reads like the cursor is never exposed. The ranked path does not build its page there: `buildPage` in `showcase-feed-personalization.ts:205-233` does, and it includes `nextCursor`. `sanitizeShowcaseFeedPage` spreads the page and only maps items, so it survives to the client. Confirm this before concluding the server is at fault.
+- **Cursor and offset are sent as either/or.** The route already zeroes the offset when a cursor is present, so sending both changes nothing functionally, but it makes a request log ambiguous about which path served the page.
+- **Three call sites needed it, not one.** The intersection sentinel, the retry button, and the `sessionStorage` snapshot. The snapshot matters most: `hasMore` was derived from `nextOffset` alone, so restoring a snapshot whose last page returned only a cursor would have looked like the end of the feed and silently stopped pagination.
+- A lane switch deliberately discards the cursor — it is a new ranking, not a continuation.
+
+**Not yet re-measured.** The verification above is a production check and has not been run; the unit tests pin the request shape, not the resulting `feed_sessions` row count.
 
 ---
 

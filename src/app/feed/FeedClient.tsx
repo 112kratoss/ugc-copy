@@ -109,6 +109,15 @@ export default function FeedClient({
     const [nextOffset, setNextOffset] = useState<number | null>(
         seedFeed.pageInfo.hasMore ? seedFeed.pageInfo.nextOffset : null
     );
+    // Offset alone re-runs the whole ranking for every page loaded outside the
+    // server's two-minute session-reuse window, persisting a fresh session and
+    // up to 121 rows each time -- three pages could write ~363 rows instead of
+    // 121. It is also why items repeated across pages, which the id guard in
+    // `fetchPage` was papering over. The cursor continues the ranking that
+    // produced page one instead of ranking again.
+    const [nextCursor, setNextCursor] = useState<string | null>(
+        seedFeed.pageInfo.hasMore ? seedFeed.pageInfo.nextCursor ?? null : null
+    );
     const [loadingMore, setLoadingMore] = useState(false);
     // The ranker groups a viewer's events into one session. It arrives on the
     // feed page rather than the item, so it has to be carried forward as pages
@@ -153,8 +162,16 @@ export default function FeedClient({
 
     const cards = useMemo(() => buildPostFeedCards(items), [items]);
 
-    const fetchPage = useCallback(async (targetChipId: FeedChipId, offset: number, replace: boolean) => {
-        const requestKey = `${targetChipId}:${offset}`;
+    const fetchPage = useCallback(async (
+        targetChipId: FeedChipId,
+        offset: number,
+        replace: boolean,
+        cursor: string | null = null,
+    ) => {
+        // A lane switch always restarts the ranking, so it never carries a
+        // cursor forward from the lane it is leaving.
+        const continuationCursor = replace ? null : cursor;
+        const requestKey = `${targetChipId}:${continuationCursor ?? offset}`;
         if (!replace && pendingLoadMoreKeyRef.current === requestKey) return;
 
         const requestId = ++requestIdRef.current;
@@ -170,9 +187,17 @@ export default function FeedClient({
             const chip = getFeedChip(targetChipId);
             const params = new URLSearchParams({
                 limit: String(FEED_PAGE_SIZE),
-                offset: String(offset),
                 sort: chip.sort,
             });
+            // Either/or, not both: the server zeroes the offset whenever a
+            // cursor is present, so sending both only invites confusion when
+            // reading a request log. Non-ranked sorts never produce a cursor
+            // and keep paging by offset exactly as before.
+            if (continuationCursor) {
+                params.set('cursor', continuationCursor);
+            } else {
+                params.set('offset', String(offset));
+            }
             if (chip.unlock !== 'all') params.set('unlock', chip.unlock);
 
             const response = await fetch(
@@ -193,6 +218,7 @@ export default function FeedClient({
                 // React keys unique rather than trusting the page boundary.
                 : [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))]));
             setNextOffset(page.pageInfo.hasMore ? page.pageInfo.nextOffset : null);
+            setNextCursor(page.pageInfo.hasMore ? page.pageInfo.nextCursor ?? null : null);
             // A lane switch starts a new session and adopts whatever the page
             // says, including nothing. Paging within a lane keeps the session it
             // already has rather than dropping it for an unranked page.
@@ -241,28 +267,34 @@ export default function FeedClient({
                 items,
                 pageInfo: {
                     ...seedFeed.pageInfo,
-                    hasMore: nextOffset !== null,
+                    // hasMore keys on either continuation, or restoring a
+                    // snapshot whose last page returned a cursor but no offset
+                    // would look like the end of the feed.
+                    hasMore: nextOffset !== null || nextCursor !== null,
                     nextOffset,
+                    nextCursor,
                 },
             },
             renderedItemCount: items.length,
             savedItemIds: [...savedItemIds],
         });
-    }, [cacheKey, chipId, initialChipId, items, nextOffset, savedItemIds, seedFeed]);
+    }, [cacheKey, chipId, initialChipId, items, nextCursor, nextOffset, savedItemIds, seedFeed]);
 
     useEffect(() => {
         const sentinel = sentinelRef.current;
-        if (!sentinel || nextOffset === null) return;
+        // A ranked lane can hand back a cursor and no offset, so either
+        // continuation means there is more to load.
+        if (!sentinel || (nextOffset === null && nextCursor === null)) return;
 
         const observer = new IntersectionObserver((entries) => {
             if (entries.some((entry) => entry.isIntersecting)) {
-                void fetchPage(chipId, nextOffset, false);
+                void fetchPage(chipId, nextOffset ?? 0, false, nextCursor);
             }
         }, { rootMargin: '600px 0px' });
 
         observer.observe(sentinel);
         return () => observer.disconnect();
-    }, [chipId, fetchPage, nextOffset]);
+    }, [chipId, fetchPage, nextCursor, nextOffset]);
 
     const selectChip = useCallback((nextChipId: FeedChipId) => {
         if (nextChipId === chipId) return;
@@ -347,7 +379,14 @@ export default function FeedClient({
                     <span>{loadError}</span>
                     <button
                         type="button"
-                        onClick={() => void fetchPage(chipId, nextOffset ?? 0, nextOffset === null)}
+                        onClick={() => void fetchPage(
+                            chipId,
+                            nextOffset ?? 0,
+                            // Nothing left to continue from means retrying has
+                            // to restart the lane rather than page on.
+                            nextOffset === null && nextCursor === null,
+                            nextCursor,
+                        )}
                         className="ui-focus-ring min-h-11 rounded-full border border-current px-4 text-xs font-bold"
                     >
                         Retry
