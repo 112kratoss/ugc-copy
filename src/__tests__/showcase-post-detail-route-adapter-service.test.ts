@@ -6,6 +6,12 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getShowcasePostDetailRouteResponse } from '@/lib/showcase-post-detail-route-adapter-service';
 import type { getShowcaseFeedItemById } from '@/lib/showcase-feed';
 
+vi.mock('@/lib/backend-rate-limit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/backend-rate-limit')>()),
+  // The read limiter needs a service client these tests do not build.
+  enforceBackendRateLimit: vi.fn(),
+}));
+
 function createContext(postId = 'post-1') {
   return {
     params: Promise.resolve({ postId }),
@@ -45,6 +51,7 @@ describe('showcase post detail route adapter service', () => {
       }),
       context: createContext(),
       dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
         createUserClient: createUserClientMock,
         getShowcaseFeedItemById: getShowcaseFeedItemByIdMock as unknown as typeof getShowcaseFeedItemById,
         withProviderFetchRequestId,
@@ -81,6 +88,7 @@ describe('showcase post detail route adapter service', () => {
       }),
       context: createContext(),
       dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
         createUserClient: vi.fn(() => createUserClient('viewer-1')),
         getShowcaseFeedItemById: getShowcaseFeedItemByIdMock as unknown as typeof getShowcaseFeedItemById,
       },
@@ -102,6 +110,7 @@ describe('showcase post detail route adapter service', () => {
       request: createRequest({ 'x-request-id': 'showcase-detail-missing-1' }),
       context: createContext('missing-post'),
       dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
         getShowcaseFeedItemById: vi.fn(async () => null) as unknown as typeof getShowcaseFeedItemById,
       },
     });
@@ -117,6 +126,7 @@ describe('showcase post detail route adapter service', () => {
       request: createRequest({ 'x-request-id': 'showcase-detail-failure-1' }),
       context: createContext(),
       dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
         getShowcaseFeedItemById: vi.fn(async () => {
           throw new Error('database unavailable');
         }) as unknown as typeof getShowcaseFeedItemById,

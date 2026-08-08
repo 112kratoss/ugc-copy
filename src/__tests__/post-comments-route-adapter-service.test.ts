@@ -60,6 +60,8 @@ describe('getPostCommentsRouteResponse', () => {
       dependencies: {
         createServiceClient: vi.fn(() => ({}) as SupabaseClient),
         createUserClient: createUserClientSpy,
+        enforceBackendRateLimit: vi.fn(),
+        getFeedNetworkKeyHash: () => 'network-hash',
         listPostCommentsForRoute,
       },
     });
@@ -84,6 +86,8 @@ describe('getPostCommentsRouteResponse', () => {
       dependencies: {
         createServiceClient: vi.fn(() => ({}) as SupabaseClient),
         createUserClient: () => createUserClient('viewer-1'),
+        enforceBackendRateLimit: vi.fn(),
+        getFeedNetworkKeyHash: () => 'network-hash',
         listPostCommentsForRoute,
       },
     });
@@ -107,6 +111,8 @@ describe('getPostCommentsRouteResponse', () => {
       dependencies: {
         createServiceClient: vi.fn(() => ({}) as SupabaseClient),
         createUserClient: () => createUserClient('viewer-1'),
+        enforceBackendRateLimit: vi.fn(),
+        getFeedNetworkKeyHash: () => 'network-hash',
         listPostCommentsForRoute: vi.fn(async () => emptyPage()),
       },
     });
@@ -122,6 +128,8 @@ describe('getPostCommentsRouteResponse', () => {
       dependencies: {
         createServiceClient: vi.fn(() => ({}) as SupabaseClient),
         createUserClient: () => createUserClient(null),
+        enforceBackendRateLimit: vi.fn(),
+        getFeedNetworkKeyHash: () => 'network-hash',
         listPostCommentsForRoute: vi.fn(async () => ({
           ok: false as const,
           status: 404 as const,

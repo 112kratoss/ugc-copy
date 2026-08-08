@@ -293,6 +293,49 @@ export const SHOWCASE_FOR_YOU_FEED_READ_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+/**
+ * The read limits below are deliberately generous: they exist to stop a script,
+ * not to shape normal browsing. Every one of these endpoints was previously
+ * unthrottled while the mutation paths beside them were covered.
+ *
+ * Each rejected request still costs a Postgres write transaction, which makes
+ * the limiter its own load generator under sustained abuse. Moving coarse read
+ * limiting to edge/KV is a Phase 2 item in `docs/scaling-audit-2026-08-08.md`.
+ */
+export const SHOWCASE_FEED_READ_RATE_LIMIT = {
+  scope: 'showcase-feed:read',
+  limit: 240,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const SHOWCASE_POST_DETAIL_READ_RATE_LIMIT = {
+  scope: 'showcase-post:read',
+  limit: 300,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const POST_COMMENTS_READ_RATE_LIMIT = {
+  scope: 'post-comments:read',
+  limit: 300,
+  windowSeconds: 10 * 60,
+} as const;
+
+/**
+ * Higher than its siblings because the studio polls this every 30 seconds
+ * while a generation is running — 20 polls per 10 minutes per open tab.
+ */
+export const OWNER_GENERATIONS_READ_RATE_LIMIT = {
+  scope: 'owner-generations:read',
+  limit: 400,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const CREATOR_PROFILE_READ_RATE_LIMIT = {
+  scope: 'creator-profile:read',
+  limit: 300,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const POST_RESOURCE_FILE_UPLOAD_RATE_LIMIT = {
   scope: 'post-resource-file:upload',
   limit: 30,

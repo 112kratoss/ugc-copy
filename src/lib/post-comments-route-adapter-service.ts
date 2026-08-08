@@ -3,7 +3,13 @@ import 'server-only';
 import { NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
-import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
+import {
+  BackendRateLimitError,
+  POST_COMMENTS_READ_RATE_LIMIT,
+  createBackendRateLimitResponse,
+  enforceBackendRateLimit,
+} from '@/lib/backend-rate-limit';
+import { getFeedNetworkKeyHash } from '@/lib/showcase-feed-identity';
 import {
   createPostCommentForRoute,
   listPostCommentsForRoute,
@@ -27,6 +33,8 @@ type PostCommentsRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   createPostCommentForRoute?: typeof createPostCommentForRoute;
+  enforceBackendRateLimit?: typeof enforceBackendRateLimit;
+  getFeedNetworkKeyHash?: typeof getFeedNetworkKeyHash;
   listPostCommentsForRoute?: typeof listPostCommentsForRoute;
   removePostCommentForRoute?: typeof removePostCommentForRoute;
 };
@@ -36,6 +44,8 @@ function resolveDependencies(dependencies: PostCommentsRouteDependencies | undef
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     createPostCommentForRoute: dependencies?.createPostCommentForRoute ?? createPostCommentForRoute,
+    enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
+    getFeedNetworkKeyHash: dependencies?.getFeedNetworkKeyHash ?? getFeedNetworkKeyHash,
     listPostCommentsForRoute: dependencies?.listPostCommentsForRoute ?? listPostCommentsForRoute,
     removePostCommentForRoute: dependencies?.removePostCommentForRoute ?? removePostCommentForRoute,
   };
@@ -83,6 +93,23 @@ async function handlePostCommentsGET(
   const { postId } = await context.params;
   const viewerUserId = await getViewerUserId(request, dependencies);
   const searchParams = new URL(request.url).searchParams;
+
+  // Comment writes were limited while the read beside them was open, even
+  // though listing is the more expensive half: it range-reads in a loop until
+  // enough visible rows accumulate, issuing two user_blocks queries per pass.
+  // Keyed on the viewer when signed in, otherwise on a salted network hash.
+  try {
+    await dependencies.enforceBackendRateLimit(dependencies.createServiceClient(), {
+      ...POST_COMMENTS_READ_RATE_LIMIT,
+      key: viewerUserId ?? dependencies.getFeedNetworkKeyHash(request),
+    });
+  } catch (error) {
+    if (error instanceof BackendRateLimitError) {
+      return createBackendRateLimitResponse(error);
+    }
+
+    throw error;
+  }
 
   const result = await dependencies.listPostCommentsForRoute({
     postId,

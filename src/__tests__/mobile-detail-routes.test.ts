@@ -6,6 +6,12 @@ const resolvePostIdForResourceIdentifierMock = vi.fn();
 const getPostResourceBundleDetailByPostIdMock = vi.fn();
 const getUserMock = vi.fn();
 
+vi.mock('@/lib/backend-rate-limit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/backend-rate-limit')>()),
+  // The read limiter needs a service client these tests do not build.
+  enforceBackendRateLimit: vi.fn(),
+}));
+
 vi.mock('@/lib/showcase-feed', () => ({
   getShowcaseFeedItemById: (options: unknown) => getShowcaseFeedItemByIdMock(options),
 }));
@@ -22,6 +28,8 @@ vi.mock('@/lib/server-helpers', () => ({
       getUser: () => getUserMock(),
     },
   }),
+  // The detail read is rate limited now, and the limiter takes a service client.
+  createServiceClient: () => ({}),
 }));
 
 describe('mobile detail API routes', () => {

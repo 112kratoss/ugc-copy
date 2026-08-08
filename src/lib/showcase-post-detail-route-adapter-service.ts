@@ -8,16 +8,26 @@ import {
   getApiRequestId,
   getViewerAwareApiCacheControl,
 } from '@/lib/api-cache';
+import {
+  BackendRateLimitError,
+  SHOWCASE_POST_DETAIL_READ_RATE_LIMIT,
+  createBackendRateLimitResponse,
+  enforceBackendRateLimit,
+} from '@/lib/backend-rate-limit';
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
-import { createUserClient } from '@/lib/server-helpers';
+import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import { getShowcaseFeedItemById } from '@/lib/showcase-feed';
+import { getFeedNetworkKeyHash } from '@/lib/showcase-feed-identity';
 
 type ShowcasePostDetailRouteContext = {
   params: Promise<{ postId: string }>;
 };
 
 type ShowcasePostDetailRouteDependencies = {
+  createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
+  enforceBackendRateLimit?: typeof enforceBackendRateLimit;
+  getFeedNetworkKeyHash?: typeof getFeedNetworkKeyHash;
   getShowcaseFeedItemById?: typeof getShowcaseFeedItemById;
   logError?: typeof logBackendRouteError;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
@@ -25,7 +35,10 @@ type ShowcasePostDetailRouteDependencies = {
 
 function resolveDependencies(dependencies: ShowcasePostDetailRouteDependencies | undefined) {
   return {
+    createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
+    enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
+    getFeedNetworkKeyHash: dependencies?.getFeedNetworkKeyHash ?? getFeedNetworkKeyHash,
     getShowcaseFeedItemById: dependencies?.getShowcaseFeedItemById ?? getShowcaseFeedItemById,
     logError: dependencies?.logError ?? logBackendRouteError,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
@@ -55,6 +68,22 @@ async function handleShowcasePostDetailGET(
     const { postId } = await context.params;
     const hasAuthorizationHeader = Boolean(request.headers.get('Authorization'));
     const viewerUserId = await getViewerUserId(request, hasAuthorizationHeader, dependencies);
+
+    // Anonymous callers key on a salted network hash, the same identity the
+    // feed already derives, so a signed-out scraper cannot walk every post id
+    // for free.
+    try {
+      await dependencies.enforceBackendRateLimit(dependencies.createServiceClient(), {
+        ...SHOWCASE_POST_DETAIL_READ_RATE_LIMIT,
+        key: viewerUserId ?? dependencies.getFeedNetworkKeyHash(request),
+      });
+    } catch (error) {
+      if (error instanceof BackendRateLimitError) {
+        return createBackendRateLimitResponse(error);
+      }
+
+      throw error;
+    }
 
     const item = await dependencies.getShowcaseFeedItemById({
       postId,

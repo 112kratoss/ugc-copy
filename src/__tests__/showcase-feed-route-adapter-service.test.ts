@@ -45,7 +45,9 @@ describe('showcase feed route adapter service', () => {
         },
       }),
       dependencies: {
+        createServiceClient: vi.fn(() => ({ kind: 'service' }) as unknown as SupabaseClient),
         createUserClient: createUserClientDependency,
+        enforceBackendRateLimit: vi.fn(),
         getShowcaseFeedPage: getShowcaseFeedPageMock as unknown as typeof getShowcaseFeedPage,
         withProviderFetchRequestId,
       },
@@ -136,7 +138,9 @@ describe('showcase feed route adapter service', () => {
         },
       }),
       dependencies: {
+        createServiceClient: vi.fn(() => ({ kind: 'service' }) as unknown as SupabaseClient),
         createUserClient: vi.fn(() => createUserClient('viewer-1')),
+        enforceBackendRateLimit: vi.fn(),
         getShowcaseFeedPage: getShowcaseFeedPageMock as unknown as typeof getShowcaseFeedPage,
       },
     });
@@ -279,5 +283,57 @@ describe('showcase feed route adapter service', () => {
     expect(responseBody).not.toContain('SECRET_ROUTE_PROMPT');
     expect(responseBody).not.toContain('https://secret.example');
     expect(responseBody).not.toContain('creator/private');
+  });
+
+  it('rate limits non-personalized sorts too, under their own generous budget', async () => {
+    // top-sales scans every public post per call, so leaving the cheap-looking
+    // sorts unthrottled left the most expensive read in the file wide open.
+    const enforceBackendRateLimit = vi.fn();
+    const serviceClient = { kind: 'service' } as unknown as SupabaseClient;
+
+    await getShowcaseFeedRouteResponse({
+      request: new Request('http://localhost/api/showcase/feed?sort=top-sales'),
+      dependencies: {
+        createServiceClient: vi.fn(() => serviceClient),
+        createUserClient: vi.fn(() => createUserClient(null)),
+        enforceBackendRateLimit,
+        getFeedNetworkKeyHash: () => 'network-hash',
+        getShowcaseFeedPage: vi.fn(async () => createFeedPage()) as unknown as typeof getShowcaseFeedPage,
+      },
+    });
+
+    expect(enforceBackendRateLimit).toHaveBeenCalledWith(serviceClient, {
+      scope: 'showcase-feed:read',
+      limit: 240,
+      windowSeconds: 600,
+      key: 'network-hash',
+    });
+  });
+
+  it('returns 429 on an exhausted non-personalized read budget', async () => {
+    const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
+
+    const response = await getShowcaseFeedRouteResponse({
+      request: new Request('http://localhost/api/showcase/feed?sort=top-sales'),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({ kind: 'service' }) as unknown as SupabaseClient),
+        createUserClient: vi.fn(() => createUserClient(null)),
+        enforceBackendRateLimit: vi.fn(async () => {
+          throw new BackendRateLimitError({
+            allowed: false,
+            limit: 240,
+            remaining: 0,
+            retryAfterSeconds: 42,
+            resetAt: '2026-08-08T10:10:00.000Z',
+          });
+        }),
+        getFeedNetworkKeyHash: () => 'network-hash',
+        getShowcaseFeedPage: getShowcaseFeedPageMock as unknown as typeof getShowcaseFeedPage,
+      },
+    });
+
+    expect(response.status).toBe(429);
+    // Rejected before the catalog scan, which is the whole point.
+    expect(getShowcaseFeedPageMock).not.toHaveBeenCalled();
   });
 });

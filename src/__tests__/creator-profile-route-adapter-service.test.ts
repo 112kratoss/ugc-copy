@@ -4,6 +4,14 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getCreatorProfileRouteResponse } from '@/lib/creator-profile-route-adapter-service';
 import type { getCreatorProfilePageData } from '@/lib/creator-profile';
 
+// The read limiter needs a service client these tests deliberately do not
+// build. Its behaviour is asserted directly in the feed and post-detail adapter
+// tests; here it only has to stay out of the way.
+vi.mock('@/lib/backend-rate-limit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/backend-rate-limit')>()),
+  enforceBackendRateLimit: vi.fn(),
+}));
+
 function createUserClient(userId: string | null) {
   return {
     auth: {
@@ -63,6 +71,7 @@ describe('creator profile route adapter service', () => {
       }),
       context: { params: Promise.resolve({ username: 'luna' }) },
       dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
         createUserClient: createUserClientMock,
         getCreatorProfilePageData: getCreatorProfilePageDataMock as unknown as typeof getCreatorProfilePageData,
       },
@@ -125,6 +134,7 @@ describe('creator profile route adapter service', () => {
       request: new Request('http://localhost/api/creators/missing'),
       context: { params: Promise.resolve({ username: 'missing' }) },
       dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
         getCreatorProfilePageData: vi.fn(async () => null) as unknown as typeof getCreatorProfilePageData,
       },
     });

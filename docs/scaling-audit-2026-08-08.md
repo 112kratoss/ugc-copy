@@ -61,7 +61,7 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 | F11 | Web `/feed` drops the ranking cursor | Critical | 0 | TODO | |
 | F13 | v2 stats refresh starves past 1,000 rows | High | 0 | TODO | |
 | F7a | Facts for all candidates; unbatched events | High | 0 | TODO | |
-| F6 | Unthrottled hot GETs incl. full-catalog scan | Medium | 0 | TODO | |
+| F6 | Unthrottled hot GETs incl. full-catalog scan | Medium | 0 | IN PROGRESS | Limits on all 5 GETs, pkg 3, 2026-08-08; `top-sales` precompute still open |
 | F15a | Monitoring truncates silently; biased rates | Medium | 0 | TODO | |
 | F10 | Assorted small leaks | Low | 0 | IN PROGRESS | Mobile 404 pkg 1; studio grid + images pkg 2, 2026-08-08. Webhook budget rides pkg 3; two web-perf items stay unassigned |
 | F12 | Workflow runs non-durable, non-idempotent | Critical | 1 | TODO | |
@@ -367,6 +367,24 @@ F7b partitions monthly, so a 30-day raw window is three partitions deep at any t
 
 **Longer term.** Every rejected request currently still costs a Postgres write transaction, which makes the limiter its own load generator under abuse. Moving coarse read-limiting to edge/KV is a Phase 2 item; keep Postgres limits for credits, purchases and business-critical quotas.
 
+**Rate limits landed 2026-08-08 (work package 3). The `top-sales` precompute is NOT done — F6 stays open for it.**
+
+All five cited endpoints are now limited, keyed on the viewer when signed in and otherwise on the salted network hash the feed already derives:
+
+| Endpoint | Scope | Budget / 10 min |
+|---|---|---:|
+| `/api/showcase/feed` (non-`for-you`) | `showcase-feed:read` | 240 |
+| `/api/showcase/posts/[postId]` | `showcase-post:read` | 300 |
+| comments GET | `post-comments:read` | 300 |
+| `/api/generations` | `owner-generations:read` | 400 |
+| `/api/creators/[username]` | `creator-profile:read` | 300 |
+
+Deliberately generous — these stop a script, not normal browsing. `/api/generations` is highest because the studio polls it every 30 s while a generation runs, so a few open tabs must not trip it.
+
+**One real cost, worth stating plainly.** Rate-limit state is service-role only, so throttling a read means building a privileged client on every request. `/api/generations` previously created one lazily and often not at all — a test asserted exactly that, and it had to be rewritten. This is the same trade the `for-you` feed already made, and it is a second reason the Phase 2 edge/KV move matters.
+
+**Still open in F6:** precomputing the `top-sales` ranking into `post_feed_stats`. The limiter now caps how often the full-catalog scan (`showcase-feed.ts:682-686`, `mustScanAllCandidates`) can be triggered, which removes the abuse case, but the scan itself is unchanged and still runs per call for legitimate traffic.
+
 ---
 
 ### F15a — Monitoring truncates silently and computes biased failure rates
@@ -395,7 +413,7 @@ F7b partitions monthly, so a 30-day raw window is three partitions deep at any t
 - **Owner studio grid** *(web package)* — **DONE 2026-08-08.** `CreationMediaFrame` took a `posterSrc` and now uses `preload="none"` with the poster whenever one exists, so a grid of 36 tiles issues no video range requests at all. Two things were needed to make that safe: the tile's load state has to start settled, or the spinner would sit over the poster forever waiting for a `loadedmetadata` that will never fire; and tiles *without* a poster keep `preload="metadata"` rather than rendering black, so the change is strictly an improvement instead of a trade. The poster is the generation's existing `preview_url`, which the API already returns but the page's local `Generation` type had not declared — when it is absent the tile simply behaves as it does today.
 - **Unoptimized full-res images** *(web package)* — **DONE 2026-08-08.** The creator cover and avatar are `next/image` now (the avatar renders at 96–112px and was shipping the uploaded original). Detail and reel images route through the existing `OptimizedPreviewImage` rather than a raw `<img>`, which also gets them the host-allowlist fallback that component already encapsulates. It gained optional `onError` and `imageRef` props to do this: the carousel needs the failure signal for its recovery overlay, and needs the element to read `complete`/`naturalWidth`, because a cached image can finish before React attaches `onLoad` and would otherwise strand the frame on its fallback aspect ratio. Note it passes the **source** as `previewSrc`, not the 720px preview — the intent is to resize the original, not to downgrade it.
 - **Mobile 404 fallback** *(mobile package — store train)* — **DONE 2026-08-08.** `ugc-mobile/lib/api-client.ts` refetched a feed page to locate one post after a detail 404. Removed outright rather than shrunk, for three reasons found on inspection: it requested 48 items but the server clamps feed `limit` to 24 (`showcase-feed-route-adapter-service.ts:91`), so it never searched what it claimed to; its own regression test named it the *legacy* fallback and existed only because it had to forward auth by hand or become a way around user blocks; and every caller already tolerates failure. A detail 404 is now authoritative.
-- **Webhook import budget** *(transcode package)* — the finished-video download and re-upload runs via `after()` inside `/api/webhooks/kie`, whose `maxDuration` is 60 s, with a 60 s fetch timeout. Large videos always fall through to the 10-minute cron. Raise the duration or hand off to the queue unconditionally.
+- **Webhook import budget** *(transcode package)* — **DONE 2026-08-08.** `maxDuration` raised 60 → 300 on `/api/webhooks/kie`. It was the only media-touching route in the app still at 60 s while every sibling — posts, account, all seven crons — was already at 300, and with `PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS` also at 60 s the download alone could consume the entire invocation, leaving nothing for the re-upload. Chose the duration raise over an unconditional queue hand-off: the queue is still the fallback for anything that overruns, and F14 is going to restructure these queues in Phase 1 anyway.
 - **Web feed DOM growth** *(unassigned — opportunistic)* — `/feed` keeps every loaded card mounted and serializes the whole accumulated feed to `sessionStorage` on change; approaches browser limits around 50–100 cards. Window the list and debounce the snapshot to an idle callback.
 - **Payload weight** *(unassigned — opportunistic)* — decoded HTML runs 447–641 KiB with roughly 246 KB of duplicated inline CSS/Flight data from `experimental.inlineCss` (`next.config.ts:107-109`). Add both compressed and decoded budgets, and A/B disabling inlining.
 
@@ -553,4 +571,5 @@ Two independent audits produced different headline numbers. Both were right abou
 | 2026-08-08 | Initial audit; all items TODO. Baseline commit `63b9a3b`. | Claude Code |
 | 2026-08-08 | Pre-work review amendments: F3 reframed against the documented moderation TTL constraint (new decision #5); every-push-deploys warning added; mobile items consolidated onto the store-release train; workflow rewritten for one-conversation-per-phase sequential execution (no worktrees); evidence re-verified at `8a69de5`. | Claude Code |
 | 2026-08-08 | Decisions recorded: #1 spend cap **ON and staying on** (owner), #5 derivative TTL **1-day compromise** (owner), #2 raw fact retention **30 days** (owner delegated the call). Work package 1 landed — F1 mobile viewer, F3 mobile upload header, F10 mobile 404 fallback. Corrections to the audit as written: no mutable/immutable TTL split is needed because every public showcase path is write-once; `stale-while-revalidate` is unreachable through supabase-js; the `.copy()` cache-control inheritance lives in `post-publish-service`/`post-update-service`, not `showcase-publish-service`; and the mobile viewer had two full-source paths, not the one cited. | Claude Code |
+| 2026-08-08 | Work package 3, part one — **F2 DONE** (publish-time repair kick; sweep bounded by a 60s wall clock rather than a five-row count, which bounded nothing: five rows at a 120s ffmpeg timeout could occupy 600s of a 300s invocation). **F6 partly done** — read limits on all five cited GETs; the `top-sales` precompute is still open, so F6 stays IN PROGRESS. **F10 webhook budget DONE** — `/api/webhooks/kie` was the only media route left at `maxDuration = 60` while its own download timeout was also 60s. | Claude Code |
 | 2026-08-08 | Work package 2 landed — F1 web (carousel every mode, profile hover video), F3 server constants plus a backfill migration over `storage.objects`, F10 studio grid and unoptimized images. **F1 and F3 are now DONE.** Material correction from measuring production: `showcase_media` held three generations of cache policy, not the single 300s the finding described — 60 content-hashed derivatives at a **full year**, 29 originals at supabase-js's default 3600, and only 10 at 300s. The repo had immutable derivative caching until 2026-07-29 and gave it up for moderation, so decision #5 was really about how much of that year to restore, and the backfill moves 60 objects *down* (a live takedown exposure) as well as 39 up. | Claude Code |

@@ -29,6 +29,7 @@ describe('owner generations route adapter service', () => {
       dependencies: {
         createServiceClient,
         createUserClient: vi.fn(() => userSupabase as never),
+        enforceBackendRateLimit: vi.fn(),
         listOwnerGenerationsForRoute,
       },
     });
@@ -46,7 +47,11 @@ describe('owner generations route adapter service', () => {
       getAdminSupabase: createServiceClient,
       searchParams: new URLSearchParams('limit=2&detail=summary'),
     });
-    expect(createServiceClient).not.toHaveBeenCalled();
+    // Exactly one, for the read limiter. Rate-limit state is service-role only,
+    // so throttling this endpoint costs a privileged client per request, where
+    // it used to be created lazily and often not at all. The read service still
+    // receives the factory rather than an instance, so it builds no second one.
+    expect(createServiceClient).toHaveBeenCalledTimes(1);
   });
 
   it('rejects unauthenticated requests before service or privileged client work', async () => {
@@ -87,6 +92,7 @@ describe('owner generations route adapter service', () => {
       dependencies: {
         createServiceClient: vi.fn(),
         createUserClient: vi.fn(() => createUserClient('user-1') as never),
+        enforceBackendRateLimit: vi.fn(),
         listOwnerGenerationsForRoute: vi.fn(async () => {
           throw new Error('database tired');
         }),

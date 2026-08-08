@@ -11,7 +11,14 @@ import {
 } from '@/lib/api-cache';
 import { getCreatorProfilePageData } from '@/lib/creator-profile';
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
+import {
+  BackendRateLimitError,
+  CREATOR_PROFILE_READ_RATE_LIMIT,
+  createBackendRateLimitResponse,
+  enforceBackendRateLimit,
+} from '@/lib/backend-rate-limit';
 import { getCreatorFollowStateForRoute } from '@/lib/profile-follow-service';
+import { getFeedNetworkKeyHash } from '@/lib/showcase-feed-identity';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import { parsePositiveInt } from '@/lib/showcase';
@@ -23,6 +30,8 @@ type CreatorProfileRouteContext = {
 type CreatorProfileRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
+  enforceBackendRateLimit?: typeof enforceBackendRateLimit;
+  getFeedNetworkKeyHash?: typeof getFeedNetworkKeyHash;
   getCreatorFollowStateForRoute?: typeof getCreatorFollowStateForRoute;
   isUserRelationshipBlocked?: typeof isUserRelationshipBlocked;
   getCreatorProfilePageData?: typeof getCreatorProfilePageData;
@@ -34,6 +43,8 @@ function resolveDependencies(dependencies: CreatorProfileRouteDependencies | und
   return {
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
+    enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
+    getFeedNetworkKeyHash: dependencies?.getFeedNetworkKeyHash ?? getFeedNetworkKeyHash,
     getCreatorFollowStateForRoute: dependencies?.getCreatorFollowStateForRoute ?? getCreatorFollowStateForRoute,
     isUserRelationshipBlocked: dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked,
     getCreatorProfilePageData: dependencies?.getCreatorProfilePageData ?? getCreatorProfilePageData,
@@ -98,6 +109,21 @@ async function handleCreatorProfileGET(
     const requestedOffset = parsePositiveInt(searchParams.get('offset'), 0);
     const hasAuthorizationHeader = Boolean(request.headers.get('Authorization'));
     const viewerUserId = await getViewerUserId(request, hasAuthorizationHeader, dependencies);
+
+    // This read joins a profile to a paged slice of its posts, so an anonymous
+    // walk of every creator is not cheap. Keyed like the other public reads.
+    try {
+      await dependencies.enforceBackendRateLimit(dependencies.createServiceClient(), {
+        ...CREATOR_PROFILE_READ_RATE_LIMIT,
+        key: viewerUserId ?? dependencies.getFeedNetworkKeyHash(request),
+      });
+    } catch (error) {
+      if (error instanceof BackendRateLimitError) {
+        return createBackendRateLimitResponse(error);
+      }
+
+      throw error;
+    }
 
     const data = await dependencies.getCreatorProfilePageData(username, {
       limit: requestedLimit,

@@ -12,6 +12,7 @@ import {
 } from '@/lib/api-cache';
 import {
   BackendRateLimitError,
+  SHOWCASE_FEED_READ_RATE_LIMIT,
   SHOWCASE_FOR_YOU_FEED_READ_RATE_LIMIT,
   createBackendRateLimitResponse,
   enforceBackendRateLimit,
@@ -106,18 +107,27 @@ async function handleShowcaseFeedGET(
       : dependencies.resolveFeedAnonymousIdentity(request);
     const anonymousKeyHash = anonymousIdentity?.anonymousKeyHash ?? null;
 
-    if (sort === 'for-you') {
+    // Every sort is limited, not just for-you. The others were left open on the
+    // reasoning that they are cheap cached reads, but `top-sales` scans every
+    // public post per call, and an unthrottled expensive read is exactly what
+    // an abusive client will find. The non-personalized ceiling is deliberately
+    // four times the for-you one: it is there to stop a script, not to shape
+    // browsing.
+    {
       const serviceClient = dependencies.createServiceClient();
+      const readRateLimit = sort === 'for-you'
+        ? SHOWCASE_FOR_YOU_FEED_READ_RATE_LIMIT
+        : SHOWCASE_FEED_READ_RATE_LIMIT;
       try {
         await dependencies.enforceBackendRateLimit(serviceClient, {
-          ...SHOWCASE_FOR_YOU_FEED_READ_RATE_LIMIT,
+          ...readRateLimit,
           key: viewerUserId ?? dependencies.getFeedNetworkKeyHash(request),
         });
       } catch (error) {
         if (error instanceof BackendRateLimitError) {
           return applyPrivateNoStoreApiResponseHeaders(createBackendRateLimitResponse(error), request);
         }
-        dependencies.logError('Showcase For You feed rate limit failed:', error);
+        dependencies.logError('Showcase feed rate limit failed:', error);
         return NextResponse.json(
           { error: 'Failed to check feed request limits.' },
           { status: 500, headers: createPrivateNoStoreApiResponseHeaders(request) },

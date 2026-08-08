@@ -176,6 +176,12 @@ function createSupabaseClientMock() {
   };
 }
 
+vi.mock('@/lib/backend-rate-limit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/backend-rate-limit')>()),
+  // The read limiter needs a service client these tests do not build.
+  enforceBackendRateLimit: vi.fn(),
+}));
+
 vi.mock('@supabase/supabase-js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@supabase/supabase-js')>();
   return {
