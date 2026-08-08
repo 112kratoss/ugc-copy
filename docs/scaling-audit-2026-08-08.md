@@ -59,7 +59,7 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 | F2 | AI posts skip transcode; sweep 5/hour | Critical | 0 | DONE | Publish-time repair kick + wall-clock sweep budget, pkg 3, 2026-08-08 |
 | F3 | Derivative cache TTL — decision #5 resolved | Critical | 0 | DONE | Constants, upload headers and backfill migration, pkg 1–2, 2026-08-08 |
 | F11 | Web `/feed` drops the ranking cursor | Critical | 0 | DONE | Cursor threaded through load-more, retry and snapshot, pkg 4, 2026-08-08 |
-| F13 | v2 stats refresh starves past 1,000 rows | High | 0 | TODO | |
+| F13 | v2 stats refresh starves past 1,000 rows | High | 0 | DONE | Migration + fact index, pkg 5, 2026-08-08 |
 | F7a | Facts for all candidates; unbatched events | High | 0 | TODO | |
 | F6 | Unthrottled hot GETs incl. full-catalog scan | Medium | 0 | IN PROGRESS | Limits on all 5 GETs, pkg 3, 2026-08-08; `top-sales` precompute still open |
 | F15a | Monitoring truncates silently; biased rates | Medium | 0 | TODO | |
@@ -328,6 +328,16 @@ That also makes the backfill two-directional, and its larger half is a **safety 
 **Verify.** `npx supabase db reset --local` then `npx supabase test db`. Seed >1,000 creators locally and confirm two consecutive refresh runs touch disjoint row sets.
 
 **Priority note.** This is an **activation blocker for v2**, not live damage — v2 is still shadow. It must land before v2 is promoted, but it is not degrading production today.
+
+**Landed 2026-08-08 (work package 5).** `20260808130000_feed_ranking_v2_starvation_free_refresh.sql` replaces both v2 functions and adds the index.
+
+- **The v1 audit this item asked for has an answer: v1 was already correct.** `refresh_post_feed_stats` and `refresh_user_interest_weights` both already left-join the table they write and order by `min(...updated_at) ASC NULLS FIRST`. v2 regressed an idiom v1 had. The fix is therefore a port, not an invention — the new candidate CTEs are v1's shape applied to `creator_feed_stats` and `post_feed_stats`.
+- **`refresh_post_feed_engagement_stats` writes `post_feed_stats`, not a table of its own name.** The staleness join has to target the table the function actually stamps, or the queue never drains and the fix silently does nothing.
+- Both functions are reproduced verbatim from the v2 migration apart from the candidate CTEs, so a diff against `20260728181000` shows only the selection change. A test asserts both advisory locks and both limit guards survived the copy.
+
+**Verified:** `db reset --local` applies cleanly, `supabase test db` stays green at 541 tests, and querying `pg_get_functiondef` in the reset database confirms all four feed refreshes now order by staleness and none orders by key alone.
+
+**Not verified:** the audit's seed-1,000-creators check that two consecutive runs touch disjoint sets. The fixture needs an `auth.users` → `posts` → `feed_session_items` → `feed_delivery_facts` chain, and the structural check above was taken as sufficient for a shadow-mode function. **Run it before promoting v2.**
 
 ---
 
