@@ -88,6 +88,12 @@ import {
   PROVIDER_TASK_CREATE_TIMEOUT_MS,
   withProviderModel,
 } from '@/lib/provider-fetch';
+import {
+  admitProviderSubmission,
+  isProviderFaultFailure,
+  parseProviderRetryAfterSeconds,
+  recordProviderSubmissionOutcome,
+} from '@/lib/provider-admission';
 import { isAllowlistedRemoteMediaUrl, type RemoteMediaKind } from '@/lib/remote-media-security';
 import { stageAllowlistedRemoteMedia } from '@/lib/staged-remote-media';
 import { loadGenerationModelOperationalConfig } from '@/lib/generation-model-catalog-store';
@@ -256,23 +262,70 @@ async function createKieTask(
     ? body.callBackUrl
     : buildKieWebhookCallbackUrl({ generationId: options.generationId });
 
-  // Attribute the call to the *app* model id, not `body.model`. The latter is
-  // the provider's api model id, and the status-poll paths attribute using
-  // `generation.model` — mixing the two id spaces in one telemetry column would
-  // split a single model's traffic across two keys and break its rates.
-  const response = await withProviderModel(options.modelId, () => fetchWithProviderTimeout(endpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${KIE_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ ...body, callBackUrl: callbackUrl }),
-  }, PROVIDER_TASK_CREATE_TIMEOUT_MS, fetch, 'KIE task creation'));
+  // F14: account-wide admission, immediately before the only outbound call that
+  // creates provider work. Placed here rather than at the seven start call
+  // sites for the same reason the money-bug fix went into the shared settle
+  // helper — a new start path inherits the gate instead of having to remember
+  // it. A rejection throws a 429 `GenerationServiceError`, which the caller's
+  // existing catch refunds through the ordinary path; that is correct because
+  // no request was sent, so the provider will never bill for it.
+  await admitProviderSubmission({ model: options.modelId });
 
-  const data = await response.json();
-  if (!response.ok || data.code !== 200) {
-    throw new Error(data.msg || 'Provider rejected the request');
+  let response: Response;
+  try {
+    // Attribute the call to the *app* model id, not `body.model`. The latter is
+    // the provider's api model id, and the status-poll paths attribute using
+    // `generation.model` — mixing the two id spaces in one telemetry column would
+    // split a single model's traffic across two keys and break its rates.
+    response = await withProviderModel(options.modelId, () => fetchWithProviderTimeout(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${KIE_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ...body, callBackUrl: callbackUrl }),
+    }, PROVIDER_TASK_CREATE_TIMEOUT_MS, fetch, 'KIE task creation'));
+  } catch (error) {
+    if (isProviderFaultFailure(error)) {
+      recordProviderSubmissionOutcome({ success: false });
+    }
+    throw error;
   }
+
+  // Parsed defensively: an overloaded provider is exactly the case most likely
+  // to answer with a non-JSON body, and letting that surface as a SyntaxError
+  // would lose both the status code and the Retry-After the breaker needs.
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    const retryAfterSeconds = parseProviderRetryAfterSeconds(response);
+    if (isProviderFaultFailure(null, response.status)) {
+      recordProviderSubmissionOutcome({ success: false, retryAfterSeconds });
+    }
+
+    // A provider 429 is reported as one. It reaches the user as `provider_busy`
+    // ("busy right now, please retry shortly"), which is honest here precisely
+    // because this path refunds — unlike the held ambiguous-timeout case, whose
+    // copy must never invite a retry.
+    if (response.status === 429) {
+      throw new GenerationServiceError(
+        data?.msg || 'The generation provider is busy right now. Please retry shortly.',
+        429,
+        'provider_busy',
+      );
+    }
+
+    throw new Error(data?.msg || 'Provider rejected the request');
+  }
+
+  if (!data || data.code !== 200) {
+    // HTTP 200 carrying a body-level rejection is how Kie reports a validation
+    // failure. Deliberately not recorded as a breaker failure: one user's bad
+    // input must never open the circuit for everybody.
+    throw new Error(data?.msg || 'Provider rejected the request');
+  }
+
+  recordProviderSubmissionOutcome({ success: true });
 
   return data.data.taskId as string;
 }
