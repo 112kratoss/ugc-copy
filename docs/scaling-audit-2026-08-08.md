@@ -57,7 +57,7 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 | F4 | Spend cap posture + egress monitoring | Critical | 0 | IN PROGRESS | Cap recorded 2026-08-08; egress metric rides F15a |
 | F1 | Watch surfaces stream full-bitrate source | Critical | 0 | DONE | Mobile pkg 1 + web pkg 2, 2026-08-08 — mobile still needs a store release to reach phones |
 | F2 | AI posts skip transcode; sweep 5/hour | Critical | 0 | DONE | Publish-time repair kick + wall-clock sweep budget, pkg 3, 2026-08-08 |
-| F3 | Derivative cache TTL — decision #5 resolved | Critical | 0 | DONE | Constants, upload headers and backfill migration, pkg 1–2, 2026-08-08 |
+| F3 | Derivative cache TTL — decision #5 resolved | Critical | 0 | IN PROGRESS | Constants + upload headers + metadata migration deployed 2026-08-08, but the CDN still serves the old headers — needs an SDK-write backfill to purge |
 | F11 | Web `/feed` drops the ranking cursor | Critical | 0 | DONE | Cursor threaded through load-more, retry and snapshot, pkg 4, 2026-08-08 |
 | F13 | v2 stats refresh starves past 1,000 rows | High | 0 | DONE | Migration + fact index, pkg 5, 2026-08-08 |
 | F7a | Facts for all candidates; unbatched events | High | 0 | TODO | |
@@ -273,7 +273,30 @@ That also makes the backfill two-directional, and its larger half is a **safety 
 
 **Backfill mechanism.** A migration — `supabase/migrations/20260808120000_showcase_media_cache_ttl_backfill.sql` — rewriting `storage.objects.metadata->>'cacheControl'`, rather than one of the `backfill:*` scripts. Storage exposes no metadata-only write through supabase-js, so a script would have to download and re-upload all 615 MB purely to change a header, churning every object's version; the paths are write-once, so the bytes and ETags are already correct. This project's migrations already cover the `storage` schema.
 
-**Verify after deploy** — this is the step that catches a wrong assumption about where Storage reads the header from. `curl -I` a `.preview.<hash>.webp` and confirm `cache-control: max-age=86400`. Supabase's CDN may keep serving a previously cached header until its own entry expires, so pick a path that has not just been fetched.
+**Verified after deploy on 2026-08-08, and it failed. The metadata backfill does not reach the CDN — F3 is back to IN PROGRESS.**
+
+What was confirmed working:
+- The migration applied in production; all **99** `showcase_media` objects now read `max-age=86400` in `storage.objects.metadata`, replacing the three-way 31536000/3600/300 split.
+- The constant change is deployed, so objects written from now on carry the new TTL through the SDK.
+
+What is **not** working, and why:
+
+```
+curl -I .../showcase_media/posts/.../1000292264.preview.<hash>.webp
+  cf-cache-status: HIT
+  cache-control: public, max-age=31536000      <- still the old year
+curl -I .../showcase_media/showcase/.../generated_....png
+  cf-cache-status: HIT
+  cache-control: public, max-age=300           <- still the old five minutes
+```
+
+Every object still serves its **previous** header. This is not staleness that will age out: a request with `Cache-Control: no-cache` and a request with a never-seen query string both return `HIT`, so the edge entry cannot be revalidated or bypassed from the client, and the 300s objects are long past any TTL that would have expired them naturally.
+
+**The cause is the mechanism, not the value.** Supabase's Smart CDN purges an object's edge entry when that object is written **through the Storage API**. A migration that updates `storage.objects.metadata` with SQL changes what the origin would say but never tells the CDN anything, so the edge keeps serving whatever it captured. The audit's original instruction — hang the backfill off the existing `backfill:*` scripts — was right for a reason this document previously dismissed: a script re-writing objects through the SDK is not merely a slower way to set metadata, **it is the only way to invalidate the cache**.
+
+Note the direction of the residual risk: the 60 content-hashed derivatives are still advertising a **one-year** TTL, so the takedown-exposure improvement claimed for this item has not landed. That is the pre-existing state, not a regression, but it is not fixed either.
+
+**To finish F3**, add a `backfill:showcase-media-cache` script that, for each object in `showcase_media`, downloads and re-uploads it through `storage.update()` with `cacheControl` set from `SHOWCASE_PUBLIC_MEDIA_CACHE_TTL_SECONDS`, so each write purges its own edge entry. ~615 MB of transfer, once. Keep the migration: it makes the origin correct, which is what any newly-populated edge will read. Then re-run the two `curl -I` checks above and require `max-age=86400` on both an original and a derivative.
 
 **Related.** Supabase's Smart CDN guidance notes that fresh signed tokens create distinct cache keys, which is a second reason to prefer public immutable derivatives over signed URLs for public media.
 
@@ -590,5 +613,7 @@ Two independent audits produced different headline numbers. Both were right abou
 | 2026-08-08 | Initial audit; all items TODO. Baseline commit `63b9a3b`. | Claude Code |
 | 2026-08-08 | Pre-work review amendments: F3 reframed against the documented moderation TTL constraint (new decision #5); every-push-deploys warning added; mobile items consolidated onto the store-release train; workflow rewritten for one-conversation-per-phase sequential execution (no worktrees); evidence re-verified at `8a69de5`. | Claude Code |
 | 2026-08-08 | Decisions recorded: #1 spend cap **ON and staying on** (owner), #5 derivative TTL **1-day compromise** (owner), #2 raw fact retention **30 days** (owner delegated the call). Work package 1 landed — F1 mobile viewer, F3 mobile upload header, F10 mobile 404 fallback. Corrections to the audit as written: no mutable/immutable TTL split is needed because every public showcase path is write-once; `stale-while-revalidate` is unreachable through supabase-js; the `.copy()` cache-control inheritance lives in `post-publish-service`/`post-update-service`, not `showcase-publish-service`; and the mobile viewer had two full-source paths, not the one cited. | Claude Code |
+| 2026-08-08 | **F11 DONE** (ranked feed continues by cursor; three call sites needed it, the `sessionStorage` snapshot being the subtle one). **F13 DONE** (v2 refreshes ported to v1's staleness-ordered candidate selection — the v1 audit this called for found v1 was already correct and v2 had regressed it — plus the missing `feed_delivery_facts` index). | Claude Code |
+| 2026-08-08 | **F3 reopened after post-deploy verification.** The metadata backfill applied — all 99 objects read `max-age=86400` in `storage.objects` — but every object still *serves* its old header, and neither `no-cache` nor a novel query string can force revalidation. Supabase's Smart CDN only purges an edge entry when the object is written through the Storage API, so a SQL metadata update is invisible to it. The audit's original "hang it off the `backfill:*` scripts" instruction was right for a reason this document had dismissed: re-writing through the SDK is not a slower way to set metadata, it is the only way to invalidate the cache. Needs a `backfill:showcase-media-cache` script. | Claude Code |
 | 2026-08-08 | Work package 3, part one — **F2 DONE** (publish-time repair kick; sweep bounded by a 60s wall clock rather than a five-row count, which bounded nothing: five rows at a 120s ffmpeg timeout could occupy 600s of a 300s invocation). **F6 partly done** — read limits on all five cited GETs; the `top-sales` precompute is still open, so F6 stays IN PROGRESS. **F10 webhook budget DONE** — `/api/webhooks/kie` was the only media route left at `maxDuration = 60` while its own download timeout was also 60s. | Claude Code |
 | 2026-08-08 | Work package 2 landed — F1 web (carousel every mode, profile hover video), F3 server constants plus a backfill migration over `storage.objects`, F10 studio grid and unoptimized images. **F1 and F3 are now DONE.** Material correction from measuring production: `showcase_media` held three generations of cache policy, not the single 300s the finding described — 60 content-hashed derivatives at a **full year**, 29 originals at supabase-js's default 3600, and only 10 at 300s. The repo had immutable derivative caching until 2026-07-29 and gave it up for moderation, so decision #5 was really about how much of that year to restore, and the backfill moves 60 objects *down* (a live takedown exposure) as well as 39 up. | Claude Code |
