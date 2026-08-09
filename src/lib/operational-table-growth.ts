@@ -48,6 +48,14 @@ export const OPERATIONAL_TABLE_ROW_BUDGETS: Record<string, { warning: number; de
   feed_events: { warning: 200_000, degraded: 1_000_000 },
   feed_session_items: { warning: 200_000, degraded: 1_000_000 },
   feed_sessions: { warning: 50_000, degraded: 250_000 },
+  // F7b. Deliberately generous, and deliberately not the primary signal: at a
+  // 30-day window this table's steady state is ~37k rows at today's traffic and
+  // ~1.8M at 5,000 MAU, so any fixed row ceiling either fires constantly at
+  // scale or never fires at all. It is a backstop against runaway growth;
+  // `feed-retention-lag.ts` is what actually detects a prune falling behind,
+  // because lag reads 0 at any size while the sweep keeps up.
+  feed_delivery_facts: { warning: 3_000_000, degraded: 8_000_000 },
+  workflow_run_step_jobs: { warning: 10_000, degraded: 50_000 },
 };
 
 const DEFAULT_BUDGET = { warning: 100_000, degraded: 500_000 };

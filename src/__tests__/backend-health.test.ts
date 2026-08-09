@@ -178,9 +178,20 @@ function createClient(
     return builder;
   });
 
+  // F7b's retention-lag probe is the collector's only RPC. A healthy fixture
+  // answers with no retained rows, which reports `ok`; omitting it entirely
+  // would surface as FEED_RETENTION_LAG "unmonitored" on every test.
+  const rpc = vi.fn(async (fn: string) => {
+    if (fn === 'get_feed_retention_lag') {
+      return { data: results.__feedRetentionLag ?? [], error: null };
+    }
+    return { data: null, error: null };
+  });
+
   return {
-    client: { from },
+    client: { from, rpc },
     from,
+    rpc,
     builders,
   };
 }

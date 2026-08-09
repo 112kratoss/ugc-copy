@@ -80,7 +80,9 @@ describe('maintainFeedPersonalization', () => {
         p_event_retention_days: 90,
         p_session_retention_days: 2,
         p_limit: 5000,
-        p_fact_retention_days: 400,
+        // F7b / decision #2: 30 days, down from 400. The old setting projected
+        // ~24 GiB of raw facts at 5,000 MAU against an 8 GiB included quota.
+        p_fact_retention_days: 30,
       }],
     ]);
     expect(invalidateFeedCache).toHaveBeenCalledOnce();

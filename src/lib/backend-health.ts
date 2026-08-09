@@ -19,6 +19,10 @@ import {
   type BackendQueueAgeHealth,
   type QueueClient,
 } from '@/lib/backend-queue-age';
+import {
+  collectFeedRetentionLag,
+  type FeedRetentionLagReport,
+} from '@/lib/feed-retention-lag';
 import { getMediaUploadReclaimPolicy } from '@/lib/media-upload-reclaim-policy';
 import { PAYMENT_WEBHOOK_PROCESSING_SERVICE_NAMES } from '@/lib/provider-dependency-telemetry';
 
@@ -326,6 +330,7 @@ export type BackendHealth = {
   generations: BackendGenerationHealth;
   completionQueue: BackendCompletionQueueHealth;
   queueAge: BackendQueueAgeHealth;
+  feedRetentionLag: FeedRetentionLagReport;
   mediaPipeline: BackendMediaPipelineHealth;
   aiUsage: BackendAiUsageHealth;
   providerDependencies: BackendProviderDependencyHealth;
@@ -1432,6 +1437,10 @@ export async function collectBackendHealth(
   // deep enough to matter.
   const queueAgeResult = await collectBackendQueueAgeHealth(client as unknown as QueueClient, now);
 
+  // Retention lag, not just table size: a capped hourly prune can silently stop
+  // keeping up while row counts still look like ordinary growth.
+  const feedRetentionLagResult = await collectFeedRetentionLag(client, now);
+
   const issues = [
     ...healthSampleIssues,
     ...schedulerResult.issues,
@@ -1439,6 +1448,11 @@ export async function collectBackendHealth(
     ...generationResult.issues,
     ...completionQueueResultHealth.issues,
     ...queueAgeResult.issues,
+    ...feedRetentionLagResult.issues.map((issue) => ({
+      severity: issue.severity,
+      code: issue.code,
+      message: issue.message,
+    })),
     ...mediaPipelineResult.issues,
     ...aiUsageResult.issues,
     ...providerDependencyResult.issues,
@@ -1452,6 +1466,7 @@ export async function collectBackendHealth(
     generationResult.health.status,
     completionQueueResultHealth.health.status,
     queueAgeResult.health.status,
+    feedRetentionLagResult.status,
     mediaPipelineResult.health.status,
     aiUsageResult.health.status,
     providerDependencyResult.health.status,
@@ -1477,6 +1492,7 @@ export async function collectBackendHealth(
     generations: generationResult.health,
     completionQueue: completionQueueResultHealth.health,
     queueAge: queueAgeResult.health,
+    feedRetentionLag: feedRetentionLagResult,
     mediaPipeline: mediaPipelineResult.health,
     aiUsage: aiUsageResult.health,
     providerDependencies: providerDependencyResult.health,
