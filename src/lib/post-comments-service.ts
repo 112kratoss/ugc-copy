@@ -8,13 +8,28 @@ import {
   POST_COMMENT_MUTATION_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
-import { logBackendError } from '@/lib/backend-logger';
-import { isUserRelationshipBlocked, loadBlockedCreatorIds } from '@/lib/moderation-service';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
+import {
+  isUserRelationshipBlocked,
+  loadBlockedCreatorIds,
+  loadViewerBlockRelationships,
+} from '@/lib/moderation-service';
 import { getCreatorDisplayName } from '@/lib/profile';
 
 export const POST_COMMENT_PAGE_SIZE = 20;
 export const POST_COMMENT_MAX_PAGE_SIZE = 50;
 export const POST_COMMENT_MAX_LENGTH = 2000;
+/**
+ * F9: the visible-comment scan was `while (true)`.
+ *
+ * It exits when a page is filled or the table runs out, so on a thread where a
+ * viewer has blocked many authors it walked every comment on the post. Ten
+ * batches is far more than any real page needs — at the default page size that
+ * is 200 raw rows examined for 20 visible ones — and it converts an unbounded
+ * walk into a bounded one. Hitting the cap reports `hasMore`, so the client
+ * pages on from the last offset examined instead of being told the thread ended.
+ */
+export const POST_COMMENT_MAX_SCAN_ITERATIONS = 10;
 const UUID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 
 export type PostCommentSort = 'top' | 'newest';
@@ -297,8 +312,39 @@ export async function listPostCommentsForRoute({
   let scanOffset = offset;
   let hasMore = false;
   let nextOffset: number | null = null;
+  let reachedEndOfThread = false;
 
-  scan: while (true) {
+  // F9: loaded once, not once per batch. `loadBlockedCreatorIds` issues two
+  // `user_blocks` queries, and calling it inside an uncapped scan meant two
+  // queries per iteration with no ceiling. The block set is a property of the
+  // viewer, not of the batch, so hoisting it makes the whole scan cost two
+  // queries total however many batches it walks.
+  let blockedIds = new Set<string>();
+  // Tracked explicitly rather than inferred from `blockedIds.size === 0`: an
+  // empty set is the *common* case (a viewer who has blocked nobody), and
+  // treating it as "fall back" would put the per-batch queries back on the
+  // hot path for almost everyone.
+  let useExactPerBatchBlockFilter = false;
+  if (viewerUserId) {
+    try {
+      const relationships = await loadViewerBlockRelationships({ adminSupabase, viewerUserId });
+      blockedIds = relationships.blockedUserIds;
+
+      if (relationships.truncated) {
+        // Beyond the cap the in-memory set is incomplete, and an incomplete
+        // block set shows a viewer content they blocked. Fall back to the
+        // per-batch filtered lookup, which is exact at any list size.
+        logBackendWarning('post_comment_block_set_truncated', { viewerUserId });
+        blockedIds = new Set<string>();
+        useExactPerBatchBlockFilter = true;
+      }
+    } catch (blockError) {
+      logBackendError('failed_to_filter_blocked_post_comments', { error: blockError });
+      return { ok: false, status: 500, body: { error: 'Failed to load comments.' } };
+    }
+  }
+
+  scan: for (let iteration = 0; iteration < POST_COMMENT_MAX_SCAN_ITERATIONS; iteration += 1) {
     const { data, error } = await buildQuery().range(
       scanOffset,
       scanOffset + scanBatchSize - 1,
@@ -310,8 +356,9 @@ export async function listPostCommentsForRoute({
     }
 
     const rows = (data ?? []) as CommentRow[];
-    let blockedIds = new Set<string>();
-    if (viewerUserId && rows.length > 0) {
+
+    // Only reached when the viewer's block list exceeded the cap above.
+    if (useExactPerBatchBlockFilter && viewerUserId && rows.length > 0) {
       try {
         blockedIds = await loadBlockedCreatorIds({
           adminSupabase,
@@ -340,8 +387,25 @@ export async function listPostCommentsForRoute({
       visibleRows.push(row);
     }
 
-    if (rows.length < scanBatchSize) break;
+    if (rows.length < scanBatchSize) {
+      reachedEndOfThread = true;
+      break;
+    }
     scanOffset += rows.length;
+  }
+
+  // Neither a full page nor the end of the thread stopped the scan, so the
+  // iteration cap did. Reporting `hasMore` here is what keeps the cap a
+  // *bound* rather than a silent truncation: the client continues from the
+  // last offset examined instead of being told the conversation ended.
+  if (!hasMore && !reachedEndOfThread) {
+    hasMore = true;
+    nextOffset = scanOffset;
+    logBackendWarning('post_comment_scan_cap_reached', {
+      postId: normalizedPostId,
+      scanOffset,
+      iterations: POST_COMMENT_MAX_SCAN_ITERATIONS,
+    });
   }
 
   const profiles = await loadCommentAuthors(

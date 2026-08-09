@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  POST_COMMENT_MAX_SCAN_ITERATIONS,
   createPostCommentForRoute,
   listPostCommentsForRoute,
   normalizePostCommentBody,
@@ -85,11 +86,15 @@ function createClient({
     };
   });
 
+  const tableReads: Record<string, number> = {};
+
   function from(table: string) {
+    tableReads[table] = (tableReads[table] ?? 0) + 1;
     const eqFilters: Record<string, unknown> = {};
     const isFilters: Record<string, unknown> = {};
     const inFilters: Record<string, unknown[]> = {};
     let orFilter: string | null = null;
+    let limitCount: number | null = null;
 
     const source = (): Row[] => {
       if (table === 'posts') return posts;
@@ -127,6 +132,12 @@ function createClient({
         return query;
       },
       order: () => query,
+      // F9's viewer block load reads the whole list with a cap, so the stub
+      // needs `limit()`; without it the call throws and the listing 500s.
+      limit(count: number) {
+        limitCount = count;
+        return query;
+      },
       async range(start: number, end: number) {
         return { data: filteredRows().slice(start, end + 1), error: null };
       },
@@ -137,14 +148,15 @@ function createClient({
         return { data: { ...row, posts: relatedPost }, error: null };
       },
       then(resolve: (value: { data: Row[]; error: null }) => unknown) {
-        return Promise.resolve({ data: filteredRows(), error: null }).then(resolve);
+        const rows = limitCount === null ? filteredRows() : filteredRows().slice(0, limitCount);
+        return Promise.resolve({ data: rows, error: null }).then(resolve);
       },
     };
 
     return query;
   }
 
-  return { client: { from, rpc } as unknown as SupabaseClient, state };
+  return { client: { from, rpc } as unknown as SupabaseClient, state, tableReads };
 }
 
 describe('post comments service', () => {
@@ -244,6 +256,63 @@ describe('post comments service', () => {
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.body.comments.map((item) => item.id)).toEqual([COMMENT_ID]);
+    });
+
+    it('reads the viewer block list once, however many batches the scan walks', async () => {
+      // F9: loadBlockedCreatorIds issues two user_blocks queries, and it used
+      // to be called per batch inside an uncapped loop. The block set belongs
+      // to the viewer, not the batch, so the whole scan should cost two reads
+      // no matter how far it walks.
+      const blockedId = STRANGER_ID;
+      const blockedComments = Array.from({ length: 60 }, (_, index) => comment({
+        id: `60000000-0000-4000-8000-${String(index + 10).padStart(12, '0')}`,
+        user_id: blockedId,
+      }));
+      const { client, tableReads } = createClient({
+        comments: [...blockedComments, comment({ id: COMMENT_ID, user_id: AUTHOR_ID })],
+        userBlocks: [{ blocker_user_id: POST_OWNER_ID, blocked_user_id: blockedId }],
+      });
+
+      const result = await listPostCommentsForRoute({
+        postId: POST_ID,
+        viewerUserId: POST_OWNER_ID,
+        createAdminSupabase: () => client,
+      });
+
+      expect(result.ok).toBe(true);
+      // Two reads: outgoing blocks and incoming blocks. Three or more batches
+      // were walked to reach the visible comment.
+      expect(tableReads.user_blocks).toBe(2);
+      expect(tableReads.post_comments).toBeGreaterThan(2);
+    });
+
+    it('bounds the scan and reports hasMore rather than claiming the thread ended', async () => {
+      // Every comment is blocked, so the scan can never fill a page. Before the
+      // cap this walked the entire thread; now it stops and tells the client to
+      // continue, which keeps the cap a bound rather than a silent truncation.
+      const blockedId = STRANGER_ID;
+      const blockedComments = Array.from({ length: 400 }, (_, index) => comment({
+        id: `70000000-0000-4000-8000-${String(index + 10).padStart(12, '0')}`,
+        user_id: blockedId,
+      }));
+      const { client, tableReads } = createClient({
+        comments: blockedComments,
+        userBlocks: [{ blocker_user_id: POST_OWNER_ID, blocked_user_id: blockedId }],
+      });
+
+      const result = await listPostCommentsForRoute({
+        postId: POST_ID,
+        viewerUserId: POST_OWNER_ID,
+        createAdminSupabase: () => client,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.body.comments).toEqual([]);
+      expect(result.body.pageInfo.hasMore).toBe(true);
+      expect(result.body.pageInfo.nextOffset).toBeGreaterThan(0);
+      // The cap, not the thread length, decided when to stop.
+      expect(tableReads.post_comments).toBeLessThanOrEqual(POST_COMMENT_MAX_SCAN_ITERATIONS + 1);
     });
 
     it('scans past a fully blocked raw page to return later visible comments', async () => {

@@ -300,6 +300,71 @@ export async function setUserBlockForRoute({
   return { ok: true, body: { success: true, blocked: shouldBlock } };
 }
 
+/**
+ * Upper bound on a viewer's block list before we stop trying to hold it in
+ * memory. Blocking is a deliberate per-person action, so real lists are tens of
+ * entries; the cap exists so one pathological account cannot turn a "load it
+ * once" optimisation into an unbounded read.
+ */
+export const VIEWER_BLOCK_RELATIONSHIP_LIMIT = 5_000;
+
+export type ViewerBlockRelationships = {
+  blockedUserIds: Set<string>;
+  /** True when the viewer has more relationships than the cap, so the set is incomplete. */
+  truncated: boolean;
+};
+
+/**
+ * Loads a viewer's *entire* bidirectional block list in two queries.
+ *
+ * F9: the comments scan called `loadBlockedCreatorIds` once per batch, and that
+ * helper issues two `user_blocks` queries — so an unbounded scan loop issued two
+ * queries per iteration. The block set does not vary by batch: it is a property
+ * of the viewer, bounded by their own behaviour rather than by how many comments
+ * a post has. Loading it once is the same inversion F5 applied to the feed's
+ * hidden-post list — materialise the small thing, not the thing being paged.
+ *
+ * A truncated result is reported rather than silently trusted, because a partial
+ * block set would show a viewer content they have blocked.
+ */
+export async function loadViewerBlockRelationships({
+  adminSupabase,
+  viewerUserId,
+}: {
+  adminSupabase: SupabaseClient;
+  viewerUserId: string;
+}): Promise<ViewerBlockRelationships> {
+  const [viewerBlocks, creatorBlocks] = await Promise.all([
+    adminSupabase
+      .from('user_blocks')
+      .select('blocked_user_id')
+      .eq('blocker_user_id', viewerUserId)
+      .limit(VIEWER_BLOCK_RELATIONSHIP_LIMIT + 1),
+    adminSupabase
+      .from('user_blocks')
+      .select('blocker_user_id')
+      .eq('blocked_user_id', viewerUserId)
+      .limit(VIEWER_BLOCK_RELATIONSHIP_LIMIT + 1),
+  ]);
+
+  if (viewerBlocks.error || creatorBlocks.error) {
+    throw viewerBlocks.error ?? creatorBlocks.error;
+  }
+
+  const outgoing = viewerBlocks.data ?? [];
+  const incoming = creatorBlocks.data ?? [];
+  const truncated = outgoing.length > VIEWER_BLOCK_RELATIONSHIP_LIMIT
+    || incoming.length > VIEWER_BLOCK_RELATIONSHIP_LIMIT;
+
+  return {
+    blockedUserIds: new Set([
+      ...outgoing.map((row) => String(row.blocked_user_id)),
+      ...incoming.map((row) => String(row.blocker_user_id)),
+    ]),
+    truncated,
+  };
+}
+
 export async function loadBlockedCreatorIds({
   adminSupabase,
   creatorIds,
