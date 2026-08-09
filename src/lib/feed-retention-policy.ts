@@ -35,3 +35,22 @@ export const FEED_FACT_RETENTION_DAYS = 30;
  * is what `feed-retention-lag.ts` exists to detect.
  */
 export const FEED_RETENTION_PRUNE_LIMIT = 5000;
+
+/**
+ * How many trailing days the daily rollup recomputes each run.
+ *
+ * Facts are mutated after insert — `served_at`, `opened_at`, `saved_at` and the
+ * rest are stamped as outcomes arrive — so a day's bucket is not final when the
+ * day ends. Three days is comfortably longer than the outcome tail while
+ * keeping each refresh small.
+ */
+export const FEED_FACT_DAILY_LOOKBACK_DAYS = 3;
+
+/**
+ * How long the aggregates live: the 400 days the raw facts used to keep.
+ *
+ * This is the whole point of decision #2 — raw rows shrink to 30 days because
+ * the *aggregates* carry the experiment lookback, not because the lookback was
+ * given up.
+ */
+export const FEED_FACT_DAILY_RETENTION_DAYS = 400;

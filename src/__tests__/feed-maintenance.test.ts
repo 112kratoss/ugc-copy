@@ -19,6 +19,15 @@ describe('maintainFeedPersonalization', () => {
       refresh_post_feed_engagement_stats: { data: 21, error: null },
       refresh_creator_feed_stats: { data: 9, error: null },
       refresh_user_interest_weights: { data: 12, error: null },
+      refresh_feed_delivery_fact_daily: {
+        data: {
+          buckets_refreshed: 6,
+          buckets_pruned: 1,
+          from_date: '2026-07-08',
+          retention_days: 400,
+        },
+        error: null,
+      },
       prune_feed_personalization_data: {
         data: {
           skipped: false,
@@ -45,6 +54,12 @@ describe('maintainFeedPersonalization', () => {
       postEngagementStatsRefreshed: 21,
       creatorStatsRefreshed: 9,
       userInterestProfilesRefreshed: 12,
+      dailyRollup: {
+        bucketsRefreshed: 6,
+        bucketsPruned: 1,
+        fromDate: '2026-07-08',
+        retentionDays: 400,
+      },
       retention: {
         skipped: false,
         events_deleted: 8,
@@ -74,6 +89,14 @@ describe('maintainFeedPersonalization', () => {
         p_lookback_days: 90,
         p_half_life_days: 30,
         p_limit: 1000,
+      }],
+      // F7b: the rollup runs *before* the prune. Aggregating after deleting
+      // would silently drop a day of experiment history rather than fail, so
+      // the order is asserted, not left to chance.
+      ['refresh_feed_delivery_fact_daily', {
+        p_as_of: '2026-07-11T07:20:00.000Z',
+        p_lookback_days: 3,
+        p_retention_days: 400,
       }],
       ['prune_feed_personalization_data', {
         p_as_of: '2026-07-11T07:20:00.000Z',

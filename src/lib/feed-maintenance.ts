@@ -9,6 +9,8 @@ const USER_INTEREST_LOOKBACK_DAYS = 90;
 const USER_INTEREST_HALF_LIFE_DAYS = 30;
 import {
   FEED_EVENT_RETENTION_DAYS,
+  FEED_FACT_DAILY_LOOKBACK_DAYS,
+  FEED_FACT_DAILY_RETENTION_DAYS,
   FEED_FACT_RETENTION_DAYS,
   FEED_RETENTION_PRUNE_LIMIT,
   FEED_SESSION_RETENTION_DAYS,
@@ -26,14 +28,35 @@ type FeedRetentionSummary = {
   facts_deleted?: number;
 };
 
+export type FeedDailyRollupSummary = {
+  bucketsRefreshed: number;
+  bucketsPruned: number;
+  fromDate: string | null;
+  retentionDays: number | null;
+};
+
 export type FeedMaintenanceSummary = {
   asOf: string;
   postStatsRefreshed: number;
   postEngagementStatsRefreshed: number;
   creatorStatsRefreshed: number;
   userInterestProfilesRefreshed: number;
+  dailyRollup: FeedDailyRollupSummary;
   retention: FeedRetentionSummary;
 };
+
+function dailyRollupSummary(value: unknown): FeedDailyRollupSummary {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const count = (raw: unknown) => (typeof raw === 'number' && Number.isFinite(raw) ? raw : 0);
+  return {
+    bucketsRefreshed: count(record.buckets_refreshed),
+    bucketsPruned: count(record.buckets_pruned),
+    fromDate: typeof record.from_date === 'string' ? record.from_date : null,
+    retentionDays: typeof record.retention_days === 'number' ? record.retention_days : null,
+  };
+}
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -127,6 +150,20 @@ export async function maintainFeedPersonalization(
     throw rpcError('refresh_user_interest_weights', interestsResult.error);
   }
 
+  // Deliberately before the prune. The rollup window (3 days) sits well inside
+  // the raw retention window (30), so the order is not load-bearing today —
+  // but aggregating before deleting is the invariant that stays correct if
+  // either number ever changes, and getting it backwards would silently drop a
+  // day of experiment history rather than fail.
+  const dailyRollupResult = await client.rpc('refresh_feed_delivery_fact_daily', {
+    p_as_of: asOf,
+    p_lookback_days: FEED_FACT_DAILY_LOOKBACK_DAYS,
+    p_retention_days: FEED_FACT_DAILY_RETENTION_DAYS,
+  });
+  if (dailyRollupResult.error) {
+    throw rpcError('refresh_feed_delivery_fact_daily', dailyRollupResult.error);
+  }
+
   const pruneResult = await client.rpc('prune_feed_personalization_data', {
     p_as_of: asOf,
     p_event_retention_days: FEED_EVENT_RETENTION_DAYS,
@@ -153,6 +190,7 @@ export async function maintainFeedPersonalization(
       interestsResult.data,
       'refresh_user_interest_weights',
     ),
+    dailyRollup: dailyRollupSummary(dailyRollupResult.data),
     retention: retentionSummary(pruneResult.data),
   };
 }
