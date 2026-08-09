@@ -72,7 +72,8 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 | F8 | Per-request GoTrue round-trip | Medium | 1 | DONE | `getClaims()` verifies locally via WebCrypto against a cached JWKS — no hand-rolled JWT code, 2026-08-09. Premise verified first: JWKS publishes only ES256 with no symmetric key, in prod *and* local. User rebuilt from verified claims only, preserving the "never read the cookie's user" invariant |
 | F9 | Comments scan loop; unindexed top sort | Medium | 1 | DONE | Viewer block set loaded **once** (2 reads per scan, not 2 per batch), scan capped at 10 batches reporting `hasMore`, and `post_comments_toplevel_top_idx` added — `post_comments` had no index reaching `reply_count` at all, 2026-08-09 |
 | F15b | Error tracking, PITR, log drain | Medium | 1 | IN PROGRESS | **`track_io_timing` DONE** (`ALTER ROLE` on `postgres` **and** `authenticator` — role GUCs apply at login and PostgREST `SET ROLE`s), verified collecting. **Error tracking DONE** — browser proven by an event arriving, server wired, source maps uploading. **Second incident recipient DONE and drilled** — the watchdog opens an incident issue, because GitHub emails scheduled-workflow failures to exactly one person; receipt confirmed at `info@magicbooklet.com`. **Provider-cost ledger unblocked** — Kie's export is per-task and its `Task ID` is already `generations.prediction_id`. **Out of scope on budget:** log drain, PITR, paid external monitoring — so the RTO is "last daily backup" |
-| — | Phase 1 certification load test | — | 1 | READY | **Unblocked 2026-08-09.** Phase 1's code tail is complete and deployed; `track_io_timing` is on and collecting; error tracking is live on browser and server with source maps; and the second incident recipient is **verified by drill** — a forced watchdog failure opened an issue and the notification reached `info@magicbooklet.com`. F12 and F10 staying IN PROGRESS are recorded deferrals, not prerequisites. **Remaining caveat, not a blocker:** IO timing was off for the entry baseline, so take a short idle sample before the run or the IO figures have no "before" |
+| — | Phase 1 certification load test | — | 1 | **ATTEMPTED — NOT CERTIFIED** | **Run 2026-08-09; no MAU level certified.** The specified isolated environment **cannot be built**: a Supabase branch dies at 9/171 migrations because the base `remote_schema` migration recorded no statements, so the history cannot rebuild the database (**Finding C** — this also makes F15b's "RTO is last daily backup" optimistic; there is no migrations-only rebuild path). Ran instead against Micro-tuned local Postgres + a production build: **knee between 25 and 50 origin RPS**, clean at 25 (0% error, for-you P95 155 ms), latency collapses 5× at 50 with errors still at zero, authenticated path fails 41.7% at 100. **Not transferable** — `shared_buffers`/`max_connections` unset so the pool criterion was not evaluated, no Vercel, and anonymous throttling is a single-IP artifact. Two production defects found: **Finding A**, `update_post_with_resource_bundle` raises on every call (text-post publish and metadata edits broken since 2026-08-06); **Finding B**, the retention skew guard now silently coerces instead of raising, so this document's own verification recipe cannot detect the incident it was written for. **One-hour soak at 25 RPS ran but produced no valid verdict**: 32.31% error, decomposing into ~16,400 401s from a driver token-refresh race and ~10,200 `fetch failed` 500s from host transport exhaustion (the Docker daemon stopped responding afterwards) — artifacts, not capacity. Webhook-burst and workflow fan-out **not run** — no generation-start family. Prerequisites and the earlier READY note in the certification section |
+| — | ~~Phase 1 certification load test (READY note, 2026-08-09)~~ | — | 1 | superseded | **Unblocked 2026-08-09.** Phase 1's code tail is complete and deployed; `track_io_timing` is on and collecting; error tracking is live on browser and server with source maps; and the second incident recipient is **verified by drill** — a forced watchdog failure opened an issue and the notification reached `info@magicbooklet.com`. F12 and F10 staying IN PROGRESS are recorded deferrals, not prerequisites. **Remaining caveat, not a blocker:** IO timing was off for the entry baseline, so take a short idle sample before the run or the IO figures have no "before" |
 | — | Phase 2 backlog (unnumbered — see the Phase 2 section) | — | 2 | TODO | |
 
 ---
@@ -188,7 +189,19 @@ docker exec supabase_db_magicbooklet psql -U postgres -d postgres -c \
   "select public.prune_feed_personalization_data(now(), 30, 2, 5000, 30);"
 ```
 
-A summary comes back when the constants are legal; an exception when they are not. Where the invariant can be stated in TypeScript, assert it in a unit test as well — `FEED_FACT_RETENTION_DAYS >= FEED_EVENT_RETENTION_DAYS` now is.
+> ⚠️ **Corrected 2026-08-09 — this no longer detects the incident it was written
+> for.** The `event ≤ fact` exception is gone; the function now does
+> `v_fact_retention_days := greatest(p_fact_retention_days, p_event_retention_days)`
+> and **silently coerces** the skew instead of raising. Verified against
+> production. A summary comes back either way, so this call cannot distinguish a
+> legal pair from the 2026-08-08 skew — it will simply retain facts for the
+> longer window, against decision #2's 30-day bound, with nothing raised or
+> logged. Note the argument order too: `(as_of, EVENT, session, limit, FACT)`;
+> transposed, the skewed pair is legal and the check passes for the wrong reason.
+> Full detail in *Finding B* under *Certification attempt — 2026-08-09*.
+
+A summary comes back when the constants are otherwise legal (limits, ranges); an
+exception when they are not. Where the invariant can be stated in TypeScript, assert it in a unit test as well — `FEED_FACT_RETENTION_DAYS >= FEED_EVENT_RETENTION_DAYS` now is.
 
 **A deploy verifying green does not mean the change is safe.** That release passed its own health check because the cron had not yet run with the new constant; the failure armed itself for the next tick. **After deploying anything a scheduled job touches, check `backend_job_runs` on the next cadence** rather than treating promotion as the end of the change:
 
@@ -1448,7 +1461,15 @@ The `I/O Timings` line is absent entirely when the setting is off. Incidentally 
 
 ### Phase 1 certification test
 
-**Status:** READY — **all prerequisites cleared 2026-08-09**
+**Status:** **ATTEMPTED 2026-08-09 — NOT CERTIFIED.** The harness is built and the
+workload runs, but the isolated environment this section specifies **could not be
+created**, and the run that did happen was against a substitute that does not
+reproduce two of the constraints the pass criteria are written against. Results,
+the three defects the attempt exposed, and what has to clear before a real
+certification is possible are in *Certification attempt — 2026-08-09* below.
+
+**Do not read the numbers below as a certified MAU level.** No MAU figure is
+being claimed. The planning table in the *Executive verdict* is unchanged.
 
 **Entry check, recorded 2026-08-09 when the code tail closed.** Every Phase 1 scaling item that could be executed in code has landed: F5, F5b, F7b, F8, F9, F14 and F15a's aggregate layer are DONE. Two things are deliberately **not** blockers, and two things **are**.
 
@@ -1471,6 +1492,238 @@ The `I/O Timings` line is absent entirely when the setting is off. Incidentally 
 Certification, not a smoke test. Use a production-shaped isolated environment with 10k/100k/1M-row fixtures and stepped runs at 5, 10, 25, 50 and 100 origin RPS. Must include: authenticated `for-you` feed **with cursor continuation**, batched feed events, saves/follows/comments/publishing, upload sign and finalize, generation quote and start against a provider stub, webhook bursts and completion draining, workflow fan-out, realistic image and video ingest, and cron overlap with retention cleanup.
 
 Certify only a level that survives a **one-hour soak** with: error rate below 1%; route P95 within SLO; DB CPU and connection pool below 70%; no growing lock or retention backlog; queue age below twice its cadence; provider 429/5xx below 1–2%; no duplicate or orphaned paid generations; and at least 30% remaining headroom.
+
+---
+
+### Certification attempt — 2026-08-09
+
+Harness built, workload driven, **no level certified.** Recorded in full because
+three of the findings are worth more than the run would have been.
+
+**Environment proposed, priced, and abandoned.** The plan was a Supabase preview
+branch (Micro-equivalent, `$0.01344/hr`, ~$1.61 for five days) plus a Vercel
+preview deployment. The branch was created and came back `MIGRATIONS_FAILED`
+after **9 of 171 migrations**. It was deleted immediately; total spend ~$0.003.
+Cause, in *Finding C* below, is a property of this repository rather than of
+branching, so a second attempt will fail the same way.
+
+**Substitute environment, and what it is not.** The run used local Postgres with
+role-level Micro GUCs (`work_mem=2148kB`, `track_io_timing=on`, `log_temp_files=0`
+on both `postgres` and `authenticator`; `authenticator` already carries
+`statement_timeout=8s`) plus a Next.js **production build** on `localhost:3200`,
+against a 100k-tier seeded catalog: 2,000 users, 20,000 posts across 2,000
+distinct creators, 100,020 delivery facts, 5,000 bundles.
+
+Three gaps make its numbers **non-transferable to the pass criteria**:
+
+1. **`shared_buffers` and `max_connections` could not be set** — reserved GUCs,
+   no superuser locally. So the "connection pool below 70%" criterion, which this
+   document is careful to read against a **47% idle floor**, has no floor here at
+   all and was not evaluated.
+2. **The app is not on Vercel.** Route P95 excludes Fluid compute, `bom1`
+   placement and real network latency.
+3. **Anonymous throttling is an artifact.** `showcase-feed:read` keys on
+   `getFeedNetworkKeyHash(request)` for signed-out traffic
+   (`showcase-feed-route-adapter-service.ts:123`), so a single-source generator
+   shares one bucket. The code comment says that ceiling is there "to stop a
+   script" — which is exactly what the driver looks like. **Anonymous families
+   (~34% of the mix) are not capacity signal above ~10 RPS.** Authenticated
+   families key on `viewerUserId` across 600 real users and are sound.
+
+**Stepped ladder** — 120s per step, 600 signed-in users, `publish-post` disabled
+(*Finding A*). "Auth" columns cover only the user-keyed families.
+
+| Target | Achieved | Error | 429 | Auth error | Auth 429 | for-you P95 | P99 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 5 | 4.97 | 0.00% | 0.00% | 0.00% | 0.00% | 115 ms | 160 ms |
+| 10 | 9.92 | 0.00% | 2.11% | 0.00% | 0.00% | 113 ms | 183 ms |
+| 25 | 24.57 | 0.00% | 5.80% | 0.00% | 0.00% | **155 ms** | 222 ms |
+| 50 | 48.44 | 0.00% | 26.50% | 0.00% | 0.00% | 762 ms | 1,263 ms |
+| 100 | 97.83 | **32.89%** | 23.88% | **41.66%** | 1.37% | **21.8 s** | 30.3 s |
+
+**The knee is between 25 and 50 origin RPS, and the wall is below 100.** 25 RPS is
+the last step where nothing degrades. At 50 the error rate is still zero but
+ranked-feed P95 rises **5×** (155 ms → 762 ms) — latency collapse arrives well
+before errors do, so an error-rate-only gate would have called 50 healthy. At 100
+the authenticated path fails outright at 41.66% with a 21.8 s P95; that is
+saturation, not throttling (auth 429 is only 1.37%).
+
+**One-hour soak at 25 RPS — ran to completion, produced no valid verdict.**
+82,506 scored requests, 23.11 RPS achieved, **32.31% error rate**. The same level
+was clean for 120s. That gap is the whole reason a soak exists, but here both
+error classes are **artifacts, not capacity**, so the run neither certifies 25
+RPS nor condemns it:
+
+| Class | Count | Cause |
+|---|---:|---|
+| `401` on every authenticated family | ~16,400 | **Driver bug.** Supabase refresh tokens rotate and are single-use. With 600 users drawn at random, two concurrent requests for the same user both refresh; the second consumes an already-used token, `refreshUser` returns false, and that user 401s for the rest of the run. Error share is ~32% uniformly across authenticated families, which is the signature of a shared auth fault rather than an endpoint problem |
+| `500` on anonymous families and `generation-quote` | ~10,200 | **Host transport exhaustion.** Every one is `TypeError: fetch failed` from Next.js to the local Supabase stack — the HTTP call never completed. Dominated by `Showcase feed rate limit failed` (5,233), i.e. the limiter's own RPC. Afterwards the Docker daemon itself stopped responding to `docker ps`, which places the bottleneck on the single host, not on Postgres |
+
+`marketplace-list` was the one family at **0% error and 0 429s** across the whole
+hour — it is served from the tagged cache and never reaches the database, which
+is F5b's restructure behaving exactly as intended under sustained load.
+
+Two things are worth keeping even though the verdict is void. The **P99 tail
+widens under duration in a way the 120s steps never showed** — ranked-feed P99
+reached 1,190 ms against 222 ms on the equivalent step, while P50 stayed flat at
+69 ms. And **latency degrades before errors appear**: at 50 RPS on the ladder the
+error rate was still exactly 0.00% while P95 had already risen 5×. An
+error-rate-only gate passes 50 and then falls off a cliff at 100. Whatever
+environment certification finally runs in, the gate needs a latency criterion
+that bites before the error criterion does.
+
+**Named cases**
+
+| Case | Result |
+|---|---|
+| Migration-under-old-code skew | **Guard assertion FAILED — see Finding B.** Deployed constants legal; all three cron jobs survived the new schema; no job run recorded a failure |
+| Cron overlap with retention cleanup | **PASS** — six concurrent invocations returned 200/202, no 5xx, no aborted job. Retention lag reported cleanly (126,204 facts, oldest 2026-07-15) |
+| Webhook burst | **NOT RUN** — the driver quotes generations but never *starts* one, so no provider task existed to complete. Needs a generation-start family before the burst means anything |
+| Workflow fan-out | **NOT RUN** — blocked behind the same gap, and see the F12 caveat below |
+
+**F12 caveat, honoured.** F12's body says to build the per-node executor *before*
+certification exercises fan-out. It has not been built. Whenever fan-out is
+driven, what gets certified is the **run-scoped advance** — poison-**node**
+isolation and per-node retry accounting are **not** covered. The case file states
+this inline so a later green run cannot be misread.
+
+#### Finding A — `update_post_with_resource_bundle` raises on every call
+
+**Live in production.** The function references `v_bundle.status` but declares
+only the scalars `v_bundle_id` / `v_bundle_status`; Postgres resolves it as
+`table.column` and raises `missing FROM-clause entry for table "v_bundle"`.
+Introduced 2026-08-06 by `20260806120000_freeze_sold_post_resource_bundles.sql:421`,
+apparently copy-pasted from the sibling at line 705 which correctly declares
+`v_bundle public.post_resource_bundles%ROWTYPE`.
+
+Verified against production `pg_proc`: `update_post_with_resource_bundle` is
+broken; `update_post_with_resource_bundle_and_media` and
+`upsert_post_with_resource_bundle` are not. It is selected at
+`post-resource-bundles-server.ts:1438` whenever `mediaItems === undefined` — so
+**publishing a text post and metadata-only edits are broken**. Reproduced: HTTP
+500, *"saved as a private draft, but publishing failed."*
+
+The guard is also semantically wrong: at that point the bundle has not been read
+(`v_bundle_status` is populated ~20 lines later), so a rename to
+`v_bundle_status` compares against NULL. Work out the intended guard.
+`publish-post` was disabled for the ladder because at 1% of the mix its 100%
+failure sits exactly on the <1% error threshold and would decide certification
+for a reason unrelated to capacity.
+
+**FIXED 2026-08-09** (`8d05483`, migration `20260809220000_fix_update_post_owner_guard.sql`).
+The intended guard turned out to be: none. The fragment is a mis-paste from
+`get_post_resource_bundle_cash_quote` (line 705 of the freeze migration), whose
+`IF NOT FOUND OR v_bundle.status <> 'published'` is a *buyer-side* rule — you
+can only quote a published bundle. An owner-edit path has no such precondition;
+the sold-bundle freeze is enforced in `apply_post_resource_bundle_mutation` and
+the visibility-sync trigger. The guard returns to its pre-20260806 form with
+the `FOR UPDATE` lock kept, and
+`supabase/tests/database/update_post_owner_guard.test.sql` pins both behaviours
+(owner edit on a bundle-less text post succeeds; non-owner still gets the
+message the API maps to 404). Re-enable the `publish-post` family in the next
+certification run.
+
+#### Finding B — the retention skew guard no longer exists
+
+**This document's own verification recipe cannot detect the incident it was
+written for.** *How to work an item* says of
+`prune_feed_personalization_data`: *"A summary comes back when the constants are
+legal; an exception when they are not."* For the fact/event skew that is no
+longer true.
+
+The function now does:
+
+```sql
+v_fact_retention_days := greatest(p_fact_retention_days, p_event_retention_days);
+```
+
+Confirmed against **production**: `coerces_silently = true`, `raises_on_skew =
+false`, and none of its 5 `RAISE EXCEPTION` guards compares event against fact.
+Calling it with the exact incident shape — event=90, fact=30 — **returns a
+summary**.
+
+The 2026-08-08 failure mode is genuinely fixed: the hourly job no longer aborts.
+But the loud failure was replaced by **silence**, and the replacement is not
+free. A future skew now silently retains facts for the **longer** window,
+quietly violating decision #2's 30-day bound against the 8 GiB quota with
+nothing raised and nothing logged. The retention-lag monitor reads 0 throughout,
+because the sweep is keeping up — with the wrong window.
+
+Note the argument order when re-testing: `(as_of, EVENT, session, limit, FACT)`.
+Transposed, the skewed pair is legal and the check silently passes.
+
+**FIXED 2026-08-09** (migration `20260809230000_report_feed_retention_clamp.sql`),
+in three layers so the clamp can never fire unobserved:
+
+1. The prune summary now reports `fact_retention_days_requested`,
+   `fact_retention_days_applied` and `fact_retention_clamped` — the visibility
+   the clamp migration promised but never implemented. pgTAP pins both
+   directions (`feed_retention_clamp_reporting.test.sql`).
+2. `maintainFeedPersonalization` logs a structured
+   `feed_retention_clamped` warning whenever the flag is set, so a clamped run
+   is in the job record and the logs, not just a jsonb nobody reads.
+3. Backend health reports the policy skew *continuously and without a query*:
+   `buildFeedRetentionPolicySkewIssue` compares the two policy constants and
+   raises a `FEED_RETENTION_POLICY_SKEW` warning through the existing
+   retention-lag report, and a unit test pins the live constants as unskewed —
+   the suite itself now fails in the state that broke feed maintenance hourly.
+
+**Updated verification recipe** (replaces the "exception when they are not"
+recipe this finding invalidated): call the RPC with the incident shape
+`(now(), 90, 2, 5000, 30)` and assert `fact_retention_clamped = true` with
+`fact_retention_days_applied = 90`; then confirm `/api/ops/backend-health`
+carries `FEED_RETENTION_POLICY_SKEW` whenever `FEED_FACT_RETENTION_DAYS <
+FEED_EVENT_RETENTION_DAYS`.
+
+#### Finding C — the migration history cannot rebuild the database
+
+Verified against production's `supabase_migrations.schema_migrations`:
+
+- `20260223171338 / remote_schema` has **NULL recorded statements**. The base
+  schema was created outside the migration history entirely.
+- `20260317090245 / showcase_security_and_backfill` carries a backfill
+  referencing `category`, a column a from-scratch replay never creates. Postgres
+  logs `column "category" does not exist` and the branch halts at 9/171.
+
+`supabase db reset --local` passes only because the local migration **files**
+have diverged from the statements production actually recorded — an
+edited-after-apply violation of this document's own rule, now visible.
+
+Two consequences, the second larger than this test:
+
+1. **Supabase branching is unusable here** until the history is made
+   self-sufficient (squash a real baseline into the first migration).
+2. **F15b's "the RTO is last daily backup" is optimistic.** There is no
+   migrations-only rebuild path at all. If a backup is unrestorable, the schema
+   cannot be reconstructed from the repository.
+
+#### What has to clear before a real certification
+
+1. ~~Fix *Finding A*, or publishing stays uncertified.~~ **Done 2026-08-09**
+   (`8d05483`); re-enable the `publish-post` family.
+2. Make the migration history replayable (*Finding C*), which unblocks branching.
+3. Stand up the environment this section specifies — branch or fresh project —
+   with a Vercel preview, so pool and route P95 become measurable.
+4. Add a generation-**start** family so the webhook-burst and workflow-fan-out
+   cases have provider tasks to work with.
+5. Drive anonymous families from multiple source addresses, or exclude them and
+   record the exclusion.
+6. **Fix the driver's token refresh before any soak is believed.** Serialise
+   refresh per user (a single in-flight promise per identity) so rotating
+   single-use refresh tokens are never consumed twice; treat a failed refresh as
+   a driver fault and re-authenticate rather than scoring 401s as application
+   errors.
+7. **Drive load from a separate host from the one under test.** At 25 RPS the
+   generator, the Next.js server, Postgres, PostgREST, Kong and GoTrue all shared
+   one machine, and the failure that ended the soak was that host running out of
+   transport capacity — not the application.
+
+Harness lives in `scripts/certification/`: `seed-fixtures.mjs`,
+`cert-load-test.mjs`, `provider-stub.mjs`, `cert-cases.mjs`. The provider stub is
+reached through an env-gated seam in `provider-fetch.ts` (`KIE_API_BASE_URL`)
+that rewrites only `api.kie.ai`, is ignored when `VERCEL_ENV=production`, and
+rewrites before telemetry so the recorded host proves where traffic went.
+**Provider spend for this attempt: $0.**
 
 ---
 
@@ -1530,6 +1783,8 @@ Two independent audits produced different headline numbers. Both were right abou
 
 | Date | Change | By |
 |---|---|---|
+| 2026-08-09 | **Certification Findings A and B fixed.** **A** (`8d05483`, `20260809220000`): the owner guard's `v_bundle.status` fragment was a mis-paste from the buyer-side quote function `get_post_resource_bundle_cash_quote` — there was no intended guard change; restored to plain `IF NOT FOUND`, `FOR UPDATE` kept, pgTAP pins owner-edit success and non-owner rejection. Text-post publish and metadata edits work again after three broken days. **B** (`20260809230000`): the clamp now reports `requested/applied/clamped` in its summary (the visibility its own migration promised but never implemented), `maintainFeedPersonalization` logs `feed_retention_clamped`, health raises `FEED_RETENTION_POLICY_SKEW` from the policy constants with zero queries, and the suite pins the live constants as unskewed. Verification recipe in Finding B replaced accordingly. | Claude Code |
+| 2026-08-09 | **Phase 1 certification attempted — NOT certified, no MAU level claimed.** Harness added under `scripts/certification/` (seeder, mixed-workload driver, provider stub, named cases) plus an env-gated `KIE_API_BASE_URL` seam in `provider-fetch.ts`. Stepped ladder run: knee between 25 and 50 origin RPS. Three findings recorded in *Certification attempt — 2026-08-09*: **A** `update_post_with_resource_bundle` raises on every call in production; **B** the retention skew guard silently coerces rather than raising, invalidating this document's own verification recipe; **C** the migration history cannot rebuild the database, which blocks Supabase branching and weakens F15b's recorded RTO. | Claude Code |
 | 2026-08-08 | Initial audit; all items TODO. Baseline commit `63b9a3b`. | Claude Code |
 | 2026-08-08 | Pre-work review amendments: F3 reframed against the documented moderation TTL constraint (new decision #5); every-push-deploys warning added; mobile items consolidated onto the store-release train; workflow rewritten for one-conversation-per-phase sequential execution (no worktrees); evidence re-verified at `8a69de5`. | Claude Code |
 | 2026-08-08 | Decisions recorded: #1 spend cap **ON and staying on** (owner), #5 derivative TTL **1-day compromise** (owner), #2 raw fact retention **30 days** (owner delegated the call). Work package 1 landed — F1 mobile viewer, F3 mobile upload header, F10 mobile 404 fallback. Corrections to the audit as written: no mutable/immutable TTL split is needed because every public showcase path is write-once; `stale-while-revalidate` is unreachable through supabase-js; the `.copy()` cache-control inheritance lives in `post-publish-service`/`post-update-service`, not `showcase-publish-service`; and the mobile viewer had two full-source paths, not the one cited. | Claude Code |

@@ -45,10 +45,31 @@ export type FeedRetentionLagEntry = {
 
 export type FeedRetentionLagIssue = {
   severity: 'warning' | 'degraded';
-  code: 'FEED_RETENTION_LAG';
+  code: 'FEED_RETENTION_LAG' | 'FEED_RETENTION_POLICY_SKEW';
   tableName: string;
   message: string;
 };
+
+/**
+ * Finding B (2026-08-09 retention incident): the prune RPC clamps a fact
+ * window shorter than the event window instead of raising, so a skewed policy
+ * no longer fails the job — it silently retains more than configured, hourly.
+ * The clamp is the right runtime behaviour and exactly why the skew must be
+ * caught here instead: both numbers are compile-time constants, so health can
+ * report the misconfiguration continuously without touching the database.
+ */
+export function buildFeedRetentionPolicySkewIssue(
+  factRetentionDays: number,
+  eventRetentionDays: number,
+): FeedRetentionLagIssue | null {
+  if (factRetentionDays >= eventRetentionDays) return null;
+  return {
+    severity: 'warning',
+    code: 'FEED_RETENTION_POLICY_SKEW',
+    tableName: 'feed_delivery_facts',
+    message: `Feed retention policy is skewed: facts are configured for ${factRetentionDays} day(s) but events for ${eventRetentionDays}. The prune clamps facts up to ${eventRetentionDays} day(s) instead of failing, so fix the policy constants — the configured fact window is not what production retains.`,
+  };
+}
 
 export type FeedRetentionLagReport = {
   status: FeedRetentionLagStatus;
@@ -164,18 +185,25 @@ export async function collectFeedRetentionLag(
   }
 
   const tables = normalizeFeedRetentionLagRows(rows, now);
-  const issues: FeedRetentionLagIssue[] = tables
-    .filter((entry) => entry.status !== 'ok')
-    .map((entry) => ({
-      severity: entry.status === 'degraded' ? 'degraded' as const : 'warning' as const,
-      code: 'FEED_RETENTION_LAG' as const,
-      tableName: entry.tableName,
-      message: `${entry.tableName} retains rows ${entry.ageDays} day(s) old against a ${entry.retentionDays}-day window (${entry.lagDays} day(s) past). The prune is capped at 5,000 rows/hour and is not keeping up.`,
-    }));
+  const skewIssue = buildFeedRetentionPolicySkewIssue(
+    FEED_FACT_RETENTION_DAYS,
+    FEED_EVENT_RETENTION_DAYS,
+  );
+  const issues: FeedRetentionLagIssue[] = [
+    ...(skewIssue ? [skewIssue] : []),
+    ...tables
+      .filter((entry) => entry.status !== 'ok')
+      .map((entry) => ({
+        severity: entry.status === 'degraded' ? 'degraded' as const : 'warning' as const,
+        code: 'FEED_RETENTION_LAG' as const,
+        tableName: entry.tableName,
+        message: `${entry.tableName} retains rows ${entry.ageDays} day(s) old against a ${entry.retentionDays}-day window (${entry.lagDays} day(s) past). The prune is capped at 5,000 rows/hour and is not keeping up.`,
+      })),
+  ];
 
   const status: FeedRetentionLagStatus = tables.some((entry) => entry.status === 'degraded')
     ? 'degraded'
-    : tables.some((entry) => entry.status === 'warning')
+    : issues.length > 0
       ? 'warning'
       : 'ok';
 

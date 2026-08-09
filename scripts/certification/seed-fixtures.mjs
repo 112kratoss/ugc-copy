@@ -1,0 +1,435 @@
+#!/usr/bin/env node
+/**
+ * Phase 1 certification fixture seeder.
+ *
+ * Seeds a production-shaped catalog into an ISOLATED Supabase branch. Refuses to
+ * run against the production project ref — this script writes millions of rows
+ * and must never be pointed at production by accident.
+ *
+ * Sizing is derived, not chosen:
+ *
+ * - The user pool comes from the per-identity rate limits, not from taste. The
+ *   for-you feed allows 60 reads per 10 minutes per identity (0.1 RPS/user), so
+ *   sustaining 100 RPS of ranked reads needs ~300 users at 100% of the limit.
+ *   The default pool is 2,000 so the run measures the application rather than
+ *   `check_backend_rate_limit`.
+ * - Post count drives F5's ranking cost and F7b's facts-per-session, which the
+ *   audit measured at 26-32 only because production has ~34 posts and the
+ *   candidate pool caps at 60. A real catalog pushes that toward the served
+ *   slice bound, which is the number the 5,000 MAU gate actually rests on.
+ *
+ * Usage:
+ *   node scripts/certification/seed-fixtures.mjs --tier 100k
+ *   node scripts/certification/seed-fixtures.mjs --tier 1m --users 3000
+ */
+
+import { createClient } from '@supabase/supabase-js';
+
+const PRODUCTION_PROJECT_REF = 'ildfmhozpibwiopeavfg';
+
+/** Row targets per tier. `posts` is the catalog; `facts` is the telemetry mass. */
+const TIERS = {
+  '10k': { posts: 2_000, facts: 10_000, bundles: 500, comments: 2_000 },
+  '100k': { posts: 20_000, facts: 100_000, bundles: 5_000, comments: 20_000 },
+  '1m': { posts: 200_000, facts: 1_000_000, bundles: 80_000, comments: 200_000 },
+};
+
+const SEED_PASSWORD = 'cert-load-test-password';
+const SEED_EMAIL_DOMAIN = 'cert.invalid';
+
+function parseArgs(argv) {
+  const options = { tier: '100k', users: 2_000 };
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    const value = argv[index + 1];
+    if (argument === '--tier') {
+      if (!TIERS[value]) throw new Error(`--tier must be one of ${Object.keys(TIERS).join(', ')}`);
+      options.tier = value;
+      index += 1;
+    } else if (argument === '--users') {
+      options.users = Number(value);
+      if (!Number.isInteger(options.users) || options.users <= 0) throw new Error('--users must be a positive integer');
+      index += 1;
+    }
+  }
+  return options;
+}
+
+function requireEnvironment() {
+  const url = process.env.CERT_SUPABASE_URL;
+  const serviceRoleKey = process.env.CERT_SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceRoleKey) {
+    throw new Error('CERT_SUPABASE_URL and CERT_SUPABASE_SERVICE_ROLE_KEY are required.');
+  }
+
+  // The single most important guard in this file.
+  if (url.includes(PRODUCTION_PROJECT_REF)) {
+    throw new Error(
+      `Refusing to seed: CERT_SUPABASE_URL points at the production project (${PRODUCTION_PROJECT_REF}).`,
+    );
+  }
+
+  return { url, serviceRoleKey };
+}
+
+/**
+ * Runs a statement through the branch's SQL endpoint. Seeding is bulk DML that
+ * PostgREST cannot express efficiently, so this goes through a helper function
+ * created at setup rather than through the REST API row-by-row.
+ */
+async function runSql(client, sql) {
+  const { data, error } = await client.rpc('cert_exec_sql', { p_sql: sql });
+  if (error) throw new Error(`SQL failed: ${error.message}\n--- statement ---\n${sql.slice(0, 400)}`);
+  return data;
+}
+
+async function installSqlHelper(url, serviceRoleKey) {
+  // Bootstrapped over the Postgres meta endpoint because the helper does not
+  // exist yet. Kept to the branch only; never created on production.
+  const response = await fetch(`${url}/rest/v1/rpc/cert_exec_sql`, {
+    method: 'POST',
+    headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_sql: 'select 1' }),
+  });
+  if (response.ok) return;
+  throw new Error(
+    'cert_exec_sql is not installed on the branch. Create it first with:\n'
+    + '  create or replace function public.cert_exec_sql(p_sql text) returns void\n'
+    + '  language plpgsql security definer as $$ begin execute p_sql; end; $$;\n'
+    + '  revoke all on function public.cert_exec_sql(text) from public, anon, authenticated;\n'
+    + '  grant execute on function public.cert_exec_sql(text) to service_role;\n'
+    + "  notify pgrst, 'reload schema';",
+  );
+}
+
+/**
+ * Auth users are inserted directly rather than through the admin API: 2,000
+ * sequential API calls take minutes, one statement takes a second. GoTrue signs
+ * these in normally because every column it reads on the password grant is set.
+ * The shared bcrypt hash is the same password for every seeded user.
+ */
+async function seedUsers(client, userCount) {
+  console.log(`Seeding ${userCount} auth users...`);
+  await runSql(client, `
+    insert into auth.users (
+      instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
+      created_at, updated_at, raw_app_meta_data, raw_user_meta_data, is_sso_user, is_anonymous,
+      confirmation_token, recovery_token, email_change, email_change_token_new,
+      email_change_token_current, phone_change, phone_change_token, reauthentication_token
+    )
+    select
+      '00000000-0000-0000-0000-000000000000'::uuid,
+      gen_random_uuid(),
+      'authenticated', 'authenticated',
+      'cert-user-' || generation.index || '@${SEED_EMAIL_DOMAIN}',
+      extensions.crypt('${SEED_PASSWORD}', extensions.gen_salt('bf')),
+      now(), now(), now(),
+      '{"provider":"email","providers":["email"]}'::jsonb,
+      '{}'::jsonb, false, false,
+      -- GoTrue scans these into non-nullable Go strings. Left NULL, every sign-in
+      -- fails with "Database error querying schema" and the whole authenticated
+      -- workload silently becomes untestable.
+      '', '', '', '', '', '', '', ''
+    from generate_series(1, ${userCount}) as generation(index)
+    on conflict do nothing;
+  `);
+
+  // Identities are what GoTrue's password grant actually looks up.
+  await runSql(client, `
+    insert into auth.identities (provider_id, user_id, identity_data, provider, created_at, updated_at)
+    select u.id::text, u.id,
+           jsonb_build_object('sub', u.id::text, 'email', u.email, 'email_verified', true),
+           'email', now(), now()
+    from auth.users u
+    where u.email like 'cert-user-%@${SEED_EMAIL_DOMAIN}'
+    on conflict do nothing;
+  `);
+
+  // A signup trigger already created a profile for each auth user with a
+  // GENERATED handle (creator-xxxxxxxx) and no display name. Publishing
+  // publicly requires a *claimed* handle plus a display name, so an upsert that
+  // only refreshed credits left every seeded user unable to publish — the
+  // publish family fails 100% and looks like an application fault.
+  await runSql(client, `
+    insert into public.profiles (id, credits, created_at, display_name, username)
+    select u.id, 100000, now(),
+           'Cert User ' || row_number() over (order by u.email),
+           'certuser' || row_number() over (order by u.email)
+    from auth.users u
+    where u.email like 'cert-user-%@${SEED_EMAIL_DOMAIN}'
+    on conflict (id) do update set
+      credits = excluded.credits,
+      display_name = excluded.display_name,
+      username = excluded.username;
+  `);
+}
+
+/**
+ * Posts carry the review/visibility columns the feed filters on, so a seeded
+ * catalog that skips them ranks zero candidates and the whole run measures an
+ * empty feed.
+ */
+async function seedPosts(client, postCount) {
+  console.log(`Seeding ${postCount} posts...`);
+  const batchSize = 50_000;
+  for (let offset = 0; offset < postCount; offset += batchSize) {
+    const size = Math.min(batchSize, postCount - offset);
+    await runSql(client, `
+      with numbered_authors as (
+        select id, (row_number() over (order by id)) - 1 as author_index
+        from public.profiles
+      ),
+      author_count as (select count(*)::bigint as total from numbered_authors)
+      -- Format mix mirrors a real feed rather than one shape: ~70% media,
+      -- ~30% text. posts_public_surface_check ties format, category and the
+      -- media columns together, so a uniform fixture is not insertable at all.
+      insert into public.posts (
+        id, user_id, visibility, category, title, description, prompt, source_kind,
+        source_tool, created_at, updated_at, post_format, review_status, body,
+        showcase_asset_path, save_count, remix_count, share_count, comment_count
+      )
+      select
+        gen_random_uuid(),
+        author.id,
+        'public',
+        case when shape.is_text then 'text'
+             when shape.roll < 0.5 then 'image' else 'video' end,
+        'Cert post ' || generation.index,
+        'Seeded fixture for the Phase 1 certification load test.',
+        'a cinematic product shot, studio lighting',
+        'magicbooklet', 'kie',
+        now() - (random() * interval '90 days'),
+        now(),
+        case when shape.is_text then 'text' else 'media' end,
+        'visible',
+        case when shape.is_text then 'Seeded certification text post ' || generation.index else null end,
+        case when shape.is_text then null
+             else 'showcase/cert/' || generation.index
+                  || case when shape.roll < 0.5 then '.jpg' else '.mp4' end end,
+        floor(random()*50)::int, floor(random()*10)::int,
+        floor(random()*20)::int, floor(random()*15)::int
+      from generate_series(${offset + 1}, ${offset + size}) as generation(index)
+      cross join lateral (select random() as roll, random() < 0.3 as is_text) shape
+      cross join author_count ac
+      -- Authors are chosen by a prime stride over numbered profiles, which is
+      -- genuinely correlated with the outer row. Neither a bare subquery nor a
+      -- LATERAL that references no outer column works here: both are
+      -- uncorrelated, Postgres evaluates them once for the whole statement, and
+      -- all 20,000 posts end up owned by a single creator — which silently
+      -- disables follow and flattens every creator-diversity term in the ranker.
+      join numbered_authors author
+        on author.author_index = (generation.index * 7919) % ac.total;
+    `);
+    console.log(`  posts: ${Math.min(offset + batchSize, postCount)}/${postCount}`);
+  }
+}
+
+async function seedComments(client, commentCount) {
+  console.log(`Seeding ${commentCount} comments...`);
+  const batchSize = 50_000;
+  for (let offset = 0; offset < commentCount; offset += batchSize) {
+    const size = Math.min(batchSize, commentCount - offset);
+    await runSql(client, `
+      with numbered_targets as (
+        select id, (row_number() over (order by created_at, id)) - 1 as target_index
+        from public.posts
+      ),
+      target_count as (select count(*)::bigint as total from numbered_targets),
+      numbered_authors as (
+        select id, (row_number() over (order by id)) - 1 as author_index
+        from public.profiles
+      ),
+      author_count as (select count(*)::bigint as total from numbered_authors)
+      insert into public.post_comments (id, post_id, user_id, body, status, reply_count, created_at, updated_at)
+      select gen_random_uuid(), target.id, author.id,
+             'Seeded certification comment ' || generation.index,
+             'active', 0,
+             now() - (random() * interval '60 days'), now()
+      from generate_series(${offset + 1}, ${offset + size}) as generation(index)
+      -- Correlated strides, for the same reason as posts: an uncorrelated
+      -- subquery puts every comment on one post by one author.
+      cross join target_count tc
+      cross join author_count ac
+      join numbered_targets target on target.target_index = (generation.index * 6151) % tc.total
+      join numbered_authors author on author.author_index = (generation.index * 7919) % ac.total;
+    `);
+  }
+}
+
+/**
+ * Facts are the table the 5,000 MAU gate is derived from, and the one whose
+ * retention sweep the cron-overlap case exercises. Spread across the retention
+ * window so the prune has real work to do during the soak.
+ */
+async function seedFeedFacts(client, factCount) {
+  // Sessions are derived from the fact count, not from the user count. F7b
+  // measured 26-32 facts per session in production, so a fixture with one
+  // session per user would need hundreds of facts each and collide against
+  // feed_session_items' UNIQUE (session_id, post_id) - a session ranks any
+  // given post at most once.
+  const FACTS_PER_SESSION = 30;
+  const sessionCount = Math.ceil(factCount / FACTS_PER_SESSION);
+  console.log(`Seeding ${factCount} feed delivery facts across ${sessionCount} sessions...`);
+
+  await runSql(client, `
+    with numbered_viewers as (
+      select id, (row_number() over (order by id)) - 1 as viewer_index
+      from public.profiles
+    ),
+    viewer_count as (select count(*)::bigint as total from numbered_viewers)
+    insert into public.feed_sessions (
+      id, viewer_user_id, surface, mode, algorithm_version_id,
+      created_at, last_accessed_at, expires_at
+    )
+    select gen_random_uuid(), viewer.id, 'feed', 'for-you',
+           (select id from public.feed_algorithm_versions order by created_at desc limit 1),
+           now() - (random() * interval '25 days'), now(), now() + interval '1 day'
+    from generate_series(1, ${sessionCount}) as generation(index)
+    -- Correlated stride: sessions must spread across the user pool, not
+    -- collapse onto one viewer, or every seeded fact is one person's history.
+    cross join viewer_count vc
+    join numbered_viewers viewer on viewer.viewer_index = (generation.index * 7919) % vc.total;
+  `);
+
+  // A fact's delivery_id IS a feed_session_items.id — the fact table mirrors
+  // the session item it was served from, and `apply_feed_delivery_outcome`
+  // joins on exactly that. Seeding facts with synthetic ids would produce a
+  // fixture where no feed event can ever attach to its delivery, silently
+  // disabling the hottest write path the soak is meant to exercise.
+  // Posts are assigned to a session by a stride over a stable ordering rather
+  // than at random, so the (session, post) pairs are unique by construction.
+  const sessionBatch = 2_000;
+  for (let offset = 0; offset < sessionCount; offset += sessionBatch) {
+    const size = Math.min(sessionBatch, sessionCount - offset);
+    await runSql(client, `
+      with numbered_sessions as (
+        select id, viewer_user_id, algorithm_version_id,
+               (row_number() over (order by id)) - 1 + ${offset} as session_index
+        from (select id, viewer_user_id, algorithm_version_id from public.feed_sessions
+              order by id limit ${size} offset ${offset}) batch
+      ),
+      numbered_posts as (
+        select id, user_id, (row_number() over (order by created_at, id)) - 1 as post_index
+        from public.posts
+      ),
+      catalog as (select count(*)::bigint as total from numbered_posts),
+      pairs as (
+        select s.id as session_id, s.viewer_user_id, s.algorithm_version_id,
+               p.id as post_id, p.user_id as creator_user_id,
+               slot.position,
+               (array['recency','affinity','exploration','trending'])[1 + floor(random()*4)::int] as candidate_source,
+               now() - (random() * interval '25 days') as ranked_at
+        from numbered_sessions s
+        cross join catalog c
+        cross join generate_series(0, ${FACTS_PER_SESSION - 1}) as slot(position)
+        join numbered_posts p
+          on p.post_index = ((s.session_index * ${FACTS_PER_SESSION} + slot.position) % c.total)
+      ),
+      inserted_items as (
+        insert into public.feed_session_items (
+          session_id, post_id, position, candidate_source, final_score,
+          score_components, is_exploration, ranked_at, served_at
+        )
+        select session_id, post_id, position, candidate_source, random(),
+               jsonb_build_object('recency', random(), 'affinity', random(), 'engagement', random()),
+               candidate_source = 'exploration', ranked_at, ranked_at
+        from pairs
+        returning id, session_id, post_id, position, candidate_source,
+                  final_score, score_components, ranked_at, served_at
+      )
+      insert into public.feed_delivery_facts (
+        delivery_id, session_id, algorithm_version_id, viewer_user_id, post_id,
+        creator_user_id, position, candidate_source, final_score, score_components,
+        surface, mode, ranked_at, served_at
+      )
+      select item.id, item.session_id, s.algorithm_version_id, s.viewer_user_id,
+             item.post_id, p.user_id, item.position, item.candidate_source,
+             item.final_score, item.score_components,
+             'feed', 'for-you', item.ranked_at, item.served_at
+      from inserted_items item
+      join public.feed_sessions s on s.id = item.session_id
+      join public.posts p on p.id = item.post_id;
+    `);
+    console.log(`  facts: ~${Math.min((offset + size) * FACTS_PER_SESSION, factCount)}/${factCount}`);
+  }
+}
+
+async function seedBundles(client, bundleCount) {
+  console.log(`Seeding ${bundleCount} marketplace bundles...`);
+  // F5b restructured this path against a seeded 80,000-bundle catalog; the
+  // certification catalog has to reach that scale or it re-measures the old
+  // small-catalog case that hid the problem.
+  const batchSize = 20_000;
+  for (let offset = 0; offset < bundleCount; offset += batchSize) {
+    const size = Math.min(batchSize, bundleCount - offset);
+    await runSql(client, `
+      insert into public.post_resource_bundles (
+        id, post_id, owner_user_id, access_mode, status, title, summary,
+        prompt_text, price_usd_cents, sales_count, created_at, updated_at
+      )
+      -- access_mode and price are constrained *together*: free must be exactly
+      -- 0, paid must be >= 10 and a multiple of 10. Rolling them independently
+      -- produces rows the table rejects.
+      select gen_random_uuid(), p.id, p.user_id,
+             case when pricing.is_paid then 'paid' else 'free' end,
+             'published',
+             'Cert bundle ' || generation.index,
+             'Seeded certification bundle.',
+             -- A published bundle must carry at least one unlock item; the
+             -- prompt alone satisfies that without inventing attachment jsonb.
+             'a cinematic product shot, studio lighting, 85mm',
+             case when pricing.is_paid
+                  then (array[500, 1200, 2900])[1 + floor(random()*3)::int]
+                  else 0 end,
+             floor(random()*100)::int, now(), now()
+      -- post_id is UNIQUE on this table, so bundles are mapped onto distinct
+      -- posts by offset rather than drawn at random, which collides.
+      from (
+        select id, user_id, row_number() over (order by created_at, id) as sequence
+        from public.posts
+        order by created_at, id
+        limit ${size} offset ${offset}
+      ) p
+      cross join lateral (select ${offset} + p.sequence as index) generation
+      cross join lateral (select random() < 0.5 as is_paid) pricing
+      on conflict (post_id) do nothing;
+    `);
+  }
+}
+
+async function reportSizes(client, url, serviceRoleKey) {
+  const response = await fetch(`${url}/rest/v1/rpc/cert_table_sizes`, {
+    method: 'POST',
+    headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  if (response.ok) console.log(await response.text());
+}
+
+async function main() {
+  const options = parseArgs(process.argv.slice(2));
+  const { url, serviceRoleKey } = requireEnvironment();
+  const tier = TIERS[options.tier];
+
+  console.log(`Seeding tier ${options.tier} into ${new URL(url).host}`);
+  console.log(`  users ${options.users} · posts ${tier.posts} · facts ${tier.facts} · bundles ${tier.bundles}`);
+
+  const client = createClient(url, serviceRoleKey, { auth: { persistSession: false } });
+  await installSqlHelper(url, serviceRoleKey);
+
+  const startedAt = Date.now();
+  await seedUsers(client, options.users);
+  await seedPosts(client, tier.posts);
+  await seedComments(client, tier.comments);
+  await seedBundles(client, tier.bundles);
+  await seedFeedFacts(client, tier.facts);
+  await runSql(client, 'analyze;');
+  await reportSizes(client, url, serviceRoleKey);
+
+  console.log(`Seeded in ${Math.round((Date.now() - startedAt) / 1000)}s`);
+}
+
+main().catch((error) => {
+  console.error(error.message);
+  process.exitCode = 1;
+});

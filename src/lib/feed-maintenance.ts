@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { logBackendWarning } from '@/lib/backend-logger';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
 const POST_STATS_REFRESH_LIMIT = 1000;
@@ -26,6 +27,9 @@ type FeedRetentionSummary = {
   post_feedback_deleted?: number;
   creator_feedback_deleted?: number;
   facts_deleted?: number;
+  fact_retention_days_requested?: number;
+  fact_retention_days_applied?: number;
+  fact_retention_clamped?: boolean;
 };
 
 export type FeedDailyRollupSummary = {
@@ -175,6 +179,17 @@ export async function maintainFeedPersonalization(
     throw rpcError('prune_feed_personalization_data', pruneResult.error);
   }
 
+  const retention = retentionSummary(pruneResult.data);
+  // The clamp is the right runtime behaviour — retaining longer than asked is
+  // recoverable — but it must never pass unobserved: a clamped run means the
+  // configured policy is not what production is actually retaining.
+  if (retention.fact_retention_clamped === true) {
+    logBackendWarning('feed_retention_clamped', {
+      requestedDays: retention.fact_retention_days_requested ?? FEED_FACT_RETENTION_DAYS,
+      appliedDays: retention.fact_retention_days_applied ?? null,
+    });
+  }
+
   return {
     asOf,
     postStatsRefreshed,
@@ -191,6 +206,6 @@ export async function maintainFeedPersonalization(
       'refresh_user_interest_weights',
     ),
     dailyRollup: dailyRollupSummary(dailyRollupResult.data),
-    retention: retentionSummary(pruneResult.data),
+    retention,
   };
 }

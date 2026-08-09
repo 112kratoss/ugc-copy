@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { logBackendWarning } from '@/lib/backend-logger';
 import { maintainFeedPersonalization } from '@/lib/feed-maintenance';
+
+vi.mock('@/lib/backend-logger', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  logBackendWarning: vi.fn(),
+}));
 
 function createRpcClient(results: Record<string, { data: unknown; error: unknown }>) {
   const rpc = vi.fn(async (name: string) => {
@@ -146,5 +152,84 @@ describe('maintainFeedPersonalization', () => {
       now: new Date(Number.NaN),
     })).rejects.toThrow('Feed maintenance time must be a valid date');
     expect(db.rpc).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a clamped retention run as a structured warning, not a silent success', async () => {
+    vi.mocked(logBackendWarning).mockClear();
+    const db = createRpcClient({
+      refresh_post_feed_stats: { data: 0, error: null },
+      refresh_post_feed_engagement_stats: { data: 0, error: null },
+      refresh_creator_feed_stats: { data: 0, error: null },
+      refresh_user_interest_weights: { data: 0, error: null },
+      refresh_feed_delivery_fact_daily: {
+        data: { buckets_refreshed: 0, buckets_pruned: 0, from_date: null, retention_days: 400 },
+        error: null,
+      },
+      prune_feed_personalization_data: {
+        data: {
+          skipped: false,
+          events_deleted: 0,
+          sessions_deleted: 0,
+          assignments_deleted: 0,
+          interests_deleted: 0,
+          post_feedback_deleted: 0,
+          creator_feedback_deleted: 0,
+          facts_deleted: 0,
+          fact_retention_days_requested: 30,
+          fact_retention_days_applied: 90,
+          fact_retention_clamped: true,
+        },
+        error: null,
+      },
+    });
+
+    const summary = await maintainFeedPersonalization(db.client as never, {
+      now: new Date('2026-08-09T15:00:00.000Z'),
+      invalidateFeedCache: vi.fn(),
+    });
+
+    expect(logBackendWarning).toHaveBeenCalledWith('feed_retention_clamped', {
+      requestedDays: 30,
+      appliedDays: 90,
+    });
+    expect(summary.retention.fact_retention_clamped).toBe(true);
+    expect(summary.retention.fact_retention_days_applied).toBe(90);
+  });
+
+  it('does not warn when the retention run applied exactly what was requested', async () => {
+    vi.mocked(logBackendWarning).mockClear();
+    const db = createRpcClient({
+      refresh_post_feed_stats: { data: 0, error: null },
+      refresh_post_feed_engagement_stats: { data: 0, error: null },
+      refresh_creator_feed_stats: { data: 0, error: null },
+      refresh_user_interest_weights: { data: 0, error: null },
+      refresh_feed_delivery_fact_daily: {
+        data: { buckets_refreshed: 0, buckets_pruned: 0, from_date: null, retention_days: 400 },
+        error: null,
+      },
+      prune_feed_personalization_data: {
+        data: {
+          skipped: false,
+          events_deleted: 0,
+          sessions_deleted: 0,
+          assignments_deleted: 0,
+          interests_deleted: 0,
+          post_feedback_deleted: 0,
+          creator_feedback_deleted: 0,
+          facts_deleted: 0,
+          fact_retention_days_requested: 30,
+          fact_retention_days_applied: 30,
+          fact_retention_clamped: false,
+        },
+        error: null,
+      },
+    });
+
+    await maintainFeedPersonalization(db.client as never, {
+      now: new Date('2026-08-09T15:00:00.000Z'),
+      invalidateFeedCache: vi.fn(),
+    });
+
+    expect(logBackendWarning).not.toHaveBeenCalled();
   });
 });

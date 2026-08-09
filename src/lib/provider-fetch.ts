@@ -111,6 +111,72 @@ function parseProviderFetchUrl(input: RequestInfo | URL): URL | null {
   return null;
 }
 
+const PROVIDER_API_HOST = 'api.kie.ai';
+
+let providerBaseUrlOverrideWarned = false;
+
+function warnProviderBaseUrlOverrideOnce(reason: string, baseUrl: string) {
+  if (providerBaseUrlOverrideWarned) return;
+  providerBaseUrlOverrideWarned = true;
+  logBackendWarning('provider_base_url_override_ignored', { reason, baseUrl });
+}
+
+/**
+ * Certification seam — inert unless `KIE_API_BASE_URL` is set.
+ *
+ * The provider host is hard-coded at 17 call sites across 11 modules and the
+ * model catalog supplies only the provider *model* id, never the host, so there
+ * was no way to exercise generation start, webhook bursts or completion
+ * draining under load without billing real generations. Every provider request
+ * funnels through `fetchWithTelemetry`, so redirecting here covers all of them.
+ *
+ * Three deliberate constraints:
+ * - Only the exact `api.kie.ai` host is rewritten. Other external services that
+ *   share this helper are left alone.
+ * - The override is ignored in a production runtime, so a leaked variable can
+ *   never silently route real users' paid generations at a stub. It is ignored
+ *   rather than thrown on, because failing closed here would take generation
+ *   down in production to prevent a misconfiguration that has not happened.
+ *   `VERCEL_ENV` is the gate, not `NODE_ENV` — preview deployments build with
+ *   `NODE_ENV=production` and must still be able to use the seam.
+ * - Rewriting happens before telemetry, so the recorded `host` reports where
+ *   the request actually went. That is what makes "zero requests reached the
+ *   provider" an observation instead of an assumption.
+ */
+function resolveProviderRequestTarget(input: RequestInfo | URL): RequestInfo | URL {
+  const baseUrl = process.env.KIE_API_BASE_URL;
+  if (!baseUrl) return input;
+
+  if (process.env.VERCEL_ENV === 'production') {
+    warnProviderBaseUrlOverrideOnce('production_runtime', baseUrl);
+    return input;
+  }
+
+  let overrideOrigin: URL;
+  try {
+    overrideOrigin = new URL(baseUrl);
+  } catch {
+    warnProviderBaseUrlOverrideOnce('unparseable', baseUrl);
+    return input;
+  }
+
+  if (overrideOrigin.protocol !== 'http:' && overrideOrigin.protocol !== 'https:') {
+    warnProviderBaseUrlOverrideOnce('unsupported_protocol', baseUrl);
+    return input;
+  }
+
+  const requestUrl = parseProviderFetchUrl(input);
+  if (!requestUrl || requestUrl.hostname !== PROVIDER_API_HOST) return input;
+
+  const rewritten = new URL(requestUrl.pathname + requestUrl.search, overrideOrigin);
+
+  if (typeof Request !== 'undefined' && input instanceof Request) {
+    return new Request(rewritten, input);
+  }
+
+  return rewritten;
+}
+
 function getProviderTaskId(url: URL | null): string | undefined {
   if (!url) return undefined;
   return url.searchParams.get('taskId')
@@ -196,6 +262,9 @@ async function fetchWithTelemetry({
   serviceName: string;
   timeoutSignal?: AbortSignal;
 }) {
+  // Resolved before telemetry so the recorded host reflects the request that
+  // was actually made. Identity function unless the certification seam is on.
+  const target = resolveProviderRequestTarget(input);
   const requestInit = timeoutSignal ? { ...init, signal: timeoutSignal } : init;
   const startedAtMs = performance.now();
 
@@ -205,9 +274,9 @@ async function fetchWithTelemetry({
   recordProviderFetchAttempt(serviceName);
 
   try {
-    const response = await fetcher(input, requestInit);
+    const response = await fetcher(target, requestInit);
     emitProviderFetchTelemetry(createProviderFetchTelemetryEvent({
-      input,
+      input: target,
       init: requestInit,
       serviceName,
       timeoutMs,
@@ -219,7 +288,7 @@ async function fetchWithTelemetry({
   } catch (error: unknown) {
     const timedOut = Boolean(timeoutSignal?.aborted && isAbortLikeError(error));
     emitProviderFetchTelemetry(createProviderFetchTelemetryEvent({
-      input,
+      input: target,
       init: requestInit,
       serviceName,
       timeoutMs,

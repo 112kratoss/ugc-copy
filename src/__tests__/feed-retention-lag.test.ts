@@ -6,6 +6,7 @@ import {
 } from '@/lib/feed-retention-policy';
 import {
   buildFeedRetentionLagEntry,
+  buildFeedRetentionPolicySkewIssue,
   collectFeedRetentionLag,
   FEED_RETENTION_LAG_DEGRADED_DAYS,
   FEED_RETENTION_LAG_WARNING_DAYS,
@@ -130,5 +131,33 @@ describe('feed retention lag', () => {
 
     expect(report.status).toBe('ok');
     expect(report.issues).toEqual([]);
+  });
+});
+
+describe('buildFeedRetentionPolicySkewIssue', () => {
+  it('reports a warning when facts are configured shorter than events', () => {
+    // The 2026-08-09 incident's signature: the prune clamps this skew silently,
+    // so health has to be the layer that keeps it visible.
+    const issue = buildFeedRetentionPolicySkewIssue(30, 90);
+
+    expect(issue).not.toBeNull();
+    expect(issue?.severity).toBe('warning');
+    expect(issue?.code).toBe('FEED_RETENTION_POLICY_SKEW');
+    expect(issue?.message).toContain('30 day(s)');
+    expect(issue?.message).toContain('90');
+  });
+
+  it('is silent when the windows are aligned or facts retain longer', () => {
+    expect(buildFeedRetentionPolicySkewIssue(30, 30)).toBeNull();
+    expect(buildFeedRetentionPolicySkewIssue(400, 90)).toBeNull();
+  });
+
+  it('pins the live policy constants as unskewed', () => {
+    // This assertion is the config regression test: it fails the suite the
+    // moment someone reintroduces a fact window shorter than the event window,
+    // which is exactly the state that broke feed maintenance hourly.
+    expect(
+      buildFeedRetentionPolicySkewIssue(FEED_FACT_RETENTION_DAYS, FEED_EVENT_RETENTION_DAYS),
+    ).toBeNull();
   });
 });
