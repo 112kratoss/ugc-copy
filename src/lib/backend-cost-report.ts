@@ -10,6 +10,11 @@ import {
   type OperationalTableGrowthReport,
 } from '@/lib/operational-table-growth';
 
+import {
+  fetchBackendCostAggregates,
+  type BackendCostAggregates,
+} from '@/lib/backend-cost-aggregates';
+
 export type BackendCostReportStatus = 'ok' | 'warning' | 'degraded';
 
 type GenerationCostRow = {
@@ -75,15 +80,22 @@ export type BackendCostBudgetPolicy = {
 };
 
 /**
- * Whether each raw query returned everything in the window or only the first
+ * Whether each source returned everything in the window or only the first
  * QUERY_LIMIT rows.
  *
  * Without this the report gets quietly *more* optimistic as traffic grows:
  * every figure below is computed from whatever the cap returned, so past the
  * cap a sample is presented as the population with no indication anywhere. A
  * truncated source means the numbers drawn from it are lower bounds.
+ *
+ * `mode` says which half of F15a produced the numbers. On `aggregate` the
+ * database grouped the whole window and `truncated` is structurally false —
+ * `rows` is then the exact population rather than a kept-row count, and `limit`
+ * is reported as 0 because no cap applied. On `raw-rows` the collector fell
+ * back to downloading rows and the cap is live again.
  */
 export type BackendCostSampling = {
+  mode: 'aggregate' | 'raw-rows';
   limit: number;
   truncated: boolean;
   sources: Array<{ source: string; rows: number; truncated: boolean }>;
@@ -608,6 +620,109 @@ function buildStorageGrowth(rows: StorageObjectCostRow[]) {
   };
 }
 
+/*
+ * ─── F15a: the same five summaries, from database-side aggregates ────────────
+ *
+ * These sit next to their raw-row twins on purpose. Each one is the *only*
+ * thing the aggregate path adds on top of `get_backend_cost_aggregates`, and
+ * reading it against the builder directly above shows what moved into SQL and
+ * what did not. Nothing here re-derives arithmetic; where a value looks
+ * computed it is policy that must not live in the database.
+ */
+
+function buildGenerationSpendFromAggregates(
+  aggregates: BackendCostAggregates,
+): BackendCostReport['generationSpend'] {
+  const { generations } = aggregates;
+  return {
+    recentRuns: generations.rowCount,
+    recentCreditCost: rounded(generations.recentCreditCost),
+    failedPaidCount: generations.failedPaidCount,
+    failedPaidCreditCost: rounded(generations.failedPaidCreditCost),
+    completedOutputCount: generations.completedOutputCount,
+    byStatus: generations.byStatus,
+    byModel: generations.byModel,
+  };
+}
+
+function buildAiUsageSpendFromAggregates(
+  aggregates: BackendCostAggregates,
+): BackendCostReport['aiUsageSpend'] {
+  const { aiUsage } = aggregates;
+  return {
+    recentEvents: aiUsage.rowCount,
+    recentCreditCost: rounded(aiUsage.recentCreditCost),
+    failedCount: aiUsage.failedCount,
+    byFeature: aiUsage.byFeature,
+    byStatus: aiUsage.byStatus,
+  };
+}
+
+function buildProviderDependenciesFromAggregates(aggregates: BackendCostAggregates) {
+  const { providerDependencies } = aggregates;
+  return {
+    recentEvents: providerDependencies.rowCount,
+    // Unchanged by the aggregate move, and worth restating: the underlying
+    // table still only holds failures and slow calls, so this is a volume
+    // signal. Computing it in SQL does not make it a denominator.
+    population: 'failures-and-slow-calls' as const,
+    failedCount: providerDependencies.failedCount,
+    slowCount: providerDependencies.slowCount,
+    maxDurationMs: providerDependencies.maxDurationMs,
+    byService: providerDependencies.byService,
+    failuresByService: providerDependencies.failuresByService,
+    timeoutsByService: providerDependencies.timeoutsByService,
+    byModel: providerDependencies.byModel,
+    failuresByModel: providerDependencies.failuresByModel,
+    timeoutsByModel: providerDependencies.timeoutsByModel,
+  };
+}
+
+/**
+ * The quote and media-read splits are derived here rather than in SQL. Which
+ * scopes count as a media read is a product decision that changes whenever a
+ * route is added — `MEDIA_READ_RATE_LIMIT_SCOPES` is the single place that
+ * knows, and pushing it into a migration would fork it into two places that
+ * drift silently.
+ */
+function buildRateLimitPressureFromAggregates(
+  aggregates: BackendCostAggregates,
+): BackendCostReport['rateLimitPressure'] {
+  const { rateLimits } = aggregates;
+  let quoteRequests = 0;
+  let mediaReadRequests = 0;
+
+  for (const [scope, requestCount] of Object.entries(rateLimits.byScope)) {
+    if (scope === 'generation-model:quote') {
+      quoteRequests += requestCount;
+    }
+    if (MEDIA_READ_RATE_LIMIT_SCOPES.has(scope)) {
+      mediaReadRequests += requestCount;
+    }
+  }
+
+  return {
+    totalRequests: rateLimits.totalRequests,
+    quoteRequests,
+    mediaReadRequests,
+    maxWindowRequestCount: rateLimits.maxWindowRequestCount,
+    byScope: rateLimits.byScope,
+  };
+}
+
+function buildStorageGrowthFromAggregates(
+  aggregates: BackendCostAggregates,
+): BackendCostReport['storageGrowth'] {
+  const { storage } = aggregates;
+  return {
+    recentObjectCount: storage.rowCount,
+    recentBytes: storage.recentBytes,
+    largestObjectBytes: storage.largestObjectBytes,
+    bytesByBucket: storage.bytesByBucket,
+    objectsByBucket: storage.objectsByBucket,
+  };
+}
+
 function buildCostIssues({
   generationSpend,
   aiUsageSpend,
@@ -726,13 +841,66 @@ function buildCostIssues({
   return issues;
 }
 
-export async function collectBackendCostReport(
+/**
+ * The five window summaries plus how they were obtained. Both paths produce
+ * this identically — that equivalence is what
+ * `src/__tests__/backend-cost-aggregates.test.ts` asserts.
+ */
+type BackendCostSummaries = {
+  generationSpend: BackendCostReport['generationSpend'];
+  aiUsageSpend: BackendCostReport['aiUsageSpend'];
+  providerDependencies: Omit<
+    BackendCostReport['providerDependencies'],
+    'recentAttempts' | 'attemptsByService'
+  >;
+  rateLimitPressure: BackendCostReport['rateLimitPressure'];
+  storageGrowth: BackendCostReport['storageGrowth'];
+  sampling: BackendCostSampling;
+  storageGrowthUnavailable: boolean;
+};
+
+/**
+ * F15a's aggregate path: one RPC, the whole window, no cap.
+ *
+ * `sources` still carries a row count per source, but here it is the exact
+ * population rather than however many rows fitted under the cap, and
+ * `truncated` is false because nothing was sampled. Storage is read inside the
+ * SECURITY DEFINER function, so the PostgREST `storage` schema exposure that
+ * the raw path has to tolerate is not involved at all.
+ */
+function summarizeFromAggregates(aggregates: BackendCostAggregates): BackendCostSummaries {
+  return {
+    generationSpend: buildGenerationSpendFromAggregates(aggregates),
+    aiUsageSpend: buildAiUsageSpendFromAggregates(aggregates),
+    providerDependencies: buildProviderDependenciesFromAggregates(aggregates),
+    rateLimitPressure: buildRateLimitPressureFromAggregates(aggregates),
+    storageGrowth: buildStorageGrowthFromAggregates(aggregates),
+    sampling: {
+      mode: 'aggregate',
+      limit: 0,
+      truncated: false,
+      sources: [
+        { source: 'generations', rows: aggregates.generations.rowCount, truncated: false },
+        { source: 'ai_usage_events', rows: aggregates.aiUsage.rowCount, truncated: false },
+        { source: 'provider_dependency_events', rows: aggregates.providerDependencies.rowCount, truncated: false },
+        { source: 'backend_rate_limits', rows: aggregates.rateLimits.rowCount, truncated: false },
+        { source: 'storage.objects', rows: aggregates.storage.rowCount, truncated: false },
+      ],
+    },
+    storageGrowthUnavailable: false,
+  };
+}
+
+/**
+ * The pre-F15a path, kept live as the fallback for a database without
+ * `get_backend_cost_aggregates`. Keeping it is what stops this change from
+ * trading a tested JS implementation for an untested SQL one — see the header
+ * of `backend-cost-aggregates.ts`.
+ */
+async function summarizeFromRawRows(
   client: SupabaseClient,
-  now = new Date(),
-  options: CollectBackendCostReportOptions = {},
-): Promise<BackendCostReport> {
-  const since = new Date(now.getTime() - RECENT_WINDOW_HOURS * 60 * 60 * 1000).toISOString();
-  const budgetPolicy = buildBackendCostBudgetPolicy(options.budgetPolicy, options.environment);
+  since: string,
+): Promise<BackendCostSummaries> {
   const [
     generationsResult,
     aiUsageResult,
@@ -807,11 +975,50 @@ export async function collectBackendCostReport(
       storageGrowthUnavailable ? [] : (storageObjectsResult.data ?? []) as StorageObjectCostRow[],
     ),
   );
-  const sampling: BackendCostSampling = {
-    limit: QUERY_LIMIT,
-    truncated: samplingSources.some((source) => source.truncated),
-    sources: samplingSources,
+  return {
+    generationSpend,
+    aiUsageSpend,
+    providerDependencies,
+    rateLimitPressure,
+    storageGrowth,
+    sampling: {
+      mode: 'raw-rows',
+      limit: QUERY_LIMIT,
+      truncated: samplingSources.some((source) => source.truncated),
+      sources: samplingSources,
+    },
+    storageGrowthUnavailable,
   };
+}
+
+export async function collectBackendCostReport(
+  client: SupabaseClient,
+  now = new Date(),
+  options: CollectBackendCostReportOptions = {},
+): Promise<BackendCostReport> {
+  const since = new Date(now.getTime() - RECENT_WINDOW_HOURS * 60 * 60 * 1000).toISOString();
+  const budgetPolicy = buildBackendCostBudgetPolicy(options.budgetPolicy, options.environment);
+
+  // Aggregates first, raw rows only if the function is unavailable. The
+  // fallback is a real code path, not dead code: it runs against any database
+  // that has not applied 20260809200000.
+  const aggregates = await fetchBackendCostAggregates(
+    client,
+    since,
+    GENERATED_STORAGE_BUCKETS,
+    SLOW_PROVIDER_DURATION_MS,
+  );
+  const {
+    generationSpend,
+    aiUsageSpend,
+    providerDependencies,
+    rateLimitPressure,
+    storageGrowth,
+    sampling,
+    storageGrowthUnavailable,
+  } = aggregates
+    ? summarizeFromAggregates(aggregates)
+    : await summarizeFromRawRows(client, since);
 
   // Attempt counters are the failure-rate denominator; fail soft because a
   // database without the migration must still produce a report. The whole
@@ -853,6 +1060,12 @@ export async function collectBackendCostReport(
     storageGrowth,
     budgetPolicy,
   });
+  // Note there is deliberately no issue raised for `mode === 'raw-rows'`. The
+  // fallback is exact whenever it does not truncate, so alerting on it would
+  // fire on every collection against a database that simply has not applied the
+  // migration yet — local stacks included. `sampling.mode` carries the state as
+  // data; truncation below is the thing that is actually wrong. State on the
+  // payload, alarms only for lost accuracy.
   if (sampling.truncated) {
     // Deliberately an issue rather than a footnote: every figure drawn from a
     // truncated source is a lower bound, and the failure mode this prevents is
