@@ -148,6 +148,11 @@ jobs:
         if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job runs without actions/checkout on purpose, so `gh` has no
+          # git remote to infer the repository from and fails with
+          # "not a git repository". GH_REPO supplies it without paying for a
+          # checkout on every hourly run.
+          GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           INCIDENT_TITLE: Backend alert watchdog is failing
         run: |
@@ -174,6 +179,11 @@ jobs:
         if: success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This job runs without actions/checkout on purpose, so `gh` has no
+          # git remote to infer the repository from and fails with
+          # "not a git repository". GH_REPO supplies it without paying for a
+          # checkout on every hourly run.
+          GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           INCIDENT_TITLE: Backend alert watchdog is failing
         run: |
