@@ -108,7 +108,19 @@ export function buildFeedRetentionLagEntry(params: {
   };
 }
 
-export function normalizeFeedRetentionLagRows(data: unknown, now: Date): FeedRetentionLagEntry[] {
+/**
+ * The parameter is deliberately not called `now`.
+ *
+ * It was, and passing it on as the object shorthand `{ ..., now }` produced a
+ * build that threw `ReferenceError: now is not defined` at runtime — the
+ * minifier inlined `buildFeedRetentionLagEntry` here, renamed the enclosing
+ * parameter, and left the shorthand's implicit reference pointing at the old
+ * name. Source, unit tests and typecheck all pass, because the fault is
+ * introduced by the bundler; only the built artifact is broken, and the health
+ * endpoint 500s. Naming the parameter differently forces an explicit
+ * `now: asOf` and removes the shorthand the inliner mishandles.
+ */
+export function normalizeFeedRetentionLagRows(data: unknown, asOf: Date): FeedRetentionLagEntry[] {
   if (!Array.isArray(data)) return [];
 
   return data.flatMap((row) => {
@@ -119,7 +131,7 @@ export function normalizeFeedRetentionLagRows(data: unknown, now: Date): FeedRet
       tableName,
       oldestRowAt: typeof row.oldest_row_at === 'string' ? row.oldest_row_at : null,
       rowCount: toCount(row.row_count),
-      now,
+      now: asOf,
     })];
   });
 }
