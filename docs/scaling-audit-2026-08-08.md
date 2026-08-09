@@ -1338,6 +1338,14 @@ Three settings were chosen rather than defaulted: `tracesSampleRate: 0` (this it
 
 **A missing DSN disables Sentry rather than failing the build** — local checkouts and CI must not need an external account — **but production warns loudly at startup**, because "instrumented and reporting nothing" is the same silent optimism F15a spent its whole item removing. `src/__tests__/sentry-config.test.ts` pins that, including the empty-string case, which is the usual shape of "someone added the key to Vercel and never pasted the value".
 
+**And the first deploy of it was silently broken, which is worth recording in full because the mechanism is not obvious.** `12107cf` shipped, the buildId matched, the CSP carried the Sentry ingest origin — every signal said configured — and **no Sentry client existed on the page**. Cause: Next inlines `NEXT_PUBLIC_*` into the client bundle by **substituting the literal text** `process.env.NEXT_PUBLIC_SENTRY_DSN`. The config module read it as `environment.NEXT_PUBLIC_SENTRY_DSN`, where `environment` merely *defaulted* to `process.env`, so the literal never appeared, no substitution happened, and `process.env` is an empty shim in the browser.
+
+The CSP still contained the ingest origin because `next.config.ts` runs in Node at build time, where `process.env` is real — **so the one signal that looked like proof of correct wiring was produced by a completely different mechanism from the one that was broken.**
+
+It was silent twice: `resolveSentryEnvironment` had the identical flaw, so it read `'unknown'` instead of `'production'` and the "error tracking is OFF" warning never fired. **Only loading the deployed page and finding no Sentry client caught it** — not the build, not the tests, not the CSP header, not a green pipeline.
+
+Fixed by snapshotting each variable through a direct `process.env.X` member expression (`BUILD_ENVIRONMENT`), verified by building with a DSN and grepping the emitted client chunk for it, and guarded by a test that asserts the source shape, since no unit test can observe bundler substitution.
+
 **NOT shipped #1 — server-side capture, blocked by a post-incident build guard.**
 
 Initialising Sentry on the server needs a root `instrumentation.ts`. Adding one makes Next emit an edge-wrapper chunk containing Turbopack's own path helper:

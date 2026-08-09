@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -68,6 +71,33 @@ describe('sentry configuration', () => {
     expect(resolveSentryEnvironment({ VERCEL_ENV: 'preview', NODE_ENV: 'production' })).toBe('preview');
     expect(resolveSentryEnvironment({ NODE_ENV: 'test' })).toBe('test');
     expect(resolveSentryEnvironment({})).toBe('unknown');
+  });
+
+  it('reads every NEXT_PUBLIC_ value as a literal process.env member expression', () => {
+    // REGRESSION GUARD, and it caught a real production miss.
+    //
+    // Next inlines NEXT_PUBLIC_* into the client bundle by substituting the
+    // literal text `process.env.NEXT_PUBLIC_FOO`. Reading it through a variable
+    // — `environment.NEXT_PUBLIC_SENTRY_DSN`, where `environment` merely
+    // defaults to `process.env` — never matches, and `process.env` is an empty
+    // shim in the browser. The first deploy shipped exactly that: the
+    // instrumentation module was in the bundle, the DSN was not, Sentry never
+    // initialised, and because resolveSentryEnvironment had the same flaw it
+    // read 'unknown' instead of 'production' so the warning stayed silent too.
+    //
+    // No unit test can observe bundler substitution, so this asserts the source
+    // shape that makes it possible. `getSentryConfigSource` deliberately reads
+    // the file rather than importing it.
+    const source = fs.readFileSync(
+      path.resolve(process.cwd(), 'src/lib/sentry-config.ts'),
+      'utf8',
+    );
+
+    expect(source).toContain('NEXT_PUBLIC_SENTRY_DSN: process.env.NEXT_PUBLIC_SENTRY_DSN');
+    expect(source).toContain('NEXT_PUBLIC_VERCEL_ENV: process.env.NEXT_PUBLIC_VERCEL_ENV');
+    // No exported function may default its environment argument to the bare
+    // `process.env`, which is what reintroduces the bug.
+    expect(source).not.toMatch(/undefined>\s*=\s*process\.env\s*,/);
   });
 
   it('samples every error and no traces', () => {

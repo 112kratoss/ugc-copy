@@ -31,12 +31,42 @@
  */
 
 /**
+ * The build-time environment snapshot, and the reason it is written out one
+ * literal at a time.
+ *
+ * Next inlines `NEXT_PUBLIC_*` into the client bundle by **substituting the
+ * literal expression** `process.env.NEXT_PUBLIC_FOO`. It is a text
+ * substitution, not a runtime lookup: `process.env` itself is an empty shim in
+ * the browser. So reading `someEnvVariable.NEXT_PUBLIC_SENTRY_DSN`, where
+ * `someEnvVariable` merely *defaults* to `process.env`, never matches the
+ * pattern and always reads `undefined` in the browser.
+ *
+ * This shipped that way once. The instrumentation module was in the production
+ * bundle, the DSN was not, `Sentry.init` never ran — and because
+ * `resolveSentryEnvironment` had the identical flaw it reported `'unknown'`
+ * rather than `'production'`, so `assertSentryConfigured` stayed quiet too.
+ * Silent on both levels, which is exactly the failure this file's warning
+ * exists to prevent. Caught only by loading the deployed page and finding no
+ * Sentry client on it.
+ *
+ * Keep every entry as a direct `process.env.X` member expression. The
+ * functions below still accept an environment argument so tests can inject
+ * one; this object is only the default.
+ */
+const BUILD_ENVIRONMENT: Record<string, string | undefined> = {
+  NEXT_PUBLIC_SENTRY_DSN: process.env.NEXT_PUBLIC_SENTRY_DSN,
+  NEXT_PUBLIC_VERCEL_ENV: process.env.NEXT_PUBLIC_VERCEL_ENV,
+  VERCEL_ENV: process.env.VERCEL_ENV,
+  NODE_ENV: process.env.NODE_ENV,
+};
+
+/**
  * Reported as the Sentry `environment`. Vercel sets VERCEL_ENV to
  * production/preview/development; NEXT_PUBLIC_VERCEL_ENV is its browser-visible
  * twin. Falling back to NODE_ENV keeps local runs labelled rather than blank.
  */
 export function resolveSentryEnvironment(
-  environment: Record<string, string | undefined> = process.env,
+  environment: Record<string, string | undefined> = BUILD_ENVIRONMENT,
 ): string {
   return environment.NEXT_PUBLIC_VERCEL_ENV
     ?? environment.VERCEL_ENV
@@ -51,7 +81,7 @@ export function resolveSentryEnvironment(
  * a different project without a code change.
  */
 export function resolveSentryDsn(
-  environment: Record<string, string | undefined> = process.env,
+  environment: Record<string, string | undefined> = BUILD_ENVIRONMENT,
 ): string | undefined {
   const dsn = environment.NEXT_PUBLIC_SENTRY_DSN?.trim();
   return dsn ? dsn : undefined;
@@ -70,7 +100,7 @@ export function resolveSentryDsn(
  * below is what stops it being silent.
  */
 export function isSentryEnabled(
-  environment: Record<string, string | undefined> = process.env,
+  environment: Record<string, string | undefined> = BUILD_ENVIRONMENT,
 ): boolean {
   return Boolean(resolveSentryDsn(environment));
 }
@@ -85,7 +115,7 @@ export function isSentryEnabled(
  * catch.
  */
 export function assertSentryConfigured(
-  environment: Record<string, string | undefined> = process.env,
+  environment: Record<string, string | undefined> = BUILD_ENVIRONMENT,
   // `console.warn` rather than `logBackendWarning`: this module is pulled into
   // the browser bundle by `instrumentation-client.ts`, and the backend logger
   // is a server-side structured sink. Injectable so the test asserts the
