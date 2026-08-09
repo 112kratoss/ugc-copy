@@ -1,3 +1,4 @@
+import { withSentryConfig } from "@sentry/nextjs";
 import type { NextConfig } from "next";
 import { collectBackendEnvironmentHealth } from "./src/lib/backend-environment";
 import { SHOWCASE_PUBLIC_MEDIA_MINIMUM_CACHE_TTL_SECONDS } from "./src/lib/showcase-media-cache";
@@ -131,12 +132,11 @@ const nextConfig: NextConfig = {
   // node_modules directory outputFileTracingIncludes already ships.
   // sharp needs no entry; Next externalizes it by default.
   //
-  // The @sentry/* entries are kept for when server-side Sentry lands: with a
-  // root instrumentation.ts present, bundling them inlined
-  // "/ROOT/node_modules/@sentry/..." into the server chunks and dragged
-  // Sentry's own bundler-plugin machinery in behind the package index.
-  // `build:verify` caught that; these entries cleared it. They are inert while
-  // only the browser SDK ships, and removing them would just have to be undone.
+  // The @sentry/* entries are load-bearing now that src/instrumentation.ts
+  // exists: bundling them inlined "/ROOT/node_modules/@sentry/..." into the
+  // server chunks and dragged Sentry's own bundler-plugin machinery in behind
+  // the package index. `build:verify` caught that; keeping them external is
+  // what clears it.
   serverExternalPackages: [
     "ffmpeg-static",
     "@sentry/nextjs",
@@ -223,4 +223,67 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+/**
+ * Sentry's build-time wrapper (F15b). Its only job here is source maps: without
+ * it every stack trace in Sentry points at minified code, which makes the error
+ * tracker able to tell you that something broke but not where.
+ *
+ * THIS WRAPPER IS THE RISKY PART OF THE INTEGRATION, so each option below is a
+ * decision rather than a default:
+ *
+ * - `widenClientFileUpload: false` — uploading extra client bundles costs quota
+ *   and buys nothing until traces are actually unreadable without it.
+ * - `disableLogger: true` — strips Sentry's own debug logging from the bundle.
+ * - `automaticVercelMonitors: false` — it would create Vercel Cron monitors in
+ *   Sentry. The cron already has `backend_job_runs` plus the external watchdog,
+ *   and a second, quota-consuming monitor for the same thing is noise.
+ * - `sourcemaps.deleteSourcemapsAfterUpload: true` — the maps go to Sentry, not
+ *   to the public. This repository is public and the deployed site is public;
+ *   shipping `.map` files would hand out readable source to anyone.
+ * - `tunnelRoute` is deliberately NOT set. It would proxy Sentry traffic through
+ *   the app's own domain to dodge ad blockers, at the cost of a route and of
+ *   every event crossing our own serverless functions.
+ *
+ * `silent` is tied to CI so local builds stay quiet while CI keeps the upload
+ * log — if source-map upload ever silently stops, the CI log is where that
+ * shows up.
+ *
+ * Verify after changing anything here with `npm run build:verify`. The wrapper
+ * rewrites the bundler configuration that `outputFileTracingIncludes` uses to
+ * force `ffmpeg-static` into the media routes, and that check is what caught
+ * both the original ffmpeg breakage and this integration's earlier attempts.
+ */
+export default withSentryConfig(nextConfig, {
+  org: "magicbooklet",
+  project: "magicbooklet-web",
+  // Absent locally and in CI forks; the upload is skipped rather than failing
+  // the build, so a checkout never depends on having the token.
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  silent: !process.env.CI,
+  widenClientFileUpload: false,
+  disableLogger: true,
+  automaticVercelMonitors: false,
+  sourcemaps: {
+    deleteSourcemapsAfterUpload: true,
+  },
+  /**
+   * Source-map upload must never be the reason a deploy fails.
+   *
+   * This is not hypothetical caution: CI builds *without* `SENTRY_AUTH_TOKEN`
+   * (it is a Vercel environment variable, not a GitHub secret), so the
+   * production build on Vercel is the FIRST build that ever exercises the
+   * upload path. A wrong-scoped, expired or revoked token would surface there
+   * and nowhere earlier — after Quality has already gone green.
+   *
+   * Same posture as the missing-DSN case: degrade to "no source maps", loudly,
+   * rather than to "no deploy". The log line is what stops it being silent.
+   */
+  errorHandler: (error) => {
+    console.warn(
+      '[sentry] source map upload failed — the build continues and the deploy is '
+      + 'unaffected, but stack traces for this release will be minified. '
+      + 'Check SENTRY_AUTH_TOKEN scope/expiry.',
+      error instanceof Error ? error.message : error,
+    );
+  },
+});
