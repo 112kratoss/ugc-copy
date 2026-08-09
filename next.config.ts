@@ -44,6 +44,21 @@ const mediaImportHostCspSources = (process.env.MEDIA_IMPORT_HOST_ALLOWLIST ?? ""
 const supabaseCspSources = supabaseUrl
   ? [supabaseUrl.origin, `wss://${supabaseUrl.host}`]
   : [];
+// Derived from the DSN rather than hard-coded, so pointing Sentry at a
+// different org or region cannot leave the CSP behind. The CSP is
+// report-only today, so a missing entry would not block reporting — it would
+// quietly fill /api/security/csp-report with violations instead, which is
+// noise that looks like a real finding.
+const sentryIngestOrigin = (() => {
+  const dsn = process.env.NEXT_PUBLIC_SENTRY_DSN?.trim();
+  if (!dsn) return null;
+  try {
+    return new URL(dsn).origin;
+  } catch {
+    return null;
+  }
+})();
+const sentryCspSources = sentryIngestOrigin ? [sentryIngestOrigin] : [];
 
 function buildCspDirective(directive: string, sources: string[]): string {
   return [directive, ...sources].join(" ");
@@ -87,6 +102,7 @@ const contentSecurityPolicyReportOnly = [
     "https://www.google-analytics.com",
     "https://*.google-analytics.com",
     "https://va.vercel-scripts.com",
+    ...sentryCspSources,
   ]),
   buildCspDirective("frame-src", [
     "https://api.razorpay.com",
@@ -114,7 +130,20 @@ const nextConfig: NextConfig = {
   // it external preserves a real runtime require, so `__dirname` points at the
   // node_modules directory outputFileTracingIncludes already ships.
   // sharp needs no entry; Next externalizes it by default.
-  serverExternalPackages: ["ffmpeg-static"],
+  //
+  // The @sentry/* entries are kept for when server-side Sentry lands: with a
+  // root instrumentation.ts present, bundling them inlined
+  // "/ROOT/node_modules/@sentry/..." into the server chunks and dragged
+  // Sentry's own bundler-plugin machinery in behind the package index.
+  // `build:verify` caught that; these entries cleared it. They are inert while
+  // only the browser SDK ships, and removing them would just have to be undone.
+  serverExternalPackages: [
+    "ffmpeg-static",
+    "@sentry/nextjs",
+    "@sentry/node-core",
+    "@sentry/server-utils",
+    "@apm-js-collab/code-transformer-bundler-plugins",
+  ],
   // Keys are matched as globs, so a literal "[id]" reads as a character class
   // and never matches its route. Use "*" for dynamic segments.
   outputFileTracingIncludes: {
