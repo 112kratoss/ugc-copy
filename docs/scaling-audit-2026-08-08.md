@@ -1346,6 +1346,8 @@ It was silent twice: `resolveSentryEnvironment` had the identical flaw, so it re
 
 Fixed by snapshotting each variable through a direct `process.env.X` member expression (`BUILD_ENVIRONMENT`), verified by building with a DSN and grepping the emitted client chunk for it, and guarded by a test that asserts the source shape, since no unit test can observe bundler substitution.
 
+**Verified end-to-end on `0f39cd5`, not merely re-deployed.** The live page's Sentry client reports `dsn` on the right host, `environment: "production"` (so `NEXT_PUBLIC_VERCEL_ENV` inlines too), `tracesSampleRate: 0`, `sendDefaultPii: false`, `replaysSessionSampleRate: 0` — every setting chosen above, confirmed on the deployed bundle rather than in source. A deliberate test exception then arrived in the issue stream as `MAGICBOOKLET-WEB-1` at Priority High, which exercises the alert path as well as ingestion. **The lesson to keep: for anything whose whole job is to report, the deploy is not the verification — an event arriving is.**
+
 **NOT shipped #1 — server-side capture, blocked by a post-incident build guard.**
 
 Initialising Sentry on the server needs a root `instrumentation.ts`. Adding one makes Next emit an edge-wrapper chunk containing Turbopack's own path helper:
