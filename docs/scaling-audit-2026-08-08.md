@@ -1697,11 +1697,132 @@ Two consequences, the second larger than this test:
    migrations-only rebuild path at all. If a backup is unrestorable, the schema
    cannot be reconstructed from the repository.
 
+**FIXED 2026-08-09** (`d502d7a`, no migration added). This finding named the
+right defect and prescribed the wrong repair. **No baseline squash was
+needed.** Replaying all 173 migrations on a clean database reproduces
+production — verified class by class rather than asserted, with
+`scripts/schema-fingerprint.sql` run on both sides through the two routes that
+do work here (a runner for the replay, the Management API for production).
+Tables, columns with their types, defaults and nullability, constraints,
+indexes, RLS policies, triggers, sequences, extensions and storage buckets all
+match digest for digest.
+
+What could not rebuild the database was never the repository. **A preview
+branch replays the statements recorded in the ledger, not the files**, and it
+was production's ledger that had drifted away from them:
+
+1. **Nine rows carried NULL statements**, including the base `remote_schema`.
+   Those rows were *marked* applied rather than applied — `supabase migration
+   repair` writes a version and a name and nothing else, which is exactly how a
+   row comes to build nothing. The other eight are the 2026-07-23 to 07-25
+   batch. This also reframes "the base schema was created outside the migration
+   history": the first file is empty and always was, migrations 2–173 build
+   everything, and the empty first file is harmless the moment the ledger stops
+   claiming to hold a base it never held.
+2. **`20260317090245` recorded a backfill against `generations.category`**, a
+   column the recorded history only creates at `20260317140000`. The repository
+   had already been corrected — the backfill sits in migration 10 beside its
+   own `ADD COLUMN` — but the correction never reached the ledger. So the
+   recorded history halted at 9 where the files do not, and *that* is why
+   `db reset --local` passed while branching did not. The divergence this
+   document read as an edited-after-apply violation was real, but it ran in the
+   repairing direction.
+
+The repair rewrites every ledger row from the file that produced it
+(`.github/scripts/repair-supabase-ledger.mjs`, run from
+`repair-migration-ledger.yml`), so replaying the ledger and replaying the
+repository became one operation. It runs over the Management API because
+`supabase migration repair` needs a Postgres connection that no secret in this
+repository can authenticate — and because, as above, it could not have written
+the statements even if it could connect. It backs the old ledger up to
+`supabase_migrations.schema_migrations_backup_20260809182008`, stages the
+rebuild, verifies the staged copy against the repository, and only then swaps
+atomically. No migration SQL runs; only bookkeeping rows change.
+
+**Verified end to end.** Production's ledger: 173 rows, **0 NULL statements**
+(was 9), first version `20260223171338`, last `20260809230000` — the repository's
+own last file, where the ledger previously ended at an API-generated
+`20260809145727`. 46 of 173 rows had drifted versions and now carry the
+repository's. A preview branch created afterwards reached **`MIGRATIONS_PASSED`
+on all 173** and fingerprints identically to production on every structural
+class. Branching is unblocked, and **consequence 2 above is retired**: a
+migrations-only rebuild path now exists and has been exercised.
+
+Three differences survive, all understood and none of them structural:
+
+| Difference | Verdict |
+|---|---|
+| `generations` holds `model/duration/cost/prediction_id/output_url` at positions 12–16 in a different order | Cosmetic. Same columns, same types, affects only `select *` ordering. Correcting it would need a table rewrite in production and buys nothing |
+| `finish_generation_completion_job` body differs by 225 bytes | A three-line comment the repository added after the migration was applied. Stripping the comment reproduces production's `prosrc` md5 exactly, so the two are behaviourally identical |
+| Production grants DML on 16 tables a clean replay never grants | Not cosmetic — see *Finding D* |
+
+**Ordering, which is the sharp edge.** The push had to come first and the
+ledger repair second, never the reverse. `apply-supabase-migrations.mjs` treats
+a migration as applied when its version is in the ledger; repairing first would
+have left the ledger holding versions no file on `main` matched, and the next
+release would have read the repository's own history as pending and re-applied
+it to a database that already had it. Pushing first was a no-op for the release
+path — the change adds no migration files, and the release logged *"Supabase
+migration history is already current"*. That rule is now executable rather than
+commented: `apply-supabase-migrations.mjs` exposes its decision as
+`planMigrations()`, and `supabase-migration-ledger-ordering.test.ts` pins it
+against the real migration directory in both orderings, plus a back-dated
+migration and a repaired ledger running ahead of its checkout.
+
+The repair also removed a live exposure nobody had recorded. Releases only
+survived the version drift because the script falls back to matching on *name*
+when a name is unique in the repository. `remote_schema` appears four times, so
+the fallback is switched off for it — a single rename of a drifted migration
+would have had a release re-run the base schema against production.
+
+#### Finding D — production's Data API surface is wider than the repository's
+
+Found by the Finding C parity check, not by the certification run. Compared by
+**effective privilege** rather than by acl rows — a null acl means defaults
+apply, owner-only for a table and `EXECUTE` to `PUBLIC` for a function, so
+counting materialised entries first reported the two databases as 235 grants
+apart when they were not.
+
+Production grants `anon`/`authenticated` DML on **16 tables** that a clean
+replay never grants: `ai_usage_events`, `contact_messages`,
+`generation_input_media`, `marketplace_asset_content`, `marketplace_orders`,
+`marketplace_purchases`, `post_deletion_audits`, `post_saves`,
+`source_tool_models`, `source_tools`, `workflow_canvas_assistant_messages`,
+`workflow_canvas_assistant_proposals`, `workflow_canvas_history`,
+`workflow_canvas_run_steps`, `workflow_canvas_runs`, `workflow_canvases`.
+Table grants: 780 in production against 607 from a replay. Routines: 200
+against 182. Sequences: 33 against 19.
+
+The cause is dated, not accidental.
+`20260726071722_harden_data_api_and_storage_contract` says it plainly —
+*"Supabase's platform defaults changed in 2026; declaring grants here keeps
+clean replays and established projects on the same contract."* It converged the
+**default privileges** and five named tables, and `pg_default_acl` is now
+byte-identical on both sides. It did not reach the tables created *before* it
+under the older platform default, which a project created in February 2026 has
+and a database built from the files today does not.
+
+**Not fixed, deliberately.** RLS policies match production exactly (91 = 91),
+so access is still gated; what production lacks relative to the repository is
+the defence-in-depth layer beneath it. Revoking is a live behaviour change that
+breaks any client path reading those tables through PostgREST, and that
+deserves its own change with its own verification rather than riding along with
+a ledger repair. Recorded here so the next person meets it as a decision rather
+than a surprise.
+
+Note the direction, because it inverts the usual worry: a preview branch is now
+*more* restrictive than production on these 16 tables, so a Data API path can
+pass on a branch and still be wrong about production — and the reverse cannot
+happen.
+
 #### What has to clear before a real certification
 
 1. ~~Fix *Finding A*, or publishing stays uncertified.~~ **Done 2026-08-09**
    (`8d05483`); re-enable the `publish-post` family.
-2. Make the migration history replayable (*Finding C*), which unblocks branching.
+2. ~~Make the migration history replayable (*Finding C*), which unblocks
+   branching.~~ **Done 2026-08-09** (`d502d7a`) — the repository always could;
+   production's ledger could not. Repaired and exercised: a preview branch
+   reaches `MIGRATIONS_PASSED` on all 173.
 3. Stand up the environment this section specifies — branch or fresh project —
    with a Vercel preview, so pool and route P95 become measurable.
 4. Add a generation-**start** family so the webhook-burst and workflow-fan-out
@@ -1783,6 +1904,7 @@ Two independent audits produced different headline numbers. Both were right abou
 
 | Date | Change | By |
 |---|---|---|
+| 2026-08-09 | **Finding C fixed; Finding D opened.** **C** (`d502d7a`): the prescribed baseline squash was not needed — a clean replay of all 173 migrations reproduces production, proved class by class with a new `scripts/schema-fingerprint.sql` run on both sides (the CLI still cannot reach production, so a runner replays and the Management API reads production). The unreplayable artefact was production's **ledger**, which is what a preview branch replays: nine rows held NULL statements because `supabase migration repair` records a version and a name and nothing else, and `20260317090245` held a `generations.category` backfill the recorded history only creates one migration later. Every row is now rewritten from its own file (`repair-supabase-ledger.mjs` over the Management API, old ledger kept in `schema_migrations_backup_20260809182008`): 173 rows, 0 NULL statements, 46 drifted versions restored, and a preview branch reaching `MIGRATIONS_PASSED` on all 173 with a fingerprint identical to production. Push-before-repair ordering is now pinned by `supabase-migration-ledger-ordering.test.ts` rather than by comment. **D**: production grants `anon`/`authenticated` DML on 16 tables a clean replay never grants — the 2026-07 Data API hardening converged the default privileges but not the tables predating them. Recorded, not changed: RLS still gates access, and revoking is a live behaviour change that needs its own verification. | Claude Code |
 | 2026-08-09 | **Certification Findings A and B fixed.** **A** (`8d05483`, `20260809220000`): the owner guard's `v_bundle.status` fragment was a mis-paste from the buyer-side quote function `get_post_resource_bundle_cash_quote` — there was no intended guard change; restored to plain `IF NOT FOUND`, `FOR UPDATE` kept, pgTAP pins owner-edit success and non-owner rejection. Text-post publish and metadata edits work again after three broken days. **B** (`20260809230000`): the clamp now reports `requested/applied/clamped` in its summary (the visibility its own migration promised but never implemented), `maintainFeedPersonalization` logs `feed_retention_clamped`, health raises `FEED_RETENTION_POLICY_SKEW` from the policy constants with zero queries, and the suite pins the live constants as unskewed. Verification recipe in Finding B replaced accordingly. | Claude Code |
 | 2026-08-09 | **Phase 1 certification attempted — NOT certified, no MAU level claimed.** Harness added under `scripts/certification/` (seeder, mixed-workload driver, provider stub, named cases) plus an env-gated `KIE_API_BASE_URL` seam in `provider-fetch.ts`. Stepped ladder run: knee between 25 and 50 origin RPS. Three findings recorded in *Certification attempt — 2026-08-09*: **A** `update_post_with_resource_bundle` raises on every call in production; **B** the retention skew guard silently coerces rather than raising, invalidating this document's own verification recipe; **C** the migration history cannot rebuild the database, which blocks Supabase branching and weakens F15b's recorded RTO. | Claude Code |
 | 2026-08-08 | Initial audit; all items TODO. Baseline commit `63b9a3b`. | Claude Code |
