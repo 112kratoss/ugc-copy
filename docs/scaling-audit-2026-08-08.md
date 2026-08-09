@@ -181,6 +181,22 @@ curl -s -o /dev/null -w '%{http_code}\n' -H 'Authorization: Bearer localtest' lo
 
 Expect a body and a non-500 status (503 `degraded` is normal locally — production env vars are absent). Kill the port first: a stale server on it will serve the *previous* build and make a real fix look ineffective.
 
+**And when a change alters a constant that a database function validates, call that function with the new value.** Nothing else will. The maintenance unit tests mock every RPC, so database-side guards never execute; pgTAP exercises the functions but not with the app's constants; and the two only meet in production. Changing `FEED_FACT_RETENTION_DAYS` to 30 while `FEED_EVENT_RETENTION_DAYS` stayed at 90 violated `prune_feed_personalization_data`'s `event ≤ fact` guard and **aborted the entire hourly feed-maintenance job** — stats refreshes included — for hours, through a green deploy:
+
+```bash
+docker exec supabase_db_magicbooklet psql -U postgres -d postgres -c \
+  "select public.prune_feed_personalization_data(now(), 30, 2, 5000, 30);"
+```
+
+A summary comes back when the constants are legal; an exception when they are not. Where the invariant can be stated in TypeScript, assert it in a unit test as well — `FEED_FACT_RETENTION_DAYS >= FEED_EVENT_RETENTION_DAYS` now is.
+
+**A deploy verifying green does not mean the change is safe.** That release passed its own health check because the cron had not yet run with the new constant; the failure armed itself for the next tick. **After deploying anything a scheduled job touches, check `backend_job_runs` on the next cadence** rather than treating promotion as the end of the change:
+
+```bash
+# last run and last error per job
+select job_name, max(started_at), (array_agg(status order by started_at desc))[1] from public.backend_job_runs group by job_name;
+```
+
 ---
 
 ## Phase 0 — media and feed-write hygiene
