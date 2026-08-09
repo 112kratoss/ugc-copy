@@ -1,0 +1,92 @@
+name: Repair migration ledger
+
+# Rewrites production's `supabase_migrations.schema_migrations` so every row
+# reproduces the file that produced it. See
+# .github/scripts/repair-supabase-ledger.mjs for why the ledger, rather than
+# the repository, is what blocks Supabase branching.
+#
+# Manual only, and only from main: the production environment is
+# branch-restricted, and the repair is only correct once main already carries
+# the migration files the ledger is being rewritten from.
+#
+# ORDERING — this must run *after* the matching commit is on main, never
+# before. `apply-supabase-migrations.mjs` treats a migration as applied when
+# its version appears in the ledger. Repairing first would leave the ledger
+# holding versions no file on main matches, and the next release would then
+# see the repository's own history as pending and re-apply it against a
+# database that already has it. Running second is a no-op for the release
+# path, because every repaired version still matches a file on main.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: What to do with the ledger
+        required: true
+        default: report
+        type: choice
+        options:
+          - report
+          - apply
+          - verify
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-ledger
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    name: ${{ inputs.mode }} the production migration ledger
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+    steps:
+      - name: Refuse to run against anything but main
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::The ledger may only be repaired from main; got ${GITHUB_REF}."
+            exit 1
+          fi
+
+      - name: Check out main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Confirm the checked-out commit is current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          test -n "${current_main}"
+          if [ "$(git rev-parse HEAD)" != "${current_main}" ]; then
+            echo "::error::Checked-out main is stale; remote main is ${current_main}."
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
+      - name: Run the ledger repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${MODE}" in
+            report) node .github/scripts/repair-supabase-ledger.mjs ;;
+            apply)  node .github/scripts/repair-supabase-ledger.mjs --apply ;;
+            verify) node .github/scripts/repair-supabase-ledger.mjs --verify ;;
+            *) echo "::error::Unknown mode ${MODE}."; exit 1 ;;
+          esac
+        env:
+          MODE: ${{ inputs.mode }}
