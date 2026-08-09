@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => {
     profileQuery,
     getUser: vi.fn(),
     getSession: vi.fn(),
+    getClaims: vi.fn(),
     createServerClient: vi.fn<(...args: unknown[]) => unknown>(),
     createServiceClient: vi.fn(),
     isE2EAuthBypassEnabled: vi.fn(() => false),
@@ -66,6 +67,7 @@ const serverSupabase = {
   auth: {
     getUser: mocks.getUser,
     getSession: mocks.getSession,
+    getClaims: mocks.getClaims,
   },
 };
 
@@ -87,18 +89,13 @@ describe('getServerAuthState', () => {
     });
   });
 
-  it('uses the verified user for service-role reads without touching the cookie session user', async () => {
-    const verifiedUser = {
-      id: 'verified-user',
-      aud: 'authenticated',
-      role: 'authenticated',
-      email: 'verified@example.com',
-      app_metadata: {},
-      user_metadata: { name: 'Verified Creator' },
-      identities: [],
-      created_at: '2026-07-05T00:00:00.000Z',
-    };
-    const cookieSession = {
+  /**
+   * The cookie session used throughout. Its `user` getter throws on purpose:
+   * the cookie is client-controlled, and F8 must not start trusting it just
+   * because verification moved from a GoTrue call to a local signature check.
+   */
+  function cookieSessionThatRefusesToBeRead() {
+    return {
       access_token: 'verified-access-token',
       refresh_token: 'verified-refresh-token',
       expires_in: 3600,
@@ -108,8 +105,26 @@ describe('getServerAuthState', () => {
         throw new Error('untrusted session user was accessed');
       },
     };
-    mocks.getUser.mockResolvedValue({ data: { user: verifiedUser }, error: null });
-    mocks.getSession.mockResolvedValue({ data: { session: cookieSession }, error: null });
+  }
+
+  it('builds the user from verified claims and never reads the cookie session user', async () => {
+    mocks.getSession.mockResolvedValue({
+      data: { session: cookieSessionThatRefusesToBeRead() },
+      error: null,
+    });
+    mocks.getClaims.mockResolvedValue({
+      data: {
+        claims: {
+          sub: 'verified-user',
+          aud: 'authenticated',
+          role: 'authenticated',
+          email: 'verified@example.com',
+          app_metadata: {},
+          user_metadata: { name: 'Verified Creator' },
+        },
+      },
+      error: null,
+    });
 
     const { getServerAuthState } = await import('@/lib/supabase-server');
     const result = await getServerAuthState();
@@ -117,18 +132,37 @@ describe('getServerAuthState', () => {
     expect(result).toMatchObject({
       session: {
         access_token: 'verified-access-token',
-        user: verifiedUser,
+        user: {
+          id: 'verified-user',
+          email: 'verified@example.com',
+          user_metadata: { name: 'Verified Creator' },
+        },
       },
       credits: 42,
     });
     expect(mocks.profileQuery.eq).toHaveBeenCalledWith('id', 'verified-user');
   });
 
-  it('rejects a cookie session when the auth server cannot verify its user', async () => {
-    mocks.getUser.mockResolvedValue({
-      data: { user: null },
-      error: new Error('invalid token'),
+  it('does not call the auth server on the read path', async () => {
+    // The whole point of F8. With asymmetric signing keys getClaims() verifies
+    // locally through WebCrypto against a cached JWKS, so an authenticated
+    // render costs no GoTrue round trip.
+    mocks.getSession.mockResolvedValue({
+      data: { session: cookieSessionThatRefusesToBeRead() },
+      error: null,
     });
+    mocks.getClaims.mockResolvedValue({
+      data: { claims: { sub: 'verified-user', aud: 'authenticated' } },
+      error: null,
+    });
+
+    const { getServerAuthState } = await import('@/lib/supabase-server');
+    await getServerAuthState();
+
+    expect(mocks.getUser).not.toHaveBeenCalled();
+  });
+
+  it('rejects a session whose token fails verification', async () => {
     mocks.getSession.mockResolvedValue({
       data: {
         session: {
@@ -141,13 +175,45 @@ describe('getServerAuthState', () => {
       },
       error: null,
     });
+    mocks.getClaims.mockResolvedValue({
+      data: null,
+      error: new Error('invalid signature'),
+    });
 
     const { getServerAuthState } = await import('@/lib/supabase-server');
     await expect(getServerAuthState()).resolves.toEqual({
       session: null,
       credits: null,
     });
-    expect(mocks.getSession).not.toHaveBeenCalled();
+    expect(mocks.createServiceClient).not.toHaveBeenCalled();
+  });
+
+  it('rejects verified claims that carry no subject', async () => {
+    // A token can verify and still be unusable as an identity. Falling back to
+    // the cookie's user id here is exactly the substitution the getter above
+    // exists to catch.
+    mocks.getSession.mockResolvedValue({
+      data: {
+        session: {
+          access_token: 'subjectless-token',
+          refresh_token: 'r',
+          expires_in: 3600,
+          token_type: 'bearer',
+          user: { id: 'victim-user' },
+        },
+      },
+      error: null,
+    });
+    mocks.getClaims.mockResolvedValue({
+      data: { claims: { aud: 'authenticated' } },
+      error: null,
+    });
+
+    const { getServerAuthState } = await import('@/lib/supabase-server');
+    await expect(getServerAuthState()).resolves.toEqual({
+      session: null,
+      credits: null,
+    });
     expect(mocks.createServiceClient).not.toHaveBeenCalled();
   });
 
