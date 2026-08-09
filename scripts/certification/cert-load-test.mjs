@@ -194,10 +194,36 @@ async function refreshUser(user) {
   return true;
 }
 
+/**
+ * Refresh tokens rotate and are single-use, so two in-flight renewals for the
+ * same identity consume the same token twice and the second one 401s — which
+ * the first soak then scored as ~16,400 application errors. One renewal
+ * promise per user serialises that; a failed refresh is a *driver* fault and
+ * triggers a fresh password sign-in rather than ever surfacing as a 401 in an
+ * authenticated family. A user that cannot re-authenticate leaves the pool.
+ */
+async function renewUser(user) {
+  if (await refreshUser(user)) return true;
+  const fresh = await signIn(user.email);
+  if (!fresh) return false;
+  user.userId = fresh.userId;
+  user.accessToken = fresh.accessToken;
+  user.refreshToken = fresh.refreshToken;
+  user.expiresAt = fresh.expiresAt;
+  return true;
+}
+
 async function borrowUser() {
   const user = pick(runtimeState.users);
   if (!user) return null;
-  if (Date.now() >= user.expiresAt) await refreshUser(user);
+  if (Date.now() >= user.expiresAt) {
+    user.renewal ??= renewUser(user).finally(() => { user.renewal = null; });
+    const renewed = await user.renewal;
+    if (!renewed) {
+      runtimeState.users = runtimeState.users.filter((candidate) => candidate !== user);
+      return borrowUser();
+    }
+  }
   return user;
 }
 
