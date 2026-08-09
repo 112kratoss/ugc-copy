@@ -1,0 +1,219 @@
+name: Schema baseline
+
+# Captures what the migration history actually builds, and proves it still
+# describes production.
+#
+# This exists because the Supabase CLI cannot reach this project's production
+# database from a developer machine — neither the direct nor the pooler
+# endpoint answers — so `supabase db dump --linked` and `supabase migration
+# list` are not available where the migrations are written. A runner can talk
+# to the Supabase Management API (that is how `production-release.yml` applies
+# migrations), and it can run the full local stack under Docker, which a
+# developer machine here cannot always do either.
+#
+# Two artifacts come out:
+#   * fingerprint.txt — one digest per object class, from scripts/schema-fingerprint.sql.
+#     Compare against the same query run on production to prove the repository
+#     still rebuilds it.
+#   * schema-*.sql — a real `pg_dump` of the replayed schema, i.e. the baseline
+#     the migration history is worth.
+#
+# The `probe` job records whether a runner can open a Postgres connection to
+# production at all. `production-release.yml` only proves the runner reaches
+# api.supabase.com over HTTPS; it never opens a Postgres wire connection, so
+# that reachability was never actually established. Recording the answer keeps
+# the next person from assuming either way.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'schema-baseline/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: schema-baseline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    name: Replay migrations and fingerprint the result
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@v3
+        with:
+          version: 2.109.1
+
+      - name: Start isolated Supabase database
+        run: |
+          set -euo pipefail
+          supabase start --exclude gotrue,realtime,storage-api,imgproxy,kong,mailpit,postgrest,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
+
+      - name: Replay every migration from a clean database
+        run: |
+          set -euo pipefail
+          supabase db reset --local --no-seed --yes
+
+      - name: Record what the replay applied
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          psql "${DB_URL}" -At -F '|' \
+            -c "select version, name, coalesce(array_length(statements, 1), 0)
+                from supabase_migrations.schema_migrations order by version;" \
+            > artifacts/replayed-ledger.txt
+          echo "Replayed $(wc -l < artifacts/replayed-ledger.txt) migrations."
+        env:
+          DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+
+      - name: Fingerprint the replayed schema
+        run: |
+          set -euo pipefail
+          # Without ON_ERROR_STOP psql exits 0 after a failed statement, which
+          # would hand back an empty fingerprint from a green step.
+          psql "${DB_URL}" -v ON_ERROR_STOP=1 -At -F '|' -f scripts/schema-fingerprint.sql \
+            | tee artifacts/fingerprint.txt
+          test -s artifacts/fingerprint.txt
+        env:
+          DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+
+      - name: Break down the classes that can differ without differing in count
+        run: |
+          set -euo pipefail
+          psql "${DB_URL}" -v ON_ERROR_STOP=1 -At -F '|' > artifacts/detail-functions.txt <<'SQL'
+          select p.oid::regprocedure::text,
+                 md5('secdef=' || p.prosecdef::text
+                     || '|volatile=' || p.provolatile::text
+                     || '|strict=' || p.proisstrict::text
+                     || '|config=' || coalesce(array_to_string(p.proconfig, ','), '')
+                     || '|returns=' || pg_get_function_result(p.oid)
+                     || '|body=' || md5(coalesce(p.prosrc, '')))
+          from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+          where n.nspname='public'
+          order by 1;
+          SQL
+
+          psql "${DB_URL}" -v ON_ERROR_STOP=1 -At -F '|' > artifacts/detail-column-order.txt <<'SQL'
+          select c.relname,
+                 md5(string_agg(a.attname || ':' || a.attnum::text, ',' order by a.attnum))
+          from pg_attribute a
+          join pg_class c on c.oid = a.attrelid
+          join pg_namespace n on n.oid = c.relnamespace
+          where n.nspname='public' and c.relkind in ('r','p') and a.attnum > 0 and not a.attisdropped
+          group by 1 order by 1;
+          SQL
+          psql "${DB_URL}" -v ON_ERROR_STOP=1 -At -F '|' > artifacts/detail-grants.txt <<'SQL'
+          select 'table|' || c.relname || '|' || r.rolname || '|' || pr.priv
+          from pg_class c join pg_namespace n on n.oid = c.relnamespace
+          cross join (values ('anon'), ('authenticated'), ('service_role')) as r(rolname)
+          cross join (values ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'),
+                             ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')) as pr(priv)
+          where n.nspname='public' and c.relkind in ('r','p','v','m')
+            and has_table_privilege(r.rolname, c.oid, pr.priv)
+          union all
+          select 'sequence|' || c.relname || '|' || r.rolname || '|' || pr.priv
+          from pg_class c join pg_namespace n on n.oid = c.relnamespace
+          cross join (values ('anon'), ('authenticated'), ('service_role')) as r(rolname)
+          cross join (values ('USAGE'), ('SELECT'), ('UPDATE')) as pr(priv)
+          where n.nspname='public' and c.relkind='S'
+            and has_sequence_privilege(r.rolname, c.oid, pr.priv)
+          union all
+          select 'routine|' || p.oid::regprocedure::text || '|' || r.rolname || '|EXECUTE'
+          from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+          cross join (values ('anon'), ('authenticated'), ('service_role')) as r(rolname)
+          where n.nspname='public' and has_function_privilege(r.rolname, p.oid, 'EXECUTE')
+          order by 1;
+          SQL
+
+          psql "${DB_URL}" -v ON_ERROR_STOP=1 -At -F '|' > artifacts/detail-default-acl.txt <<'SQL'
+          select coalesce(n.nspname, '-') || '|' || d.defaclobjtype::text || '|'
+                 || d.defaclrole::regrole::text || '|' || d.defaclacl::text
+          from pg_default_acl d left join pg_namespace n on n.oid = d.defaclnamespace
+          order by 1;
+          SQL
+          wc -l artifacts/detail-*.txt
+        env:
+          DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+
+      - name: Dump the replayed schema
+        run: |
+          set -euo pipefail
+          supabase db dump --local -f artifacts/schema-public.sql --schema public
+          supabase db dump --local -f artifacts/schema-storage-auth.sql --schema storage,auth
+          supabase db dump --local -f artifacts/schema-roles.sql --role-only
+          wc -c artifacts/schema-*.sql
+
+      - name: Upload baseline artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: schema-baseline
+          path: artifacts/
+          retention-days: 14
+
+      - name: Stop isolated Supabase database
+        if: always()
+        continue-on-error: true
+        run: supabase stop --no-backup
+
+  probe:
+    name: Probe production Postgres reachability
+    # The production environment is branch-restricted, so this can only run
+    # from main; anywhere else it is skipped rather than failed.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: production
+    env:
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+    steps:
+      - name: Try to open a Postgres connection to production
+        shell: bash
+        run: |
+          set -uo pipefail
+          if [ -z "${SUPABASE_PROJECT_REF:-}" ]; then
+            echo "::warning::No SUPABASE_PROJECT_REF; skipping reachability probe."
+            exit 0
+          fi
+
+          direct="db.${SUPABASE_PROJECT_REF}.supabase.co"
+          for target in "${direct}:5432" "${direct}:6543"; do
+            host="${target%%:*}"
+            port="${target##*:}"
+            if getent hosts "${host}" >/dev/null 2>&1; then
+              echo "DNS ${host} -> $(getent hosts "${host}" | awk '{print $1}' | tr '\n' ' ')"
+            else
+              echo "DNS ${host} -> NO RECORD"
+              continue
+            fi
+            if timeout 10 bash -c "cat < /dev/null > /dev/tcp/${host}/${port}" 2>/dev/null; then
+              echo "TCP ${target} -> OPEN"
+            else
+              echo "TCP ${target} -> CLOSED or filtered"
+            fi
+          done
+
+          # The pooler hostname is regional rather than per-project.
+          for pooler in \
+            "aws-0-ap-south-1.pooler.supabase.com:5432" \
+            "aws-0-ap-south-1.pooler.supabase.com:6543"
+          do
+            host="${pooler%%:*}"
+            port="${pooler##*:}"
+            if timeout 10 bash -c "cat < /dev/null > /dev/tcp/${host}/${port}" 2>/dev/null; then
+              echo "TCP ${pooler} -> OPEN"
+            else
+              echo "TCP ${pooler} -> CLOSED or filtered"
+            fi
+          done
