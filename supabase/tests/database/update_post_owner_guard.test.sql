@@ -14,23 +14,23 @@ select plan(5);
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
 values
-  ('00000000-0000-4000-8000-00000000fa01'::uuid, 'owner-guard-owner@example.invalid',
+  ('fa010000-0000-4000-8000-000000000001'::uuid, 'owner-guard-owner@example.invalid',
    'authenticated', 'authenticated', '{}'::jsonb, '{}'::jsonb),
-  ('00000000-0000-4000-8000-00000000fa02'::uuid, 'owner-guard-other@example.invalid',
+  ('fa020000-0000-4000-8000-000000000002'::uuid, 'owner-guard-other@example.invalid',
    'authenticated', 'authenticated', '{}'::jsonb, '{}'::jsonb);
 
 -- A bundle-less text post: exactly the shape that was broken end-to-end.
 insert into public.posts (id, user_id, visibility, category, source_kind, post_format, body)
 values (
   'fa000000-0000-4000-8000-000000000001'::uuid,
-  '00000000-0000-4000-8000-00000000fa01'::uuid,
+  'fa010000-0000-4000-8000-000000000001'::uuid,
   'public', 'image', 'external', 'text', 'Original body'
 );
 
 select lives_ok(
   $$select * from public.update_post_with_resource_bundle(
       'fa000000-0000-4000-8000-000000000001'::uuid,
-      '00000000-0000-4000-8000-00000000fa01'::uuid,
+      'fa010000-0000-4000-8000-000000000001'::uuid,
       '{"title": "Guarded title"}'::jsonb,
       false,
       null
@@ -47,7 +47,7 @@ select is(
 select is(
   (select r.bundle_id from public.update_post_with_resource_bundle(
      'fa000000-0000-4000-8000-000000000001'::uuid,
-     '00000000-0000-4000-8000-00000000fa01'::uuid,
+     'fa010000-0000-4000-8000-000000000001'::uuid,
      '{}'::jsonb,
      false,
      null
@@ -59,7 +59,7 @@ select is(
 select throws_ok(
   $$select * from public.update_post_with_resource_bundle(
       'fa000000-0000-4000-8000-000000000001'::uuid,
-      '00000000-0000-4000-8000-00000000fa02'::uuid,
+      'fa020000-0000-4000-8000-000000000002'::uuid,
       '{"title": "Hijacked"}'::jsonb,
       false,
       null
@@ -72,7 +72,7 @@ select throws_ok(
 select throws_ok(
   $$select * from public.update_post_with_resource_bundle(
       'fa000000-0000-4000-8000-0000000000ff'::uuid,
-      '00000000-0000-4000-8000-00000000fa01'::uuid,
+      'fa010000-0000-4000-8000-000000000001'::uuid,
       '{}'::jsonb,
       false,
       null
