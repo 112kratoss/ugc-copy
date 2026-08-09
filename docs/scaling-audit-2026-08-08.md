@@ -1739,6 +1739,24 @@ the statements even if it could connect. It backs the old ledger up to
 rebuild, verifies the staged copy against the repository, and only then swaps
 atomically. No migration SQL runs; only bookkeeping rows change.
 
+**Which routes actually reach production, measured rather than assumed.** The
+`probe` job in `schema-baseline.yml` answers this from a runner, because
+"production-release.yml proves runners can reach it" only ever proved HTTPS to
+`api.supabase.com`:
+
+| Endpoint | From a GitHub runner |
+|---|---|
+| `db.<ref>.supabase.co:5432` and `:6543` | **Unreachable.** DNS returns an AAAA record only (`2406:da1a:…`) and hosted runners are IPv4-only, so both ports read closed |
+| `aws-0-ap-south-1.pooler.supabase.com:5432` and `:6543` | **Open** |
+| `api.supabase.com` (Management API) | Open — the route the release and this repair use |
+
+So the direct endpoint is IPv6-only, which is the same wall a developer machine
+hits. The pooler *is* reachable from CI, which means the one thing standing
+between CI and the real `supabase db dump --linked` / `migration repair` is a
+**database password secret**, not the network. Worth adding if a future task
+wants the CLI; it would still not have fixed this finding, since `migration
+repair` cannot write statements.
+
 **Verified end to end.** Production's ledger: 173 rows, **0 NULL statements**
 (was 9), first version `20260223171338`, last `20260809230000` — the repository's
 own last file, where the ledger previously ended at an API-generated
