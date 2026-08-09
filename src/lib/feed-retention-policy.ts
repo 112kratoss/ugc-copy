@@ -9,7 +9,22 @@
  * without either depending on the other's behaviour.
  */
 
-export const FEED_EVENT_RETENTION_DAYS = 90;
+/**
+ * Must be **≤ `FEED_FACT_RETENTION_DAYS`**, and that is enforced by the
+ * database, not by convention.
+ *
+ * `prune_feed_personalization_data` raises `Feed fact retention days must be
+ * between event retention days and 1460` when facts would be pruned before
+ * events, because `feed_events.delivery_fact_id` points at facts — deleting
+ * facts first orphans the events that reference them.
+ *
+ * This was 90 while facts were 400. Decision #2 cut facts to 30 and *this
+ * constant was not brought down with it*, so every hourly feed-maintenance run
+ * aborted on the guard — taking the stats refreshes and the whole prune with
+ * it, not just fact retention. Lowering events to 30 is the change decision #2
+ * implied but did not spell out.
+ */
+export const FEED_EVENT_RETENTION_DAYS = 30;
 
 export const FEED_SESSION_RETENTION_DAYS = 2;
 

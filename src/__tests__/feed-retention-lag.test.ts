@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { FEED_FACT_RETENTION_DAYS } from '@/lib/feed-retention-policy';
+import {
+  FEED_EVENT_RETENTION_DAYS,
+  FEED_FACT_RETENTION_DAYS,
+} from '@/lib/feed-retention-policy';
 import {
   buildFeedRetentionLagEntry,
   collectFeedRetentionLag,
@@ -26,6 +29,20 @@ describe('feed retention windows', () => {
     // included quota.
     expect(FEED_FACT_RETENTION_DAYS).toBe(30);
     expect(FEED_RETENTION_WINDOWS.feed_delivery_facts).toBe(30);
+  });
+
+  it('never prunes facts before the events that reference them', () => {
+    // `prune_feed_personalization_data` raises when facts would be pruned
+    // first, because `feed_events.delivery_fact_id` points at facts. Violating
+    // it does not fail one step — it aborts the entire hourly job, so the stats
+    // refreshes and the whole prune stop too.
+    //
+    // This is asserted here because nothing else can catch it locally: the
+    // maintenance unit tests mock the RPC, so the database-side guard never
+    // runs, and the constants reach it only in production. Lowering facts to 30
+    // while events stayed at 90 broke every feed-maintenance run until it was
+    // spotted in `backend_job_runs`.
+    expect(FEED_FACT_RETENTION_DAYS).toBeGreaterThanOrEqual(FEED_EVENT_RETENTION_DAYS);
   });
 });
 

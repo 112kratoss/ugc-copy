@@ -100,7 +100,11 @@ describe('maintainFeedPersonalization', () => {
       }],
       ['prune_feed_personalization_data', {
         p_as_of: '2026-07-11T07:20:00.000Z',
-        p_event_retention_days: 90,
+        // Brought down from 90 with the facts. The prune RPC rejects fact
+        // retention shorter than event retention, so decision #2's 30-day
+        // facts require events at 30 too — leaving this at 90 aborted every
+        // feed-maintenance run.
+        p_event_retention_days: 30,
         p_session_retention_days: 2,
         p_limit: 5000,
         // F7b / decision #2: 30 days, down from 400. The old setting projected
