@@ -8,9 +8,15 @@ name: Backend alert watchdog
 # system that died — nothing inside the app can catch that.
 #
 # This workflow runs on GitHub's infrastructure, outside Vercel and outside
-# Supabase, so it stays alive when they do not. A failing run sends the repo
-# owner GitHub's standard workflow-failure email, which is the alert channel:
-# no third-party monitoring service and no paid add-on involved.
+# Supabase, so it stays alive when they do not. No third-party monitoring
+# service and no paid add-on is involved.
+#
+# TWO alert channels, because GitHub's own one reaches a single person:
+#   * GitHub's standard workflow-failure email, which for a *scheduled*
+#     workflow goes only to whoever last edited the cron expression — not to
+#     collaborators, not to watchers; and
+#   * an incident issue (see the last two steps), which notifies everyone
+#     watching the repository. That is the second recipient.
 #
 # It fails when:
 #   * the ops endpoint is unreachable (Vercel down, deploy broken, DNS gone),
@@ -27,6 +33,17 @@ on:
     - cron: '0 * * * *'
   workflow_dispatch:
 
+# Least privilege, stated explicitly rather than inherited from repository
+# defaults. `issues: write` exists for the incident-issue channel below: GitHub
+# emails scheduled-workflow failures to exactly ONE person — whoever last edited
+# the cron expression — so collaborators and verified addresses never receive
+# them. An issue notifies every watcher, and is the only free, genuinely
+# independent second channel available (a mail service is ruled out by the
+# budget constraint in F15b of docs/scaling-audit-2026-08-08.md).
+permissions:
+  contents: read
+  issues: write
+
 # A stuck run must never block the next scheduled check.
 concurrency:
   group: backend-alert-watchdog
@@ -41,6 +58,7 @@ jobs:
       # No actions/checkout: the probe needs no repository content, and
       # skipping it keeps each billed run as short as possible.
       - name: Probe /api/ops/backend-alerts
+        id: probe
         env:
           OPS_READ_SECRET: ${{ secrets.OPS_READ_SECRET }}
           # Override by setting a repository variable named PRODUCTION_BASE_URL.
@@ -67,8 +85,9 @@ jobs:
           BASE_URL="${BASE_URL%/}"
           echo "Probing ${BASE_URL}/api/ops/backend-alerts"
 
-          # --max-time bounds a hung connection; the body is captured so the
-          # failure email explains *what* is degraded, not just that it is.
+          # --max-time bounds a hung connection. The body is written to a file
+          # rather than to the log: it is needed for the exit-status decision
+          # below, not for publication. See the note before the step summary.
           http_status=$(curl --silent --show-error \
             --max-time 30 \
             --retry 2 --retry-delay 5 --retry-connrefused \
@@ -78,17 +97,26 @@ jobs:
             "${BASE_URL}/api/ops/backend-alerts") || http_status="000"
 
           echo "HTTP ${http_status}"
-          body=$(head -c 4000 response.json 2>/dev/null || echo '<no response body>')
 
+          # The response body is DELIBERATELY not written to the step summary.
+          # On a public repository, Actions run logs and step summaries are
+          # world-readable, and this endpoint is protected by OPS_READ_SECRET
+          # precisely because its contents are not public: queue depths, failure
+          # counts, provider health and degraded-subsystem names. Publishing it
+          # hourly would hand that to anyone, and would defeat the secret that
+          # guards the endpoint.
+          #
+          # The HTTP status plus the ::error annotation below still say which
+          # category of failure occurred, which is what the alert needs to
+          # convey. Read the body from the ops dashboard, authenticated.
           {
             echo "### Backend alert watchdog"
             echo
             echo "- Endpoint: \`${BASE_URL}/api/ops/backend-alerts\`"
             echo "- HTTP status: \`${http_status}\`"
             echo
-            echo '```json'
-            echo "${body}"
-            echo '```'
+            echo "Response body intentionally omitted — this log is public. See"
+            echo "\`docs/production-deployment-runbook.md\` for the alert-response table."
           } >> "$GITHUB_STEP_SUMMARY"
 
           case "${http_status}" in
@@ -104,7 +132,7 @@ jobs:
               exit 1
               ;;
             503)
-              echo "::error title=Backend degraded::The backend reports degraded health. See the response body above and the alert-response table in docs/production-deployment-runbook.md."
+              echo "::error title=Backend degraded::The backend reports degraded health. The response body is not printed here because this log is public — read it from the authenticated ops dashboard, and see the alert-response table in docs/production-deployment-runbook.md."
               exit 1
               ;;
             *)
@@ -112,3 +140,47 @@ jobs:
               exit 1
               ;;
           esac
+
+      # Reuses one open issue rather than filing hourly duplicates, and closes
+      # it on recovery, so the issue list reads as current state not as a log.
+      # No response body here either — this repository is public.
+      - name: Open or update the incident issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          INCIDENT_TITLE: Backend alert watchdog is failing
+        run: |
+          set -uo pipefail
+          existing=$(gh issue list --state open --search "\"${INCIDENT_TITLE}\" in:title" --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          stamp=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          if [ -n "${existing}" ]; then
+            gh issue comment "${existing}" --body "Still failing as of ${stamp}. Run: ${RUN_URL}"
+            echo "Commented on existing incident issue #${existing}."
+          else
+            gh issue create --title "${INCIDENT_TITLE}" --body "$(printf '%s\n' \
+              "The hourly backend watchdog failed at ${stamp}, so production health could not be confirmed." \
+              "" \
+              "Run: ${RUN_URL}" \
+              "" \
+              "The response body is not reproduced here or in the run log, because this repository is public and the ops endpoint is protected for a reason. Read it from the authenticated ops dashboard, and see the alert-response table in docs/production-deployment-runbook.md." \
+              "" \
+              "This issue closes automatically when the watchdog next succeeds.")"
+            echo "Opened a new incident issue."
+          fi
+
+      - name: Close the incident issue on recovery
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          INCIDENT_TITLE: Backend alert watchdog is failing
+        run: |
+          set -uo pipefail
+          existing=$(gh issue list --state open --search "\"${INCIDENT_TITLE}\" in:title" --json number --jq '.[0].number // empty' 2>/dev/null || true)
+
+          if [ -n "${existing}" ]; then
+            gh issue close "${existing}" --comment "Watchdog recovered at $(date -u '+%Y-%m-%d %H:%M UTC'). Run: ${RUN_URL}"
+            echo "Closed incident issue #${existing}."
+          fi
