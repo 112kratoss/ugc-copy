@@ -6,21 +6,15 @@
  * Node import, because `instrumentation-client.ts` pulls it into the browser
  * bundle.
  *
- * BROWSER ONLY, FOR NOW — and the reason is a build guard, not a preference.
- * Adding a root `instrumentation.ts` (the only way to initialise Sentry on the
- * server and to register `onRequestError`) makes Next emit an edge-wrapper
- * chunk containing Turbopack's own path helper, ``U.P = e => `/ROOT/${e}` ``.
- * `scripts/check-ffmpeg-build-artifact.mjs` flags any `/ROOT/` literal outside
- * `/ROOT/node_modules/next/dist`, so the bare template prefix trips it and
- * `npm run build:verify` fails. That guard exists because bundling
+ * Server and browser both initialise from here. The server half was blocked
+ * for a while by `scripts/check-ffmpeg-build-artifact.mjs`: adding a root
+ * `instrumentation.ts` makes Next emit an edge-wrapper chunk containing
+ * Turbopack's own path constructor, ``U.P = e => `/ROOT/${e}` ``, and the check
+ * flagged every `/ROOT/` literal. That check exists because bundling
  * `ffmpeg-static` inlined `/ROOT/node_modules/ffmpeg-static` and broke every
- * rendition in production, so it is not something to widen casually.
- *
- * Verified by elimination: no instrumentation files → passes; client only →
- * passes; server file present → fails, with or without any Sentry import.
- * **So the blocker is `instrumentation.ts` existing at all, not Sentry.**
- * See F15b in `docs/scaling-audit-2026-08-08.md` for the one-line guard change
- * that would unblock it, and why it needs a human decision.
+ * rendition in production, so it was narrowed rather than relaxed: a bare
+ * `/ROOT/` with an empty tail is now allowed, and anything with a tail is still
+ * flagged. See the regression test in `ffmpeg-build-artifact.test.ts`.
  *
  * ALSO NOT WIRED THROUGH `withSentryConfig`. That wrapper exists for
  * source-map upload, release tagging and tunnelling; source maps need a

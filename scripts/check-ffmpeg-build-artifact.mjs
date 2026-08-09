@@ -18,7 +18,25 @@ const FFMPEG_MODULE_TRACE_PATTERN = /(?:^|\/)ffmpeg-static(?:@[^/]*)?(?:\/node_m
  * they never use it to reach the filesystem.
  */
 const INLINED_ROOT_PATH_PATTERN = /\/ROOT\/[a-zA-Z0-9_@./-]*/g;
-export const ALLOWED_INLINED_ROOT_PATH_PATTERN = /^\/ROOT\/node_modules\/next\/dist(?:\/|$)/;
+/**
+ * Two allowances, and both are deliberately narrow.
+ *
+ * 1. Next's own precompiled dependencies, as above.
+ *
+ * 2. A BARE "/ROOT/" with nothing after it. That is not a path to anything —
+ *    it is the static prefix of Turbopack's own runtime path *constructor*,
+ *    `U.P = e => `/ROOT/${e}``, which Next emits inside its edge-wrapper
+ *    template. It appears as soon as a root `instrumentation.ts` exists,
+ *    whatever that file imports, so without this allowance the check forbids
+ *    instrumentation outright — which is how it blocked server-side error
+ *    tracking (F15b).
+ *
+ *    This cannot mask the bug the check exists for. That bug was
+ *    "/ROOT/node_modules/ffmpeg-static" — a path *with a tail*, still flagged.
+ *    Anything that reaches the filesystem names what it is reaching; a prefix
+ *    with an empty tail names nothing.
+ */
+export const ALLOWED_INLINED_ROOT_PATH_PATTERN = /^\/ROOT\/(?:$|node_modules\/next\/dist(?:\/|$))/;
 
 /** Routes that must be able to spawn ffmpeg at runtime. */
 export const FFMPEG_REQUIRED_ROUTE_MANIFESTS = [

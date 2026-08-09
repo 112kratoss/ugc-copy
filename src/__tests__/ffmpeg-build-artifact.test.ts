@@ -65,6 +65,24 @@ describe('FFmpeg build artifact verification', () => {
       expect(findInlinedRootPaths('t.exports=e.x("ffmpeg-static",()=>require("ffmpeg-static"))'))
         .toEqual([]);
     });
+
+    it("ignores Turbopack's own path constructor in the edge wrapper", () => {
+      // `U.P = e => `/ROOT/${e}`` is emitted into Next's edge-wrapper template
+      // as soon as a root instrumentation.ts exists — whatever it imports.
+      // Flagging it made the check forbid instrumentation outright, which is
+      // what blocked server-side error tracking (F15b).
+      expect(findInlinedRootPaths('U.P=function(e){return`/ROOT/${e??""}`}')).toEqual([]);
+    });
+
+    it('still flags a dependency path even now that a bare prefix is allowed', () => {
+      // The allowance above must not widen into "any /ROOT/ is fine". Anything
+      // that reaches the filesystem names what it reaches; only the empty tail
+      // is tolerated. This is the regression the whole check exists for.
+      expect(findInlinedRootPaths('U.P=function(e){return`/ROOT/${e}`};o.join("/ROOT/node_modules/ffmpeg-static","ffmpeg")'))
+        .toEqual(['/ROOT/node_modules/ffmpeg-static']);
+      expect(findInlinedRootPaths('require("/ROOT/node_modules/sharp/build/Release/sharp.node")'))
+        .toEqual(['/ROOT/node_modules/sharp/build/Release/sharp.node']);
+    });
   });
 
   describe('trace completeness', () => {

@@ -1348,7 +1348,7 @@ Fixed by snapshotting each variable through a direct `process.env.X` member expr
 
 **Verified end-to-end on `0f39cd5`, not merely re-deployed.** The live page's Sentry client reports `dsn` on the right host, `environment: "production"` (so `NEXT_PUBLIC_VERCEL_ENV` inlines too), `tracesSampleRate: 0`, `sendDefaultPii: false`, `replaysSessionSampleRate: 0` — every setting chosen above, confirmed on the deployed bundle rather than in source. A deliberate test exception then arrived in the issue stream as `MAGICBOOKLET-WEB-1` at Priority High, which exercises the alert path as well as ingestion. **The lesson to keep: for anything whose whole job is to report, the deploy is not the verification — an event arriving is.**
 
-**NOT shipped #1 — server-side capture, blocked by a post-incident build guard.**
+**~~NOT shipped #1~~ — server-side capture: UNBLOCKED AND SHIPPED 2026-08-09, by narrowing the guard rather than relaxing it.**
 
 Initialising Sentry on the server needs a root `instrumentation.ts`. Adding one makes Next emit an edge-wrapper chunk containing Turbopack's own path helper:
 
@@ -1368,9 +1368,13 @@ Attributed by elimination rather than guessed:
 
 **The blocker is `instrumentation.ts` existing at all — not Sentry.** With it present, Sentry *also* inlined `/ROOT/node_modules/@sentry/...` into the server chunks and dragged its bundler-plugin machinery in behind the package index; that half is already solved and the `@sentry/*` entries in `serverExternalPackages` are left in place for when this lands. Making the SDK import lazy and node-runtime-only did **not** clear the edge wrapper, because the chunk is emitted by the instrumentation hook itself.
 
-The fix is one line — teach `ALLOWED_INLINED_ROOT_PATH_PATTERN` to accept a bare `/ROOT/` prefix inside Next's own edge-wrapper templates, rather than only `/ROOT/node_modules/next/dist`. **It was deliberately not made here:** narrowing a guard that exists because of a production outage changes what production is protected from, and the evidence for "benign" is five minutes old. It is a short, well-evidenced review, not a re-investigation.
+**Resolved by narrowing, and the distinction matters.** `ALLOWED_INLINED_ROOT_PATH_PATTERN` now also accepts a **bare `/ROOT/` with an empty tail** — not "any `/ROOT/`". The guard's own comment states its purpose: block dependency paths that reach the filesystem, tolerate Next's own inlining. A prefix with nothing after it names no dependency and cannot reach anything; the bug this check exists for was `/ROOT/node_modules/ffmpeg-static`, **which has a tail and is still flagged**. Two regression tests pin exactly that — one asserting the Turbopack constructor is ignored, one asserting `ffmpeg-static` and a `sharp` native path are still caught even with the new allowance in the same source.
 
-Until it lands, **API route and server component errors are not captured** — which is where most server incidents live, so this is the more valuable half.
+Server-side capture now ships: `src/instrumentation.ts` initialises on the Node runtime and registers `onRequestError`, so App Router errors reach Sentry instead of being swallowed by the framework's own boundary.
+
+**Still node-only, deliberately.** `instrumentation.ts` is loaded by the edge runtime too, and middleware runs on *every* request — `src/proxy.ts` is thin by design and an APM SDK is not proportionate on that path. So **middleware errors remain uncaptured**; server components, route handlers and the browser are covered.
+
+**One honest gap in the verification:** the browser half was proven by an event arriving in the issue stream. The server half is proven *wired and deployed* — bundled, `onRequestError` registered, sharing the same config module whose inlining bug is fixed (and on the server `process.env` is real regardless) — but **no server event has been forced**, so it is not proven by arrival the way the browser half is. The first genuine server error will confirm it.
 
 **NOT shipped #2 — source maps.** `withSentryConfig` uploads them, needs a `SENTRY_AUTH_TOKEN` (a real secret, owner-only), and rewrites the bundler config that `outputFileTracingIncludes` uses for `ffmpeg-static` — the same thing `build:verify` guards. **Until it lands, stack traces arrive minified.**
 
