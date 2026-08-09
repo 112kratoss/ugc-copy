@@ -1394,7 +1394,19 @@ So "add a second email" and even "add a second collaborator" both look like they
 
 **What actually works, and costs nothing:** the watchdog now **opens a GitHub issue on failure**, which notifies every watcher of the repository. It reuses one open issue rather than filing hourly duplicates, and **closes it on recovery**, so the issue list reads as current state rather than as a log. A mail service would be the alternative and is ruled out by the budget constraint above.
 
-**Remaining owner step:** `magicbooklet` must accept the invite and **watch the repository** (All Activity, or Custom → Issues). Without that, the issue is created and notifies nobody new.
+**Verified by drill, not by reading the YAML** — and the first attempt was broken, which is the point of drilling. `PRODUCTION_BASE_URL` was pointed at a 404 path, the workflow dispatched, and the whole lifecycle exercised:
+
+| Drill step | Result |
+|---|---|
+| Probe fails → issue opened | `#45`, and **no ops payload in the body** |
+| Probe fails again → dedup | commented on `#45`, no duplicate filed |
+| Probe succeeds → recovery | `#45` closed with a recovery comment |
+
+The variable was restored to `https://magicbooklet.com` afterwards.
+
+**The first drill failed on the alerting step itself**: `gh` died with *"not a git repository"*, because this job deliberately runs **without `actions/checkout`** to keep each billed run short, so `gh` had no remote to infer the repository from. Fixed with `GH_REPO` rather than by adding a checkout, which would have put a clone on every hourly run. Had this not been drilled, the watchdog would have kept passing while its alert channel was dead — an alerting system that only fails when you need it.
+
+**Remaining owner step:** `magicbooklet` must accept the collaborator invite and **watch the repository** (All Activity, or Custom → Issues). Without that, the issue is created and notifies nobody new — the channel exists but the second recipient is not yet on it.
 
 ### A public-repository exposure, found while doing this
 
