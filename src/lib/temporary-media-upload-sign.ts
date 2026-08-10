@@ -9,6 +9,7 @@ import {
 import { canUserCreateDurableUpload } from '@/lib/account-deletion-guard';
 import { recordMediaUploadIntent } from '@/lib/media-upload-intents';
 import { isAllowedStorageMediaMimeType } from '@/lib/storage-upload-mime-policy';
+import { releaseUploadBytes, reserveUploadBytes } from '@/lib/upload-byte-admission';
 
 export type TemporaryMediaUploadSignClient = Parameters<typeof enforceBackendRateLimit>[0] & {
   // Widened for media_upload_intents. The staging bucket has no other record
@@ -243,6 +244,21 @@ export async function createTemporaryMediaUploadIntent({
 
   const uploadPath = `${userId}/${createUploadId()}-${metadata.fileName}`;
 
+  const byteReservation = await reserveUploadBytes(resolvedClient, {
+    userId,
+    bucket: TEMPORARY_UPLOADS_BUCKET,
+    storagePath: uploadPath,
+    declaredBytes: metadata.sizeBytes,
+  });
+  if (!byteReservation.ok) {
+    return {
+      ok: false,
+      status: byteReservation.status,
+      code: byteReservation.code,
+      error: byteReservation.error,
+    };
+  }
+
   // Recorded before the URL is handed out, never after. Signing first and
   // failing here would leave an object the client can write and nothing can
   // collect; failing in this order leaves a row for an object that will never
@@ -255,6 +271,10 @@ export async function createTemporaryMediaUploadIntent({
     declaredBytes: metadata.sizeBytes,
   });
   if (!intent.ok) {
+    await releaseUploadBytes(resolvedClient, {
+      bucket: TEMPORARY_UPLOADS_BUCKET,
+      storagePath: uploadPath,
+    });
     return {
       ok: false,
       status: 500,
@@ -267,6 +287,10 @@ export async function createTemporaryMediaUploadIntent({
     .createSignedUploadUrl(uploadPath);
 
   if (error || !data?.token) {
+    await releaseUploadBytes(resolvedClient, {
+      bucket: TEMPORARY_UPLOADS_BUCKET,
+      storagePath: uploadPath,
+    });
     return {
       ok: false,
       status: 500,

@@ -3,6 +3,7 @@ import type { Mock } from 'vitest';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import { CatalogError } from '@/lib/generation-model-catalog';
+import { markHeldProviderSubmission } from '@/lib/generation-public-failure';
 
 const mocks = vi.hoisted(() => ({
   getVideoGenerationStatusForRoute: vi.fn(),
@@ -61,6 +62,27 @@ describe('video generation route service', () => {
     });
     createAdminSupabase = vi.fn(() => adminSupabase);
     createUserSupabase = vi.fn(() => createUserSupabaseMock());
+  });
+
+  it('returns submission_pending with the held generation id after an ambiguous provider accept', async () => {
+    const ambiguous = new TypeError('fetch failed');
+    markHeldProviderSubmission(ambiguous, 'generation-held-video-1');
+    mocks.startVideoGenerationForRoute.mockRejectedValueOnce(ambiguous);
+    const { postVideoGenerationForRoute } = await import('@/lib/video-generation-route-service');
+
+    const result = await postVideoGenerationForRoute({
+      createAdminSupabase,
+      createUserSupabase,
+      kieApiKey: 'preview-provider-key',
+      readRequestBody: async () => ({ model: 'seedance-2-mini', prompt: 'portrait' }),
+      request: new Request('http://localhost/api/generate-video'),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 409,
+      body: { code: 'submission_pending', generationId: 'generation-held-video-1' },
+    });
   });
 
   it('authenticates video starts before parsing request JSON or creating privileged clients', async () => {

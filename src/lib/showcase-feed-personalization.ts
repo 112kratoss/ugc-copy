@@ -832,6 +832,7 @@ export async function getPersonalizedShowcaseFeedPage({
   offset,
   serviceClient,
   viewerUserId,
+  onPhaseTiming,
 }: {
   anonymousKeyHash: string | null;
   cursor: string | null;
@@ -842,16 +843,25 @@ export async function getPersonalizedShowcaseFeedPage({
   offset: number;
   serviceClient: SupabaseClient;
   viewerUserId: string | null;
+  onPhaseTiming?: (phase: string, durationMs: number) => void;
 }): Promise<ShowcaseFeedPage> {
+  const timed = async <T>(phase: string, work: () => Promise<T>): Promise<T> => {
+    const startedAt = performance.now();
+    try {
+      return await work();
+    } finally {
+      onPhaseTiming?.(phase, performance.now() - startedAt);
+    }
+  };
   if (cursor) {
-    const persisted = await loadPersistedPage({
+    const persisted = await timed('cursor_load', () => loadPersistedPage({
       anonymousKeyHash,
       cursorValue: cursor,
       hydratePostIds,
       limit,
       serviceClient,
       viewerUserId,
-    });
+    }));
     if (persisted) return persisted;
 
     // A continuation token is a request for one immutable session. If it is
@@ -871,11 +881,11 @@ export async function getPersonalizedShowcaseFeedPage({
     experimentAssignmentId,
     experimentId,
     experimentVariantId,
-  } = await resolveAlgorithmForViewer({
+  } = await timed('algorithm', () => resolveAlgorithmForViewer({
     anonymousKeyHash,
     serviceClient,
     viewerUserId,
-  });
+  }));
   if (!algorithm) {
     const fallback = await fallbackItems(Math.min(
       SHOWCASE_FEED_ELIGIBLE_ITEM_LIMIT,
@@ -893,34 +903,34 @@ export async function getPersonalizedShowcaseFeedPage({
   }
 
   if (offset === 0) {
-    const reusableSessionId = await findReusableSession({
+    const reusableSessionId = await timed('session_reuse', () => findReusableSession({
       algorithmVersionId: algorithm.id,
       anonymousKeyHash,
       experimentAssignmentId,
       filters,
       serviceClient,
       viewerUserId,
-    });
+    }));
     if (reusableSessionId) {
-      const reused = await loadPersistedPage({
+      const reused = await timed('session_page', () => loadPersistedPage({
         anonymousKeyHash,
         cursorValue: encodeRankedFeedCursor({ sessionId: reusableSessionId, position: 0 }),
         hydratePostIds,
         limit,
         serviceClient,
         viewerUserId,
-      });
+      }));
       if (reused) return reused;
     }
   }
 
-  const featureRows = await loadCandidateFeatures({
+  const featureRows = await timed('candidate_rpc', () => loadCandidateFeatures({
     algorithm,
     anonymousKeyHash,
     category: filters.category,
     serviceClient,
     viewerUserId,
-  });
+  }));
   // Hydration is budgeted, so the pre-sort must already respect the seen tier;
   // otherwise repeats consume the budget and never reach the reranker as the
   // last resort they are meant to be.
@@ -932,23 +942,24 @@ export async function getPersonalizedShowcaseFeedPage({
     ))
     : null;
   const hydratedFeatureItems = configuredFeatureRows?.length
-    ? await hydrateEligibleCandidates({
+    ? await timed('hydration', () => hydrateEligibleCandidates({
       eligibleItemLimit: algorithm.eligibleItemLimit,
       featureRows: configuredFeatureRows,
       hydratePostIds,
-    })
+    }))
     : [];
   const fallbackTarget = algorithm.eligibleItemLimit - hydratedFeatureItems.length;
   const filteredFallbackItems = fallbackTarget > 0
-    ? await fallbackItems(algorithm.eligibleItemLimit)
+    ? await timed('fallback', () => fallbackItems(algorithm.eligibleItemLimit))
     : [];
-  const feedbackFilteredCandidateItems = await filterActiveViewerFeedback({
+  const feedbackFilteredCandidateItems = await timed('feedback', () => filterActiveViewerFeedback({
     items: mergeUniqueFeedItems(hydratedFeatureItems, filteredFallbackItems),
     serviceClient,
     viewerUserId,
-  });
+  }));
   const candidateItems = (feedbackFilteredCandidateItems ?? [])
     .slice(0, algorithm.eligibleItemLimit);
+  const rankingStartedAt = performance.now();
   const ranked = rankAndDiversifyShowcaseItems({
     items: candidateItems,
     featureRows: configuredFeatureRows ?? [],
@@ -956,7 +967,8 @@ export async function getPersonalizedShowcaseFeedPage({
     diversityConfig: algorithm.diversityConfig,
     seenPenalty: algorithm.retrieval.seenPenalty,
   }).slice(0, algorithm.eligibleItemLimit);
-  const persisted = await persistRankedSession({
+  onPhaseTiming?.('ranking', performance.now() - rankingStartedAt);
+  const persisted = await timed('persistence', () => persistRankedSession({
     algorithmVersionId: algorithm.id,
     anonymousKeyHash,
     experimentAssignmentId,
@@ -968,7 +980,7 @@ export async function getPersonalizedShowcaseFeedPage({
     ranked,
     serviceClient,
     viewerUserId,
-  });
+  }));
   const pageEntries = ranked.slice(offset, offset + limit);
   // Whether more content exists is a fact about the ranked pool, not about whether
   // we managed to persist a session. Only `nextCursor` needs a session, because only

@@ -328,6 +328,35 @@ export function isExternalServiceTimeoutError(error: unknown): error is External
   return error instanceof ExternalServiceTimeoutError;
 }
 
+/**
+ * Network failures after a non-idempotent POST are outcome-ambiguous just like
+ * a timeout: the provider may have accepted the bytes before the connection
+ * reset. Keep this narrow to fetch/network errors so an application validation
+ * exception is still settled immediately.
+ */
+export function isExternalServiceNetworkError(error: unknown): boolean {
+  if (error instanceof TypeError) {
+    const cause = (error as TypeError & { cause?: unknown }).cause;
+    // Node fetch uses TypeError as its outer wrapper. Prefer the concrete
+    // socket cause when present so a refused/unreachable connection refunds
+    // immediately instead of holding credits for 45 minutes. A cause-less
+    // fetch TypeError remains conservative because its send state is unknown.
+    return cause === undefined ? true : isExternalServiceNetworkError(cause);
+  }
+  if (!error || typeof error !== 'object') return false;
+  const record = error as { code?: unknown; cause?: unknown };
+  const code = typeof record.code === 'string' ? record.code.toUpperCase() : '';
+  // These can happen after bytes were accepted by the peer. Connection-refused,
+  // DNS and route failures happen before a provider can accept the task and are
+  // therefore definitive failures, not submission_unknown.
+  if (['ECONNRESET', 'EPIPE', 'UND_ERR_SOCKET'].includes(code)) {
+    return true;
+  }
+  return record.cause !== undefined && record.cause !== error
+    ? isExternalServiceNetworkError(record.cause)
+    : false;
+}
+
 // ─── Bounded retry ────────────────────────────────────────────────────────────
 
 /**

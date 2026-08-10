@@ -146,6 +146,13 @@ function createSupabaseMock(
       };
     }
 
+    if (fn === 'enqueue_generation_output_import_job') {
+      return {
+        data: 'output-import-job-1',
+        error: null,
+      };
+    }
+
     if (fn === 'refund_generation') {
       return { data: true, error: null };
     }
@@ -847,7 +854,7 @@ describe('/api/generate-image route', () => {
     }));
   });
 
-  it('persists and returns all Grok image outputs when the provider succeeds', async () => {
+  it('durably enqueues all Grok image outputs instead of importing them in the status request', async () => {
     currentSupabaseMock = createSupabaseMock(null, {
       id: 'gen-grok-image-1',
       prediction_id: 'task-grok-image-1',
@@ -863,9 +870,6 @@ describe('/api/generate-image route', () => {
         providerModel: 'grok-imagine/text-to-image',
       },
     });
-
-    const serverHelpers = await import('@/lib/server-helpers');
-    vi.mocked(serverHelpers.resolveStoredMediaUrl).mockImplementation(async (_supabase, outputUrl) => `signed:${outputUrl}`);
 
     vi.stubGlobal(
       'fetch',
@@ -891,10 +895,7 @@ describe('/api/generate-image route', () => {
           } as Response;
         }
 
-        return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
-          status: 200,
-          headers: { 'Content-Type': 'image/jpeg' },
-        });
+        throw new Error(`status request must not download output media: ${url}`);
       })
     );
 
@@ -910,24 +911,24 @@ describe('/api/generate-image route', () => {
     const data = await response.json();
     expect(response.status).toBe(200);
     expect(data).toMatchObject({
-      status: 'succeeded',
-      output: 'signed:generated_images/user-1/generated_task-grok-image-1_0.jpg',
-      outputs: [
-        'signed:generated_images/user-1/generated_task-grok-image-1_0.jpg',
-        'signed:generated_images/user-1/generated_task-grok-image-1_1.jpg',
-      ],
+      status: 'processing',
+      output: null,
     });
-    expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith('settle_generation_succeeded', expect.objectContaining({
-      p_prediction_id: 'task-grok-image-1',
-      p_output_url: 'generated_images/user-1/generated_task-grok-image-1_0.jpg',
-      p_completed_at: '2026-04-15T10:01:00.000Z',
-      p_workflow_settings: expect.objectContaining({
-        outputs: [
-          { index: 0, storagePath: 'generated_images/user-1/generated_task-grok-image-1_0.jpg' },
-          { index: 1, storagePath: 'generated_images/user-1/generated_task-grok-image-1_1.jpg' },
+    expect(currentSupabaseMock.client.rpc).toHaveBeenCalledWith(
+      'enqueue_generation_output_import_job',
+      {
+        p_generation_id: 'gen-grok-image-1',
+        p_output_urls: [
+          'https://provider.example.com/grok-1.jpg',
+          'https://provider.example.com/grok-2.jpg',
         ],
-      }),
-    }));
+        p_provider_completed_at: '2026-04-15T10:01:00.000Z',
+      },
+    );
+    expect(currentSupabaseMock.client.rpc).not.toHaveBeenCalledWith(
+      'settle_generation_succeeded',
+      expect.anything(),
+    );
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });
 });

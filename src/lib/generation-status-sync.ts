@@ -16,13 +16,12 @@ import {
   settleGenerationSucceeded,
 } from '@/lib/generation-settlement';
 import { extractKieWebhookTaskId } from '@/lib/kie-webhook';
+import { enqueueGenerationOutputImportJob } from '@/lib/generation-output-import-jobs';
 import { getGenerationKind, normalizeMarketGenerationTiming, toIsoTimestamp } from '@/lib/generation-timing';
 import {
   getFirstResultUrl,
   getGenerationResultUrls,
   getStoredWorkflowModel,
-  persistGeneratedOutput,
-  persistGeneratedOutputList,
   type GenerationStatusSyncResult,
   type GenerationSyncStatus,
   type SyncableGenerationRecord,
@@ -60,6 +59,24 @@ async function markGenerationFailed(
     generation.prediction_id,
     completedAt ?? new Date().toISOString(),
   );
+}
+
+async function queueProviderOutputImport(
+  client: SupabaseClient,
+  generation: SyncableGenerationRecord,
+  outputUrls: string[],
+  completedAt?: string | null,
+): Promise<'succeeded'> {
+  await enqueueGenerationOutputImportJob({
+    client,
+    generationId: generation.id,
+    outputUrls,
+    providerCompletedAt: completedAt ?? null,
+  });
+  // Provider reconciliation is complete once the URLs are committed to the
+  // durable import queue. The generation row intentionally remains active
+  // until that queue persists media and settles credits exactly once.
+  return 'succeeded';
 }
 
 function isVeoGeneration(generation: SyncableGenerationRecord): boolean {
@@ -113,7 +130,12 @@ async function syncSingleGenerationStatusFromProviderPayload(
     if (successFlag === 1) {
       const tempUrl = getFirstResultUrl(responseData?.resultUrls) || getFirstResultUrl(responseData?.originUrls);
       if (tempUrl) {
-        return persistGeneratedOutput(creditSupabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
+        return queueProviderOutputImport(
+          creditSupabase,
+          generation,
+          [tempUrl],
+          toIsoTimestamp(timing.completedAtMs),
+        );
       } else {
         return settleGenerationSucceeded(creditSupabase, {
           predictionId: generation.prediction_id,
@@ -151,15 +173,19 @@ async function syncSingleGenerationStatusFromProviderPayload(
 
     if (tempUrl) {
       if (generation.model === 'grok-imagine-image') {
-        return (await persistGeneratedOutputList(
-          creditSupabase,
+        return queueProviderOutputImport(
           creditSupabase,
           generation,
           getGenerationResultUrls(result),
           toIsoTimestamp(timing.completedAtMs)
-        )).status;
+        );
       } else {
-        return persistGeneratedOutput(creditSupabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
+        return queueProviderOutputImport(
+          creditSupabase,
+          generation,
+          [tempUrl],
+          toIsoTimestamp(timing.completedAtMs),
+        );
       }
     } else {
       return settleGenerationSucceeded(creditSupabase, {
@@ -217,7 +243,12 @@ async function syncSingleGenerationStatus(
     if (successFlag === 1) {
       const tempUrl = getFirstResultUrl(responseData?.resultUrls) || getFirstResultUrl(responseData?.originUrls);
       if (tempUrl) {
-        return persistGeneratedOutput(creditSupabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
+        return queueProviderOutputImport(
+          creditSupabase,
+          generation,
+          [tempUrl],
+          toIsoTimestamp(timing.completedAtMs),
+        );
       } else {
         return settleGenerationSucceeded(creditSupabase, {
           predictionId: generation.prediction_id,
@@ -269,15 +300,19 @@ async function syncSingleGenerationStatus(
 
     if (tempUrl) {
       if (generation.model === 'grok-imagine-image') {
-        return (await persistGeneratedOutputList(
-          creditSupabase,
+        return queueProviderOutputImport(
           creditSupabase,
           generation,
           getGenerationResultUrls(result),
           toIsoTimestamp(timing.completedAtMs)
-        )).status;
+        );
       } else {
-        return persistGeneratedOutput(creditSupabase, creditSupabase, generation, tempUrl, toIsoTimestamp(timing.completedAtMs));
+        return queueProviderOutputImport(
+          creditSupabase,
+          generation,
+          [tempUrl],
+          toIsoTimestamp(timing.completedAtMs),
+        );
       }
     } else {
       return settleGenerationSucceeded(creditSupabase, {

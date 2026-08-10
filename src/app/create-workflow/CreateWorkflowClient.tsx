@@ -279,6 +279,12 @@ export default function CreateWorkflowClient({
     };
   }, [effectiveSession?.access_token]);
 
+  // Retain the key only while the outcome is ambiguous. If the request reaches
+  // the server but the response is lost, the next Run click must replay the
+  // same intent instead of creating and charging a second workflow. A confirmed
+  // response clears it so a later deliberate run gets a fresh identity.
+  const pendingRunIntentRef = useRef<{ signature: string; key: string } | null>(null);
+
   const graph = useMemo<WorkflowCanvasGraph>(() => ({
     version: starter.version,
     nodes,
@@ -999,10 +1005,24 @@ export default function CreateWorkflowClient({
       }
     }
 
+    const intentSignature = JSON.stringify({
+      canvasId: activeCanvasId,
+      nodeId,
+      mode,
+      catalogRevision: modelCatalogRevision,
+    });
+    if (pendingRunIntentRef.current?.signature !== intentSignature) {
+      pendingRunIntentRef.current = { signature: intentSignature, key: crypto.randomUUID() };
+    }
+    const idempotencyKey = pendingRunIntentRef.current.key;
+
     try {
       const response = await fetch(`/api/workflow-canvases/${activeCanvasId}/run`, {
         method: 'POST',
-        headers: await authHeaders(),
+        headers: {
+          ...(await authHeaders()),
+          'Idempotency-Key': idempotencyKey,
+        },
         body: JSON.stringify({
           startNodeId: nodeId,
           mode,
@@ -1011,9 +1031,17 @@ export default function CreateWorkflowClient({
       });
       const data = await response.json();
       if (!response.ok) {
+        // Only deterministic pre-creation rejections clear the intent. A 429
+        // can follow an earlier request whose response was lost; clearing the
+        // key there would turn the post-window retry into a second paid run.
+        // Preserve the key on throttling, conflicts and 5xx ambiguity.
+        if ([400, 401, 403, 404].includes(response.status)) {
+          pendingRunIntentRef.current = null;
+        }
         throw new Error(data.error || 'Failed to start workflow run.');
       }
 
+      pendingRunIntentRef.current = null;
       if (typeof data.runId === 'string' && data.runId.length > 0) {
         setActiveRunId(data.runId);
       }

@@ -290,7 +290,7 @@ describe('posts route adapter service', () => {
       return new Request('http://localhost/api/posts', { method: 'POST', body: new FormData() });
     }
 
-    it('kicks the repair for the new post with the same service client', async () => {
+    it('leaves new media for the leased dedicated repair worker', async () => {
       const adminSupabase = { kind: 'admin' } as unknown as SupabaseClient;
       const repairMediaForPost = vi.fn(async () => ({ attempted: 1, completed: 1, failed: 0 }));
       const scheduled: Array<() => Promise<void>> = [];
@@ -307,12 +307,10 @@ describe('posts route adapter service', () => {
       });
 
       expect(response.status).toBe(200);
-      // Scheduled, not awaited: the publish response must not wait on a transcode.
+      // Publishing only commits pending rows. It never creates an unleased
+      // ffmpeg worker per request.
       expect(repairMediaForPost).not.toHaveBeenCalled();
-      expect(scheduled).toHaveLength(1);
-
-      await scheduled[0]();
-      expect(repairMediaForPost).toHaveBeenCalledWith(adminSupabase, 'post-1');
+      expect(scheduled).toHaveLength(0);
     });
 
     it('does not schedule a repair when creation failed', async () => {
@@ -351,9 +349,7 @@ describe('posts route adapter service', () => {
       });
 
       expect(response.status).toBe(200);
-      // The post is already published and the hourly sweep retries this exact
-      // work, so a rejection here must not escape into the runtime.
-      await expect(scheduled[0]()).resolves.toBeUndefined();
+      expect(scheduled).toHaveLength(0);
     });
 
     it('still publishes when the repair cannot even be scheduled', async () => {

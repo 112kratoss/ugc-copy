@@ -84,6 +84,7 @@ import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 const TEMPLATE_START_FAILED_EVENT = 'template_generation_start_failed_after_reservation';
 import {
   fetchWithProviderTimeout,
+  isExternalServiceNetworkError,
   isExternalServiceTimeoutError,
   PROVIDER_TASK_CREATE_TIMEOUT_MS,
   withProviderModel,
@@ -269,7 +270,10 @@ async function createKieTask(
   // it. A rejection throws a 429 `GenerationServiceError`, which the caller's
   // existing catch refunds through the ordinary path; that is correct because
   // no request was sent, so the provider will never bill for it.
-  await admitProviderSubmission({ model: options.modelId });
+  await admitProviderSubmission({
+    generationId: options.generationId,
+    model: options.modelId,
+  });
 
   let response: Response;
   try {
@@ -287,7 +291,7 @@ async function createKieTask(
     }, PROVIDER_TASK_CREATE_TIMEOUT_MS, fetch, 'KIE task creation'));
   } catch (error) {
     if (isProviderFaultFailure(error)) {
-      recordProviderSubmissionOutcome({ success: false });
+      await recordProviderSubmissionOutcome({ success: false });
     }
     throw error;
   }
@@ -300,7 +304,7 @@ async function createKieTask(
   if (!response.ok) {
     const retryAfterSeconds = parseProviderRetryAfterSeconds(response);
     if (isProviderFaultFailure(null, response.status)) {
-      recordProviderSubmissionOutcome({ success: false, retryAfterSeconds });
+      await recordProviderSubmissionOutcome({ success: false, retryAfterSeconds });
     }
 
     // A provider 429 is reported as one. It reaches the user as `provider_busy`
@@ -325,7 +329,7 @@ async function createKieTask(
     throw new Error(data?.msg || 'Provider rejected the request');
   }
 
-  recordProviderSubmissionOutcome({ success: true });
+  await recordProviderSubmissionOutcome({ success: true });
 
   return data.data.taskId as string;
 }
@@ -517,6 +521,19 @@ async function settleTemplateGenerationStartFailureQuietly(params: {
   userId: string;
   cost: number;
 }) {
+  if (isExternalServiceTimeoutError(params.error) || isExternalServiceNetworkError(params.error)) {
+    const hold = await holdAmbiguousGenerationSubmission({
+      creditSupabase: params.creditSupabase,
+      generationId: params.generationId,
+      userId: params.userId,
+      cost: params.cost,
+    });
+    if (hold !== 'unrecorded') {
+      if (hold === 'reserved') markHeldProviderSubmission(params.error, params.generationId);
+      return;
+    }
+  }
+
   const failure = getPublicGenerationStartFailure(params.error);
   const logEntry = {
     generationId: params.generationId,
@@ -663,7 +680,7 @@ async function settleGenerationStartFailureQuietly(params: {
   // Only the ambiguous class is held. A provider that answered -- with an HTTP
   // error or a non-200 body code -- has definitively rejected the request, and
   // refunding it immediately stays correct.
-  if (isExternalServiceTimeoutError(params.error)) {
+  if (isExternalServiceTimeoutError(params.error) || isExternalServiceNetworkError(params.error)) {
     const hold = await holdAmbiguousGenerationSubmission({
       creditSupabase: params.creditSupabase,
       generationId: params.generationId,
@@ -675,7 +692,7 @@ async function settleGenerationStartFailureQuietly(params: {
       // Tagged only when the credits really are still reserved, so the copy the
       // caller renders can say so without the risk of promising it to someone
       // who has already been refunded.
-      if (hold === 'reserved') markHeldProviderSubmission(params.error);
+      if (hold === 'reserved') markHeldProviderSubmission(params.error, params.generationId);
       return;
     }
   }
@@ -1169,15 +1186,7 @@ export async function persistGeneratedOutput(
 
       if (uploadError) {
         logBackendError('generation_output_upload_failed', { predictionId: generation.prediction_id, error: uploadError });
-        return settleGenerationSucceeded(settlementSupabase, {
-          predictionId: generation.prediction_id!,
-          outputUrl: tempUrl,
-          previewUrl: getFallbackPreviewUrl(generation.category, stagedMedia.contentType, tempUrl),
-          previewStatus: 'failed',
-          previewAttemptCount: 1,
-          previewError: 'Generated output could not be persisted for preview processing.',
-          completedAt: settledAt,
-        });
+        throw uploadError;
       }
 
       const storagePath = `${bucket}/${fileName}`;
@@ -1207,15 +1216,7 @@ export async function persistGeneratedOutput(
     }
   } catch (error) {
     logBackendError('generation_output_persist_failed', { predictionId: generation.prediction_id, error });
-    return settleGenerationSucceeded(settlementSupabase, {
-      predictionId: generation.prediction_id!,
-      outputUrl: null,
-      previewUrl: null,
-      previewStatus: 'failed',
-      previewAttemptCount: 1,
-      previewError: error instanceof Error ? error.message.slice(0, 500) : 'Generated output persistence failed.',
-      completedAt: settledAt,
-    });
+    throw error;
   }
 }
 
@@ -1293,7 +1294,13 @@ export async function persistGeneratedOutputList(
     }
   }
 
-  const primaryOutput = outputs[0]?.storagePath ?? null;
+  if (outputs.length !== tempUrls.length || !outputs.some((output) => output.index === 0)) {
+    throw new Error(
+      `Persisted ${outputs.length} of ${tempUrls.length} provider outputs; settlement deferred for retry.`,
+    );
+  }
+
+  const primaryOutput = outputs.find((output) => output.index === 0)?.storagePath ?? null;
   const workflowSettings = generation.workflow_settings && typeof generation.workflow_settings === 'object'
     ? generation.workflow_settings
     : {};

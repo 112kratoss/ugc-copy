@@ -1,5 +1,6 @@
 import 'server-only';
 import { logBackendError } from '@/lib/backend-logger';
+import { randomUUID } from 'node:crypto';
 
 import { after, NextResponse } from 'next/server';
 
@@ -21,8 +22,9 @@ import {
   getWorkflowRunDetails,
   WorkflowRunApprovalError,
 } from '@/lib/workflow-runner';
+import { processWorkflowRunStepJobs } from '@/lib/workflow-run-jobs-processor';
 
-type WorkflowRunScheduleMonitor = (callback: () => Promise<void>) => void;
+type WorkflowRunScheduleWorker = (callback: () => Promise<void>) => void;
 type WorkflowRunDetailsSupabaseClient = Parameters<typeof getWorkflowRunDetails>[0]['supabase'];
 
 type WorkflowRunDetailsRouteContext = {
@@ -39,7 +41,8 @@ type WorkflowRunRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
   getWorkflowRunDetails?: typeof getWorkflowRunDetails;
-  scheduleMonitor?: WorkflowRunScheduleMonitor;
+  processWorkflowRunStepJobs?: typeof processWorkflowRunStepJobs;
+  scheduleWorker?: WorkflowRunScheduleWorker;
   startWorkflowRunForRoute?: typeof startWorkflowRunForRoute;
 };
 
@@ -50,7 +53,9 @@ function resolveDependencies(dependencies: WorkflowRunRouteDependencies | undefi
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
     getWorkflowRunDetails: dependencies?.getWorkflowRunDetails ?? getWorkflowRunDetails,
-    scheduleMonitor: dependencies?.scheduleMonitor ?? ((callback) => after(callback)),
+    processWorkflowRunStepJobs:
+      dependencies?.processWorkflowRunStepJobs ?? processWorkflowRunStepJobs,
+    scheduleWorker: dependencies?.scheduleWorker ?? ((callback) => after(callback)),
     startWorkflowRunForRoute:
       dependencies?.startWorkflowRunForRoute ?? startWorkflowRunForRoute,
   };
@@ -68,6 +73,23 @@ function createWorkflowRunResponse(result: WorkflowRunRouteResult) {
   return NextResponse.json(result.body, { status: result.status });
 }
 
+function scheduleWorkflowFastPathWorker(dependencies: ReturnType<typeof resolveDependencies>) {
+  dependencies.scheduleWorker(async () => {
+    try {
+      await dependencies.processWorkflowRunStepJobs({
+        supabase: dependencies.createServiceClient(),
+        lockedBy: `workflow-route-${randomUUID()}`,
+        limit: 1,
+        concurrency: 1,
+      });
+    } catch (error) {
+      // The job is already durable. A failed fast-path drain is safe: the
+      // dedicated cron will reclaim it using the same database lease.
+      logBackendError('workflow_run_fast_path_worker_failed', { error });
+    }
+  });
+}
+
 async function handleWorkflowRunPOST(
   request: Request,
   canvasId: string,
@@ -79,15 +101,20 @@ async function handleWorkflowRunPOST(
   const body = await request.json().catch(() => ({}));
   const workflowRunSupabase = auth.supabase as unknown as WorkflowRunRouteSupabaseClient;
 
-  return createWorkflowRunResponse(await dependencies.startWorkflowRunForRoute({
+  const result = await dependencies.startWorkflowRunForRoute({
     supabase: workflowRunSupabase,
     adminSupabase: dependencies.createServiceClient,
     userId: auth.userId,
     canvasId,
     body,
     idempotencyKeyHeader: request.headers.get('idempotency-key'),
-    scheduleMonitor: dependencies.scheduleMonitor,
-  }));
+  });
+
+  if (result.ok && result.body.status === 'processing' && !result.body.reused) {
+    scheduleWorkflowFastPathWorker(dependencies);
+  }
+
+  return createWorkflowRunResponse(result);
 }
 
 export async function postWorkflowRunRouteResponse({
@@ -175,6 +202,7 @@ async function handleWorkflowRunApprovalPOST(
       runId,
       stepId,
     });
+    if (run.status === 'processing') scheduleWorkflowFastPathWorker(dependencies);
     return NextResponse.json({ run });
   } catch (error) {
     if (error instanceof WorkflowRunApprovalError) {

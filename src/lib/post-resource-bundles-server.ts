@@ -252,6 +252,7 @@ interface PostResourceBundleLinkedPost {
   sourceToolSlug: string | null;
   mediaUrl: string | null;
   mediaPreviewUrl: string | null;
+  mediaRenditionUrl: string | null;
   mediaKind: ShowcaseMediaKind | null;
   saveCount: number;
   remixCount: number;
@@ -1161,6 +1162,7 @@ async function loadLinkedPostMap(
         sourceToolSlug: row.source_tool_slug ?? slugifySourceTool(row.source_tool),
         mediaUrl,
         mediaPreviewUrl: coverMedia?.previewUrl ?? null,
+        mediaRenditionUrl: coverMedia?.renditionUrl ?? null,
         mediaKind: coverMedia?.mediaKind ?? getPostMediaKind(row.category, row.post_format),
         saveCount: row.save_count ?? 0,
         remixCount: row.remix_count ?? 0,

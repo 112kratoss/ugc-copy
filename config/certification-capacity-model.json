@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "headroomFraction": 0.30,
+  "productionAnonymousOperationShare": 0.34,
+  "feedFactPruneRowsPerDay": 120000,
+  "generationsPerMauPerMonth": 4,
+  "scenarios": {
+    "conservative": {
+      "dauMauRatio": 0.30,
+      "authenticatedOperationsPerDau": 15,
+      "peakToAverageFactor": 6,
+      "feedSessionsPerDau": 3
+    },
+    "base": {
+      "dauMauRatio": 0.20,
+      "authenticatedOperationsPerDau": 10,
+      "peakToAverageFactor": 4,
+      "feedSessionsPerDau": 2
+    },
+    "optimistic": {
+      "dauMauRatio": 0.15,
+      "authenticatedOperationsPerDau": 6,
+      "peakToAverageFactor": 3,
+      "feedSessionsPerDau": 1
+    }
+  }
+}

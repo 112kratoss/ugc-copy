@@ -11,6 +11,7 @@ import {
 } from '@/lib/backend-rate-limit';
 import { canUserCreateDurableUpload } from '@/lib/account-deletion-guard';
 import { isAllowedStorageBucketMimeType } from '@/lib/storage-upload-mime-policy';
+import { releaseUploadBytes, reserveUploadBytes } from '@/lib/upload-byte-admission';
 
 const PROFILE_MEDIA_BUCKET = 'profiles';
 const SIGNED_UPLOAD_EXPIRES_IN_SECONDS = 2 * 60 * 60;
@@ -93,6 +94,7 @@ function validateProfileMediaMetadata(body: unknown): {
   fileName: string;
   mimeType: string;
   role: ProfileMediaRole;
+  sizeBytes: number;
 } | { error: string } {
   if (!isRecord(body)) {
     return { error: 'Invalid profile media metadata.' };
@@ -130,6 +132,7 @@ function validateProfileMediaMetadata(body: unknown): {
     fileName,
     mimeType,
     role,
+    sizeBytes,
   };
 }
 
@@ -207,10 +210,27 @@ export async function createProfileMediaUploadIntent({
   }
 
   const uploadPath = `${userId}/${metadata.role}-${createUploadId()}-${metadata.fileName}`;
+  const byteReservation = await reserveUploadBytes(resolvedClient, {
+    userId,
+    bucket: PROFILE_MEDIA_BUCKET,
+    storagePath: uploadPath,
+    declaredBytes: metadata.sizeBytes,
+  });
+  if (!byteReservation.ok) {
+    return {
+      ok: false,
+      status: byteReservation.status,
+      body: { error: byteReservation.error, code: byteReservation.code },
+    };
+  }
   const profileStorage = resolvedClient.storage.from(PROFILE_MEDIA_BUCKET);
   const { data, error } = await profileStorage.createSignedUploadUrl(uploadPath);
 
   if (error || !data?.token) {
+    await releaseUploadBytes(resolvedClient, {
+      bucket: PROFILE_MEDIA_BUCKET,
+      storagePath: uploadPath,
+    });
     logBackendError('failed_to_create_profile_media_signed_upload_url', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to prepare profile media upload.' } };
   }
@@ -220,6 +240,10 @@ export async function createProfileMediaUploadIntent({
   } = profileStorage.getPublicUrl(uploadPath);
 
   if (!publicUrl) {
+    await releaseUploadBytes(resolvedClient, {
+      bucket: PROFILE_MEDIA_BUCKET,
+      storagePath: uploadPath,
+    });
     return { ok: false, status: 500, body: { error: 'Failed to prepare profile media URL.' } };
   }
 

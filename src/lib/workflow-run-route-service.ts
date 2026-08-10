@@ -9,7 +9,6 @@ import {
 import { normalizeWorkflowGraph, type WorkflowCanvasGraph } from '@/lib/workflow-canvas';
 import {
   executeWorkflowRun,
-  monitorWorkflowRun,
   type WorkflowRunExecutionResult,
 } from '@/lib/workflow-runner';
 
@@ -44,13 +43,6 @@ type ExecuteWorkflowRunForRoute = (params: {
   idempotencyKey?: string | null;
 }) => Promise<WorkflowRunExecutionResult>;
 
-type MonitorWorkflowRunForRoute = (params: {
-  canvasId: string;
-  runId: string;
-}) => Promise<unknown>;
-
-type ScheduleWorkflowMonitor = (callback: () => Promise<void>) => void;
-
 export type WorkflowRunRouteResult =
   | {
       ok: true;
@@ -76,15 +68,10 @@ type StartWorkflowRunForRouteInput = {
    */
   idempotencyKeyHeader?: string | null;
   executeRun?: ExecuteWorkflowRunForRoute;
-  monitorRun?: MonitorWorkflowRunForRoute;
-  scheduleMonitor?: ScheduleWorkflowMonitor;
 };
 
 const defaultExecuteWorkflowRunForRoute: ExecuteWorkflowRunForRoute = async (params) =>
   executeWorkflowRun(params as unknown as Parameters<typeof executeWorkflowRun>[0]);
-
-const defaultMonitorWorkflowRunForRoute: MonitorWorkflowRunForRoute = async (params) =>
-  monitorWorkflowRun(params);
 
 function resolveAdminClient(adminSupabase: WorkflowRunRateLimitInput) {
   return typeof adminSupabase === 'function' ? adminSupabase() : adminSupabase;
@@ -165,8 +152,6 @@ export async function startWorkflowRunForRoute({
   body,
   idempotencyKeyHeader = null,
   executeRun = defaultExecuteWorkflowRunForRoute,
-  monitorRun = defaultMonitorWorkflowRunForRoute,
-  scheduleMonitor,
 }: StartWorkflowRunForRouteInput): Promise<WorkflowRunRouteResult> {
   const request = readRunRequest(body);
   const idempotencyKey = readIdempotencyKey(idempotencyKeyHeader) ?? request.idempotencyKey;
@@ -175,6 +160,16 @@ export async function startWorkflowRunForRoute({
       ok: false,
       status: 400,
       body: { error: 'A start node is required.' },
+    };
+  }
+  if (!idempotencyKey) {
+    return {
+      ok: false,
+      status: 400,
+      body: {
+        error: 'An Idempotency-Key is required for workflow runs.',
+        code: 'IDEMPOTENCY_KEY_REQUIRED',
+      },
     };
   }
 
@@ -208,22 +203,6 @@ export async function startWorkflowRunForRoute({
       catalogRevision: request.catalogRevision,
       idempotencyKey,
     });
-
-    // A replayed key returns the run it already names without re-executing the
-    // graph, so there is nothing new to monitor -- whatever started the
-    // original run is already watching it, and the cron adopts it otherwise.
-    if (result.status === 'processing' && !result.reused && scheduleMonitor) {
-      scheduleMonitor(async () => {
-        try {
-          await monitorRun({
-            canvasId: canvas.id,
-            runId: result.runId,
-          });
-        } catch (monitorError) {
-          logBackendError('workflow_run_monitor_failed', { error: monitorError });
-        }
-      });
-    }
 
     return { ok: true, body: result };
   } catch (error) {

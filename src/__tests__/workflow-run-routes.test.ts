@@ -6,6 +6,7 @@ const executeWorkflowRunMock = vi.fn();
 const monitorWorkflowRunMock = vi.fn();
 const getWorkflowRunDetailsMock = vi.fn();
 const approveWorkflowRunStepMock = vi.fn();
+const processWorkflowRunStepJobsMock = vi.fn();
 let runRateLimitAllowed = true;
 let runAdminRpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
 
@@ -28,6 +29,10 @@ vi.mock('@/lib/workflow-runner', () => ({
       super(message);
     }
   },
+}));
+
+vi.mock('@/lib/workflow-run-jobs-processor', () => ({
+  processWorkflowRunStepJobs: (...args: unknown[]) => processWorkflowRunStepJobsMock(...args),
 }));
 
 function createSupabaseMock() {
@@ -105,6 +110,8 @@ describe('workflow run routes', () => {
     monitorWorkflowRunMock.mockReset();
     getWorkflowRunDetailsMock.mockReset();
     approveWorkflowRunStepMock.mockReset();
+    processWorkflowRunStepJobsMock.mockReset();
+    processWorkflowRunStepJobsMock.mockResolvedValue({ claimed: 1 });
   });
 
   afterEach(() => {
@@ -124,6 +131,7 @@ describe('workflow run routes', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Idempotency-Key': 'run-route-rate-limit-1',
           'x-request-id': 'workflow-run-rate-limit-1',
         },
         body: JSON.stringify({
@@ -149,7 +157,7 @@ describe('workflow run routes', () => {
     expect(afterMock).not.toHaveBeenCalled();
   });
 
-  it('POST /run schedules the monitor once when execution is still processing', async () => {
+  it('POST /run hands processing execution to the durable worker without an after monitor', async () => {
     executeWorkflowRunMock.mockResolvedValue({
       runId: 'run-1',
       status: 'processing',
@@ -162,6 +170,7 @@ describe('workflow run routes', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Idempotency-Key': 'run-route-success-1',
           'x-request-id': 'workflow-run-success-1',
         },
         body: JSON.stringify({
@@ -176,13 +185,14 @@ describe('workflow run routes', () => {
     expect(response.status).toBe(200);
     expectPrivateNoStoreTraceHeaders(response, 'workflow-run-success-1');
     expect(afterMock).toHaveBeenCalledTimes(1);
-    expect(monitorWorkflowRunMock).toHaveBeenCalledTimes(1);
-    expect(monitorWorkflowRunMock).toHaveBeenCalledWith({
-      canvasId: 'canvas-1',
-      runId: 'run-1',
-    });
+    expect(monitorWorkflowRunMock).not.toHaveBeenCalled();
+    expect(processWorkflowRunStepJobsMock).toHaveBeenCalledWith(expect.objectContaining({
+      limit: 1,
+      concurrency: 1,
+    }));
     expect(executeWorkflowRunMock).toHaveBeenCalledWith(expect.objectContaining({
       catalogRevision: 'catalog-rev-1',
+      idempotencyKey: 'run-route-success-1',
     }));
   });
 

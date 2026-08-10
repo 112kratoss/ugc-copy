@@ -27,7 +27,7 @@ describe('media preview pipeline migration', () => {
     expect(migration).toContain("posts_category_check CHECK (category IN ('image', 'video', 'text'))");
   });
 
-  it('keeps repair covered by the shared low-cost backend job orchestrator', () => {
+  it('isolates repair in its own ten-minute cron instead of the shared orchestrator', () => {
     const vercel = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'vercel.json'), 'utf8'));
     expect(vercel.crons).toContainEqual({
       path: '/api/cron/backend-jobs',
@@ -35,8 +35,12 @@ describe('media preview pipeline migration', () => {
     });
     expect(BACKEND_JOBS_BY_NAME['media-preview-repair']).toMatchObject({
       route: '/api/cron/media-preview-repair',
-      schedule: '0 * * * *',
-      cadenceMinutes: 60,
+      schedule: '*/10 * * * *',
+      cadenceMinutes: 10,
+    });
+    expect(vercel.crons).toContainEqual({
+      path: '/api/cron/media-preview-repair',
+      schedule: '*/10 * * * *',
     });
   });
 });

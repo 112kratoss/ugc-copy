@@ -24,6 +24,9 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import pg from 'pg';
+
+const { Client: PgClient } = pg;
 
 const PRODUCTION_PROJECT_REF = 'ildfmhozpibwiopeavfg';
 
@@ -84,22 +87,83 @@ async function runSql(client, sql) {
 }
 
 async function installSqlHelper(url, serviceRoleKey) {
-  // Bootstrapped over the Postgres meta endpoint because the helper does not
-  // exist yet. Kept to the branch only; never created on production.
-  const response = await fetch(`${url}/rest/v1/rpc/cert_exec_sql`, {
+  // Prefer the already-installed helper, but bootstrap a complete, versioned
+  // helper set through a direct branch connection when this is a clean branch.
+  // PostgREST cannot create the first RPC through an RPC that does not exist.
+  const response = await fetch(`${url}/rest/v1/rpc/certification_helper_version`, {
     method: 'POST',
     headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ p_sql: 'select 1' }),
+    body: JSON.stringify({}),
   });
-  if (response.ok) return;
-  throw new Error(
-    'cert_exec_sql is not installed on the branch. Create it first with:\n'
-    + '  create or replace function public.cert_exec_sql(p_sql text) returns void\n'
-    + '  language plpgsql security definer as $$ begin execute p_sql; end; $$;\n'
-    + '  revoke all on function public.cert_exec_sql(text) from public, anon, authenticated;\n'
-    + '  grant execute on function public.cert_exec_sql(text) to service_role;\n'
-    + "  notify pgrst, 'reload schema';",
-  );
+  if (response.ok && Number(await response.json()) >= 2) return;
+
+  const databaseUrl = process.env.CERT_DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error('Clean certification setup requires CERT_DATABASE_URL for the isolated branch.');
+  }
+  if (databaseUrl.includes(PRODUCTION_PROJECT_REF)) {
+    throw new Error('Refusing to install certification helpers on production.');
+  }
+
+  const client = new PgClient({ connectionString: databaseUrl, ssl: { rejectUnauthorized: false } });
+  await client.connect();
+  try {
+    await client.query(`
+      create or replace function public.certification_helper_version()
+      returns integer language sql immutable as $$ select 2 $$;
+
+      create or replace function public.cert_exec_sql(p_sql text)
+      returns void language plpgsql security definer set search_path = public, pg_temp
+      as $$ begin execute p_sql; end; $$;
+
+      create or replace function public.cert_query(p_sql text)
+      returns setof jsonb language plpgsql security definer set search_path = public, pg_temp
+      as $$
+      begin
+        return query execute format(
+          'select to_jsonb(cert_row) from (%s) cert_row',
+          regexp_replace(p_sql, ';[[:space:]]*$', '')
+        );
+      end;
+      $$;
+
+      create or replace function public.cert_table_sizes()
+      returns table(table_name text, row_estimate bigint, total_bytes bigint)
+      language sql security definer set search_path = public, pg_temp
+      as $$
+        select c.relname::text, greatest(c.reltuples, 0)::bigint,
+               pg_total_relation_size(c.oid)::bigint
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'public' and c.relkind in ('r', 'p')
+        order by pg_total_relation_size(c.oid) desc;
+      $$;
+
+      revoke all on function public.certification_helper_version() from public, anon, authenticated;
+      revoke all on function public.cert_exec_sql(text) from public, anon, authenticated;
+      revoke all on function public.cert_query(text) from public, anon, authenticated;
+      revoke all on function public.cert_table_sizes() from public, anon, authenticated;
+      grant execute on function public.certification_helper_version() to service_role;
+      grant execute on function public.cert_exec_sql(text) to service_role;
+      grant execute on function public.cert_query(text) to service_role;
+      grant execute on function public.cert_table_sizes() to service_role;
+      notify pgrst, 'reload schema';
+    `);
+  } finally {
+    await client.end();
+  }
+
+  // `NOTIFY pgrst` is asynchronous. Do not race the first bulk seed against
+  // schema-cache reload and misreport a clean branch as missing its helper.
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const probe = await fetch(`${url}/rest/v1/rpc/certification_helper_version`, {
+      method: 'POST',
+      headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }).catch(() => null);
+    if (probe?.ok && Number(await probe.json()) >= 2) return;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error('Certification helpers were installed, but PostgREST did not reload them within 10 seconds.');
 }
 
 /**
@@ -247,6 +311,10 @@ async function seedPosts(client, postCount) {
 
 async function seedComments(client, commentCount) {
   console.log(`Seeding ${commentCount} comments...`);
+  // Half land on one deterministic post. This makes the 100k tier contain a
+  // 10k-comment thread and the 1m tier a 100k-comment thread, so F9's bounded
+  // scan/index path is measured rather than inferred from many tiny threads.
+  const hotThreadComments = Math.floor(commentCount / 2);
   const batchSize = 50_000;
   for (let offset = 0; offset < commentCount; offset += batchSize) {
     const size = Math.min(batchSize, commentCount - offset);
@@ -271,7 +339,10 @@ async function seedComments(client, commentCount) {
       -- subquery puts every comment on one post by one author.
       cross join target_count tc
       cross join author_count ac
-      join numbered_targets target on target.target_index = (generation.index * 6151) % tc.total
+      join numbered_targets target on target.target_index = case
+        when generation.index <= ${hotThreadComments} then 0
+        else (generation.index * 6151) % tc.total
+      end
       join numbered_authors author on author.author_index = (generation.index * 7919) % ac.total;
     `);
   }

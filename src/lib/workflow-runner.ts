@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { createHash } from 'node:crypto';
 import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
 import { logBackendError } from '@/lib/backend-logger';
 import { enqueueWorkflowRunStepJob } from '@/lib/workflow-run-jobs';
@@ -10,6 +11,10 @@ import {
   startVoiceoverGeneration,
   type TemplateGenerationContext,
 } from '@/lib/generation-services';
+import {
+  getHeldProviderSubmissionGenerationId,
+  getPublicGenerationStartFailure,
+} from '@/lib/generation-public-failure';
 import { syncGenerationStatuses } from '@/lib/generation-status-sync';
 import {
   type ApprovalGateNodeData,
@@ -105,10 +110,7 @@ type WorkflowRunResponse = WorkflowCanvasRunRecord & {
   steps: HydratedRunStep[];
 };
 
-const WORKFLOW_MONITOR_INTERVAL_MS = 3000;
-const WORKFLOW_MONITOR_MAX_CYCLES = 240;
 const activeWorkflowRunAdvances = new Map<string, Promise<WorkflowRunResponse>>();
-const activeWorkflowRunMonitors = new Map<string, Promise<WorkflowRunResponse | null>>();
 
 function getRunnableElementPayload(
   graph: WorkflowCanvasGraph,
@@ -337,12 +339,6 @@ async function updateRunStep(
     .eq('id', stepId);
 }
 
-function delay(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function getWorkflowRunMonitorKey(canvasId: string, runId: string) {
   return `${canvasId}:${runId}`;
 }
@@ -377,6 +373,10 @@ function hasStepChanged(previous: HydratedRunStep, next: HydratedRunStep) {
 }
 
 function deriveWorkflowRunStatus(steps: HydratedRunStep[]): 'processing' | 'awaiting_approval' | 'succeeded' | 'failed' {
+  // An empty step set means initialization died before durable ownership was
+  // established. It must never be interpreted as successful completion.
+  if (steps.length === 0) return 'failed';
+
   if (steps.some((step) => step.status === 'failed' || step.status === 'blocked')) {
     return 'failed';
   }
@@ -392,6 +392,12 @@ function deriveWorkflowRunStatus(steps: HydratedRunStep[]): 'processing' | 'awai
   if (steps.some((step) => step.status === 'queued')) return 'processing';
 
   return 'succeeded';
+}
+
+function workflowGenerationIdempotencyHash(runId: string, nodeId: string, attempt = 1) {
+  return createHash('sha256')
+    .update(`workflow-run:${runId}:${nodeId}:${attempt}`)
+    .digest('hex');
 }
 
 function getDerivedRunFinishedAt(run: WorkflowRunRow, status: 'processing' | 'awaiting_approval' | 'succeeded' | 'failed', steps: HydratedRunStep[]) {
@@ -905,6 +911,9 @@ export async function executeWorkflowRun(params: {
     catalogRevision = null,
     idempotencyKey = null,
   } = params;
+  if (!idempotencyKey?.trim()) {
+    throw new Error('Workflow run idempotency key is required.');
+  }
   // A canvas can still have an in-memory overlay from a previous run. Start
   // every execution from the editable graph only so stale generation outputs
   // can never satisfy dependencies in a new run.
@@ -912,13 +921,15 @@ export async function executeWorkflowRun(params: {
     serializeWorkflowGraph(graph, { mode: 'client-save' }) as unknown as Partial<WorkflowCanvasGraph>,
   );
   const executionOrder = getExecutionOrder(executionGraph, startNodeId, mode);
+  if (executionOrder.length === 0) {
+    throw new Error('Workflow run has no executable steps.');
+  }
 
-  // F12: run creation goes through an RPC so the idempotency key is enforced by
-  // a unique index inside one statement. A timed-out client retry used to
-  // create a second run here and re-charge every node's generation; per
-  // generation idempotency cannot catch that, because each new run legitimately
-  // starts new generations.
-  const runStart = await supabase.rpc('start_workflow_canvas_run', {
+  // F12: one transaction creates the idempotent run, its complete step
+  // skeleton, and the first leased-worker ticket. No provider work occurs in
+  // this request. A function death therefore leaves either nothing or a fully
+  // recoverable run, never paid work with a partial/empty step set.
+  const runStart = await supabase.rpc('initialize_workflow_canvas_run', {
     p_canvas_id: canvasId,
     p_user_id: userId,
     p_start_node_id: startNodeId,
@@ -926,6 +937,7 @@ export async function executeWorkflowRun(params: {
     p_catalog_revision: catalogRevision,
     p_graph_snapshot: serializeWorkflowGraph(executionGraph, { mode: 'client-save' }),
     p_idempotency_key: idempotencyKey,
+    p_step_skeleton: executionOrder.map((nodeId) => ({ nodeId })),
   });
 
   if (runStart.error) {
@@ -945,183 +957,10 @@ export async function executeWorkflowRun(params: {
     throw new Error('Workflow run could not be created.');
   }
 
-  // The early return is the actual double-charge fix. Executing the graph again
-  // for a key that already names a run is exactly the spend the key exists to
-  // prevent, so a replay returns the existing run in whatever state it reached.
-  if (startedRun?.reused) {
-    return {
-      runId,
-      status: startedRun.run_status ?? 'processing',
-      reused: true,
-    };
-  }
-
-  let workingGraph = executionGraph;
-  let encounteredFailure = false;
-  let hasProcessingWork = false;
-  let hasQueuedWork = false;
-  let hasAwaitingApproval = false;
-
-  for (const nodeId of executionOrder) {
-    const node = getNodeById(workingGraph, nodeId);
-    if (!node) continue;
-
-    const startedAt = new Date().toISOString();
-
-    if (!isRunnableNode(node) && !isApprovalGateNode(node)) {
-      await supabase.from('workflow_canvas_run_steps').insert({
-        run_id: runId,
-        node_id: node.id,
-        status: 'succeeded',
-        input_snapshot: resolveNodeInputs(workingGraph, node.id),
-        output_snapshot: buildStaticOutputSnapshot(node),
-        started_at: startedAt,
-        finished_at: new Date().toISOString(),
-      });
-      continue;
-    }
-
-    const dependencyState = inspectWorkflowNodeDependencies(workingGraph, node);
-    if (dependencyState.kind === 'queued') {
-      hasQueuedWork = true;
-      workingGraph = updateNodeRunState(workingGraph, node.id, {
-        status: 'queued',
-        error: dependencyState.message,
-        updatedAt: startedAt,
-      });
-      await supabase.from('workflow_canvas_run_steps').insert({
-        run_id: runId,
-        node_id: node.id,
-        status: 'queued',
-        input_snapshot: resolveNodeInputs(workingGraph, node.id),
-        error_message: dependencyState.message,
-        started_at: null,
-        finished_at: null,
-      });
-      continue;
-    }
-
-    if (dependencyState.kind === 'blocked') {
-      encounteredFailure = true;
-      workingGraph = updateNodeRunState(workingGraph, node.id, {
-        status: 'blocked',
-        error: dependencyState.message,
-        updatedAt: startedAt,
-      });
-      await supabase.from('workflow_canvas_run_steps').insert({
-        run_id: runId,
-        node_id: node.id,
-        status: 'blocked',
-        input_snapshot: resolveNodeInputs(workingGraph, node.id),
-        error_message: dependencyState.message,
-        started_at: startedAt,
-        finished_at: new Date().toISOString(),
-      });
-      continue;
-    }
-
-    try {
-      const result = await executeWorkflowRunnableNode({ supabase, userId, node, graph: workingGraph, catalogRevision });
-      const nextRunState: Partial<Record<'status' | 'generationId' | 'error' | 'updatedAt' | 'cost', unknown>> = {
-        status: result.status,
-        generationId: result.generation_id,
-        error: result.error_message,
-        cost: (result.output_snapshot as { cost?: number | null } | null)?.cost ?? null,
-        updatedAt: result.status === 'processing' || result.status === 'awaiting_approval'
-          ? startedAt
-          : new Date().toISOString(),
-      };
-      workingGraph = updateNodeRunState(workingGraph, node.id, nextRunState as Record<string, unknown>);
-
-      await supabase.from('workflow_canvas_run_steps').insert({
-        run_id: runId,
-        node_id: node.id,
-        status: result.status,
-        generation_id: result.generation_id,
-        input_snapshot: result.input_snapshot,
-        output_snapshot: result.output_snapshot,
-        error_message: result.error_message,
-        started_at: startedAt,
-        finished_at: result.status === 'processing' || result.status === 'awaiting_approval'
-          ? null
-          : new Date().toISOString(),
-      });
-
-      if (result.status === 'blocked') {
-        encounteredFailure = true;
-      }
-
-      if (result.status === 'processing') {
-        hasProcessingWork = true;
-      }
-
-      if (result.status === 'awaiting_approval') {
-        hasAwaitingApproval = true;
-      }
-    } catch (error) {
-      encounteredFailure = true;
-      const message = error instanceof Error ? error.message : 'Node execution failed.';
-      workingGraph = updateNodeRunState(workingGraph, node.id, {
-        status: 'failed',
-        error: message,
-        updatedAt: new Date().toISOString(),
-      });
-      await supabase.from('workflow_canvas_run_steps').insert({
-        run_id: runId,
-        node_id: node.id,
-        status: 'failed',
-        error_message: message,
-        input_snapshot: resolveNodeInputs(workingGraph, node.id),
-        started_at: startedAt,
-        finished_at: new Date().toISOString(),
-      });
-    }
-  }
-
-  const nextRunStatus = encounteredFailure
-    ? 'failed'
-    : hasProcessingWork
-      ? 'processing'
-      : hasAwaitingApproval
-        ? 'awaiting_approval'
-        : hasQueuedWork
-          ? 'processing'
-          : 'succeeded';
-  await supabase
-    .from('workflow_canvas_runs')
-    .update({
-      status: nextRunStatus,
-      finished_at: nextRunStatus === 'processing' || nextRunStatus === 'awaiting_approval'
-        ? null
-        : new Date().toISOString(),
-    })
-    .eq('id', runId);
-
-  // F12: hand the run to the durable queue. The in-request monitor scheduled by
-  // the route is still the fast path; this is the recovery guarantee that did
-  // not exist before, because the cron registry had no workflow entry at all
-  // and a recycled function stranded the run with nothing watching it.
-  //
-  // node_id carries the start node because this job is currently a run-advance
-  // ticket rather than a single-node executor -- see the F12 notes in the
-  // scaling audit for what the per-node executor would change.
-  if (nextRunStatus === 'processing') {
-    try {
-      await enqueueWorkflowRunStepJob(createServiceClient(), {
-        runId,
-        nodeId: startNodeId,
-      });
-    } catch (error) {
-      // The run is persisted and the in-request monitor still advances it, so
-      // losing the recovery ticket must not fail the caller's request.
-      logBackendError('workflow_run_step_enqueue_failed', { error });
-    }
-  }
-
   return {
     runId,
-    status: nextRunStatus,
-    reused: false,
+    status: startedRun?.run_status ?? 'processing',
+    reused: startedRun?.reused === true,
   };
 }
 
@@ -1158,7 +997,46 @@ async function advanceWorkflowRunProgress(params: {
 
     const queuedStep = hydratedSteps[stepIndex];
     const node = getNodeById(workingGraph, nodeId);
-    if (!node || (!isRunnableNode(node) && !isApprovalGateNode(node))) {
+    if (!node) {
+      const finishedAt = new Date().toISOString();
+      const failedStep: HydratedRunStep = {
+        ...queuedStep,
+        status: 'failed',
+        error_message: 'Workflow step is missing from the immutable run graph.',
+        started_at: queuedStep.started_at || finishedAt,
+        finished_at: finishedAt,
+      };
+      hydratedSteps[stepIndex] = failedStep;
+      await updateRunStep(supabase, queuedStep.id, {
+        status: failedStep.status,
+        error_message: failedStep.error_message,
+        started_at: failedStep.started_at,
+        finished_at: failedStep.finished_at,
+      });
+      continue;
+    }
+
+    if (!isRunnableNode(node) && !isApprovalGateNode(node)) {
+      const startedAt = queuedStep.started_at || new Date().toISOString();
+      const staticStep: HydratedRunStep = {
+        ...queuedStep,
+        status: 'succeeded',
+        input_snapshot: resolveNodeInputs(workingGraph, node.id),
+        output_snapshot: buildStaticOutputSnapshot(node),
+        error_message: null,
+        started_at: startedAt,
+        finished_at: new Date().toISOString(),
+      };
+      hydratedSteps[stepIndex] = staticStep;
+      workingGraph = applyStepToGraph(workingGraph, staticStep);
+      await updateRunStep(supabase, queuedStep.id, {
+        status: staticStep.status,
+        input_snapshot: staticStep.input_snapshot,
+        output_snapshot: staticStep.output_snapshot,
+        error_message: null,
+        started_at: staticStep.started_at,
+        finished_at: staticStep.finished_at,
+      });
       continue;
     }
 
@@ -1208,6 +1086,7 @@ async function advanceWorkflowRunProgress(params: {
         node,
         graph: workingGraph,
         catalogRevision: run.catalog_revision,
+        clientRequestKeyHash: workflowGenerationIdempotencyHash(run.id, node.id),
       });
 
       const resumedStep: HydratedRunStep = {
@@ -1236,7 +1115,58 @@ async function advanceWorkflowRunProgress(params: {
         finished_at: resumedStep.finished_at,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Node execution failed.';
+      const failure = getPublicGenerationStartFailure(error);
+      const heldGenerationId = getHeldProviderSubmissionGenerationId(error);
+
+      if (failure.code === 'provider_busy' || failure.code === 'provider_unavailable') {
+        // Admission/backpressure is a scheduling condition, not a failed
+        // workflow node. Leave the immutable step queued; the durable run job
+        // defers without spending an attempt and retries after backoff.
+        hydratedSteps[stepIndex] = {
+          ...queuedStep,
+          error_message: failure.message,
+        };
+        workingGraph = updateNodeRunState(workingGraph, node.id, {
+          status: 'queued',
+          error: failure.message,
+        });
+        await updateRunStep(supabase, queuedStep.id, {
+          error_message: failure.message,
+        });
+        continue;
+      }
+
+      if (failure.code === 'submission_pending' && heldGenerationId) {
+        // The provider may have accepted the request. The generation start RPC
+        // already reserved money and the idempotency key, so link that exact
+        // held row instead of retrying and risking a second provider task.
+        const processingStep: HydratedRunStep = {
+          ...queuedStep,
+          status: 'processing',
+          generation_id: heldGenerationId,
+          output_snapshot: {
+            submissionPending: true,
+          },
+          error_message: failure.message,
+          started_at: startedAt,
+          finished_at: null,
+        };
+        hydratedSteps[stepIndex] = processingStep;
+        workingGraph = applyStepToGraph(workingGraph, processingStep);
+        await updateRunStep(supabase, queuedStep.id, {
+          status: processingStep.status,
+          generation_id: processingStep.generation_id,
+          output_snapshot: processingStep.output_snapshot,
+          error_message: processingStep.error_message,
+          started_at: processingStep.started_at,
+          finished_at: null,
+        });
+        continue;
+      }
+
+      const message = failure.message || (error instanceof Error
+        ? error.message
+        : 'Node execution failed.');
       const failedStep: HydratedRunStep = {
         ...queuedStep,
         status: 'failed',
@@ -1319,46 +1249,20 @@ export async function approveWorkflowRunStep(params: {
     .update({ status: 'processing', finished_at: null })
     .eq('id', runId);
 
-  return advanceWorkflowRunOnce({ supabase, canvasId, runId });
-}
-
-export async function monitorWorkflowRun(params: {
-  canvasId: string;
-  runId: string;
-  maxCycles?: number;
-}) {
-  const { canvasId, runId, maxCycles = WORKFLOW_MONITOR_MAX_CYCLES } = params;
-  const monitorKey = getWorkflowRunMonitorKey(canvasId, runId);
-  const existingMonitor = activeWorkflowRunMonitors.get(monitorKey);
-  if (existingMonitor) {
-    return existingMonitor;
+  try {
+    await enqueueWorkflowRunStepJob(createServiceClient(), {
+      runId,
+      // This is a run ticket, not an execution selector. Namespacing prevents
+      // collision if the approval gate itself was the original start node.
+      nodeId: `approval:${step.node_id}`,
+    });
+  } catch (error) {
+    // No provider work starts here. The stalled-run adopter is the durable
+    // fallback if enqueue fails after the approval update commits.
+    logBackendError('workflow_approval_enqueue_failed', { error, runId, stepId });
   }
 
-  const nextMonitor = (async () => {
-    const supabase = createServiceClient();
-    let latestRun: WorkflowRunResponse | null = null;
-
-    for (let cycle = 0; cycle < maxCycles; cycle += 1) {
-      latestRun = await advanceWorkflowRunOnce({
-        supabase,
-        canvasId,
-        runId,
-      });
-
-      if (!latestRun || latestRun.status !== 'processing') {
-        return latestRun;
-      }
-
-      await delay(WORKFLOW_MONITOR_INTERVAL_MS);
-    }
-
-    return latestRun;
-  })().finally(() => {
-    activeWorkflowRunMonitors.delete(monitorKey);
-  });
-
-  activeWorkflowRunMonitors.set(monitorKey, nextMonitor);
-  return nextMonitor;
+  return getWorkflowRunDetails({ supabase, canvasId, runId });
 }
 
 export async function getWorkflowRunDetails(params: {

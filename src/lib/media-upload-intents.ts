@@ -2,6 +2,7 @@ import 'server-only';
 import { logBackendWarning } from '@/lib/backend-logger';
 
 import type { UploadIntentConsumer, UploadIntentKind } from '@/lib/media-upload-reclaim';
+import { releaseUploadBytes } from '@/lib/upload-byte-admission';
 
 // Re-exported so the request path keeps a single import for intent work; the
 // definitions live in a dependency-free module the ops backfill can also load.
@@ -69,6 +70,10 @@ type IntentUpdateFilter = {
 };
 
 type IntentUpdateClient = {
+  rpc: (
+    fn: string,
+    args: Record<string, unknown>,
+  ) => PromiseLike<{ data: unknown; error: unknown }>;
   from: (table: string) => {
     update: (values: Record<string, unknown>) => IntentUpdateFilter;
   };
@@ -156,6 +161,15 @@ export async function markMediaUploadIntentsConsumed(
       count: storagePaths.length,
     });
   }
+
+  // Once a staged object has a durable consumer it is no longer an outstanding
+  // upload, even when the generation-input path deliberately leaves staging in
+  // place for short-term reuse. The reclaim intent remains the storage-lifecycle
+  // record; byte admission should not keep charging the user for two hours.
+  await Promise.all(storagePaths.map((storagePath) => releaseUploadBytes(client, {
+    bucket: 'uploads',
+    storagePath,
+  })));
 }
 
 /**
@@ -189,4 +203,10 @@ export async function markMediaUploadIntentsCleared(
       count: normalized.length,
     });
   }
+
+
+  await Promise.all(normalized.map((storagePath) => releaseUploadBytes(client, {
+    bucket: 'uploads',
+    storagePath,
+  })));
 }

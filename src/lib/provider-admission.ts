@@ -101,6 +101,7 @@ const REJECTION_MESSAGES: Record<string, string> = {
 export async function admitProviderSubmission(params: {
   service?: string;
   model?: string | null;
+  generationId?: string | null;
   client?: { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: unknown }> };
 }): Promise<ProviderAdmissionVerdict> {
   const service = params.service?.trim() || KIE_PROVIDER_SERVICE;
@@ -116,7 +117,11 @@ export async function admitProviderSubmission(params: {
   // "not admitted" verdict must never be swallowed as an infrastructure blip.
   try {
     const client = params.client ?? createServiceClient();
-    const { data, error } = await client.rpc('admit_provider_submission', {
+    const rpcName = params.generationId
+      ? 'reserve_provider_submission'
+      : 'admit_provider_submission';
+    const { data, error } = await client.rpc(rpcName, {
+      ...(params.generationId ? { p_generation_id: params.generationId } : {}),
       p_service: service,
       p_model: params.model?.trim() || null,
       p_global_capacity: PROVIDER_ADMISSION_POLICY.globalCapacity,
@@ -196,38 +201,37 @@ export function isProviderFaultFailure(error: unknown, status?: number | null): 
 }
 
 /**
- * Fire-and-forget: the breaker is a protective heuristic, and failing to record
- * an outcome must never fail the generation it describes.
+ * Await the breaker write so serverless shutdown cannot discard it. The write
+ * remains failure-isolated: admission telemetry must never change the result
+ * of the generation it describes.
  */
-export function recordProviderSubmissionOutcome(params: {
+export async function recordProviderSubmissionOutcome(params: {
   service?: string;
   success: boolean;
   retryAfterSeconds?: number;
   client?: { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: unknown }> };
-}): void {
+}): Promise<void> {
   const service = params.service?.trim() || KIE_PROVIDER_SERVICE;
 
-  void (async () => {
-    try {
-      const client = params.client ?? createServiceClient();
-      const { error } = await client.rpc('record_provider_submission_outcome', {
-        p_service: service,
-        p_success: params.success,
-        p_failure_threshold: PROVIDER_ADMISSION_POLICY.failureThreshold,
-        p_circuit_open_seconds: PROVIDER_ADMISSION_POLICY.circuitOpenSeconds,
-        p_retry_after_seconds: Math.max(0, Math.round(params.retryAfterSeconds ?? 0)) || null,
-      });
-      if (error) {
-        logBackendWarning('provider_circuit_outcome_unrecorded', {
-          service,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    } catch (outcomeError) {
+  try {
+    const client = params.client ?? createServiceClient();
+    const { error } = await client.rpc('record_provider_submission_outcome', {
+      p_service: service,
+      p_success: params.success,
+      p_failure_threshold: PROVIDER_ADMISSION_POLICY.failureThreshold,
+      p_circuit_open_seconds: PROVIDER_ADMISSION_POLICY.circuitOpenSeconds,
+      p_retry_after_seconds: Math.max(0, Math.round(params.retryAfterSeconds ?? 0)) || null,
+    });
+    if (error) {
       logBackendWarning('provider_circuit_outcome_unrecorded', {
         service,
-        error: outcomeError instanceof Error ? outcomeError.message : String(outcomeError),
+        error: error instanceof Error ? error.message : String(error),
       });
     }
-  })();
+  } catch (outcomeError) {
+    logBackendWarning('provider_circuit_outcome_unrecorded', {
+      service,
+      error: outcomeError instanceof Error ? outcomeError.message : String(outcomeError),
+    });
+  }
 }

@@ -54,6 +54,10 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
         return { data: options.rpcResults[fn], error: null };
       }
 
+      if (fn === 'enqueue_generation_output_import_job') {
+        return { data: `output-import-${String(args.p_generation_id)}`, error: null };
+      }
+
       if (fn === 'start_generation' || fn === 'start_template_generation') {
         const insertError = generationInsertErrors.shift();
         if (insertError) {
@@ -1330,6 +1334,58 @@ describe('generation services', () => {
     // Left set deliberately: the row stays in ACTIVE_START_STATUSES, so a
     // same-key resubmit replays the held generation instead of charging twice.
     expect(generations[0].client_request_key_hash).toBe('d'.repeat(64));
+  });
+
+  it('holds a generation when the provider connection resets after submission', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    const reset = new Error('socket hang up') as Error & { code: string };
+    reset.code = 'ECONNRESET';
+    fetchMock.mockRejectedValue(reset);
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    await expect(startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 'n'.repeat(64),
+      prompt: 'A submission whose response connection resets.',
+      model: 'nano-banana-2',
+    })).rejects.toThrow('socket hang up');
+
+    expect(rpcCalls.map((call) => call.fn)).toContain('mark_generation_submission_unknown');
+    expect(rpcCalls.map((call) => call.fn)).not.toContain('settle_generation_start_failed');
+    expect(generations[0]).toMatchObject({
+      status: 'pending',
+      prediction_id: null,
+      submission_unknown_at: expect.any(String),
+    });
+    expect(generations[0].refunded).toBeFalsy();
+  });
+
+  it('holds template generation credits on ambiguous network failure', async () => {
+    const { startImageGeneration, getPublicGenerationStartFailure } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockRejectedValue(new TypeError('fetch failed after write'));
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    const caught = await startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: 't'.repeat(64),
+      prompt: 'A private template submission with an ambiguous response.',
+      model: 'nano-banana-2',
+      templateContext: { runId: 'template-run-1', stepId: 'template-step-1' },
+      privateRecipe: true,
+      persistInputMedia: false,
+    }).catch((error: unknown) => error);
+
+    expect(rpcCalls.map((call) => call.fn)).toContain('mark_generation_submission_unknown');
+    expect(rpcCalls.map((call) => call.fn)).not.toContain('settle_template_generation_start_failed');
+    expect(generations[0]).toMatchObject({ status: 'pending' });
+    expect(generations[0].refunded).toBeFalsy();
+    expect(getPublicGenerationStartFailure(caught)).toMatchObject({ code: 'submission_pending' });
   });
 
   it('still refunds an image generation when the provider definitively rejects it', async () => {
@@ -2982,7 +3038,7 @@ describe('generation services', () => {
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 
-  it('syncs processing audio generations into succeeded storage-backed outputs', async () => {
+  it('queues processing audio outputs without downloading media in the status poll', async () => {
     const { syncGenerationStatuses } = await import('@/lib/generation-status-sync');
     const statusSignal = AbortSignal.abort();
     const mediaSignal = AbortSignal.abort();
@@ -3034,23 +3090,18 @@ describe('generation services', () => {
       generationIds: ['gen-audio-1'],
     });
 
-    expect(generations[0].status).toBe('succeeded');
-    expect(generations[0].output_url).toBe('generated_audio/user-1/generated_task-audio-1.mp3');
-    expect(generations[0].completed_at).toBe('2026-04-15T10:00:12.000Z');
+    expect(generations[0].status).toBe('processing');
+    expect(generations[0].output_url).toBeNull();
     expect(timeoutSpy).toHaveBeenNthCalledWith(1, 10_000);
-    expect(timeoutSpy).toHaveBeenNthCalledWith(2, 60_000);
     expect(statusInit?.signal).toBe(statusSignal);
-    expect(mediaInit?.signal).toBe(mediaSignal);
-    expect(uploads[0]).toEqual({
-      bucket: 'generated_audio',
-      filePath: 'user-1/generated_task-audio-1.mp3',
-    });
+    expect(mediaInit).toBeUndefined();
+    expect(uploads).toEqual([]);
     expect(rpcCalls).toContainEqual({
-      fn: 'settle_generation_succeeded',
+      fn: 'enqueue_generation_output_import_job',
       args: expect.objectContaining({
-        p_prediction_id: 'task-audio-1',
-        p_output_url: 'generated_audio/user-1/generated_task-audio-1.mp3',
-        p_completed_at: '2026-04-15T10:00:12.000Z',
+        p_generation_id: 'gen-audio-1',
+        p_output_urls: ['https://cdn.example.com/audio.mp3'],
+        p_provider_completed_at: '2026-04-15T10:00:12.000Z',
       }),
     });
   });

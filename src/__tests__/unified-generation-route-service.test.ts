@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { markHeldProviderSubmission } from '@/lib/generation-public-failure';
 
 const startUnifiedGenerationForRouteMock = vi.hoisted(() => vi.fn());
 
@@ -17,6 +18,30 @@ import { postUnifiedGenerationForRoute } from '@/lib/unified-generation-route-se
 describe('unified generation route service', () => {
   beforeEach(() => {
     startUnifiedGenerationForRouteMock.mockReset();
+  });
+
+  it('returns submission_pending with the held generation id after an ambiguous provider accept', async () => {
+    const ambiguous = new TypeError('fetch failed');
+    markHeldProviderSubmission(ambiguous, 'generation-held-unified-1');
+    startUnifiedGenerationForRouteMock.mockRejectedValueOnce(ambiguous);
+
+    const result = await postUnifiedGenerationForRoute({
+      request: new Request('http://localhost/api/generations', { method: 'POST' }),
+      createUserSupabase: () => ({
+        auth: {
+          getUser: vi.fn(async () => ({ data: { user: { id: 'user-1' } }, error: null })),
+        },
+      }),
+      createAdminSupabase: () => ({ kind: 'admin' }),
+      kieApiKey: 'configured',
+      readRequestBody: async () => ({ kind: 'image', modelId: 'nano-banana-2-lite' }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 409,
+      body: { code: 'submission_pending', generationId: 'generation-held-unified-1' },
+    });
   });
 
   it('authenticates and delegates the generic request without accepting a client cost', async () => {

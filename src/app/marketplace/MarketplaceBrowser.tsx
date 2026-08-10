@@ -431,7 +431,7 @@ function MarketplaceCard({
             />
           ) : (
             <HoverVideo
-              src={asset.post.mediaUrl}
+              src={asset.post.mediaRenditionUrl ?? asset.post.mediaUrl}
               poster={asset.post.mediaPreviewUrl}
               className="h-64 w-full object-cover transition duration-500 group-hover:scale-[1.02]"
             />

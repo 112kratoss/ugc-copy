@@ -23,6 +23,9 @@ lighthouse-results/
 # local Codex audit captures
 /.codex/audits/
 
+# local scaling-certificate evidence (may contain sensitive operational exports)
+/certification-artifacts/
+
 # next.js
 /.next/
 /out/

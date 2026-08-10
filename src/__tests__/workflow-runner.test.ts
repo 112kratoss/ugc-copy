@@ -12,6 +12,7 @@ import {
   type WorkflowCanvasGraph,
   type WorkflowCanvasRunStepRecord,
 } from '@/lib/workflow-canvas';
+import { markHeldProviderSubmission } from '@/lib/generation-public-failure';
 
 // The runner reads generations service-role (authenticated grants stop at the
 // resume projection), so the service client must serve the same state-backed
@@ -45,6 +46,10 @@ const startVideoGenerationMock = vi.fn(async (..._args: unknown[]): Promise<Star
   };
 });
 const syncGenerationStatusesMock = vi.fn(async () => undefined);
+const enqueueWorkflowRunStepJobMock = vi.fn(async (..._args: unknown[]) => {
+  void _args;
+  return 'approval-job-1';
+});
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => createServiceClientMock(),
@@ -69,6 +74,10 @@ vi.mock('@/lib/generation-services', () => ({
 vi.mock('@/lib/generation-model-catalog-store', () => ({
   quotePublishedGenerationModel: (input: Parameters<typeof quoteGenerationModelMock>[0]) =>
     quoteGenerationModelMock(input),
+}));
+
+vi.mock('@/lib/workflow-run-jobs', () => ({
+  enqueueWorkflowRunStepJob: (...args: unknown[]) => enqueueWorkflowRunStepJobMock(...args),
 }));
 
 type RunnerTestState = {
@@ -528,6 +537,55 @@ describe('workflow-runner recovery', () => {
     expect(state.graph.nodes.find((node) => node.id === state.videoNodeId)?.data.runState.status).toBe('idle');
   });
 
+  it('keeps provider admission backpressure queued for a durable retry', async () => {
+    const state = createQueuedWorkflowState();
+    const supabase = createSupabaseMock(state);
+    startVideoGenerationMock.mockRejectedValueOnce({
+      status: 429,
+      failureCode: 'provider_busy',
+      message: 'provider capacity is full',
+    });
+
+    const { advanceWorkflowRunOnce } = await import('@/lib/workflow-runner');
+    const run = await advanceWorkflowRunOnce({
+      supabase: supabase as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+
+    expect(run.status).toBe('processing');
+    expect(run.steps?.find((step) => step.node_id === state.videoNodeId)).toMatchObject({
+      status: 'queued',
+      generation_id: null,
+      error_message: expect.stringContaining('busy'),
+    });
+    expect(state.run.status).toBe('processing');
+  });
+
+  it('links an ambiguous held submission instead of starting a duplicate provider task', async () => {
+    const state = createQueuedWorkflowState();
+    const supabase = createSupabaseMock(state);
+    const ambiguous = new Error('provider response timed out');
+    markHeldProviderSubmission(ambiguous, 'gen-held-video');
+    startVideoGenerationMock.mockRejectedValueOnce(ambiguous);
+
+    const { advanceWorkflowRunOnce } = await import('@/lib/workflow-runner');
+    const run = await advanceWorkflowRunOnce({
+      supabase: supabase as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+
+    expect(run.status).toBe('processing');
+    expect(run.steps?.find((step) => step.node_id === state.videoNodeId)).toMatchObject({
+      status: 'processing',
+      generation_id: 'gen-held-video',
+      output_snapshot: { submissionPending: true },
+      error_message: expect.stringContaining('credits stay reserved'),
+    });
+    expect(startVideoGenerationMock).toHaveBeenCalledTimes(1);
+  });
+
   it('continues from the immutable run snapshot when the source canvas changes', async () => {
     const state = createQueuedWorkflowState();
     state.graph = normalizeWorkflowGraph({
@@ -666,7 +724,7 @@ describe('workflow-runner recovery', () => {
     });
   });
 
-  it('approves a checkpoint and resumes its queued downstream branch', async () => {
+  it('approves a checkpoint and durably queues its downstream branch', async () => {
     const state = createAwaitingApprovalState();
     const supabase = createSupabaseMock(state);
 
@@ -684,13 +742,13 @@ describe('workflow-runner recovery', () => {
         outputUrl: 'uploads/user-1/review-frame.png',
       }),
     });
-    expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
-      prompt: 'Approved frame video',
-      startImageUrl: 'uploads/user-1/review-frame.png',
-    }));
+    expect(startVideoGenerationMock).not.toHaveBeenCalled();
+    expect(enqueueWorkflowRunStepJobMock).toHaveBeenCalledWith(expect.anything(), {
+      runId: state.run.id,
+      nodeId: `approval:${state.approvalNodeId}`,
+    });
     expect(run.steps?.find((step) => step.node_id === state.videoNodeId)).toMatchObject({
-      status: 'processing',
-      generation_id: 'gen-video',
+      status: 'queued',
     });
   });
 

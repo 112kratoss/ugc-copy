@@ -5,6 +5,9 @@ const mocks = vi.hoisted(() => ({
   attachGenerationProviderTask: vi.fn(),
   enqueueGenerationCompletionJob: vi.fn(),
   processGenerationCompletionJobs: vi.fn(),
+  processGenerationOutputImportJobs: vi.fn(),
+  processTemplateRunJobs: vi.fn(),
+  processWorkflowRunStepJobs: vi.fn(),
 }));
 
 vi.mock('@/lib/generation-services', () => ({
@@ -14,6 +17,23 @@ vi.mock('@/lib/generation-services', () => ({
 vi.mock('@/lib/generation-completion-jobs', () => ({
   enqueueGenerationCompletionJob: (...args: unknown[]) => mocks.enqueueGenerationCompletionJob(...args),
   processGenerationCompletionJobs: (...args: unknown[]) => mocks.processGenerationCompletionJobs(...args),
+}));
+
+vi.mock('@/lib/workflow-run-jobs-processor', () => ({
+  WORKFLOW_RUN_STEP_BATCH_LIMIT: 10,
+  processWorkflowRunStepJobs: (...args: unknown[]) => mocks.processWorkflowRunStepJobs(...args),
+}));
+
+vi.mock('@/lib/template-run-jobs-processor', () => ({
+  TEMPLATE_RUN_JOB_BATCH_LIMIT: 10,
+  processTemplateRunJobs: (...args: unknown[]) => mocks.processTemplateRunJobs(...args),
+}));
+
+vi.mock('@/lib/generation-output-import-jobs-processor', () => ({
+  GENERATION_OUTPUT_IMPORT_BATCH_LIMIT: 4,
+  processGenerationOutputImportJobs: (...args: unknown[]) => (
+    mocks.processGenerationOutputImportJobs(...args)
+  ),
 }));
 
 function signedKieRequest(
@@ -54,6 +74,9 @@ describe('kie webhook service', () => {
     mocks.attachGenerationProviderTask.mockReset();
     mocks.enqueueGenerationCompletionJob.mockReset();
     mocks.processGenerationCompletionJobs.mockReset();
+    mocks.processGenerationOutputImportJobs.mockReset();
+    mocks.processTemplateRunJobs.mockReset();
+    mocks.processWorkflowRunStepJobs.mockReset();
     mocks.attachGenerationProviderTask.mockResolvedValue('attached');
     mocks.enqueueGenerationCompletionJob.mockResolvedValue('job-1');
     mocks.processGenerationCompletionJobs.mockResolvedValue({
@@ -62,6 +85,9 @@ describe('kie webhook service', () => {
       retried: 0,
       failed: 0,
     });
+    mocks.processGenerationOutputImportJobs.mockResolvedValue({ claimed: 1, completed: 1 });
+    mocks.processWorkflowRunStepJobs.mockResolvedValue({ claimed: 1, advanced: 1 });
+    mocks.processTemplateRunJobs.mockResolvedValue({ claimed: 1, completed: 1 });
   });
 
   it('rejects oversized payloads before JSON parsing or privileged service work', async () => {
@@ -115,6 +141,23 @@ describe('kie webhook service', () => {
       lockedBy: 'kie-webhook:task-1:1782039000000',
       limit: 5,
       predictionId: 'task-1',
+    });
+    await vi.waitFor(() => {
+      expect(mocks.processWorkflowRunStepJobs).toHaveBeenCalledWith({
+        supabase: serviceClient,
+        lockedBy: 'kie-webhook:task-1:1782039000000:workflow',
+        limit: 2,
+      });
+      expect(mocks.processTemplateRunJobs).toHaveBeenCalledWith({
+        client: serviceClient,
+        lockedBy: 'kie-webhook:task-1:1782039000000:template',
+        limit: 2,
+      });
+    });
+    expect(mocks.processGenerationOutputImportJobs).toHaveBeenCalledWith({
+      client: serviceClient,
+      lockedBy: 'kie-webhook:task-1:1782039000000:output-import',
+      limit: 1,
     });
   });
 

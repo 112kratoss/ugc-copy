@@ -1,5 +1,7 @@
 import 'server-only';
 
+import type { SupabaseClient } from '@supabase/supabase-js';
+
 import {
   enforceBackendRateLimit,
   MEDIA_TEMPLATE_MUTATION_RATE_LIMIT,
@@ -14,7 +16,7 @@ import {
   createMediaTemplate,
   disableMediaTemplate,
   getMediaTemplate,
-  listActiveMediaTemplates,
+  listActiveMediaTemplatesPage,
   listOwnedMediaTemplates,
   publishMediaTemplate,
   updateMediaTemplate,
@@ -27,14 +29,41 @@ import {
   createTemplateInputUploadIntent,
   createTemplateRun,
   finalizeTemplateRunInputs,
+  getTemplateRun,
   retryTemplateRunStep,
   startTemplateRun,
-  syncTemplateRun,
 } from '@/lib/template-run-service';
+import {
+  TEMPLATE_RUN_JOB_BATCH_LIMIT,
+  processTemplateRunJobs,
+} from '@/lib/template-run-jobs-processor';
+import { logBackendError } from '@/lib/backend-logger';
+import { createServiceClient } from '@/lib/server-helpers';
+import { API_CACHE_CONTROL, createApiResponseHeaders } from '@/lib/api-cache';
 
 type IdContext = { params: Promise<{ id: string }> };
 type RunStepContext = { params: Promise<{ id: string; stepId: string }> };
-type AdapterResult = { body: unknown; status?: number };
+type AdapterResult = { body: unknown; status?: number; publicCache?: boolean };
+type ScheduleAfter = (callback: () => Promise<void> | void) => void;
+
+function scheduleTemplateRunDrain(
+  scheduleAfter: ScheduleAfter | undefined,
+  client: SupabaseClient,
+  runId: string,
+) {
+  if (!scheduleAfter) return;
+  scheduleAfter(async () => {
+    try {
+      await processTemplateRunJobs({
+        client,
+        lockedBy: `template-route:${runId}:${Date.now()}`,
+        limit: TEMPLATE_RUN_JOB_BATCH_LIMIT,
+      });
+    } catch (error) {
+      logBackendError('template_run_route_drain_failed', { runId, error });
+    }
+  });
+}
 
 async function respond(
   request: Request,
@@ -42,6 +71,12 @@ async function respond(
 ) {
   try {
     const result = await action();
+    if (result.publicCache) {
+      return Response.json(result.body, {
+        status: result.status ?? 200,
+        headers: createApiResponseHeaders(request, API_CACHE_CONTROL.publicShortEdge),
+      });
+    }
     return templateApiResponse(request, result.body, result.status);
   } catch (error) {
     return templateApiErrorResponse(request, error);
@@ -71,11 +106,16 @@ export function createMediaTemplatesRouteHandlers() {
   return {
     GET: (request: Request) => respond(request, async () => {
       const mine = new URL(request.url).searchParams.get('mine') === '1';
-      const auth = await getTemplateApiAuth(request, mine);
-      const templates = mine
-        ? await listOwnedMediaTemplates(auth.adminClient, auth.userId!)
-        : await listActiveMediaTemplates(auth.adminClient);
-      return { body: { templates } };
+      if (mine) {
+        const auth = await getTemplateApiAuth(request, true);
+        return { body: { templates: await listOwnedMediaTemplates(auth.adminClient, auth.userId!) } };
+      }
+      const url = new URL(request.url);
+      const page = await listActiveMediaTemplatesPage(createServiceClient(), {
+        cursor: url.searchParams.get('cursor'),
+        limit: Number(url.searchParams.get('limit') ?? 48),
+      });
+      return { body: page, publicCache: true };
     }),
     POST: (request: Request) => respond(request, async () => {
       const auth = await mutationAuth(request);
@@ -184,11 +224,9 @@ export function createTemplateRunRouteHandlers() {
     GET: (request: Request, context: IdContext) => respond(request, async () => {
       const { id } = await context.params;
       const auth = await getTemplateApiAuth(request);
-      const run = await syncTemplateRun({
+      const run = await getTemplateRun({
         adminClient: auth.adminClient,
-        request,
         runId: id,
-        userClient: auth.userClient,
         userId: auth.userId!,
       });
       return { body: { run } };
@@ -228,7 +266,7 @@ export function createTemplateRunInputFinalizeRouteHandlers() {
   };
 }
 
-export function createTemplateRunStartRouteHandlers() {
+export function createTemplateRunStartRouteHandlers(options: { scheduleAfter?: ScheduleAfter } = {}) {
   return {
     POST: (request: Request, context: IdContext) => respond(request, async () => {
       const { id } = await context.params;
@@ -238,12 +276,13 @@ export function createTemplateRunStartRouteHandlers() {
         runId: id,
         userId: auth.userId!,
       });
+      scheduleTemplateRunDrain(options.scheduleAfter, auth.adminClient, id);
       return { body: { run } };
     }),
   };
 }
 
-export function createTemplateRunStepRetryRouteHandlers() {
+export function createTemplateRunStepRetryRouteHandlers(options: { scheduleAfter?: ScheduleAfter } = {}) {
   return {
     POST: (request: Request, context: RunStepContext) => respond(request, async () => {
       const { id, stepId } = await context.params;
@@ -254,12 +293,13 @@ export function createTemplateRunStepRetryRouteHandlers() {
         stepId,
         userId: auth.userId!,
       });
+      scheduleTemplateRunDrain(options.scheduleAfter, auth.adminClient, id);
       return { body: { run } };
     }),
   };
 }
 
-export function createTemplateRunStepApprovalRouteHandlers() {
+export function createTemplateRunStepApprovalRouteHandlers(options: { scheduleAfter?: ScheduleAfter } = {}) {
   return {
     POST: (request: Request, context: RunStepContext) => respond(request, async () => {
       const { id, stepId } = await context.params;
@@ -270,6 +310,7 @@ export function createTemplateRunStepApprovalRouteHandlers() {
         stepId,
         userId: auth.userId!,
       });
+      scheduleTemplateRunDrain(options.scheduleAfter, auth.adminClient, id);
       return { body: { run } };
     }),
   };

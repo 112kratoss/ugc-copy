@@ -1072,6 +1072,7 @@ async function getShowcaseForYouFeedPage(params: {
   anonymousKeyHash: string | null;
   cursor: string | null;
   adminSupabase?: ReturnType<typeof createServiceClient>;
+  onPhaseTiming?: (phase: string, durationMs: number) => void;
 }): Promise<ShowcaseFeedPage> {
   const adminSupabase = params.adminSupabase ?? createServiceClient();
   const hydrationCache: ShowcaseFeedHydrationCache = new Map();
@@ -1119,6 +1120,7 @@ async function getShowcaseForYouFeedPage(params: {
     offset: params.offset,
     serviceClient: adminSupabase,
     viewerUserId: params.viewerUserId,
+    onPhaseTiming: params.onPhaseTiming,
   });
 }
 
@@ -1209,6 +1211,7 @@ export async function getShowcaseFeedPage(options: {
   resource?: ShowcaseResourceFilter;
   countryCode?: string | null;
   bypassCache?: boolean;
+  onPhaseTiming?: (phase: string, durationMs: number) => void;
 }): Promise<ShowcaseFeedPage> {
   const { category, sort, offset, limit } = options;
   const adminSupabase = createServiceClient();
@@ -1244,6 +1247,7 @@ export async function getShowcaseFeedPage(options: {
         anonymousKeyHash: options.anonymousKeyHash ?? null,
         cursor: options.cursor ?? null,
         adminSupabase,
+        onPhaseTiming: options.onPhaseTiming,
       })
     : shouldCacheViewerNeutralShowcaseBasePage({
       offset,
@@ -1253,8 +1257,12 @@ export async function getShowcaseFeedPage(options: {
     })
       ? await loadShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter)
       : await getShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter);
+  const priceStartedAt = performance.now();
   const pricedFeed = await attachLocalizedAssetPrices(baseFeed, options.countryCode);
+  options.onPhaseTiming?.('pricing', performance.now() - priceStartedAt);
+  const viewerStartedAt = performance.now();
   const hydratedFeed = await attachViewerStateToFeed(pricedFeed, viewerUserId, adminSupabase);
+  options.onPhaseTiming?.('viewer_state', performance.now() - viewerStartedAt);
 
   return sanitizeShowcaseFeedPage(hydratedFeed);
 }

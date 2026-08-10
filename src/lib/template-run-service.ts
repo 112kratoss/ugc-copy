@@ -33,6 +33,7 @@ import {
 import {
   getTemplateStepDefinitions,
 } from '@/lib/template-graph-compiler';
+import { enqueueTemplateRunJob } from '@/lib/template-run-jobs';
 import {
   getTemplateInputExtensions,
   validateTemplateInputBlob,
@@ -995,13 +996,19 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
       const status = isRecord(error) && typeof error.status === 'number' ? error.status : 500;
       if (status !== 409) {
         const failure = getPublicGenerationStartFailure(error);
+        const submissionPending = failure.code === 'submission_pending';
+        const retryableBackpressure = failure.code === 'provider_busy'
+          || failure.code === 'provider_unavailable';
         await client.from('template_run_steps').update({
-          status: 'failed',
+          status: submissionPending ? 'processing' : retryableBackpressure ? 'queued' : 'failed',
           error_message: failure.message,
           output_snapshot: failureSnapshot(step, failure.code),
-          finished_at: new Date().toISOString(),
+          finished_at: submissionPending || retryableBackpressure ? null : new Date().toISOString(),
         }).eq('id', step.id);
-        graph = updateNodeRunState(graph, node.id, { status: 'failed' });
+        graph = updateNodeRunState(graph, node.id, {
+          status: submissionPending ? 'processing' : retryableBackpressure ? 'queued' : 'failed',
+          error: failure.message,
+        });
       }
     }
   }
@@ -1062,8 +1069,22 @@ export async function startTemplateRun(params: {
   } else if (!['queued', 'processing'].includes(state.run.status)) {
     return toRunDto(params.adminClient, state);
   }
-  state = await advanceTemplateRun(params.adminClient, state.run.id, params.userId);
+  await enqueueTemplateRunJob(params.adminClient, state.run.id);
+  state = await loadRunState(params.adminClient, state.run.id, params.userId);
   return toRunDto(params.adminClient, state);
+}
+
+/** Pure owned read. Template execution belongs to the leased worker; a GET
+ * must never poll providers, start paid nodes, or become required for progress. */
+export async function getTemplateRun(params: {
+  adminClient: SupabaseClient;
+  runId: string;
+  userId: string;
+}): Promise<TemplateRunDto> {
+  return toRunDto(
+    params.adminClient,
+    await loadRunState(params.adminClient, params.runId, params.userId),
+  );
 }
 
 export async function syncTemplateRun(params: {
@@ -1128,7 +1149,8 @@ export async function approveTemplateRunStep(params: {
   if (!data) throw new MediaTemplateError('This checkpoint was already handled.', 409, 'APPROVAL_ALREADY_HANDLED');
   await params.adminClient.from('template_runs').update({ status: 'processing', error_message: null })
     .eq('id', state.run.id).neq('status', 'cancelled');
-  const next = await advanceTemplateRun(params.adminClient, state.run.id, params.userId);
+  await enqueueTemplateRunJob(params.adminClient, state.run.id);
+  const next = await loadRunState(params.adminClient, state.run.id, params.userId);
   return toRunDto(params.adminClient, next);
 }
 
@@ -1222,7 +1244,8 @@ export async function retryTemplateRunStep(params: {
   }
   await params.adminClient.from('template_runs').update({ status: 'queued', error_message: null })
     .eq('id', state.run.id).in('status', ['awaiting_approval', 'needs_attention']);
-  const next = await advanceTemplateRun(params.adminClient, state.run.id, params.userId);
+  await enqueueTemplateRunJob(params.adminClient, state.run.id);
+  const next = await loadRunState(params.adminClient, state.run.id, params.userId);
   return toRunDto(params.adminClient, next);
 }
 

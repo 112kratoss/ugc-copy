@@ -122,16 +122,14 @@ describe('backend job registry', () => {
 
     expect(getCronScheduleDailyInvocations('*/10 * * * *')).toBe(144);
     expect(getCronScheduleDailyInvocations('0 * * * *')).toBe(24);
-    // 505 from the seven original jobs, one daily retention sweep, one daily
-    // staged-upload reclaim sweep, the ten-minute durable account-deletion
-    // cleanup worker, and the ten-minute workflow run step worker added by F12
-    // (+144) -- before it, no registry entry watched workflow runs at all.
-    expect(logicalDailyRuns).toBe(795);
+    // Media repair now runs every ten minutes rather than hourly (+120/day) so
+    // its leased queue cannot sit for an hour after publish stopped doing work.
+    expect(logicalDailyRuns).toBe(915);
     expect(BACKEND_JOB_SCHEDULER.dailyInvocations).toBe(144);
     // The budget bounds real Vercel cron invocations, not logical job runs, so
     // it has to be measured across every entry now that F14 added two. Checking
     // only the scheduler would have let dedicated crons grow unbounded.
-    expect(getBackendJobVercelDailyInvocations()).toBe(144 + 144 + 24);
+    expect(getBackendJobVercelDailyInvocations()).toBe(144 + 144 + 144);
     expect(getBackendJobVercelDailyInvocations())
       .toBeLessThanOrEqual(BACKEND_JOB_DAILY_INVOCATION_BUDGET);
     expect(

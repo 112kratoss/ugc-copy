@@ -129,6 +129,11 @@ function normalizeBoolean(value: unknown, fallback: boolean) {
   return typeof value === 'boolean' ? value : fallback;
 }
 
+function normalizeNonNegativeInteger(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : 0;
+}
+
 function isExpoPushToken(value: string) {
   return /^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]+\]$/.test(value);
 }
@@ -1079,28 +1084,24 @@ async function pruneMobileNotificationRetention(
   const deliveryCutoff = new Date(now.getTime() - DELIVERY_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const notificationCutoff = new Date(now.getTime() - READ_NOTIFICATION_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
-  const { error: deliveryDeleteError } = await adminSupabase
-    .from('mobile_push_deliveries')
-    .delete()
-    .lt('created_at', deliveryCutoff);
+  const { data, error } = await adminSupabase.rpc('prune_mobile_notification_retention', {
+    p_delivery_cutoff: deliveryCutoff,
+    p_notification_cutoff: notificationCutoff,
+    p_limit: 5000,
+  });
 
-  if (deliveryDeleteError) {
-    throw new MobileNotificationError('Failed to prune mobile push delivery history.', 500);
+  if (error) {
+    throw new MobileNotificationError('Failed to prune mobile notification history.', 500);
   }
 
-  const { error: notificationDeleteError } = await adminSupabase
-    .from('mobile_notifications')
-    .delete()
-    .eq('is_read', true)
-    .lt('updated_at', notificationCutoff);
-
-  if (notificationDeleteError) {
-    throw new MobileNotificationError('Failed to prune read mobile notifications.', 500);
-  }
+  const retention = isRecord(data) ? data : {};
 
   return {
     deliveryRetentionDays: DELIVERY_RETENTION_DAYS,
     readNotificationRetentionDays: READ_NOTIFICATION_RETENTION_DAYS,
+    deliveriesDeleted: normalizeNonNegativeInteger(retention.deliveriesDeleted),
+    notificationsDeleted: normalizeNonNegativeInteger(retention.notificationsDeleted),
+    retentionBatchLimitReached: retention.batchLimitReached === true,
   };
 }
 

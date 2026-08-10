@@ -133,6 +133,20 @@ describe('provider fetch', () => {
     }));
   });
 
+  it('recognizes nested connection resets as ambiguous network outcomes', async () => {
+    const { isExternalServiceNetworkError } = await import('@/lib/provider-fetch');
+
+    expect(isExternalServiceNetworkError(new TypeError('fetch failed'))).toBe(true);
+    expect(isExternalServiceNetworkError({
+      cause: { code: 'ECONNRESET' },
+    })).toBe(true);
+    expect(isExternalServiceNetworkError(Object.assign(new TypeError('fetch failed'), {
+      cause: { code: 'ECONNREFUSED' },
+    }))).toBe(false);
+    expect(isExternalServiceNetworkError({ code: 'ENETUNREACH' })).toBe(false);
+    expect(isExternalServiceNetworkError(new Error('validation failed'))).toBe(false);
+  });
+
   it('names every production provider timeout boundary for actionable logs', () => {
     expect(findProviderFetchCallsMissingServiceName()).toEqual([]);
   });

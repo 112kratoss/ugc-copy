@@ -88,12 +88,20 @@ async function handleShowcaseFeedGET(
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
   try {
+    const timingEnabled = process.env.SCALING_CERTIFICATION_TIMINGS === '1';
+    const phaseTimings = new Map<string, number>();
+    const recordPhase = (phase: string, durationMs: number) => {
+      if (!timingEnabled) return;
+      phaseTimings.set(phase, (phaseTimings.get(phase) ?? 0) + Math.max(0, durationMs));
+    };
     const searchParams = new URL(request.url).searchParams;
     const limit = Math.min(parsePositiveInt(searchParams.get('limit'), SHOWCASE_PAGE_SIZE), 24);
     const tool = searchParams.get('tool');
     const cursor = searchParams.get('cursor');
     const hasAuthorizationHeader = Boolean(request.headers.get('Authorization'));
+    const authStartedAt = performance.now();
     const actor = await getViewerUserId(request, hasAuthorizationHeader, dependencies);
+    recordPhase('auth', performance.now() - authStartedAt);
     if (!actor.ok) {
       return NextResponse.json(
         { error: 'Authentication required.' },
@@ -114,6 +122,7 @@ async function handleShowcaseFeedGET(
     // four times the for-you one: it is there to stop a script, not to shape
     // browsing.
     {
+      const limiterStartedAt = performance.now();
       const serviceClient = dependencies.createServiceClient();
       const readRateLimit = sort === 'for-you'
         ? SHOWCASE_FOR_YOU_FEED_READ_RATE_LIMIT
@@ -123,6 +132,7 @@ async function handleShowcaseFeedGET(
           ...readRateLimit,
           key: viewerUserId ?? dependencies.getFeedNetworkKeyHash(request),
         });
+        recordPhase('rate_limit', performance.now() - limiterStartedAt);
       } catch (error) {
         if (error instanceof BackendRateLimitError) {
           return applyPrivateNoStoreApiResponseHeaders(createBackendRateLimitResponse(error), request);
@@ -135,6 +145,7 @@ async function handleShowcaseFeedGET(
       }
     }
 
+    const feedStartedAt = performance.now();
     const feed = await dependencies.getShowcaseFeedPage({
       category: normalizeShowcaseCategory(searchParams.get('category')),
       sort,
@@ -152,14 +163,23 @@ async function handleShowcaseFeedGET(
       // attached after the cache read, so authenticated readers can safely
       // share the same base page instead of rebuilding it per request.
       bypassCache: sort === 'for-you' || Boolean(cursor),
+      ...(timingEnabled ? { onPhaseTiming: recordPhase } : {}),
     });
+    recordPhase('feed_total', performance.now() - feedStartedAt);
     const cacheControl = getViewerAwareApiCacheControl(hasAuthorizationHeader || sort === 'for-you');
 
+    const serializationStartedAt = performance.now();
     const response = NextResponse.json(sanitizeShowcaseFeedPage(feed), {
       headers: createApiResponseHeaders(request, cacheControl, {
         vary: ['Authorization', 'x-vercel-ip-country'],
       }),
     });
+    recordPhase('serialization', performance.now() - serializationStartedAt);
+    if (timingEnabled) {
+      response.headers.set('Server-Timing', [...phaseTimings]
+        .map(([phase, durationMs]) => `${phase.replace(/_/g, '-')};dur=${durationMs.toFixed(2)}`)
+        .join(', '));
+    }
     if (anonymousIdentity?.cookieValueToSet) {
       response.cookies.set({
         name: FEED_ANONYMOUS_COOKIE_NAME,

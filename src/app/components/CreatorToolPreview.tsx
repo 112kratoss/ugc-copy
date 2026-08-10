@@ -29,7 +29,7 @@ export function CreatorToolPreview({
   }
 
   const coverMedia = getCoverMedia(item);
-  const mediaUrl = coverMedia?.url ?? item.mediaUrl;
+  const mediaUrl = coverMedia?.renditionUrl ?? coverMedia?.url ?? item.mediaUrl;
   const mediaKind = coverMedia?.mediaKind ?? item.mediaKind;
   const previewUrl = coverMedia?.previewUrl ?? null;
   const prioritizePreview = priority && Boolean(previewUrl);

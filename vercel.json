@@ -16,7 +16,7 @@
     },
     {
       "path": "/api/cron/media-preview-repair",
-      "schedule": "0 * * * *"
+      "schedule": "*/10 * * * *"
     }
   ]
 }

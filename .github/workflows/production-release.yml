@@ -221,7 +221,7 @@ jobs:
             if (body.buildId && body.buildId !== process.env.RELEASE_SHA) {
               throw new Error('Health build id does not match the release commit');
             }
-            if (!['ok', 'warning'].includes(body.status)) {
+            if (body.status !== 'ok') {
               throw new Error('Staged backend health is ' + body.status);
             }
             const expectedReclaim = process.env.EXPECTED_ABANDONED_RECLAIM_EFFECTIVE;
@@ -236,15 +236,6 @@ jobs:
                 );
               }
               console.log('Staged abandoned-reclaim state matches expected ' + expectedReclaim + '.');
-            }
-            if (body.status === 'warning') {
-              const issues = Array.isArray(body.issues)
-                ? body.issues
-                    .map((issue) => [issue.code, issue.message].filter(Boolean).join(': '))
-                    .filter(Boolean)
-                    .join('; ')
-                : 'unspecified';
-              console.warn('::warning::Staged backend health warnings: ' + issues);
             }
           "
 
@@ -297,3 +288,26 @@ jobs:
           done
           echo "::error::Production did not serve ${RELEASE_SHA} within 60 seconds of promotion."
           exit 1
+
+      - name: Require protected production health after promotion
+        shell: bash
+        run: |
+          set -euo pipefail
+          production_origin="${PRODUCTION_BASE_URL%/}"
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer ${OPS_READ_SECRET}" \
+            "${production_origin}/api/ops/backend-health" \
+            --output "${RUNNER_TEMP}/production-backend-health.json"
+          node -e "
+            const fs = require('node:fs');
+            const body = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/production-backend-health.json', 'utf8'));
+            if (body.buildId && body.buildId !== process.env.RELEASE_SHA) {
+              throw new Error('Production health build id does not match the released commit');
+            }
+            if (body.status !== 'ok') {
+              const issues = Array.isArray(body.issues)
+                ? body.issues.map((issue) => [issue.code, issue.message].filter(Boolean).join(': ')).join('; ')
+                : 'unspecified';
+              throw new Error('Production backend health is ' + body.status + ': ' + issues);
+            }
+          "

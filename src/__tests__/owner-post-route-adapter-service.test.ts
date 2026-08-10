@@ -298,7 +298,7 @@ describe('owner post route adapter service', () => {
       },
     };
 
-    it('kicks the repair after a saved edit', async () => {
+    it('leaves a saved edit for the leased repair worker', async () => {
       const adminSupabase = { kind: 'admin' };
       const repairMediaForPost = vi.fn(async () => ({ attempted: 1, completed: 1, failed: 0 }));
       const createServiceClient = vi.fn(() => adminSupabase);
@@ -320,9 +320,7 @@ describe('owner post route adapter service', () => {
       // and no admin client is built until the repair actually runs.
       expect(repairMediaForPost).not.toHaveBeenCalled();
       expect(createServiceClient).not.toHaveBeenCalled();
-
-      await scheduled[0]();
-      expect(repairMediaForPost).toHaveBeenCalledWith(adminSupabase, 'post-1');
+      expect(scheduled).toHaveLength(0);
     });
 
     it('does not schedule a repair when the edit was rejected', async () => {
@@ -360,7 +358,7 @@ describe('owner post route adapter service', () => {
       });
 
       expect(response.status).toBe(200);
-      await expect(scheduled[0]()).resolves.toBeUndefined();
+      expect(scheduled).toHaveLength(0);
     });
 
     it('still saves the edit when the repair cannot be scheduled', async () => {

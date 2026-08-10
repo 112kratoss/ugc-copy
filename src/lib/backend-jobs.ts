@@ -257,7 +257,7 @@ export const BACKEND_JOB_REGISTRY = [
     // invocation with everything else.
     name: 'media-preview-repair',
     route: '/api/cron/media-preview-repair',
-    schedule: '0 * * * *',
+    schedule: '*/10 * * * *',
     dispatch: 'dedicated',
     maxDurationSeconds: 300,
     lockTtlSeconds: 14 * 60,

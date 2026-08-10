@@ -38,6 +38,10 @@ const mocks = vi.hoisted(() => ({
     return true;
   }),
   processGenerationCompletionJobs: vi.fn(),
+  processGenerationOutputImportJobs: vi.fn(),
+  processTemplateRunJobs: vi.fn(),
+  processWorkflowRunStepJobs: vi.fn(),
+  hasDueGenerationOutputImportJobs: vi.fn(),
   pruneGenerationCompletionJobs: vi.fn(),
   startBackendJobRun: vi.fn(async (_client, options: {
     name: string;
@@ -106,6 +110,29 @@ vi.mock('@/lib/generation-completion-jobs', async () => {
   };
 });
 
+vi.mock('@/lib/workflow-run-jobs-processor', () => ({
+  WORKFLOW_RUN_STEP_BATCH_LIMIT: 10,
+  processWorkflowRunStepJobs: (...args: unknown[]) => mocks.processWorkflowRunStepJobs(...args),
+}));
+
+vi.mock('@/lib/template-run-jobs-processor', () => ({
+  TEMPLATE_RUN_JOB_BATCH_LIMIT: 10,
+  processTemplateRunJobs: (...args: unknown[]) => mocks.processTemplateRunJobs(...args),
+}));
+
+vi.mock('@/lib/generation-output-import-jobs', () => ({
+  hasDueGenerationOutputImportJobs: (...args: unknown[]) => (
+    mocks.hasDueGenerationOutputImportJobs(...args)
+  ),
+}));
+
+vi.mock('@/lib/generation-output-import-jobs-processor', () => ({
+  GENERATION_OUTPUT_IMPORT_BATCH_LIMIT: 4,
+  processGenerationOutputImportJobs: (...args: unknown[]) => (
+    mocks.processGenerationOutputImportJobs(...args)
+  ),
+}));
+
 describe('/api/cron/generation-completions route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -115,6 +142,10 @@ describe('/api/cron/generation-completions route', () => {
     mocks.pruneBackendJobRuns.mockClear();
     mocks.maybePruneGenerationCompletionJobs.mockReset();
     mocks.processGenerationCompletionJobs.mockReset();
+    mocks.processGenerationOutputImportJobs.mockReset();
+    mocks.processTemplateRunJobs.mockReset();
+    mocks.hasDueGenerationOutputImportJobs.mockReset();
+    mocks.processWorkflowRunStepJobs.mockReset();
     mocks.pruneGenerationCompletionJobs.mockReset();
     mocks.startBackendJobRun.mockClear();
     mocks.withBackendJobLock.mockReset();
@@ -126,6 +157,30 @@ describe('/api/cron/generation-completions route', () => {
       completed: 1,
       retried: 1,
       failed: 0,
+    });
+    mocks.hasDueGenerationOutputImportJobs.mockResolvedValue(false);
+    mocks.processGenerationOutputImportJobs.mockResolvedValue({
+      claimed: 1,
+      completed: 1,
+      retried: 0,
+      exhausted: 0,
+    });
+    mocks.processWorkflowRunStepJobs.mockResolvedValue({
+      claimed: 1,
+      advanced: 1,
+      deferred: 0,
+      retried: 0,
+      exhausted: 0,
+      failed: 0,
+      adopted: 0,
+    });
+    mocks.processTemplateRunJobs.mockResolvedValue({
+      claimed: 1,
+      completed: 1,
+      deferred: 0,
+      retried: 0,
+      exhausted: 0,
+      leaseLost: 0,
     });
     mocks.hasStalledGenerationWork.mockResolvedValue(false);
     mocks.reapStalledGenerations.mockResolvedValue(stalledReapSummary);
@@ -208,6 +263,22 @@ describe('/api/cron/generation-completions route', () => {
       creditSupabase: { service: 'supabase' },
       nowMs: expect.any(Number),
     });
+    expect(mocks.processWorkflowRunStepJobs).toHaveBeenCalledWith({
+      supabase: { service: 'supabase' },
+      lockedBy: expect.stringMatching(/^generation-completions:.*:workflow$/),
+      limit: 4,
+      nowMs: expect.any(Number),
+    });
+    expect(mocks.processTemplateRunJobs).toHaveBeenCalledWith({
+      client: { service: 'supabase' },
+      lockedBy: expect.stringMatching(/^generation-completions:.*:template$/),
+      limit: 4,
+    });
+    expect(mocks.processGenerationOutputImportJobs).toHaveBeenCalledWith({
+      client: { service: 'supabase' },
+      lockedBy: expect.stringMatching(/^generation-completions:.*:output-import$/),
+      limit: 4,
+    });
     expect(mocks.maybePruneGenerationCompletionJobs).toHaveBeenCalledWith(
       { service: 'supabase' },
       expect.objectContaining({ nowMs: expect.any(Number) }),
@@ -224,6 +295,9 @@ describe('/api/cron/generation-completions route', () => {
           retried: 1,
           failed: 0,
           stalled: stalledReapSummary,
+          outputImports: expect.objectContaining({ claimed: 1, completed: 1 }),
+          workflowWake: expect.objectContaining({ claimed: 1, advanced: 1 }),
+          templateWake: expect.objectContaining({ claimed: 1, completed: 1 }),
           pruned: 3,
         },
       }),

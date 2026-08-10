@@ -28,6 +28,11 @@ import {
   maybePruneGenerationCompletionJobs,
   processGenerationCompletionJobs,
 } from '@/lib/generation-completion-jobs';
+import { hasDueGenerationOutputImportJobs } from '@/lib/generation-output-import-jobs';
+import {
+  GENERATION_OUTPUT_IMPORT_BATCH_LIMIT,
+  processGenerationOutputImportJobs,
+} from '@/lib/generation-output-import-jobs-processor';
 import { verifyPublishedGenerationModels } from '@/lib/generation-model-provider-verification';
 import { hasRepairableMediaPreviews, repairMediaPreviews } from '@/lib/media-preview-repair';
 import {
@@ -52,6 +57,11 @@ import {
   reapStalledGenerations,
 } from '@/lib/stalled-generation-reaper';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { hasDueTemplateRunJobs, pruneTemplateRunJobs } from '@/lib/template-run-jobs';
+import {
+  TEMPLATE_RUN_JOB_BATCH_LIMIT,
+  processTemplateRunJobs,
+} from '@/lib/template-run-jobs-processor';
 import {
   findStalledWorkflowRuns,
   hasDueWorkflowRunStepJobs,
@@ -367,6 +377,7 @@ export function runGenerationCompletionsBackendJob(options: {
     },
     hasWork: async (client, context) => (
       await hasDueGenerationCompletionJobs(client, { nowMs: context.startedAtMs })
+      || await hasDueGenerationOutputImportJobs(client)
       || await hasStalledGenerationWork(client, { nowMs: context.startedAtMs })
     ),
     onNoWork: async (client, context) => ({
@@ -387,10 +398,37 @@ export function runGenerationCompletionsBackendJob(options: {
         creditSupabase: client,
         nowMs: context.startedAtMs,
       });
+      const outputImports = await processGenerationOutputImportJobs({
+        client,
+        lockedBy: `${context.lockOwner}:output-import`,
+        limit: GENERATION_OUTPUT_IMPORT_BATCH_LIMIT,
+      });
+      const terminalTransitions = completionSummary.completed
+        + stalled.providerSync.reconciled
+        + stalled.startFailures.settled
+        + outputImports.completed;
+      const workflowWake = terminalTransitions > 0
+        ? await processWorkflowRunStepJobs({
+            supabase: client,
+            lockedBy: `${context.lockOwner}:workflow`,
+            limit: Math.min(WORKFLOW_RUN_STEP_BATCH_LIMIT, terminalTransitions),
+            nowMs: context.startedAtMs,
+          })
+        : null;
+      const templateWake = terminalTransitions > 0
+        ? await processTemplateRunJobs({
+            client,
+            lockedBy: `${context.lockOwner}:template`,
+            limit: Math.min(TEMPLATE_RUN_JOB_BATCH_LIMIT, terminalTransitions),
+          })
+        : null;
       const pruned = await maybePruneGenerationCompletionJobs(client, { nowMs: context.startedAtMs });
       return {
         ...completionSummary,
         stalled,
+        outputImports,
+        workflowWake,
+        templateWake,
         pruned,
       };
     },
@@ -637,10 +675,12 @@ export function runWorkflowRunStepsBackendJob(options: {
     // no job by definition.
     hasWork: async (client, context) => (
       await hasDueWorkflowRunStepJobs(client, { nowMs: context.startedAtMs })
+      || await hasDueTemplateRunJobs(client)
       || (await findStalledWorkflowRuns(client, { nowMs: context.startedAtMs, limit: 1 })).length > 0
     ),
     onNoWork: async (client, context) => ({
       pruned: await maybePruneWorkflowRunStepJobs(client, { nowMs: context.startedAtMs }),
+      templatePruned: await pruneTemplateRunJobs(client),
     }),
     run: async (client, context) => {
       const summary = await processWorkflowRunStepJobs({
@@ -649,8 +689,14 @@ export function runWorkflowRunStepsBackendJob(options: {
         limit: WORKFLOW_RUN_STEP_BATCH_LIMIT,
         nowMs: context.startedAtMs,
       });
+      const templates = await processTemplateRunJobs({
+        client,
+        lockedBy: `${context.lockOwner}:template`,
+        limit: TEMPLATE_RUN_JOB_BATCH_LIMIT,
+      });
       const pruned = await maybePruneWorkflowRunStepJobs(client, { nowMs: context.startedAtMs });
-      return { ...summary, pruned };
+      const templatePruned = await pruneTemplateRunJobs(client);
+      return { ...summary, templates, pruned, templatePruned };
     },
   });
 }

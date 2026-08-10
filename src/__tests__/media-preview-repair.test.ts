@@ -152,10 +152,12 @@ describe('rendition byte admission (F14)', () => {
 
     expect(rpcCalls).toHaveLength(1);
     expect(rpcCalls[0]).toEqual({
-      fn: 'list_media_rendition_repair_candidates',
+      fn: 'claim_media_rendition_repairs',
       args: {
         p_limit: 7,
         p_byte_budget: RENDITION_REPAIR_BYTE_BUDGET,
+        p_locked_by: expect.stringMatching(/^media-rendition:/),
+        p_lock_ttl_seconds: 300,
         p_max_attempts: MAX_RENDITION_ATTEMPTS,
       },
     });

@@ -9,6 +9,10 @@ import {
   GenerationServiceError,
 } from '@/lib/generation-services';
 import {
+  getHeldProviderSubmissionGenerationId,
+  getPublicGenerationStartFailure,
+} from '@/lib/generation-public-failure';
+import {
   GenerationStartIdempotencyError,
 } from '@/lib/generation-start-idempotency';
 import { SourceGenerationValidationError } from '@/lib/source-generation';
@@ -88,6 +92,19 @@ function mapVideoStartError(error: unknown): VideoGenerationRouteResult {
       body: { error: error.message },
       status: error.status,
       rateLimitError: error,
+    };
+  }
+
+  const publicFailure = getPublicGenerationStartFailure(error);
+  if (publicFailure.code === 'submission_pending') {
+    return {
+      ok: false,
+      body: {
+        code: publicFailure.code,
+        error: publicFailure.message,
+        generationId: getHeldProviderSubmissionGenerationId(error),
+      },
+      status: 409,
     };
   }
 
