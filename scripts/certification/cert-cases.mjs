@@ -513,16 +513,35 @@ async function runWebhookBurstCase() {
       );
     }
     after = await sql(`
-      select count(*) filter (where status = 'pending') as pending,
-             count(*) filter (where status = 'failed') as failed,
-             count(*) filter (where status = 'succeeded') as succeeded,
-             count(*) filter (where attempt_count > 1) as retried
-      from public.generation_completion_jobs
-      where prediction_id in (${predictionIds})
+      select
+        (select count(*) from public.generation_completion_jobs
+          where prediction_id in (${predictionIds}) and status = 'pending') as pending,
+        (select count(*) from public.generation_completion_jobs
+          where prediction_id in (${predictionIds}) and status = 'failed') as failed,
+        (select count(*) from public.generation_completion_jobs
+          where prediction_id in (${predictionIds}) and status = 'succeeded') as succeeded,
+        (select count(*) from public.generation_completion_jobs
+          where prediction_id in (${predictionIds}) and attempt_count > 1) as retried,
+        (select count(*) from public.generation_output_import_jobs j
+          join public.generations g on g.id = j.generation_id
+          where g.prediction_id in (${predictionIds}) and j.status = 'pending') as imports_pending,
+        (select count(*) from public.generation_output_import_jobs j
+          join public.generations g on g.id = j.generation_id
+          where g.prediction_id in (${predictionIds}) and j.status = 'failed') as imports_failed,
+        (select count(*) from public.generation_output_import_jobs j
+          join public.generations g on g.id = j.generation_id
+          where g.prediction_id in (${predictionIds}) and j.status = 'succeeded') as imports_succeeded,
+        (select count(*) from public.generations
+          where prediction_id in (${predictionIds})
+            and status = 'succeeded' and output_url is not null) as durable_outputs
     `);
     if (Number(after[0]?.succeeded ?? 0) === count
       && Number(after[0]?.pending ?? 0) === 0
-      && Number(after[0]?.failed ?? 0) === 0) {
+      && Number(after[0]?.failed ?? 0) === 0
+      && Number(after[0]?.imports_succeeded ?? 0) === count
+      && Number(after[0]?.imports_pending ?? 0) === 0
+      && Number(after[0]?.imports_failed ?? 0) === 0
+      && Number(after[0]?.durable_outputs ?? 0) === count) {
       drained = true;
       break;
     }
@@ -530,11 +549,11 @@ async function runWebhookBurstCase() {
   }
   console.log(`      burst queue state ${JSON.stringify(after)}`);
   allPassed = report(
-    `all burst jobs settled successfully within ${drainDeadlineSeconds}s`,
+    `all completion and output-import jobs settled successfully within ${drainDeadlineSeconds}s`,
     drained,
     drained
-      ? `settled ${after?.[0]?.succeeded ?? 0}/${count} in ${Math.round((Date.now() - burstStartedAt) / 1000)}s`
-        + `, retried ${after?.[0]?.retried ?? 0}`
+      ? `completion ${after?.[0]?.succeeded ?? 0}/${count}, imports ${after?.[0]?.imports_succeeded ?? 0}/${count}`
+        + ` in ${Math.round((Date.now() - burstStartedAt) / 1000)}s, retried ${after?.[0]?.retried ?? 0}`
       : `terminal state ${JSON.stringify(after?.[0] ?? null)}`,
   ) && allPassed;
 
