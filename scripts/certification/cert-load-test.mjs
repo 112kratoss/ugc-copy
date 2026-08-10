@@ -33,10 +33,13 @@
  *   node scripts/certification/cert-load-test.mjs --rps 50 --duration 3600 --out soak.json
  *   node scripts/certification/cert-load-test.mjs --rps 25 --duration 120 --exclude-anonymous
  *   node scripts/certification/cert-load-test.mjs --only generation-start --rps 10 --duration 60
+ *   node scripts/certification/cert-load-test.mjs --only generation-start --rps 0.5 --max-operations 48
  */
 
-import { randomUUID } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFile, writeFile } from 'node:fs/promises';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { deflateSync } from 'node:zlib';
 
 const options = {
   rps: 10,
@@ -45,6 +48,10 @@ const options = {
   out: null,
   label: null,
   warmupSeconds: 5,
+  requestTimeoutMs: 120_000,
+  maxOperations: null,
+  minContinuationRatio: 0.1,
+  sloConfig: 'config/certification-slos.json',
 };
 
 for (let index = 2; index < process.argv.length; index += 1) {
@@ -56,6 +63,10 @@ for (let index = 2; index < process.argv.length; index += 1) {
   else if (argument === '--out') { options.out = value; index += 1; }
   else if (argument === '--label') { options.label = value; index += 1; }
   else if (argument === '--warmup') { options.warmupSeconds = Number(value); index += 1; }
+  else if (argument === '--request-timeout-ms') { options.requestTimeoutMs = Number(value); index += 1; }
+  else if (argument === '--max-operations') { options.maxOperations = Number(value); index += 1; }
+  else if (argument === '--min-continuation-ratio') { options.minContinuationRatio = Number(value); index += 1; }
+  else if (argument === '--slo-config') { options.sloConfig = value; index += 1; }
   else if (argument === '--disable') { options.disabled = value.split(',').map((name) => name.trim()); index += 1; }
   else if (argument === '--only') { options.only = value.split(',').map((name) => name.trim()); index += 1; }
   else if (argument === '--exclude-anonymous') { options.excludeAnonymous = true; }
@@ -64,18 +75,64 @@ options.disabled = options.disabled ?? [];
 options.only = options.only ?? null;
 options.excludeAnonymous = options.excludeAnonymous ?? false;
 
+const numericBounds = [
+  ['--rps', options.rps, 0, 100],
+  ['--duration', options.durationSeconds, 0, 3_600],
+  ['--users', options.users, 0, 5_000],
+  ['--request-timeout-ms', options.requestTimeoutMs, 999, 330_000],
+];
+for (const [name, value, minimumExclusive, maximumInclusive] of numericBounds) {
+  if (!Number.isFinite(value) || value <= minimumExclusive || value > maximumInclusive) {
+    console.error(`${name} must be > ${minimumExclusive} and <= ${maximumInclusive}.`);
+    process.exit(1);
+  }
+}
+if (!Number.isFinite(options.warmupSeconds)
+  || options.warmupSeconds < 0
+  || options.warmupSeconds >= options.durationSeconds) {
+  console.error('--warmup must be >= 0 and less than --duration.');
+  process.exit(1);
+}
+if (options.maxOperations !== null
+  && (!Number.isSafeInteger(options.maxOperations) || options.maxOperations < 1)) {
+  console.error('--max-operations must be a positive integer.');
+  process.exit(1);
+}
+if (!Number.isFinite(options.minContinuationRatio)
+  || options.minContinuationRatio < 0
+  || options.minContinuationRatio > 1) {
+  console.error('--min-continuation-ratio must be a number between 0 and 1.');
+  process.exit(1);
+}
 const BASE_URL = process.env.CERT_BASE_URL;
 const SUPABASE_URL = process.env.CERT_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.CERT_SUPABASE_ANON_KEY;
 const SERVICE_ROLE_KEY = process.env.CERT_SUPABASE_SERVICE_ROLE_KEY;
 const SEED_PASSWORD = process.env.CERT_SEED_PASSWORD ?? 'cert-load-test-password';
+const SLO_CONFIG_SOURCE = await readFile(options.sloConfig, 'utf8');
+const SLO_CONFIG = JSON.parse(SLO_CONFIG_SOURCE);
+const SLO_CONFIG_SHA256 = createHash('sha256').update(SLO_CONFIG_SOURCE).digest('hex');
+const EXPECTED_BUILD_ID = process.env.CERT_EXPECTED_BUILD_ID;
+const SCHEMA_FINGERPRINT = process.env.CERT_SCHEMA_FINGERPRINT;
+const FIXTURE_TIER = process.env.CERT_FIXTURE_TIER;
+const CATALOG_REVISION = process.env.CERT_CATALOG_REVISION;
+const STUB_URL = process.env.CERT_STUB_URL;
+const STUB_SECRET = process.env.CERT_STUB_SECRET;
 
 if (!BASE_URL || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.error('CERT_BASE_URL, CERT_SUPABASE_URL and CERT_SUPABASE_ANON_KEY are required.');
   process.exit(1);
 }
+if (!EXPECTED_BUILD_ID || !SCHEMA_FINGERPRINT || !FIXTURE_TIER || !CATALOG_REVISION) {
+  console.error('CERT_EXPECTED_BUILD_ID, CERT_SCHEMA_FINGERPRINT, CERT_FIXTURE_TIER and CERT_CATALOG_REVISION are required.');
+  process.exit(1);
+}
 if (BASE_URL.includes('magicbooklet.com')) {
   console.error('Refusing to run: CERT_BASE_URL points at production.');
+  process.exit(1);
+}
+if (new URL(SUPABASE_URL).hostname.split('.')[0] === 'ildfmhozpibwiopeavfg') {
+  console.error('Refusing to run: CERT_SUPABASE_URL points at production.');
   process.exit(1);
 }
 
@@ -85,8 +142,9 @@ if (BASE_URL.includes('magicbooklet.com')) {
  * thinner tail of paid work. They sum to 100.
  */
 const WORKLOAD = [
-  { name: 'feed-for-you', weight: 26, authenticated: true },
-  { name: 'feed-events', weight: 24, authenticated: true },
+  { name: 'feed-for-you', weight: 25, authenticated: true },
+  { name: 'feed-events', weight: 23, authenticated: true },
+  { name: 'authenticated-page', weight: 2, authenticated: true },
   { name: 'feed-recent', weight: 14, authenticated: false },
   { name: 'post-detail', weight: 9, authenticated: false },
   { name: 'comments-read', weight: 6, authenticated: false },
@@ -94,7 +152,7 @@ const WORKLOAD = [
   { name: 'save-toggle', weight: 5, authenticated: true },
   { name: 'follow-toggle', weight: 3, authenticated: true },
   { name: 'comment-create', weight: 3, authenticated: true },
-  { name: 'upload-sign', weight: 2, authenticated: true },
+  { name: 'upload-roundtrip', weight: 2, authenticated: true },
   { name: 'generation-quote', weight: 1, authenticated: true },
   // Split out of generation-quote's 2 rather than added on top, so the paid-work
   // tail stays at 2% of the mix. Quoting is a pure read; *starting* is the path
@@ -171,16 +229,122 @@ const metrics = new Map(WORKLOAD.map((entry) => [entry.name, {
   statuses: new Map(),
   durations: [],
 }]));
+const operationMetrics = new Map(WORKLOAD.map((entry) => [entry.name, {
+  scheduled: 0,
+  completed: 0,
+  skipped: 0,
+  driverErrors: 0,
+}]));
+const operationContext = new AsyncLocalStorage();
 
 const runtimeState = {
+  runId: randomUUID(),
+  preflight: null,
   users: [],
   posts: [],
   creators: [],
+  hotCommentPostId: null,
   startedAt: 0,
   warmupUntil: 0,
   stopping: false,
   scheduled: 0,
+  scoredScheduled: 0,
+  completedOperations: 0,
+  skippedOperations: 0,
+  driverErrors: 0,
+  maxInFlight: 0,
+  backpressureWaits: 0,
+  backpressureMs: 0,
+  feedValidity: {
+    parseFailures: 0,
+    rankedResponses: 0,
+    freshSessionResponses: 0,
+    continuationRequests: 0,
+    continuationResponses: 0,
+    stableSessionContinuations: 0,
+    advancingPositionContinuations: 0,
+    linkedEventBatches: 0,
+    linkedEvents: 0,
+  },
+  uploadValidity: {
+    attempted: 0,
+    completed: 0,
+  },
+  feedPhaseTimings: new Map(),
 };
+
+function recordFeedServerTimings(headerValue) {
+  if (!headerValue) return;
+  for (const entry of headerValue.split(',')) {
+    const match = entry.trim().match(/^([^;]+);dur=([0-9]+(?:\.[0-9]+)?)$/);
+    if (!match) continue;
+    const phase = match[1];
+    const duration = Number(match[2]);
+    if (!Number.isFinite(duration)) continue;
+    const durations = runtimeState.feedPhaseTimings.get(phase) ?? [];
+    durations.push(duration);
+    runtimeState.feedPhaseTimings.set(phase, durations);
+  }
+}
+
+// A real 1920x1080 RGB PNG. The deterministic noisy pixels keep the payload at
+// a representative multi-megabyte size after compression, while constructing
+// it locally makes the certification runner independent of a third-party URL.
+// One buffer is shared by all requests; the load is network/storage/preview
+// work, not repeated fixture generation on the driver.
+let certificationImage = null;
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type, data) {
+  const typeBytes = Buffer.from(type, 'ascii');
+  const chunk = Buffer.allocUnsafe(12 + data.length);
+  chunk.writeUInt32BE(data.length, 0);
+  typeBytes.copy(chunk, 4);
+  data.copy(chunk, 8);
+  chunk.writeUInt32BE(crc32(Buffer.concat([typeBytes, data])), 8 + data.length);
+  return chunk;
+}
+
+function getCertificationImage() {
+  if (certificationImage) return certificationImage;
+  const width = 1920;
+  const height = 1080;
+  const scanlines = Buffer.allocUnsafe(height * (1 + width * 3));
+  let state = 0x6d2b79f5;
+  let offset = 0;
+  for (let y = 0; y < height; y += 1) {
+    scanlines[offset++] = 0;
+    for (let x = 0; x < width; x += 1) {
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      scanlines[offset++] = state & 0xff;
+      scanlines[offset++] = (state >>> 8) & 0xff;
+      scanlines[offset++] = (state >>> 16) & 0xff;
+    }
+  }
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header.set([8, 2, 0, 0, 0], 8);
+  certificationImage = Buffer.concat([
+    Buffer.from('89504e470d0a1a0a', 'hex'),
+    pngChunk('IHDR', header),
+    pngChunk('IDAT', deflateSync(scanlines, { level: 1 })),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+  return certificationImage;
+}
 
 function percentile(values, target) {
   if (values.length === 0) return null;
@@ -200,6 +364,18 @@ function pickWorkload() {
 
 function pick(list) {
   return list.length === 0 ? null : list[Math.floor(Math.random() * list.length)];
+}
+
+function buildAuthCookie(session) {
+  const projectRef = new URL(SUPABASE_URL).hostname.split('.')[0];
+  const key = `sb-${projectRef}-auth-token`;
+  const encoded = `base64-${Buffer.from(JSON.stringify(session)).toString('base64url')}`;
+  const chunks = [];
+  for (let offset = 0; offset < encoded.length; offset += 3180) {
+    chunks.push(encoded.slice(offset, offset + 3180));
+  }
+  if (chunks.length === 1) return `${key}=${chunks[0]}`;
+  return chunks.map((chunk, index) => `${key}.${index}=${chunk}`).join('; ');
 }
 
 // --- authentication ---------------------------------------------------------
@@ -229,6 +405,7 @@ async function signIn(email, attempt = 0) {
     userId: payload.user?.id ?? null,
     accessToken: payload.access_token,
     refreshToken: payload.refresh_token,
+    authCookie: buildAuthCookie(payload),
     // Refreshed early rather than on expiry: a token that dies mid-flight turns
     // into a 401 that would be scored as an application error.
     //
@@ -256,6 +433,7 @@ async function refreshUser(user) {
   if (!payload.access_token) return false;
   user.accessToken = payload.access_token;
   user.refreshToken = payload.refresh_token;
+  user.authCookie = buildAuthCookie(payload);
   user.expiresAt = Date.now() + (payload.expires_in - 900) * 1000;
   return true;
 }
@@ -279,15 +457,16 @@ async function renewUser(user) {
   return true;
 }
 
-async function borrowUser() {
-  const user = pick(runtimeState.users);
+async function borrowUser(predicate = null) {
+  const eligibleUsers = predicate ? runtimeState.users.filter(predicate) : runtimeState.users;
+  const user = pick(eligibleUsers);
   if (!user) return null;
   if (Date.now() >= user.expiresAt) {
     user.renewal ??= renewUser(user).finally(() => { user.renewal = null; });
     const renewed = await user.renewal;
     if (!renewed) {
       runtimeState.users = runtimeState.users.filter((candidate) => candidate !== user);
-      return borrowUser();
+      return borrowUser(predicate);
     }
   }
   return user;
@@ -331,6 +510,14 @@ async function loadFixtureIds() {
 
   runtimeState.posts = rows.map((row) => row.id);
   runtimeState.creators = [...new Set(rows.map((row) => row.user_id))];
+  // The seeder puts half its comments on the earliest post by created_at/id.
+  // Resolve that same post explicitly rather than depending on the ID ordering
+  // used to paginate the broader fixture list.
+  const hotResponse = await fetch(
+    `${SUPABASE_URL}/rest/v1/posts?select=id&visibility=eq.public&order=created_at.asc,id.asc&limit=1`,
+    { headers: { apikey: SERVICE_ROLE_KEY, Authorization: `Bearer ${SERVICE_ROLE_KEY}` } },
+  );
+  if (hotResponse.ok) runtimeState.hotCommentPostId = (await hotResponse.json())?.[0]?.id ?? null;
   if (runtimeState.posts.length === 0) throw new Error('No seeded posts found — run the seeder first.');
 }
 
@@ -347,6 +534,42 @@ const BYPASS_HEADERS = process.env.CERT_BYPASS_SECRET
   ? { 'x-vercel-protection-bypass': process.env.CERT_BYPASS_SECRET }
   : {};
 
+async function runEnvironmentPreflight() {
+  const versionResponse = await fetch(new URL('/api/app-version', BASE_URL), {
+    headers: BYPASS_HEADERS,
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!versionResponse.ok) {
+    throw new Error(`App-version preflight failed: HTTP ${versionResponse.status}`);
+  }
+  const version = await versionResponse.json();
+  if (version.buildId !== EXPECTED_BUILD_ID) {
+    throw new Error(`Preview build ${version.buildId ?? 'missing'} does not match expected ${EXPECTED_BUILD_ID}.`);
+  }
+
+  let stub = null;
+  if (STUB_URL) {
+    if (!STUB_SECRET) throw new Error('CERT_STUB_SECRET is required when CERT_STUB_URL is set.');
+    const stubResponse = await fetch(new URL('/stub/stats', STUB_URL), {
+      headers: { 'x-cert-stub-secret': STUB_SECRET },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!stubResponse.ok) throw new Error(`Provider-stub preflight failed: HTTP ${stubResponse.status}`);
+    stub = await stubResponse.json();
+  }
+
+  runtimeState.preflight = {
+    buildId: version.buildId,
+    schemaFingerprint: SCHEMA_FINGERPRINT,
+    fixtureTier: FIXTURE_TIER,
+    catalogRevision: CATALOG_REVISION,
+    supabaseProjectRef: new URL(SUPABASE_URL).hostname.split('.')[0],
+    sloConfigPath: options.sloConfig,
+    sloConfigSha256: SLO_CONFIG_SHA256,
+    stub,
+  };
+}
+
 function authHeaders(user) {
   return user ? { Authorization: `Bearer ${user.accessToken}` } : {};
 }
@@ -354,72 +577,181 @@ function authHeaders(user) {
 async function timedFetch(family, url, init = {}) {
   // Applied here rather than at each call site so anonymous families get it too
   // — they are excluded from the certified mix but still runnable.
-  init = { ...init, headers: { ...BYPASS_HEADERS, ...(init.headers ?? {}) } };
+  const isAppRequest = new URL(url).origin === new URL(BASE_URL).origin;
+  const timeoutSignal = AbortSignal.timeout(options.requestTimeoutMs);
+  const signal = init.signal
+    ? AbortSignal.any([init.signal, timeoutSignal])
+    : timeoutSignal;
+  init = {
+    ...init,
+    headers: { ...(isAppRequest ? BYPASS_HEADERS : {}), ...(init.headers ?? {}) },
+    signal,
+  };
   const bucket = metrics.get(family);
+  const currentOperation = operationContext.getStore();
+  if (currentOperation) currentOperation.httpRequests += 1;
   const startedAt = performance.now();
+  // Eligibility is frozen when the request starts. A slow warm-up request that
+  // completes after the boundary must not enter the certified sample, and a
+  // scored request remains scored even if it completes much later.
+  const scored = Date.now() >= runtimeState.warmupUntil;
   let status = 0;
+  let response = null;
+  let body = null;
   try {
-    const response = await fetch(url, init);
+    response = await fetch(url, init);
     status = response.status;
-    // Body must be drained or keep-alive sockets stall under sustained load.
-    await response.arrayBuffer();
-    return response;
+    // Read exactly once. Callers that need JSON decode these bytes; callers that
+    // do not still drain the response so keep-alive sockets remain reusable.
+    body = await response.arrayBuffer();
   } catch {
     status = 0;
-    return null;
   } finally {
+    if (currentOperation) currentOperation.httpCompletions += 1;
     const durationMs = performance.now() - startedAt;
     // Warm-up traffic is issued but not scored, so cold starts and JWKS//
     // connection priming do not land in the certified percentiles.
-    if (Date.now() >= runtimeState.warmupUntil) {
+    if (scored) {
       bucket.requests += 1;
       bucket.durations.push(durationMs);
       bucket.statuses.set(status, (bucket.statuses.get(status) ?? 0) + 1);
       if (status === 429) bucket.throttled += 1;
-      else if (status === 0 || status >= 500 || status === 401 || status === 403) bucket.failures += 1;
-      else if (status >= 400) bucket.failures += 1;
+      else if (status === 0 || status >= 300) bucket.failures += 1;
     }
   }
+
+  if (!response || body === null) return null;
+  return {
+    response,
+    body,
+    scored,
+  };
+}
+
+function parseJsonBody(result) {
+  return JSON.parse(new TextDecoder().decode(result.body));
 }
 
 const families = {
   async 'feed-for-you'() {
-    const user = await borrowUser();
+    const user = await borrowUser((candidate) => !candidate.feedBusy);
     if (!user) return;
+    user.feedBusy = true;
+    const requestedCursor = user.cursor;
+    const previousSessionId = user.sessionId;
+    const previousMaxPosition = user.maxFeedPosition;
     const url = new URL('/api/showcase/feed', BASE_URL);
     url.searchParams.set('sort', 'for-you');
     url.searchParams.set('limit', '12');
     // F11's regression case: continue from the cursor rather than re-ranking.
-    if (user.cursor) url.searchParams.set('cursor', user.cursor);
+    if (requestedCursor) url.searchParams.set('cursor', requestedCursor);
 
-    const response = await timedFetch('feed-for-you', url, { headers: authHeaders(user) });
-    if (!response?.ok) { user.cursor = null; return; }
     try {
-      const payload = await response.clone().json();
-      user.cursor = payload?.nextCursor ?? payload?.cursor ?? null;
-      user.sessionId = payload?.sessionId ?? user.sessionId;
-    } catch { user.cursor = null; }
+      const result = await timedFetch('feed-for-you', url, { headers: authHeaders(user) });
+      if (!result?.response.ok) { user.cursor = null; return; }
+
+      let payload;
+      try {
+        payload = parseJsonBody(result);
+      } catch {
+        if (result.scored) runtimeState.feedValidity.parseFailures += 1;
+        user.cursor = null;
+        return;
+      }
+
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      const nextCursor = payload?.pageInfo?.nextCursor ?? null;
+      const responseSessionId = typeof payload?.feedSessionId === 'string'
+        ? payload.feedSessionId
+        : null;
+      const deliveries = items.flatMap((item) => {
+        const recommendation = item?.recommendation;
+        if (!item?.id
+          || !recommendation?.deliveryId
+          || !Number.isInteger(recommendation?.position)) return [];
+        return [{
+          postId: item.id,
+          deliveryId: recommendation.deliveryId,
+          position: recommendation.position,
+        }];
+      });
+      const positions = deliveries.map((delivery) => delivery.position);
+      const minPosition = positions.length > 0 ? Math.min(...positions) : null;
+      const maxPosition = positions.length > 0 ? Math.max(...positions) : null;
+
+      const validity = runtimeState.feedValidity;
+      if (result.scored) {
+        recordFeedServerTimings(
+          result.response.headers.get('server-timing')
+            ?? result.response.headers.get('x-scaling-certification-timing'),
+        );
+        validity.rankedResponses += 1;
+        if (!requestedCursor) validity.freshSessionResponses += responseSessionId ? 1 : 0;
+        else {
+          validity.continuationRequests += 1;
+          validity.continuationResponses += 1;
+          if (responseSessionId && responseSessionId === previousSessionId) {
+            validity.stableSessionContinuations += 1;
+          }
+          if (Number.isInteger(previousMaxPosition)
+            && Number.isInteger(minPosition)
+            && minPosition > previousMaxPosition) {
+            validity.advancingPositionContinuations += 1;
+          }
+        }
+      }
+
+      user.cursor = nextCursor;
+      user.sessionId = responseSessionId;
+      user.maxFeedPosition = maxPosition;
+      user.lastFeedDeliveries = responseSessionId ? deliveries : [];
+    } finally {
+      user.feedBusy = false;
+    }
   },
 
   async 'feed-events'() {
-    const user = await borrowUser();
+    const user = await borrowUser((candidate) => (
+      candidate.sessionId && candidate.lastFeedDeliveries?.length > 0
+    ));
     if (!user) return;
     // Batched, as F7a made them: one request carrying a client's queued
     // telemetry rather than one request per impression.
-    const events = Array.from({ length: 6 }, () => ({
-      clientEventId: randomUUID(),
-      postId: pick(runtimeState.posts),
-      eventType: pick(['impression', 'dwell', 'media_progress', 'open', 'quick_skip']),
-      sourceSurface: 'feed',
-      occurredAt: new Date().toISOString(),
-      durationMs: Math.floor(Math.random() * 8000),
-      progress: Math.random(),
-      ...(user.sessionId ? { feedSessionId: user.sessionId } : {}),
-    }));
-    await timedFetch('feed-events', new URL('/api/showcase/feed/events', BASE_URL), {
+    const events = Array.from({ length: Math.min(6, user.lastFeedDeliveries.length) }, () => {
+      const delivery = pick(user.lastFeedDeliveries);
+      return {
+        clientEventId: randomUUID(),
+        postId: delivery.postId,
+        deliveryId: delivery.deliveryId,
+        position: delivery.position,
+        eventType: pick(['impression', 'dwell', 'media_progress', 'open', 'quick_skip']),
+        sourceSurface: 'feed',
+        occurredAt: new Date().toISOString(),
+        durationMs: Math.floor(Math.random() * 8000),
+        progress: Math.random(),
+        feedSessionId: user.sessionId,
+      };
+    });
+    const result = await timedFetch('feed-events', new URL('/api/showcase/feed/events', BASE_URL), {
       method: 'POST',
       headers: { ...authHeaders(user), 'Content-Type': 'application/json' },
       body: JSON.stringify({ events }),
+    });
+    if (result?.scored && result.response.ok) {
+      runtimeState.feedValidity.linkedEventBatches += 1;
+      runtimeState.feedValidity.linkedEvents += events.length;
+    }
+  },
+
+  async 'authenticated-page'() {
+    const user = await borrowUser();
+    if (!user) return;
+    // Drives the React Server Component path that calls getServerAuthState().
+    // Bearer-only API traffic cannot measure F8's cookie-session decode, local
+    // JWKS verification, request cache, or profile-credit read.
+    await timedFetch('authenticated-page', new URL(`/feed?cert=${randomUUID()}`, BASE_URL), {
+      headers: { Cookie: user.authCookie },
+      redirect: 'manual',
     });
   },
 
@@ -439,7 +771,11 @@ const families = {
   },
 
   async 'comments-read'() {
-    const postId = pick(runtimeState.posts);
+    // Half the reads hit the intentionally hot 10k/100k-comment thread; a
+    // uniformly random catalog read would almost never exercise F9.
+    const postId = runtimeState.hotCommentPostId && Math.random() < 0.5
+      ? runtimeState.hotCommentPostId
+      : pick(runtimeState.posts);
     await timedFetch('comments-read',
       new URL(`/api/showcase/posts/${postId}/comments?limit=20&cb=${randomUUID()}`, BASE_URL));
   },
@@ -450,6 +786,10 @@ const families = {
     const url = new URL('/api/marketplace/resources', BASE_URL);
     url.searchParams.set('limit', '12');
     url.searchParams.set('cb', randomUUID());
+    // Default pages and full-text search have different plans. F5b's first
+    // certificate hit only the tagged page cache; one quarter of this family
+    // now measures the uncached O(catalog) search path explicitly.
+    if (Math.random() < 0.25) url.searchParams.set('q', 'certification');
     await timedFetch('marketplace-list', url);
   },
 
@@ -490,19 +830,71 @@ const families = {
     });
   },
 
-  async 'upload-sign'() {
+  async 'upload-roundtrip'() {
     const user = await borrowUser();
     if (!user) return;
-    await timedFetch('upload-sign', new URL('/api/uploads/media/sign', BASE_URL), {
+    const image = getCertificationImage();
+    const validity = runtimeState.uploadValidity;
+    const signResult = await timedFetch('upload-roundtrip', new URL('/api/uploads/media/sign', BASE_URL), {
       method: 'POST',
       headers: { ...authHeaders(user), 'Content-Type': 'application/json' },
       body: JSON.stringify({
         kind: 'image',
-        fileName: `cert-${randomUUID()}.jpg`,
-        mimeType: 'image/jpeg',
-        sizeBytes: 128_000,
+        fileName: `cert-${randomUUID()}.png`,
+        mimeType: 'image/png',
+        sizeBytes: image.length,
       }),
     });
+    const scoreRoundtrip = Boolean(signResult?.scored);
+    if (scoreRoundtrip) validity.attempted += 1;
+    if (!signResult?.response.ok) return;
+
+    let intent;
+    try {
+      intent = parseJsonBody(signResult);
+    } catch {
+      return;
+    }
+    if (!intent?.signedUploadUrl || !intent?.storagePath) return;
+
+    const uploadResult = await timedFetch('upload-roundtrip', intent.signedUploadUrl, {
+      method: 'PUT',
+      headers: {
+        // Publish copies the staged object into the public bucket without an
+        // opportunity to replace this metadata. Keep certification traffic on
+        // the same one-day moderation/replay policy as real web and mobile
+        // uploads; a one-year immutable header here would create a live policy
+        // violation in the environment used to prove production behaviour.
+        'cache-control': 'max-age=86400',
+        'content-type': 'image/png',
+        'x-upsert': 'false',
+      },
+      body: image,
+    });
+    if (!uploadResult?.response.ok) return;
+
+    // Publishing is the consume/finalize operation for Showcase media: it
+    // verifies object metadata, copies bytes to the durable public bucket,
+    // creates the preview, deletes staging, and marks the upload intent
+    // consumed/cleared. A signed PUT without this step only tests abandonment.
+    const form = new FormData();
+    form.set('postFormat', 'media');
+    form.set('category', 'image');
+    form.set('title', `${pick(POST_TITLES)} ${randomUUID().slice(0, 6)}`);
+    form.set('body', pick(POST_BODIES));
+    form.set('visibility', 'public');
+    form.set('mediaItems', JSON.stringify([{
+      mediaKey: 'primary',
+      storagePath: intent.storagePath,
+      originalName: 'certification-1080p.png',
+      contentType: 'image/png',
+    }]));
+    const publishResult = await timedFetch('upload-roundtrip', new URL('/api/posts', BASE_URL), {
+      method: 'POST',
+      headers: authHeaders(user),
+      body: form,
+    });
+    if (publishResult?.response.ok && scoreRoundtrip) validity.completed += 1;
   },
 
   async 'generation-quote'() {
@@ -596,19 +988,58 @@ async function runLoad() {
   const endsAt = runtimeState.startedAt + options.durationSeconds * 1000;
   const inFlight = new Set();
 
-  while (Date.now() < endsAt && !runtimeState.stopping) {
+  while (
+    Date.now() < endsAt
+    && !runtimeState.stopping
+    && (options.maxOperations === null || runtimeState.scheduled < options.maxOperations)
+  ) {
     const tickStartedAt = Date.now();
     const entry = pickWorkload();
-    const task = families[entry.name]()
-      .catch(() => {})
+    const scored = tickStartedAt >= runtimeState.warmupUntil;
+    const context = {
+      family: entry.name,
+      scored,
+      httpRequests: 0,
+      httpCompletions: 0,
+      driverError: null,
+    };
+    if (scored) {
+      runtimeState.scoredScheduled += 1;
+      operationMetrics.get(entry.name).scheduled += 1;
+    }
+    const task = operationContext.run(context, async () => {
+      try {
+        await families[entry.name]();
+      } catch (error) {
+        context.driverError = error instanceof Error ? error.message : String(error);
+      } finally {
+        if (context.scored) {
+          const familyOperations = operationMetrics.get(entry.name);
+          if (context.driverError) {
+            runtimeState.driverErrors += 1;
+            familyOperations.driverErrors += 1;
+          } else if (context.httpRequests === 0) {
+            runtimeState.skippedOperations += 1;
+            familyOperations.skipped += 1;
+          } else if (context.httpCompletions === context.httpRequests) {
+            runtimeState.completedOperations += 1;
+            familyOperations.completed += 1;
+          }
+        }
+      }
+    })
       .finally(() => inFlight.delete(task));
     inFlight.add(task);
     runtimeState.scheduled += 1;
+    runtimeState.maxInFlight = Math.max(runtimeState.maxInFlight, inFlight.size);
 
     // Backpressure guard: if the origin stalls badly, stop piling on rather
     // than exhausting local sockets and measuring the driver instead.
     if (inFlight.size > options.rps * 20) {
+      const waitStartedAt = performance.now();
+      runtimeState.backpressureWaits += 1;
       await Promise.race(inFlight);
+      runtimeState.backpressureMs += performance.now() - waitStartedAt;
     }
 
     const elapsed = Date.now() - tickStartedAt;
@@ -617,6 +1048,82 @@ async function runLoad() {
   }
 
   await Promise.allSettled([...inFlight]);
+}
+
+function buildValidityReport() {
+  const feedActive = ACTIVE_WORKLOAD.some((entry) => entry.name === 'feed-for-you');
+  const eventsActive = ACTIVE_WORKLOAD.some((entry) => entry.name === 'feed-events');
+  const uploadActive = ACTIVE_WORKLOAD.some((entry) => entry.name === 'upload-roundtrip');
+  const feed = runtimeState.feedValidity;
+  const upload = runtimeState.uploadValidity;
+  const continuationRatio = feed.rankedResponses > 0
+    ? feed.continuationRequests / feed.rankedResponses
+    : 0;
+  const checks = [];
+  const addCheck = (name, passed, observed, required) => {
+    checks.push({ name, passed, observed, required });
+  };
+
+  if (feedActive) {
+    addCheck('ranked_responses_nonzero', feed.rankedResponses > 0, feed.rankedResponses, '> 0');
+    addCheck('ranked_parse_failures_zero', feed.parseFailures === 0, feed.parseFailures, '0');
+    addCheck('fresh_sessions_nonzero', feed.freshSessionResponses > 0, feed.freshSessionResponses, '> 0');
+    addCheck('cursor_continuations_nonzero', feed.continuationRequests > 0, feed.continuationRequests, '> 0');
+    addCheck(
+      'cursor_continuation_ratio',
+      continuationRatio >= options.minContinuationRatio,
+      Number(continuationRatio.toFixed(4)),
+      `>= ${options.minContinuationRatio}`,
+    );
+    addCheck(
+      'continuation_session_stable',
+      feed.continuationResponses > 0
+        && feed.stableSessionContinuations === feed.continuationResponses,
+      `${feed.stableSessionContinuations}/${feed.continuationResponses}`,
+      'all continuation responses',
+    );
+    addCheck(
+      'continuation_positions_advance',
+      feed.continuationResponses > 0
+        && feed.advancingPositionContinuations === feed.continuationResponses,
+      `${feed.advancingPositionContinuations}/${feed.continuationResponses}`,
+      'all continuation responses',
+    );
+    for (const phase of [
+      'auth', 'rate-limit', 'feed-total', 'serialization', 'algorithm',
+      'candidate-rpc', 'hydration', 'persistence', 'cursor-load', 'viewer-state',
+    ]) {
+      const samples = runtimeState.feedPhaseTimings.get(phase) ?? [];
+      addCheck(`feed_phase_${phase}`, samples.length > 0, samples.length, '> 0 samples');
+    }
+  }
+
+  if (eventsActive) {
+    addCheck('delivery_linked_event_batches_nonzero', feed.linkedEventBatches > 0, feed.linkedEventBatches, '> 0');
+    addCheck('delivery_linked_events_nonzero', feed.linkedEvents > 0, feed.linkedEvents, '> 0');
+  }
+
+  if (uploadActive) {
+    const completionRatio = upload.attempted > 0 ? upload.completed / upload.attempted : 0;
+    addCheck('upload_roundtrips_nonzero', upload.completed > 0, upload.completed, '> 0');
+    addCheck(
+      'upload_roundtrip_completion_ratio',
+      completionRatio >= 0.99,
+      Number(completionRatio.toFixed(4)),
+      '>= 0.99',
+    );
+  }
+
+  return {
+    passed: checks.every((check) => check.passed),
+    minimumContinuationRatio: options.minContinuationRatio,
+    feed: {
+      ...feed,
+      continuationRatio: Number(continuationRatio.toFixed(4)),
+    },
+    upload,
+    checks,
+  };
 }
 
 function buildReport() {
@@ -645,9 +1152,24 @@ function buildReport() {
   }
 
   const elapsedSeconds = (Date.now() - runtimeState.startedAt) / 1000;
-  return {
+  const scoredElapsedSeconds = Math.max(1, elapsedSeconds - options.warmupSeconds);
+  const operationBreakdown = Object.fromEntries(ACTIVE_WORKLOAD.map((entry) => [
+    entry.name,
+    { ...operationMetrics.get(entry.name) },
+  ]));
+  const skippedOperationRate = runtimeState.scoredScheduled > 0
+    ? runtimeState.skippedOperations / runtimeState.scoredScheduled
+    : null;
+  const report = {
+    artifactVersion: 2,
+    runId: runtimeState.runId,
+    startedAt: new Date(runtimeState.startedAt).toISOString(),
+    endedAt: new Date().toISOString(),
+    environment: runtimeState.preflight,
     label: options.label,
     targetRps: options.rps,
+    targetOperationRps: options.rps,
+    maxOperations: options.maxOperations,
     disabledFamilies: options.disabled,
     onlyFamilies: options.only,
     // Recorded in the artefact, not just the run log: a reader of this report
@@ -661,17 +1183,122 @@ function buildReport() {
       entry.name,
       Number((entry.weight / totalWeight).toFixed(4)),
     ])),
-    achievedRps: Number((totalRequests / Math.max(1, elapsedSeconds - options.warmupSeconds)).toFixed(2)),
+    achievedRps: Number((totalRequests / scoredElapsedSeconds).toFixed(2)),
+    achievedOperationRps: Number((runtimeState.completedOperations / scoredElapsedSeconds).toFixed(2)),
     durationSeconds: Number(elapsedSeconds.toFixed(1)),
     users: runtimeState.users.length,
     scheduled: runtimeState.scheduled,
+    scoredScheduled: runtimeState.scoredScheduled,
+    scheduledOperationRps: Number((runtimeState.scoredScheduled / scoredElapsedSeconds).toFixed(2)),
+    completedOperations: runtimeState.completedOperations,
+    skippedOperations: runtimeState.skippedOperations,
+    skippedOperationRate: skippedOperationRate === null
+      ? null
+      : Number(skippedOperationRate.toFixed(4)),
+    driverErrors: runtimeState.driverErrors,
+    operations: operationBreakdown,
+    maxInFlight: runtimeState.maxInFlight,
+    backpressureWaits: runtimeState.backpressureWaits,
+    backpressureMs: Number(runtimeState.backpressureMs.toFixed(1)),
     totalRequests,
     totalFailures,
     totalThrottled,
     errorRate: totalRequests ? Number((totalFailures / totalRequests).toFixed(4)) : null,
     throttleRate: totalRequests ? Number((totalThrottled / totalRequests).toFixed(4)) : null,
     families: families.sort((left, right) => right.requests - left.requests),
+    validity: buildValidityReport(),
+    feedPhaseTimings: Object.fromEntries([...runtimeState.feedPhaseTimings].map(([phase, durations]) => [
+      phase,
+      {
+        samples: durations.length,
+        p50Ms: percentile(durations, 50),
+        p95Ms: percentile(durations, 95),
+        p99Ms: percentile(durations, 99),
+      },
+    ])),
   };
+  const familyByName = new Map(families.map((family) => [family.name, family]));
+  const sloChecks = [
+    {
+      name: 'achieved_rps',
+      passed: report.achievedOperationRps >= options.rps * SLO_CONFIG.overall.minAchievedRpsRatio,
+      observed: report.achievedOperationRps,
+      required: `>= ${(options.rps * SLO_CONFIG.overall.minAchievedRpsRatio).toFixed(2)}`,
+    },
+    {
+      name: 'driver_errors',
+      passed: report.driverErrors === 0,
+      observed: report.driverErrors,
+      required: '0',
+    },
+    {
+      name: 'skipped_operation_rate',
+      passed: report.skippedOperationRate !== null
+        && report.skippedOperationRate <= SLO_CONFIG.overall.maxSkippedOperationRate,
+      observed: report.skippedOperationRate,
+      required: `<= ${SLO_CONFIG.overall.maxSkippedOperationRate}`,
+    },
+    {
+      name: 'driver_backpressure_guard',
+      passed: report.backpressureWaits === 0,
+      observed: `${report.backpressureWaits} waits / ${report.backpressureMs}ms`,
+      required: '0 waits',
+    },
+    {
+      name: 'overall_error_rate',
+      passed: report.errorRate !== null && report.errorRate <= SLO_CONFIG.overall.maxErrorRate,
+      observed: report.errorRate,
+      required: `<= ${SLO_CONFIG.overall.maxErrorRate}`,
+    },
+    {
+      name: 'overall_throttle_rate',
+      passed: report.throttleRate !== null && report.throttleRate <= SLO_CONFIG.overall.maxThrottleRate,
+      observed: report.throttleRate,
+      required: `<= ${SLO_CONFIG.overall.maxThrottleRate}`,
+    },
+  ];
+  for (const entry of ACTIVE_WORKLOAD) {
+    const family = familyByName.get(entry.name);
+    const budget = SLO_CONFIG.families[entry.name];
+    const familyOperations = operationMetrics.get(entry.name);
+    const expectedOperations = runtimeState.scoredScheduled * (entry.weight / totalWeight);
+    const minimumOperations = Math.max(
+      budget?.minRequests ?? 1,
+      Math.floor(expectedOperations * SLO_CONFIG.overall.minFamilyOperationRatio),
+    );
+    sloChecks.push({
+      name: `${entry.name}_completed_operations`,
+      passed: familyOperations.completed >= minimumOperations,
+      observed: familyOperations.completed,
+      required: `>= ${minimumOperations}`,
+    });
+    sloChecks.push({
+      name: `${entry.name}_p95_ms`,
+      passed: Boolean(family && budget && family.p95 <= budget.p95Ms),
+      observed: family?.p95 ?? null,
+      required: `<= ${budget?.p95Ms ?? 'missing budget'}`,
+    });
+    sloChecks.push({
+      name: `${entry.name}_error_rate`,
+      passed: Boolean(family
+        && family.errorRate <= (budget?.maxErrorRate ?? SLO_CONFIG.overall.maxErrorRate)),
+      observed: family?.errorRate ?? null,
+      required: `<= ${budget?.maxErrorRate ?? SLO_CONFIG.overall.maxErrorRate}`,
+    });
+    sloChecks.push({
+      name: `${entry.name}_throttle_rate`,
+      passed: Boolean(family
+        && family.throttleRate <= (budget?.maxThrottleRate ?? SLO_CONFIG.overall.maxThrottleRate)),
+      observed: family?.throttleRate ?? null,
+      required: `<= ${budget?.maxThrottleRate ?? SLO_CONFIG.overall.maxThrottleRate}`,
+    });
+  }
+  report.slo = {
+    configVersion: SLO_CONFIG.version,
+    passed: sloChecks.every((check) => check.passed),
+    checks: sloChecks,
+  };
+  return report;
 }
 
 async function main() {
@@ -679,6 +1306,8 @@ async function main() {
   console.log(`  families: ${ACTIVE_WORKLOAD.map((entry) => entry.name).join(', ')}`);
   if (options.disabled.length > 0) console.log(`  disabled: ${options.disabled.join(', ')}`);
 
+  await runEnvironmentPreflight();
+  console.log(`  build: ${runtimeState.preflight.buildId} · schema: ${SCHEMA_FINGERPRINT.slice(0, 12)}…`);
   await loadFixtureIds();
   console.log(`  fixtures: ${runtimeState.posts.length} posts, ${runtimeState.creators.length} creators`);
 
@@ -700,9 +1329,9 @@ async function main() {
   const requiredUsers = Math.ceil(options.rps * rankedShare * 600 / 60);
   console.log(`  ranked-read share ${(rankedShare * 100).toFixed(1)}% → needs ~${requiredUsers} users`);
   if (runtimeState.users.length < requiredUsers) {
-    console.warn(`  WARNING: ${runtimeState.users.length} users is below the ~${requiredUsers} needed`
+    throw new Error(`${runtimeState.users.length} users is below the ~${requiredUsers} needed`
       + ` for ${options.rps} RPS of ranked reads against a 60-per-10-minute limit.`
-      + ' Throttling will dominate and the result will not be a valid certification.');
+      + ' Refusing to run a certificate dominated by the identity rate limit.');
   }
 
   runtimeState.startedAt = Date.now();
@@ -714,7 +1343,10 @@ async function main() {
 
   const report = buildReport();
   console.log('');
-  console.log(`Achieved ${report.achievedRps} RPS · ${report.totalRequests} scored requests`);
+  console.log(`Achieved ${report.achievedOperationRps} operation RPS`
+    + ` · ${report.achievedRps} HTTP RPS · ${report.totalRequests} scored requests`);
+  console.log(`Operations: ${report.completedOperations} completed`
+    + ` · ${report.skippedOperations} skipped · ${report.driverErrors} driver errors`);
   console.log(`Error rate ${(report.errorRate * 100).toFixed(2)}% · throttled ${(report.throttleRate * 100).toFixed(2)}%`);
   console.log('');
   console.log('family'.padEnd(20) + 'reqs'.padStart(8) + 'err%'.padStart(8) + '429%'.padStart(8)
@@ -731,10 +1363,23 @@ async function main() {
     );
   }
 
+  console.log('');
+  console.log(`Validity gates: ${report.validity.passed ? 'PASS' : 'FAIL'}`);
+  for (const check of report.validity.checks) {
+    console.log(`  ${check.passed ? 'PASS' : 'FAIL'} ${check.name}: ${check.observed} (required ${check.required})`);
+  }
+
+  console.log(`SLO gates: ${report.slo.passed ? 'PASS' : 'FAIL'}`);
+  for (const check of report.slo.checks.filter((candidate) => !candidate.passed)) {
+    console.log(`  FAIL ${check.name}: ${check.observed} (required ${check.required})`);
+  }
+
   if (options.out) {
     await writeFile(options.out, JSON.stringify(report, null, 2));
     console.log(`\nReport written to ${options.out}`);
   }
+
+  if (!report.validity.passed || !report.slo.passed) process.exitCode = 1;
 }
 
 main().catch((error) => {

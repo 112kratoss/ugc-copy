@@ -5,6 +5,10 @@ import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import { CatalogError } from '@/lib/generation-model-catalog';
 import { GenerationProviderAdapterError } from '@/lib/generation-model-adapters';
 import { GenerationServiceError } from '@/lib/generation-services';
+import {
+  getHeldProviderSubmissionGenerationId,
+  getPublicGenerationStartFailure,
+} from '@/lib/generation-public-failure';
 import { GenerationStartIdempotencyError } from '@/lib/generation-start-idempotency';
 import { SourceGenerationValidationError } from '@/lib/source-generation';
 import {
@@ -99,6 +103,18 @@ function mapUnifiedGenerationError(error: unknown): UnifiedGenerationRouteResult
           : 'This model is temporarily unavailable.',
       },
       status: error.status,
+    };
+  }
+  const publicFailure = getPublicGenerationStartFailure(error);
+  if (publicFailure.code === 'submission_pending') {
+    return {
+      ok: false,
+      body: {
+        code: publicFailure.code,
+        error: publicFailure.message,
+        generationId: getHeldProviderSubmissionGenerationId(error),
+      },
+      status: 409,
     };
   }
   if (error instanceof GenerationServiceError) {

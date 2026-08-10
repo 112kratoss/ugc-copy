@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import { OptionalAuth } from '@/app/components/RouteAuthBoundary';
 import TemplateCatalogClient from '@/app/components/templates/TemplateCatalogClient';
 import type { MediaTemplate } from '@/app/components/templates/types';
-import { listActiveMediaTemplates } from '@/lib/media-template-service';
+import { listActiveMediaTemplatesPage } from '@/lib/media-template-service';
 import { createServiceClient } from '@/lib/server-helpers';
 
 export const metadata: Metadata = {
@@ -13,17 +13,17 @@ export const metadata: Metadata = {
 
 export const revalidate = 300;
 
-async function loadInitialTemplates(): Promise<MediaTemplate[] | undefined> {
+async function loadInitialTemplates(): Promise<{ templates: MediaTemplate[]; nextCursor: string | null } | undefined> {
   try {
-    const templates = await listActiveMediaTemplates(createServiceClient());
-    return templates.map((template) => {
+    const page = await listActiveMediaTemplatesPage(createServiceClient());
+    return { nextCursor: page.nextCursor, templates: page.templates.map((template) => {
       const publicTemplate = {
         ...template,
         outputKind: template.outputKind ?? 'video',
       };
       delete publicTemplate.authoring;
       return publicTemplate;
-    });
+    }) };
   } catch (error) {
     // Keep the catalog usable when the server-side bootstrap is unavailable.
     // An undefined value tells the client to retry through the public API.
@@ -33,11 +33,14 @@ async function loadInitialTemplates(): Promise<MediaTemplate[] | undefined> {
 }
 
 export default async function TemplatesPage() {
-  const initialTemplates = await loadInitialTemplates();
+  const initialPage = await loadInitialTemplates();
 
   return (
     <OptionalAuth>
-      <TemplateCatalogClient initialTemplates={initialTemplates} />
+      <TemplateCatalogClient
+        initialTemplates={initialPage?.templates}
+        initialNextCursor={initialPage?.nextCursor ?? null}
+      />
     </OptionalAuth>
   );
 }

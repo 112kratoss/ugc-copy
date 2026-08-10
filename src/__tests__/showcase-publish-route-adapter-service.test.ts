@@ -218,7 +218,7 @@ describe('showcase publish route adapter service', () => {
     });
   });
 
-  it('kicks the rendition repair after a successful publish instead of waiting for the sweep', async () => {
+  it('does not launch unleased rendition work from a publish request', async () => {
     // Publishing copies the provider's file in untranscoded. Without this kick
     // the only thing that ever builds a rendition is the hourly sweep, so a
     // burst of publishes serves full-bitrate sources for hours.
@@ -243,12 +243,10 @@ describe('showcase publish route adapter service', () => {
     });
 
     expect(response.status).toBe(200);
-    // Scheduled, not awaited -- the publish response must not wait on a transcode.
+    // The ten-minute dedicated queue worker owns repair. A publish burst must
+    // not autoscale into one ffmpeg process per request.
     expect(repairMediaForPost).not.toHaveBeenCalled();
-    expect(scheduled).toHaveLength(1);
-
-    await scheduled[0]();
-    expect(repairMediaForPost).toHaveBeenCalledWith(adminSupabase, 'post-1');
+    expect(scheduled).toHaveLength(0);
   });
 
   it('never turns a successful publish into an error when the repair fails', async () => {
@@ -273,7 +271,7 @@ describe('showcase publish route adapter service', () => {
     });
 
     expect(response.status).toBe(200);
-    await expect(scheduled[0]()).resolves.toBeUndefined();
+    expect(scheduled).toHaveLength(0);
   });
 
   it('schedules nothing when the publish produced no post', async () => {

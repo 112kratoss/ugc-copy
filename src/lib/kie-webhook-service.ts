@@ -6,12 +6,24 @@ import {
   enqueueGenerationCompletionJob,
   processGenerationCompletionJobs,
 } from '@/lib/generation-completion-jobs';
+import {
+  GENERATION_OUTPUT_IMPORT_BATCH_LIMIT,
+  processGenerationOutputImportJobs,
+} from '@/lib/generation-output-import-jobs-processor';
 import { attachGenerationProviderTask } from '@/lib/generation-services';
 import {
   extractKieWebhookTaskId,
   verifyKieWebhookAuthorization,
 } from '@/lib/kie-webhook';
 import { readBoundedWebhookBody } from '@/lib/webhook-request';
+import {
+  TEMPLATE_RUN_JOB_BATCH_LIMIT,
+  processTemplateRunJobs,
+} from '@/lib/template-run-jobs-processor';
+import {
+  WORKFLOW_RUN_STEP_BATCH_LIMIT,
+  processWorkflowRunStepJobs,
+} from '@/lib/workflow-run-jobs-processor';
 
 type RouteBody = Record<string, unknown>;
 
@@ -210,13 +222,41 @@ export async function handleKieWebhookForRoute(input: KieWebhookRouteInput): Pro
   const lockedBy = `kie-webhook:${predictionId}:${resolveNowMs(input)}`;
   input.scheduleAfter(async () => {
     try {
-      await processGenerationCompletionJobs({
+      const completion = await processGenerationCompletionJobs({
         supabase: serviceClient,
         creditSupabase: serviceClient,
         lockedBy,
         limit: 5,
         predictionId,
       });
+      const outputImports = completion.completed > 0
+        ? await processGenerationOutputImportJobs({
+            client: serviceClient,
+            lockedBy: `${lockedBy}:output-import`,
+            limit: Math.min(GENERATION_OUTPUT_IMPORT_BATCH_LIMIT, completion.completed),
+          })
+        : { completed: 0 };
+      if (completion.completed > 0 || outputImports.completed > 0) {
+        // The generation terminal trigger made the exact workflow ticket due.
+        // Drain it in the same after() window for low latency; the durable
+        // ticket and cron remain the crash-safe fallback if this work is cut.
+        await processWorkflowRunStepJobs({
+          supabase: serviceClient,
+          lockedBy: `${lockedBy}:workflow`,
+          limit: Math.min(
+            WORKFLOW_RUN_STEP_BATCH_LIMIT,
+            Math.max(1, completion.completed + outputImports.completed),
+          ),
+        });
+        await processTemplateRunJobs({
+          client: serviceClient,
+          lockedBy: `${lockedBy}:template`,
+          limit: Math.min(
+            TEMPLATE_RUN_JOB_BATCH_LIMIT,
+            Math.max(1, completion.completed + outputImports.completed),
+          ),
+        });
+      }
     } catch (error) {
       logBackendError('kie_webhook_completion_processing_failed', {
         predictionId,

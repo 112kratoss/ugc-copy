@@ -12,7 +12,7 @@ import {
   Text,
 } from '@/app/components/DesignSystem';
 
-import { listTemplates } from './api';
+import { listTemplatePage, listTemplates } from './api';
 import { TemplateCard, TemplatePageShell } from './TemplatePrimitives';
 import type { MediaTemplate } from './types';
 
@@ -38,9 +38,11 @@ function CatalogSkeleton() {
 export default function TemplateCatalogClient({
   mode = 'public',
   initialTemplates,
+  initialNextCursor = null,
 }: {
   mode?: 'public' | 'owner';
   initialTemplates?: MediaTemplate[];
+  initialNextCursor?: string | null;
 }) {
   const { session, isLoading: isAuthLoading } = useAuth();
   const hasInitialPublicTemplates = mode === 'public' && initialTemplates !== undefined;
@@ -51,6 +53,8 @@ export default function TemplateCatalogClient({
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [inputFilter, setInputFilter] = useState<InputFilter>('all');
+  const [nextCursor, setNextCursor] = useState(initialNextCursor);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
   useEffect(() => {
     if (hasInitialPublicTemplates) return;
@@ -90,6 +94,25 @@ export default function TemplateCatalogClient({
   }, [inputFilter, query, templates]);
 
   const isOwnerMode = mode === 'owner';
+
+  async function loadMore() {
+    if (!nextCursor || isLoadingMore) return;
+    setIsLoadingMore(true);
+    setError(null);
+    try {
+      const page = await listTemplatePage({ cursor: nextCursor, limit: 48 });
+      setTemplates((current) => {
+        const byId = new Map(current.map((template) => [template.id, template]));
+        for (const template of page.templates) byId.set(template.id, template);
+        return [...byId.values()];
+      });
+      setNextCursor(page.nextCursor);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not load more templates.');
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }
 
   return (
     <TemplatePageShell>
@@ -161,11 +184,20 @@ export default function TemplateCatalogClient({
           <StatusCallout tone="danger" title="Templates are unavailable" body={error} />
         ) : null}
         {!isLoading && !error && filteredTemplates.length > 0 ? (
-          <div className="ui-stagger grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {filteredTemplates.map((template) => (
-              <TemplateCard key={template.id} template={template} mode={mode} />
-            ))}
-          </div>
+          <>
+            <div className="ui-stagger grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {filteredTemplates.map((template) => (
+                <TemplateCard key={template.id} template={template} mode={mode} />
+              ))}
+            </div>
+            {!isOwnerMode && nextCursor ? (
+              <div className="mt-8 flex justify-center">
+                <Button variant="secondary" onClick={loadMore} disabled={isLoadingMore}>
+                  {isLoadingMore ? 'Loading…' : 'Load more templates'}
+                </Button>
+              </div>
+            ) : null}
+          </>
         ) : null}
         {!isLoading && !error && filteredTemplates.length === 0 ? (
           <Surface variant="soft" padding="lg" className="py-14 text-center">

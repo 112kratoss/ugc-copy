@@ -12,6 +12,14 @@ import sharp from 'sharp';
 
 const PREVIEW_MAX_SIZE = 720;
 
+/**
+ * Poster extraction should be much cheaper than a full rendition. Keep each
+ * seek bounded so a corrupt or adversarial video cannot leave ffmpeg alive for
+ * the lifetime of the serverless invocation. The one-second seek may retry at
+ * zero, so the total ffmpeg wall clock is bounded to twice this value.
+ */
+export const VIDEO_POSTER_TIMEOUT_MS = 30_000;
+
 export async function createVideoPosterBuffer(body: Blob) {
   const tempDir = await mkdtemp(path.join(/* turbopackIgnore: true */ tmpdir(), 'generation-poster-'));
   const inputPath = path.join(/* turbopackIgnore: true */ tempDir, 'input-video');
@@ -33,9 +41,9 @@ export async function createVideoPosterBufferFromFile(inputPath: string) {
 
   try {
     try {
-      await runFfmpeg(inputPath, framePath, '00:00:01.000');
+      await runVideoPosterFfmpeg(inputPath, framePath, '00:00:01.000');
     } catch {
-      await runFfmpeg(inputPath, framePath, '00:00:00.000');
+      await runVideoPosterFfmpeg(inputPath, framePath, '00:00:00.000');
     }
 
     const frame = await readFile(framePath);
@@ -54,7 +62,7 @@ export async function createVideoPosterBufferFromFile(inputPath: string) {
   }
 }
 
-async function runFfmpeg(inputPath: string, framePath: string, seekTime: string) {
+export async function runVideoPosterFfmpeg(inputPath: string, framePath: string, seekTime: string) {
   const ffmpegPath = getFfmpegPath();
   const args = [
     '-y',
@@ -72,6 +80,8 @@ async function runFfmpeg(inputPath: string, framePath: string, seekTime: string)
   await new Promise<void>((resolve, reject) => {
     const child = spawn(ffmpegPath, args, {
       stdio: ['ignore', 'ignore', 'pipe'],
+      timeout: VIDEO_POSTER_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
     });
     const stderr: Buffer[] = [];
 
@@ -79,13 +89,20 @@ async function runFfmpeg(inputPath: string, framePath: string, seekTime: string)
       stderr.push(chunk);
     });
     child.on('error', reject);
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
       if (code === 0) {
         resolve();
         return;
       }
 
-      reject(new Error(`ffmpeg exited with code ${code ?? 'unknown'}: ${Buffer.concat(stderr).toString('utf8')}`));
+      if (signal) {
+        reject(new Error(`ffmpeg terminated by ${signal} after ${VIDEO_POSTER_TIMEOUT_MS}ms.`));
+        return;
+      }
+
+      reject(new Error(
+        `ffmpeg exited with code ${code ?? 'unknown'}: ${Buffer.concat(stderr).toString('utf8').slice(-2000)}`,
+      ));
     });
   });
 }

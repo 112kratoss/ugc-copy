@@ -7,6 +7,7 @@ import type { MediaTemplate } from '@/app/components/templates/types';
 const mocks = vi.hoisted(() => ({
   useAuth: vi.fn(),
   listTemplates: vi.fn(),
+  listTemplatePage: vi.fn(),
 }));
 
 vi.mock('@/app/components/AuthProvider', () => ({
@@ -15,6 +16,7 @@ vi.mock('@/app/components/AuthProvider', () => ({
 
 vi.mock('@/app/components/templates/api', () => ({
   listTemplates: (options: unknown) => mocks.listTemplates(options),
+  listTemplatePage: (options: unknown) => mocks.listTemplatePage(options),
 }));
 
 vi.mock('@/app/components/templates/TemplatePrimitives', () => ({
@@ -54,7 +56,24 @@ describe('TemplateCatalogClient initial data', () => {
   beforeEach(() => {
     mocks.useAuth.mockReset();
     mocks.listTemplates.mockReset();
+    mocks.listTemplatePage.mockReset();
     mocks.useAuth.mockReturnValue({ session: null, isLoading: false });
+  });
+
+  it('loads the next bounded catalog page on demand', async () => {
+    mocks.listTemplatePage.mockResolvedValue({
+      templates: [template({ id: 'template-2', name: 'Second Page' })],
+      nextCursor: null,
+    });
+    render(<TemplateCatalogClient
+      initialTemplates={[template()]}
+      initialNextCursor="cursor-2"
+    />);
+
+    screen.getByRole('button', { name: 'Load more templates' }).click();
+    expect(await screen.findByText('Second Page')).toBeInTheDocument();
+    expect(mocks.listTemplatePage).toHaveBeenCalledWith({ cursor: 'cursor-2', limit: 48 });
+    expect(screen.queryByRole('button', { name: 'Load more templates' })).not.toBeInTheDocument();
   });
 
   it('renders server-provided public templates immediately without a duplicate API fetch', async () => {

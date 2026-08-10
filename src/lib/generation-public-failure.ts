@@ -34,8 +34,9 @@ const GENERATION_START_FAILURE_CODES = new Set<GenerationStartFailureCode>([
  * Non-enumerable so the flag never leaks into a serialized error payload.
  */
 const HELD_SUBMISSION_FLAG = '__magicbookletHeldSubmission';
+const HELD_SUBMISSION_GENERATION_ID = '__magicbookletHeldGenerationId';
 
-export function markHeldProviderSubmission(error: unknown): void {
+export function markHeldProviderSubmission(error: unknown, generationId?: string | null): void {
   if (!error || typeof error !== 'object') return;
   Object.defineProperty(error, HELD_SUBMISSION_FLAG, {
     value: true,
@@ -43,6 +44,22 @@ export function markHeldProviderSubmission(error: unknown): void {
     configurable: true,
     writable: true,
   });
+  if (generationId?.trim()) {
+    Object.defineProperty(error, HELD_SUBMISSION_GENERATION_ID, {
+      value: generationId.trim(),
+      enumerable: false,
+      configurable: true,
+      writable: false,
+    });
+  }
+}
+
+/** Server-only workflow recovery metadata. Non-enumerable on the originating
+ * error so API serializers never expose internal generation identifiers. */
+export function getHeldProviderSubmissionGenerationId(error: unknown): string | null {
+  if (!isHeldProviderSubmission(error) || !error || typeof error !== 'object') return null;
+  const value = (error as Record<string, unknown>)[HELD_SUBMISSION_GENERATION_ID];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function isHeldProviderSubmission(error: unknown): boolean {

@@ -39,10 +39,13 @@ describe('workflow run route adapter service', () => {
     expect(startWorkflowRunForRoute).not.toHaveBeenCalled();
   });
 
-  it('delegates parsed workflow run bodies with lazy admin-client and monitor scheduling handoffs', async () => {
+  it('delegates parsed workflow run bodies with a lazy admin client and idempotency key', async () => {
     const supabase = { kind: 'user-client' } as unknown as SupabaseClient;
     const createServiceClient = vi.fn();
-    const scheduleMonitor = vi.fn();
+    const processWorkflowRunStepJobs = vi.fn(async () => ({
+      claimed: 1, advanced: 1, deferred: 0, retried: 0, exhausted: 0, failed: 0, adopted: 0,
+    }));
+    const scheduleWorker = vi.fn((callback: () => Promise<void>) => { void callback(); });
     const body = {
       startNodeId: 'node-1',
       mode: 'branch',
@@ -61,6 +64,7 @@ describe('workflow run route adapter service', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Idempotency-Key': 'run-key-adapter-1',
           'x-request-id': 'workflow-run-adapter-success-1',
         },
         body: JSON.stringify(body),
@@ -69,7 +73,8 @@ describe('workflow run route adapter service', () => {
       dependencies: {
         authenticateRequest: vi.fn(async () => ({ userId: 'user-1', supabase })),
         createServiceClient,
-        scheduleMonitor,
+        processWorkflowRunStepJobs,
+        scheduleWorker,
         startWorkflowRunForRoute,
       },
     });
@@ -81,15 +86,19 @@ describe('workflow run route adapter service', () => {
       runId: 'run-1',
       status: 'processing',
     });
-    expect(createServiceClient).not.toHaveBeenCalled();
+    expect(scheduleWorker).toHaveBeenCalledTimes(1);
+    expect(createServiceClient).toHaveBeenCalledTimes(1);
+    expect(processWorkflowRunStepJobs).toHaveBeenCalledWith(expect.objectContaining({
+      limit: 1,
+      concurrency: 1,
+    }));
     expect(startWorkflowRunForRoute).toHaveBeenCalledWith({
       supabase,
       adminSupabase: createServiceClient,
       userId: 'user-1',
       canvasId: 'canvas-1',
       body,
-      idempotencyKeyHeader: null,
-      scheduleMonitor,
+      idempotencyKeyHeader: 'run-key-adapter-1',
     });
   });
 
@@ -282,6 +291,10 @@ describe('workflow run route adapter service', () => {
       retryAfterSeconds: 0,
       resetAt: '2026-06-23T10:10:00.000Z',
     }));
+    const processWorkflowRunStepJobs = vi.fn(async () => ({
+      claimed: 1, advanced: 1, deferred: 0, retried: 0, exhausted: 0, failed: 0, adopted: 0,
+    }));
+    const scheduleWorker = vi.fn((callback: () => Promise<void>) => { void callback(); });
 
     const response = await postWorkflowRunApprovalRouteResponse({
       request: new Request('http://localhost/api/workflow-canvases/canvas-1/runs/run-1/approval-steps/step-1/approve', {
@@ -296,6 +309,8 @@ describe('workflow run route adapter service', () => {
         approveWorkflowRunStep,
         createServiceClient: vi.fn(() => adminSupabase as never),
         enforceBackendRateLimit,
+        processWorkflowRunStepJobs,
+        scheduleWorker,
       },
     });
 
@@ -311,6 +326,11 @@ describe('workflow run route adapter service', () => {
       runId: 'run-1',
       stepId: 'step-1',
     });
+    expect(scheduleWorker).toHaveBeenCalledTimes(1);
+    expect(processWorkflowRunStepJobs).toHaveBeenCalledWith(expect.objectContaining({
+      limit: 1,
+      concurrency: 1,
+    }));
   });
 
   it('returns a conflict when a workflow checkpoint is no longer awaiting approval', async () => {

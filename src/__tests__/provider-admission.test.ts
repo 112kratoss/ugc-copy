@@ -45,6 +45,21 @@ describe('provider admission', () => {
     }));
   });
 
+  it('atomically reserves an in-flight slot when a generation already exists', async () => {
+    const { client, rpc } = clientReturning(ADMITTED);
+    await admitProviderSubmission({
+      generationId: 'e2000000-0000-4000-8000-000000000001',
+      model: 'veo-3-1',
+      client,
+    });
+
+    expect(rpc).toHaveBeenCalledWith('reserve_provider_submission', expect.objectContaining({
+      p_generation_id: 'e2000000-0000-4000-8000-000000000001',
+      p_service: 'kie',
+      p_model: 'veo-3-1',
+    }));
+  });
+
   it('rejects with a 429 the route layer already knows how to return', async () => {
     const { client } = clientReturning({
       allowed: false, reason: 'rate_limited', state: 'closed', retryAfterSeconds: 4, inFlight: 12,
@@ -177,17 +192,15 @@ describe('provider Retry-After parsing', () => {
 
 describe('provider circuit outcome recording', () => {
   it('never throws when the breaker table is unavailable', async () => {
-    // Fire-and-forget by design: the breaker is a protective heuristic, and
-    // failing to record an outcome must not fail the generation it describes.
+    // The write is awaited so serverless shutdown cannot discard it, but its
+    // failure remains isolated from the generation request.
     const rpc = vi.fn().mockRejectedValue(new Error('unreachable'));
-    expect(() => recordProviderSubmissionOutcome({ success: true, client: { rpc } })).not.toThrow();
-    await Promise.resolve();
+    await expect(recordProviderSubmissionOutcome({ success: true, client: { rpc } })).resolves.toBeUndefined();
   });
 
   it('passes a provider Retry-After through as the open duration input', async () => {
     const rpc = vi.fn().mockResolvedValue({ data: null, error: null });
-    recordProviderSubmissionOutcome({ success: false, retryAfterSeconds: 90, client: { rpc } });
-    await vi.waitFor(() => expect(rpc).toHaveBeenCalled());
+    await recordProviderSubmissionOutcome({ success: false, retryAfterSeconds: 90, client: { rpc } });
 
     expect(rpc).toHaveBeenCalledWith('record_provider_submission_outcome', expect.objectContaining({
       p_success: false,

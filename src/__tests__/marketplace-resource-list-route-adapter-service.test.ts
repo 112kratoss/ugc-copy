@@ -90,6 +90,22 @@ describe('marketplace resource list route adapter service', () => {
     expect(getMarketplaceResourceList).not.toHaveBeenCalled();
   });
 
+  it('rejects one- and two-character search queries before touching the catalog', async () => {
+    const getMarketplaceResourceList = vi.fn();
+
+    const response = await getMarketplaceResourceListRouteResponse({
+      request: createRequest('?q=ab', { 'x-request-id': 'resources-list-query-1' }),
+      dependencies: { getMarketplaceResourceList },
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    await expect(response.json()).resolves.toEqual({
+      error: 'q must be empty or at least 3 characters.',
+    });
+    expect(getMarketplaceResourceList).not.toHaveBeenCalled();
+  });
+
   it('does not advertise a next offset beyond the bounded public window', async () => {
     const response = await getMarketplaceResourceListRouteResponse({
       request: createRequest('?offset=960&limit=48'),

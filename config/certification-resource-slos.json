@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "minSamples": 5,
+  "maxSampleGapSeconds": 45,
+  "requireTrackIoTiming": true,
+  "maxPoolUsedPct": 70,
+  "maxIdleInTransactionSeconds": 5,
+  "maxLockWaiters": 0,
+  "maxUngrantedLocks": 0,
+  "maxDeadlocksDelta": 0,
+  "maxTempBytesDelta": 536870912,
+  "maxQueueAgeSeconds": {
+    "completion": 1200,
+    "workflow": 1200,
+    "template": 1200,
+    "outputImport": 1200,
+    "rendition": 3600
+  },
+  "maxFeedRetentionAgeDays": 32,
+  "requireFinalQueueDrain": true
+}

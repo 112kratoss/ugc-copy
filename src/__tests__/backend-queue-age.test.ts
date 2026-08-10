@@ -34,6 +34,7 @@ function stubClient(
       builder.select = (columns: string) => { filters.push(`select:${columns}`); return chain(); };
       builder.eq = (column: string, value: unknown) => { filters.push(`eq:${column}=${String(value)}`); return chain(); };
       builder.in = (column: string, values: string[]) => { filters.push(`in:${column}=${values.join('|')}`); return chain(); };
+      builder.or = (value: string) => { filters.push(`or:${value}`); return chain(); };
       builder.lte = (column: string, value: string) => { filters.push(`lte:${column}=${value}`); return chain(); };
       builder.order = (column: string, options: { ascending: boolean }) => {
         filters.push(`order:${column}:${options.ascending ? 'asc' : 'desc'}`);
@@ -72,9 +73,10 @@ describe('queue-age SLO derivation', () => {
 
     expect(completionEntry.sloMinutes).toBe(completions!.cadenceMinutes * QUEUE_AGE_SLO_CADENCE_MULTIPLIER);
     expect(repairEntry.sloMinutes).toBe(repair!.cadenceMinutes * QUEUE_AGE_SLO_CADENCE_MULTIPLIER);
-    // The two queues genuinely have different cadences, so this would catch a
-    // single shared threshold masquerading as a derivation.
-    expect(completionEntry.sloMinutes).not.toBe(repairEntry.sloMinutes);
+    // Both currently run every ten minutes, but each entry still derives from
+    // its owning registry job rather than from a queue-local magic number.
+    expect(completionEntry.job).toBe('generation-completions');
+    expect(repairEntry.job).toBe('media-preview-repair');
   });
 
   it('reports an empty queue as null age, never zero', () => {
@@ -127,7 +129,9 @@ describe('queue-age collection', () => {
 
     expect(health.queues.map((entry) => entry.queue)).toEqual([
       'generation_completion_jobs',
+      'generation_output_import_jobs',
       'workflow_run_step_jobs',
+      'template_run_jobs',
       'post_media_renditions',
     ]);
   });
@@ -138,10 +142,48 @@ describe('queue-age collection', () => {
     const calls: Record<string, string[]> = {};
     await collectBackendQueueAgeHealth(stubClient({}, calls), NOW);
 
-    expect(calls.generation_completion_jobs).toContain(`lte:next_attempt_at=${NOW.toISOString()}`);
-    expect(calls.workflow_run_step_jobs).toContain(`lte:next_attempt_at=${NOW.toISOString()}`);
+    expect(calls.generation_completion_jobs.some((call) => (
+      call.includes(`status.eq.pending,next_attempt_at.lte.${NOW.toISOString()}`)
+    ))).toBe(true);
+    expect(calls.workflow_run_step_jobs.some((call) => (
+      call.includes(`status.eq.pending,next_attempt_at.lte.${NOW.toISOString()}`)
+    ))).toBe(true);
+    expect(calls.template_run_jobs.some((call) => (
+      call.includes(`status.eq.pending,next_attempt_at.lte.${NOW.toISOString()}`)
+    ))).toBe(true);
     expect(calls.generation_completion_jobs).toContain('order:next_attempt_at:asc');
     expect(calls.generation_completion_jobs).toContain('limit:1');
+    expect(calls.generation_output_import_jobs).toContain('limit:1');
+  });
+
+  it('includes expired processing leases so crashed workers cannot look healthy', async () => {
+    const calls: Record<string, string[]> = {};
+    await collectBackendQueueAgeHealth(stubClient({}, calls), NOW);
+
+    const completionFilter = calls.generation_completion_jobs
+      .find((call) => call.startsWith('or:'));
+    expect(completionFilter).toContain('status.eq.processing');
+    expect(completionFilter).toContain('locked_at.lte.');
+    expect(completionFilter).not.toContain('heartbeat_at');
+
+    const outputImportFilter = calls.generation_output_import_jobs
+      .find((call) => call.startsWith('or:'));
+    expect(outputImportFilter).toContain('status.eq.processing');
+    expect(outputImportFilter).toContain('locked_at.lte.');
+
+    const workflowFilter = calls.workflow_run_step_jobs
+      .find((call) => call.startsWith('or:'));
+    expect(workflowFilter).toContain('status.eq.processing');
+    expect(workflowFilter).toContain('heartbeat_at.lte.');
+    expect(workflowFilter).toContain('heartbeat_at.is.null');
+    expect(workflowFilter).toContain('locked_at.lte.');
+
+    const templateFilter = calls.template_run_jobs
+      .find((call) => call.startsWith('or:'));
+    expect(templateFilter).toContain('status.eq.processing');
+    expect(templateFilter).toContain('heartbeat_at.lte.');
+    expect(templateFilter).toContain('heartbeat_at.is.null');
+    expect(templateFilter).toContain('locked_at.lte.');
   });
 
   it('reads the single oldest row rather than filtering a capped sample', async () => {
@@ -150,7 +192,13 @@ describe('queue-age collection', () => {
     const calls: Record<string, string[]> = {};
     await collectBackendQueueAgeHealth(stubClient({}, calls), NOW);
 
-    for (const table of ['generation_completion_jobs', 'workflow_run_step_jobs', 'post_media']) {
+    for (const table of [
+      'generation_completion_jobs',
+      'generation_output_import_jobs',
+      'workflow_run_step_jobs',
+      'template_run_jobs',
+      'post_media',
+    ]) {
       expect(calls[table]).toContain('limit:1');
     }
   });

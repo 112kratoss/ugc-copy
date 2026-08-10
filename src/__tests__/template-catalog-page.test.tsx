@@ -13,7 +13,10 @@ vi.mock('@/lib/server-helpers', () => ({
 }));
 
 vi.mock('@/lib/media-template-service', () => ({
-  listActiveMediaTemplates: (client: unknown) => mocks.listActiveMediaTemplates(client),
+  listActiveMediaTemplatesPage: async (client: unknown) => ({
+    templates: await mocks.listActiveMediaTemplates(client),
+    nextCursor: 'next-page',
+  }),
 }));
 
 vi.mock('@/app/components/RouteAuthBoundary', () => ({
@@ -81,6 +84,7 @@ describe('TemplatesPage server bootstrap', () => {
         id: 'template-1',
         outputKind: 'video',
       })],
+      initialNextCursor: 'next-page',
     });
     expect(mocks.catalogProps.mock.calls[0]?.[0]).not.toHaveProperty(
       'initialTemplates.0.authoring'
@@ -96,7 +100,10 @@ describe('TemplatesPage server bootstrap', () => {
 
     render(await TemplatesPage());
 
-    expect(mocks.catalogProps).toHaveBeenCalledWith({ initialTemplates: undefined });
+    expect(mocks.catalogProps).toHaveBeenCalledWith({
+      initialTemplates: undefined,
+      initialNextCursor: null,
+    });
     expect(consoleError).toHaveBeenCalledWith(
       'Failed to server-render the template catalog:',
       serverError

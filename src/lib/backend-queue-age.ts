@@ -25,6 +25,7 @@ export const QUEUE_AGE_SLO_CADENCE_MULTIPLIER = 2;
  * worth a look on Monday and the other is worth waking up for.
  */
 export const QUEUE_AGE_DEGRADED_CADENCE_MULTIPLIER = 4;
+const QUEUE_LEASE_TTL_SECONDS = 300;
 
 export type BackendQueueAgeStatus = 'ok' | 'warning' | 'degraded';
 
@@ -80,6 +81,7 @@ export type QueueClient = {
     select: (columns: string) => {
       in: (column: string, values: string[]) => QueueFilter;
       eq: (column: string, value: unknown) => QueueFilter;
+      or: (filters: string) => QueueFilter;
     };
   };
 };
@@ -87,6 +89,7 @@ export type QueueClient = {
 type QueueFilter = {
   lte: (column: string, value: string) => QueueFilter;
   in: (column: string, values: string[]) => QueueFilter;
+  or: (filters: string) => QueueFilter;
   order: (column: string, options: { ascending: boolean }) => QueueFilter;
   limit: (count: number) => QueueFilter;
   maybeSingle: () => PromiseLike<{ data: Record<string, unknown> | null; error: unknown }>;
@@ -108,8 +111,34 @@ const QUEUE_DEFINITIONS: QueueDefinition[] = [
       const { data, error } = await client
         .from('generation_completion_jobs')
         .select('next_attempt_at')
-        .eq('status', 'pending')
-        .lte('next_attempt_at', nowIso)
+        .or([
+          `and(status.eq.pending,next_attempt_at.lte.${nowIso})`,
+          // Completion jobs have no heartbeat column. Their claim contract
+          // reclaims processing rows solely from locked_at, so health must use
+          // that exact lease clock instead of querying a column that exists
+          // only on workflow_run_step_jobs.
+          `and(status.eq.processing,locked_at.lte.${new Date(Date.parse(nowIso) - QUEUE_LEASE_TTL_SECONDS * 1000).toISOString()})`,
+        ].join(','))
+        .order('next_attempt_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      return { data: { oldest: readTimestamp(data, 'next_attempt_at') }, error };
+    },
+  },
+  {
+    queue: 'generation_output_import_jobs',
+    job: 'generation-completions',
+    probe: async (client, nowIso) => {
+      const staleIso = new Date(
+        Date.parse(nowIso) - QUEUE_LEASE_TTL_SECONDS * 1000,
+      ).toISOString();
+      const { data, error } = await client
+        .from('generation_output_import_jobs')
+        .select('next_attempt_at')
+        .or([
+          `and(status.eq.pending,next_attempt_at.lte.${nowIso})`,
+          `and(status.eq.processing,locked_at.lte.${staleIso})`,
+        ].join(','))
         .order('next_attempt_at', { ascending: true })
         .limit(1)
         .maybeSingle();
@@ -125,8 +154,32 @@ const QUEUE_DEFINITIONS: QueueDefinition[] = [
       const { data, error } = await client
         .from('workflow_run_step_jobs')
         .select('next_attempt_at')
-        .eq('status', 'pending')
-        .lte('next_attempt_at', nowIso)
+        .or([
+          `and(status.eq.pending,next_attempt_at.lte.${nowIso})`,
+          `and(status.eq.processing,heartbeat_at.lte.${new Date(Date.parse(nowIso) - QUEUE_LEASE_TTL_SECONDS * 1000).toISOString()})`,
+          `and(status.eq.processing,heartbeat_at.is.null,locked_at.lte.${new Date(Date.parse(nowIso) - QUEUE_LEASE_TTL_SECONDS * 1000).toISOString()})`,
+        ].join(','))
+        .order('next_attempt_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      return { data: { oldest: readTimestamp(data, 'next_attempt_at') }, error };
+    },
+  },
+  {
+    queue: 'template_run_jobs',
+    job: 'workflow-run-steps',
+    probe: async (client, nowIso) => {
+      const staleIso = new Date(
+        Date.parse(nowIso) - QUEUE_LEASE_TTL_SECONDS * 1000,
+      ).toISOString();
+      const { data, error } = await client
+        .from('template_run_jobs')
+        .select('next_attempt_at')
+        .or([
+          `and(status.eq.pending,next_attempt_at.lte.${nowIso})`,
+          `and(status.eq.processing,heartbeat_at.lte.${staleIso})`,
+          `and(status.eq.processing,heartbeat_at.is.null,locked_at.lte.${staleIso})`,
+        ].join(','))
         .order('next_attempt_at', { ascending: true })
         .limit(1)
         .maybeSingle();

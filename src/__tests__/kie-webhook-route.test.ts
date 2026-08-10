@@ -6,6 +6,9 @@ const mocks = vi.hoisted(() => ({
   createServiceClient: vi.fn(),
   enqueueGenerationCompletionJob: vi.fn(),
   processGenerationCompletionJobs: vi.fn(),
+  processGenerationOutputImportJobs: vi.fn(),
+  processTemplateRunJobs: vi.fn(),
+  processWorkflowRunStepJobs: vi.fn(),
 }));
 
 vi.mock('next/server', async () => {
@@ -30,6 +33,23 @@ vi.mock('@/lib/generation-completion-jobs', async () => {
     processGenerationCompletionJobs: (...args: unknown[]) => mocks.processGenerationCompletionJobs(...args),
   };
 });
+
+vi.mock('@/lib/workflow-run-jobs-processor', () => ({
+  WORKFLOW_RUN_STEP_BATCH_LIMIT: 10,
+  processWorkflowRunStepJobs: (...args: unknown[]) => mocks.processWorkflowRunStepJobs(...args),
+}));
+
+vi.mock('@/lib/template-run-jobs-processor', () => ({
+  TEMPLATE_RUN_JOB_BATCH_LIMIT: 10,
+  processTemplateRunJobs: (...args: unknown[]) => mocks.processTemplateRunJobs(...args),
+}));
+
+vi.mock('@/lib/generation-output-import-jobs-processor', () => ({
+  GENERATION_OUTPUT_IMPORT_BATCH_LIMIT: 4,
+  processGenerationOutputImportJobs: (...args: unknown[]) => (
+    mocks.processGenerationOutputImportJobs(...args)
+  ),
+}));
 
 function createServiceClientMock() {
   const updateEq = vi.fn(() => ({ is: updateIs }));
@@ -89,6 +109,9 @@ describe('/api/webhooks/kie route', () => {
     mocks.createServiceClient.mockReset();
     mocks.enqueueGenerationCompletionJob.mockReset();
     mocks.processGenerationCompletionJobs.mockReset();
+    mocks.processGenerationOutputImportJobs.mockReset();
+    mocks.processTemplateRunJobs.mockReset();
+    mocks.processWorkflowRunStepJobs.mockReset();
     serviceClientMock = createServiceClientMock();
     mocks.createServiceClient.mockReturnValue(serviceClientMock.client);
     mocks.enqueueGenerationCompletionJob.mockResolvedValue('job-1');
@@ -98,6 +121,9 @@ describe('/api/webhooks/kie route', () => {
       retried: 0,
       failed: 0,
     });
+    mocks.processGenerationOutputImportJobs.mockResolvedValue({ claimed: 1, completed: 1 });
+    mocks.processWorkflowRunStepJobs.mockResolvedValue({ claimed: 1, advanced: 1 });
+    mocks.processTemplateRunJobs.mockResolvedValue({ claimed: 1, completed: 1 });
     vi.useFakeTimers();
     vi.setSystemTime(new Date(1782039000000));
     process.env.KIE_WEBHOOK_HMAC_KEY = 'hmac-key';
@@ -135,6 +161,21 @@ describe('/api/webhooks/kie route', () => {
       lockedBy: expect.stringMatching(/^kie-webhook:/),
       limit: 5,
       predictionId: 'task-1',
+    });
+    expect(mocks.processWorkflowRunStepJobs).toHaveBeenCalledWith({
+      supabase: serviceClientMock.client,
+      lockedBy: expect.stringMatching(/^kie-webhook:.*:workflow$/),
+      limit: 2,
+    });
+    expect(mocks.processTemplateRunJobs).toHaveBeenCalledWith({
+      client: serviceClientMock.client,
+      lockedBy: expect.stringMatching(/^kie-webhook:.*:template$/),
+      limit: 2,
+    });
+    expect(mocks.processGenerationOutputImportJobs).toHaveBeenCalledWith({
+      client: serviceClientMock.client,
+      lockedBy: expect.stringMatching(/^kie-webhook:.*:output-import$/),
+      limit: 1,
     });
   });
 

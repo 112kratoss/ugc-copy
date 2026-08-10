@@ -1,6 +1,6 @@
 # Production Deployment And Operations Runbook
 
-Last updated: 2026-08-04
+Last updated: 2026-08-10
 
 ## Production Topology
 
@@ -9,7 +9,10 @@ Last updated: 2026-08-04
 - Database, Auth, and Storage: Supabase Pro project `ildfmhozpibwiopeavfg` in `ap-south-1` (Mumbai).
 - Production branch: `main`.
 - Production domains: `magicbooklet.com` and `www.magicbooklet.com`.
-- Background scheduler: `/api/cron/backend-jobs` every ten minutes.
+- Background scheduling: `/api/cron/backend-jobs` every ten minutes for the
+  lightweight registry, plus dedicated ten-minute
+  `/api/cron/generation-completions` and `/api/cron/media-preview-repair`
+  invocations so network/FFmpeg work cannot kill the shared scheduler.
 
 `.github/workflows/production-release.yml` owns normal production releases. It runs
 only after every `Quality` job succeeds for the current `main` SHA, applies
@@ -569,10 +572,11 @@ Outbound alert *push* silently no-ops when unset: the `backend-alert-delivery` j
 
 These are known gaps, consciously left open under the no-third-party, no-paid-add-on decision:
 
-- **No dedicated client error tracking.** Review native iOS crash reports in App
-  Store Connect and Android crashes in Google Play Console. Browser exceptions
-  and handled mobile JavaScript errors depend on user reports and reproduction.
-  Backend faults are covered by `backend-health` and the watchdog.
+- **Mobile error tracking is not yet integrated.** Browser and Node runtime
+  exceptions are reported through Sentry with production source maps. Review
+  native iOS crashes in App Store Connect and Android crashes in Google Play
+  Console until the mobile SDK is added. Backend faults are also covered by
+  `backend-health` and the watchdog.
 - **No log drain.** Vercel function logs expire with the plan's retention, so post-incident reconstruction is limited to that window. When an incident happens, capture the relevant logs *before* they age out. The app emits single-line structured JSON via `backend-logger`, so copying the raw lines out of the Vercel log view preserves everything needed.
 - **No PITR until the paid provider add-on is activated.** Supabase scheduled
   physical database backups have a daily RPO; they are not continuous recovery.

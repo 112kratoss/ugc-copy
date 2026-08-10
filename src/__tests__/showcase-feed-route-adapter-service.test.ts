@@ -32,6 +32,41 @@ function createUserClient(userId: string | null = 'user-1') {
 }
 
 describe('showcase feed route adapter service', () => {
+  it('emits certification-only ranked-feed phase timings', async () => {
+    vi.stubEnv('SCALING_CERTIFICATION_TIMINGS', '1');
+    try {
+      const response = await getShowcaseFeedRouteResponse({
+        request: new Request('http://localhost/api/showcase/feed?sort=for-you'),
+        dependencies: {
+          createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+          enforceBackendRateLimit: vi.fn(),
+          getFeedNetworkKeyHash: vi.fn(() => 'network-hash'),
+          resolveFeedAnonymousIdentity: vi.fn(() => ({
+            anonymousKeyHash: 'anonymous-feed-hash',
+            cookieValueToSet: null,
+            source: 'web-cookie' as const,
+          })),
+          getShowcaseFeedPage: vi.fn(async (options) => {
+            options.onPhaseTiming?.('candidate_rpc', 12.5);
+            options.onPhaseTiming?.('persistence', 3.25);
+            return createFeedPage();
+          }) as unknown as typeof getShowcaseFeedPage,
+        },
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Server-Timing')).toContain('candidate-rpc;dur=12.50');
+      expect(response.headers.get('Server-Timing')).toContain('persistence;dur=3.25');
+      expect(response.headers.get('Server-Timing')).toContain('auth;dur=');
+      expect(response.headers.get('Server-Timing')).toContain('rate-limit;dur=');
+      expect(response.headers.get('x-scaling-certification-timing')).toBe(
+        response.headers.get('Server-Timing'),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('wraps anonymous feed requests in provider request context and keeps them publicly cacheable', async () => {
     const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
     const createUserClientDependency = vi.fn();

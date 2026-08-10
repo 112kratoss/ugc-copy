@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { createGenerationOutputPreview } from '@/lib/generation-output-preview';
@@ -78,6 +79,8 @@ type PostMediaRenditionRepairRow = {
   content_type: string | null;
   rendition_attempt_count: number | null;
 };
+
+type ClaimedRows<T> = { rows: T[]; leased: boolean };
 
 function hasRows(data: unknown): boolean {
   return Array.isArray(data) && data.length > 0;
@@ -175,10 +178,16 @@ async function downloadMedia(supabase: SupabaseClient, source: string): Promise<
   return response.blob();
 }
 
-async function repairGeneration(supabase: SupabaseClient, row: GenerationRepairRow): Promise<boolean> {
+async function repairGeneration(
+  supabase: SupabaseClient,
+  row: GenerationRepairRow,
+  leaseOwner?: string,
+): Promise<boolean> {
   const attempts = row.preview_attempt_count ?? 0;
   try {
-    await supabase.from('generations').update({ preview_status: 'processing' }).eq('id', row.id);
+    if (!leaseOwner) {
+      await supabase.from('generations').update({ preview_status: 'processing' }).eq('id', row.id);
+    }
     const body = await downloadMedia(supabase, row.output_url);
     const preview = await createGenerationOutputPreview({
       body,
@@ -189,26 +198,42 @@ async function repairGeneration(supabase: SupabaseClient, row: GenerationRepairR
     });
     if (!preview) throw new Error('Media type does not support a visual preview.');
 
-    const result = await supabase.from('generations').update({
+    let resultQuery = supabase.from('generations').update({
       preview_url: preview.previewStoragePath,
       preview_thumbhash: preview.previewThumbhash,
       preview_status: 'ready',
       preview_attempt_count: attempts + 1,
       preview_error: null,
       preview_generated_at: new Date().toISOString(),
+      preview_locked_at: null,
+      preview_locked_by: null,
     }).eq('id', row.id);
+    if (leaseOwner) resultQuery = resultQuery.eq('preview_locked_by', leaseOwner);
+    const result = await resultQuery;
     if (result.error) throw result.error;
     return true;
   } catch (error) {
-    await supabase.from('generations').update(previewFailure(error, attempts)).eq('id', row.id);
+    const failure = supabase.from('generations').update({
+      ...previewFailure(error, attempts),
+      preview_locked_at: null,
+      preview_locked_by: null,
+    }).eq('id', row.id);
+    if (leaseOwner) failure.eq('preview_locked_by', leaseOwner);
+    await failure;
     return false;
   }
 }
 
-async function repairPostMedia(supabase: SupabaseClient, row: PostMediaRepairRow): Promise<boolean> {
+async function repairPostMedia(
+  supabase: SupabaseClient,
+  row: PostMediaRepairRow,
+  leaseOwner?: string,
+): Promise<boolean> {
   const attempts = row.preview_attempt_count ?? 0;
   try {
-    await supabase.from('post_media').update({ preview_status: 'processing' }).eq('id', row.id);
+    if (!leaseOwner) {
+      await supabase.from('post_media').update({ preview_status: 'processing' }).eq('id', row.id);
+    }
     const download = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).download(row.storage_path);
     if (download.error || !download.data) {
       throw download.error ?? new Error('Stored post media could not be downloaded.');
@@ -223,7 +248,7 @@ async function repairPostMedia(supabase: SupabaseClient, row: PostMediaRepairRow
     });
     if (!preview) throw new Error('Media type does not support a visual preview.');
 
-    const result = await supabase.from('post_media').update({
+    let resultQuery = supabase.from('post_media').update({
       preview_storage_path: preview.previewStoragePath,
       preview_thumbhash: preview.previewThumbhash,
       preview_status: 'ready',
@@ -232,11 +257,21 @@ async function repairPostMedia(supabase: SupabaseClient, row: PostMediaRepairRow
       preview_generated_at: new Date().toISOString(),
       width: preview.width,
       height: preview.height,
+      preview_locked_at: null,
+      preview_locked_by: null,
     }).eq('id', row.id);
+    if (leaseOwner) resultQuery = resultQuery.eq('preview_locked_by', leaseOwner);
+    const result = await resultQuery;
     if (result.error) throw result.error;
     return true;
   } catch (error) {
-    await supabase.from('post_media').update(previewFailure(error, attempts)).eq('id', row.id);
+    const failure = supabase.from('post_media').update({
+      ...previewFailure(error, attempts),
+      preview_locked_at: null,
+      preview_locked_by: null,
+    }).eq('id', row.id);
+    if (leaseOwner) failure.eq('preview_locked_by', leaseOwner);
+    await failure;
     return false;
   }
 }
@@ -244,10 +279,13 @@ async function repairPostMedia(supabase: SupabaseClient, row: PostMediaRepairRow
 async function repairPostMediaRendition(
   supabase: SupabaseClient,
   row: PostMediaRenditionRepairRow,
+  leaseOwner?: string,
 ): Promise<boolean> {
   const attempts = row.rendition_attempt_count ?? 0;
   try {
-    await supabase.from('post_media').update({ rendition_status: 'processing' }).eq('id', row.id);
+    if (!leaseOwner) {
+      await supabase.from('post_media').update({ rendition_status: 'processing' }).eq('id', row.id);
+    }
     const download = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).download(row.storage_path);
     if (download.error || !download.data) {
       throw download.error ?? new Error('Stored post media could not be downloaded.');
@@ -264,16 +302,20 @@ async function repairPostMediaRendition(
     // 'skipped' is a correct terminal answer, not a failure — record it so the
     // row stops appearing in this sweep.
     if (rendition.status === 'skipped') {
-      const skipResult = await supabase.from('post_media').update({
+      let skipQuery = supabase.from('post_media').update({
         rendition_status: 'skipped',
         rendition_attempt_count: attempts + 1,
         rendition_error: `Rendition skipped: ${rendition.reason}.`,
+        rendition_locked_at: null,
+        rendition_locked_by: null,
       }).eq('id', row.id);
+      if (leaseOwner) skipQuery = skipQuery.eq('rendition_locked_by', leaseOwner);
+      const skipResult = await skipQuery;
       if (skipResult.error) throw skipResult.error;
       return true;
     }
 
-    const result = await supabase.from('post_media').update({
+    let resultQuery = supabase.from('post_media').update({
       rendition_storage_path: rendition.renditionStoragePath,
       rendition_status: 'ready',
       rendition_attempt_count: attempts + 1,
@@ -284,22 +326,31 @@ async function repairPostMediaRendition(
       ...(rendition.width === null ? {} : { width: rendition.width }),
       ...(rendition.height === null ? {} : { height: rendition.height }),
       ...(rendition.durationSeconds === null ? {} : { duration_seconds: rendition.durationSeconds }),
+      rendition_locked_at: null,
+      rendition_locked_by: null,
     }).eq('id', row.id);
+    if (leaseOwner) resultQuery = resultQuery.eq('rendition_locked_by', leaseOwner);
+    const result = await resultQuery;
     if (result.error) throw result.error;
     return true;
   } catch (error) {
-    await supabase.from('post_media').update({
+    const failure = supabase.from('post_media').update({
       rendition_status: 'failed',
       rendition_attempt_count: Math.min(MAX_RENDITION_ATTEMPTS, attempts + 1),
       rendition_error: error instanceof Error ? error.message.slice(0, 500) : 'Rendition generation failed.',
+      rendition_locked_at: null,
+      rendition_locked_by: null,
     }).eq('id', row.id);
+    if (leaseOwner) failure.eq('rendition_locked_by', leaseOwner);
+    await failure;
     return false;
   }
 }
 
 function isMissingRenditionAdmissionRpcError(error: { message?: string } | null): boolean {
   const message = error?.message ?? '';
-  return message.includes('list_media_rendition_repair_candidates')
+  return message.includes('claim_media_rendition_repairs')
+    || message.includes('list_media_rendition_repair_candidates')
     || message.includes('schema cache');
 }
 
@@ -316,20 +367,23 @@ async function claimRenditionRepairRows(
   supabase: SupabaseClient,
   batchSize: number,
   byteBudget: number,
-): Promise<PostMediaRenditionRepairRow[] | null> {
-  const admitted = await supabase.rpc('list_media_rendition_repair_candidates', {
+  lockedBy: string,
+): Promise<ClaimedRows<PostMediaRenditionRepairRow> | null> {
+  const claimed = await supabase.rpc('claim_media_rendition_repairs', {
     p_limit: batchSize,
     p_byte_budget: byteBudget,
+    p_locked_by: lockedBy,
+    p_lock_ttl_seconds: 300,
     p_max_attempts: MAX_RENDITION_ATTEMPTS,
   });
 
-  if (!admitted.error) {
-    return (admitted.data ?? []) as PostMediaRenditionRepairRow[];
+  if (!claimed.error) {
+    return { rows: (claimed.data ?? []) as PostMediaRenditionRepairRow[], leased: true };
   }
 
-  if (!isMissingRenditionAdmissionRpcError(admitted.error)) {
-    if (isMissingRenditionColumnError(admitted.error)) return null;
-    throw admitted.error;
+  if (!isMissingRenditionAdmissionRpcError(claimed.error)) {
+    if (isMissingRenditionColumnError(claimed.error)) return null;
+    throw claimed.error;
   }
 
   const { data, error } = await supabase
@@ -347,23 +401,29 @@ async function claimRenditionRepairRows(
     throw error;
   }
 
-  return (data ?? []) as PostMediaRenditionRepairRow[];
+  return { rows: (data ?? []) as PostMediaRenditionRepairRow[], leased: false };
 }
 
 export async function repairPostMediaRenditions(
   supabase: SupabaseClient,
-  options: { batchSize?: number; timeBudgetMs?: number; byteBudget?: number } = {},
+  options: {
+    batchSize?: number;
+    timeBudgetMs?: number;
+    byteBudget?: number;
+    lockedBy?: string;
+  } = {},
 ): Promise<RepairSummary> {
   const batchSize = Math.max(1, Math.min(options.batchSize ?? RENDITION_REPAIR_BATCH_SIZE, 50));
   const timeBudgetMs = Math.max(0, options.timeBudgetMs ?? RENDITION_REPAIR_TIME_BUDGET_MS);
   const byteBudget = Math.max(1, options.byteBudget ?? RENDITION_REPAIR_BYTE_BUDGET);
 
-  const claimed = await claimRenditionRepairRows(supabase, batchSize, byteBudget);
+  const lockedBy = options.lockedBy ?? `media-rendition:${randomUUID()}`;
+  const claimed = await claimRenditionRepairRows(supabase, batchSize, byteBudget, lockedBy);
   if (claimed === null) {
     return { attempted: 0, completed: 0, failed: 0 };
   }
 
-  const rows = claimed.filter((row) => canRepairRendition(row.rendition_attempt_count));
+  const rows = claimed.rows.filter((row) => canRepairRendition(row.rendition_attempt_count));
 
   // Sequential on purpose: concurrent ffmpeg processes would contend for the
   // same one or two cores and push the job past its duration budget.
@@ -381,7 +441,7 @@ export async function repairPostMediaRenditions(
     }
 
     attempted += 1;
-    if (await repairPostMediaRendition(supabase, row)) {
+    if (await repairPostMediaRendition(supabase, row, claimed.leased ? lockedBy : undefined)) {
       completed += 1;
     }
   }
@@ -464,50 +524,139 @@ export async function repairMediaForPost(
   return { attempted, completed, failed: attempted - completed };
 }
 
+function isMissingPreviewClaimRpc(error: { message?: string } | null): boolean {
+  const message = error?.message ?? '';
+  return message.includes('claim_generation_preview_repairs')
+    || message.includes('claim_post_media_preview_repairs')
+    || message.includes('list_media_rendition_repair_candidates')
+    || message.includes('schema cache');
+}
+
+async function claimGenerationPreviewRows(
+  supabase: SupabaseClient,
+  limit: number,
+  lockedBy: string,
+): Promise<ClaimedRows<GenerationRepairRow>> {
+  const claimed = await supabase.rpc('claim_generation_preview_repairs', {
+    p_limit: limit,
+    p_locked_by: lockedBy,
+    p_lock_ttl_seconds: 300,
+    p_max_attempts: MAX_PREVIEW_ATTEMPTS,
+  });
+  if (!claimed.error) {
+    return { rows: (claimed.data ?? []) as GenerationRepairRow[], leased: true };
+  }
+  if (!isMissingPreviewClaimRpc(claimed.error)) throw claimed.error;
+
+  const fallback = await supabase
+    .from('generations')
+    .select('id, output_url, category, preview_attempt_count')
+    .eq('status', 'succeeded')
+    .in('category', ['image', 'video'])
+    .in('preview_status', ['pending', 'failed', 'processing'])
+    .lt('preview_attempt_count', MAX_PREVIEW_ATTEMPTS)
+    .not('output_url', 'is', null)
+    .order('completed_at', { ascending: true, nullsFirst: false })
+    .limit(limit);
+  if (fallback.error) throw fallback.error;
+  return { rows: (fallback.data ?? []) as GenerationRepairRow[], leased: false };
+}
+
+async function claimPostMediaPreviewRows(
+  supabase: SupabaseClient,
+  limit: number,
+  lockedBy: string,
+): Promise<ClaimedRows<PostMediaRepairRow>> {
+  const claimed = await supabase.rpc('claim_post_media_preview_repairs', {
+    p_limit: limit,
+    p_locked_by: lockedBy,
+    p_lock_ttl_seconds: 300,
+    p_max_attempts: MAX_PREVIEW_ATTEMPTS,
+  });
+  if (!claimed.error) {
+    return { rows: (claimed.data ?? []) as PostMediaRepairRow[], leased: true };
+  }
+  if (!isMissingPreviewClaimRpc(claimed.error)) throw claimed.error;
+
+  const fallback = await supabase
+    .from('post_media')
+    .select('id, storage_path, media_kind, content_type, preview_attempt_count')
+    .in('preview_status', ['pending', 'failed', 'processing'])
+    .lt('preview_attempt_count', MAX_PREVIEW_ATTEMPTS)
+    .not('storage_path', 'is', null)
+    .order('created_at', { ascending: true })
+    .limit(limit);
+  if (fallback.error) throw fallback.error;
+  return { rows: (fallback.data ?? []) as PostMediaRepairRow[], leased: false };
+}
+
+async function mapWithConcurrency<T>(
+  rows: T[],
+  concurrency: number,
+  worker: (row: T) => Promise<boolean>,
+): Promise<boolean[]> {
+  const output = new Array<boolean>(rows.length);
+  let cursor = 0;
+  await Promise.all(Array.from(
+    { length: Math.min(Math.max(1, concurrency), Math.max(1, rows.length)) },
+    async () => {
+      for (;;) {
+        const index = cursor;
+        cursor += 1;
+        if (index >= rows.length) return;
+        output[index] = await worker(rows[index]!);
+      }
+    },
+  ));
+  return output;
+}
+
 export async function repairMediaPreviews(
   supabase: SupabaseClient,
   options: {
     batchSize?: number;
     renditionBatchSize?: number;
     invalidateFeedCache?: typeof invalidateShowcaseFeedCache;
+    lockedBy?: string;
   } = {}
 ): Promise<RepairSummary> {
   const batchSize = Math.max(1, Math.min(options.batchSize ?? 25, 500));
-  const [generationsResult, postMediaResult] = await Promise.all([
-    supabase
-      .from('generations')
-      .select('id, output_url, category, preview_attempt_count')
-      .eq('status', 'succeeded')
-      .in('category', ['image', 'video'])
-      .in('preview_status', ['pending', 'failed', 'processing'])
-      .lt('preview_attempt_count', MAX_PREVIEW_ATTEMPTS)
-      .not('output_url', 'is', null)
-      .order('completed_at', { ascending: true, nullsFirst: false })
-      .limit(batchSize),
-    supabase
-      .from('post_media')
-      .select('id, storage_path, media_kind, content_type, preview_attempt_count')
-      .in('preview_status', ['pending', 'failed', 'processing'])
-      .lt('preview_attempt_count', MAX_PREVIEW_ATTEMPTS)
-      .not('storage_path', 'is', null)
-      .order('created_at', { ascending: true })
-      .limit(batchSize),
+  const lockedBy = options.lockedBy ?? `media-preview:${randomUUID()}`;
+  const [generations, postMedia] = await Promise.all([
+    claimGenerationPreviewRows(supabase, batchSize, `${lockedBy}:generation`),
+    claimPostMediaPreviewRows(supabase, batchSize, `${lockedBy}:post`),
   ]);
-
-  if (generationsResult.error) throw generationsResult.error;
-  if (postMediaResult.error) throw postMediaResult.error;
-
-  const generations = (generationsResult.data ?? []) as GenerationRepairRow[];
-  const postMedia = (postMediaResult.data ?? []) as PostMediaRepairRow[];
-  const results = await Promise.all([
-    ...generations.filter((row) => canRepairPreview(row.preview_attempt_count)).map((row) => repairGeneration(supabase, row)),
-    ...postMedia.filter((row) => canRepairPreview(row.preview_attempt_count)).map((row) => repairPostMedia(supabase, row)),
-  ]);
+  const repairRows = [
+    ...generations.rows
+      .filter((row) => canRepairPreview(row.preview_attempt_count))
+      .map((row) => ({
+        row,
+        worker: () => repairGeneration(
+          supabase,
+          row,
+          generations.leased ? `${lockedBy}:generation` : undefined,
+        ),
+      })),
+    ...postMedia.rows
+      .filter((row) => canRepairPreview(row.preview_attempt_count))
+      .map((row) => ({
+        row,
+        worker: () => repairPostMedia(
+          supabase,
+          row,
+          postMedia.leased ? `${lockedBy}:post` : undefined,
+        ),
+      })),
+  ];
+  // Four lightweight poster/image workers at most; rendition work below stays
+  // strictly single-file so ffmpeg and temporary disk cannot fan out.
+  const results = await mapWithConcurrency(repairRows, 4, (entry) => entry.worker());
 
   // Runs after the preview pass so poster frames — which the feed needs before
   // anything can play at all — always win the shared duration budget.
   const renditions = await repairPostMediaRenditions(supabase, {
     batchSize: options.renditionBatchSize,
+    lockedBy: `${lockedBy}:rendition`,
   });
 
   const completed = results.filter(Boolean).length + renditions.completed;

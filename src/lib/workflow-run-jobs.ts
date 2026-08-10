@@ -252,7 +252,7 @@ export async function hasDueWorkflowRunStepJobs(
  * that mutated state on GET. This probe is what lets the cron adopt them.
  */
 export async function findStalledWorkflowRuns(
-  client: DueProbeClient,
+  client: RpcClient,
   options: { nowMs?: number; stallSeconds?: number; limit?: number } = {},
 ): Promise<{ id: string; canvas_id: string }[]> {
   const nowMs = options.nowMs ?? Date.now();
@@ -267,14 +267,15 @@ export async function findStalledWorkflowRuns(
     throw new Error('Workflow run stall seconds must be a positive integer');
   }
 
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('Workflow run stall probe limit must be between 1 and 100');
+  }
+
   const cutoffIso = new Date(nowMs - stallSeconds * 1000).toISOString();
-  const { data, error } = await client
-    .from('workflow_canvas_runs')
-    .select('id, canvas_id')
-    .in('status', ['processing', 'awaiting_approval'])
-    .lte('created_at', cutoffIso)
-    .order('created_at', { ascending: true })
-    .limit(limit);
+  const { data, error } = await client.rpc('list_stalled_workflow_runs_without_live_jobs', {
+    p_created_before: cutoffIso,
+    p_limit: limit,
+  });
 
   if (error) throw error;
   return (Array.isArray(data) ? data : []) as { id: string; canvas_id: string }[];

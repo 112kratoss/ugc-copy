@@ -14,6 +14,10 @@ import {
 import { slugifySourceTool } from '@/lib/source-tools';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import { MARKETPLACE_INITIAL_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
+import {
+  isValidMarketplaceSearchQuery,
+  normalizeMarketplaceSearchQuery,
+} from '@/lib/marketplace-search-policy';
 
 interface MarketplacePageProps {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -35,7 +39,8 @@ async function loadMarketplacePageData(searchParams: MarketplacePageProps['searc
     getParam(resolvedSearchParams.sort)
   );
   const tool = slugifySourceTool(getParam(resolvedSearchParams.tool)) ?? '';
-  const q = (getParam(resolvedSearchParams.q) ?? '').trim().slice(0, 80);
+  const requestedQuery = normalizeMarketplaceSearchQuery(getParam(resolvedSearchParams.q));
+  const q = isValidMarketplaceSearchQuery(requestedQuery) ? requestedQuery : '';
   const [assetPage, sourceToolOptions] = await Promise.all([
     getMarketplaceResourceList({
     filter,

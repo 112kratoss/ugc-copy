@@ -24,9 +24,9 @@ import {
 } from '@/lib/generation-timing';
 import {
   getGenerationResultUrls,
-  persistGeneratedOutputList,
   settleGenerationFailed,
 } from '@/lib/generation-services';
+import { enqueueGenerationOutputImportJob } from '@/lib/generation-output-import-jobs';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 import {
   fetchStatusPollWithRetry,
@@ -54,7 +54,7 @@ type ImageStatusGenerationRow = {
 export type ImageGenerationStatusDependencies = {
   resolveStoredMediaUrl: typeof resolveStoredMediaUrl;
   fetchWithProviderTimeout: typeof fetchWithProviderTimeout;
-  persistGeneratedOutputList: typeof persistGeneratedOutputList;
+  enqueueGenerationOutputImportJob: typeof enqueueGenerationOutputImportJob;
   settleGenerationFailed: typeof settleGenerationFailed;
   notifyGenerationStatus: typeof notifyGenerationStatus;
   withBackendJobLock: typeof withBackendJobLock;
@@ -82,7 +82,8 @@ function resolveDependencies(
   return {
     resolveStoredMediaUrl: dependencies?.resolveStoredMediaUrl ?? resolveStoredMediaUrl,
     fetchWithProviderTimeout: dependencies?.fetchWithProviderTimeout ?? fetchStatusPollWithRetry,
-    persistGeneratedOutputList: dependencies?.persistGeneratedOutputList ?? persistGeneratedOutputList,
+    enqueueGenerationOutputImportJob:
+      dependencies?.enqueueGenerationOutputImportJob ?? enqueueGenerationOutputImportJob,
     settleGenerationFailed: dependencies?.settleGenerationFailed ?? settleGenerationFailed,
     notifyGenerationStatus: dependencies?.notifyGenerationStatus ?? notifyGenerationStatus,
     withBackendJobLock: dependencies?.withBackendJobLock ?? withBackendJobLock,
@@ -269,54 +270,20 @@ export async function getImageGenerationStatusForRoute({
             throw new Error('Missing local generation record for completed image run');
           }
 
-          // Both clients must be service-role. The first one performs the
-          // Storage upload, and the generated_* buckets grant `authenticated`
-          // SELECT only -- no INSERT -- so uploading as the user fails with
-          // "new row violates row-level security policy". Every other caller
-          // (generation-status-sync) already passes its service client twice.
-          const persistedOutputs = await resolvedDependencies.persistGeneratedOutputList(
-            admin,
-            admin,
-            {
-              id: localGeneration.id,
-              user_id: userId,
-              prediction_id: predictionId,
-              category: 'image',
-              model: localGeneration.model || 'nano-banana-2',
-              workflow_settings: workflowSettings,
-            },
-            localGeneration.model === 'grok-imagine-image' ? resultUrls : [tempUrl],
-            toIsoTimestamp(timing.completedAtMs),
-          );
-
-          if (persistedOutputs.status === 'failed') {
-            status = 'failed';
-            error = 'Generation was already settled as failed.';
-            output = null;
-            return {
-              status,
-              output,
-              error,
-              timing: timingWithEstimate,
-            };
-          }
-
-          const resolvedOutputs = await resolveOutputPaths(
-            admin,
-            persistedOutputs.outputs.map((persistedOutput) => persistedOutput.storagePath),
-            resolvedDependencies,
-          );
-          await resolvedDependencies.notifyGenerationStatus(admin, {
-            id: localGeneration.id,
-            user_id: userId,
-            category: 'image',
-            model: localGeneration.model || 'nano-banana-2',
-          }, 'succeeded');
-          output = resolvedOutputs[0] || tempUrl;
+          await resolvedDependencies.enqueueGenerationOutputImportJob({
+            client: admin,
+            generationId: localGeneration.id,
+            outputUrls: localGeneration.model === 'grok-imagine-image' ? resultUrls : [tempUrl],
+            providerCompletedAt: toIsoTimestamp(timing.completedAtMs),
+          });
+          // Persistence is now owned by the durable media worker. A status GET
+          // records provider completion and returns quickly; it never downloads,
+          // uploads or transcodes hundreds of megabytes inline.
+          status = 'processing';
+          output = null;
           return {
             status,
             output,
-            ...(resolvedOutputs.length > 1 ? { outputs: resolvedOutputs } : {}),
             error,
             timing: timingWithEstimate,
           };

@@ -1,12 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  findStalledWorkflowRuns,
   getWorkflowRunStepRetryDelaySeconds,
   hasDueWorkflowRunStepJobs,
   shouldPruneWorkflowRunStepJobs,
 } from '@/lib/workflow-run-jobs';
 import {
   WORKFLOW_RUN_MAX_LIFETIME_SECONDS,
+  WORKFLOW_RUN_HEARTBEAT_INTERVAL_MS,
   adoptStalledWorkflowRuns,
   processWorkflowRunStepJobs,
 } from '@/lib/workflow-run-jobs-processor';
@@ -40,9 +42,11 @@ type FakeClientOptions = {
 
 function createFakeClient(options: FakeClientOptions = {}) {
   const rpcCalls: { fn: string; args: Record<string, unknown> }[] = [];
+  const runUpdates: Record<string, unknown>[] = [];
 
   const client = {
     rpcCalls,
+    runUpdates,
     from(table: string) {
       return {
         select(columns: string) {
@@ -55,10 +59,17 @@ function createFakeClient(options: FakeClientOptions = {}) {
           if (columns === 'id') return makeQuery({ data: options.duePending ?? [], error: null });
           throw new Error(`Unexpected select on ${table}: ${columns}`);
         },
+        update(values: Record<string, unknown>) {
+          runUpdates.push(values);
+          return makeQuery({ data: null, error: null });
+        },
       };
     },
     async rpc(fn: string, args: Record<string, unknown>) {
       rpcCalls.push({ fn, args });
+      if (fn === 'list_stalled_workflow_runs_without_live_jobs') {
+        return { data: options.stalledRuns ?? [], error: null };
+      }
       if (fn === 'claim_workflow_run_step_jobs') return { data: options.claimed ?? [], error: null };
       if (fn === 'heartbeat_workflow_run_step_job') {
         return { data: options.heartbeat ?? true, error: null };
@@ -132,11 +143,66 @@ describe('workflow run step queue client', () => {
     expect(shouldPruneWorkflowRunStepJobs(Date.parse('2026-08-09T12:02:00.000Z'))).toBe(true);
     expect(shouldPruneWorkflowRunStepJobs(Date.parse('2026-08-09T12:30:00.000Z'))).toBe(false);
   });
+
+  it('delegates stalled-run exclusion and limiting to one database RPC', async () => {
+    const client = createFakeClient({
+      stalledRuns: [{ id: 'run-orphan', canvas_id: 'canvas-1' }],
+    });
+
+    const stalled = await findStalledWorkflowRuns(client, {
+      nowMs: NOW,
+      stallSeconds: 120,
+      limit: 7,
+    });
+
+    expect(stalled).toEqual([{ id: 'run-orphan', canvas_id: 'canvas-1' }]);
+    expect(client.rpcCalls).toContainEqual({
+      fn: 'list_stalled_workflow_runs_without_live_jobs',
+      args: {
+        p_created_before: '2026-08-09T11:58:00.000Z',
+        p_limit: 7,
+      },
+    });
+  });
+
+  it('rejects an adoption page larger than the bounded database contract', async () => {
+    const client = createFakeClient();
+    await expect(findStalledWorkflowRuns(client, { nowMs: NOW, limit: 101 })).rejects.toThrow(
+      'between 1 and 100',
+    );
+    expect(client.rpcCalls).toHaveLength(0);
+  });
 });
 
 describe('workflow run step worker', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('keeps the database lease alive throughout a long branch advance', async () => {
+    vi.useFakeTimers();
+    const client = createFakeClient({ claimed: [makeJob()] });
+    let resolveAdvance!: (value: { status: string; created_at: string }) => void;
+    const advanceRun = vi.fn(() => new Promise((resolve) => {
+      resolveAdvance = resolve;
+    }));
+
+    const processing = processWorkflowRunStepJobs({
+      supabase: client as never,
+      lockedBy: 'worker-A',
+      nowMs: NOW,
+      advanceRun: advanceRun as never,
+    });
+    await vi.advanceTimersByTimeAsync(WORKFLOW_RUN_HEARTBEAT_INTERVAL_MS + 1);
+
+    expect(client.rpcCalls.filter((call) => call.fn === 'heartbeat_workflow_run_step_job')).toHaveLength(1);
+    resolveAdvance({ status: 'succeeded', created_at: new Date(NOW - 60_000).toISOString() });
+    const summary = await processing;
+    expect(summary.advanced).toBe(1);
   });
 
   it('defers a run that is still waiting instead of spending an attempt', async () => {

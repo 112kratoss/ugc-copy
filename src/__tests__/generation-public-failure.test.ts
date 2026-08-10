@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  getHeldProviderSubmissionGenerationId,
   getPublicGenerationStartFailure,
   markHeldProviderSubmission,
   requiresReplacementGenerationInput,
@@ -93,9 +94,23 @@ describe('public generation failure classification', () => {
 
     it('does not leak the hold marker into a serialized error payload', () => {
       const error = new Error('timed out');
-      markHeldProviderSubmission(error);
+      markHeldProviderSubmission(error, 'generation-held-1');
       expect(Object.keys(error)).not.toContain('__magicbookletHeldSubmission');
+      expect(Object.keys(error)).not.toContain('__magicbookletHeldGenerationId');
       expect(JSON.stringify({ ...error })).not.toMatch(/HeldSubmission/);
+      expect(JSON.stringify({ ...error })).not.toContain('generation-held-1');
+      expect(getHeldProviderSubmissionGenerationId(error)).toBe('generation-held-1');
+    });
+
+    it('only exposes recovery metadata for errors that carry the held marker', () => {
+      const error = new Error('timed out');
+      Object.defineProperty(error, '__magicbookletHeldGenerationId', {
+        value: 'generation-forged',
+      });
+
+      expect(getHeldProviderSubmissionGenerationId(error)).toBeNull();
+      markHeldProviderSubmission(error);
+      expect(getHeldProviderSubmissionGenerationId(error)).toBe('generation-forged');
     });
 
     it('ignores non-object errors rather than throwing', () => {

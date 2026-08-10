@@ -1086,6 +1086,8 @@ describe('CreateWorkflowPage', () => {
 
     expect(patchIndex).toBeGreaterThan(-1);
     expect(runIndex).toBeGreaterThan(patchIndex);
+    const runHeaders = new Headers(fetchMock.mock.calls[runIndex]?.[1]?.headers);
+    expect(runHeaders.get('Idempotency-Key')).toMatch(/^[0-9a-f-]{36}$/i);
     expect(screen.queryByText(/unsaved changes/i)).not.toBeInTheDocument();
   });
 

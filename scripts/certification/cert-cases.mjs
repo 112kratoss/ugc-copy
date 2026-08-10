@@ -4,13 +4,18 @@
  *
  *   node scripts/certification/cert-cases.mjs skew
  *   node scripts/certification/cert-cases.mjs webhook-burst --count 500
+ *   node scripts/certification/cert-cases.mjs provider-degradation
  *   node scripts/certification/cert-cases.mjs workflow-fanout --runs 20 --mode branch
  *   node scripts/certification/cert-cases.mjs cron-overlap
  *
  * webhook-burst needs a backlog of *pending* provider tasks, which only exists
  * if auto-completion is off while they are created:
- *   curl -X POST $CERT_STUB_URL/stub/config -d '{"completionDelaySeconds":0}'
- *   node scripts/certification/cert-load-test.mjs --only generation-start --rps 10 --duration 60
+ *   curl -X POST -H "x-cert-stub-secret: $CERT_STUB_SECRET" \
+ *     -H 'content-type: application/json' $CERT_STUB_URL/stub/config \
+ *     -d '{"completionDelaySeconds":0}'
+ *   node scripts/certification/cert-load-test.mjs --only generation-start --rps 0.5 --duration 120
+ * The 0.5 RPS priming rate stays below the configured per-model admission refill;
+ * a 10 RPS priming burst mostly measures deliberate provider admission rejects.
  *
  * Each case reports PASS/FAIL and exits non-zero on failure, so a certification
  * run cannot be recorded as clean while one of them is broken.
@@ -24,6 +29,7 @@ const SERVICE_ROLE_KEY = process.env.CERT_SUPABASE_SERVICE_ROLE_KEY;
 const CRON_SECRET = process.env.CERT_CRON_SECRET;
 const OPS_READ_SECRET = process.env.CERT_OPS_READ_SECRET;
 const STUB_URL = process.env.CERT_STUB_URL ?? 'http://127.0.0.1:8787';
+const STUB_SECRET = process.env.CERT_STUB_SECRET;
 
 /** See the note in cert-load-test.mjs — preview deployments sit behind SSO. */
 const BYPASS_HEADERS = process.env.CERT_BYPASS_SECRET
@@ -38,6 +44,14 @@ function appFetch(path, init = {}) {
   return fetch(new URL(path, BASE_URL), {
     ...init,
     headers: { ...BYPASS_HEADERS, ...(init.headers ?? {}) },
+  });
+}
+
+function stubFetch(path, init = {}) {
+  if (!STUB_SECRET) throw new Error('CERT_STUB_SECRET is required for provider stub control.');
+  return fetch(new URL(path, STUB_URL), {
+    ...init,
+    headers: { 'x-cert-stub-secret': STUB_SECRET, ...(init.headers ?? {}) },
   });
 }
 
@@ -90,10 +104,27 @@ async function sql(query) {
   return response.json();
 }
 
+async function execSql(query) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/cert_exec_sql`, {
+    method: 'POST',
+    headers: {
+      apikey: SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ p_sql: query }),
+  });
+  if (!response.ok) throw new Error(`SQL execution failed (${response.status}): ${await response.text()}`);
+}
+
 function report(name, passed, detail) {
   console.log(`${passed ? 'PASS' : 'FAIL'}  ${name}`);
   if (detail) console.log(`      ${detail}`);
   return passed;
+}
+
+function sqlString(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +226,11 @@ async function runSkewCase() {
       allPassed = report('backend health reports no retention policy skew', false, error.message) && allPassed;
     }
   } else {
-    console.log('SKIP  backend-health skew check — CERT_OPS_READ_SECRET not set');
+    allPassed = report(
+      'backend health reports no retention policy skew',
+      false,
+      'CERT_OPS_READ_SECRET is required; certification checks may not skip',
+    ) && allPassed;
   }
 
   // (d) Old code against new schema: drive every cron job and assert none
@@ -226,14 +261,185 @@ async function runSkewCase() {
       Array.isArray(failures) && failures.length > 0 ? JSON.stringify(failures).slice(0, 300) : 'clean',
     ) && allPassed;
   } else {
-    console.log('SKIP  cron drive — CERT_CRON_SECRET not set');
+    allPassed = report(
+      'cron drive is configured',
+      false,
+      'CERT_CRON_SECRET is required; certification checks may not skip',
+    ) && allPassed;
   }
 
   return allPassed;
 }
 
 // ---------------------------------------------------------------------------
-// Case 2 — webhook burst and completion draining
+// Case 2 — deterministic provider degradation and ambiguous acceptance
+// ---------------------------------------------------------------------------
+
+async function runProviderDegradationCase() {
+  console.log('Case: deterministic provider degradation\n');
+  if (!CRON_SECRET) return report('completion worker is configured', false, 'CERT_CRON_SECRET is required');
+
+  const user = await signIn(1);
+  const startedAt = new Date().toISOString();
+  const reset = await stubFetch('/stub/reset', { method: 'POST' });
+  if (!reset.ok) return report('provider stub reset', false, `HTTP ${reset.status}`);
+  // This is an isolated disposable branch. A previous strict-case attempt can
+  // otherwise leave the shared breaker open and make the deterministic 429 /
+  // 5xx / ambiguous sequence measure old test state instead of this run.
+  await execSql(`
+    truncate table public.provider_admission_buckets,
+      public.provider_circuit_breakers
+  `);
+
+  const creditRows = await sql(`select credits from public.profiles where id = ${sqlString(user.userId)}`);
+  const initialCredits = Number(creditRows[0]?.credits);
+  if (!Number.isFinite(initialCredits)) return report('fixture credit balance is readable', false, JSON.stringify(creditRows));
+
+  async function configure(next) {
+    const response = await stubFetch('/stub/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        completionDelaySeconds: 0,
+        rateLimitRate: 0,
+        serverErrorRate: 0,
+        nextRateLimitCount: 0,
+        nextServerErrorCount: 0,
+        nextAcceptedResetCount: 0,
+        ...next,
+      }),
+    });
+    if (!response.ok) throw new Error(`stub config failed: ${response.status}`);
+  }
+
+  async function start(key) {
+    const response = await appFetch('/api/generate-image', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${user.accessToken}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': key,
+      },
+      body: JSON.stringify({
+        model: 'nano-banana-2-lite',
+        prompt: 'A cinematic portrait with warm natural light and detailed texture',
+        settings: { aspectRatio: '1:1', resolution: '1K', outputFormat: 'jpg' },
+      }),
+    });
+    return { response, body: await response.json().catch(() => ({})) };
+  }
+
+  let allPassed = true;
+  await configure({ nextRateLimitCount: 1 });
+  const rateLimited = await start(`cert-provider-429-${randomUUID()}`);
+  allPassed = report(
+    'provider 429 is returned as retryable busy',
+    rateLimited.response.status === 429,
+    `HTTP ${rateLimited.response.status}: ${JSON.stringify(rateLimited.body).slice(0, 180)}`,
+  ) && allPassed;
+
+  await configure({ nextServerErrorCount: 1 });
+  const unavailable = await start(`cert-provider-503-${randomUUID()}`);
+  allPassed = report(
+    'provider 5xx fails the request without claiming success',
+    unavailable.response.status >= 500,
+    `HTTP ${unavailable.response.status}: ${JSON.stringify(unavailable.body).slice(0, 180)}`,
+  ) && allPassed;
+
+  const rejectedRows = await sql(`
+    select status, refunded, submission_unknown_at
+    from public.generations
+    where user_id = ${sqlString(user.userId)} and created_at >= ${sqlString(startedAt)}
+    order by created_at asc
+  `);
+  const creditsAfterRefusals = Number((await sql(
+    `select credits from public.profiles where id = ${sqlString(user.userId)}`,
+  ))[0]?.credits);
+  allPassed = report(
+    'definitive 429/5xx attempts are failed and fully refunded',
+    rejectedRows.length === 2
+      && rejectedRows.every((row) => row.status === 'failed' && row.refunded === true && !row.submission_unknown_at)
+      && creditsAfterRefusals === initialCredits,
+    `rows ${JSON.stringify(rejectedRows)}, credits ${initialCredits} -> ${creditsAfterRefusals}`,
+  ) && allPassed;
+
+  await configure({ nextAcceptedResetCount: 1 });
+  const ambiguous = await start(`cert-provider-reset-${randomUUID()}`);
+  allPassed = report(
+    'accepted-then-reset returns stable submission_pending instead of generic 500',
+    ambiguous.response.status === 409
+      && ambiguous.body?.code === 'submission_pending'
+      && typeof ambiguous.body?.generationId === 'string',
+    `HTTP ${ambiguous.response.status}: ${JSON.stringify(ambiguous.body).slice(0, 220)}`,
+  ) && allPassed;
+  if (!allPassed || !ambiguous.body?.generationId) return false;
+
+  const heldRows = await sql(`
+    select id, status, prediction_id, submission_unknown_at, refunded, cost
+    from public.generations where id = ${sqlString(ambiguous.body.generationId)}
+  `);
+  const heldCredits = Number((await sql(
+    `select credits from public.profiles where id = ${sqlString(user.userId)}`,
+  ))[0]?.credits);
+  allPassed = report(
+    'ambiguous provider work remains held and unrefunded until callback reconciliation',
+    heldRows.length === 1
+      && heldRows[0].status === 'pending'
+      && heldRows[0].prediction_id === null
+      && heldRows[0].submission_unknown_at
+      && heldRows[0].refunded !== true
+      && heldCredits === initialCredits - Number(heldRows[0].cost),
+    `row ${JSON.stringify(heldRows[0])}, credits ${initialCredits} -> ${heldCredits}`,
+  ) && allPassed;
+
+  const burstResponse = await stubFetch('/stub/burst', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ count: 1 }),
+  });
+  const burst = burstResponse.ok ? await burstResponse.json() : null;
+  allPassed = report(
+    'the accepted ambiguous task delivers exactly one late callback',
+    burstResponse.ok && burst?.fired === 1 && burst?.taskIds?.length === 1,
+    JSON.stringify(burst),
+  ) && allPassed;
+  if (!allPassed) return false;
+
+  const deadline = Date.now() + 300_000;
+  let terminal = null;
+  while (Date.now() < deadline) {
+    const worker = await appFetch('/api/cron/generation-completions', {
+      headers: { Authorization: `Bearer ${CRON_SECRET}` },
+    }).catch(() => null);
+    if (!worker || ![200, 202].includes(worker.status)) {
+      return report('generation completion worker stayed available', false, worker ? `HTTP ${worker.status}` : 'request failed');
+    }
+    const rows = await sql(`
+      select status, prediction_id, output_url, refunded
+      from public.generations where id = ${sqlString(ambiguous.body.generationId)}
+    `);
+    terminal = rows[0] ?? null;
+    if (terminal?.status === 'succeeded' && terminal.output_url) break;
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+  }
+  const finalCredits = Number((await sql(
+    `select credits from public.profiles where id = ${sqlString(user.userId)}`,
+  ))[0]?.credits);
+  allPassed = report(
+    'late callback attaches, imports output and settles once without refunding the hold',
+    terminal?.status === 'succeeded'
+      && terminal.prediction_id === burst.taskIds[0]
+      && terminal.output_url
+      && terminal.refunded !== true
+      && finalCredits === heldCredits,
+    `terminal ${JSON.stringify(terminal)}, credits ${heldCredits} -> ${finalCredits}`,
+  ) && allPassed;
+
+  return allPassed;
+}
+
+// ---------------------------------------------------------------------------
+// Case 3 — webhook burst and completion draining
 // ---------------------------------------------------------------------------
 
 /**
@@ -247,48 +453,66 @@ async function runWebhookBurstCase() {
   const drainDeadlineSeconds = Number(argValue('--drain-deadline', '300'));
   console.log(`Case: webhook burst (${count} completions)\n`);
 
-  // Prime first, or this measures nothing. Build the backlog with:
-  //   curl -X POST $CERT_STUB_URL/stub/config -d '{"completionDelaySeconds":0}'
-  //   node cert-load-test.mjs --only generation-start --rps 10 --duration 60
-  const primed = await (await fetch(`${STUB_URL}/stub/stats`)).json();
-  if (primed.tasksPending < count) {
-    console.log(`      only ${primed.tasksPending} pending provider tasks for a burst of ${count}`);
-    if (primed.tasksPending === 0) {
-      return report('burst has provider tasks to fire', false, 'no pending tasks — prime with --only generation-start');
-    }
+  if (!Number.isInteger(count) || count < 1) {
+    return report('burst count is valid', false, '--count must be a positive integer');
+  }
+  if (!CRON_SECRET) {
+    return report('completion worker is configured', false, 'CERT_CRON_SECRET is required');
   }
 
-  const before = await sql(`
-    select count(*) filter (where status = 'pending') as pending,
-           count(*) as total
-    from public.generation_completion_jobs
-  `);
-  const basePending = Number(before[0]?.pending ?? 0);
+  // Prime first, or this measures nothing. Build the backlog with:
+  //   curl -X POST -H "x-cert-stub-secret: $CERT_STUB_SECRET" \
+  //     -H 'content-type: application/json' $CERT_STUB_URL/stub/config \
+  //     -d '{"completionDelaySeconds":0}'
+  //   node cert-load-test.mjs --only generation-start --rps 0.5 --duration 120
+  const primed = await (await stubFetch('/stub/stats')).json();
+  if (primed.tasksPending < count) {
+    return report(
+      'burst has the requested provider backlog available',
+      false,
+      `requested ${count}, only ${primed.tasksPending} pending — prime with --only generation-start`,
+    );
+  }
 
   const burstStartedAt = Date.now();
-  const response = await fetch(`${STUB_URL}/stub/burst`, {
+  const response = await stubFetch('/stub/burst', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ count }),
   });
-  const { fired } = await response.json();
+  if (!response.ok) {
+    return report('provider stub accepted burst request', false, `HTTP ${response.status}`);
+  }
+  const { fired, taskIds } = await response.json();
   console.log(`      fired ${fired} callbacks in ${Date.now() - burstStartedAt}ms`);
+
+  let allPassed = report(
+    'provider stub fired the exact requested task set',
+    fired === count
+      && Array.isArray(taskIds)
+      && taskIds.length === count
+      && new Set(taskIds).size === count,
+    `requested ${count}, fired ${fired}, unique ids ${Array.isArray(taskIds) ? new Set(taskIds).size : 0}`,
+  );
+  if (!allPassed) return false;
 
   // Deltas, not absolutes. `callbacksSent`/`callbackFailures` are cumulative for
   // the stub process, which by this point in a certification run has also served
   // the ladder and two soaks — including periods when the app was timing out. On
   // the first run this scored 190 whole-session failures against a 48-callback
   // burst and reported it as a burst failure.
-  const stats = await (await fetch(`${STUB_URL}/stub/stats`)).json();
+  const stats = await (await stubFetch('/stub/stats')).json();
   const sent = stats.callbacksSent - (primed.callbacksSent ?? 0);
   const failed = stats.callbackFailures - (primed.callbackFailures ?? 0);
 
-  let allPassed = report(
+  allPassed = report(
     'every callback in this burst was accepted by the webhook path',
-    failed === 0,
+    sent === fired && failed === 0,
     `burst sent ${sent}, failures ${failed}`
     + ` (session totals ${stats.callbacksSent}/${stats.callbackFailures})`,
-  );
+  ) && allPassed;
+
+  const predictionIds = taskIds.map(sqlString).join(',');
 
   // Draining is the half that matters: accepting a burst and then never
   // working it off is the failure mode, not the HTTP response. Polled to a
@@ -298,37 +522,86 @@ async function runWebhookBurstCase() {
   let after = null;
   let drained = false;
   while (Date.now() < deadline) {
-    if (CRON_SECRET) {
-      await appFetch('/api/cron/backend-jobs', {
-        headers: { Authorization: `Bearer ${CRON_SECRET}` },
-      }).catch(() => {});
+    const cronResponse = await appFetch('/api/cron/generation-completions', {
+      headers: { Authorization: `Bearer ${CRON_SECRET}` },
+    }).catch(() => null);
+    if (!cronResponse || ![200, 202].includes(cronResponse.status)) {
+      return report(
+        'generation completion worker returned an expected success status',
+        false,
+        cronResponse ? `HTTP ${cronResponse.status}` : 'request failed',
+      );
     }
     after = await sql(`
-      select count(*) filter (where status = 'pending') as pending,
-             count(*) filter (where status = 'failed') as failed,
-             count(*) filter (where attempt_count > 1) as retried
-      from public.generation_completion_jobs
+      select
+        (select count(*) from public.generation_completion_jobs
+          where prediction_id in (${predictionIds}) and status = 'pending') as pending,
+        (select count(*) from public.generation_completion_jobs
+          where prediction_id in (${predictionIds}) and status = 'failed') as failed,
+        (select count(*) from public.generation_completion_jobs
+          where prediction_id in (${predictionIds}) and status = 'succeeded') as succeeded,
+        (select count(*) from public.generation_completion_jobs
+          where prediction_id in (${predictionIds}) and attempt_count > 1) as retried,
+        (select count(*) from public.generation_output_import_jobs j
+          join public.generations g on g.id = j.generation_id
+          where g.prediction_id in (${predictionIds}) and j.status = 'pending') as imports_pending,
+        (select count(*) from public.generation_output_import_jobs j
+          join public.generations g on g.id = j.generation_id
+          where g.prediction_id in (${predictionIds}) and j.status = 'failed') as imports_failed,
+        (select count(*) from public.generation_output_import_jobs j
+          join public.generations g on g.id = j.generation_id
+          where g.prediction_id in (${predictionIds}) and j.status = 'succeeded') as imports_succeeded,
+        (select count(*) from public.generations
+          where prediction_id in (${predictionIds})
+            and status = 'succeeded' and output_url is not null) as durable_outputs
     `);
-    // Back to the pre-burst level, not to absolute zero: the mix is still
-    // producing generations, so a steady trickle of freshly-enqueued jobs is
-    // expected and is not the burst failing to drain.
-    if (Number(after[0]?.pending ?? 0) <= basePending) { drained = true; break; }
+    if (Number(after[0]?.succeeded ?? 0) === count
+      && Number(after[0]?.pending ?? 0) === 0
+      && Number(after[0]?.failed ?? 0) === 0
+      && Number(after[0]?.imports_succeeded ?? 0) === count
+      && Number(after[0]?.imports_pending ?? 0) === 0
+      && Number(after[0]?.imports_failed ?? 0) === 0
+      && Number(after[0]?.durable_outputs ?? 0) === count) {
+      drained = true;
+      break;
+    }
     await new Promise((resolve) => setTimeout(resolve, 10_000));
   }
-  console.log(`      queue before ${JSON.stringify(before)} after ${JSON.stringify(after)}`);
+  console.log(`      burst queue state ${JSON.stringify(after)}`);
   allPassed = report(
-    `completion queue drained to its pre-burst level within ${drainDeadlineSeconds}s`,
+    `all completion and output-import jobs settled successfully within ${drainDeadlineSeconds}s`,
     drained,
     drained
-      ? `drained in ${Math.round((Date.now() - burstStartedAt) / 1000)}s to ${after?.[0]?.pending ?? 0}`
-        + ` (pre-burst ${basePending}), retried ${after?.[0]?.retried ?? 0}`
-      : `still pending: ${after?.[0]?.pending ?? 'unknown'} against pre-burst ${basePending}`,
+      ? `completion ${after?.[0]?.succeeded ?? 0}/${count}, imports ${after?.[0]?.imports_succeeded ?? 0}/${count}`
+        + ` in ${Math.round((Date.now() - burstStartedAt) / 1000)}s, retried ${after?.[0]?.retried ?? 0}`
+      : `terminal state ${JSON.stringify(after?.[0] ?? null)}`,
+  ) && allPassed;
+
+  const settled = await sql(`
+    select prediction_id, status, output_url, client_request_key_hash,
+           cost, refunded
+    from public.generations
+    where prediction_id in (${predictionIds})
+  `);
+  const uniquePredictions = new Set(settled.map((row) => row.prediction_id));
+  allPassed = report(
+    'every fired task has one successful generation with an output',
+    settled.length === count
+      && uniquePredictions.size === count
+      && settled.every((row) => (
+        row.status === 'succeeded'
+        && row.output_url
+        && row.client_request_key_hash
+        && Number(row.cost) > 0
+        && row.refunded !== true
+      )),
+    `rows ${settled.length}/${count}, unique ${uniquePredictions.size}, outputs ${settled.filter((row) => row.output_url).length}`,
   ) && allPassed;
 
   const duplicates = await sql(`
     select prediction_id, count(*) as settlements
     from public.generations
-    where prediction_id is not null
+    where prediction_id in (${predictionIds})
     group by prediction_id having count(*) > 1
   `);
   allPassed = report(
@@ -341,21 +614,20 @@ async function runWebhookBurstCase() {
 }
 
 // ---------------------------------------------------------------------------
-// Case 3 — workflow fan-out
+// Case 4 — workflow fan-out
 // ---------------------------------------------------------------------------
 
 /**
- * IMPORTANT CAVEAT, recorded deliberately.
+ * The worker owns one leased run ticket at a time, and provider-backed child
+ * generations carry deterministic `(run,node,attempt)` request hashes. The
+ * request only commits the run, complete step skeleton, and first ticket; it
+ * does not call a provider. This case therefore verifies both intra-run branch
+ * fan-out and cross-run concurrency without the old route/monitor race.
  *
- * F12's own body says to build the per-node executor "before the Phase 1
- * certification test exercises workflow fan-out, or the test will certify a
- * fan-out path that has not been restructured." That has not been done. A
- * claimed job still drives a RUN-scoped advance, not a single node.
- *
- * So this case exercises the durability properties that DID ship — idempotent
- * run creation, the durable step queue, cron recovery, and the pure GET — and
- * explicitly does NOT certify poison-node isolation or per-node retry
- * accounting. The replay assertion below is the one that protects money.
+ * Run-scoped leasing intentionally remains: dependency resolution needs a
+ * consistent graph snapshot. This case does not certify independent per-node
+ * retry accounting or poison-node isolation; those properties must remain an
+ * explicit certificate exclusion until a one-node-per-claim executor exists.
  */
 /**
  * Creates a canvas for a signed-in user and returns its id plus the node the
@@ -371,7 +643,36 @@ async function createCanvasForRun(user, startNodeType) {
   });
   if (!response.ok) throw new Error(`Canvas create failed: ${response.status} ${(await response.text()).slice(0, 200)}`);
   const payload = await response.json();
-  const canvas = payload?.canvas ?? payload;
+  let canvas = payload?.canvas ?? payload;
+
+  if (startNodeType === 'text-input') {
+    // The user-facing starter graph also contains an intentionally empty image
+    // input connected to video/motion nodes. That is useful UI scaffolding but
+    // is not a runnable fan-out fixture: dependency validation correctly marks
+    // the empty media edge blocked. Trim it to two independent provider-backed
+    // children so this case measures queue fan-out rather than invalid input.
+    const keptTypes = new Set(['text-input', 'image-generate', 'video-generate']);
+    const keptNodes = (canvas?.graph?.nodes ?? []).filter((node) => keptTypes.has(node?.type));
+    const keptNodeIds = new Set(keptNodes.map((node) => node.id));
+    const graph = {
+      ...canvas.graph,
+      nodes: keptNodes,
+      edges: (canvas?.graph?.edges ?? []).filter((edge) => (
+        keptNodeIds.has(edge?.source) && keptNodeIds.has(edge?.target)
+      )),
+    };
+    const patchResponse = await appFetch(`/api/workflow-canvases/${canvas.id}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${user.accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ graph, baseRevision: canvas.revision }),
+    });
+    if (!patchResponse.ok) {
+      throw new Error(`Canvas fixture update failed: ${patchResponse.status} ${(await patchResponse.text()).slice(0, 200)}`);
+    }
+    const patchedPayload = await patchResponse.json();
+    canvas = patchedPayload?.canvas ?? patchedPayload;
+  }
+
   const nodes = canvas?.graph?.nodes ?? [];
   const startNode = nodes.find((node) => node?.type === startNodeType);
   if (!canvas?.id || !startNode?.id) {
@@ -390,7 +691,10 @@ async function startRun(user, canvas, mode, idempotencyKey) {
     },
     body: JSON.stringify({ startNodeId: canvas.startNodeId, mode }),
   });
-  return { status: response.status, body: await response.text() };
+  const text = await response.text();
+  let payload = null;
+  try { payload = JSON.parse(text); } catch { /* validated by the caller */ }
+  return { status: response.status, text, payload };
 }
 
 async function runWorkflowFanoutCase() {
@@ -398,56 +702,87 @@ async function runWorkflowFanoutCase() {
   const mode = argValue('--mode', 'branch');
   const startNodeType = argValue('--start-node', mode === 'node' ? 'image-generate' : 'text-input');
   console.log(`Case: workflow fan-out (${runs} runs, mode=${mode}, start=${startNodeType})\n`);
-  console.log('      NOTE: run-scoped advance — poison-node isolation and per-node');
-  console.log('      retry accounting are NOT covered. See F12.\n');
+  if (!Number.isInteger(runs) || runs < 2) {
+    return report('fan-out cardinality is valid', false, '--runs must be at least 2');
+  }
+  if (mode !== 'branch') {
+    return report('fan-out mode is branch', false, 'workflow-fanout certification requires --mode branch');
+  }
+  if (!CRON_SECRET) {
+    return report('workflow workers are configured', false, 'CERT_CRON_SECRET is required');
+  }
 
   const users = await Promise.all(
-    Array.from({ length: runs }, (_, index) => signIn(index + 1)),
+    Array.from({ length: runs + 1 }, (_, index) => signIn(index + 1)),
   );
   const canvases = await Promise.all(users.map((user) => createCanvasForRun(user, startNodeType)));
 
   // --- replay: one key, three attempts, at most one run -------------------
   const idempotencyKey = randomUUID();
-  const beforeReplay = await sql('select count(*) as runs from public.workflow_canvas_runs');
-  const replayResults = [];
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    replayResults.push((await startRun(users[0], canvases[0], mode, idempotencyKey)).status);
-  }
-  console.log(`      replay statuses: ${replayResults.join(', ')}`);
-  const afterReplay = await sql('select count(*) as runs from public.workflow_canvas_runs');
-  const replayCreated = Number(afterReplay[0]?.runs ?? 0) - Number(beforeReplay[0]?.runs ?? 0);
+  const replayResults = await Promise.all(
+    Array.from({ length: 3 }, () => startRun(users[0], canvases[0], mode, idempotencyKey)),
+  );
+  const replayStatuses = replayResults.map((result) => result.status);
+  const replayRunIds = replayResults.map((result) => result.payload?.runId).filter(Boolean);
+  console.log(`      replay statuses: ${replayStatuses.join(', ')}`);
+  const replayRows = await sql(`
+    select id from public.workflow_canvas_runs
+    where canvas_id = ${sqlString(canvases[0].canvasId)}
+      and idempotency_key = ${sqlString(idempotencyKey)}
+  `);
 
   let allPassed = report(
-    'replayed idempotency key created at most one run',
-    replayCreated <= 1 && replayResults.every((status) => status < 500),
-    `runs created: ${replayCreated}, statuses ${replayResults.join('/')}`,
+    'three replay attempts return one durable run identity',
+    replayStatuses.every((status) => status >= 200 && status < 300)
+      && replayRunIds.length === 3
+      && new Set(replayRunIds).size === 1
+      && replayRows.length === 1
+      && replayRows[0]?.id === replayRunIds[0],
+    `DB rows ${replayRows.length}, response ids ${replayRunIds.join('/') || 'none'}, statuses ${replayStatuses.join('/')}`,
   );
 
   // --- fan-out: N concurrent runs, distinct keys ---------------------------
-  const beforeFanout = await sql('select count(*) as runs from public.workflow_canvas_runs');
   const fanoutStartedAt = Date.now();
-  const fanout = await Promise.all(users.slice(1).map((user, index) =>
+  const fanout = await Promise.all(users.slice(1, runs + 1).map((user, index) =>
     startRun(user, canvases[index + 1], mode, randomUUID())));
   const statuses = fanout.map((result) => result.status);
-  const serverErrors = statuses.filter((status) => status >= 500);
+  const runIds = fanout.map((result) => result.payload?.runId).filter(Boolean);
+  const nonSuccesses = statuses.filter((status) => status < 200 || status >= 300);
   console.log(`      ${fanout.length} concurrent starts in ${Date.now() - fanoutStartedAt}ms`
     + ` · statuses ${[...new Set(statuses)].sort().join(', ')}`);
-  if (serverErrors.length > 0) {
-    console.log(`      first 5xx body: ${fanout.find((r) => r.status >= 500)?.body.slice(0, 200)}`);
+  if (nonSuccesses.length > 0) {
+    console.log(`      first failure body: ${fanout.find((r) => r.status < 200 || r.status >= 300)?.text.slice(0, 200)}`);
   }
   allPassed = report(
-    'concurrent run starts produce no 5xx',
-    serverErrors.length === 0,
-    `${serverErrors.length}/${statuses.length} were 5xx`,
+    'every concurrent run start returns 2xx with a unique run id',
+    fanout.length === runs
+      && nonSuccesses.length === 0
+      && runIds.length === runs
+      && new Set(runIds).size === runs,
+    `${nonSuccesses.length}/${statuses.length} non-2xx; ${new Set(runIds).size}/${runs} unique run ids`,
   ) && allPassed;
+  if (!allPassed) return false;
+  const replayRunId = replayRunIds[0];
 
-  const afterFanout = await sql('select count(*) as runs from public.workflow_canvas_runs');
-  const fanoutCreated = Number(afterFanout[0]?.runs ?? 0) - Number(beforeFanout[0]?.runs ?? 0);
-  const accepted = statuses.filter((status) => status < 400).length;
+  if (runIds.length !== runs) return false;
+  const allRunIds = [replayRunId, ...runIds];
+  const expectedRunCount = runs + 1;
+  const runIdSql = allRunIds.map(sqlString).join(',');
+  const durableRows = await sql(`
+    select r.id,
+           count(distinct s.node_id) as steps,
+           count(distinct j.id) as jobs
+    from public.workflow_canvas_runs r
+    left join public.workflow_canvas_run_steps s on s.run_id = r.id
+    left join public.workflow_run_step_jobs j on j.run_id = r.id
+    where r.id in (${runIdSql})
+    group by r.id
+  `);
   allPassed = report(
-    'every accepted start created exactly one run',
-    fanoutCreated === accepted,
-    `accepted ${accepted}, runs created ${fanoutCreated}`,
+    'every run atomically owns a complete branch skeleton and queue ticket',
+    durableRows.length === expectedRunCount
+      && durableRows.every((row) => Number(row.steps) >= 3 && Number(row.jobs) >= 1),
+    `rows ${durableRows.length}/${expectedRunCount}; minimum steps ${Math.min(...durableRows.map((row) => Number(row.steps) || 0))}`,
   ) && allPassed;
 
   // --- durability: the queue must own the work, not the request ------------
@@ -456,7 +791,8 @@ async function runWorkflowFanoutCase() {
   const orphaned = await sql(`
     select count(*) as orphaned
     from public.workflow_canvas_runs r
-    where r.status = 'processing'
+    where r.id in (${runIdSql})
+      and r.status = 'processing'
       and not exists (
         select 1 from public.workflow_run_step_jobs j where j.run_id = r.id
       )
@@ -467,52 +803,140 @@ async function runWorkflowFanoutCase() {
     `orphaned: ${orphaned[0]?.orphaned ?? 0}`,
   ) && allPassed;
 
-  // Cron recovery is the other half that shipped: drive the dispatcher and
-  // assert it advances the queue rather than leaving it where the request left it.
-  if (CRON_SECRET) {
-    for (let pass = 0; pass < 3; pass += 1) {
-      await appFetch('/api/cron/backend-jobs', {
+  // Drive the leased worker until every branch has launched both generation
+  // children, then complete exactly those provider tasks.
+  const deadline = Date.now() + Number(argValue('--drain-deadline', '300')) * 1000;
+  let generationRows = [];
+  while (Date.now() < deadline) {
+    const worker = await appFetch('/api/cron/workflow-run-steps', {
+      headers: { Authorization: `Bearer ${CRON_SECRET}` },
+    });
+    if (![200, 202].includes(worker.status)) {
+      return report('workflow worker returned an expected success status', false, `HTTP ${worker.status}`);
+    }
+    generationRows = await sql(`
+      select s.run_id, s.node_id, g.id, g.prediction_id, g.status,
+             g.output_url, g.client_request_key_hash
+      from public.workflow_canvas_run_steps s
+      join public.generations g on g.id = s.generation_id
+      where s.run_id in (${runIdSql})
+    `);
+    const counts = new Map(allRunIds.map((id) => [id, 0]));
+    for (const row of generationRows) counts.set(row.run_id, (counts.get(row.run_id) ?? 0) + 1);
+    if ([...counts.values()].every((countValue) => countValue >= 2)) break;
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+
+  const providerTaskIds = generationRows.map((row) => row.prediction_id).filter(Boolean);
+  allPassed = report(
+    'every branch launched at least two provider-backed child nodes',
+    providerTaskIds.length >= expectedRunCount * 2
+      && allRunIds.every((runId) => generationRows.filter((row) => row.run_id === runId).length >= 2),
+    `provider tasks ${providerTaskIds.length}, expected at least ${expectedRunCount * 2}`,
+  ) && allPassed;
+  if (!allPassed) return false;
+
+  const stubBefore = await (await stubFetch('/stub/stats')).json();
+  const burstResponse = await stubFetch('/stub/burst', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskIds: providerTaskIds }),
+  });
+  const burst = burstResponse.ok ? await burstResponse.json() : null;
+  const stubAfter = await (await stubFetch('/stub/stats')).json();
+  allPassed = report(
+    'workflow callbacks fired exactly once for the captured task set',
+    burstResponse.ok
+      && burst?.fired === providerTaskIds.length
+      && Array.isArray(burst?.taskIds)
+      && new Set(burst.taskIds).size === providerTaskIds.length
+      && stubAfter.callbacksSent - stubBefore.callbacksSent === providerTaskIds.length
+      && stubAfter.callbackFailures - stubBefore.callbackFailures === 0,
+    `captured ${providerTaskIds.length}, fired ${burst?.fired ?? 0}, callback failures ${stubAfter.callbackFailures - stubBefore.callbackFailures}`,
+  ) && allPassed;
+
+  const terminalDeadline = Date.now() + Number(argValue('--drain-deadline', '300')) * 1000;
+  let terminalRuns = [];
+  while (allPassed && Date.now() < terminalDeadline) {
+    for (const route of ['generation-completions', 'workflow-run-steps']) {
+      const response = await appFetch(`/api/cron/${route}`, {
         headers: { Authorization: `Bearer ${CRON_SECRET}` },
       });
-      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      if (![200, 202].includes(response.status)) {
+        return report(`${route} returned an expected success status`, false, `HTTP ${response.status}`);
+      }
     }
-    const queue = await sql(`
-      select status, count(*) as jobs
-      from public.workflow_run_step_jobs
-      group by status order by status
+    terminalRuns = await sql(`
+      select id, status from public.workflow_canvas_runs where id in (${runIdSql})
     `);
-    console.log(`      step queue after cron: ${JSON.stringify(queue)}`);
-    const failedJobs = await sql(`
-      select count(*) as failed from public.workflow_run_step_jobs
-      where status = 'failed' and updated_at > now() - interval '10 minutes'
-    `);
-    allPassed = report(
-      'cron advanced the step queue without failing jobs',
-      Number(failedJobs[0]?.failed ?? 0) === 0,
-      `failed step jobs: ${failedJobs[0]?.failed ?? 0}`,
-    ) && allPassed;
-  } else {
-    console.log('SKIP  cron recovery — CERT_CRON_SECRET not set');
+    if (terminalRuns.length === expectedRunCount && terminalRuns.every((row) => row.status === 'succeeded')) break;
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
+  allPassed = report(
+    'every fan-out run reached succeeded',
+    terminalRuns.length === expectedRunCount && terminalRuns.every((row) => row.status === 'succeeded'),
+    JSON.stringify(terminalRuns).slice(0, 300),
+  ) && allPassed;
+
+  const finalGenerations = await sql(`
+    select g.prediction_id, g.status, g.output_url, g.client_request_key_hash,
+           g.cost, g.refunded
+    from public.workflow_canvas_run_steps s
+    join public.generations g on g.id = s.generation_id
+    where s.run_id in (${runIdSql})
+  `);
+  const duplicateKeys = new Map();
+  for (const row of finalGenerations) {
+    if (!row.client_request_key_hash) continue;
+    duplicateKeys.set(row.client_request_key_hash, (duplicateKeys.get(row.client_request_key_hash) ?? 0) + 1);
+  }
+  allPassed = report(
+    'workflow generations settled once with outputs and unique deterministic keys',
+    finalGenerations.length === providerTaskIds.length
+      && finalGenerations.every((row) => (
+        row.status === 'succeeded'
+        && row.output_url
+        && row.client_request_key_hash
+        && Number(row.cost) > 0
+        && row.refunded !== true
+      ))
+      && [...duplicateKeys.values()].every((value) => value === 1),
+    `terminal outputs ${finalGenerations.filter((row) => row.output_url).length}/${providerTaskIds.length}; duplicate keys ${[...duplicateKeys.values()].filter((value) => value > 1).length}`,
+  ) && allPassed;
+
+  const failedJobs = await sql(`
+    select count(*) as failed from public.workflow_run_step_jobs
+    where run_id in (${runIdSql}) and status = 'failed'
+  `);
+  allPassed = report(
+    'workflow queue drained without failed tickets',
+    Number(failedJobs[0]?.failed ?? 0) === 0,
+    `failed step jobs: ${failedJobs[0]?.failed ?? 0}`,
+  ) && allPassed;
 
   return allPassed;
 }
 
 // ---------------------------------------------------------------------------
-// Case 4 — cron overlap with retention cleanup
+// Case 5 — cron overlap with retention cleanup
 // ---------------------------------------------------------------------------
 
 async function runCronOverlapCase() {
   console.log('Case: cron overlap with retention cleanup\n');
   if (!CRON_SECRET) {
-    console.log('SKIP  CERT_CRON_SECRET not set');
-    return true;
+    return report('cron secret is configured', false, 'CERT_CRON_SECRET is required');
   }
 
   // Fire the overlapping jobs concurrently — the shared-fate condition F14
   // split apart. Under a job lock, a second concurrent invocation should be
   // refused cleanly rather than both running or both failing.
-  const jobs = ['feed-maintenance', 'backend-jobs', 'operational-data-retention'];
+  const jobs = [
+    'backend-jobs',
+    'generation-completions',
+    'media-preview-repair',
+    'workflow-run-steps',
+    'operational-data-retention',
+  ];
   const responses = await Promise.all(jobs.flatMap((job) => [
     appFetch(`/api/cron/${job}`, { headers: { Authorization: `Bearer ${CRON_SECRET}` } }),
     appFetch(`/api/cron/${job}`, { headers: { Authorization: `Bearer ${CRON_SECRET}` } }),
@@ -520,9 +944,13 @@ async function runCronOverlapCase() {
 
   const statuses = responses.map((response) => response.status);
   console.log(`      statuses: ${statuses.join(', ')}`);
-  const noServerErrors = statuses.every((status) => status < 500);
+  const expectedStatuses = statuses.every((status) => status === 200 || status === 202);
 
-  let allPassed = report('concurrent cron invocations produce no 5xx', noServerErrors, statuses.join(', '));
+  let allPassed = report(
+    'every concurrent cron invocation returns only an expected success status',
+    expectedStatuses,
+    statuses.join(', '),
+  );
 
   const lag = await sql('select * from public.get_feed_retention_lag()');
   console.log(`      retention lag: ${JSON.stringify(lag).slice(0, 200)}`);
@@ -537,11 +965,41 @@ async function runCronOverlapCase() {
     Array.isArray(failures) && failures.length > 0 ? JSON.stringify(failures).slice(0, 300) : 'clean',
   ) && allPassed;
 
+  const dedicated = await sql(`
+    select job_name, count(*) as runs,
+           count(*) filter (where status in ('succeeded', 'skipped')) as clean,
+           count(*) filter (where status = 'skipped') as skipped
+    from public.backend_job_runs
+    where started_at > now() - interval '5 minutes'
+      and job_name in (
+        'generation-completions', 'media-preview-repair',
+        'workflow-run-steps', 'operational-data-retention'
+      )
+    group by job_name
+  `);
+  const expectedJobs = new Set([
+    'generation-completions',
+    'media-preview-repair',
+    'workflow-run-steps',
+    'operational-data-retention',
+  ]);
+  const observedJobs = new Map(dedicated.map((row) => [row.job_name, row]));
+  allPassed = report(
+    'every dedicated topology route recorded a clean managed-job outcome',
+    [...expectedJobs].every((job) => (
+      Number(observedJobs.get(job)?.runs ?? 0) >= 1
+      && Number(observedJobs.get(job)?.clean ?? 0) === Number(observedJobs.get(job)?.runs ?? 0)
+      && Number(observedJobs.get(job)?.skipped ?? 0) >= 1
+    )),
+    JSON.stringify(dedicated).slice(0, 400),
+  ) && allPassed;
+
   return allPassed;
 }
 
 const CASES = {
   skew: runSkewCase,
+  'provider-degradation': runProviderDegradationCase,
   'webhook-burst': runWebhookBurstCase,
   'workflow-fanout': runWorkflowFanoutCase,
   'cron-overlap': runCronOverlapCase,

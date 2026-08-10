@@ -70,6 +70,9 @@ interface OwnerPost {
     archivedAt: string | null;
     mediaUrl: string | null;
     mediaKind: 'image' | 'video' | null;
+    mediaItems?: Array<{
+      renditionUrl?: string | null;
+    }>;
     title: string;
     description: string;
     prompt: string;
@@ -2355,7 +2358,7 @@ export default function CreationsPage() {
                                             <div className="relative overflow-hidden rounded-[22px] border border-white/8 bg-black/60">
                                                 {post.mediaUrl ? (
                                                     post.mediaKind === 'video' ? (
-                                                        <video src={post.mediaUrl} controls playsInline preload="metadata" className="aspect-[4/5] w-full object-cover" />
+                                                        <video src={post.mediaItems?.[0]?.renditionUrl ?? post.mediaUrl} controls playsInline preload="metadata" className="aspect-[4/5] w-full object-cover" />
                                                     ) : (
                                                         // eslint-disable-next-line @next/next/no-img-element
                                                         <img src={post.mediaUrl} alt={post.title} loading="lazy" decoding="async" className="aspect-[4/5] w-full object-cover" />

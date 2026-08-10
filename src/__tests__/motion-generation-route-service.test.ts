@@ -3,6 +3,7 @@ import type { Mock } from 'vitest';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import { CatalogError } from '@/lib/generation-model-catalog';
+import { markHeldProviderSubmission } from '@/lib/generation-public-failure';
 
 const mocks = vi.hoisted(() => ({
   getMotionGenerationStatusForRoute: vi.fn(),
@@ -61,6 +62,27 @@ describe('motion generation route service', () => {
     });
     createAdminSupabase = vi.fn(() => adminSupabase);
     createUserSupabase = vi.fn(() => createUserSupabaseMock());
+  });
+
+  it('returns submission_pending with the held generation id after an ambiguous provider accept', async () => {
+    const ambiguous = new TypeError('fetch failed');
+    markHeldProviderSubmission(ambiguous, 'generation-held-motion-1');
+    mocks.startMotionGenerationForRoute.mockRejectedValueOnce(ambiguous);
+    const { postMotionGenerationForRoute } = await import('@/lib/motion-generation-route-service');
+
+    const result = await postMotionGenerationForRoute({
+      createAdminSupabase,
+      createUserSupabase,
+      kieApiKey: 'preview-provider-key',
+      readRequestBody: async () => ({ model: 'kling-2.6/motion-control', prompt: 'portrait' }),
+      request: new Request('http://localhost/api/generate'),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 409,
+      body: { code: 'submission_pending', generationId: 'generation-held-motion-1' },
+    });
   });
 
   it('authenticates motion starts before parsing request JSON or creating privileged clients', async () => {

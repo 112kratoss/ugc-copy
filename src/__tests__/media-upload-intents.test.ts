@@ -34,8 +34,9 @@ function updateClientDouble(error: { message?: string } | null = null) {
     return chain;
   });
   const from = vi.fn(() => ({ update }));
+  const rpc = vi.fn(async () => ({ data: true, error: null }));
 
-  return { client: { from }, from, update, filters, values };
+  return { client: { from, rpc }, from, rpc, update, filters, values };
 }
 
 describe('normalizeUploadIntentPath', () => {
@@ -136,6 +137,10 @@ describe('markMediaUploadIntentsConsumed', () => {
     });
     expect(retained.values[0]).not.toHaveProperty('storage_cleared_at');
     expect(retained.values[0].consumed_by).toBe('generation_input');
+    expect(retained.rpc).toHaveBeenCalledWith('release_upload_byte_reservation', {
+      p_bucket_id: 'uploads',
+      p_storage_path: 'user-1/a.jpg',
+    });
   });
 
   it('never overwrites an earlier claim', async () => {
@@ -194,5 +199,9 @@ describe('markMediaUploadIntentsCleared', () => {
     expect(client.values[0]).not.toHaveProperty('consumed_at');
     expect(client.values[0]).not.toHaveProperty('consumed_by');
     expect(client.filters).toContainEqual({ method: 'is', column: 'storage_cleared_at', value: null });
+    expect(client.rpc).toHaveBeenCalledWith('release_upload_byte_reservation', {
+      p_bucket_id: 'uploads',
+      p_storage_path: 'user-1/a.jpg',
+    });
   });
 });

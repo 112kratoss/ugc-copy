@@ -82,7 +82,6 @@ describe('startWorkflowRunForRoute', () => {
     const canvas = createCanvasClient();
     const adminFactory = vi.fn(() => createAdminClient().client);
     const executeRun = vi.fn();
-    const scheduleMonitor = vi.fn();
 
     const result = await startWorkflowRunForRoute({
       supabase: canvas.client,
@@ -91,7 +90,6 @@ describe('startWorkflowRunForRoute', () => {
       canvasId: 'canvas-1',
       body: { mode: 'branch' },
       executeRun,
-      scheduleMonitor,
     });
 
     expect(result).toEqual({
@@ -102,7 +100,6 @@ describe('startWorkflowRunForRoute', () => {
     expect(adminFactory).not.toHaveBeenCalled();
     expect(canvas.from).not.toHaveBeenCalled();
     expect(executeRun).not.toHaveBeenCalled();
-    expect(scheduleMonitor).not.toHaveBeenCalled();
   });
 
   it('rate limits workflow starts before loading the canvas or starting runner work', async () => {
@@ -116,8 +113,8 @@ describe('startWorkflowRunForRoute', () => {
       userId: 'user-1',
       canvasId: 'canvas-1',
       body: { startNodeId: 'node-1' },
+      idempotencyKeyHeader: 'run-key-1',
       executeRun,
-      scheduleMonitor: vi.fn(),
     });
 
     expect(result).toMatchObject({
@@ -150,8 +147,8 @@ describe('startWorkflowRunForRoute', () => {
       userId: 'user-1',
       canvasId: 'missing-canvas',
       body: { startNodeId: 'node-1' },
+      idempotencyKeyHeader: 'run-key-2',
       executeRun,
-      scheduleMonitor: vi.fn(),
     });
 
     expect(result).toEqual({
@@ -163,7 +160,7 @@ describe('startWorkflowRunForRoute', () => {
     expect(executeRun).not.toHaveBeenCalled();
   });
 
-  it('executes normalized workflow runs and schedules monitoring while processing', async () => {
+  it('executes normalized keyed workflow runs without starting a request-local monitor', async () => {
     const graph = normalizeWorkflowGraph(createStarterGraph());
     const canvas = createCanvasClient({ canvas: { id: 'canvas-1', graph } });
     const admin = createAdminClient();
@@ -171,11 +168,6 @@ describe('startWorkflowRunForRoute', () => {
       runId: 'run-1',
       status: 'processing' as const,
     }));
-    const monitorRun = vi.fn(async () => null);
-    const scheduleMonitor = vi.fn((job: () => Promise<void>) => {
-      void job();
-    });
-
     const result = await startWorkflowRunForRoute({
       supabase: canvas.client,
       adminSupabase: admin.client,
@@ -186,9 +178,8 @@ describe('startWorkflowRunForRoute', () => {
         mode: 'node',
         catalogRevision: 'catalog-rev-1',
       },
+      idempotencyKeyHeader: 'run-key-3',
       executeRun,
-      monitorRun,
-      scheduleMonitor,
     });
 
     expect(result).toEqual({
@@ -206,13 +197,35 @@ describe('startWorkflowRunForRoute', () => {
       startNodeId: 'node-1',
       mode: 'node',
       catalogRevision: 'catalog-rev-1',
-      idempotencyKey: null,
+      idempotencyKey: 'run-key-3',
     });
-    expect(scheduleMonitor).toHaveBeenCalledTimes(1);
-    expect(monitorRun).toHaveBeenCalledWith({
+  });
+
+  it('rejects a keyless run before rate limiting or database work', async () => {
+    const canvas = createCanvasClient();
+    const adminFactory = vi.fn(() => createAdminClient().client);
+    const executeRun = vi.fn();
+
+    const result = await startWorkflowRunForRoute({
+      supabase: canvas.client,
+      adminSupabase: adminFactory,
+      userId: 'user-1',
       canvasId: 'canvas-1',
-      runId: 'run-1',
+      body: { startNodeId: 'node-1' },
+      executeRun,
     });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: {
+        error: 'An Idempotency-Key is required for workflow runs.',
+        code: 'IDEMPOTENCY_KEY_REQUIRED',
+      },
+    });
+    expect(adminFactory).not.toHaveBeenCalled();
+    expect(canvas.from).not.toHaveBeenCalled();
+    expect(executeRun).not.toHaveBeenCalled();
   });
 
   it('maps runner failures to a fixed 500 response without leaking error details', async () => {
@@ -226,10 +239,10 @@ describe('startWorkflowRunForRoute', () => {
       userId: 'user-1',
       canvasId: 'canvas-1',
       body: { startNodeId: 'node-1' },
+      idempotencyKeyHeader: 'run-key-4',
       executeRun: vi.fn(async () => {
         throw new Error('connection refused: db-internal:5432');
       }),
-      scheduleMonitor: vi.fn(),
     });
 
     expect(result).toEqual({

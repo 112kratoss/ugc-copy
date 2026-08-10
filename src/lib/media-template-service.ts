@@ -218,11 +218,52 @@ async function attachTemplateDetails(
 }
 
 export async function listActiveMediaTemplates(client: SupabaseClient): Promise<MediaTemplateDto[]> {
-  const { data, error } = await client.from('templates').select(TEMPLATE_SELECT)
+  return (await listActiveMediaTemplatesPage(client)).templates;
+}
+
+const PUBLIC_TEMPLATE_PAGE_SIZE = 48;
+
+function decodeTemplateCursor(value: string | null | undefined): { createdAt: string; id: string } | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Record<string, unknown>;
+    return typeof parsed.createdAt === 'string' && typeof parsed.id === 'string'
+      ? { createdAt: parsed.createdAt, id: parsed.id }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function encodeTemplateCursor(row: MediaTemplateRow): string {
+  return Buffer.from(JSON.stringify({ createdAt: row.created_at, id: row.id }), 'utf8').toString('base64url');
+}
+
+export async function listActiveMediaTemplatesPage(
+  client: SupabaseClient,
+  options: { cursor?: string | null; limit?: number } = {},
+): Promise<{ templates: MediaTemplateDto[]; nextCursor: string | null }> {
+  const limit = Math.max(1, Math.min(Math.trunc(options.limit ?? PUBLIC_TEMPLATE_PAGE_SIZE), 96));
+  const cursor = decodeTemplateCursor(options.cursor);
+  let query = client.from('templates').select(TEMPLATE_SELECT)
     .eq('status', 'active').eq('is_active', true).not('active_version_id', 'is', null)
-    .not('creator_user_id', 'is', null).order('created_at', { ascending: false });
+    .not('creator_user_id', 'is', null)
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(limit + 1);
+  if (cursor) {
+    query = query.or(`created_at.lt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.lt.${cursor.id})`);
+  }
+  const { data, error } = await query;
   if (error) throw error;
-  return attachTemplateDetails(client, (data ?? []) as unknown as MediaTemplateRow[], false);
+  const rows = (data ?? []) as unknown as MediaTemplateRow[];
+  const pageRows = rows.slice(0, limit);
+  return {
+    templates: await attachTemplateDetails(client, pageRows, false),
+    nextCursor: rows.length > limit && pageRows.length > 0
+      ? encodeTemplateCursor(pageRows[pageRows.length - 1]!)
+      : null,
+  };
 }
 
 export async function listOwnedMediaTemplates(client: SupabaseClient, userId: string): Promise<MediaTemplateDto[]> {

@@ -141,16 +141,21 @@ describe('workflow run idempotency (F12)', () => {
 
     expect(result.reused).toBe(false);
     expect(result.runId).toBe('run-new');
-    expect(stepInserts).toHaveLength(1);
+    // Initialization owns the full handoff; the request never inserts steps
+    // one by one or starts provider work outside the durable lease.
+    expect(stepInserts).toHaveLength(0);
     expect(rpcCalls[0]).toMatchObject({
-      fn: 'start_workflow_canvas_run',
-      args: { p_idempotency_key: 'key-fresh', p_canvas_id: 'canvas-1', p_user_id: 'user-1' },
+      fn: 'initialize_workflow_canvas_run',
+      args: {
+        p_idempotency_key: 'key-fresh',
+        p_canvas_id: 'canvas-1',
+        p_user_id: 'user-1',
+        p_step_skeleton: [{ nodeId: graph.nodes[0].id }],
+      },
     });
   });
 
-  it('passes a null key straight through rather than inventing one', async () => {
-    // Callers without a key must still get an unconditional run; silently
-    // deriving a key here would collapse deliberate re-runs.
+  it('rejects a keyless run before calling the creation RPC', async () => {
     const graph = createSingleNodeGraph();
     const { client, rpcCalls } = createRunnerClient({
       run_id: 'run-new',
@@ -159,16 +164,16 @@ describe('workflow run idempotency (F12)', () => {
     });
 
     const { executeWorkflowRun } = await import('@/lib/workflow-runner');
-    await executeWorkflowRun({
+    await expect(executeWorkflowRun({
       supabase: client as never,
       userId: 'user-1',
       canvasId: 'canvas-1',
       graph,
       startNodeId: graph.nodes[0].id,
       mode: 'node',
-    });
+    })).rejects.toThrow('Workflow run idempotency key is required.');
 
-    expect(rpcCalls[0].args.p_idempotency_key).toBeNull();
+    expect(rpcCalls).toHaveLength(0);
   });
 
   it('throws instead of writing steps against a null run when creation fails', async () => {
@@ -185,6 +190,7 @@ describe('workflow run idempotency (F12)', () => {
       graph,
       startNodeId: graph.nodes[0].id,
       mode: 'node',
+      idempotencyKey: 'key-failed-create',
     })).rejects.toMatchObject({ message: 'insert denied' });
 
     expect(stepInserts).toHaveLength(0);

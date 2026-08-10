@@ -19,6 +19,7 @@ export type OperationalRetentionSummary = {
   shareEventsDeleted: number;
   profileShareEventsDeleted: number;
   abandonedFreeUnlockOrdersDeleted: number;
+  uploadByteReservationsDeleted: number;
 };
 
 function toCount(value: unknown): number {
@@ -47,6 +48,7 @@ export async function pruneOperationalBackendData(
   let shareEventsDeleted = 0;
   let profileShareEventsDeleted = 0;
   let abandonedFreeUnlockOrdersDeleted = 0;
+  let uploadByteReservationsDeleted = 0;
 
   const shareResult = await client.rpc('prune_post_share_events', {});
   if (!shareResult.error) {
@@ -63,10 +65,18 @@ export async function pruneOperationalBackendData(
     abandonedFreeUnlockOrdersDeleted = toCount(freeUnlockResult.data);
   }
 
+  const uploadReservationResult = await client.rpc('prune_upload_byte_reservations', {
+    p_limit: options.maxDeletesPerTable ?? 5000,
+  });
+  if (!uploadReservationResult.error) {
+    uploadByteReservationsDeleted = toCount(uploadReservationResult.data);
+  }
+
   return {
     shareEventsDeleted,
     profileShareEventsDeleted,
     abandonedFreeUnlockOrdersDeleted,
+    uploadByteReservationsDeleted,
     jobRunsDeleted: toCount(summary.job_runs_deleted),
     rateLimitsDeleted: toCount(summary.rate_limits_deleted),
     completionJobsDeleted: toCount(summary.completion_jobs_deleted),

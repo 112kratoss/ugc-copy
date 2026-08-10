@@ -287,6 +287,23 @@ export async function listTemplates(options: { token?: string | null; mine?: boo
   return Array.isArray(templates) ? templates.map(normalizeTemplate) : [];
 }
 
+export async function listTemplatePage(options: {
+  token?: string | null;
+  cursor?: string | null;
+  limit?: number;
+} = {}): Promise<{ templates: MediaTemplate[]; nextCursor: string | null }> {
+  const params = new URLSearchParams();
+  if (options.cursor) params.set('cursor', options.cursor);
+  if (options.limit) params.set('limit', String(options.limit));
+  const suffix = params.size ? `?${params}` : '';
+  const payload = asRecord(await requestJson<unknown>(`/api/templates${suffix}`, { token: options.token }));
+  const templates = first(payload, ['templates', 'items', 'data']);
+  return {
+    templates: Array.isArray(templates) ? templates.map(normalizeTemplate) : [],
+    nextCursor: nullableString(payload, ['nextCursor', 'next_cursor']),
+  };
+}
+
 export async function getTemplate(idOrSlug: string, token?: string | null): Promise<MediaTemplate> {
   return normalizeTemplate(await requestJson<unknown>(
     `/api/templates/${encodeURIComponent(idOrSlug)}`,

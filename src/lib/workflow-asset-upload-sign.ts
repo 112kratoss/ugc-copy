@@ -8,6 +8,7 @@ import {
 } from '@/lib/backend-rate-limit';
 import { canUserCreateDurableUpload } from '@/lib/account-deletion-guard';
 import { isAllowedStorageBucketMimeType } from '@/lib/storage-upload-mime-policy';
+import { releaseUploadBytes, reserveUploadBytes } from '@/lib/upload-byte-admission';
 
 const SIGNED_UPLOAD_EXPIRES_IN_SECONDS = 2 * 60 * 60;
 
@@ -228,11 +229,29 @@ export async function createWorkflowAssetUploadIntent({
   }
 
   const uploadPath = `${userId}/workflow-input-${createUploadId()}-${metadata.fileName}`;
+  const byteReservation = await reserveUploadBytes(resolvedClient, {
+    userId,
+    bucket: metadata.bucket,
+    storagePath: uploadPath,
+    declaredBytes: metadata.sizeBytes,
+  });
+  if (!byteReservation.ok) {
+    return {
+      ok: false,
+      status: byteReservation.status,
+      code: byteReservation.code,
+      error: byteReservation.error,
+    };
+  }
   const { data, error } = await resolvedClient.storage
     .from(metadata.bucket)
     .createSignedUploadUrl(uploadPath);
 
   if (error || !data?.token) {
+    await releaseUploadBytes(resolvedClient, {
+      bucket: metadata.bucket,
+      storagePath: uploadPath,
+    });
     return {
       ok: false,
       status: 500,

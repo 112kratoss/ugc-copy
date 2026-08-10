@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError } from '@/lib/backend-logger';
 import {
+  MAX_WORKFLOW_RUN_STEP_ATTEMPTS,
   WORKFLOW_RUN_STEP_CONCURRENCY,
   claimWorkflowRunStepJobs,
   deferWorkflowRunStepJob,
@@ -28,6 +29,7 @@ export const WORKFLOW_RUN_MAX_LIFETIME_SECONDS = 24 * 60 * 60;
 // finished generation is reflected quickly, long enough that a day-long run
 // costs a bounded number of ticks.
 const WORKFLOW_RUN_DEFER_SECONDS = 60;
+export const WORKFLOW_RUN_HEARTBEAT_INTERVAL_MS = 60_000;
 
 export type WorkflowRunStepProcessSummary = {
   claimed: number;
@@ -46,7 +48,7 @@ function errorMessage(error: unknown): string {
 }
 
 function isRunUnfinished(status: string | null | undefined): boolean {
-  return status === 'processing' || status === 'awaiting_approval';
+  return status === 'processing';
 }
 
 /**
@@ -68,6 +70,9 @@ export async function adoptStalledWorkflowRuns(params: {
   const stalled = await findStalledWorkflowRuns(supabase, { nowMs, limit });
   if (stalled.length === 0) return 0;
 
+  // The RPC applies this exclusion before LIMIT, which prevents starvation.
+  // Re-check the returned ids as a narrow race guard: a live ticket can be
+  // created after the RPC snapshot but before this worker enqueues adoption.
   const runIds = stalled.map((run) => run.id);
   const { data: liveJobs, error } = await supabase
     .from('workflow_run_step_jobs')
@@ -100,6 +105,17 @@ export async function adoptStalledWorkflowRuns(params: {
       const highestAttempt = Array.isArray(usedAttempts) && usedAttempts.length > 0
         ? Number((usedAttempts[0] as { attempt: number }).attempt) || 0
         : 0;
+
+      if (highestAttempt >= MAX_WORKFLOW_RUN_STEP_ATTEMPTS) {
+        await supabase
+          .from('workflow_canvas_runs')
+          .update({
+            status: 'failed',
+            finished_at: new Date(nowMs).toISOString(),
+          })
+          .eq('id', run.id);
+        continue;
+      }
 
       const { data: runRow } = await supabase
         .from('workflow_canvas_runs')
@@ -134,6 +150,26 @@ async function processOne(params: {
   summary: WorkflowRunStepProcessSummary;
 }): Promise<void> {
   const { supabase, job, lockedBy, nowMs, advanceRun, summary } = params;
+  let heartbeatInFlight = false;
+  let leaseLost = false;
+  const heartbeatDuringAdvance = async () => {
+    if (heartbeatInFlight || leaseLost) return;
+    heartbeatInFlight = true;
+    try {
+      leaseLost = !(await heartbeatWorkflowRunStepJob(supabase, { id: job.id, lockedBy }));
+    } catch (error) {
+      // A transient heartbeat error must not create a second executor. Leave
+      // the current attempt alone; if the process dies, normal TTL reclaim is
+      // still the durable fallback.
+      logBackendError('workflow_run_step_heartbeat_failed', { error, jobId: job.id });
+    } finally {
+      heartbeatInFlight = false;
+    }
+  };
+  const heartbeatTimer = setInterval(() => {
+    void heartbeatDuringAdvance();
+  }, WORKFLOW_RUN_HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref?.();
 
   try {
     const run = await advanceRun({
@@ -144,18 +180,27 @@ async function processOne(params: {
 
     // Losing the lease mid-advance means another worker has taken over. Stop
     // rather than race it to the finish call.
-    const stillHeld = await heartbeatWorkflowRunStepJob(supabase, { id: job.id, lockedBy });
+    const stillHeld = !leaseLost
+      && await heartbeatWorkflowRunStepJob(supabase, { id: job.id, lockedBy });
     if (!stillHeld) return;
 
     if (isRunUnfinished(run?.status)) {
       const runAgeMs = run?.created_at ? nowMs - Date.parse(run.created_at) : 0;
       if (Number.isFinite(runAgeMs) && runAgeMs > WORKFLOW_RUN_MAX_LIFETIME_SECONDS * 1000) {
+        await supabase
+          .from('workflow_canvas_runs')
+          .update({
+            status: 'failed',
+            finished_at: new Date(nowMs).toISOString(),
+          })
+          .eq('id', job.run_id);
         const outcome = await finishWorkflowRunStepJob(supabase, {
           id: job.id,
           lockedBy,
           succeeded: false,
           error: 'Workflow run exceeded its maximum lifetime without finishing.',
           retryDelaySeconds: getWorkflowRunStepRetryDelaySeconds(job.attempt),
+          maxAttempts: job.attempt,
         });
         if (outcome === 'retry_scheduled') summary.retried += 1;
         else if (outcome === 'exhausted') summary.exhausted += 1;
@@ -189,6 +234,8 @@ async function processOne(params: {
     if (outcome === 'retry_scheduled') summary.retried += 1;
     else if (outcome === 'exhausted') summary.exhausted += 1;
     else summary.failed += 1;
+  } finally {
+    clearInterval(heartbeatTimer);
   }
 }
 

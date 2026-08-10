@@ -29,6 +29,17 @@ This file is the single source of truth for scaling work. It is written to be **
 
 The app answers two different capacity questions, and they have different answers. Both are correct; they differ in tense.
 
+> **Current-status override — scoped certificate issued 2026-08-10.** The two
+> paragraphs below preserve the original planning baseline; they do **not**
+> describe the current release candidate. Exact build `c1d494e` passed the clean
+> 100k-fixture one-hour soak at 7 target authenticated-web operations/s, including
+> cursor/session continuation, delivery-linked events, real upload round trips,
+> provider/media settlement, platform telemetry and strict concurrency cases.
+> After 30% reserve the scoped model yields **2,026 conservative / 4,559 base /
+> 12,159 optimistic authenticated-web MAU**, with retention limiting every
+> scenario. Anonymous, mobile, Auth capacity, poison-node isolation and >100k
+> fixtures remain excluded. The certificate section below is authoritative.
+
 **1. Where does the app as deployed first break? ~300–500 mixed MAU**, on Supabase storage egress. The watch surfaces stream full-bitrate source MP4s (avg 7.6 MB, p90 22.5 MB, ~23 Mbps), AI-generated posts are never transcoded at publish, and every media object carries a 300-second cache TTL. Supabase Pro's spend cap is **on by default**, so quota exhaustion degrades storage service rather than producing a bill.
 
 **2. What can the architecture be trusted to handle once media is fixed? ~2,000 MAU safe, ~5,000 as a re-certification gate.** The binding path becomes the personalized feed's write pipeline: up to 121 rows persisted per ranked session against a hard cleanup ceiling of 120,000 delivery facts per day, compounded by the web feed dropping its ranking cursor so long scrolls re-rank and re-persist.
@@ -40,7 +51,7 @@ The app answers two different capacity questions, and they have different answer
 | Hard line, code unchanged, spend cap on | ~350 MAU |
 | Safe mixed target after Phase 0 | 2,000 MAU |
 | Re-certification gate | 5,000 MAU |
-| After Phase 1, proven by load test | 10,000–25,000 MAU |
+| Phase 1 exact-build scoped certificate | 2,026 conservative / 4,559 base authenticated-web MAU |
 | Anonymous, cache-heavy browsing | ~10,000 MAU |
 | Active AI-generating users | 800–1,500/month |
 | Mixed generations | 300–500/day |
@@ -60,21 +71,91 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 | F3 | Derivative cache TTL — decision #5 resolved | Critical | 0 | DONE | Full pipeline verified; reopened for ranged edge entries and re-closed 2026-08-08 — takedown delete verified working, finite stale-ranged residual recorded and accepted in F3 step 3 |
 | F11 | Web `/feed` drops the ranking cursor | Critical | 0 | DONE | Cursor threaded through load-more, retry and snapshot, pkg 4, 2026-08-08 |
 | F13 | v2 stats refresh starves past 1,000 rows | High | 0 | DONE | Migration + fact index, pkg 5, 2026-08-08 |
-| F7a | Facts for all candidates; unbatched events | High | 0 | DONE | Served-slice facts + batched events, 2026-08-08 — single-transaction insert deferred to F7b |
+| F7a | Facts for all candidates; unbatched web events | High | 0 | DONE | Served-slice facts + batched web requests, 2026-08-08. The previously stated transaction deferral did not land in F7b; it is now explicitly F7c instead of being hidden behind a DONE item. |
+| F7c | Atomic feed-event batches + mobile offline queue | High | 1/2 | TODO — MOBILE EXCLUDED FROM CERTIFICATE | Server batches still process entries serially and installed mobile clients send one event/request. Build an atomic batch RPC plus persisted mobile queue/backoff in the next store train; until then no certificate may be called mobile/app-wide MAU. |
 | F6 | Unthrottled hot GETs incl. full-catalog scan | Medium | 0 | DONE | Limits on all 5 GETs; filtered top-sales scan replaced by RPC unlock filter + ordered streaming, 2026-08-08 |
 | F15a | Monitoring truncates silently; biased rates | Medium | 0 | DONE | Truncation flagged (cost + health), attempt-counter denominator landed, 2026-08-08. **DB-side aggregates landed 2026-08-09** (`20260809200000`, `get_backend_cost_aggregates` + `backend-cost-aggregates.ts`): the cost report reads the whole window in one RPC and cannot truncate. The raw-row path is **kept live as the fallback**, which is what preserves the JS unit coverage the audit warned this change would destroy. Health-collector caps are a separate, smaller residual — recorded in the section |
 | F10 | Assorted small leaks | Low | 0 | IN PROGRESS | Mobile 404 pkg 1; studio grid + images pkg 2, 2026-08-08. Webhook budget rides pkg 3; two web-perf items stay unassigned |
-| F12 | Workflow runs non-durable, non-idempotent | Critical | 1 | IN PROGRESS | Idempotent run creation + durable step queue + cron recovery + pure GET, 2026-08-09 — per-node executor deferred with reasoning |
-| F14 | Shared-fate cron; no provider admission control | High | 1 | DONE | **Part one** — cron split + byte admission, 2026-08-09 (ffmpeg wall-clock kill already existed). **Part two's money bug** — ambiguous submissions held, not refunded, **verified live**. **Part two's throughput half** — token bucket, in-flight cap, `Retry-After`, circuit breaker, **verified live**. **Queue-age SLOs** — derived from registry cadence; also closed F12's unmonitored step queue, 2026-08-09 |
+| F12 | Workflow runs non-durable, non-idempotent | Critical | 1 | **PREVIEW PROOF PASSED — PRODUCTION RELEASE OPEN** | Required run keys, atomic skeleton/ticket creation, one DB-leased executor, deterministic generation keys, heartbeat, fair orphan adoption, retryable provider backpressure and completion-driven terminal wake are implemented. On exact build `c1d494e`, three concurrent replay starts returned one run, 20 concurrent unique runs created complete skeletons/tickets, 42 child generations settled with outputs and every run succeeded. Poison-node isolation remains explicitly excluded because canvas execution is run-scoped. |
+| F14 | Shared-fate cron; no provider admission control | High | 1 | **PREVIEW PROOF PASSED — PRODUCTION RELEASE OPEN** | Dedicated heavy crons, stale-lease health, ambiguity holds, atomic provider-slot reservation, duplicate-callback lease preservation, durable output import, leased byte-aware media repair and bounded cleanup are implemented. The exact-build strict run accepted and settled a 48-callback burst with 48 durable outputs and no duplicates; provider 429/5xx/accepted-reset and concurrent cron ownership cases also passed. |
 | F5 | For-you RPC materializes whole catalog | High | 1 | DONE | LIMIT-first pools + one new index, 2026-08-09. Seeded 200k-post catalog: **445,336 buffers/587 ms → 6,171/8.2 ms**, and now flat in catalog size (+8.9% for 4× the posts). Output verified identical across personalised, anonymous and category branches. **v2 is untouched and is a gate before promotion** |
-| F5b | `list_marketplace_resource_bundles` is 47% of RPC time | High | 1 | DONE | **Diagnosis corrected by measurement 2026-08-09**: the ~1,000 blocks are planning plus a ~200-block PostgREST floor, **not** the query. All three corrected items now landed — tool-filtered caching (`v4`), 6-arg shim dropped (`20260809150000`), and the **catalog-scale restructure** (`20260809210000`, `marketplace_bundle_listings`). Seeded to 80,000 bundles: default page **408,080 → 134 buffers** and **6,651 ms → 0.21 ms**, and flat in catalog size (+35% for 80× the posts) against the old path's 155× growth. Output verified identical to the old function across 34 parameter combinations at 1k/20k/80k. Search improved 21× but stays O(catalog) — recorded as a residual. The `SHOWCASE_FEED_CACHE_TAG` coupling is **load-bearing for moderation** — do not remove it |
+| F5b | `list_marketplace_resource_bundles` is 47% of RPC time | High | 1 | DONE | **Diagnosis corrected by measurement 2026-08-09**: the ~1,000 blocks are planning plus a ~200-block PostgREST floor, **not** the query. The page-sized listing restructure (`20260809210000`) stays flat in catalog size. The remaining `%query%` scan is now replaced locally by a trigger-maintained search document and `pg_trgm` GIN index (`20260810112000`), with a three-character public/DB floor and trigger/index pgTAP. Re-run 100k/1m search plans on the isolated branch; do not reuse the older O(catalog) result. The `SHOWCASE_FEED_CACHE_TAG` coupling remains load-bearing for moderation. |
 | F7b | Fact retention + partitioning | High | 1 | DONE | Retention 400→30 (decision #2), `feed_delivery_facts` added to growth reporting, a retention-lag monitor, and the **daily rollup** (`feed_delivery_fact_daily`, 400-day window) — 2026-08-09; the 2026-08-27 deadline is **discharged**. **Monthly partitioning analysed and deliberately deferred**: decision #2's 30-day window makes monthly granularity retain ~60 days to enforce 30, and finer granularity would turn the hottest write path into a per-partition scan. Trigger to revisit recorded |
 | F8 | Per-request GoTrue round-trip | Medium | 1 | DONE | `getClaims()` verifies locally via WebCrypto against a cached JWKS — no hand-rolled JWT code, 2026-08-09. Premise verified first: JWKS publishes only ES256 with no symmetric key, in prod *and* local. User rebuilt from verified claims only, preserving the "never read the cookie's user" invariant |
 | F9 | Comments scan loop; unindexed top sort | Medium | 1 | DONE | Viewer block set loaded **once** (2 reads per scan, not 2 per batch), scan capped at 10 batches reporting `hasMore`, and `post_comments_toplevel_top_idx` added — `post_comments` had no index reaching `reply_count` at all, 2026-08-09 |
 | F15b | Error tracking, PITR, log drain | Medium | 1 | IN PROGRESS | **`track_io_timing` DONE** (`ALTER ROLE` on `postgres` **and** `authenticator` — role GUCs apply at login and PostgREST `SET ROLE`s), verified collecting. **Error tracking DONE** — browser proven by an event arriving, server wired, source maps uploading. **Second incident recipient DONE and drilled** — the watchdog opens an incident issue, because GitHub emails scheduled-workflow failures to exactly one person; receipt confirmed at `info@magicbooklet.com`. **Provider-cost ledger unblocked** — Kie's export is per-task and its `Task ID` is already `generations.prediction_id`. **Out of scope on budget:** log drain, PITR, paid external monitoring — so the RTO is "last daily backup" |
-| — | Phase 1 certification load test | — | 1 | **RUN IN THE SPECIFIED ENVIRONMENT — STILL NOT CERTIFIED** | **Run 2026-08-10; no MAU level certified.** The environment 2026-08-09 called impossible now exists: a Supabase preview branch replaying **173/173** migrations (Finding C's ledger repair, proven), seeded to the 100k tier, plus a Vercel preview in production's `bom1` region and the provider stub via `KIE_API_BASE_URL`. **Provider spend $0; branch cost ~$0.09.** **All four named cases PASS** — skew (Finding B's clamp verified live), cron-overlap, webhook-burst (48 completions, zero callback failures, queue drained to pre-burst level in 4 s, no duplicate settlement) and workflow fan-out (19 concurrent starts, one run each, no orphans) — with F12's run-scoped-advance caveat stated inline. **But no level survives the one-hour soak:** 25 RPS → 5.07 achieved / 12.32% error; 10 RPS → 6.19 / **0.03% error but 25 s p50**; 5 RPS → 1.44 / 5.84%. Every 120 s ladder step that passed had merely not queued yet, and sustainable throughput *fell* across the session (6.2 → 1.44 RPS) as `feed_session_items` grew 8× to 894,487 rows / 711 MB. **The database is not the wall** — steady-state pool p50 51.7% / p95 61.7% against a 45% idle floor (criterion passes), lock waiters ≤1, and `get_ranked_feed_candidates` at **125 ms for the heaviest viewer**, so F5 holds. Nor is it bandwidth (13.6 KB responses) or the driver (no undici cap). The unexplained cost is per-request: 2.6–4.4 s idle against ~120 ms ranking + ~200 ms RTT. **The binding MAU constraint is arithmetic, not latency:** measured 114,751 facts/hour at 25 RPS against a 5,000/hour prune ceiling; at this document's own 12 facts/MAU/day that ceiling implies **~10,000 MAU** — the planning table's lower bound, now measured. Not certified, because the soak did not pass. **Five defects found and fixed** (single-format seeded catalog from an uncorrelated LATERAL; every marketplace listing ineligible for want of a seller avatar; the stub unable to complete an image generation because the two poll paths disagree; a renamed JPEG served as `.mp4`; the driver drawing from 1,000 of 20,000 posts). **Finding D corrected** — a cloud branch's grant surface is production's, not the repository's. Next steps in *Certification run — 2026-08-10* |
+| — | Phase 1 certification load test | — | 1 | **SCOPED CERTIFICATE ISSUED — 7 AUTHENTICATED WEB OPS/S** | Exact build `c1d494e` passed a clean one-hour soak on the 100k fixture at 6.96 completed operations/s (7.39 HTTP requests/s), all route/validity/resource gates, external Supabase/Vercel telemetry and all strict cases. After 30% headroom the certified workload rate is **4.872 ops/s**. Conditional authenticated-web MAU scenarios are **2,026 conservative / 4,559 base / 12,159 optimistic**, all limited by the configured feed-fact prune model. Anonymous, mobile, Auth-platform capacity, poison-node isolation and catalogs above the 100k fixture are excluded. See the authoritative scoped certificate below. |
+| IR-1 | Independent implementation/certification review | Critical | 1 | **CORE REMEDIATION LOCAL — SUPERSEDED BY IR-2** | R1/R2/R3/R5 and the exact-count retention probe have local fixes. IR-2 found remaining strict-case false-pass paths and broader product topology gaps, so the earlier R6 closure language is no longer authoritative. The invalid run remains discarded; its no-MAU verdict was later superseded by the exact-build scoped certificate. |
+| IR-2 | Whole-project pre-certification scaling review | Critical | 1 | **PRODUCT BLOCKERS IMPLEMENTED — SUPERSEDED BY IR-3** | IR-2 found execution-on-GET template runs, workflow/provider backpressure and wake gaps, non-durable output import, completion-lease revocation, unleased repair fan-out and byte-unbounded uploads. Those product items now have local implementations; IR-3 is the authoritative source/release status. No full-app MAU claim is permitted before cloud proof. |
+| IR-3 | Pre-certification implementation closure | Critical | 1 | **CLOUD PROOF COMPLETE — SCOPED CERTIFICATE ISSUED** | The release candidate was replayed and deployed to an isolated Mumbai Micro/Vercel preview, bound to schema/catalog/build identifiers, exercised with representative media, and observed with database, PostgREST and Vercel metrics. The 100k-fixture one-hour 7 ops/s soak and every strict case pass. The 1m fixture does not fit Micro storage and was not load-tested, so this is deliberately not a full-app, anonymous, mobile or >100k-fixture certificate. |
 | — | ~~Phase 1 certification load test (READY note, 2026-08-09)~~ | — | 1 | superseded | **Unblocked 2026-08-09.** Phase 1's code tail is complete and deployed; `track_io_timing` is on and collecting; error tracking is live on browser and server with source maps; and the second incident recipient is **verified by drill** — a forced watchdog failure opened an issue and the notification reached `info@magicbooklet.com`. F12 and F10 staying IN PROGRESS are recorded deferrals, not prerequisites. **Remaining caveat, not a blocker:** IO timing was off for the entry baseline, so take a short idle sample before the run or the IO figures have no "before" |
 | — | Phase 2 backlog (unnumbered — see the Phase 2 section) | — | 2 | TODO | |
+
+---
+
+## Authoritative closure sequence — 2026-08-10
+
+This section and the status board are the current execution view. Dated prose
+below is retained as investigation history and may describe a state that a later
+entry supersedes. Do not select work from an older “still open” paragraph without
+checking it here first.
+
+The executable environment, command and artifact handoff is maintained in
+`docs/scaling-certification-runbook.md`.
+
+**Local database preflight is now complete (2026-08-10).** With Docker running,
+`supabase db reset --local` replayed the full migration history through
+`20260810101000` from an empty database. The first behavioural test exposed an
+ambiguous PL/pgSQL `run_id` reference in the new atomic initializer; the
+unapplied migration was corrected to qualify the job-table columns, the database
+was reset again from scratch, and all **31 pgTAP files / 651 assertions** passed.
+`scripts/schema-fingerprint.sql` also executes successfully against that clean
+replay and emits all 15 object-class digests. This closes the local SQL gate; it
+does not replace the fresh cloud-branch replay, advisor check, preview deployment
+or capacity run below.
+
+### P0 — close Phase 1 before adding another optimization
+
+1. Review and preserve the current remediation as a release candidate. No MAU
+   conclusion changes because source tests pass.
+2. Replay every migration, including `20260810100000` and `20260810101000`, on a
+   fresh Supabase branch. Run pgTAP, schema fingerprint comparison and database
+   advisors. The product must use only the atomic initializer. Keep the old
+   run-only RPC for the schema-first deployment window, then revoke/drop it in
+   the immediately following release after production build-ID verification.
+3. Deploy a Vercel preview against that branch and run the strict skew, webhook,
+   workflow and cron cases. Workflow must prove one run for three replays,
+   complete atomic step skeletons, deterministic generation keys, terminal
+   fan-out and zero duplicate/refunded paid tasks. This certifies run-scoped
+   ownership; per-node poison isolation stays an explicit exclusion.
+4. Run each 10k/100k/1m fixture and each ladder/soak against a fresh clone. A
+   sequential run on an already-grown database is diagnostic only.
+5. Collect DB CPU, block I/O, WAL/checkpoints, PostgREST waits, Vercel
+   concurrency/cold starts and ranked-feed phase timings alongside the existing
+   queue/retention sampler. Store the raw reports, config, commit, schema
+   fingerprint and reconciliation queries as one immutable certificate artifact.
+6. Convert sustainable RPS to MAU only from measured production
+   facts/session, sessions/DAU, DAU/MAU and peak-factor inputs, with 30% measured
+   headroom. Until every executable SLO passes, the status is **NOT CERTIFIED**.
+
+### P1 — product work after the clean rerun identifies the wall
+
+| Work | Trigger / acceptance condition |
+|---|---|
+| Ranked-feed persistence | Add phase timing first. Benchmark fresh and cursor-continuation writes at 100k/1m rows; change indexes/row shape/retention only after the corrected run proves the cost. |
+| Marketplace search | Add a maintained search document plus `pg_trgm` or FTS only after output-parity and large-fixture plans prove the index wins. Search remains O(catalog) today. |
+| One-node-per-claim workflow executor | Required before claiming per-node retry accounting or poison-node isolation, and before workflow usage becomes material. It is not required to describe the current run-scoped certificate honestly. |
+| Health aggregates | Replace growth-sensitive sampled collectors when target-scale fixtures approach their declared 1,000/500/200-row caps. |
+| F10 browser work | Window the web feed, idle/debounce snapshots, and A/B `experimental.inlineCss` under compressed and decoded payload budgets. |
+| Mobile/ops completion | Ship mobile Sentry, force one server event through Sentry, enable useful temp-file logging, write/execute restore drills, and build a secret-safe Kie usage importer/provider-cost ledger. |
+
+### External or funded gates
+
+PITR, a retained log drain and paid five-minute monitoring remain outside the
+recorded budget. Egress automation needs a Supabase usage-scope token; provider
+cost reconciliation needs a sanitized Kie export; mobile changes need a store
+release; anonymous capacity needs multiple source IPs. These are not repository
+defects and must not be marked complete by adding placeholder code.
 
 ---
 
@@ -704,8 +785,11 @@ The aggregate payload in the vitest file is the **verbatim output of the functio
 
 ### F12 — Workflow runs are non-durable and non-idempotent
 
-**Status:** IN PROGRESS · **Severity:** Critical · **Surface:** server
-**Landed:** Idempotent run creation, durable step queue, cron recovery worker and a pure GET — 2026-08-09. The per-node executor is deliberately still open; see *Still open* below.
+**Current status:** **FIX IMPLEMENTED LOCALLY — AWAITING DEPLOY + RECERTIFICATION** · **Severity:** Critical · **Surface:** server
+
+The paragraphs through *Reopened by independent review* preserve the 2026-08-09 implementation history. The authoritative current disposition is the 2026-08-10 remediation table: required browser/API keys, atomic run/skeleton/ticket creation, one shared DB-leased executor, deterministic generation keys, bounded approval handling and strict race/fan-out cases are implemented locally. They are not marked DONE until the migrations replay and the cloud cases pass. A true one-node-per-claim executor remains a separately scoped enhancement for poison-node isolation; do not claim that property in the certificate unless it is implemented and tested.
+
+**Historical landed state (superseded where the independent review says so):** Idempotent run creation, durable step queue, cron recovery worker and a pure GET — 2026-08-09.
 
 **Problem.** This is a money bug. Run creation has no idempotency binding, so a timed-out client retry creates a duplicate run that re-charges every node's generation. Per-generation idempotency does not help, because each new run legitimately starts new generations. Progress depends on a process-local map plus client polling, and the cron registry contains **no workflow job** — so a recycled function strands the run with no server-side recovery. A GET can also advance workflow state, meaning polling is not read-only.
 
@@ -760,12 +844,49 @@ The queue is per `(run_id, node_id, attempt)` as the audit specifies, and it car
 
 It was scoped out because the existing engine sequences a run as a whole and nodes that launch a generation sit in `processing` awaiting a provider webhook, so a per-node executor is a rewrite of the 1,300-line runner with real regression risk across approval gates and generation polling — against a feature with 11 lifetime runs. **Do it before workflow usage becomes material, and before the Phase 1 certification test exercises workflow fan-out**, or the test will certify a fan-out path that has not been restructured.
 
+**Reopened by independent review 2026-08-10 — the original money and durability
+claims are not closed end to end.** This supersedes the sentence above that both
+filed bugs are closed, without removing the useful queue work that landed:
+
+1. **The production browser is keyless.** `CreateWorkflowClient` posts
+   `startNodeId`, `mode` and `catalogRevision` with auth/content-type headers but
+   no `Idempotency-Key` and no body key. The route and RPC accept `NULL`, and the
+   migration deliberately inserts an unconditional run in that case. The
+   certification case always supplies a key, so its replay PASS proves the keyed
+   API seam, not the actual product caller. A response timeout followed by another
+   Run click can still create and charge a second run.
+2. **Creation and durable ownership are not atomic.** The run row is created,
+   provider nodes execute, step rows are inserted, the run is updated, and only
+   then is the recovery ticket enqueued. A kill between those stages can leave
+   paid provider work without its step, or a partial/empty step set that recovery
+   can later derive as `succeeded`. Adoption advances only step rows that already
+   exist; it does not reconstruct the expected graph skeleton.
+3. **Two serverless instances can execute the same queued node.** The request's
+   12-minute `after()` monitor remains an executor while the cron worker also
+   advances the run. Their only shared exclusion is a module-local Map, not a DB
+   lease/CAS, and workflow generation starts default to no deterministic request
+   key. The fan-out case does not force this two-instance race or assert one
+   generation/credit settlement per expected node.
+4. **Approval waits can leak queue rows indefinitely.** The stalled-run probe
+   includes `awaiting_approval`; after 24 hours the ticket is exhausted but the
+   run remains awaiting approval, and adoption enqueues `highestAttempt + 1`
+   outside the SQL retry cap.
+
+**Closure gate:** require a stable browser key at the route, create the run plus
+complete step skeleton plus first durable ownership atomically before provider
+work, make every executor acquire the same per-node DB lease with deterministic
+`(run,node,attempt)` generation idempotency, and add kill-point, two-instance and
+25-hour approval tests. Until those pass, F12 blocks a full Phase 1 certificate.
+
 ---
 
 ### F14 — Shared-fate cron and no provider admission control
 
-**Status:** DONE · **Severity:** High · **Surface:** server
-**Landed:** **Part one**, apart from queue-age SLOs — cron shared-fate split and byte-based media admission, 2026-08-09; the ffmpeg wall-clock kill already existed. **Part two's money bug is closed** — ambiguous submissions are held rather than refunded, 2026-08-09. Part two's throughput half (token bucket, `Retry-After`, circuit breaker) is still open.
+**Current status:** **FIX IMPLEMENTED LOCALLY — AWAITING DEPLOY + RECERTIFICATION** · **Severity:** High · **Surface:** server
+
+The 2026-08-09 cron split, byte admission, timeout hold and provider admission controls are deployed history. The current worktree additionally makes queue age include reclaimably stale `processing` leases and holds connection-reset/network-ambiguous and private-template submissions. Those additions supersede the older “still open” and residual statements below, but require migration replay and the clean burst/queue-age run before F14 returns to DONE.
+
+**Historical landed state:** cron shared-fate split, byte-based media admission, timeout hold, global/per-model admission, `Retry-After`-driven breaker and circuit breaker — 2026-08-09.
 
 **Problem, part one.** Every due job runs concurrently inside one 300-second function invocation, so one memory-heavy media job can take down completions, push receipts, alerts and retention together. Four completion workers each staging a video up to 250 MB can require ~1 GB of function temp space.
 
@@ -820,7 +941,7 @@ Also found while building the fixture, and worth recording because it constrains
 
 The claim falls back to the previous count-only query when the RPC is absent, matching the repo's existing missing-RPC idiom, and the app still applies the attempt cap to whatever the RPC returns rather than trusting a database function to enforce a spend cap.
 
-**Still open in F14:** queue-age SLOs, and part two's throughput half — global provider token bucket, `Retry-After` handling, and the circuit breaker. The `submission_unknown` state landed 2026-08-09; see *Part two's money bug, closed* below.
+**Historical checkpoint, now superseded:** at this point queue-age SLOs and the throughput half were still open. The throughput half landed later on 2026-08-09; stale-lease-aware queue age is implemented in the current worktree and awaits recertification.
 
 **Part two's money bug, now located exactly (2026-08-09) so the fix does not start from a re-read.** `generation-services.ts:1491` calls `createKieTask` and assigns to `predictionId`; the catch at `:1512` refunds on `if (!predictionId && generationId)`. `createKieTask` uses `PROVIDER_TASK_CREATE_TIMEOUT_MS` (30 s, `provider-fetch.ts:7`) with no retry. So **a timeout leaves `predictionId` undefined and takes the refund branch — which is indistinguishable from a definitive provider rejection**, even though Kie may have accepted the task. The later callback then arrives for a generation already settled as failed, and is discarded.
 
@@ -868,7 +989,7 @@ Two properties fall out of that choice for free, and both are pinned by tests: t
 
 **A latent bug found and fixed on the way: the reaper was not template-aware.** `loadStalledStartFailureRows` selects any `pending` row with no provider task, including template generations, and settled all of them through `settle_generation_start_failed` — which refunds the hold but never touches `template_run_steps`, stranding the run in `processing`. This was near-unreachable before, because template starts settle synchronously and only reached the reaper when that settlement had itself failed. Holding would have made those rows ordinary. The reaper now routes rows carrying a `template_run_id` to the template settlement RPC.
 
-**Residuals, recorded rather than fixed:**
+**Historical residuals, superseded where noted by the 2026-08-10 remediation:**
 
 1. **Only the typed timeout is held.** `ExternalServiceTimeoutError` is the ambiguous class; a post-send `ECONNRESET` is genuinely ambiguous too, but `fetchWithTelemetry` only converts abort-like errors (`provider-fetch.ts:220-233`) and rethrows the rest unchanged. Widening it means a new classifier separating post-send network errors from `ENOTFOUND`/`ECONNREFUSED`, which unambiguously never landed. Scoped out deliberately: the timeout is the dominant case at a 30 s budget.
 2. **A timeout that fired before the request left the box is indistinguishable from one that fired after**, so it holds credits for 45 minutes unnecessarily. Conservative in the safe direction.
@@ -1247,9 +1368,15 @@ Both tables are still small (14 MB and 4.7 MB), so the copy-and-swap itself is s
 
 ### F15b — Error tracking, PITR and log retention
 
-**Status:** BLOCKED — **scoped 2026-08-09; the one code-only item landed under F15a on 2026-08-09, and every remaining item is now an owner action** · **Severity:** Medium · **Surface:** ops
+**Current status:** IN PROGRESS · **Severity:** Medium · **Surface:** ops
 
-There is no Sentry, PostHog or equivalent anywhere — web, mobile or server. Alerting is an hourly GitHub Actions watchdog email to a single recipient. There is no retained log drain, no PITR, no independent Storage recovery and no defined restore-time objective. Before meaningful paid scale: add error tracking on all three surfaces, five-minute external monitoring, a second incident recipient, retained logs, PITR, media recovery and quarterly restore drills.
+Browser and server Sentry, source-map upload, `track_io_timing` and the drilled second-recipient incident path are complete according to the status board and later dated entries. Mobile Sentry, a forced server-event arrival check, media/database restore drills, egress automation and the provider-cost import/ledger remain actionable. PITR, a retained log drain and paid five-minute monitoring remain explicitly out of scope under the recorded budget. Older “not shipped” paragraphs below are implementation history, not current status.
+
+**Historical opening state (superseded by the current-status paragraph and dated
+entries below):** there was no Sentry on web, mobile or server, and alerting was
+an hourly single-recipient watchdog. Web/browser and server tracking, source
+maps and the second-recipient drill have since landed; mobile tracking, log
+drain, PITR and recovery drills remain open.
 
 Also add a **per-task provider-cost ledger** — the repo records app-credit charges but not Kie credits consumed, effective provider cost, payment fee, or storage/egress allocation per task. Contribution margin per model is unknowable without it, and provider spend is likely the largest total variable cost.
 
@@ -1309,7 +1436,7 @@ API Key | Model | Credits Consumed | Create Time | Task ID
 
 **Security note from doing this:** the export's `API Key` column contains the **full key in plaintext** (`ANTIGRAVITY (b5b1…6907)`), where the dashboard masks it. Any automation that fetches or stores this file is handling a live credential — treat the file as a secret, and prefer rotating the key after a manual export.
 
-**~~One consequence worth taking:~~ Taken 2026-08-09.** F15a's database-side aggregates were deferred into this item specifically so `backend-cost-report.ts` would not be rewritten twice — "F15b adds a per-task provider-cost ledger to the same file, so building the aggregate layer once, with the ledger's requirements known, avoids rewriting it twice." The ledger is blocked on an input that does not exist, so that coupling dissolved and the aggregate layer was **built on its own and landed under F15a** (`20260809200000`). **Nothing code-shaped remains in F15b.**
+**~~One consequence worth taking:~~ Taken 2026-08-09.** F15a's database-side aggregates were deferred into this item specifically so `backend-cost-report.ts` would not be rewritten twice — "F15b adds a per-task provider-cost ledger to the same file, so building the aggregate layer once, with the ledger's requirements known, avoids rewriting it twice." The coupling dissolved and the aggregate layer was **built on its own and landed under F15a** (`20260809200000`). **The aggregate work no longer belongs to F15b.** Code-shaped F15b work still exists for provider-cost import/ledger, mobile error tracking and recovery-drill tooling; paid PITR/log drain/monitoring remain external budget decisions.
 
 ### Budget constraint, recorded 2026-08-09 (owner)
 
@@ -1327,7 +1454,9 @@ That rules out, explicitly:
 
 **One consequence worth stating plainly:** with no PITR and no log drain, the recovery story is *daily backup + finite logs*. That is a legitimate choice at 13 MAU. It is **not** a legitimate choice at the 10,000–25,000 MAU this phase certifies, so it should be revisited as a funded item before that traffic arrives, not after.
 
-**Owner decisions, none of which are code** — each needs an account, a spend approval or a value only the owner has. **This table is the unblock list: supplying these values is what turns F15b from BLOCKED into work.**
+**Historical owner-unblock table.** Later dated entries resolve web/server
+Sentry, source maps and the second recipient; do not use this table as current
+status without the opening summary above.
 
 | Item | What it needs | Where it goes |
 |---|---|---|
@@ -1389,7 +1518,9 @@ Server-side capture now ships: `src/instrumentation.ts` initialises on the Node 
 
 **One honest gap in the verification:** the browser half was proven by an event arriving in the issue stream. The server half is proven *wired and deployed* — bundled, `onRequestError` registered, sharing the same config module whose inlining bug is fixed (and on the server `process.env` is real regardless) — but **no server event has been forced**, so it is not proven by arrival the way the browser half is. The first genuine server error will confirm it.
 
-**NOT shipped #2 — source maps.** `withSentryConfig` uploads them, needs a `SENTRY_AUTH_TOKEN` (a real secret, owner-only), and rewrites the bundler config that `outputFileTracingIncludes` uses for `ffmpeg-static` — the same thing `build:verify` guards. **Until it lands, stack traces arrive minified.**
+**Historical #2 — source maps (now shipped).** `withSentryConfig` uploads them
+using `SENTRY_AUTH_TOKEN`; the build/artifact gate verifies the ffmpeg tracing
+contract alongside it.
 
 **NOT shipped #3 — mobile.** `magicbooklet-mobile` exists with its own DSN, but `@sentry/react-native` is unwired. Mobile ships on the store-release train (a manual dispatch plus review, multi-week), so nothing wired today reaches a phone this month; and the Expo config plugin changes `expo prebuild`, which CI runs. Worth doing as its own change with its own mobile-CI verification, per this document's "start mobile items first even though they land last".
 
@@ -1419,7 +1550,8 @@ The variable was restored to `https://magicbooklet.com` afterwards.
 
 **The first drill failed on the alerting step itself**: `gh` died with *"not a git repository"*, because this job deliberately runs **without `actions/checkout`** to keep each billed run short, so `gh` had no remote to infer the repository from. Fixed with `GH_REPO` rather than by adding a checkout, which would have put a clone on every hourly run. Had this not been drilled, the watchdog would have kept passing while its alert channel was dead — an alerting system that only fails when you need it.
 
-**Remaining owner step:** `magicbooklet` must accept the collaborator invite and **watch the repository** (All Activity, or Custom → Issues). Without that, the issue is created and notifies nobody new — the channel exists but the second recipient is not yet on it.
+**Historical owner step — resolved.** `magicbooklet` accepted/watched and the
+second-recipient delivery was confirmed by drill, as recorded on the board.
 
 ### A public-repository exposure, found while doing this
 
@@ -1461,28 +1593,29 @@ The `I/O Timings` line is absent entirely when the setting is off. Incidentally 
 
 ### Phase 1 certification test
 
-**Status:** **RUN 2026-08-10 IN THE SPECIFIED ENVIRONMENT — STILL NOT CERTIFIED.**
-The environment the 2026-08-09 attempt could not build now exists and works end to
-end: a Supabase preview branch replaying all 173 migrations, seeded to the 100k
-tier, with a Vercel preview in production's `bom1` region and the provider stub
-reached through the `KIE_API_BASE_URL` seam. All four named cases **pass**. But
-**no MAU level is certified**, because no tested origin-RPS level survives the
-one-hour soak: 25, 10 and 5 RPS all fail, and measured sustainable throughput
-*fell* across the session as feed tables grew. Full results in
-*Certification run — 2026-08-10* below; the 2026-08-09 attempt is kept beneath it
-for the three findings it produced.
+**Current status:** **INVALIDATED RUN RECORDED — CLEAN RERUN REQUIRED.**
+The 2026-08-10 environment proved that the replayed Supabase branch, Vercel
+preview and provider-stub topology can be built. Its ranked-feed continuation,
+named cases, media realism, resource gates and independent-soak properties did
+not satisfy the declared certificate. The current worktree remediates those
+defects but has not been applied to a cloud branch. Therefore **no MAU level is
+certified** and the run below is diagnostic history only.
 
 **Do not read the numbers below as a certified MAU level.** No MAU figure is
 being claimed. The planning table in the *Executive verdict* is unchanged.
 
-**Entry check, recorded 2026-08-09 when the code tail closed.** Every Phase 1 scaling item that could be executed in code has landed: F5, F5b, F7b, F8, F9, F14 and F15a's aggregate layer are DONE. Two things are deliberately **not** blockers, and two things **are**.
+**Historical entry check, recorded 2026-08-09 before independent review.** It is
+kept to explain why the first run started, not as the current go/no-go decision.
 
 **Not blockers, and why:**
 
-- **F12 stays IN PROGRESS by design.** Idempotent run creation, the durable step queue, cron recovery and the pure GET all landed; the per-node executor is a recorded deferral, not an unfinished prerequisite. The durability properties the certification test exercises are the ones that shipped.
+- **F12 was treated as a deferral.** Independent review later reopened the
+  product caller, atomic initialization and cross-instance ownership seams. The
+  current worktree fixes those seams; deployment and strict race/fan-out tests
+  now block closure. Per-node poison isolation remains an explicit exclusion.
 - **F10 stays IN PROGRESS by design** — two unassigned web-perf leftovers carried past Phase 0 on this document's own instruction.
 
-**Actual blockers — both cleared 2026-08-09:**
+**Pre-run blockers that were cleared 2026-08-09:**
 
 1. ~~**`track_io_timing` must be ON before the run.**~~ **Done** — set on `postgres` *and* `authenticator` and verified collecting. Setting it on `postgres` alone would have instrumented ops traffic and missed every PostgREST query, so **check both roles still carry it immediately before the run**.
 2. ~~**A second incident recipient.**~~ **Done, and verified by drill rather than by configuration.** `magicbooklet` (info@magicbooklet.com) is a collaborator watching the repository, and the watchdog now opens an incident issue on failure — which is the only channel that reaches a second person, because GitHub emails scheduled-workflow failures to exactly one. A forced failure was run end to end and the notification arrived.
@@ -1501,9 +1634,11 @@ Certify only a level that survives a **one-hour soak** with: error rate below 1%
 
 ### Certification run — 2026-08-10
 
-**Verdict: NOT CERTIFIED.** The environment specified by this section was built
-and works; the workload ran in full; all four named cases pass. **No MAU level is
-claimed**, because no tested level survives the one-hour soak.
+**Superseded verdict: NOT CERTIFIED.** The environment specified by this section
+was built, but the later independent review proved that the workload did not run
+in full and that the four command-level PASS results did not cover the required
+properties. The raw observations are retained; feed-growth attribution, named
+case closure and MAU conversion from this run are invalid.
 
 **Provider spend: $0.** Supabase branch cost: ~$0.09.
 
@@ -1535,7 +1670,7 @@ domain exists; branch `rate_limit_verify` raised 30 → 150,000; and P95 is
 end-to-end over the internet (~200 ms RTT), so it is **not** comparable to the
 2026-08-09 localhost figures.
 
-#### The ladder, and a wall that is not the database
+#### The ladder, and an unattributed wall
 
 120 s per step, 574–569 signed-in users, `publish-post` re-enabled after
 Finding A's fix — it ran at 0% error, so the family 2026-08-09 had to disable is
@@ -1729,6 +1864,581 @@ Harness lives in `scripts/certification/`: `seed-fixtures.mjs`,
 `sample-resources.mjs` (new — samples pool, locks, queue age and fact growth,
 because the pass criteria are not all latency and 2026-08-09 could not evaluate
 the pool criterion at all).
+
+#### Independent review — 2026-08-10
+
+**Review point:** `b1df70a`, after the cloud run and harness-hardening commit.
+This review preserves the run's raw observations and its conservative verdict,
+but supersedes the four-item closure list above.
+
+**Independent verdict: `NOT CERTIFIED` is correct; the feed bottleneck attribution
+and full-workload claim are not yet valid.** Finding C is fixed in practice, the
+cloud environment now exists, the run proves that short ladders can hide an
+unbounded queue, and the feed persistence/retention system is the right first
+area to investigate. It does **not** yet prove that production cursor traffic has
+the same growth curve, that Postgres is outside the wall, or that ~10,000 MAU is
+measured capacity.
+
+##### Findings that change how the 2026-08-10 result may be used
+
+| ID | Severity | Finding | Consequence / required disposition |
+|---|---|---|---|
+| R1 | **Critical** | **The certification driver never continues the ranked feed.** `timedFetch` drains the body with `response.arrayBuffer()` and returns the consumed `Response`; `feed-for-you` then calls `response.clone().json()`, which throws and resets the cursor. Even after fixing that, it reads `payload.nextCursor` / `payload.sessionId`, while the API shape is `payload.pageInfo.nextCursor` / `payload.feedSessionId`. | Every ranked request in the run was effectively fresh page one; F11 continuation and session reuse were not tested, and feed events were not linked to a returned delivery session. Fix parsing and field names, hard-assert non-zero continuations/stable session IDs, then rerun from a clean identical branch. Do not use the 894k-row growth curve as a production capacity result before that rerun. |
+| R2 | **Critical** | **F12's keyed fan-out test does not represent the product caller.** The case supplies `Idempotency-Key`; the browser does not. Run creation, step materialisation and first job ownership are non-atomic, and the request monitor can race the worker across instances. | The named PASS is a clean-path keyed API smoke result, not workflow money/durability certification. F12 remains a certification blocker; closure is specified in the reopened F12 section. |
+| R3 | **High** | **F14 queue age can report green while work is reclaimably stale.** Both generation and workflow probes filter only `status = 'pending'`; both claim RPCs also treat expired `processing` leases as due. The sampler records pending generation age and only a workflow open count. | Include stale `processing` lease age in health and certification sampling. The `queue age < 2× cadence` criterion was not established, so F14 is reopened. |
+| R4 | **High** | **“The database is not the wall” is too strong.** The run rules out connection-pool exhaustion, material lock contention, the ranking RPC, bandwidth and an undici connection cap. It did not measure DB CPU, block read/write time, WAL/index-write cost, temp spill, checkpoint pressure, PostgREST wait or the latency of session/item/fact persistence. | The leading suspect is itself database/API write work. Say “ranking and pool/lock saturation are not the measured wall” until phase timings plus DB/Vercel telemetry isolate the remainder. |
+| R5 | **High** | **The run did not execute the entire declared certificate.** Upload stops at sign—no PUT/finalize/consume; media is valid but tiny (1,787-byte, 64×64/1s MP4); anonymous traffic is excluded; only the 100k fixture tier ran; the branch catalog is v1 while production is v2. | Keep these as explicit exclusions. Add representative upload/media cases, production catalog revision, 10k/1m fixtures and a separately reported multi-source anonymous run before calling a future result full-product certification. |
+| R6 | **High** | **Named cases still contain false-pass paths.** Workflow replay accepts `created <= 1` and any status below 500, so zero runs/all 4xx can pass; it does not assert child count, terminal outputs or exactly-once credits. Webhook permits fewer tasks than requested and does not bind fired IDs to terminal jobs/credits. Cron skips successfully without a secret and accepts 401/403/404 because it checks only `<500`; it also omits the dedicated completion/media routes. | Make every skip a certificate failure; require expected 2xx/202 statuses, exact non-zero cardinality, terminal outputs, queue drain, and exactly-once credit/provider settlement. Test the actual dedicated cron topology. |
+| R7 | **High** | **The three soaks are not independent.** They ran sequentially against one continuously growing database and may also inherit outstanding work/platform state from earlier offered load. | They prove non-stationary degradation, not the isolated capacity of 25 vs 10 vs 5 RPS. Reset/clone between tiers and separately test a pre-seeded steady state. |
+| R8 | **High** | **The ~10,000-MAU result remains model arithmetic.** The 5,000/hour prune constant is factual; the conversion uses an assumed 12 facts/MAU/day. The synthetic 25-RPS fact rate—generated without cursor continuation—is not interchangeable with production MAU behavior. | Label it “configured retention-throughput ceiling under the document's activity model.” Recalculate from production facts/session, sessions/DAU, DAU/MAU and peak factor before using it as a launch gate. |
+
+The item/fact ratio independently confirms R1: during the run, incremental
+`feed_session_items` divided by incremental facts was approximately **5.27**,
+close to the fresh-page shape of **60 ranked session items / 12 served facts**.
+A real continuation should reuse the existing session and move through positions,
+not repeatedly create that amplification. Also correct the current run's
+“~12 session items + ~12 facts” wording: a fresh session inserts the complete
+ranked set, up to 60 session items, then facts for the served slice.
+
+##### Additional implementation residuals carried into the plan
+
+- **Retention monitoring creates avoidable scale work.**
+  `get_feed_retention_lag()` performs exact `count(*)` scans over facts and events
+  despite describing the read as cheap; the resource sampler separately counts
+  all facts every 15 seconds. Lag needs the oldest actionable timestamp, while
+  table size can use existing growth estimates / `n_live_tup`.
+- **The unused-index hypothesis is plausible, not permission to drop.**
+  `feed_session_items_unserved_idx` has no repository query consumer and recorded
+  zero scans in the preview, but confirm production `pg_stat_user_indexes` over a
+  representative window and compare plans before removal. Continuation currently
+  uses `(session_id, position)`.
+- **Session-item retention is longer than the cursor lifetime.** Sessions expire
+  after two hours but pruning waits another two days, retaining ephemeral ranked
+  rows for roughly 50 hours. Measure the event-attribution grace actually needed
+  and test cascade-delete/WAL/bloat before shortening it.
+- **Marketplace search remains O(catalog).** The default listing is fast, but
+  multi-field `%query%` search remains an uncached scan. Add a maintained search
+  document plus `pg_trgm` GIN only after a large-fixture plan confirms it.
+- **F15a aggregate queries need large-window index proof.** Validate and, if the
+  plans require them, add time-leading indexes for `generations(created_at)`,
+  `backend_rate_limits(window_start)` and `storage.objects(bucket_id, created_at)`.
+- **Phase 0 media coverage is scoped, not universal.** Creator-tool preview,
+  marketplace hover video and one Creations path still use source media; mobile
+  rollout is not proven. Publish-time repair remains best-effort `after()` work,
+  bypasses the sweep's byte/time admission and can overlap its non-atomic
+  candidate selection.
+- **Mobile telemetry remains unbatched.** Web batches requests, while installed
+  mobile clients still send individual impression/progress/dwell events; the
+  server batch route also processes entries serially rather than in one RPC.
+- **Operational residuals remain explicit:** F4 egress observation is manual with
+  the spend cap ON; the accepted legacy ranged-CDN population does not obey the
+  universal one-day replay claim; F13 still needs the >1,000-row disjoint-run gate
+  before v2 promotion; F10's DOM/snapshot and payload budgets remain open.
+
+##### Ordered remediation plan before another certificate attempt
+
+**P0 — restore measurement correctness**
+
+1. Change the load driver to consume each response exactly once and return parsed
+   JSON where needed. Read `pageInfo.nextCursor` and `feedSessionId`; select event
+   post/delivery IDs from the page that produced that session.
+2. Add hard driver gates: zero parse failures, non-zero fresh sessions, non-zero
+   cursor continuations, positions advancing 0→12→24, stable session ID across a
+   continuation chain, and a declared minimum continuation ratio. A failed gate
+   exits non-zero before any capacity result is printed.
+3. Make setup self-contained and versioned: install/remove certification helper
+   RPCs, assert seed counts/catalog revision, reset/clone per tier, and guarantee
+   teardown. Commit immutable raw JSON/JSONL, commands, SHAs, environment values,
+   exclusions and reconciliation queries for every run.
+
+**P0 — close workflow and money correctness**
+
+4. Require a stable run-intent key at the workflow API and reuse it from the
+   browser across transport retries. Atomically create the run, expected step
+   skeleton and initial durable ownership before any provider submission.
+5. Make exactly one DB lease/CAS own each `(run,node,attempt)` execution; remove
+   the monitor as an executor or make it claim the same lease. Pass a deterministic
+   generation idempotency key as defense in depth. Exclude approval waits from
+   stalled adoption, enforce the attempt cap and terminalize expired runs.
+6. Add kill-point, two-instance race, 25-hour approval, stale-lease,
+   timeout/connection-reset, late-callback and template-ambiguity cases. Assert
+   expected step cardinality, terminal outputs and exactly one provider task and
+   credit settlement per node.
+
+**P1 — isolate the steady-state feed wall**
+
+7. Instrument the ranked-feed route by phase: auth/JWKS, rate limit, reusable
+   session lookup, candidate RPC, hydration/filtering, session insert, item
+   insert, fact insert and serialization. Correlate request IDs with Vercel
+   duration/concurrency/cold-start data and `pg_stat_statements` deltas.
+8. Extend resource sampling with DB CPU, block read/write timing, WAL/temp and
+   checkpoint deltas, table/index tuple growth, PostgREST/app-stage timing, every
+   durable queue's oldest actionable item and actual retention lag. Define the
+   pool rule (P95 vs absolute max) before the run; do not reinterpret it after.
+9. Run fresh-session and cursor-continuation microbenchmarks separately against a
+   fresh seed and a pre-seeded steady state. Verify the unserved index with static
+   inventory + production stats + `EXPLAIN`, then test fewer/narrower session rows
+   or one transactional persistence RPC before choosing a schema change.
+
+**P1 — raise durable throughput safely**
+
+10. Remove exact-count work from lag probes. Benchmark bounded old-row deletes,
+    lock/WAL impact and cron overlap before increasing fact/session/event prune
+    limits or cadence. Consider a dedicated retention worker; partition only if
+    measurements justify the schema/write-path cost.
+11. Complete the declared workload: sign→PUT representative bytes→finalize /
+    consume, realistic image/video sizes, cold marketplace + search, production
+    catalog revision, hot-comment and RSC-auth cases, plus a separately scoped
+    multi-source anonymous test.
+
+**Certificate acceptance gate**
+
+12. Run 10k/100k/1m fixtures with a fresh clone per stepped ladder and per
+    one-hour soak, plus a pre-aged two-day session / 30-day fact steady-state
+    fixture. The harness must fail non-zero unless every predeclared route SLO,
+    error/429 policy, DB CPU/pool/I/O gate, queue/retention gate, paid-generation
+    invariant and **30% measured headroom** passes. Convert RPS to MAU only through
+    a documented model built from real sessions/actions/facts telemetry and a peak
+    factor. **At this independent-review checkpoint**, status remained NOT
+    CERTIFIED; the later exact-build scoped certificate records which portions
+    of this gate were executed and which exclusions remain.
+
+##### Remediation implementation — 2026-08-10 (current worktree)
+
+**Status:** the code/harness defects found by the independent review are fixed
+locally and pass focused verification. This is **not** a certificate: the new
+database migrations have not been applied to an isolated cloud branch, no clean
+ladder/soak has run, and no change in the MAU verdict is permitted yet.
+
+| Review item | Implemented disposition | Evidence / remaining gate |
+|---|---|---|
+| R1 — consumed response, wrong cursor/session fields | `cert-load-test.mjs` reads response bytes once, parses `pageInfo.nextCursor` and `feedSessionId`, serializes each user's feed chain, advances positions, and emits events only for returned delivery IDs/session IDs. Hard gates require zero parse failures, non-zero fresh/continued sessions, stable IDs, advancing positions and a minimum continuation ratio. | A clean branch rerun must replace—not amend—the contaminated 2026-08-10 feed-growth result. |
+| R2 — keyless/non-atomic workflow | The browser creates one run-intent key and retains it across ambiguous retries; the supported route and atomic initializer reject keyless starts. Migration `20260810100000` atomically creates the idempotent run, complete step skeleton and first queue ticket. The request performs no provider work. The long process monitor is removed; the short `after()` fast path claims the same DB lease as cron, and a long branch heartbeats that lease every minute. Generation submissions use deterministic run/node hashes. Approval waits do not consume recovery tickets; exhausted adoption terminalizes the run. The old run-only RPC remains compatible only for the schema-first rollout and must be removed in the following release. | Apply migration on a new replayed branch; run kill-point/two-instance/fan-out/approval tests. Production remains unchanged until normal release. |
+| R3 — stale leased work invisible | Queue health and `sample-resources.mjs` include expired `processing` leases for completion and workflow queues and use `next_attempt_at`; rendition backlog gets its own oldest age. | Verify `queue age < 2× cadence` throughout the clean soak. |
+| R4 — database attribution overreach | Sampler adds block read/write timing, temp bytes/files, deadlocks, cache/TPS, due queue ages, rendition age and feed retention age. The document continues to say the earlier run ruled out only ranking plus pool/lock saturation. | DB CPU, WAL/checkpoints, PostgREST wait, Vercel concurrency/cold starts and route-phase timings still require platform telemetry/instrumentation in the next environment. No “not Postgres” conclusion is allowed without them. |
+| R5 — incomplete workload | Upload traffic now performs sign → raw signed PUT → post publish/consume using a valid multi-megabyte 1920×1080 PNG under the same one-day cache policy as product uploads. The provider stub generates a real 1920×1080 JPEG (~1.48 MB) and a real eight-second 1280×720 H.264/AAC MP4 (~3.76 MB) once at startup; byte padding is not treated as decode/transcode realism. The mix now includes cookie-authenticated `/feed` RSC renders, a deterministic 10k/100k-comment hot thread, cache-busted default marketplace pages and uncached search. | Multi-source anonymous traffic, production catalog revision and all 10k/100k/1m tiers remain separate environment gates. |
+| R6 — false-pass named cases | Missing secrets/skips fail. Webhook requires exactly N unique fired IDs, accepted callbacks, terminal jobs and successful non-refunded paid generations. Workflow requires all 2xx, the same ID for three replays, exactly one DB run, N unique concurrent runs, complete skeletons, ≥2 provider children/run, exact callbacks, terminal outputs/keys and a drained queue. Cron accepts only 200/202 and proves the dedicated completion/media/workflow/retention routes recorded clean managed-job outcomes. | These assertions must execute against the new deployed preview; script exit alone is no longer treated as property coverage. |
+| R7 — shared-state soaks | No code can make old sequential runs independent. Seeder now bootstraps a versioned `cert_exec_sql`/`cert_query`/`cert_table_sizes` helper set on an isolated branch via `CERT_DATABASE_URL`. | Provision/reset a fresh branch per tier and soak, then teardown it; do not compare sequential loads on one growing database. |
+| R8 — modeled MAU | Unchanged by design. | Recalculate with production facts/session, sessions/DAU, DAU/MAU and peak factor. The current ~10k figure remains a configured retention-throughput model, not measured capacity. |
+
+Additional hardening in the same remediation:
+
+- `config/certification-slos.json` predeclares per-family sample/P95 budgets,
+  overall error/429 limits and achieved-load criteria. The driver records actual
+  scheduled operation rate, maximum concurrency and backpressure-guard time and
+  exits non-zero on any validity or SLO failure.
+- Migration `20260810101000` removes exact `count(*)` scans from
+  `get_feed_retention_lag()` while keeping exact index-backed oldest-row times;
+  the resource sampler uses planner estimates for table size.
+- Provider task creation treats typed timeout, a cause-less fetch `TypeError`,
+  connection reset, broken pipe and closed-socket failures as
+  `submission_unknown`. Definitive pre-connect failures such as refused, DNS and
+  unreachable-route errors refund immediately. Private template steps remain
+  processing while an ambiguous hold reconciles instead of becoming
+  failed/refunded locally.
+- Verification at that remediation checkpoint: all three TypeScript configurations, script
+  syntax, full ESLint, `git diff --check`, **615 test files / 4,008 tests**, a
+  production Next.js build and FFmpeg build-artifact verification pass. The
+  provider stub now starts only after Sharp has encoded its real 1080p JPEG and
+  ffmpeg-static has encoded its real 720p/eight-second MP4; a local probe decoded
+  the MP4 at 1280×720 for 8.00 seconds.
+  With Docker restored, a clean `supabase db reset --local` replay through both
+  migrations that existed at that checkpoint passed. The new behavioural workflow test initially caught an
+  ambiguous PL/pgSQL column reference; after qualification and another clean
+  replay, all **31 database test files / 651 pgTAP assertions** pass, and the
+  15-class schema fingerprint script completes. An isolated cloud replay/apply,
+  database advisors and preview verification remain explicit release gates.
+
+### IR-2 — whole-project pre-certification scaling review (2026-08-10)
+
+**Review point:** the dirty release-candidate worktree based on `b1df70a`, after
+IR-1 remediation and before another cloud certificate attempt.
+
+**Historical decision at the IR-2 review point: do not start the cloud
+certificate yet.** The product items below now have local implementations in
+IR-3; this table remains the diagnosis and required-property record, not current
+status. The earlier review made
+the measurement harness materially better, but a wider application pass found
+product paths whose execution, ownership or cleanup model still changes under
+concurrency. A green feed/load soak cannot certify those paths. The certificate
+may be narrowed only by naming exclusions in the artifact; it may not be called
+a full-app or full-product capacity certificate while the P0 rows below remain.
+
+No new MAU number follows from this review. The existing fact-prune arithmetic
+remains a configured design ceiling, and the old cloud run remains invalid for
+capacity attribution.
+
+#### Safe fixes completed during this review
+
+| Area | Local disposition | Verification |
+|---|---|---|
+| Completion queue-age health | Removed the nonexistent `generation_completion_jobs.heartbeat_at` predicate from application health and the resource sampler. Completion leases use `locked_at`; only workflow tickets have a heartbeat. Added a real-schema pgTAP contract so permissive JS mocks cannot hide this again. | Focused queue/health tests pass; clean replay and pgTAP pass. |
+| Stalled workflow adoption | Added `workflow_run_step_jobs(canvas_id)` and the partial oldest-processing-run index. Adoption now uses a service-only RPC whose `NOT EXISTS` anti-join runs **before** `ORDER/LIMIT`, so 25 legitimate old jobs cannot starve a later orphan. The application retains a narrow post-snapshot race check. | Focused workflow tests pass; a 25-live-plus-one-orphan pgTAP fixture passes. |
+| Video poster extraction | Added a 30-second timeout, `SIGKILL`, signal-aware errors and bounded stderr to both poster seek attempts. This closes the missing kill path; it does not solve repair fan-out or ownership. | Focused poster tests and source typecheck pass. |
+| Load-driver scoring/accounting | Warm-up eligibility is frozen at request start; only scored successful feed responses affect feed-validity counters. Requests have a hard timeout. The report now separates scheduled, completed, skipped and driver-error operations; achieved load is based on completed operations; every family gets error and throttle gates. Numeric CLI bounds, exact `--max-operations` priming and a hard auth-pool minimum prevent invalid runs. | Script syntax, source-contract tests, test typecheck and focused lint pass. |
+| Certification migration safety | Added a certification-only wrapper requiring the independently copied expected branch ref, exact `SUPABASE_PROJECT_REF`/URL agreement and HTTPS, with a hard rejection of production ref `ildfmhozpibwiopeavfg`. Raw certificate artifacts use an ignored directory. | Ten wrapper cases, syntax, typecheck and lint pass. |
+| Stub priming state | The runbook now resets the stub, primes exactly 48 operations, asserts exactly 48 pending tasks, then restores and verifies eight-second auto-completion before load. | Runbook/script contract only; the cloud path still needs execution. |
+| Duplicate completion callback ownership | Migration `20260810103000` now preserves `processing` owner/lease/attempt and terminal state on duplicate enqueue; only pending work is accelerated. A second worker cannot claim the live lease and the original owner can still finish. | Nine real-database race assertions pass; isolated branch replay/webhook burst remains the release gate. |
+| Provider in-flight accounting | Migration `20260810104000` excludes local pre-submit reservations while conservatively counting attached task IDs and `submission_unknown` rows. Fifty reservation-only rows no longer self-reject a one-slot gate. | Existing breaker/bucket tests plus five new real-database admission assertions pass. A strict concurrent capacity reservation still belongs in the durable submission-queue design. |
+
+After a clean local reset through `20260810104000`, all **35 database test
+files / 678 pgTAP assertions** pass. This is source confidence, not capacity
+evidence. All three TypeScript configurations, focused lint/diff checks and the
+full **619-file / 4,028-test** Vitest suite also pass at this review point.
+
+#### P0 — product blockers before a full-app certificate
+
+| ID | Finding | Why it scales incorrectly | Required closure |
+|---|---|---|---|
+| PC-1 | **Template-run GET executes paid work.** The read adapter calls `syncTemplateRun`; sync polls providers, mutates steps and submits downstream generations. No durable worker calls it, while clients poll every three/four seconds and do not pause in hidden tabs. | Closing the client can stall a run; multiple tabs/instances can race paid submissions; GET traffic amplifies provider and DB work. This is the same architecture F12 removed from canvas workflows. | Make GET a pure database read. Atomically initialise a complete step skeleton and durable ticket; execute one leased/idempotent step per worker claim; wake on completion with cron only as recovery. Add disconnect, two-tab, two-instance, replay and fan-out settlement tests. Full-app certification is blocked until this lands. |
+| PC-2 | **Workflow backpressure becomes terminal failure.** Provider admission returns `provider_busy` after the generation/credit reservation, but the workflow runner catches it like any node error and writes a failed step. | A normal burst above a model bucket can permanently fail otherwise valid fan-out. Slowing the harness would conceal rather than fix the property. | Prefer a durable submission queue. At minimum, admit before irreversible reservation or retain a retryable queued step with bounded backoff and one attempt-specific idempotency identity. Prove no duplicate hold/task/charge. |
+| PC-3 | **Workflow production wake-up throughput is not the certified topology.** Deferred runs have no completion-driven wake. Recovery is the shared ten-minute scheduler with a batch of ten; the strict case manually calls the worker every two seconds. | After the request fast path, production can advance at most about **60 runs/hour** through recovery, and more than ten concurrent waits can grow queue age. The case currently overdrives a topology production does not deploy. | Enqueue/wake the exact run when a child generation reaches terminal state, with a dedicated higher-cadence cron only as fallback; or deploy and budget a dedicated workflow cron. Run the case at the actual deployed cadence with >10 simultaneous completions. |
+| PC-4 | **Provider in-flight semantics fixed locally; strict reservation remains.** The old gate counted local `pending` reservations before provider submission, so a burst could self-reject before creating work. | Migration `20260810104000` now counts only attached or ambiguous provider work. The count/check is still observational rather than a durable provider-slot reservation, so simultaneous callers can race near the cap. | Apply/replay the migration and run the reservation fixture. For a hard concurrency cap, let the durable submission worker transactionally reserve a provider slot/lease and release it on terminal/reconciled outcome. |
+| PC-5 | **Duplicate callback lease revocation — fixed locally, not released.** The prior enqueue function reset every non-succeeded conflict to pending and cleared its owner. | Provider retry during a large download could make the same job immediately claimable by a second worker, duplicating up to 250 MB import/preview work. | Migration `20260810103000` preserves `processing` ownership and terminal states; its claim/duplicate/finish race passes locally. Apply it on the isolated branch and bind exact callback IDs to one terminal job/output/settlement in the burst case before marking closed. |
+| PC-6 | **Provider success is not separated from durable output import.** Media staging/storage/preview errors can settle a generation as succeeded with a null/empty output; the completion job then succeeds. Direct status GETs can also perform the full remote import synchronously. | Storage throttling, oversize output or transient preview failure converts paid provider work into terminal success with no durable media and no retry. User polling can still perform up to 250 MB of network/storage/CPU work in a request. | Persist provider-terminal payload first, enqueue a leased media-import lifecycle with independent retry/backoff, and expose application success only after durable output exists. Do not send provider-completed work through the current exhausted-job refund path. Make status GET pure state reconciliation/enqueue. |
+| PC-7 | **Media repair has no single atomic owner or global admission path.** The sweep can launch 25 generation plus 25 post repairs together; its candidate RPC is a read, not a claim. Publish `after()` calls bypass sweep byte/time admission. | At the 250 MB ceiling one invocation can admit 12.5 GB and many ffmpeg processes; overlapping cron/publish instances duplicate downloads and transcodes. The new poster kill bounds duration but not fan-out. | One durable media job table with `FOR UPDATE SKIP LOCKED`, owner/lease/heartbeat/attempt/next-attempt; all publish and sweep paths enqueue/claim it. Use media/byte-aware pools (video 1, small bounded image pool) and certify upper representative sizes. |
+| PC-8 | **Upload admission is request-count based, not byte based.** Independent temporary/workflow/resource/profile scopes permit roughly 26.65 GB declared per account per ten minutes at maximum file sizes, and declared bytes are reporting-only. | A small number of accounts can exhaust project storage/egress before request limits engage. Several upload purposes also lack reclaim intents, and deletes omit derivatives/resource/secondary outputs. | Add atomic per-user and project outstanding-byte quotas, reconcile actual `storage.objects` bytes at finalize, generalise upload intents, and use a transactional storage-deletion outbox with leased retry. |
+
+#### P0 — certificate validity blockers
+
+1. **Finish strict-case properties.** Workflow replay starts must race
+   concurrently and the replayed run must be driven to terminal state and
+   included in exact credit/provider reconciliation. Webhook burst must bind
+   every requested task ID to callback, terminal job, output and one settlement.
+   Cron overlap must prove one lock owner and one clean loser, invoke the actual
+   dedicated completion/media/workflow/feed-maintenance topology, and mutate a
+   bounded expired cohort instead of accepting a no-op.
+2. **Add deterministic degradation cases.** Exercise provider 429, 5xx and
+   accepted-then-reset behavior, then prove breaker/backoff, ambiguous hold,
+   late callback and recovery without duplicate provider work or refunds.
+3. **Make resource evidence executable.** `resources.jsonl` still needs a
+   machine evaluator for pool percentile/max semantics, lock/deadlock absence,
+   every queue's oldest-due age, drain deadline, retention slope, WAL/temp/
+   checkpoint deltas and sparse/missing sample failure. DB CPU, PostgREST wait
+   and Vercel concurrency/cold-start data remain mandatory external artifacts.
+4. **Instrument ranked-feed phases before tuning it.** Record auth/JWKS, rate
+   limit, reuse, candidate RPC, hydration, session/items/facts persistence and
+   serialization against one request ID. The old run rules out ranking plus
+   measured pool/lock saturation only; it does not identify the 2.6–4.4 second
+   remainder.
+5. **Bind and isolate every run.** Record build SHA, schema fingerprint, fixture
+   manifest/project ref, exact catalog revision, SLO hash, stub run/config and
+   timestamps. Strict cases, each ladder tier and every soak require fresh
+   branches and stub nonces. The protected-preview Edge/Vercel/stub relay and
+   isolated Auth rate-limit deviation must be preflighted and recorded.
+6. **Add a deterministic capacity calculator.** Sustainable operation RPS after
+   30% headroom, active route mix, feed-prune ceiling, provider/media ceilings
+   and MAU sensitivity inputs must be versioned and reproducible. Manual RPS→MAU
+   arithmetic cannot produce a certificate.
+
+#### P1 — additional scale work found outside the original closure list
+
+| Surface | Current scaling shape | Plan / certificate scope |
+|---|---|---|
+| Public template catalog | Unpaginated/unbounded DB read, anonymous GoTrue call, up to roughly 2N storage-sign operations, private/no-store response, whole-catalog client filter/render and eager media metadata. PostgREST can silently cap at 1,000. | Keyset page a compact projection; separate cacheable public reads from owner/draft state; use immutable public previews or page-sized signing; lazy media/window cards. Test 10k templates. |
+| Marketplace search | Arbitrary public `q` bypasses application cache and remains O(catalog); both API/RSC paths are unthrottled. | Minimum query length plus edge/KV budget; add maintained search document + trigram/FTS only after 100k/1m plan/output proof. Exclude adversarial search until then. |
+| Seedance asset status | Authenticated GET accepts arbitrary asset IDs and calls the shared provider key without ownership binding, cache or read budget. | Bind IDs to user/signed capability, add a separate GET budget and terminal-state cache. |
+| Generation polling | Every authenticated tab mounts the 30-second global poller; Creations adds another, studio adds per-generation polling and app-version polls every 15 seconds. Each path multiplies auth/DB limiter/lock work even though provider polls are prediction-throttled. | Cross-tab leader election and broadcast results; remove duplicate page poll; cache/piggyback build ID; certify tab count as well as users. |
+| Public/hot API auth | F8 removed GoTrue from the RSC helper, but many API services—including authenticated feed/event paths—still use `auth.getUser()`, a network `/user` validation. | Migrate measured hot bearer paths to a shared verified-claims helper where JWT-expiry revocation semantics are acceptable; keep sensitive freshness checks explicit. Measure before/after. |
+| Marketplace bundle files | Opening a bundle sends one signed-URL request per file, repeating auth/access/rate-limit/storage work; no server item/attachment cap prevents legitimate self-429. | Enforce counts, batch-sign after one access check, and lazy/bounded client fetch. Seed the maximum supported bundle. |
+| Sales export | Loads all seller assets, sends one large `.in(...)` purchase query and builds CSV in memory; no range/budget, with silent 1,000-row risk. | Date range + keyset pages/streaming + export rate limit. |
+| Feed events/mobile | Web batches, but server handles entries serially and mobile sends one request/event. | Create F7c: atomic batch RPC plus persisted mobile queue/backoff; otherwise exclude mobile MAU from the certificate. |
+| Remaining source media | Creator preview, marketplace hover and a Creations video path still use source URLs. | Require ready `.feed.<hash>.mp4` renditions on public playback; verify no duplicate repair and complete mobile rollout. |
+| Serverless bundles | Built route traces still pull the ffmpeg-static binary through the umbrella backend-job executor into many unrelated cron routes. | Split route-specific executors and add a build gate that rejects unexpected ffmpeg-bearing manifests, not merely a minimum expected count. |
+| Retention/history | Share/profile/free-order and mobile notification cleanup include unbounded deletes; workflow/template histories lack complete growth/retention classification; rate-limit retention lacks a global time-leading index. | Bounded oldest-first deletes with matching indexes and time budgets; add oldest-expired age/cap-hit alarms. Validate production index stats before dropping redundant indexes. |
+| Browser F10 | Feed DOM, synchronous session snapshot and `inlineCss` experiment remain open. | Keep as a separate browser-scale gate: window list, idle/debounce/cap snapshot, and compressed/decoded build budgets with an inline-CSS A/B. |
+
+#### Revised order of work
+
+1. Close PC-2 through PC-5 (provider/workflow ownership and retry semantics).
+2. Build the durable template executor (PC-1) and completion-driven workflow
+   wake; otherwise explicitly exclude both template execution and poison-node
+   isolation from a narrower core-web certificate.
+3. Separate provider completion from durable media import and unify all repair
+   work behind leased, byte-aware workers (PC-6/PC-7).
+4. Add byte quotas and storage cleanup durability (PC-8).
+5. Finish the strict-case/resource/phase-timing gates, then run them on fresh
+   isolated branches at the production topology—not an accelerated test-only
+   scheduler.
+6. Only after P0 is green, run 10k/100k/1m ladders and fresh one-hour soaks,
+   calculate a reproducible MAU range, and issue a dated certificate with
+   explicit exclusions and expiry triggers.
+
+Until that sequence clears, the authoritative status remains **NOT CERTIFIED —
+no full-app MAU claim**.
+
+---
+
+### IR-3 — pre-certification implementation closure (2026-08-10)
+
+**Authority:** this section supersedes IR-2's “product blocker open” status and
+the older remediation counts. It does not supersede the capacity verdict. The
+code is a release candidate; **no MAU/RPS level is certified** until the cloud
+procedure in `docs/scaling-certification-runbook.md` passes.
+
+#### Product P0 disposition
+
+| IR-2 item | Current implementation | Remaining proof |
+|---|---|---|
+| PC-1 template execution-on-GET | Template GET is a pure state read. Starts/approvals/retries enqueue `template_run_jobs`; a service-only SKIP-LOCKED lease with heartbeat/backoff owns progress, and the backend scheduler drains it. | Isolated replay, two-instance/disconnect/fan-out strict case and deployed queue-age evidence. |
+| PC-2 workflow provider backpressure | `provider_busy` no longer terminalizes a node. The run job defers with bounded backoff while deterministic `(run,node,attempt)` generation identities prevent duplicate holds/tasks. | Run 20-way fan-out against real admission limits; no harness slowdown is allowed to substitute for the assertion. |
+| PC-3 workflow wake ceiling | Generation terminal settlement wakes the exact workflow run transactionally; the ten-minute scan is recovery rather than primary progression. | Measure terminal-to-runnable age under >10 simultaneous completions at deployed cadence. |
+| PC-4 provider admission race | `reserve_provider_submission` serializes bucket/breaker/in-flight admission and persists `provider_submission_reserved_at`; attached, ambiguous and reserved work are counted once. | Replay the concurrent pgTAP fixture on the cloud branch and reconcile reservations to tasks/terminal releases in strict cases. |
+| PC-5 callback lease revocation | Duplicate completion enqueue preserves a live processing owner/lease/attempt and terminal state. | Deployed duplicate callback race and representative large-media burst. |
+| PC-6 successful output durability | Provider success stores the terminal payload in `generation_output_import_jobs`. A leased worker imports media with independent retry/backoff; status/webhook paths enqueue and return without downloading/transcoding. Provider-completed work is not routed through refund-on-import-exhaustion. | Representative image/video import, storage-failure recovery, queue drain and exactly-once settlement on the isolated preview. |
+| PC-7 repair ownership/fan-out | Post/generation rendition candidates are atomically claimed with owner/lease/next-attempt. All publish paths enqueue the same repair lifecycle; images use a small pool, video is serial, and poster ffmpeg has a 30-second SIGKILL timeout. | Prove lease exclusion and byte/queue-age limits with upper representative media in the deployed dedicated cron. |
+| PC-8 upload bytes/cleanup | `upload_byte_reservations` enforces atomic per-user (1 GiB) and project (100 GiB) outstanding-byte ceilings across temporary, workflow, profile and resource upload signing. Failures/finalization release reservations. Auxiliary/mobile cleanup is oldest-first and capped at 5,000 rows. | Reconcile declared versus actual object bytes and run abandonment/reclaim/drain cases on isolated Storage. A general cross-bucket deletion outbox remains Phase 2. |
+
+#### Additional scaling closures found during implementation
+
+- Public templates now use a compact keyset page (48 default, 96 maximum), skip
+  anonymous GoTrue, use shared edge caching, lazy images and `preload="none"`
+  videos, and load further pages explicitly. The 10k-template fixture remains a
+  certificate gate, not an assumption.
+- Marketplace search now uses a trigger-maintained normalized search document
+  with a trigram GIN index rather than rebuilding JSON/text for the catalog on
+  every request. Both application and database enforce a three-character
+  minimum. Trigger refresh and index presence are pinned in pgTAP.
+- Share/profile/free-order and mobile notification retention are bounded,
+  indexed and oldest-first. Workflow orphan discovery excludes live jobs before
+  `LIMIT`, and the missing workflow job foreign-key/recovery indexes are added.
+- Ranked-feed certification emits correlated `Server-Timing` phases for auth,
+  limiter, cursor/reuse, candidate retrieval, hydration, ranking, persistence,
+  viewer state, serialization and total request. The driver hard-fails if a
+  required phase is absent.
+
+#### Certificate machinery now executable
+
+- The driver freezes score eligibility at request start, reads bodies once,
+  proves cursor/session/delivery linkage, performs real upload PUT+consume,
+  counts completed/skipped/driver-error operations, applies per-family
+  latency/error/429 gates, bounds requests and exits non-zero on any failed
+  validity/SLO check.
+- Webhook/workflow/cron cases require exact non-zero cardinality, expected 2xx,
+  terminal output, queue drain and unique settlement. Same-key workflow replays
+  race concurrently and the replayed run is included through completion.
+- A deterministic provider-degradation case drives one 429, one 5xx and one
+  accepted-then-reset submission. It requires immediate refund for definitive
+  refusals, a stable `submission_pending` response/held generation for the
+  ambiguous accept, late callback attachment, durable output and no second
+  refund/charge.
+- Resource sampling is serialized and schema-checked; its evaluator fails on
+  sparse telemetry, pool/lock/deadlock/temp/queue/retention breaches or failed
+  post-load drain. DB CPU/PostgREST and Vercel concurrency/cold-start remain
+  explicit external artifacts.
+- Every load report is bound to the expected build ID, schema fingerprint,
+  fixture tier, catalog revision, Supabase ref, SLO SHA-256 and authenticated
+  stub state. The migration wrapper independently verifies the non-production
+  project ref. Raw artifacts are ignored by git.
+- The versioned capacity calculator applies 30% headroom and reports compute,
+  feed-retention, provider and media limits separately across conservative/base/
+  optimistic activity assumptions. Missing dimensions or anonymous-scope
+  ambiguity fail instead of producing a hand-calculated MAU headline.
+
+Local release-candidate verification after a clean Docker replay: all three web
+TypeScript configurations and ESLint pass; **624 Vitest files / 4,060 tests**
+pass; the production Next build and ffmpeg artifact verification pass; mobile
+typecheck plus **104 files / 959 tests** pass; all **42 database files / 750
+pgTAP assertions** pass; and the clean schema fingerprint completes across 15
+object classes. Git diff whitespace and the production-release YAML parse also
+pass. No deploy, advisor run or cloud load was performed.
+
+#### Deliberate exclusions and remaining work
+
+These are not hidden in a generic “later” bucket:
+
+1. **Mobile MAU is not certified.** Installed mobile builds still send one feed
+   event per HTTP request and there is no persisted offline batch queue/atomic
+   batch RPC. A web-only certificate must say so; F7c remains the next mobile
+   store-train item.
+2. **Poison-node isolation is not certified.** Canvas execution is durable and
+   run-leased, but a claim still advances a run rather than one node. Exactly-once
+   fan-out is in scope; independent per-node retry is not.
+3. **Browser multi-tab amplification remains.** Global generation polling still
+   runs per tab and F10 feed DOM/snapshot work remains. Capacity math must state
+   its tabs/user assumption until leader election/windowing lands.
+4. **Funded operations remain external:** PITR, log drain, mobile Sentry,
+   production-equivalent autoscale/failover and multi-source anonymous traffic.
+5. **A source-green tree is not a certificate.** Required next steps are one
+   clean cloud replay/advisor pass, release-candidate preview, strict cases,
+   fresh branches for each 10k/100k/1m ladder and candidate one-hour soak,
+   platform telemetry, immutable artifacts and reproducible MAU calculation.
+
+**Historical IR-3 checkpoint:** at this source-only point the verdict remained
+NOT CERTIFIED. The cloud certificate immediately below supersedes that checkpoint
+after executing the missing replay, preview, strict-case, soak and telemetry
+gates on the exact candidate.
+
+---
+
+### Phase 1 scoped capacity certificate — 2026-08-10
+
+**Authoritative verdict:** **CERTIFIED FOR THE DECLARED AUTHENTICATED-WEB MIX AT
+7 TARGET OPERATIONS/S ON THE 100K FIXTURE.** The run achieved 6.96 completed
+operations/s and 7.39 HTTP requests/s for one hour. Applying the predeclared
+30% reserve yields a claimable workload rate of **4.872 operations/s**. This is
+a scoped certificate, not a full-app or vendor-entitlement claim.
+
+#### Exact environment binding
+
+| Binding | Certified value |
+|---|---|
+| Commit / build ID | `c1d494ebfc4b796501826001b81701fffdbee1ee` |
+| Vercel topology | Preview, `bom1`, Fluid compute, 2,048 MB/function, 300 s maximum |
+| Supabase topology | Ephemeral Micro branch in Mumbai; `track_io_timing=on`, `log_temp_files=0` |
+| Schema fingerprint | `979702a44848d635e135431b5bf8579f40b36a8edc692bc5da5835f75e2c7566` |
+| Catalog | schema v2, revision `wan-provider-id-fix-20260725`, 29 model entries |
+| Fixture start | 2,000 users, 20,000 posts, 20,000 comments, 5,000 bundles, 100,020 feed facts |
+| Provider | Authenticated isolated stub through the real Edge→Vercel callback path; real decodable 1,920×1,080 JPEG and eight-second 1,280×720 H.264/AAC MP4 |
+| Auth deviation | Isolated-branch verify/refresh limits raised for the driver pool; Auth capacity is excluded |
+| Anonymous traffic | Excluded; the report records `anonymousExcluded=true` and performs no upward normalization |
+
+The candidate's migrations, replay fingerprint, catalog revision, preview build
+ID, fixture tier, SLO hash and stub state were checked before traffic. The
+advisor snapshot from the same structural replay contained 307 INFO notices and
+zero WARN/ERROR notices; the later candidate commits changed certification
+scripts, not the fingerprinted schema. The
+previous consumed-response/cursor defect is not present in this run: all 8,737
+ranked responses parsed, 1,703 were fresh sessions, 7,034 were valid
+continuations, every continuation retained the session and advanced position,
+and 48,390 feed events were linked to actually delivered items.
+
+#### One-hour soak result
+
+| Measure | Result | Gate |
+|---|---:|---:|
+| Completed operations | 22,990 | diagnostic |
+| Scored HTTP requests | 24,393 | diagnostic |
+| Achieved rate | 6.96 ops/s; 7.39 HTTP req/s | PASS, target 7 ops/s |
+| Request errors / throttles | 0.01% / 0.00% | PASS |
+| Driver skips / errors / guard waits | 2 / 0 / 0 | PASS |
+| Maximum driver in-flight | 29 | diagnostic |
+| Cursor continuation ratio | 80.51% | PASS |
+| Upload completion | 701/702 (99.86%) | PASS |
+
+| Family | Requests | P95 | Error |
+|---|---:|---:|---:|
+| Ranked feed | 8,737 | 726.9 ms | 0% |
+| Feed-event batches | 8,066 | 1,220.9 ms | 0.01% |
+| Sign→PUT→publish/consume upload | 2,105 | 2,795.3 ms | 0.05% |
+| Save toggle | 1,759 | 472.7 ms | 0% |
+| Comment create | 1,054 | 388.2 ms | 0% |
+| Follow toggle | 976 | 521.0 ms | 0% |
+| Cookie-authenticated page | 692 | 903.5 ms | 0% |
+| Generation start | 341 | 1,116.6 ms | 0% |
+| Generation quote | 338 | 270.2 ms | 0% |
+| Post publish | 325 | 491.7 ms | 0% |
+
+All route, error, 429, sample-cardinality, ranked-phase, cursor/session,
+delivery-linkage and upload-validity checks passed. Exact post-drain
+reconciliation found **371/371 generations succeeded**, **371/371 completion
+jobs succeeded**, **371/371 output-import jobs succeeded**, zero duplicate
+prediction IDs, zero old pending rows without prediction IDs, and no open
+completion, workflow, template, output-import or rendition queue.
+
+#### Resource and platform evidence
+
+The executable resource evaluator passed all 254 samples:
+
+- database pool maximum **41.7%** against the 70% ceiling; no ungranted lock,
+  lock waiter or deadlock;
+- zero oldest-due age at final drain for completion, workflow, template,
+  output-import and rendition work;
+- **386,985,312 bytes** of temporary-file growth against the 512 MiB gate,
+  **975,006,415 WAL bytes**, 12 checkpoints and 319,275,008 bytes of database
+  growth during the observed window;
+- fact/event retention age **25.05 days**, below the 32-day gate.
+
+The separate Supabase host scrape supplied the evidence Postgres cannot collect
+from itself: CPU maximum **58.07%**, CPU p95 **52.27%**, I/O-wait maximum
+15.13%, PostgREST waiting maximum 3 with at least 6/20 connections available,
+zero PostgREST pool timeouts, and 0.742 aggregate seconds of PgBouncer client
+wait over the sampled interval.
+
+Vercel recorded 26,217 invocations for the isolated deployment in the queried
+window: 26,200 hot 200/201 responses, 12 cold starts and 5 prewarmed starts, with
+no 4xx/5xx group. Function duration p95 was 952 ms, active CPU p95 361 ms, TTFB
+p95 1,082 ms and peak memory 1,155/2,048 MB. Vercel's one-hour query buckets
+round to clock hours, so these deployment-filtered values include the short
+warm-up on the same otherwise-isolated deployment; that is conservative for
+peak resource reporting.
+
+#### Strict property cases on the exact candidate
+
+Every strict command exited zero after the soak:
+
+- retention skew clamps safely and every affected cron route records a clean
+  outcome;
+- provider 429 and 5xx attempts refund definitively refused work, while an
+  accepted-then-reset submission stays held, attaches its late callback,
+  imports output and settles once;
+- a primed burst fired exactly 48 unique callbacks; all 48 completion jobs and
+  48 output imports succeeded within 36 seconds, with 48 durable outputs and no
+  duplicate settlement;
+- three concurrent same-key workflow starts returned one run ID; 20 concurrent
+  independent starts created 20 complete durable skeletons; 42 provider-backed
+  child nodes settled with unique deterministic keys and outputs; all 21 run
+  identities succeeded and the queue drained without a failed ticket;
+- concurrent umbrella, completion, workflow, media and retention cron calls
+  returned only 200/202 and recorded clean owners or explicit lease skips.
+
+Canvas poison-node isolation remains excluded: the durable claim advances one
+run, not exactly one node. The strict result certifies replay, fan-out,
+ownership, completion wake-up and exactly-once settlement, not independent
+per-node retry.
+
+#### Capacity conversion and limiting dimension
+
+Exact fixture growth was 2,608 new ranked sessions, 120,108 new delivery facts
+and 156,480 new session items: **46.054 facts** and exactly 60 ranked items per
+new session. The measured one-hour provider/media drain was 371, or 8,904/day
+at the certified mix. `calculate-capacity.mjs` applies 30% reserve to all four
+dimensions: 4.872 ops/s, 6,232.8 provider and media generations/day, and 84,000
+fact-prune rows/day.
+
+| Scenario | Activity assumptions | Compute ceiling | Retention ceiling | Provider/media ceiling | Scoped MAU |
+|---|---|---:|---:|---:|---:|
+| Conservative | 30% DAU/MAU; 15 auth ops/DAU; 6× peak; 3 feed sessions/DAU | 15,590 | **2,026** | 46,745 | **2,026** |
+| Base | 20% DAU/MAU; 10 auth ops/DAU; 4× peak; 2 feed sessions/DAU | 52,617 | **4,559** | 46,745 | **4,559** |
+| Optimistic | 15% DAU/MAU; 6 auth ops/DAU; 3× peak; 1 feed session/DAU | 155,904 | **12,159** | 46,745 | **12,159** |
+
+The honest planning headline is therefore **about 2,000 authenticated-web MAU
+under conservative engagement, about 4,500 under the base assumptions**. The
+12,159 result is sensitivity analysis, not the launch target. Feed-fact prune
+throughput—not request compute—limits all three scenarios. Raising the MAU
+claim requires measured retention work (higher bounded delete throughput or
+lower fact/session volume), followed by a new steady-state soak; changing only
+the calculator is not a capacity improvement.
+
+#### 1m-tier result and exclusions
+
+The 1m fixture was attempted and **cannot fit on the Micro branch**. Seeding
+reached approximately 912 MB with 435,000 facts, 435,000 session items, 33,334
+sessions, 80,000 bundles and 200,000 posts/comments, then Postgres failed with
+`No space left on device`. The temporary branch was deleted. Therefore this
+certificate says nothing about the 1m catalog tier, and Micro storage—not a
+query latency result—is the first proven gate for that tier. Use a larger
+ephemeral compute/storage class before attempting its ladder.
+
+Excluded from the MAU statement:
+
+1. anonymous/multi-source traffic and CDN behaviour;
+2. mobile clients, including F7c's one-event-per-request/offline-queue gap;
+3. GoTrue/Auth platform capacity, because the isolated limit was raised;
+4. real Kie provider quota/latency/cost—the stub certifies app admission and
+   settlement semantics, not Kie's commercial capacity;
+5. multi-tab browser amplification, poison-node isolation, PITR/log drain,
+   mobile Sentry, regional failover and production autoscale equivalence;
+6. catalogs larger than this fixture and the 1m tier specifically.
+
+This certificate expires on **2026-09-09**, or immediately on a change to the
+build, schema, catalog revision, route mix/SLOs, Supabase/Vercel tier, provider
+contract, fact-prune policy, or observed facts/session by more than 20%.
+Production promotion must still use the normal release workflow and protected
+health checks; a preview certificate does not authorize bypassing release
+gates. Raw JSON/JSONL/Prometheus artifacts remain in the ignored local
+`certification-artifacts/` bundle; the environment binding and sanitized result
+are preserved here so secrets and user tokens are not committed.
 
 ---
 
@@ -2152,6 +2862,10 @@ rewrites before telemetry so the recorded host proves where traffic went.
 
 ## Cost curve
 
+**Planning-only scenarios, not measured/certified capacity or a current vendor
+quote.** Recalculate from the dated certificate artifacts before using these
+figures for a launch or budget decision.
+
 | Scale | Unfixed | After Phase 0–1 |
 |---|---|---|
 | 13 MAU (today) | ~$45–50/mo | same |
@@ -2166,9 +2880,9 @@ Excludes Kie.ai generation spend, which is credit-funded and scales with revenue
 
 Two independent audits produced different headline numbers. Both were right about different questions; recording why, so the numbers are not re-litigated.
 
-- **"~350 MAU" vs "2,000–5,000 MAU"** — the second figure silently assumes the media fixes have shipped. It models egress at rendition bitrate (~105 MB/user/month), which describes the app *after* F1. Today the watch surfaces stream full sources, so the real figure is ~0.5–0.7 GB/MAU.
-- **"Overage is available rather than a hard shutdown"** — only true with the spend cap off. Pro defaults it on. This is F4 and it is the most consequential unknown in both audits.
-- **The 5,000 MAU gate is sound.** The prune arithmetic (5,000 facts/hour, 60 facts/session, 400-day retention) was verified independently and reaches the same structural conclusion as the `feed_events` trigger analysis.
+- **"~350 MAU" vs "2,000–5,000 MAU"** — both are historical planning figures. F1 now serves renditions on the audited playback surfaces, but mobile rollout and measured post-change bytes/MAU are not certified. Do not present either number as current capacity.
+- **Spend cap posture is known:** it is ON by owner decision. That controls bill risk by accepting availability risk; the remaining work is external usage telemetry/alerts, not discovery of the setting.
+- **The old 5,000-MAU gate is superseded.** Raw fact retention is now 30 days, facts are persisted only for served rows and the exact-count lag probe is removed. The current configured prune arithmetic yields scenario outputs through the capacity calculator; it is still a modeled design ceiling until a clean run supplies measured facts/session and activity inputs.
 - **The 100,000 Auth MAU entitlement is not a capacity claim.** It appears in Supabase's pricing as a billing allowance only.
 - Claims verified line-by-line before adoption: F11 (cursor), F12 (workflow durability), F13 (v2 starvation), F14 (shared-fate cron), F15a (monitoring bias). Each carries its evidence above.
 
@@ -2190,6 +2904,13 @@ Two independent audits produced different headline numbers. Both were right abou
 
 | Date | Change | By |
 |---|---|---|
+| 2026-08-10 | **Phase 1 scoped certificate issued for exact build `c1d494e`.** A clean isolated Mumbai Micro/Vercel preview passed the one-hour 100k-fixture soak at 6.96 completed authenticated-web operations/s (7.39 HTTP req/s), all route/validity/resource gates, external Supabase/Vercel telemetry and strict skew/provider/webhook/workflow/cron cases. After 30% reserve the workload rate is 4.872 ops/s. The reproducible model reports 2,026 conservative / 4,559 base / 12,159 optimistic authenticated-web MAU, all limited by feed-fact prune throughput. The 1m fixture failed Micro storage at ~912 MB and was not load-tested. Anonymous, mobile, Auth capacity, real-provider quota, poison-node isolation and >100k fixtures are explicitly excluded; certificate expires 2026-09-09 or on a binding change. Final source gates: three TypeScript checks, ESLint, 625 Vitest files / 4,073 tests and diff whitespace pass. The isolated branch/deployment, tunnel/stub and temporary credentials were removed after capture. | Codex |
+| 2026-08-10 | **IR-3 source closure completed; capacity remains NOT CERTIFIED.** Implemented the IR-2 product P0s: atomic workflow/provider admission and terminal wake, durable pure-read template execution, preserved completion leases, durable provider-success output imports, one leased byte-aware media repair path, outstanding upload-byte quotas and bounded cleanup. Provider circuit outcomes are awaited but failure-isolated so serverless shutdown cannot silently lose breaker state. Certification now has executable resource/SLO gates, ranked-feed phase timings, authenticated stub controls, immutable environment binding and a deterministic headroom/capacity calculator. Additional scale fixes: cacheable keyset public templates and trigger-maintained trigram marketplace search. Clean verification: three web typechecks, lint, 624 Vitest files / 4,060 tests, production build/artifact gate, mobile typecheck + 104 files / 959 tests, clean-from-zero Docker migration replay, 42 pgTAP files / 750 assertions and 15-class schema fingerprint. **Not done:** cloud replay/advisors/deploy, external platform telemetry, or fresh 10k/100k/1m ladders/soak; therefore no MAU/RPS claim changed. | Codex |
+| 2026-08-10 | **The first deployed strict provider-degradation case found and closed a gateway ambiguity gap.** The external tunnel accepted a non-idempotent provider POST and lost the upstream response; Vercel received HTTP 502, so the earlier network-error-only classifier refunded the generation and returned generic 500 even though provider work existed. Task-create HTTP 502/504 are now held as `submission_unknown` like timeout/socket-reset outcomes, while direct 500/503 responses remain definitive and refundable. Two regression cases pin both gateway statuses. The cloud strict sequence must restart on the replacement commit; the failed run is evidence, not a certificate. | Codex |
+| 2026-08-10 | **The deployed 48-callback case caught a durable-pipeline false finish.** Callback ingress and all 48 completion jobs succeeded, but the case stopped as soon as that first queue drained and inspected generation outputs before `generation_output_import_jobs` ran. The strict case now continues driving the production completion route until both queues are terminal and all 48 generations have durable output URLs; pending/failed imports or missing outputs fail the deadline. | Codex |
+| 2026-08-10 | **Release-candidate review and certification handoff completed locally.** The status board, F12/F14/F15b sections and invalidated certification prose now share one authoritative closure sequence; the separate `docs/scaling-certification-runbook.md` pins environment safety, migration replay, strict property cases, fresh-tier/soak isolation, telemetry, artifact and acceptance requirements. Review fixes beyond the original remediation: certification uploads now preserve the product's one-day moderation cache policy; provider ambiguity no longer holds credits for definitive refused/DNS/unreachable failures; the provider stub encodes a real 1920×1080 JPEG and 1280×720/eight-second H.264/AAC MP4 instead of padding tiny media; webhook priming stays below provider admission refill; and the legacy workflow RPC is kept keyless-compatible for exactly one schema-first rollout window, with next-release removal required, rather than causing an old-code/new-schema outage. Gates: three typechecks, full lint, 615/615 test files and 4,008/4,008 tests, production build, build artifact verification, script syntax and direct fixture probe. Docker was subsequently restored: two clean local migration replays completed, the new behavioural test caught and drove a fix for one ambiguous PL/pgSQL reference, all 31 pgTAP files / 651 assertions pass, and the 15-class schema fingerprint completes. Cloud replay/advisors, deployment and capacity certification remain open; no deploy or MAU claim was made. | Codex |
+| 2026-08-10 | **Independent-review remediation implemented locally; certification remains blocked on deployment and a clean isolated rerun.** Ranked-feed parsing/session continuation and delivery-linked events are now hard-gated; workflow start requires a browser-stable key and atomically creates run/skeleton/ticket before provider work; the monitor race is removed in favour of the shared leased worker with active lease heartbeats; approval adoption is bounded; queue-age includes stale leases; ambiguous network/template starts stay held; named webhook/workflow/cron cases are strict and cardinality-scoped; upload performs a real 1080p sign→PUT→publish/consume round trip; provider media is representative and decodable; hot comments, marketplace search and RSC auth are driven; route SLOs fail non-zero; retention lag no longer performs exact counts. Verification: all three typechecks, full lint, 615 test files / 4,008 tests, production build + artifact verification, Sharp and FFmpeg fixture decode, a clean local migration replay, 31 database files / 651 pgTAP assertions and a complete local schema fingerprint. No deploy or capacity claim is made; a fresh isolated cloud replay, advisors and preview certification run remain hard next gates. | Codex |
+| 2026-08-10 | **Independent post-run review added — certification remains blocked.** Review at `b1df70a` found that the load driver consumed ranked-feed responses before parsing them and read the wrong continuation/session fields, so the run never exercised cursor reuse or delivery-linked events. The document now separates measured facts from contaminated causal claims, reopens F12 and F14 where the live seams remain unsafe, records eight review findings (R1–R8), and adds an ordered remediation and certificate-acceptance plan. This entry changes documentation only; no product or harness fix is claimed. | Codex |
 | 2026-08-10 | **Phase 1 certification run — the specified environment was built, all four named cases pass, and still no level is certified.** The Supabase preview branch reached `FUNCTIONS_DEPLOYED` on **173/173** migrations where 2026-08-09 died at 9/171, so Finding C's ledger repair is now proven by use rather than argued. Vercel preview in `bom1`, 100k-tier fixtures, provider stub through the `KIE_API_BASE_URL` seam, **$0 provider spend**. **The soak is what refused to certify:** 25, 10 and 5 origin RPS all fail, and the 10 RPS run is the instructive one — **0.03% error with a 25-second p50**, so an error-rate-only gate would have certified it. Every 120 s ladder step that looked clean had simply not queued yet. Sustainable throughput *fell* across the session (6.2 → 1.44 RPS) while `feed_session_items` grew 8× to 894,487 rows / 711 MB. **Elimination, not assertion:** the pool criterion **passes** (steady-state p50 51.7%, p95 61.7%, against a 45% idle floor reproducing production's documented 47%), lock waiters ≤1, `get_ranked_feed_candidates` is **125 ms for the heaviest viewer** so F5 holds, responses are 13.6 KB so it is not bandwidth, and undici has no per-origin cap so it is not the driver. What is left is ~2.5–4 s of per-request cost that is neither ranking nor RTT — most likely the per-request writes into `feed_session_items` and its 208 MB of indexes, one of which (`feed_session_items_unserved_idx`, 37 MB) has **zero recorded scans**. That hypothesis is named, not proven, and is the next run's first job. **The MAU number is now arithmetic:** 114,751 facts/hour measured at 25 RPS against a 5,000/hour prune ceiling; at this document's own 12 facts/MAU/day the ceiling implies **~10,000 MAU**, the planning table's lower bound — to design against, not to cite as certified. **Five defects found before any number could be trusted**, none of them visible to the previous attempt: an uncorrelated `LATERAL` that gave all 20,000 seeded posts one format roll (probe: 10/10 video, zero text); every marketplace listing ineligible because sellers had no avatar, so the family scored 200s over an empty cached page; a stub that could never complete an image generation because `jobs/recordInfo` reads `data.state` while `veo/record-info` reads `data.successFlag` and it emitted neither correctly; a renamed JPEG served as `.mp4`; and a driver drawing from 1,000 of 20,000 posts because PostgREST caps rows and says so only in `Content-Range`. **Finding D corrected by measurement:** a cloud preview branch inherits Supabase's per-project platform ACLs, so its grant surface is **identical to production** (914/914 table grants, 91/91 RLS policies, all 16 tables byte-identical). The original 'a branch is more restrictive' note applies to local replays and CI only. **Provider admission control measured:** per-model capacity 6 / refill 0.6 per second binds a concentrated workload at 1.2/s well before the global 15 / 1.5, and `maxInFlight: 50` correctly refuses everything when nothing completes. Harness gains `sample-resources.mjs`, because the pass criteria are not all latency and 2026-08-09 could not evaluate the pool criterion at all. Branch and preview torn down. | Claude Code |
 | 2026-08-09 | **Finding C fixed; Finding D opened.** **C** (`d502d7a`): the prescribed baseline squash was not needed — a clean replay of all 173 migrations reproduces production, proved class by class with a new `scripts/schema-fingerprint.sql` run on both sides (the CLI still cannot reach production, so a runner replays and the Management API reads production). The unreplayable artefact was production's **ledger**, which is what a preview branch replays: nine rows held NULL statements because `supabase migration repair` records a version and a name and nothing else, and `20260317090245` held a `generations.category` backfill the recorded history only creates one migration later. Every row is now rewritten from its own file (`repair-supabase-ledger.mjs` over the Management API, old ledger kept in `schema_migrations_backup_20260809182008`): 173 rows, 0 NULL statements, 46 drifted versions restored, and a preview branch reaching `MIGRATIONS_PASSED` on all 173 with a fingerprint identical to production. Push-before-repair ordering is now pinned by `supabase-migration-ledger-ordering.test.ts` rather than by comment. **D**: production grants `anon`/`authenticated` DML on 16 tables a clean replay never grants — the 2026-07 Data API hardening converged the default privileges but not the tables predating them. Recorded, not changed: RLS still gates access, and revoking is a live behaviour change that needs its own verification. | Claude Code |
 | 2026-08-09 | **Certification Findings A and B fixed.** **A** (`8d05483`, `20260809220000`): the owner guard's `v_bundle.status` fragment was a mis-paste from the buyer-side quote function `get_post_resource_bundle_cash_quote` — there was no intended guard change; restored to plain `IF NOT FOUND`, `FOR UPDATE` kept, pgTAP pins owner-edit success and non-owner rejection. Text-post publish and metadata edits work again after three broken days. **B** (`20260809230000`): the clamp now reports `requested/applied/clamped` in its summary (the visibility its own migration promised but never implemented), `maintainFeedPersonalization` logs `feed_retention_clamped`, health raises `FEED_RETENTION_POLICY_SKEW` from the policy constants with zero queries, and the suite pins the live constants as unskewed. Verification recipe in Finding B replaced accordingly. | Claude Code |

@@ -89,13 +89,13 @@ export function TemplateCard({
             poster={template.thumbnailUrl || undefined}
             muted
             playsInline
-            preload="metadata"
+            preload="none"
             className="h-full w-full object-cover"
             aria-label={`${template.name} demo`}
           />
         ) : template.thumbnailUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={template.thumbnailUrl} alt={`${template.name} preview`} className="h-full w-full object-cover" />
+          <img src={template.thumbnailUrl} alt={`${template.name} preview`} loading="lazy" decoding="async" className="h-full w-full object-cover" />
         ) : (
           <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(circle_at_70%_10%,rgba(244,63,94,0.26),transparent_36%),linear-gradient(145deg,#211318,#08090c)]">
             <OutputIcon className="h-12 w-12 text-rose-100/70" aria-hidden />

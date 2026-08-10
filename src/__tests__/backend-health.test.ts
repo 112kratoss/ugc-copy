@@ -19,6 +19,7 @@ class FakeQueryBuilder {
   in = vi.fn(() => this);
   lt = vi.fn(() => this);
   lte = vi.fn(() => this);
+  or = vi.fn(() => this);
   not = vi.fn(() => this);
   range = vi.fn(() => this);
 
@@ -145,7 +146,9 @@ function createClient(
       results.generation_completion_jobs,
       [{ error: null, data: [] }],
     ),
+    generation_output_import_jobs: withQueueAgeProbe(results.generation_output_import_jobs, []),
     workflow_run_step_jobs: withQueueAgeProbe(results.workflow_run_step_jobs, []),
+    template_run_jobs: withQueueAgeProbe(results.template_run_jobs, []),
     // post_media is read three times now: unresolved video renditions, then
     // unresolved previews, then the queue-age probe.
     post_media: withQueueAgeProbe(
@@ -327,7 +330,7 @@ describe('collectBackendHealth', () => {
       cadenceMinutes: 10,
       dailyInvocations: 144,
       dailyInvocationBudget: 456,
-      logicalDailyInvocations: 795,
+      logicalDailyInvocations: 915,
       coveredJobCount: 11,
       coveredJobs: expect.arrayContaining([
         expect.objectContaining({
@@ -352,8 +355,8 @@ describe('collectBackendHealth', () => {
         }),
         expect.objectContaining({
           name: 'media-preview-repair',
-          cadenceMinutes: 60,
-          dailyInvocations: 24,
+          cadenceMinutes: 10,
+          dailyInvocations: 144,
         }),
         expect.objectContaining({
           name: 'mobile-push-receipts',
@@ -390,8 +393,8 @@ describe('collectBackendHealth', () => {
     });
     expect(health.jobs.find((job) => job.name === 'media-preview-repair')).toMatchObject({
       status: 'ok',
-      dailyInvocations: 24,
-      expectedMaxAgeMinutes: 120,
+      dailyInvocations: 144,
+      expectedMaxAgeMinutes: 20,
     });
     expect(health.jobs.find((job) => job.name === 'referral-reward-reconciliation')).toMatchObject({
       status: 'ok',
@@ -1088,9 +1091,9 @@ describe('collectBackendHealth', () => {
         name: 'media-preview-repair',
         status: 'ok',
         route: '/api/cron/media-preview-repair',
-        schedule: '0 * * * *',
-        cadenceMinutes: 60,
-        dailyInvocations: 24,
+        schedule: '*/10 * * * *',
+        cadenceMinutes: 10,
+        dailyInvocations: 144,
         maxMissedRunsBeforeDegraded: 2,
         lastHealthyAt: '2026-06-21T09:55:00.000Z',
         lastSuccessAt: null,

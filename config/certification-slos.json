@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "description": "Predeclared Phase 1 origin-load certificate gates. A run fails non-zero when any active family misses its sample or P95 budget.",
+  "overall": {
+    "minAchievedRpsRatio": 0.95,
+    "minFamilyOperationRatio": 0.75,
+    "maxSkippedOperationRate": 0.02,
+    "maxErrorRate": 0.01,
+    "maxThrottleRate": 0.01
+  },
+  "families": {
+    "feed-for-you": { "minRequests": 10, "p95Ms": 2000 },
+    "feed-events": { "minRequests": 10, "p95Ms": 1500 },
+    "authenticated-page": { "minRequests": 3, "p95Ms": 2500 },
+    "feed-recent": { "minRequests": 5, "p95Ms": 1800 },
+    "post-detail": { "minRequests": 5, "p95Ms": 1800 },
+    "comments-read": { "minRequests": 5, "p95Ms": 1800 },
+    "marketplace-list": { "minRequests": 5, "p95Ms": 2000 },
+    "save-toggle": { "minRequests": 3, "p95Ms": 2000 },
+    "follow-toggle": { "minRequests": 3, "p95Ms": 2000 },
+    "comment-create": { "minRequests": 3, "p95Ms": 2500 },
+    "upload-roundtrip": { "minRequests": 3, "p95Ms": 15000 },
+    "generation-quote": { "minRequests": 2, "p95Ms": 2000 },
+    "generation-start": { "minRequests": 2, "p95Ms": 5000 },
+    "publish-post": { "minRequests": 2, "p95Ms": 4000 }
+  }
+}

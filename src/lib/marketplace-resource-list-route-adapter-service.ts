@@ -11,6 +11,11 @@ import {
 } from '@/lib/post-resource-bundles';
 import { getMarketplaceResourceList } from '@/lib/post-resource-bundles-server';
 import { MARKETPLACE_DEFAULT_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
+import {
+  isValidMarketplaceSearchQuery,
+  MARKETPLACE_SEARCH_MIN_LENGTH,
+  normalizeMarketplaceSearchQuery,
+} from '@/lib/marketplace-search-policy';
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
 import { slugifySourceTool } from '@/lib/source-tools';
 
@@ -52,11 +57,22 @@ async function handleMarketplaceResourceListGET(
       );
     }
 
+    const query = normalizeMarketplaceSearchQuery(searchParams.get('q'));
+    if (!isValidMarketplaceSearchQuery(query)) {
+      return NextResponse.json(
+        { error: `q must be empty or at least ${MARKETPLACE_SEARCH_MIN_LENGTH} characters.` },
+        {
+          status: 400,
+          headers: createApiResponseHeaders(request, API_CACHE_CONTROL.privateNoStore),
+        },
+      );
+    }
+
     const page = await dependencies.getMarketplaceResourceList({
       filter: normalizeMarketplaceResourceFilter(searchParams.get('access')),
       resource: normalizeMarketplaceResourceKindFilter(searchParams.get('resource')),
       tool: slugifySourceTool(searchParams.get('tool') ?? undefined),
-      q: (searchParams.get('q') ?? '').trim().slice(0, 80),
+      q: query,
       sort: normalizeMarketplaceResourceSort(searchParams.get('sort')),
       offset,
       limit: Math.min(48, Math.max(1, normalizeNumber(

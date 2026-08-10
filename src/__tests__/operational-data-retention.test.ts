@@ -77,6 +77,7 @@ describe('operational data retention', () => {
       shareEventsDeleted: 18,
       profileShareEventsDeleted: 6,
       abandonedFreeUnlockOrdersDeleted: 2,
+      uploadByteReservationsDeleted: 0,
     });
   });
 
@@ -97,6 +98,7 @@ describe('operational data retention', () => {
       'prune_post_share_events',
       'prune_profile_share_events',
       'prune_abandoned_free_unlock_orders',
+      'prune_upload_byte_reservations',
     ]);
     expect(summary.shareEventsDeleted).toBe(40);
     expect(summary.profileShareEventsDeleted).toBe(11);

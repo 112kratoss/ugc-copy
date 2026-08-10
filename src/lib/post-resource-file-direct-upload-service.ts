@@ -18,6 +18,7 @@ import {
   resolveResourceFileContentType,
   sanitizePostResourceFileName,
 } from '@/lib/post-resource-file-upload-service';
+import { releaseUploadBytes, reserveUploadBytes } from '@/lib/upload-byte-admission';
 
 const RESOURCE_FILES_BUCKET = 'post_resource_files';
 const SIGNED_UPLOAD_EXPIRES_IN_SECONDS = 2 * 60 * 60;
@@ -181,11 +182,25 @@ export async function createPostResourceFileUploadIntent({
 
   const safeName = sanitizePostResourceFileName(metadata.fileName);
   const storagePath = `${userId}/${createUploadId()}-${safeName}`;
+  const byteReservation = await reserveUploadBytes(client, {
+    userId,
+    bucket: RESOURCE_FILES_BUCKET,
+    storagePath,
+    declaredBytes: metadata.sizeBytes,
+  });
+  if (!byteReservation.ok) {
+    return {
+      ok: false,
+      status: byteReservation.status,
+      body: { error: byteReservation.error, code: byteReservation.code },
+    };
+  }
   const { data, error } = await client.storage
     .from(RESOURCE_FILES_BUCKET)
     .createSignedUploadUrl(storagePath);
 
   if (error || !data?.token) {
+    await releaseUploadBytes(client, { bucket: RESOURCE_FILES_BUCKET, storagePath });
     logBackendError('failed_to_create_post_resource_file_upload_url', { error });
     return { ok: false, status: 500, body: { error: 'Failed to prepare resource upload.' } };
   }
@@ -256,6 +271,8 @@ export async function finalizePostResourceFileUpload({
     contentType: metadata.contentType,
     sizeBytes: metadata.sizeBytes,
   };
+
+  await releaseUploadBytes(client, { bucket: RESOURCE_FILES_BUCKET, storagePath });
 
   return {
     ok: true,

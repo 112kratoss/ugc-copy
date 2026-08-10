@@ -30,6 +30,13 @@
 
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import ffmpegPath from 'ffmpeg-static';
+import sharp from 'sharp';
 
 const options = {
   port: 8787,
@@ -40,6 +47,10 @@ const options = {
   /** Fraction of createTask calls answered 5xx. */
   serverErrorRate: 0,
   publicUrl: null,
+  secret: process.env.CERT_STUB_SECRET ?? null,
+  nextRateLimitCount: 0,
+  nextServerErrorCount: 0,
+  nextAcceptedResetCount: 0,
 };
 
 for (let index = 2; index < process.argv.length; index += 1) {
@@ -52,9 +63,13 @@ for (let index = 2; index < process.argv.length; index += 1) {
   else if (argument === '--public-url') { options.publicUrl = value; index += 1; }
   else if (argument === '--forward-target') { options.forwardTarget = value; index += 1; }
   else if (argument === '--forward-bypass') { options.forwardBypass = value; index += 1; }
+  else if (argument === '--secret') { options.secret = value; index += 1; }
 }
 options.forwardTarget = options.forwardTarget ?? null;
 options.forwardBypass = options.forwardBypass ?? null;
+if (options.publicUrl && !options.secret) {
+  throw new Error('CERT_STUB_SECRET or --secret is required when the stub has a public URL.');
+}
 
 /** taskId -> { callbackUrl, createdAt, state, generationId } */
 const tasks = new Map();
@@ -65,6 +80,8 @@ const stats = {
   chatCompletion: 0,
   rateLimited: 0,
   serverErrors: 0,
+  callbackAttempts: 0,
+  callbackRetries: 0,
   callbacksSent: 0,
   callbackFailures: 0,
   mediaServed: 0,
@@ -171,21 +188,33 @@ async function sendCompletionCallback(taskId) {
     data: buildTaskStatusData(taskId, taskKind(task), true),
   });
 
-  try {
-    const response = await fetch(task.callbackUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    });
-    stats.callbacksSent += 1;
-    if (!response.ok) {
-      stats.callbackFailures += 1;
+  const maxAttempts = 4;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    stats.callbackAttempts += 1;
+    try {
+      const response = await fetch(task.callbackUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (response.ok) {
+        stats.callbacksSent += 1;
+        task.lastCallbackStatus = response.status;
+        delete task.lastCallbackError;
+        return;
+      }
       task.lastCallbackStatus = response.status;
+      task.lastCallbackError = `HTTP ${response.status}`;
+    } catch (error) {
+      task.lastCallbackError = error instanceof Error ? error.message : String(error);
     }
-  } catch (error) {
-    stats.callbackFailures += 1;
-    task.lastCallbackError = error.message;
+    if (attempt < maxAttempts) {
+      stats.callbackRetries += 1;
+      await new Promise((resolve) => setTimeout(resolve, 500 * (2 ** (attempt - 1))));
+    }
   }
+  stats.callbackFailures += 1;
 }
 
 function scheduleCompletion(taskId) {
@@ -209,17 +238,22 @@ function registerTask(payload) {
 }
 
 /** Fires the oldest pending callbacks all at once — the webhook-burst case. */
-async function fireBurst(count) {
+async function fireBurst(count, requestedTaskIds = null) {
+  const requested = Array.isArray(requestedTaskIds) ? new Set(requestedTaskIds) : null;
   const pending = [...tasks.entries()]
-    .filter(([, task]) => task.state === 'pending' && task.callbackUrl)
-    .slice(0, count)
+    .filter(([taskId, task]) => (
+      task.state === 'pending'
+      && task.callbackUrl
+      && (!requested || requested.has(taskId))
+    ))
+    .slice(0, requested ? requested.size : count)
     .map(([taskId]) => taskId);
 
   await Promise.all(pending.map((taskId) => sendCompletionCallback(taskId)));
-  return pending.length;
+  return pending;
 }
 
-const IMAGE_BYTES = Buffer.from(
+const TINY_IMAGE_BYTES = Buffer.from(
   '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a'
   + 'HBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAA'
   + 'AAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==',
@@ -232,7 +266,7 @@ const IMAGE_BYTES = Buffer.from(
  * .mp4 name would fail every video ingest and score the media pipeline as
  * broken when the fault was the fixture. 1,787 bytes, one second, eight frames.
  */
-const VIDEO_BYTES = Buffer.from(
+const TINY_VIDEO_BYTES = Buffer.from(
   'AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAORbW9vdgAAAGxtdmhkAAAAAAAAAAAA'
   + 'AAAAAAAD6AAAA+gAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAA'
   + 'AABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAArx0cmFrAAAAXHRraGQAAAADAAAA'
@@ -268,9 +302,70 @@ const VIDEO_BYTES = Buffer.from(
   'base64',
 );
 
+async function createRepresentativeJpeg() {
+  const width = 1920;
+  const height = 1080;
+  const pixels = Buffer.allocUnsafe(width * height * 3);
+  let state = 0x6d2b79f5;
+  for (let index = 0; index < pixels.length; index += 1) {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    pixels[index] = state & 0xff;
+  }
+  const output = await sharp(pixels, { raw: { width, height, channels: 3 } })
+    .jpeg({ quality: 85, chromaSubsampling: '4:2:0' })
+    .toBuffer();
+  if (output.length <= TINY_IMAGE_BYTES.length) {
+    throw new Error('Representative JPEG encoding unexpectedly collapsed to the tiny parser canary.');
+  }
+  return output;
+}
+
+function createRepresentativeMp4() {
+  if (!ffmpegPath) throw new Error('ffmpeg-static is required for the certification provider stub.');
+  const directory = mkdtempSync(join(tmpdir(), 'magicbooklet-cert-stub-'));
+  const outputPath = join(directory, 'provider-output.mp4');
+  try {
+    const result = spawnSync(ffmpegPath, [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=24',
+      '-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=44100',
+      '-t', '8',
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
+      '-pix_fmt', 'yuv420p', '-threads', '1',
+      '-c:a', 'aac', '-b:a', '96k',
+      '-movflags', '+faststart',
+      outputPath,
+    ], { encoding: 'utf8', timeout: 120_000 });
+    if (result.status !== 0) {
+      throw new Error(`Could not encode certification MP4: ${result.stderr?.trim() || `exit ${result.status}`}`);
+    }
+    const output = readFileSync(outputPath);
+    if (output.length <= TINY_VIDEO_BYTES.length) {
+      throw new Error('Representative MP4 encoding unexpectedly collapsed to the tiny parser canary.');
+    }
+    return output;
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+// Generate once at process startup. These are real decoded dimensions and
+// duration, not tiny files padded to a representative byte count, so provider
+// completion exercises network, temporary storage, image resize and FFmpeg CPU.
+const IMAGE_BYTES = await createRepresentativeJpeg();
+const VIDEO_BYTES = createRepresentativeMp4();
+
 async function handleRequest(request, response) {
   const url = new URL(request.url, `http://127.0.0.1:${options.port}`);
   const { pathname } = url;
+
+  if (pathname.startsWith('/stub/')) {
+    if (!options.secret || request.headers['x-cert-stub-secret'] !== options.secret) {
+      return json(response, 401, { error: 'stub control authentication required' });
+    }
+  }
 
   // --- stub control plane -------------------------------------------------
   if (pathname === '/stub/stats') {
@@ -280,8 +375,8 @@ async function handleRequest(request, response) {
 
   if (pathname === '/stub/burst' && request.method === 'POST') {
     const body = await readBody(request);
-    const fired = await fireBurst(Number(body.count) || 100);
-    return json(response, 200, { fired });
+    const taskIds = await fireBurst(Number(body.count) || 100, body.taskIds);
+    return json(response, 200, { fired: taskIds.length, taskIds });
   }
 
   /**
@@ -297,10 +392,16 @@ async function handleRequest(request, response) {
     }
     if (body.rateLimitRate !== undefined) options.rateLimitRate = Number(body.rateLimitRate);
     if (body.serverErrorRate !== undefined) options.serverErrorRate = Number(body.serverErrorRate);
+    if (body.nextRateLimitCount !== undefined) options.nextRateLimitCount = Math.max(0, Math.trunc(Number(body.nextRateLimitCount)));
+    if (body.nextServerErrorCount !== undefined) options.nextServerErrorCount = Math.max(0, Math.trunc(Number(body.nextServerErrorCount)));
+    if (body.nextAcceptedResetCount !== undefined) options.nextAcceptedResetCount = Math.max(0, Math.trunc(Number(body.nextAcceptedResetCount)));
     return json(response, 200, {
       completionDelaySeconds: options.completionDelaySeconds,
       rateLimitRate: options.rateLimitRate,
       serverErrorRate: options.serverErrorRate,
+      nextRateLimitCount: options.nextRateLimitCount,
+      nextServerErrorCount: options.nextServerErrorCount,
+      nextAcceptedResetCount: options.nextAcceptedResetCount,
     });
   }
 
@@ -345,7 +446,9 @@ async function handleRequest(request, response) {
     if (options.forwardBypass) headers['x-vercel-protection-bypass'] = options.forwardBypass;
 
     try {
-      const upstream = await fetch(target, { method: 'POST', headers, body: raw });
+      const upstream = await fetch(target, {
+        method: 'POST', headers, body: raw, signal: AbortSignal.timeout(15_000),
+      });
       const text = await upstream.text();
       if (!upstream.ok) {
         stats.forwardFailures += 1;
@@ -378,27 +481,39 @@ async function handleRequest(request, response) {
       || pathname === '/api/v1/veo/generate'
       || pathname === '/api/v1/playground/createAsset');
 
+  const isStatusPoll = request.method === 'GET'
+    && (pathname === '/api/v1/jobs/recordInfo'
+      || pathname === '/api/v1/veo/record-info'
+      || pathname === '/api/v1/playground/getAsset');
+  const isChatCompletion = request.method === 'POST' && pathname.endsWith('/v1/chat/completions');
+  if ((isTaskCreate || isStatusPoll || isChatCompletion) && options.secret
+    && request.headers.authorization !== `Bearer ${options.secret}`) {
+    return json(response, 401, { code: 401, msg: 'provider stub authentication required' });
+  }
+
   if (isTaskCreate) {
     stats.createTask += 1;
 
-    if (Math.random() < options.rateLimitRate) {
+    if (options.nextRateLimitCount > 0 || Math.random() < options.rateLimitRate) {
+      options.nextRateLimitCount = Math.max(0, options.nextRateLimitCount - 1);
       stats.rateLimited += 1;
       return json(response, 429, { code: 429, msg: 'rate limited' }, { 'Retry-After': '2' });
     }
-    if (Math.random() < options.serverErrorRate) {
+    if (options.nextServerErrorCount > 0 || Math.random() < options.serverErrorRate) {
+      options.nextServerErrorCount = Math.max(0, options.nextServerErrorCount - 1);
       stats.serverErrors += 1;
       return json(response, 503, { code: 503, msg: 'upstream unavailable' });
     }
 
     const payload = await readBody(request);
     const taskId = registerTask(payload);
+    if (options.nextAcceptedResetCount > 0) {
+      options.nextAcceptedResetCount -= 1;
+      request.socket.destroy();
+      return;
+    }
     return json(response, 200, { code: 200, msg: 'success', data: { taskId } });
   }
-
-  const isStatusPoll = request.method === 'GET'
-    && (pathname === '/api/v1/jobs/recordInfo'
-      || pathname === '/api/v1/veo/record-info'
-      || pathname === '/api/v1/playground/getAsset');
 
   if (isStatusPoll) {
     stats.statusPoll += 1;
@@ -424,7 +539,7 @@ async function handleRequest(request, response) {
   }
 
   // Prompt enhancement and the workflow blueprint/assistant paths.
-  if (request.method === 'POST' && pathname.endsWith('/v1/chat/completions')) {
+  if (isChatCompletion) {
     stats.chatCompletion += 1;
     return json(response, 200, {
       id: `chatcmpl-${randomUUID()}`,
