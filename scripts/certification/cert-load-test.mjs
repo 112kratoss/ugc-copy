@@ -31,6 +31,8 @@
  * Usage:
  *   node scripts/certification/cert-load-test.mjs --rps 25 --duration 300
  *   node scripts/certification/cert-load-test.mjs --rps 50 --duration 3600 --out soak.json
+ *   node scripts/certification/cert-load-test.mjs --rps 25 --duration 120 --exclude-anonymous
+ *   node scripts/certification/cert-load-test.mjs --only generation-start --rps 10 --duration 60
  */
 
 import { randomUUID } from 'node:crypto';
@@ -55,8 +57,12 @@ for (let index = 2; index < process.argv.length; index += 1) {
   else if (argument === '--label') { options.label = value; index += 1; }
   else if (argument === '--warmup') { options.warmupSeconds = Number(value); index += 1; }
   else if (argument === '--disable') { options.disabled = value.split(',').map((name) => name.trim()); index += 1; }
+  else if (argument === '--only') { options.only = value.split(',').map((name) => name.trim()); index += 1; }
+  else if (argument === '--exclude-anonymous') { options.excludeAnonymous = true; }
 }
 options.disabled = options.disabled ?? [];
+options.only = options.only ?? null;
+options.excludeAnonymous = options.excludeAnonymous ?? false;
 
 const BASE_URL = process.env.CERT_BASE_URL;
 const SUPABASE_URL = process.env.CERT_SUPABASE_URL;
@@ -89,17 +95,51 @@ const WORKLOAD = [
   { name: 'follow-toggle', weight: 3, authenticated: true },
   { name: 'comment-create', weight: 3, authenticated: true },
   { name: 'upload-sign', weight: 2, authenticated: true },
-  { name: 'generation-quote', weight: 2, authenticated: true },
+  { name: 'generation-quote', weight: 1, authenticated: true },
+  // Split out of generation-quote's 2 rather than added on top, so the paid-work
+  // tail stays at 2% of the mix. Quoting is a pure read; *starting* is the path
+  // that holds credits, creates a provider task and therefore gives the
+  // webhook-burst and workflow-fan-out cases something to complete.
+  { name: 'generation-start', weight: 1, authenticated: true },
   { name: 'publish-post', weight: 1, authenticated: true },
 ];
 
 /**
+ * Anonymous families key their rate limit on the caller's network address
+ * (`getFeedNetworkKeyHash` -> `x-vercel-forwarded-for`), which Vercel writes
+ * from the real connection and a client cannot override. One driver host is
+ * therefore one bucket no matter how many virtual users it simulates, so these
+ * families stop being capacity signal above roughly 10 RPS. Excluding them is
+ * the audit's own sanctioned alternative to multi-sourcing, and the exclusion is
+ * carried into the report rather than left to the run log.
+ */
+const ANONYMOUS_FAMILIES = WORKLOAD.filter((entry) => !entry.authenticated).map((entry) => entry.name);
+if (options.excludeAnonymous) {
+  options.disabled = [...new Set([...options.disabled, ...ANONYMOUS_FAMILIES])];
+}
+
+/**
  * A disabled family is removed from the mix entirely and named in the report,
  * so a certified result can never be read as covering a workload that was never
- * actually driven.
+ * actually driven. `--only` is the inverse and exists for priming phases (for
+ * example building a backlog of pending provider tasks before a webhook burst);
+ * a run that uses it is not a mix run and the report says so.
  */
-const ACTIVE_WORKLOAD = WORKLOAD.filter((entry) => !options.disabled.includes(entry.name));
+const ACTIVE_WORKLOAD = WORKLOAD.filter((entry) => (
+  !options.disabled.includes(entry.name)
+  && (!options.only || options.only.includes(entry.name))
+));
+if (ACTIVE_WORKLOAD.length === 0) {
+  console.error('No families left in the mix — check --only/--disable/--exclude-anonymous.');
+  process.exit(1);
+}
 const totalWeight = ACTIVE_WORKLOAD.reduce((sum, entry) => sum + entry.weight, 0);
+
+/** Share of offered load a family actually receives once the mix is filtered. */
+function activeShare(name) {
+  const entry = ACTIVE_WORKLOAD.find((candidate) => candidate.name === name);
+  return entry ? entry.weight / totalWeight : 0;
+}
 
 const POST_TITLES = [
   'Studio lighting product shot',
@@ -114,6 +154,13 @@ const POST_BODIES = [
   'The trick here was slowing the motion curve near the end so the loop point stops reading as a cut.',
   'Built this from a still, upscaled once, then ran a short motion pass to keep the grain consistent across frames.',
   'Kept the palette to three colours so the product stays the brightest thing in frame at every moment.',
+];
+
+const GENERATION_PROMPTS = [
+  'a cinematic product shot on seamless paper, studio lighting, 85mm',
+  'golden hour portrait, shallow depth of field, warm grade',
+  'a slow push-in on a ceramic cup, soft window light',
+  'macro texture study in amber, high detail, neutral background',
 ];
 
 /** Per-family metric buckets. */
@@ -157,13 +204,24 @@ function pick(list) {
 
 // --- authentication ---------------------------------------------------------
 
-async function signIn(email) {
+/**
+ * Retried once, because a sign-in that loses a race at startup shrinks the user
+ * pool for the whole step and the pool size is what the rate-limit arithmetic
+ * rests on. A step that authenticates 400 users and one that authenticates 560
+ * are not comparable measurements, and the difference is the driver's, not the
+ * application's.
+ */
+async function signIn(email, attempt = 0) {
   const response = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
     method: 'POST',
     headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password: SEED_PASSWORD }),
-  });
-  if (!response.ok) return null;
+  }).catch(() => null);
+  if (!response?.ok) {
+    if (attempt >= 2) return null;
+    await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+    return signIn(email, attempt + 1);
+  }
   const payload = await response.json();
   if (!payload.access_token) return null;
   return {
@@ -173,7 +231,15 @@ async function signIn(email) {
     refreshToken: payload.refresh_token,
     // Refreshed early rather than on expiry: a token that dies mid-flight turns
     // into a 401 that would be scored as an application error.
-    expiresAt: Date.now() + (payload.expires_in - 300) * 1000,
+    //
+    // The margin is 900s, not 300s, because validation happens when the request
+    // is *served*, not when it is sent. Under queueing the two are far apart:
+    // the 25 RPS soak saw requests wait up to the 300s gateway timeout, so a
+    // token issued with a 300s margin could arrive already expired and score a
+    // 401 that says nothing about the application. 1,470 of that soak's 2,251
+    // errors were 401s spread evenly across every authenticated family — the
+    // signature of exactly this, not of an endpoint fault.
+    expiresAt: Date.now() + (payload.expires_in - 900) * 1000,
     cursor: null,
     sessionId: null,
   };
@@ -190,7 +256,7 @@ async function refreshUser(user) {
   if (!payload.access_token) return false;
   user.accessToken = payload.access_token;
   user.refreshToken = payload.refresh_token;
-  user.expiresAt = Date.now() + (payload.expires_in - 300) * 1000;
+  user.expiresAt = Date.now() + (payload.expires_in - 900) * 1000;
   return true;
 }
 
@@ -235,12 +301,34 @@ async function borrowUser() {
  */
 async function loadFixtureIds() {
   if (!SERVICE_ROLE_KEY) throw new Error('CERT_SUPABASE_SERVICE_ROLE_KEY is required to load fixture ids.');
-  const response = await fetch(
-    `${SUPABASE_URL}/rest/v1/posts?select=id,user_id&visibility=eq.public&limit=5000`,
-    { headers: { apikey: SERVICE_ROLE_KEY, Authorization: `Bearer ${SERVICE_ROLE_KEY}` } },
-  );
-  if (!response.ok) throw new Error(`Failed to load fixture posts: ${response.status}`);
-  const rows = await response.json();
+
+  // Paged with Range, because `limit=5000` does NOT return 5,000 rows: PostgREST
+  // caps a response at its max-rows setting (1,000 by default) and says so only
+  // in Content-Range. The unpaged version silently drew every write family from
+  // the same 1,000 posts out of 20,000 — a 5% slice of the catalog, which
+  // concentrates contention on a handful of rows and flatters the ranker.
+  const pageSize = 1000;
+  const rows = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const response = await fetch(
+      `${SUPABASE_URL}/rest/v1/posts?select=id,user_id&visibility=eq.public&order=id`,
+      {
+        headers: {
+          apikey: SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+          Range: `${offset}-${offset + pageSize - 1}`,
+          'Range-Unit': 'items',
+        },
+      },
+    );
+    if (!response.ok && response.status !== 206) {
+      throw new Error(`Failed to load fixture posts: ${response.status}`);
+    }
+    const page = await response.json();
+    rows.push(...page);
+    if (page.length < pageSize) break;
+  }
+
   runtimeState.posts = rows.map((row) => row.id);
   runtimeState.creators = [...new Set(rows.map((row) => row.user_id))];
   if (runtimeState.posts.length === 0) throw new Error('No seeded posts found — run the seeder first.');
@@ -248,11 +336,25 @@ async function loadFixtureIds() {
 
 // --- request execution ------------------------------------------------------
 
+/**
+ * Vercel Deployment Protection guards preview deployments, so every request
+ * carries the project's automation-bypass secret. It only skips the SSO gate at
+ * the edge; it does not alter routing, caching or the function the request
+ * reaches, so the measurement is unaffected. Absent in an unprotected
+ * environment, where the variable is simply unset.
+ */
+const BYPASS_HEADERS = process.env.CERT_BYPASS_SECRET
+  ? { 'x-vercel-protection-bypass': process.env.CERT_BYPASS_SECRET }
+  : {};
+
 function authHeaders(user) {
   return user ? { Authorization: `Bearer ${user.accessToken}` } : {};
 }
 
 async function timedFetch(family, url, init = {}) {
+  // Applied here rather than at each call site so anonymous families get it too
+  // — they are excluded from the certified mix but still runnable.
+  init = { ...init, headers: { ...BYPASS_HEADERS, ...(init.headers ?? {}) } };
   const bucket = metrics.get(family);
   const startedAt = performance.now();
   let status = 0;
@@ -413,6 +515,49 @@ const families = {
     });
   },
 
+  /**
+   * The family the first attempt was missing, and the reason webhook-burst and
+   * workflow-fan-out could not be run: quoting never creates a provider task, so
+   * there was nothing to complete. This starts a real one through the ordinary
+   * path — credit hold, catalog quote, idempotency lock, provider createTask —
+   * which the `KIE_API_BASE_URL` seam points at the stub.
+   *
+   * Both media kinds are driven because ingest differs by kind: an image import
+   * is a fetch and a store, a video import also probes and transcodes. A run
+   * that started images only would leave the video half of the media pipeline
+   * uncertified while looking complete.
+   *
+   * The idempotency key is fresh per request. Reusing one would make every call
+   * after the first an idempotent replay, which returns early and measures the
+   * lock rather than the start path.
+   */
+  async 'generation-start'() {
+    const user = await borrowUser();
+    if (!user) return;
+    const isVideo = Math.random() < 0.2;
+    const [path, body] = isVideo
+      ? ['/api/generate-video', {
+        model: 'seedance-2-mini',
+        prompt: pick(GENERATION_PROMPTS),
+        settings: { resolution: '480p', duration: 4, aspectRatio: '16:9', sound: false },
+      }]
+      : ['/api/generate-image', {
+        model: 'nano-banana-2-lite',
+        prompt: pick(GENERATION_PROMPTS),
+        settings: { aspectRatio: '1:1', resolution: '1K', outputFormat: 'jpg' },
+      }];
+
+    await timedFetch('generation-start', new URL(path, BASE_URL), {
+      method: 'POST',
+      headers: {
+        ...authHeaders(user),
+        'Content-Type': 'application/json',
+        'Idempotency-Key': randomUUID(),
+      },
+      body: JSON.stringify(body),
+    });
+  },
+
   async 'publish-post'() {
     const user = await borrowUser();
     if (!user) return;
@@ -504,6 +649,18 @@ function buildReport() {
     label: options.label,
     targetRps: options.rps,
     disabledFamilies: options.disabled,
+    onlyFamilies: options.only,
+    // Recorded in the artefact, not just the run log: a reader of this report
+    // must be able to see that ~34% of the production mix was not driven and
+    // why, without having to find the prose that says so.
+    anonymousExcluded: options.excludeAnonymous,
+    anonymousExclusionReason: options.excludeAnonymous
+      ? 'Anonymous families key their rate limit on the caller network address, which one driver host cannot vary.'
+      : null,
+    mix: Object.fromEntries(ACTIVE_WORKLOAD.map((entry) => [
+      entry.name,
+      Number((entry.weight / totalWeight).toFixed(4)),
+    ])),
     achievedRps: Number((totalRequests / Math.max(1, elapsedSeconds - options.warmupSeconds)).toFixed(2)),
     durationSeconds: Number(elapsedSeconds.toFixed(1)),
     users: runtimeState.users.length,
@@ -519,6 +676,8 @@ function buildReport() {
 
 async function main() {
   console.log(`Certification load: ${options.rps} RPS for ${options.durationSeconds}s against ${new URL(BASE_URL).host}`);
+  console.log(`  families: ${ACTIVE_WORKLOAD.map((entry) => entry.name).join(', ')}`);
+  if (options.disabled.length > 0) console.log(`  disabled: ${options.disabled.join(', ')}`);
 
   await loadFixtureIds();
   console.log(`  fixtures: ${runtimeState.posts.length} posts, ${runtimeState.creators.length} creators`);
@@ -533,7 +692,13 @@ async function main() {
   if (runtimeState.users.length === 0) throw new Error('No seeded users could sign in.');
   console.log(`  authenticated ${runtimeState.users.length}/${options.users} users`);
 
-  const requiredUsers = Math.ceil(options.rps * 0.26 * 600 / 60);
+  // Sized against the *active* mix, not the nominal one. Excluding the anonymous
+  // families lifts ranked reads from 26% of offered load to ~39%, so the user
+  // pool a level needs grows with the exclusion — computing this from the
+  // hard-coded 0.26 would under-report the requirement by half.
+  const rankedShare = activeShare('feed-for-you');
+  const requiredUsers = Math.ceil(options.rps * rankedShare * 600 / 60);
+  console.log(`  ranked-read share ${(rankedShare * 100).toFixed(1)}% → needs ~${requiredUsers} users`);
   if (runtimeState.users.length < requiredUsers) {
     console.warn(`  WARNING: ${runtimeState.users.length} users is below the ~${requiredUsers} needed`
       + ` for ${options.rps} RPS of ranked reads against a 60-per-10-minute limit.`

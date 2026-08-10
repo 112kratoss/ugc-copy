@@ -150,17 +150,27 @@ async function seedUsers(client, userCount) {
   // publicly requires a *claimed* handle plus a display name, so an upsert that
   // only refreshed credits left every seeded user unable to publish — the
   // publish family fails 100% and looks like an application fault.
+  // `avatar_url` is not decoration. `getCreatorProfileReadiness` gates
+  // `sellerReady` on a claimed handle AND a display name AND an avatar, and
+  // `assessMarketplaceListingQuality` rejects any listing whose seller is not
+  // sellerReady. Seeded without one, all 5,000 bundles are ineligible and
+  // `/api/marketplace/resources` returns an empty page with `hasMore: true` —
+  // so the marketplace family would score 200s while measuring nothing. Found
+  // exactly that way: 0 of 25 rows survived the quality gate.
   await runSql(client, `
-    insert into public.profiles (id, credits, created_at, display_name, username)
+    insert into public.profiles (id, credits, created_at, display_name, username, avatar_url)
     select u.id, 100000, now(),
            'Cert User ' || row_number() over (order by u.email),
-           'certuser' || row_number() over (order by u.email)
+           'certuser' || row_number() over (order by u.email),
+           'https://ingtmbfnyomyjlwfishq.supabase.co/storage/v1/object/public/avatars/cert/'
+             || row_number() over (order by u.email) || '.jpg'
     from auth.users u
     where u.email like 'cert-user-%@${SEED_EMAIL_DOMAIN}'
     on conflict (id) do update set
       credits = excluded.credits,
       display_name = excluded.display_name,
-      username = excluded.username;
+      username = excluded.username,
+      avatar_url = excluded.avatar_url;
   `);
 }
 
@@ -209,7 +219,18 @@ async function seedPosts(client, postCount) {
         floor(random()*50)::int, floor(random()*10)::int,
         floor(random()*20)::int, floor(random()*15)::int
       from generate_series(${offset + 1}, ${offset + size}) as generation(index)
-      cross join lateral (select random() as roll, random() < 0.3 as is_text) shape
+      -- Correlated by generation.index, for exactly the reason spelled out at
+      -- the join below. An uncorrelated LATERAL is evaluated ONCE for the whole
+      -- statement, so a bare "select random() < 0.3 as is_text" gives every post
+      -- in the batch the same format — a 20,000-row catalog that is entirely
+      -- video, or entirely text, with no mix for the feed to rank over. Measured
+      -- on this branch before the fix: 10/10 posts came back video/media.
+      -- The split is derived from the index rather than rolled so the catalog is
+      -- reproducible: exactly 30% text, and the rest halved into image and video.
+      cross join lateral (
+        select (generation.index % 10) < 3 as is_text,
+               case when (generation.index % 2) = 0 then 0.25 else 0.75 end as roll
+      ) shape
       cross join author_count ac
       -- Authors are chosen by a prime stride over numbered profiles, which is
       -- genuinely correlated with the outer row. Neither a bare subquery nor a
@@ -391,7 +412,10 @@ async function seedBundles(client, bundleCount) {
         limit ${size} offset ${offset}
       ) p
       cross join lateral (select ${offset} + p.sequence as index) generation
-      cross join lateral (select random() < 0.5 as is_paid) pricing
+      -- Same uncorrelated-LATERAL trap as posts: "select random() < 0.5" with no
+      -- outer reference makes every bundle in the batch free, or every one paid.
+      -- Keyed off p.sequence instead, which alternates them exactly.
+      cross join lateral (select (p.sequence % 2) = 0 as is_paid) pricing
       on conflict (post_id) do nothing;
     `);
   }

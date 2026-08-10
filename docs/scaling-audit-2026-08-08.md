@@ -72,7 +72,7 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 | F8 | Per-request GoTrue round-trip | Medium | 1 | DONE | `getClaims()` verifies locally via WebCrypto against a cached JWKS — no hand-rolled JWT code, 2026-08-09. Premise verified first: JWKS publishes only ES256 with no symmetric key, in prod *and* local. User rebuilt from verified claims only, preserving the "never read the cookie's user" invariant |
 | F9 | Comments scan loop; unindexed top sort | Medium | 1 | DONE | Viewer block set loaded **once** (2 reads per scan, not 2 per batch), scan capped at 10 batches reporting `hasMore`, and `post_comments_toplevel_top_idx` added — `post_comments` had no index reaching `reply_count` at all, 2026-08-09 |
 | F15b | Error tracking, PITR, log drain | Medium | 1 | IN PROGRESS | **`track_io_timing` DONE** (`ALTER ROLE` on `postgres` **and** `authenticator` — role GUCs apply at login and PostgREST `SET ROLE`s), verified collecting. **Error tracking DONE** — browser proven by an event arriving, server wired, source maps uploading. **Second incident recipient DONE and drilled** — the watchdog opens an incident issue, because GitHub emails scheduled-workflow failures to exactly one person; receipt confirmed at `info@magicbooklet.com`. **Provider-cost ledger unblocked** — Kie's export is per-task and its `Task ID` is already `generations.prediction_id`. **Out of scope on budget:** log drain, PITR, paid external monitoring — so the RTO is "last daily backup" |
-| — | Phase 1 certification load test | — | 1 | **ATTEMPTED — NOT CERTIFIED** | **Run 2026-08-09; no MAU level certified.** The specified isolated environment **cannot be built**: a Supabase branch dies at 9/171 migrations because the base `remote_schema` migration recorded no statements, so the history cannot rebuild the database (**Finding C** — this also makes F15b's "RTO is last daily backup" optimistic; there is no migrations-only rebuild path). Ran instead against Micro-tuned local Postgres + a production build: **knee between 25 and 50 origin RPS**, clean at 25 (0% error, for-you P95 155 ms), latency collapses 5× at 50 with errors still at zero, authenticated path fails 41.7% at 100. **Not transferable** — `shared_buffers`/`max_connections` unset so the pool criterion was not evaluated, no Vercel, and anonymous throttling is a single-IP artifact. Two production defects found: **Finding A**, `update_post_with_resource_bundle` raises on every call (text-post publish and metadata edits broken since 2026-08-06); **Finding B**, the retention skew guard now silently coerces instead of raising, so this document's own verification recipe cannot detect the incident it was written for. **One-hour soak at 25 RPS ran but produced no valid verdict**: 32.31% error, decomposing into ~16,400 401s from a driver token-refresh race and ~10,200 `fetch failed` 500s from host transport exhaustion (the Docker daemon stopped responding afterwards) — artifacts, not capacity. Webhook-burst and workflow fan-out **not run** — no generation-start family. Prerequisites and the earlier READY note in the certification section |
+| — | Phase 1 certification load test | — | 1 | **RUN IN THE SPECIFIED ENVIRONMENT — STILL NOT CERTIFIED** | **Run 2026-08-10; no MAU level certified.** The environment 2026-08-09 called impossible now exists: a Supabase preview branch replaying **173/173** migrations (Finding C's ledger repair, proven), seeded to the 100k tier, plus a Vercel preview in production's `bom1` region and the provider stub via `KIE_API_BASE_URL`. **Provider spend $0; branch cost ~$0.09.** **All four named cases PASS** — skew (Finding B's clamp verified live), cron-overlap, webhook-burst (48 completions, zero callback failures, queue drained to pre-burst level in 4 s, no duplicate settlement) and workflow fan-out (19 concurrent starts, one run each, no orphans) — with F12's run-scoped-advance caveat stated inline. **But no level survives the one-hour soak:** 25 RPS → 5.07 achieved / 12.32% error; 10 RPS → 6.19 / **0.03% error but 25 s p50**; 5 RPS → 1.44 / 5.84%. Every 120 s ladder step that passed had merely not queued yet, and sustainable throughput *fell* across the session (6.2 → 1.44 RPS) as `feed_session_items` grew 8× to 894,487 rows / 711 MB. **The database is not the wall** — steady-state pool p50 51.7% / p95 61.7% against a 45% idle floor (criterion passes), lock waiters ≤1, and `get_ranked_feed_candidates` at **125 ms for the heaviest viewer**, so F5 holds. Nor is it bandwidth (13.6 KB responses) or the driver (no undici cap). The unexplained cost is per-request: 2.6–4.4 s idle against ~120 ms ranking + ~200 ms RTT. **The binding MAU constraint is arithmetic, not latency:** measured 114,751 facts/hour at 25 RPS against a 5,000/hour prune ceiling; at this document's own 12 facts/MAU/day that ceiling implies **~10,000 MAU** — the planning table's lower bound, now measured. Not certified, because the soak did not pass. **Five defects found and fixed** (single-format seeded catalog from an uncorrelated LATERAL; every marketplace listing ineligible for want of a seller avatar; the stub unable to complete an image generation because the two poll paths disagree; a renamed JPEG served as `.mp4`; the driver drawing from 1,000 of 20,000 posts). **Finding D corrected** — a cloud branch's grant surface is production's, not the repository's. Next steps in *Certification run — 2026-08-10* |
 | — | ~~Phase 1 certification load test (READY note, 2026-08-09)~~ | — | 1 | superseded | **Unblocked 2026-08-09.** Phase 1's code tail is complete and deployed; `track_io_timing` is on and collecting; error tracking is live on browser and server with source maps; and the second incident recipient is **verified by drill** — a forced watchdog failure opened an issue and the notification reached `info@magicbooklet.com`. F12 and F10 staying IN PROGRESS are recorded deferrals, not prerequisites. **Remaining caveat, not a blocker:** IO timing was off for the entry baseline, so take a short idle sample before the run or the IO figures have no "before" |
 | — | Phase 2 backlog (unnumbered — see the Phase 2 section) | — | 2 | TODO | |
 
@@ -1461,12 +1461,16 @@ The `I/O Timings` line is absent entirely when the setting is off. Incidentally 
 
 ### Phase 1 certification test
 
-**Status:** **ATTEMPTED 2026-08-09 — NOT CERTIFIED.** The harness is built and the
-workload runs, but the isolated environment this section specifies **could not be
-created**, and the run that did happen was against a substitute that does not
-reproduce two of the constraints the pass criteria are written against. Results,
-the three defects the attempt exposed, and what has to clear before a real
-certification is possible are in *Certification attempt — 2026-08-09* below.
+**Status:** **RUN 2026-08-10 IN THE SPECIFIED ENVIRONMENT — STILL NOT CERTIFIED.**
+The environment the 2026-08-09 attempt could not build now exists and works end to
+end: a Supabase preview branch replaying all 173 migrations, seeded to the 100k
+tier, with a Vercel preview in production's `bom1` region and the provider stub
+reached through the `KIE_API_BASE_URL` seam. All four named cases **pass**. But
+**no MAU level is certified**, because no tested origin-RPS level survives the
+one-hour soak: 25, 10 and 5 RPS all fail, and measured sustainable throughput
+*fell* across the session as feed tables grew. Full results in
+*Certification run — 2026-08-10* below; the 2026-08-09 attempt is kept beneath it
+for the three findings it produced.
 
 **Do not read the numbers below as a certified MAU level.** No MAU figure is
 being claimed. The planning table in the *Executive verdict* is unchanged.
@@ -1492,6 +1496,239 @@ being claimed. The planning table in the *Executive verdict* is unchanged.
 Certification, not a smoke test. Use a production-shaped isolated environment with 10k/100k/1M-row fixtures and stepped runs at 5, 10, 25, 50 and 100 origin RPS. Must include: authenticated `for-you` feed **with cursor continuation**, batched feed events, saves/follows/comments/publishing, upload sign and finalize, generation quote and start against a provider stub, webhook bursts and completion draining, workflow fan-out, realistic image and video ingest, and cron overlap with retention cleanup.
 
 Certify only a level that survives a **one-hour soak** with: error rate below 1%; route P95 within SLO; DB CPU and connection pool below 70%; no growing lock or retention backlog; queue age below twice its cadence; provider 429/5xx below 1–2%; no duplicate or orphaned paid generations; and at least 30% remaining headroom.
+
+---
+
+### Certification run — 2026-08-10
+
+**Verdict: NOT CERTIFIED.** The environment specified by this section was built
+and works; the workload ran in full; all four named cases pass. **No MAU level is
+claimed**, because no tested level survives the one-hour soak.
+
+**Provider spend: $0.** Supabase branch cost: ~$0.09.
+
+#### The environment exists now — Finding C's repair is what did it
+
+The branch reached `FUNCTIONS_DEPLOYED` on **173/173** migrations, with exactly
+one NULL statement: the empty base file, harmless now the ledger no longer claims
+it builds anything. Where 2026-08-09 died at 9/171, this replayed everything.
+
+| Component | Detail |
+|---|---|
+| Database | Supabase branch `phase1-cert` / `ingtmbfnyomyjlwfishq`, ap-south-1, Micro, `max_connections = 60` |
+| App | Vercel preview aliased to `magicbooklet-phase1-cert.vercel.app`, `regions: ["bom1"]`, Fluid compute, `functionDefaultTimeout: 300` |
+| Fixtures | 2,000 users · 20,000 posts (6,000 text / 6,000 image / 8,000 video) across 2,000 creators · 20,000 comments · 5,000 bundles (2,500 free / 2,500 paid) · 100,020 delivery facts |
+| Driver | A separate host from both the app and the database — item 7 satisfied |
+| Catalog | `GENERATION_MODEL_CATALOG_SOURCE=database`, migration-seeded revision `e271b74557d1e248` (v1); production is at `wan-provider-id-fix-20260725` (v2) |
+
+**Grant surface is production's, not the repository's** — 914 table grants,
+33 sequence grants, 25 default ACLs, 91 RLS policies, all 16 of *Finding D*'s
+tables byte-identical. See the correction recorded in Finding D.
+
+**Deviations, recorded rather than discovered later:** anonymous families
+excluded (~34% of the mix; their limit keys on the caller's network address,
+which one host cannot vary — so ranked reads rise to **39.4%** of offered load,
+making a given RPS *harder* than nominal); every request carries
+`x-vercel-protection-bypass`; the edge function's signed forward is relayed
+through the stub because `kie-webhook` cannot add that header and no spare custom
+domain exists; branch `rate_limit_verify` raised 30 → 150,000; and P95 is
+end-to-end over the internet (~200 ms RTT), so it is **not** comparable to the
+2026-08-09 localhost figures.
+
+#### The ladder, and a wall that is not the database
+
+120 s per step, 574–569 signed-in users, `publish-post` re-enabled after
+Finding A's fix — it ran at 0% error, so the family 2026-08-09 had to disable is
+back in the mix.
+
+| Target | Achieved | Error | for-you p50 | p95 |
+|---:|---:|---:|---:|---:|
+| 5 | 4.97 | 0.00% | 375 ms | 478 ms |
+| 10 | 9.87 | 0.00% | 415 ms | 696 ms |
+| 25 | 24.10 | 0.00% | 476 ms | 820 ms |
+| 40 (diagnostic) | 7.73 | 0.00% | 115,090 ms | 128,161 ms |
+| 50 | 9.01 | 0.00% | 150,001 ms | 163,818 ms |
+| 100 | 5.13 | 90.15% | 300,160 ms | 300,189 ms |
+
+Past 25 RPS the system does not degrade, it queues: throughput collapses while
+latency grows without bound and **every response is still HTTP 200** (443/443 at
+the 40 RPS diagnostic). Errors appear only at 100 RPS, as **790 HTTP 504s at
+exactly 300,000 ms** — the platform gateway timing out, not the application
+failing. This document warned that latency degrades before errors do; the run
+shows it is worse than that. An error-rate-only gate passes **40 and 50 RPS at a
+perfect 0.00%** while users wait two and a half minutes.
+
+#### Three soaks, three failures — and the reason the ladder lied
+
+| Soak | Offered | Achieved | Error | for-you p50 | p95 |
+|---|---:|---:|---:|---:|---:|
+| 25 RPS | 25 | 5.07 | 12.32% | 95,088 ms | 300,070 ms |
+| 10 RPS | 10 | 6.19 | **0.03%** | 25,088 ms | 85,742 ms |
+| 5 RPS | 5 | 1.44 | 5.84% | 2,091 ms | 300,066 ms |
+
+Every 120 s step that passed had simply not queued yet. **That gap is the entire
+reason this section demands a soak, and it has now earned its place twice over.**
+
+The 10 RPS soak is the sharpest result in the run: it passes the error criterion
+outright at **0.03%** and fails latency by two orders of magnitude. Certifying on
+error rate alone would have certified it.
+
+**Sustainable throughput fell across the session** — ~6.2 RPS at 03:00, **1.44
+RPS** by 05:12 — while `feed_session_items` grew **8×, from 100,020 rows to
+894,487 (711 MB)** and `feed_delivery_facts` reached 250,764 (194 MB). The
+degradation tracks accumulated feed data, not offered load.
+
+**What the wall is not, each checked rather than assumed:**
+
+- **Not Postgres.** Steady-state pool p50 **51.7%**, p95 **61.7%**, max 76.7%
+  (5 of 223 samples above 70%, all during the 574-user sign-in stampede that no
+  real deployment produces) — against a 45% idle floor that reproduces
+  production's documented 47%. **The pool criterion passes.** Lock waiters peaked
+  at 1. Across the ladder, TPS *fell* as offered load rose (~450 at 25 RPS, ~12 at
+  50), meaning requests were not reaching the database at all.
+- **Not the ranking RPC.** `get_ranked_feed_candidates` measures **125 ms for the
+  heaviest viewer (468 facts)** and **111 ms for a median one (60 facts)** — flat
+  in viewer history. F5's fix holds at 20,000 posts. *(Two earlier readings of
+  20.7 s and 7–30 ms were both artifacts of a malformed lateral timing query;
+  the numbers above come from sequential timing inside a `DO` block.)*
+- **Not bandwidth.** The feed response is **13.6 KB**; 6 RPS is ~82 KB/s.
+- **Not the driver's client.** undici has no per-origin connection cap, and the
+  driver demonstrably offered load until its own in-flight guard engaged.
+
+**What remains.** Per-request cost is dominated by something other than ranking:
+a single idle request measures 2.6–4.4 s end-to-end against ~120 ms of ranking
+and ~200 ms of RTT. The most likely candidate is the per-request write of ~12
+`feed_session_items` plus ~12 `feed_delivery_facts` rows into tables now carrying
+**208 MB of indexes on `feed_session_items` alone** — one of which,
+`feed_session_items_unserved_idx` (37 MB), has recorded **zero scans** while being
+maintained on every insert. That is a hypothesis this run did not isolate, and it
+is the first thing the next run should measure.
+
+**The honest caveat.** This is a preview deployment. Fluid compute autoscaling on
+a preview may not match production's warm capacity, and nothing here can
+distinguish a hard ceiling from a slow ramp. What *can* be said with evidence is
+that the constraint this document was most worried about — the database — was
+nowhere near its limits at any point.
+
+#### The retention sweep is the binding MAU constraint, and it is arithmetic
+
+Measured at 25 RPS: **31.88 delivery facts/second = 114,751/hour**, against
+`FEED_RETENTION_PRUNE_LIMIT` of **5,000 rows/hour (120,000/day)** — a **23×**
+overshoot. At ~1 KB per row that is ~2.75 GB/day, exhausting the 8 GiB quota in
+about three days. F7b predicted this exact shape.
+
+But 25 RPS is not 5,000 MAU, and conflating them would be the mistake:
+
+| Quantity | Value |
+|---|---:|
+| Measured fact rate at 25 origin RPS | 2.75M/day |
+| This document's modelled rate at 5,000 MAU | 60,000/day |
+| Facts per MAU per day (its own ratio) | 12 |
+| Prune ceiling | 120,000/day |
+| **MAU ceiling implied by the sweep** | **~10,000 MAU** |
+
+That lands on the lower bound of the planning table's *"10,000–25,000 MAU after
+Phase 1"* — now derived from a measured sweep ceiling rather than a projection.
+**It is not a certified figure**, because the soak it would have to be certified
+against did not pass. It is the number to design against, and the constraint to
+raise first.
+
+#### Named cases — all four pass
+
+| Case | Result |
+|---|---|
+| Migration-under-old-code skew | **PASS** — `(now(), 90, 2, 5000, 30)` returns `fact_retention_clamped = true`, `applied = 90`, `requested = 30`, exactly Finding B's recipe; deployed constants legal; all three cron jobs survive; no job run failed; health reports no `FEED_RETENTION_POLICY_SKEW` |
+| Cron overlap with retention cleanup | **PASS** — six concurrent invocations returned 200/202, no 5xx, no aborted job |
+| Webhook burst | **PASS** — 48 completions in 3.0 s through stub → `kie-webhook` → HMAC forward → `/api/webhooks/kie`, zero callback failures, queue drained to its pre-burst level in **4 s**, no duplicate settlement |
+| Workflow fan-out | **PASS** — replayed idempotency key created exactly 1 run; 19 concurrent starts all 200, one run each; zero runs processing without a step job; cron advanced the queue with zero failures |
+
+**F12's caveat is honoured and stated inline in the case:** this certifies the
+**run-scoped advance**. Poison-node isolation and per-node retry accounting are
+not covered.
+
+**The burst was 48, not 500, and that is itself a result.** Provider admission
+control capped task creation. `PROVIDER_ADMISSION_POLICY` is global capacity 15 /
+refill 1.5 per second but **per-model capacity 6 / refill 0.6 per second**, so a
+two-model workload caps at **1.2/s** against a global allowance of 1.5/s —
+observed directly, with the global scope holding **13.4 tokens** while
+`kie:nano-banana-2-lite` sat at **0.41** and `kie:seedance-2-mini` at **0.23**.
+Anyone reasoning about provider throughput from the global figure will be wrong
+for a concentrated workload. Separately, priming with the stub's auto-completion
+disabled produced **100% rejections and zero new tasks over 400 s** with the
+breaker `closed` and healthy: `maxInFlight: 50` was the gate, because nothing
+completing means nothing leaves the in-flight window. That is the protection
+working — and a warning that any burst-priming procedure must keep completions
+flowing.
+
+#### Five defects found before any number could be certified
+
+None were visible on 2026-08-09, which never started a generation and never
+rendered a marketplace page with eligible rows.
+
+1. **The seeder built a single-format catalog.** `cross join lateral (select
+   random() < 0.3 as is_text)` references no outer column, so Postgres evaluates
+   it **once per statement** — all 20,000 posts got one roll. A 10-row probe
+   returned 10/10 video, zero text; `seedBundles` had the same shape and would
+   have produced an all-free or all-paid catalog. Both laterals are now
+   correlated on the outer index and the split is derived, so the fixture is
+   reproducible: 6,000 text / 6,000 image / 8,000 video, 2,500 free / 2,500 paid.
+2. **Every marketplace listing was ineligible.** `/api/marketplace/resources`
+   returned `items: []` with `hasMore: true` over 5,000 bundles.
+   `assessMarketplaceListingQuality` rejects a listing whose seller is not
+   `sellerReady`, and `getCreatorProfileReadiness` requires a claimed handle, a
+   display name **and an avatar**; seeded profiles had the first two. Measured 0
+   of 25 eligible; with `avatar_url` seeded, 23/23 and 17/17 pass. The family
+   would otherwise have scored 200s while serving an empty cached page — and it
+   was the previous soak's one clean family.
+3. **The provider stub could not complete an image generation.** The two poll
+   paths disagree and it satisfied neither: `/api/v1/jobs/recordInfo` (images,
+   most models) reads `data.state` = `'success'`/`'fail'` with the URL in
+   `data.resultJson`; `/api/v1/veo/record-info` reads `data.successFlag` with the
+   URL in `data.response.resultUrls`. The stub emitted only `successFlag` +
+   `resultJson`, so the jobs path never left `processing` — measured as 12
+   completions retrying *"Generation is still processing."* The veo path would
+   have been worse: **settled succeeded with no output URL**.
+4. **The stub served a renamed JPEG as `.mp4`.** Video import probes and
+   transcodes what it fetches, so every video ingest would have failed as a
+   pipeline fault rather than a fixture one. Replaced with a real 1,787-byte
+   H.264 MP4; a smoke run then settled 7 images into `generated_images/` and 3
+   videos into `generated_videos/*.mp4`, with the webhook settling inline and the
+   queue draining without cron.
+5. **The driver drew from 1,000 posts, not 20,000.** PostgREST caps a response at
+   its max-rows setting and reports the truncation only in `Content-Range`, so
+   `limit=5000` silently returned 1,000 — concentrating every write family on a
+   5% slice of the catalog. Now paged with `Range`: 20,002 posts, 2,000 creators.
+
+Two further items were **driver artifacts**, recorded so a later run does not
+rediscover them: GoTrue's `rate_limit_verify` capped the pool at **30 of 600**
+from one host, and a 300 s token-refresh margin produced 401s under queueing
+because validation happens when a request is *served*, not when it is sent —
+1,470 of the 25 RPS soak's 2,251 errors were exactly that. The margin is now
+900 s. Two harness assertions were also wrong and would have produced false
+FAILs: `cert_query` broke on a caller's trailing semicolon, and the burst scored
+the stub's **cumulative** callback failures against a single burst.
+
+#### What has to clear before a level can be certified
+
+1. ~~Fix Finding A~~, ~~make the history replayable (Finding C)~~, ~~stand up the
+   environment~~, ~~add a generation-start family~~, ~~resolve the anonymous
+   families~~, ~~fix the driver's token refresh~~, ~~drive load from a separate
+   host~~ — **all done 2026-08-09/10.**
+2. **Find what the per-request 2.6–4.4 s is spent on.** Ranking is ~120 ms and
+   RTT ~200 ms; the remainder is unexplained and is the whole ceiling. Start with
+   the per-request writes into `feed_session_items` (711 MB, 208 MB of indexes)
+   and drop `feed_session_items_unserved_idx` if its zero scan count holds.
+3. **Establish whether the compute ceiling is preview-specific.** A production
+   deployment has warm capacity a preview may not; nothing in this run can
+   separate a hard ceiling from a slow autoscale ramp.
+4. **Raise `FEED_RETENTION_PRUNE_LIMIT` or partition**, or ~10,000 MAU is the
+   design ceiling regardless of what the compute layer can serve.
+
+Harness lives in `scripts/certification/`: `seed-fixtures.mjs`,
+`cert-load-test.mjs`, `provider-stub.mjs`, `cert-cases.mjs`, and
+`sample-resources.mjs` (new — samples pool, locks, queue age and fact growth,
+because the pass criteria are not all latency and 2026-08-09 could not evaluate
+the pool criterion at all).
 
 ---
 
@@ -1833,6 +2070,35 @@ Note the direction, because it inverts the usual worry: a preview branch is now
 pass on a branch and still be wrong about production — and the reverse cannot
 happen.
 
+**Corrected 2026-08-10 by measurement — that last paragraph is wrong for cloud
+branches.** The certification run compared the branch `ingtmbfnyomyjlwfishq`
+against production directly, and the grant surface is **identical**:
+
+| Class | Branch | Production |
+|---|---:|---:|
+| Table grants to `anon`/`authenticated`/`service_role` | 914 | 914 |
+| Sequence grants | 33 | 33 |
+| `pg_default_acl` entries | 25 | 25 |
+| RLS policies | 91 | 91 |
+| Routine grants | 203 | 200 |
+
+All 16 tables carry `anon`/`authenticated` DML **on the branch too**, with
+byte-identical ACLs — `post_saves`, `workflow_canvases`, `source_tools` and
+`contact_messages` each read
+`{postgres=arwdDxtm/postgres,anon=rm/postgres,authenticated=arwdm/postgres,service_role=arwdDxtm/postgres}`
+on both sides. The routine gap is exactly the three `cert_*` helpers the run
+installed, not a schema difference.
+
+The finding named a real gap but attributed it to the wrong boundary. It compared
+production against a **clean local replay**, where Supabase's per-project platform
+default ACLs do not exist. A cloud preview branch *is* a real Supabase project
+and inherits them, so it reproduces production rather than the repository. The
+"more restrictive" warning holds for **local replays and CI**, not for branches.
+
+Consequence, and it is favourable: a Data API result obtained on a preview branch
+**does** transfer to production. The surface that stays untested is the narrower
+local/CI one.
+
 #### What has to clear before a real certification
 
 1. ~~Fix *Finding A*, or publishing stays uncertified.~~ **Done 2026-08-09**
@@ -1841,21 +2107,23 @@ happen.
    branching.~~ **Done 2026-08-09** (`d502d7a`) — the repository always could;
    production's ledger could not. Repaired and exercised: a preview branch
    reaches `MIGRATIONS_PASSED` on all 173.
-3. Stand up the environment this section specifies — branch or fresh project —
-   with a Vercel preview, so pool and route P95 become measurable.
-4. Add a generation-**start** family so the webhook-burst and workflow-fan-out
-   cases have provider tasks to work with.
-5. Drive anonymous families from multiple source addresses, or exclude them and
-   record the exclusion.
-6. **Fix the driver's token refresh before any soak is believed.** Serialise
-   refresh per user (a single in-flight promise per identity) so rotating
-   single-use refresh tokens are never consumed twice; treat a failed refresh as
-   a driver fault and re-authenticate rather than scoring 401s as application
-   errors.
-7. **Drive load from a separate host from the one under test.** At 25 RPS the
-   generator, the Next.js server, Postgres, PostgREST, Kong and GoTrue all shared
-   one machine, and the failure that ended the soak was that host running out of
-   transport capacity — not the application.
+3. ~~Stand up the environment this section specifies — branch or fresh project —
+   with a Vercel preview, so pool and route P95 become measurable.~~ **Done
+   2026-08-10** — and the pool criterion was evaluated, and passes.
+4. ~~Add a generation-**start** family so the webhook-burst and workflow-fan-out
+   cases have provider tasks to work with.~~ **Done 2026-08-10** — both cases ran
+   and pass.
+5. ~~Drive anonymous families from multiple source addresses, or exclude them and
+   record the exclusion.~~ **Done 2026-08-10** — excluded, and the exclusion is
+   carried in every report as `anonymousExcluded: true`.
+6. ~~**Fix the driver's token refresh before any soak is believed.**~~ **Done** —
+   serialised per identity 2026-08-09, and the refresh margin widened to 900 s on
+   2026-08-10 after queueing showed a 300 s margin still produces 401s.
+7. ~~**Drive load from a separate host from the one under test.**~~ **Done
+   2026-08-10** — the app ran on Vercel and the database on Supabase, with only
+   the driver and stub on the local host.
+
+**This list is superseded by *What has to clear before a level can be certified* in the 2026-08-10 run above.**
 
 Harness lives in `scripts/certification/`: `seed-fixtures.mjs`,
 `cert-load-test.mjs`, `provider-stub.mjs`, `cert-cases.mjs`. The provider stub is
@@ -1922,6 +2190,7 @@ Two independent audits produced different headline numbers. Both were right abou
 
 | Date | Change | By |
 |---|---|---|
+| 2026-08-10 | **Phase 1 certification run — the specified environment was built, all four named cases pass, and still no level is certified.** The Supabase preview branch reached `FUNCTIONS_DEPLOYED` on **173/173** migrations where 2026-08-09 died at 9/171, so Finding C's ledger repair is now proven by use rather than argued. Vercel preview in `bom1`, 100k-tier fixtures, provider stub through the `KIE_API_BASE_URL` seam, **$0 provider spend**. **The soak is what refused to certify:** 25, 10 and 5 origin RPS all fail, and the 10 RPS run is the instructive one — **0.03% error with a 25-second p50**, so an error-rate-only gate would have certified it. Every 120 s ladder step that looked clean had simply not queued yet. Sustainable throughput *fell* across the session (6.2 → 1.44 RPS) while `feed_session_items` grew 8× to 894,487 rows / 711 MB. **Elimination, not assertion:** the pool criterion **passes** (steady-state p50 51.7%, p95 61.7%, against a 45% idle floor reproducing production's documented 47%), lock waiters ≤1, `get_ranked_feed_candidates` is **125 ms for the heaviest viewer** so F5 holds, responses are 13.6 KB so it is not bandwidth, and undici has no per-origin cap so it is not the driver. What is left is ~2.5–4 s of per-request cost that is neither ranking nor RTT — most likely the per-request writes into `feed_session_items` and its 208 MB of indexes, one of which (`feed_session_items_unserved_idx`, 37 MB) has **zero recorded scans**. That hypothesis is named, not proven, and is the next run's first job. **The MAU number is now arithmetic:** 114,751 facts/hour measured at 25 RPS against a 5,000/hour prune ceiling; at this document's own 12 facts/MAU/day the ceiling implies **~10,000 MAU**, the planning table's lower bound — to design against, not to cite as certified. **Five defects found before any number could be trusted**, none of them visible to the previous attempt: an uncorrelated `LATERAL` that gave all 20,000 seeded posts one format roll (probe: 10/10 video, zero text); every marketplace listing ineligible because sellers had no avatar, so the family scored 200s over an empty cached page; a stub that could never complete an image generation because `jobs/recordInfo` reads `data.state` while `veo/record-info` reads `data.successFlag` and it emitted neither correctly; a renamed JPEG served as `.mp4`; and a driver drawing from 1,000 of 20,000 posts because PostgREST caps rows and says so only in `Content-Range`. **Finding D corrected by measurement:** a cloud preview branch inherits Supabase's per-project platform ACLs, so its grant surface is **identical to production** (914/914 table grants, 91/91 RLS policies, all 16 tables byte-identical). The original 'a branch is more restrictive' note applies to local replays and CI only. **Provider admission control measured:** per-model capacity 6 / refill 0.6 per second binds a concentrated workload at 1.2/s well before the global 15 / 1.5, and `maxInFlight: 50` correctly refuses everything when nothing completes. Harness gains `sample-resources.mjs`, because the pass criteria are not all latency and 2026-08-09 could not evaluate the pool criterion at all. Branch and preview torn down. | Claude Code |
 | 2026-08-09 | **Finding C fixed; Finding D opened.** **C** (`d502d7a`): the prescribed baseline squash was not needed — a clean replay of all 173 migrations reproduces production, proved class by class with a new `scripts/schema-fingerprint.sql` run on both sides (the CLI still cannot reach production, so a runner replays and the Management API reads production). The unreplayable artefact was production's **ledger**, which is what a preview branch replays: nine rows held NULL statements because `supabase migration repair` records a version and a name and nothing else, and `20260317090245` held a `generations.category` backfill the recorded history only creates one migration later. Every row is now rewritten from its own file (`repair-supabase-ledger.mjs` over the Management API, old ledger kept in `schema_migrations_backup_20260809182008`): 173 rows, 0 NULL statements, 46 drifted versions restored, and a preview branch reaching `MIGRATIONS_PASSED` on all 173 with a fingerprint identical to production. Push-before-repair ordering is now pinned by `supabase-migration-ledger-ordering.test.ts` rather than by comment. **D**: production grants `anon`/`authenticated` DML on 16 tables a clean replay never grants — the 2026-07 Data API hardening converged the default privileges but not the tables predating them. Recorded, not changed: RLS still gates access, and revoking is a live behaviour change that needs its own verification. | Claude Code |
 | 2026-08-09 | **Certification Findings A and B fixed.** **A** (`8d05483`, `20260809220000`): the owner guard's `v_bundle.status` fragment was a mis-paste from the buyer-side quote function `get_post_resource_bundle_cash_quote` — there was no intended guard change; restored to plain `IF NOT FOUND`, `FOR UPDATE` kept, pgTAP pins owner-edit success and non-owner rejection. Text-post publish and metadata edits work again after three broken days. **B** (`20260809230000`): the clamp now reports `requested/applied/clamped` in its summary (the visibility its own migration promised but never implemented), `maintainFeedPersonalization` logs `feed_retention_clamped`, health raises `FEED_RETENTION_POLICY_SKEW` from the policy constants with zero queries, and the suite pins the live constants as unskewed. Verification recipe in Finding B replaced accordingly. | Claude Code |
 | 2026-08-09 | **Phase 1 certification attempted — NOT certified, no MAU level claimed.** Harness added under `scripts/certification/` (seeder, mixed-workload driver, provider stub, named cases) plus an env-gated `KIE_API_BASE_URL` seam in `provider-fetch.ts`. Stepped ladder run: knee between 25 and 50 origin RPS. Three findings recorded in *Certification attempt — 2026-08-09*: **A** `update_post_with_resource_bundle` raises on every call in production; **B** the retention skew guard silently coerces rather than raising, invalidating this document's own verification recipe; **C** the migration history cannot rebuild the database, which blocks Supabase branching and weakens F15b's recorded RTO. | Claude Code |
