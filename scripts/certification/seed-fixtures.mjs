@@ -21,10 +21,12 @@
  * Usage:
  *   node scripts/certification/seed-fixtures.mjs --tier 100k
  *   node scripts/certification/seed-fixtures.mjs --tier 1m --users 3000
+ *   node scripts/certification/seed-fixtures.mjs --tier 1m --only bundles,facts
  */
 
 import { createClient } from '@supabase/supabase-js';
 import pg from 'pg';
+import { pathToFileURL } from 'node:url';
 
 const { Client: PgClient } = pg;
 
@@ -39,9 +41,37 @@ const TIERS = {
 
 const SEED_PASSWORD = 'cert-load-test-password';
 const SEED_EMAIL_DOMAIN = 'cert.invalid';
+const SEED_COMPONENTS = ['users', 'posts', 'comments', 'bundles', 'facts'];
+export const CERTIFICATION_BUNDLE_BATCH_SIZE = 1_000;
+export const CERTIFICATION_FACT_SESSION_BATCH_SIZE = 500;
+const FACTS_PER_SESSION = 30;
 
-function parseArgs(argv) {
-  const options = { tier: '100k', users: 2_000 };
+export function deriveFactResumePlan({ factCount, existingFacts, existingItems, existingSessions }) {
+  const sessionCount = Math.ceil(factCount / FACTS_PER_SESSION);
+  const expectedFacts = sessionCount * FACTS_PER_SESSION;
+  if (existingFacts !== existingItems) {
+    throw new Error(`Fact resume mismatch: ${existingFacts} facts but ${existingItems} session items.`);
+  }
+  if (existingFacts > expectedFacts || existingFacts % FACTS_PER_SESSION !== 0) {
+    throw new Error(`Fact resume is not on a ${FACTS_PER_SESSION}-row session boundary: ${existingFacts}/${expectedFacts}.`);
+  }
+  if (existingSessions !== 0 && existingSessions !== sessionCount) {
+    throw new Error(`Fact resume has ${existingSessions} sessions; expected 0 or ${sessionCount}.`);
+  }
+  if (existingFacts > 0 && existingSessions !== sessionCount) {
+    throw new Error('Fact resume has committed facts without the complete pre-created session set.');
+  }
+  return {
+    sessionCount,
+    expectedFacts,
+    startSessionOffset: existingFacts / FACTS_PER_SESSION,
+    createSessions: existingSessions === 0,
+    complete: existingFacts === expectedFacts,
+  };
+}
+
+export function parseArgs(argv) {
+  const options = { tier: '100k', users: 2_000, only: [...SEED_COMPONENTS] };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     const value = argv[index + 1];
@@ -53,6 +83,19 @@ function parseArgs(argv) {
       options.users = Number(value);
       if (!Number.isInteger(options.users) || options.users <= 0) throw new Error('--users must be a positive integer');
       index += 1;
+    } else if (argument === '--only') {
+      const components = String(value ?? '')
+        .split(',')
+        .map((component) => component.trim())
+        .filter(Boolean);
+      const invalid = components.filter((component) => !SEED_COMPONENTS.includes(component));
+      if (components.length === 0 || invalid.length > 0) {
+        throw new Error(`--only must contain one or more of ${SEED_COMPONENTS.join(', ')}`);
+      }
+      options.only = [...new Set(components)];
+      index += 1;
+    } else {
+      throw new Error(`Unknown argument: ${argument}`);
     }
   }
   return options;
@@ -84,6 +127,44 @@ async function runSql(client, sql) {
   const { data, error } = await client.rpc('cert_exec_sql', { p_sql: sql });
   if (error) throw new Error(`SQL failed: ${error.message}\n--- statement ---\n${sql.slice(0, 400)}`);
   return data;
+}
+
+async function exactTableCount(client, table) {
+  const { count, error } = await client.from(table).select('*', { count: 'exact', head: true });
+  if (error || count === null) {
+    throw new Error(`Could not count ${table}: ${error?.message ?? 'missing exact count'}`);
+  }
+  return count;
+}
+
+async function ensureFactPostOrdinals(client) {
+  await runSql(client, `
+    create unlogged table if not exists public.cert_fixture_post_ordinals (
+      post_index bigint primary key,
+      id uuid not null,
+      user_id uuid not null
+    );
+    do $$
+    declare
+      fixture_count bigint;
+      post_count bigint;
+    begin
+      select count(*) into fixture_count from public.cert_fixture_post_ordinals;
+      select count(*) into post_count from public.posts;
+      if fixture_count <> post_count then
+        truncate public.cert_fixture_post_ordinals;
+        insert into public.cert_fixture_post_ordinals (post_index, id, user_id)
+        select (row_number() over (order by id)) - 1, id, user_id
+        from public.posts
+        order by id;
+      end if;
+    end $$;
+    analyze public.cert_fixture_post_ordinals;
+  `);
+}
+
+async function dropFactPostOrdinals(client) {
+  await runSql(client, 'drop table if exists public.cert_fixture_post_ordinals;');
 }
 
 async function installSqlHelper(url, serviceRoleKey) {
@@ -354,16 +435,33 @@ async function seedComments(client, commentCount) {
  * window so the prune has real work to do during the soak.
  */
 async function seedFeedFacts(client, factCount) {
+  const [existingFacts, existingItems, existingSessions] = await Promise.all([
+    exactTableCount(client, 'feed_delivery_facts'),
+    exactTableCount(client, 'feed_session_items'),
+    exactTableCount(client, 'feed_sessions'),
+  ]);
+  const plan = deriveFactResumePlan({ factCount, existingFacts, existingItems, existingSessions });
+  if (plan.complete) {
+    console.log(`Feed delivery facts already complete (${existingFacts}/${plan.expectedFacts}); skipping.`);
+    await dropFactPostOrdinals(client);
+    return;
+  }
   // Sessions are derived from the fact count, not from the user count. F7b
   // measured 26-32 facts per session in production, so a fixture with one
   // session per user would need hundreds of facts each and collide against
   // feed_session_items' UNIQUE (session_id, post_id) - a session ranks any
   // given post at most once.
-  const FACTS_PER_SESSION = 30;
-  const sessionCount = Math.ceil(factCount / FACTS_PER_SESSION);
+  const sessionCount = plan.sessionCount;
   console.log(`Seeding ${factCount} feed delivery facts across ${sessionCount} sessions...`);
+  if (plan.startSessionOffset > 0) {
+    console.log(`  resuming facts at session ${plan.startSessionOffset}/${sessionCount}`);
+  }
+  // Build the 200k-post ordinal map once. Recomputing row_number() over the
+  // full catalog in every fact batch spills temp files and exhausted the Micro
+  // branch disk at 435k facts.
+  await ensureFactPostOrdinals(client);
 
-  await runSql(client, `
+  if (plan.createSessions) await runSql(client, `
     with numbered_viewers as (
       select id, (row_number() over (order by id)) - 1 as viewer_index
       from public.profiles
@@ -390,8 +488,8 @@ async function seedFeedFacts(client, factCount) {
   // disabling the hottest write path the soak is meant to exercise.
   // Posts are assigned to a session by a stride over a stable ordering rather
   // than at random, so the (session, post) pairs are unique by construction.
-  const sessionBatch = 2_000;
-  for (let offset = 0; offset < sessionCount; offset += sessionBatch) {
+  const sessionBatch = CERTIFICATION_FACT_SESSION_BATCH_SIZE;
+  for (let offset = plan.startSessionOffset; offset < sessionCount; offset += sessionBatch) {
     const size = Math.min(sessionBatch, sessionCount - offset);
     await runSql(client, `
       with numbered_sessions as (
@@ -400,11 +498,7 @@ async function seedFeedFacts(client, factCount) {
         from (select id, viewer_user_id, algorithm_version_id from public.feed_sessions
               order by id limit ${size} offset ${offset}) batch
       ),
-      numbered_posts as (
-        select id, user_id, (row_number() over (order by created_at, id)) - 1 as post_index
-        from public.posts
-      ),
-      catalog as (select count(*)::bigint as total from numbered_posts),
+      catalog as (select count(*)::bigint as total from public.cert_fixture_post_ordinals),
       pairs as (
         select s.id as session_id, s.viewer_user_id, s.algorithm_version_id,
                p.id as post_id, p.user_id as creator_user_id,
@@ -414,7 +508,7 @@ async function seedFeedFacts(client, factCount) {
         from numbered_sessions s
         cross join catalog c
         cross join generate_series(0, ${FACTS_PER_SESSION - 1}) as slot(position)
-        join numbered_posts p
+        join public.cert_fixture_post_ordinals p
           on p.post_index = ((s.session_index * ${FACTS_PER_SESSION} + slot.position) % c.total)
       ),
       inserted_items as (
@@ -444,6 +538,7 @@ async function seedFeedFacts(client, factCount) {
     `);
     console.log(`  facts: ~${Math.min((offset + size) * FACTS_PER_SESSION, factCount)}/${factCount}`);
   }
+  await dropFactPostOrdinals(client);
 }
 
 async function seedBundles(client, bundleCount) {
@@ -451,8 +546,19 @@ async function seedBundles(client, bundleCount) {
   // F5b restructured this path against a seeded 80,000-bundle catalog; the
   // certification catalog has to reach that scale or it re-measures the old
   // small-catalog case that hid the problem.
-  const batchSize = 20_000;
-  for (let offset = 0; offset < bundleCount; offset += batchSize) {
+  const existingBundles = await exactTableCount(client, 'post_resource_bundles');
+  if (existingBundles > bundleCount) {
+    throw new Error(`Fixture already has ${existingBundles} bundles; tier target is only ${bundleCount}.`);
+  }
+  if (existingBundles === bundleCount) {
+    console.log(`Marketplace bundles already complete (${existingBundles}/${bundleCount}); skipping.`);
+    return;
+  }
+  console.log(`  resuming at ${existingBundles}/${bundleCount}`);
+  // Keep each statement below the branch gateway timeout. The previous 20k
+  // batch completed at the 100k tier but timed out on the 1m fixture.
+  const batchSize = CERTIFICATION_BUNDLE_BATCH_SIZE;
+  for (let offset = existingBundles; offset < bundleCount; offset += batchSize) {
     const size = Math.min(batchSize, bundleCount - offset);
     await runSql(client, `
       insert into public.post_resource_bundles (
@@ -489,6 +595,7 @@ async function seedBundles(client, bundleCount) {
       cross join lateral (select (p.sequence % 2) = 0 as is_paid) pricing
       on conflict (post_id) do nothing;
     `);
+    console.log(`  bundles: attempted ${Math.min(offset + batchSize, bundleCount)}/${bundleCount}`);
   }
 }
 
@@ -508,23 +615,26 @@ async function main() {
 
   console.log(`Seeding tier ${options.tier} into ${new URL(url).host}`);
   console.log(`  users ${options.users} · posts ${tier.posts} · facts ${tier.facts} · bundles ${tier.bundles}`);
+  console.log(`  components ${options.only.join(', ')}`);
 
   const client = createClient(url, serviceRoleKey, { auth: { persistSession: false } });
   await installSqlHelper(url, serviceRoleKey);
 
   const startedAt = Date.now();
-  await seedUsers(client, options.users);
-  await seedPosts(client, tier.posts);
-  await seedComments(client, tier.comments);
-  await seedBundles(client, tier.bundles);
-  await seedFeedFacts(client, tier.facts);
+  if (options.only.includes('users')) await seedUsers(client, options.users);
+  if (options.only.includes('posts')) await seedPosts(client, tier.posts);
+  if (options.only.includes('comments')) await seedComments(client, tier.comments);
+  if (options.only.includes('bundles')) await seedBundles(client, tier.bundles);
+  if (options.only.includes('facts')) await seedFeedFacts(client, tier.facts);
   await runSql(client, 'analyze;');
   await reportSizes(client, url, serviceRoleKey);
 
   console.log(`Seeded in ${Math.round((Date.now() - startedAt) / 1000)}s`);
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}
