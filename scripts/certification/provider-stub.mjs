@@ -80,6 +80,8 @@ const stats = {
   chatCompletion: 0,
   rateLimited: 0,
   serverErrors: 0,
+  callbackAttempts: 0,
+  callbackRetries: 0,
   callbacksSent: 0,
   callbackFailures: 0,
   mediaServed: 0,
@@ -186,22 +188,33 @@ async function sendCompletionCallback(taskId) {
     data: buildTaskStatusData(taskId, taskKind(task), true),
   });
 
-  try {
-    const response = await fetch(task.callbackUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-      signal: AbortSignal.timeout(15_000),
-    });
-    stats.callbacksSent += 1;
-    if (!response.ok) {
-      stats.callbackFailures += 1;
+  const maxAttempts = 4;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    stats.callbackAttempts += 1;
+    try {
+      const response = await fetch(task.callbackUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (response.ok) {
+        stats.callbacksSent += 1;
+        task.lastCallbackStatus = response.status;
+        delete task.lastCallbackError;
+        return;
+      }
       task.lastCallbackStatus = response.status;
+      task.lastCallbackError = `HTTP ${response.status}`;
+    } catch (error) {
+      task.lastCallbackError = error instanceof Error ? error.message : String(error);
     }
-  } catch (error) {
-    stats.callbackFailures += 1;
-    task.lastCallbackError = error.message;
+    if (attempt < maxAttempts) {
+      stats.callbackRetries += 1;
+      await new Promise((resolve) => setTimeout(resolve, 500 * (2 ** (attempt - 1))));
+    }
   }
+  stats.callbackFailures += 1;
 }
 
 function scheduleCompletion(taskId) {
