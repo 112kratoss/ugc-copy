@@ -42,32 +42,44 @@ if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
   process.exit(1);
 }
 
+async function postJsonWithRetry(url, body, label) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          apikey: SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (response.ok) return response.json();
+      const message = `${label} failed (${response.status}): ${(await response.text()).slice(0, 200)}`;
+      if (response.status < 500 && response.status !== 429) throw new Error(message);
+      lastError = new Error(message);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+    if (attempt < 3) {
+      await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** (attempt - 1))));
+    }
+  }
+  throw lastError ?? new Error(`${label} failed`);
+}
+
 async function sql(query) {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/cert_query`, {
-    method: 'POST',
-    headers: {
-      apikey: SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ p_sql: query }),
-  });
-  if (!response.ok) throw new Error(`SQL failed (${response.status}): ${(await response.text()).slice(0, 200)}`);
-  return response.json();
+  return postJsonWithRetry(
+    `${SUPABASE_URL}/rest/v1/rpc/cert_query`,
+    { p_sql: query },
+    'SQL',
+  );
 }
 
 async function rpc(name, body = {}) {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${name}`, {
-    method: 'POST',
-    headers: {
-      apikey: SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) throw new Error(`${name} failed (${response.status}): ${(await response.text()).slice(0, 200)}`);
-  return response.json();
+  return postJsonWithRetry(`${SUPABASE_URL}/rest/v1/rpc/${name}`, body, name);
 }
 
 const SAMPLE_SQL = `
