@@ -29,14 +29,16 @@ This file is the single source of truth for scaling work. It is written to be **
 
 The app answers two different capacity questions, and they have different answers. Both are correct; they differ in tense.
 
-> **Current-status override — independent review 2026-08-10.** The two paragraphs
-> below preserve the original planning baseline; they do **not** describe the
-> current code or a certified result. Phase 0 removed several of those original
-> limits, but the 2026-08-10 cloud run still certified **no** MAU level, and an
-> independent harness review found that ranked-feed cursor continuation was not
-> actually exercised. Treat every MAU number in this section as a planning model
-> until the remediation and clean rerun recorded in the independent-review
-> addendum pass.
+> **Current-status override — scoped certificate issued 2026-08-10.** The two
+> paragraphs below preserve the original planning baseline; they do **not**
+> describe the current release candidate. Exact build `c1d494e` passed the clean
+> 100k-fixture one-hour soak at 7 target authenticated-web operations/s, including
+> cursor/session continuation, delivery-linked events, real upload round trips,
+> provider/media settlement, platform telemetry and strict concurrency cases.
+> After 30% reserve the scoped model yields **2,026 conservative / 4,559 base /
+> 12,159 optimistic authenticated-web MAU**, with retention limiting every
+> scenario. Anonymous, mobile, Auth capacity, poison-node isolation and >100k
+> fixtures remain excluded. The certificate section below is authoritative.
 
 **1. Where does the app as deployed first break? ~300–500 mixed MAU**, on Supabase storage egress. The watch surfaces stream full-bitrate source MP4s (avg 7.6 MB, p90 22.5 MB, ~23 Mbps), AI-generated posts are never transcoded at publish, and every media object carries a 300-second cache TTL. Supabase Pro's spend cap is **on by default**, so quota exhaustion degrades storage service rather than producing a bill.
 
@@ -49,7 +51,7 @@ The app answers two different capacity questions, and they have different answer
 | Hard line, code unchanged, spend cap on | ~350 MAU |
 | Safe mixed target after Phase 0 | 2,000 MAU |
 | Re-certification gate | 5,000 MAU |
-| Phase 1 target after a valid load test — **not yet proven** | 10,000–25,000 MAU |
+| Phase 1 exact-build scoped certificate | 2,026 conservative / 4,559 base authenticated-web MAU |
 | Anonymous, cache-heavy browsing | ~10,000 MAU |
 | Active AI-generating users | 800–1,500/month |
 | Mixed generations | 300–500/day |
@@ -74,18 +76,18 @@ Supabase's 100,000 included Auth MAU is a **billing entitlement, not a capacity 
 | F6 | Unthrottled hot GETs incl. full-catalog scan | Medium | 0 | DONE | Limits on all 5 GETs; filtered top-sales scan replaced by RPC unlock filter + ordered streaming, 2026-08-08 |
 | F15a | Monitoring truncates silently; biased rates | Medium | 0 | DONE | Truncation flagged (cost + health), attempt-counter denominator landed, 2026-08-08. **DB-side aggregates landed 2026-08-09** (`20260809200000`, `get_backend_cost_aggregates` + `backend-cost-aggregates.ts`): the cost report reads the whole window in one RPC and cannot truncate. The raw-row path is **kept live as the fallback**, which is what preserves the JS unit coverage the audit warned this change would destroy. Health-collector caps are a separate, smaller residual — recorded in the section |
 | F10 | Assorted small leaks | Low | 0 | IN PROGRESS | Mobile 404 pkg 1; studio grid + images pkg 2, 2026-08-08. Webhook budget rides pkg 3; two web-perf items stay unassigned |
-| F12 | Workflow runs non-durable, non-idempotent | Critical | 1 | **IMPLEMENTED LOCALLY — RELEASE/CERTIFICATE GATES OPEN** | Required run keys, atomic skeleton/ticket creation, one DB-leased executor, deterministic generation keys, heartbeat, fair orphan adoption, retryable provider backpressure and completion-driven terminal wake are local. Template runs now use their own durable leased executor and pure GET reads. IR-3 records the exact migrations/tests. Poison-node isolation remains an explicit exclusion because canvas execution is still run-scoped. No capacity is certified until isolated replay and deployed fan-out pass. |
-| F14 | Shared-fate cron; no provider admission control | High | 1 | **IMPLEMENTED LOCALLY — RELEASE/CERTIFICATE GATES OPEN** | Dedicated heavy crons, stale-lease health, ambiguity holds, atomic provider-slot reservation, duplicate-callback lease preservation, durable provider-success output import, leased byte-aware media repair and bounded cleanup are local. The live certificate predates every one of these changes; replay, advisors, strict callbacks/media cases and a clean soak remain mandatory. |
+| F12 | Workflow runs non-durable, non-idempotent | Critical | 1 | **PREVIEW PROOF PASSED — PRODUCTION RELEASE OPEN** | Required run keys, atomic skeleton/ticket creation, one DB-leased executor, deterministic generation keys, heartbeat, fair orphan adoption, retryable provider backpressure and completion-driven terminal wake are implemented. On exact build `c1d494e`, three concurrent replay starts returned one run, 20 concurrent unique runs created complete skeletons/tickets, 42 child generations settled with outputs and every run succeeded. Poison-node isolation remains explicitly excluded because canvas execution is run-scoped. |
+| F14 | Shared-fate cron; no provider admission control | High | 1 | **PREVIEW PROOF PASSED — PRODUCTION RELEASE OPEN** | Dedicated heavy crons, stale-lease health, ambiguity holds, atomic provider-slot reservation, duplicate-callback lease preservation, durable output import, leased byte-aware media repair and bounded cleanup are implemented. The exact-build strict run accepted and settled a 48-callback burst with 48 durable outputs and no duplicates; provider 429/5xx/accepted-reset and concurrent cron ownership cases also passed. |
 | F5 | For-you RPC materializes whole catalog | High | 1 | DONE | LIMIT-first pools + one new index, 2026-08-09. Seeded 200k-post catalog: **445,336 buffers/587 ms → 6,171/8.2 ms**, and now flat in catalog size (+8.9% for 4× the posts). Output verified identical across personalised, anonymous and category branches. **v2 is untouched and is a gate before promotion** |
 | F5b | `list_marketplace_resource_bundles` is 47% of RPC time | High | 1 | DONE | **Diagnosis corrected by measurement 2026-08-09**: the ~1,000 blocks are planning plus a ~200-block PostgREST floor, **not** the query. The page-sized listing restructure (`20260809210000`) stays flat in catalog size. The remaining `%query%` scan is now replaced locally by a trigger-maintained search document and `pg_trgm` GIN index (`20260810112000`), with a three-character public/DB floor and trigger/index pgTAP. Re-run 100k/1m search plans on the isolated branch; do not reuse the older O(catalog) result. The `SHOWCASE_FEED_CACHE_TAG` coupling remains load-bearing for moderation. |
 | F7b | Fact retention + partitioning | High | 1 | DONE | Retention 400→30 (decision #2), `feed_delivery_facts` added to growth reporting, a retention-lag monitor, and the **daily rollup** (`feed_delivery_fact_daily`, 400-day window) — 2026-08-09; the 2026-08-27 deadline is **discharged**. **Monthly partitioning analysed and deliberately deferred**: decision #2's 30-day window makes monthly granularity retain ~60 days to enforce 30, and finer granularity would turn the hottest write path into a per-partition scan. Trigger to revisit recorded |
 | F8 | Per-request GoTrue round-trip | Medium | 1 | DONE | `getClaims()` verifies locally via WebCrypto against a cached JWKS — no hand-rolled JWT code, 2026-08-09. Premise verified first: JWKS publishes only ES256 with no symmetric key, in prod *and* local. User rebuilt from verified claims only, preserving the "never read the cookie's user" invariant |
 | F9 | Comments scan loop; unindexed top sort | Medium | 1 | DONE | Viewer block set loaded **once** (2 reads per scan, not 2 per batch), scan capped at 10 batches reporting `hasMore`, and `post_comments_toplevel_top_idx` added — `post_comments` had no index reaching `reply_count` at all, 2026-08-09 |
 | F15b | Error tracking, PITR, log drain | Medium | 1 | IN PROGRESS | **`track_io_timing` DONE** (`ALTER ROLE` on `postgres` **and** `authenticator` — role GUCs apply at login and PostgREST `SET ROLE`s), verified collecting. **Error tracking DONE** — browser proven by an event arriving, server wired, source maps uploading. **Second incident recipient DONE and drilled** — the watchdog opens an incident issue, because GitHub emails scheduled-workflow failures to exactly one person; receipt confirmed at `info@magicbooklet.com`. **Provider-cost ledger unblocked** — Kie's export is per-task and its `Task ID` is already `generations.prediction_id`. **Out of scope on budget:** log drain, PITR, paid external monitoring — so the RTO is "last daily backup" |
-| — | Phase 1 certification load test | — | 1 | **INVALIDATED RUN RECORDED — CLEAN RERUN REQUIRED** | **No MAU level is certified.** The 2026-08-10 run proved that the replayed Supabase branch, Vercel preview and provider-stub environment can be built, and that short ladders can hide a growing queue. Its ranked-feed driver consumed responses before parsing continuation state, so it repeatedly exercised fresh page one and did not prove F11 cursor/session reuse or delivery-linked events. Sequential soaks also shared one growing database. The run rules out ranking latency, response bandwidth, client connection caps and measured pool/lock saturation as the sole explanation; it does **not** rule out database CPU, I/O, WAL/index maintenance, PostgREST wait or session/item/fact persistence. The ~10,000-MAU figure remains a configured retention-throughput model under assumed activity, not measured capacity. The current worktree fixes the harness/product seams; closure requires migration replay, strict named cases and fresh isolated ladder/soak runs with platform telemetry and immutable artifacts. |
-| IR-1 | Independent implementation/certification review | Critical | 1 | **CORE REMEDIATION LOCAL — SUPERSEDED BY IR-2** | R1/R2/R3/R5 and the exact-count retention probe have local fixes. IR-2 found remaining strict-case false-pass paths and broader product topology gaps, so the earlier R6 closure language is no longer authoritative. The invalid 2026-08-10 causal result remains discarded; no MAU level is certified |
+| — | Phase 1 certification load test | — | 1 | **SCOPED CERTIFICATE ISSUED — 7 AUTHENTICATED WEB OPS/S** | Exact build `c1d494e` passed a clean one-hour soak on the 100k fixture at 6.96 completed operations/s (7.39 HTTP requests/s), all route/validity/resource gates, external Supabase/Vercel telemetry and all strict cases. After 30% headroom the certified workload rate is **4.872 ops/s**. Conditional authenticated-web MAU scenarios are **2,026 conservative / 4,559 base / 12,159 optimistic**, all limited by the configured feed-fact prune model. Anonymous, mobile, Auth-platform capacity, poison-node isolation and catalogs above the 100k fixture are excluded. See the authoritative scoped certificate below. |
+| IR-1 | Independent implementation/certification review | Critical | 1 | **CORE REMEDIATION LOCAL — SUPERSEDED BY IR-2** | R1/R2/R3/R5 and the exact-count retention probe have local fixes. IR-2 found remaining strict-case false-pass paths and broader product topology gaps, so the earlier R6 closure language is no longer authoritative. The invalid run remains discarded; its no-MAU verdict was later superseded by the exact-build scoped certificate. |
 | IR-2 | Whole-project pre-certification scaling review | Critical | 1 | **PRODUCT BLOCKERS IMPLEMENTED — SUPERSEDED BY IR-3** | IR-2 found execution-on-GET template runs, workflow/provider backpressure and wake gaps, non-durable output import, completion-lease revocation, unleased repair fan-out and byte-unbounded uploads. Those product items now have local implementations; IR-3 is the authoritative source/release status. No full-app MAU claim is permitted before cloud proof. |
-| IR-3 | Pre-certification implementation closure | Critical | 1 | **SOURCE GREEN — CLOUD CERTIFICATION NOT RUN** | Product P0 implementations, strict harness/resource gates, artifact binding, capacity calculator, public template pagination, marketplace search indexing and bounded retention are local. Three TS checks, lint, full Vitest, build/artifact verification and all 42 pgTAP files are the source gates. External platform telemetry, isolated replay/advisors/deploy and fresh 10k/100k/1m ladder/soak remain open; therefore status is still **NOT CERTIFIED**. |
+| IR-3 | Pre-certification implementation closure | Critical | 1 | **CLOUD PROOF COMPLETE — SCOPED CERTIFICATE ISSUED** | The release candidate was replayed and deployed to an isolated Mumbai Micro/Vercel preview, bound to schema/catalog/build identifiers, exercised with representative media, and observed with database, PostgREST and Vercel metrics. The 100k-fixture one-hour 7 ops/s soak and every strict case pass. The 1m fixture does not fit Micro storage and was not load-tested, so this is deliberately not a full-app, anonymous, mobile or >100k-fixture certificate. |
 | — | ~~Phase 1 certification load test (READY note, 2026-08-09)~~ | — | 1 | superseded | **Unblocked 2026-08-09.** Phase 1's code tail is complete and deployed; `track_io_timing` is on and collecting; error tracking is live on browser and server with source maps; and the second incident recipient is **verified by drill** — a forced watchdog failure opened an issue and the notification reached `info@magicbooklet.com`. F12 and F10 staying IN PROGRESS are recorded deferrals, not prerequisites. **Remaining caveat, not a blocker:** IO timing was off for the entry baseline, so take a short idle sample before the run or the IO figures have no "before" |
 | — | Phase 2 backlog (unnumbered — see the Phase 2 section) | — | 2 | TODO | |
 
@@ -1997,7 +1999,9 @@ ranked set, up to 60 session items, then facts for the served slice.
     error/429 policy, DB CPU/pool/I/O gate, queue/retention gate, paid-generation
     invariant and **30% measured headroom** passes. Convert RPS to MAU only through
     a documented model built from real sessions/actions/facts telemetry and a peak
-    factor. Until then, status remains **NOT CERTIFIED — no MAU claim**.
+    factor. **At this independent-review checkpoint**, status remained NOT
+    CERTIFIED; the later exact-build scoped certificate records which portions
+    of this gate were executed and which exclusions remain.
 
 ##### Remediation implementation — 2026-08-10 (current worktree)
 
@@ -2260,9 +2264,181 @@ These are not hidden in a generic “later” bucket:
    fresh branches for each 10k/100k/1m ladder and candidate one-hour soak,
    platform telemetry, immutable artifacts and reproducible MAU calculation.
 
-The authoritative verdict therefore remains **NOT CERTIFIED — no current MAU
-claim**. What changed is that the original product-side P0 blockers are now
-implemented and testable rather than merely planned.
+**Historical IR-3 checkpoint:** at this source-only point the verdict remained
+NOT CERTIFIED. The cloud certificate immediately below supersedes that checkpoint
+after executing the missing replay, preview, strict-case, soak and telemetry
+gates on the exact candidate.
+
+---
+
+### Phase 1 scoped capacity certificate — 2026-08-10
+
+**Authoritative verdict:** **CERTIFIED FOR THE DECLARED AUTHENTICATED-WEB MIX AT
+7 TARGET OPERATIONS/S ON THE 100K FIXTURE.** The run achieved 6.96 completed
+operations/s and 7.39 HTTP requests/s for one hour. Applying the predeclared
+30% reserve yields a claimable workload rate of **4.872 operations/s**. This is
+a scoped certificate, not a full-app or vendor-entitlement claim.
+
+#### Exact environment binding
+
+| Binding | Certified value |
+|---|---|
+| Commit / build ID | `c1d494ebfc4b796501826001b81701fffdbee1ee` |
+| Vercel topology | Preview, `bom1`, Fluid compute, 2,048 MB/function, 300 s maximum |
+| Supabase topology | Ephemeral Micro branch in Mumbai; `track_io_timing=on`, `log_temp_files=0` |
+| Schema fingerprint | `979702a44848d635e135431b5bf8579f40b36a8edc692bc5da5835f75e2c7566` |
+| Catalog | schema v2, revision `wan-provider-id-fix-20260725`, 29 model entries |
+| Fixture start | 2,000 users, 20,000 posts, 20,000 comments, 5,000 bundles, 100,020 feed facts |
+| Provider | Authenticated isolated stub through the real Edge→Vercel callback path; real decodable 1,920×1,080 JPEG and eight-second 1,280×720 H.264/AAC MP4 |
+| Auth deviation | Isolated-branch verify/refresh limits raised for the driver pool; Auth capacity is excluded |
+| Anonymous traffic | Excluded; the report records `anonymousExcluded=true` and performs no upward normalization |
+
+The candidate's migrations, replay fingerprint, catalog revision, preview build
+ID, fixture tier, SLO hash and stub state were checked before traffic. The
+advisor snapshot from the same structural replay contained 307 INFO notices and
+zero WARN/ERROR notices; the later candidate commits changed certification
+scripts, not the fingerprinted schema. The
+previous consumed-response/cursor defect is not present in this run: all 8,737
+ranked responses parsed, 1,703 were fresh sessions, 7,034 were valid
+continuations, every continuation retained the session and advanced position,
+and 48,390 feed events were linked to actually delivered items.
+
+#### One-hour soak result
+
+| Measure | Result | Gate |
+|---|---:|---:|
+| Completed operations | 22,990 | diagnostic |
+| Scored HTTP requests | 24,393 | diagnostic |
+| Achieved rate | 6.96 ops/s; 7.39 HTTP req/s | PASS, target 7 ops/s |
+| Request errors / throttles | 0.01% / 0.00% | PASS |
+| Driver skips / errors / guard waits | 2 / 0 / 0 | PASS |
+| Maximum driver in-flight | 29 | diagnostic |
+| Cursor continuation ratio | 80.51% | PASS |
+| Upload completion | 701/702 (99.86%) | PASS |
+
+| Family | Requests | P95 | Error |
+|---|---:|---:|---:|
+| Ranked feed | 8,737 | 726.9 ms | 0% |
+| Feed-event batches | 8,066 | 1,220.9 ms | 0.01% |
+| Sign→PUT→publish/consume upload | 2,105 | 2,795.3 ms | 0.05% |
+| Save toggle | 1,759 | 472.7 ms | 0% |
+| Comment create | 1,054 | 388.2 ms | 0% |
+| Follow toggle | 976 | 521.0 ms | 0% |
+| Cookie-authenticated page | 692 | 903.5 ms | 0% |
+| Generation start | 341 | 1,116.6 ms | 0% |
+| Generation quote | 338 | 270.2 ms | 0% |
+| Post publish | 325 | 491.7 ms | 0% |
+
+All route, error, 429, sample-cardinality, ranked-phase, cursor/session,
+delivery-linkage and upload-validity checks passed. Exact post-drain
+reconciliation found **371/371 generations succeeded**, **371/371 completion
+jobs succeeded**, **371/371 output-import jobs succeeded**, zero duplicate
+prediction IDs, zero old pending rows without prediction IDs, and no open
+completion, workflow, template, output-import or rendition queue.
+
+#### Resource and platform evidence
+
+The executable resource evaluator passed all 254 samples:
+
+- database pool maximum **41.7%** against the 70% ceiling; no ungranted lock,
+  lock waiter or deadlock;
+- zero oldest-due age at final drain for completion, workflow, template,
+  output-import and rendition work;
+- **386,985,312 bytes** of temporary-file growth against the 512 MiB gate,
+  **975,006,415 WAL bytes**, 12 checkpoints and 319,275,008 bytes of database
+  growth during the observed window;
+- fact/event retention age **25.05 days**, below the 32-day gate.
+
+The separate Supabase host scrape supplied the evidence Postgres cannot collect
+from itself: CPU maximum **58.07%**, CPU p95 **52.27%**, I/O-wait maximum
+15.13%, PostgREST waiting maximum 3 with at least 6/20 connections available,
+zero PostgREST pool timeouts, and 0.742 aggregate seconds of PgBouncer client
+wait over the sampled interval.
+
+Vercel recorded 26,217 invocations for the isolated deployment in the queried
+window: 26,200 hot 200/201 responses, 12 cold starts and 5 prewarmed starts, with
+no 4xx/5xx group. Function duration p95 was 952 ms, active CPU p95 361 ms, TTFB
+p95 1,082 ms and peak memory 1,155/2,048 MB. Vercel's one-hour query buckets
+round to clock hours, so these deployment-filtered values include the short
+warm-up on the same otherwise-isolated deployment; that is conservative for
+peak resource reporting.
+
+#### Strict property cases on the exact candidate
+
+Every strict command exited zero after the soak:
+
+- retention skew clamps safely and every affected cron route records a clean
+  outcome;
+- provider 429 and 5xx attempts refund definitively refused work, while an
+  accepted-then-reset submission stays held, attaches its late callback,
+  imports output and settles once;
+- a primed burst fired exactly 48 unique callbacks; all 48 completion jobs and
+  48 output imports succeeded within 36 seconds, with 48 durable outputs and no
+  duplicate settlement;
+- three concurrent same-key workflow starts returned one run ID; 20 concurrent
+  independent starts created 20 complete durable skeletons; 42 provider-backed
+  child nodes settled with unique deterministic keys and outputs; all 21 run
+  identities succeeded and the queue drained without a failed ticket;
+- concurrent umbrella, completion, workflow, media and retention cron calls
+  returned only 200/202 and recorded clean owners or explicit lease skips.
+
+Canvas poison-node isolation remains excluded: the durable claim advances one
+run, not exactly one node. The strict result certifies replay, fan-out,
+ownership, completion wake-up and exactly-once settlement, not independent
+per-node retry.
+
+#### Capacity conversion and limiting dimension
+
+Exact fixture growth was 2,608 new ranked sessions, 120,108 new delivery facts
+and 156,480 new session items: **46.054 facts** and exactly 60 ranked items per
+new session. The measured one-hour provider/media drain was 371, or 8,904/day
+at the certified mix. `calculate-capacity.mjs` applies 30% reserve to all four
+dimensions: 4.872 ops/s, 6,232.8 provider and media generations/day, and 84,000
+fact-prune rows/day.
+
+| Scenario | Activity assumptions | Compute ceiling | Retention ceiling | Provider/media ceiling | Scoped MAU |
+|---|---|---:|---:|---:|---:|
+| Conservative | 30% DAU/MAU; 15 auth ops/DAU; 6× peak; 3 feed sessions/DAU | 15,590 | **2,026** | 46,745 | **2,026** |
+| Base | 20% DAU/MAU; 10 auth ops/DAU; 4× peak; 2 feed sessions/DAU | 52,617 | **4,559** | 46,745 | **4,559** |
+| Optimistic | 15% DAU/MAU; 6 auth ops/DAU; 3× peak; 1 feed session/DAU | 155,904 | **12,159** | 46,745 | **12,159** |
+
+The honest planning headline is therefore **about 2,000 authenticated-web MAU
+under conservative engagement, about 4,500 under the base assumptions**. The
+12,159 result is sensitivity analysis, not the launch target. Feed-fact prune
+throughput—not request compute—limits all three scenarios. Raising the MAU
+claim requires measured retention work (higher bounded delete throughput or
+lower fact/session volume), followed by a new steady-state soak; changing only
+the calculator is not a capacity improvement.
+
+#### 1m-tier result and exclusions
+
+The 1m fixture was attempted and **cannot fit on the Micro branch**. Seeding
+reached approximately 912 MB with 435,000 facts, 435,000 session items, 33,334
+sessions, 80,000 bundles and 200,000 posts/comments, then Postgres failed with
+`No space left on device`. The temporary branch was deleted. Therefore this
+certificate says nothing about the 1m catalog tier, and Micro storage—not a
+query latency result—is the first proven gate for that tier. Use a larger
+ephemeral compute/storage class before attempting its ladder.
+
+Excluded from the MAU statement:
+
+1. anonymous/multi-source traffic and CDN behaviour;
+2. mobile clients, including F7c's one-event-per-request/offline-queue gap;
+3. GoTrue/Auth platform capacity, because the isolated limit was raised;
+4. real Kie provider quota/latency/cost—the stub certifies app admission and
+   settlement semantics, not Kie's commercial capacity;
+5. multi-tab browser amplification, poison-node isolation, PITR/log drain,
+   mobile Sentry, regional failover and production autoscale equivalence;
+6. catalogs larger than this fixture and the 1m tier specifically.
+
+This certificate expires on **2026-09-09**, or immediately on a change to the
+build, schema, catalog revision, route mix/SLOs, Supabase/Vercel tier, provider
+contract, fact-prune policy, or observed facts/session by more than 20%.
+Production promotion must still use the normal release workflow and protected
+health checks; a preview certificate does not authorize bypassing release
+gates. Raw JSON/JSONL/Prometheus artifacts remain in the ignored local
+`certification-artifacts/` bundle; the environment binding and sanitized result
+are preserved here so secrets and user tokens are not committed.
 
 ---
 
@@ -2728,6 +2904,7 @@ Two independent audits produced different headline numbers. Both were right abou
 
 | Date | Change | By |
 |---|---|---|
+| 2026-08-10 | **Phase 1 scoped certificate issued for exact build `c1d494e`.** A clean isolated Mumbai Micro/Vercel preview passed the one-hour 100k-fixture soak at 6.96 completed authenticated-web operations/s (7.39 HTTP req/s), all route/validity/resource gates, external Supabase/Vercel telemetry and strict skew/provider/webhook/workflow/cron cases. After 30% reserve the workload rate is 4.872 ops/s. The reproducible model reports 2,026 conservative / 4,559 base / 12,159 optimistic authenticated-web MAU, all limited by feed-fact prune throughput. The 1m fixture failed Micro storage at ~912 MB and was not load-tested. Anonymous, mobile, Auth capacity, real-provider quota, poison-node isolation and >100k fixtures are explicitly excluded; certificate expires 2026-09-09 or on a binding change. Final source gates: three TypeScript checks, ESLint, 625 Vitest files / 4,073 tests and diff whitespace pass. The isolated branch/deployment, tunnel/stub and temporary credentials were removed after capture. | Codex |
 | 2026-08-10 | **IR-3 source closure completed; capacity remains NOT CERTIFIED.** Implemented the IR-2 product P0s: atomic workflow/provider admission and terminal wake, durable pure-read template execution, preserved completion leases, durable provider-success output imports, one leased byte-aware media repair path, outstanding upload-byte quotas and bounded cleanup. Provider circuit outcomes are awaited but failure-isolated so serverless shutdown cannot silently lose breaker state. Certification now has executable resource/SLO gates, ranked-feed phase timings, authenticated stub controls, immutable environment binding and a deterministic headroom/capacity calculator. Additional scale fixes: cacheable keyset public templates and trigger-maintained trigram marketplace search. Clean verification: three web typechecks, lint, 624 Vitest files / 4,060 tests, production build/artifact gate, mobile typecheck + 104 files / 959 tests, clean-from-zero Docker migration replay, 42 pgTAP files / 750 assertions and 15-class schema fingerprint. **Not done:** cloud replay/advisors/deploy, external platform telemetry, or fresh 10k/100k/1m ladders/soak; therefore no MAU/RPS claim changed. | Codex |
 | 2026-08-10 | **The first deployed strict provider-degradation case found and closed a gateway ambiguity gap.** The external tunnel accepted a non-idempotent provider POST and lost the upstream response; Vercel received HTTP 502, so the earlier network-error-only classifier refunded the generation and returned generic 500 even though provider work existed. Task-create HTTP 502/504 are now held as `submission_unknown` like timeout/socket-reset outcomes, while direct 500/503 responses remain definitive and refundable. Two regression cases pin both gateway statuses. The cloud strict sequence must restart on the replacement commit; the failed run is evidence, not a certificate. | Codex |
 | 2026-08-10 | **The deployed 48-callback case caught a durable-pipeline false finish.** Callback ingress and all 48 completion jobs succeeded, but the case stopped as soon as that first queue drained and inspected generation outputs before `generation_output_import_jobs` ran. The strict case now continues driving the production completion route until both queues are terminal and all 48 generations have durable output URLs; pending/failed imports or missing outputs fail the deadline. | Codex |
