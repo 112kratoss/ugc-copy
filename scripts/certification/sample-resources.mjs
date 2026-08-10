@@ -77,6 +77,8 @@ const SAMPLE_SQL = `
     (select count(*) from pg_stat_activity where backend_type = 'client backend') as client_backends,
     (select count(*) from pg_stat_activity where state = 'active') as active_backends,
     (select count(*) from pg_stat_activity where state = 'idle in transaction') as idle_in_transaction,
+    (select coalesce(max(extract(epoch from (now() - xact_start))), 0)
+       from pg_stat_activity where state = 'idle in transaction') as idle_in_transaction_max_seconds,
     (select count(*) from pg_stat_activity where wait_event_type = 'Lock') as lock_waiters,
     (select coalesce(max(extract(epoch from (now() - query_start))), 0)
        from pg_stat_activity where state = 'active' and backend_type = 'client backend') as longest_active_seconds,
@@ -191,6 +193,7 @@ async function sample() {
     poolUsedPct: maxConnections ? Number((clientBackends / maxConnections * 100).toFixed(1)) : null,
     activeBackends: Number(row.active_backends),
     idleInTransaction: Number(row.idle_in_transaction),
+    idleInTransactionMaxSeconds: Number(row.idle_in_transaction_max_seconds),
     idleFloorPct: baselineIdleFloorPct,
     sampleGapSeconds: previousSampleStartedAt === null
       ? null

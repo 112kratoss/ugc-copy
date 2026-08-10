@@ -256,8 +256,11 @@ node scripts/certification/evaluate-resources.mjs \
 ```
 
 The evaluator fails non-zero for sparse telemetry, sampler errors, pool or lock
-breaches, deadlocks/temp spill, overdue or growing durable queues, and feed
-retention lag. External DB CPU/PostgREST wait and Vercel concurrency exports
+breaches, idle transactions older than five seconds, deadlocks/temp spill,
+overdue or growing durable queues, and feed retention lag. The sampler retains
+the instantaneous idle-transaction count as diagnostic context, but does not
+misclassify millisecond-scale Auth/PostgREST/Storage transaction boundaries as
+abandoned work. External DB CPU/PostgREST wait and Vercel concurrency exports
 remain mandatory companion artifacts because Postgres cannot self-report them.
 
 After selecting the highest fully green soak, calculate the MAU range only from

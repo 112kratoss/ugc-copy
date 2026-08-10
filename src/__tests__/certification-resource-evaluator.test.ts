@@ -10,6 +10,7 @@ function sample(index: number, overrides: Record<string, unknown> = {}) {
     at: new Date(Date.UTC(2026, 7, 10, 0, 0, index * 15)).toISOString(),
     poolUsedPct: 20,
     idleInTransaction: 0,
+    idleInTransactionMaxSeconds: 0,
     lockWaiters: 0,
     ungrantedLocks: 0,
     trackIoTiming: true,
@@ -65,6 +66,29 @@ describe('certification resource evaluator', () => {
     expect(report.checks).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'pool_absolute_max', passed: false }),
       expect.objectContaining({ name: 'completion_queue_drained', passed: false }),
+    ]));
+  });
+
+  it('allows transaction boundaries but fails an aged idle transaction', () => {
+    const boundarySamples = Array.from({ length: 5 }, (_, index) => sample(index, {
+      idleInTransaction: index === 2 ? 6 : 0,
+      idleInTransactionMaxSeconds: index === 2 ? 0.04 : 0,
+    }));
+    const boundaryOutput = execFileSync('node', [
+      'scripts/certification/evaluate-resources.mjs', '--in', writeSamples(boundarySamples),
+    ], { cwd: process.cwd(), encoding: 'utf8' });
+    expect(JSON.parse(boundaryOutput).passed).toBe(true);
+
+    const agedSamples = Array.from({ length: 5 }, (_, index) => sample(index, {
+      idleInTransaction: index === 3 ? 1 : 0,
+      idleInTransactionMaxSeconds: index === 3 ? 5.01 : 0,
+    }));
+    const result = spawnSync('node', [
+      'scripts/certification/evaluate-resources.mjs', '--in', writeSamples(agedSamples),
+    ], { cwd: process.cwd(), encoding: 'utf8' });
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout).checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'idle_in_transaction_age', passed: false }),
     ]));
   });
 });

@@ -37,7 +37,12 @@ add('sampler_failures', samples.every((sample) => Number(sample.sampleFailures ?
 add('sample_gap', samples.slice(1).every((sample) => Number(sample.sampleGapSeconds) <= config.maxSampleGapSeconds), max('sampleGapSeconds'), `<= ${config.maxSampleGapSeconds}s`);
 add('track_io_timing', !config.requireTrackIoTiming || samples.every((sample) => sample.trackIoTiming === true), samples.filter((sample) => sample.trackIoTiming !== true).length, 'all samples true');
 add('pool_absolute_max', max('poolUsedPct') <= config.maxPoolUsedPct, max('poolUsedPct'), `<= ${config.maxPoolUsedPct}%`);
-add('idle_in_transaction', max('idleInTransaction') <= config.maxIdleInTransaction, max('idleInTransaction'), `<= ${config.maxIdleInTransaction}`);
+add(
+  'idle_in_transaction_age',
+  max('idleInTransactionMaxSeconds') <= config.maxIdleInTransactionSeconds,
+  max('idleInTransactionMaxSeconds'),
+  `<= ${config.maxIdleInTransactionSeconds}s`,
+);
 add('lock_waiters', max('lockWaiters') <= config.maxLockWaiters, max('lockWaiters'), `<= ${config.maxLockWaiters}`);
 add('ungranted_locks', max('ungrantedLocks') <= config.maxUngrantedLocks, max('ungrantedLocks'), `<= ${config.maxUngrantedLocks}`);
 add('deadlocks_delta', (counterDelta('deadlocks') ?? Infinity) <= config.maxDeadlocksDelta, counterDelta('deadlocks'), `<= ${config.maxDeadlocksDelta}`);

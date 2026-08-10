@@ -4,7 +4,7 @@
   "maxSampleGapSeconds": 45,
   "requireTrackIoTiming": true,
   "maxPoolUsedPct": 70,
-  "maxIdleInTransaction": 0,
+  "maxIdleInTransactionSeconds": 5,
   "maxLockWaiters": 0,
   "maxUngrantedLocks": 0,
   "maxDeadlocksDelta": 0,
