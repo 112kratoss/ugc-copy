@@ -1363,6 +1363,34 @@ describe('generation services', () => {
     expect(generations[0].refunded).toBeFalsy();
   });
 
+  it.each([502, 504])('holds a generation when a provider gateway returns ambiguous HTTP %s', async (status) => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ msg: 'gateway lost upstream response' }), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    const { supabase, generations, rpcCalls } = createSupabaseMock();
+    await expect(startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      clientRequestKeyHash: String(status).repeat(32).slice(0, 64),
+      prompt: 'A submission accepted before a gateway response failure.',
+      model: 'nano-banana-2',
+    })).rejects.toThrow('gateway lost upstream response');
+
+    expect(rpcCalls.map((call) => call.fn)).toContain('mark_generation_submission_unknown');
+    expect(rpcCalls.map((call) => call.fn)).not.toContain('settle_generation_start_failed');
+    expect(generations[0]).toMatchObject({
+      status: 'pending',
+      prediction_id: null,
+      submission_unknown_at: expect.any(String),
+    });
+    expect(generations[0].refunded).toBeFalsy();
+  });
+
   it('holds template generation credits on ambiguous network failure', async () => {
     const { startImageGeneration, getPublicGenerationStartFailure } = await import('@/lib/generation-services');
     const fetchMock = vi.mocked(fetch);

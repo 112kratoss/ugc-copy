@@ -319,6 +319,18 @@ async function createKieTask(
       );
     }
 
+    // A gateway can accept and forward this non-idempotent POST, then lose the
+    // upstream response. In that case 502/504 are outcome-ambiguous in exactly
+    // the same way as a socket reset: refunding immediately can fund a second
+    // provider task while the first one is still running. Direct provider 500
+    // and overload 503 responses remain definitive failures.
+    if (response.status === 502 || response.status === 504) {
+      throw new AmbiguousProviderSubmissionError(
+        data?.msg || `Provider gateway returned HTTP ${response.status} after submission.`,
+        response.status,
+      );
+    }
+
     throw new Error(data?.msg || 'Provider rejected the request');
   }
 
@@ -332,6 +344,16 @@ async function createKieTask(
   await recordProviderSubmissionOutcome({ success: true });
 
   return data.data.taskId as string;
+}
+
+class AmbiguousProviderSubmissionError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'AmbiguousProviderSubmissionError';
+    this.status = status;
+  }
 }
 
 async function startGenerationRecord(
@@ -521,7 +543,11 @@ async function settleTemplateGenerationStartFailureQuietly(params: {
   userId: string;
   cost: number;
 }) {
-  if (isExternalServiceTimeoutError(params.error) || isExternalServiceNetworkError(params.error)) {
+  if (
+    params.error instanceof AmbiguousProviderSubmissionError
+    || isExternalServiceTimeoutError(params.error)
+    || isExternalServiceNetworkError(params.error)
+  ) {
     const hold = await holdAmbiguousGenerationSubmission({
       creditSupabase: params.creditSupabase,
       generationId: params.generationId,
@@ -680,7 +706,11 @@ async function settleGenerationStartFailureQuietly(params: {
   // Only the ambiguous class is held. A provider that answered -- with an HTTP
   // error or a non-200 body code -- has definitively rejected the request, and
   // refunding it immediately stays correct.
-  if (isExternalServiceTimeoutError(params.error) || isExternalServiceNetworkError(params.error)) {
+  if (
+    params.error instanceof AmbiguousProviderSubmissionError
+    || isExternalServiceTimeoutError(params.error)
+    || isExternalServiceNetworkError(params.error)
+  ) {
     const hold = await holdAmbiguousGenerationSubmission({
       creditSupabase: params.creditSupabase,
       generationId: params.generationId,
