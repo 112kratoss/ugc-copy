@@ -104,6 +104,19 @@ async function sql(query) {
   return response.json();
 }
 
+async function execSql(query) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/cert_exec_sql`, {
+    method: 'POST',
+    headers: {
+      apikey: SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ p_sql: query }),
+  });
+  if (!response.ok) throw new Error(`SQL execution failed (${response.status}): ${await response.text()}`);
+}
+
 function report(name, passed, detail) {
   console.log(`${passed ? 'PASS' : 'FAIL'}  ${name}`);
   if (detail) console.log(`      ${detail}`);
@@ -270,6 +283,13 @@ async function runProviderDegradationCase() {
   const startedAt = new Date().toISOString();
   const reset = await stubFetch('/stub/reset', { method: 'POST' });
   if (!reset.ok) return report('provider stub reset', false, `HTTP ${reset.status}`);
+  // This is an isolated disposable branch. A previous strict-case attempt can
+  // otherwise leave the shared breaker open and make the deterministic 429 /
+  // 5xx / ambiguous sequence measure old test state instead of this run.
+  await execSql(`
+    truncate table public.provider_admission_buckets,
+      public.provider_circuit_breakers
+  `);
 
   const creditRows = await sql(`select credits from public.profiles where id = ${sqlString(user.userId)}`);
   const initialCredits = Number(creditRows[0]?.credits);
@@ -623,7 +643,36 @@ async function createCanvasForRun(user, startNodeType) {
   });
   if (!response.ok) throw new Error(`Canvas create failed: ${response.status} ${(await response.text()).slice(0, 200)}`);
   const payload = await response.json();
-  const canvas = payload?.canvas ?? payload;
+  let canvas = payload?.canvas ?? payload;
+
+  if (startNodeType === 'text-input') {
+    // The user-facing starter graph also contains an intentionally empty image
+    // input connected to video/motion nodes. That is useful UI scaffolding but
+    // is not a runnable fan-out fixture: dependency validation correctly marks
+    // the empty media edge blocked. Trim it to two independent provider-backed
+    // children so this case measures queue fan-out rather than invalid input.
+    const keptTypes = new Set(['text-input', 'image-generate', 'video-generate']);
+    const keptNodes = (canvas?.graph?.nodes ?? []).filter((node) => keptTypes.has(node?.type));
+    const keptNodeIds = new Set(keptNodes.map((node) => node.id));
+    const graph = {
+      ...canvas.graph,
+      nodes: keptNodes,
+      edges: (canvas?.graph?.edges ?? []).filter((edge) => (
+        keptNodeIds.has(edge?.source) && keptNodeIds.has(edge?.target)
+      )),
+    };
+    const patchResponse = await appFetch(`/api/workflow-canvases/${canvas.id}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${user.accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ graph, baseRevision: canvas.revision }),
+    });
+    if (!patchResponse.ok) {
+      throw new Error(`Canvas fixture update failed: ${patchResponse.status} ${(await patchResponse.text()).slice(0, 200)}`);
+    }
+    const patchedPayload = await patchResponse.json();
+    canvas = patchedPayload?.canvas ?? patchedPayload;
+  }
+
   const nodes = canvas?.graph?.nodes ?? [];
   const startNode = nodes.find((node) => node?.type === startNodeType);
   if (!canvas?.id || !startNode?.id) {

@@ -59,6 +59,9 @@ describe('showcase feed route adapter service', () => {
       expect(response.headers.get('Server-Timing')).toContain('persistence;dur=3.25');
       expect(response.headers.get('Server-Timing')).toContain('auth;dur=');
       expect(response.headers.get('Server-Timing')).toContain('rate-limit;dur=');
+      expect(response.headers.get('x-scaling-certification-timing')).toBe(
+        response.headers.get('Server-Timing'),
+      );
     } finally {
       vi.unstubAllEnvs();
     }

@@ -176,9 +176,15 @@ async function handleShowcaseFeedGET(
     });
     recordPhase('serialization', performance.now() - serializationStartedAt);
     if (timingEnabled) {
-      response.headers.set('Server-Timing', [...phaseTimings]
+      const renderedTimings = [...phaseTimings]
         .map(([phase, durationMs]) => `${phase.replace(/_/g, '-')};dur=${durationMs.toFixed(2)}`)
-        .join(', '));
+        .join(', ');
+      response.headers.set('Server-Timing', renderedTimings);
+      // Vercel preview protection may consume or strip Server-Timing. Keep a
+      // certification-only mirror so the external driver can still enforce
+      // phase coverage; the entire block remains disabled outside the isolated
+      // scaling environment.
+      response.headers.set('x-scaling-certification-timing', renderedTimings);
     }
     if (anonymousIdentity?.cookieValueToSet) {
       response.cookies.set({

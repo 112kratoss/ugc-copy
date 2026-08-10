@@ -681,7 +681,10 @@ const families = {
 
       const validity = runtimeState.feedValidity;
       if (result.scored) {
-        recordFeedServerTimings(result.response.headers.get('server-timing'));
+        recordFeedServerTimings(
+          result.response.headers.get('server-timing')
+            ?? result.response.headers.get('x-scaling-certification-timing'),
+        );
         validity.rankedResponses += 1;
         if (!requestedCursor) validity.freshSessionResponses += responseSessionId ? 1 : 0;
         else {

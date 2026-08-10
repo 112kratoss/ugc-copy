@@ -55,4 +55,16 @@ describe('certification load-driver guardrails', () => {
     expect(strictCasesSource).toContain('Number(after[0]?.imports_succeeded ?? 0) === count');
     expect(strictCasesSource).toContain('Number(after[0]?.durable_outputs ?? 0) === count');
   });
+
+  it('uses an isolated provider state and a runnable workflow fan-out fixture', () => {
+    expect(strictCasesSource).toContain('truncate table public.provider_admission_buckets');
+    expect(strictCasesSource).toContain("new Set(['text-input', 'image-generate', 'video-generate'])");
+    expect(strictCasesSource).toContain("method: 'PATCH'");
+    expect(strictCasesSource).toContain('keptNodeIds.has(edge?.source) && keptNodeIds.has(edge?.target)');
+  });
+
+  it('accepts the certification timing mirror when the platform strips Server-Timing', () => {
+    expect(source).toContain("result.response.headers.get('server-timing')");
+    expect(source).toContain("result.response.headers.get('x-scaling-certification-timing')");
+  });
 });
