@@ -1,3 +1,4 @@
+import { resolveLinkedAccountIds } from '@/lib/account-identity';
 import 'server-only';
 import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
@@ -132,7 +133,7 @@ export async function restoreGenerationMediaForRoute({
       .from('generations')
       .select('id, user_id, status, model, category, output_url, showcase_asset_path, is_public')
       .eq('id', generationId)
-      .eq('user_id', userId)
+      .in('user_id', await resolveLinkedAccountIds(adminSupabase, userId))
       .is('template_run_id', null)
       .is('template_run_step_id', null)
       .maybeSingle();

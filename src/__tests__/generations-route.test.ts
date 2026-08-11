@@ -63,6 +63,20 @@ function createSupabaseClientMock() {
       })),
     },
     from(table: string) {
+      if (table === 'profiles') {
+        // resolveLinkedAccountIds() asks which guest identities this account
+        // owns. Nobody in these fixtures was ever a guest, so the answer is
+        // none — which makes the owner filter `in ['user-1']`, i.e. exactly the
+        // previous behaviour.
+        const query = {
+          select() { return query; },
+          eq() { return query; },
+          then(resolve: (value: { data: never[]; error: null }) => void) {
+            return Promise.resolve({ data: [] as never[], error: null }).then(resolve);
+          },
+        };
+        return query;
+      }
       if (table === 'generations') {
         return {
           select(columns?: string) {
@@ -73,6 +87,12 @@ function createSupabaseClientMock() {
             const query = {
               eq(column: string, value: unknown) {
                 filters[column] = value;
+                return query;
+              },
+              // Owner scoping is `in` over the linked-account set: work made
+              // before the person registered keeps its guest UUID.
+              in(column: string, values: unknown[]) {
+                filters[column] = values;
                 return query;
               },
               order() {
@@ -109,8 +129,9 @@ function createSupabaseClientMock() {
                 }
 
                 const data = generationsState.filter((generation) => {
-                  if (filters.user_id && generation.user_id !== filters.user_id) {
-                    return false;
+                  if (filters.user_id) {
+                    const owners = Array.isArray(filters.user_id) ? filters.user_id : [filters.user_id];
+                    if (!owners.includes(generation.user_id)) return false;
                   }
                   if (filters.id && generation.id !== filters.id) {
                     return false;
@@ -551,7 +572,10 @@ describe('/api/generations route', () => {
       hasMore: false,
       nextCursor: null,
     });
-    expect(serviceTableCalls).toEqual(['generations']);
+    // `profiles` is the linked-account lookup, not media work: the point of this
+    // assertion is that a status-only page does no media signing, and that still
+    // holds.
+    expect(serviceTableCalls).toEqual(['profiles', 'generations']);
   });
 
   it('supports owner-scoped exact generation lookup without loading the whole history', async () => {

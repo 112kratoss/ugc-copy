@@ -1,4 +1,5 @@
 import 'server-only';
+import { resolveLinkedAccountIds } from '@/lib/account-identity';
 import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -289,10 +290,21 @@ async function fetchOwnerGenerations({
     ? statusColumns
     : `${baseColumns}, preview_url, preview_thumbhash, preview_status, creation_mode`;
 
+  // `in` over the linked set, not `eq` on the caller. Anything made before the
+  // person registered still carries its guest UUID — the financial tables
+  // physically refuse to be rewritten, and generations are kept consistent with
+  // them — so filtering on the caller's id alone would make their whole
+  // pre-registration library look deleted the moment they signed up.
+  //
+  // For everyone who was never a guest this resolves to `[userId]`, i.e. exactly
+  // the previous behaviour, at the cost of one indexed lookup against the
+  // partial index on profiles.merged_into_user_id.
+  const ownerUserIds = await resolveLinkedAccountIds(supabase, userId);
+
   let query = supabase
     .from('generations')
     .select(columns)
-    .eq('user_id', userId)
+    .in('user_id', ownerUserIds)
     .or('and(template_run_id.is.null,template_run_step_id.is.null),studio_visible.eq.true')
     .order('created_at', { ascending: false });
 
@@ -344,7 +356,8 @@ async function authorizeOwnerStudioProjection({
       .from('template_runs')
       .select('id, template_id, result_generation_id')
       .in('id', candidateRunIds)
-      .eq('user_id', userId)
+      // Guests run templates too, so the same linked-owner rule applies.
+      .in('user_id', await resolveLinkedAccountIds(adminSupabase, userId))
       .eq('status', 'succeeded')
       .eq('is_test', false);
     if (runError) throw runError;

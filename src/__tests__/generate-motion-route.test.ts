@@ -34,7 +34,8 @@ function createSupabaseMock(
   const inserts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
   const selects: string[] = [];
-  const eqs: Array<{ column: string; value: unknown }> = [];
+  // `value` for eq(), `values` for the linked-owner in() filter.
+  const eqs: Array<{ column: string; value?: unknown; values?: unknown[] }> = [];
   const rpc = vi.fn(async (fn: string, args: Record<string, unknown> = {}) => {
     if (fn === 'start_generation') {
       inserts.push({
@@ -209,6 +210,11 @@ function createSupabaseMock(
                 eqs.push({ column, value });
                 return query;
               },
+              in(column: string, values: unknown[]) {
+                filters[column] = values;
+                eqs.push({ column, values });
+                return query;
+              },
               or() {
                 return query;
               },
@@ -220,7 +226,12 @@ function createSupabaseMock(
                   filters.prediction_id
                   && localGeneration
                   && localGeneration.prediction_id === filters.prediction_id
-                  && (!filters.user_id || localGeneration.user_id === filters.user_id)
+                  // Owner scoping is now `in` over the linked-account set, so
+                  // this arrives as an array. Accept either shape.
+                  && (!filters.user_id
+                    || (Array.isArray(filters.user_id)
+                      ? filters.user_id.includes(localGeneration.user_id)
+                      : localGeneration.user_id === filters.user_id))
                 ) {
                   return { data: localGeneration, error: null };
                 }
@@ -235,6 +246,9 @@ function createSupabaseMock(
             updates.push(record);
             return {
               async eq() {
+                return { data: null, error: null };
+              },
+              async in() {
                 return { data: null, error: null };
               },
             };
@@ -548,7 +562,7 @@ describe('/api/generate route', () => {
     expect(currentSupabaseMock.selects).not.toContain('*');
     expect(currentSupabaseMock.eqs).toEqual(expect.arrayContaining([
       { column: 'prediction_id', value: 'task-motion-status-1' },
-      { column: 'user_id', value: 'user-1' },
+      { column: 'user_id', values: ['user-1'] },
     ]));
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });

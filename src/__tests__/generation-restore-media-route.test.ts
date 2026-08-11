@@ -41,6 +41,9 @@ function makeMaybeSingleQuery<T>(value: () => T | null) {
     eq() {
       return query;
     },
+    in() {
+      return query;
+    },
     is() {
       return query;
     },
@@ -57,6 +60,9 @@ function makeMaybeSingleQuery<T>(value: () => T | null) {
 function makeUpdateQuery(error: () => { message: string } | null) {
   const query = {
     eq() {
+      return query;
+    },
+    in() {
       return query;
     },
     is() {

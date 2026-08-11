@@ -1,3 +1,4 @@
+import { resolveLinkedAccountIds } from '@/lib/account-identity';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -118,7 +119,7 @@ export async function deleteOwnerGenerationForRoute({
       .from('generations')
       .select('id, user_id, output_url, showcase_asset_path')
       .eq('id', generationId)
-      .eq('user_id', userId)
+      .in('user_id', await resolveLinkedAccountIds(adminSupabase, userId))
       .is('template_run_id', null)
       .is('template_run_step_id', null)
       .maybeSingle();

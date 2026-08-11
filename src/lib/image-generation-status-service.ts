@@ -1,3 +1,4 @@
+import { resolveLinkedAccountIds } from '@/lib/account-identity';
 import 'server-only';
 import { resolveGenerationAppModelId } from '@/lib/generation-model-attribution';
 import { logBackendError } from '@/lib/backend-logger';
@@ -165,7 +166,7 @@ export async function getImageGenerationStatusForRoute({
     .from('generations')
     .select(IMAGE_STATUS_GENERATION_SELECT)
     .eq('prediction_id', predictionId)
-    .eq('user_id', userId)
+    .in('user_id', await resolveLinkedAccountIds(getAdminSupabase(), userId))
     .single();
   if (generationLookupError && generationLookupError.code !== 'PGRST116') {
     logBackendError('generation_status_lookup_failed', {
