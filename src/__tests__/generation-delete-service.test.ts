@@ -76,6 +76,10 @@ function createAdminSupabaseMock({
                 filters[column] = value;
                 return query;
               },
+              in(column: string, values: unknown[]) {
+                filters[column] = values;
+                return query;
+              },
               is(column: string, value: unknown) {
                 filters[column] = value;
                 return query;
@@ -85,7 +89,11 @@ function createAdminSupabaseMock({
                   generation
                   && table === 'generations'
                   && filters.id === generation.id
-                  && filters.user_id === generation.user_id
+                  // Owner scoping is `in` over the linked-account set, so this
+                  // arrives as an array once a guest identity is linked.
+                  && (Array.isArray(filters.user_id)
+                    ? filters.user_id.includes(generation.user_id)
+                    : filters.user_id === generation.user_id)
                 ) {
                   return { data: generation, error: null };
                 }
@@ -111,6 +119,9 @@ function createAdminSupabaseMock({
             deletes.push(table);
             const query = {
               eq() {
+                return query;
+              },
+              in() {
                 return query;
               },
               is() {

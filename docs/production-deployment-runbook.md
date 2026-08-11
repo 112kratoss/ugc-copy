@@ -149,7 +149,18 @@ For Supabase Auth, prefer the narrow Management API patch over `supabase config 
 SUPABASE_MANAGEMENT_API_TOKEN=... npm run ops:external-gates -- --apply-supabase-auth
 ```
 
-The default patch is `password_hibp_enabled = true`, `db_max_pool_size_unit = "percent"`, and `db_max_pool_size = 17`. The `17%` value preserves the current effective Auth cap of roughly 10 connections on the current 60-connection database while allowing the cap to scale with future compute upgrades. Override it with `SUPABASE_AUTH_DB_POOL_PERCENT` only after reviewing live connection telemetry or Supabase support guidance.
+The default patch is `password_hibp_enabled = true`, `db_max_pool_size_unit = "percent"`, `db_max_pool_size = 17`, and `external_anonymous_users_enabled = true`. The `17%` value preserves the current effective Auth cap of roughly 10 connections on the current 60-connection database while allowing the cap to scale with future compute upgrades. Override it with `SUPABASE_AUTH_DB_POOL_PERCENT` only after reviewing live connection telemetry or Supabase support guidance.
+
+### Guest checkout ordering (App Review 5.1.1(v))
+
+`external_anonymous_users_enabled` and migration `20260811100000` must land in this order, and the order is not interchangeable:
+
+1. **Apply `20260811100000` first.** It takes the 25-credit grant out of `handle_new_user()` and moves it to the `welcome_credits_v1` program, which only pays out once a real username and display name exist. Until it lands, every anonymous sign-in mints 25 credits — one API call each, repeatable on every reinstall.
+2. **Then flip the Auth setting** with `--apply-supabase-auth`.
+
+`supabase/config.toml` governs the local stack only, so the production flip is this Management API patch and nothing else. Between the two steps, mobile guest bootstrap fails closed: `signInAnonymously()` errors, the app stays signed out, and it behaves exactly as it did before guests existed. That is a safe intermediate state; the reverse order is not.
+
+Rolling back is the same rule inverted — turn the Auth setting off before reverting the migration, or new guests will keep arriving into a schema that pays them.
 
 For RevenueCat, first verify that the deployed endpoint accepts the same configured authorization header without mutating purchase state. This sends a harmless `TEST` event that the backend intentionally ignores with `200` and private no-store headers:
 

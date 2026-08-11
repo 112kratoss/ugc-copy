@@ -6,6 +6,8 @@ import type {
   GenerationListResponse,
   GenerationStartResponse,
   GenerationStatusResponse,
+  GuestAccountMergeResponse,
+  GuestAccountMergeTicketResponse,
   ImageGenerationRequest,
   MediaReadUrlRequest,
   MediaReadUrlResponse,
@@ -535,6 +537,24 @@ export function createApiClient({
       request<{ success: boolean; deleted: boolean }>('/api/account', {
         method: 'DELETE',
         body: JSON.stringify({ confirmation, ...options }),
+      }),
+    /**
+     * Called while still a guest, immediately before the sign-in that will
+     * replace this session. Returns a one-time ticket to persist securely.
+     */
+    prepareGuestAccountMerge: () =>
+      request<GuestAccountMergeTicketResponse>('/api/account/merge/prepare', {
+        method: 'POST',
+      }),
+    /**
+     * Called as the newly registered user, with the ticket minted above.
+     * Retryable: the ticket stays valid for 30 days and is only spent on a
+     * settled outcome.
+     */
+    mergeGuestAccount: (ticket: string) =>
+      request<GuestAccountMergeResponse>('/api/account/merge', {
+        method: 'POST',
+        body: JSON.stringify({ ticket }),
       }),
     getReferralOverview: () =>
       request<ReferralOverviewResponse>('/api/referrals/me'),

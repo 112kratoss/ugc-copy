@@ -14,6 +14,7 @@ import {
 import type { PurchasesPackage } from 'react-native-purchases';
 
 import { AppText, Card, Kicker, Pill, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
+import { GuestMergeBanner } from '@/components/guest-merge-banner';
 import { useAuth } from '@/lib/auth';
 import {
   configureIapForUser,
@@ -29,6 +30,7 @@ import {
   getPricingPlanCarouselOffset,
   getPricingPlanIdForCarouselOffset,
   getPurchaseButtonLabel,
+  resolvePurchaseGate,
   resolveSelectedPricingPlan,
 } from '@/lib/pricing-view-model';
 import { MOBILE_PRICING_PLANS, type MobilePricingPlan, type PricingPlanId } from '@/lib/pricing';
@@ -111,7 +113,11 @@ function PricingPlanCard({
 }
 
 export default function PricingScreen() {
-  const { user, api, credits, refreshProfile } = useAuth();
+  // `identityUserId` rather than `user`: this screen serves guests. A guest
+  // holds a real backend identity, and credits are a server-side balance on it,
+  // so everything here — store configuration, purchase, restore — keys off the
+  // identity. `isGuest` only decides whether to offer registration.
+  const { isGuest, identityUserId, api, credits, refreshProfile } = useAuth();
   const [isConfigured, setIsConfigured] = useState(false);
   const [busyProductId, setBusyProductId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -137,14 +143,14 @@ export default function PricingScreen() {
         return;
       }
 
-      if (!user?.id) {
+      if (!identityUserId) {
         if (!cancelled) {
           setIsConfigured(false);
         }
         return;
       }
 
-      const ready = await configureIapForUser(user.id, os);
+      const ready = await configureIapForUser(identityUserId, os);
       if (!cancelled) {
         setIsConfigured(ready);
       }
@@ -155,10 +161,10 @@ export default function PricingScreen() {
     return () => {
       cancelled = true;
     };
-  }, [os, user?.id]);
+  }, [os, identityUserId]);
 
   const packageQuery = useQuery({
-    queryKey: ['iap-packages', os, user?.id],
+    queryKey: ['iap-packages', os, identityUserId],
     enabled: isConfigured,
     queryFn: getCreditPackages,
   });
@@ -185,15 +191,18 @@ export default function PricingScreen() {
     selectedNativePackage?.product.priceString
   );
   const purchaseBusy = busyProductId === selectedPlan.productId;
+  // The 5.1.1(v) rule, asserted in pricing-view-model.test.ts: purchase depends
+  // on having a backend identity, not on being registered.
+  const purchaseGate = resolvePurchaseGate({ identityUserId, isGuest });
   const purchaseDisabled =
     !isConfigured
     || packageQuery.isLoading
-    || !user
+    || !purchaseGate.canPurchase
     || !selectedNativePackage
     || busyProductId !== null;
   const selectedPackageUnavailable =
     isConfigured
-    && Boolean(user)
+    && Boolean(identityUserId)
     && packageQuery.isSuccess
     && !selectedNativePackage;
   const selectedPlanIndex = MOBILE_PRICING_PLANS.findIndex((plan) => plan.id === selectedPlan.id);
@@ -214,8 +223,12 @@ export default function PricingScreen() {
   };
 
   const buyCredits = async (productId: string) => {
-    if (!user) {
-      router.push('/auth');
+    // No sign-in gate. App Review rejected 0.0.5 (28) under guideline 5.1.1(v)
+    // for exactly the bounce that used to be here. A guest already holds a
+    // backend identity, so there is nothing to ask for before taking payment.
+    if (!identityUserId) {
+      setNotice('Your session is still starting. Try again in a moment.');
+      setNoticeTone('neutral');
       return;
     }
 
@@ -294,8 +307,9 @@ export default function PricingScreen() {
   const storeLabel = os === 'ios' ? 'App Store' : os === 'android' ? 'Play Store' : 'Native only';
 
   const refreshBalance = async () => {
-    if (!user) {
-      router.push('/auth');
+    if (!identityUserId) {
+      setNotice('Your session is still starting. Try again in a moment.');
+      setNoticeTone('neutral');
       return;
     }
 
@@ -338,21 +352,30 @@ export default function PricingScreen() {
         </View>
       </Card>
 
+      <GuestMergeBanner />
+
       {!isIapConfigured(os) ? (
         <StatusBlock
           title="Purchases are unavailable in this build"
           body="Your balance is safe. Update the app or try again later to buy a credit pack on this device."
         />
-      ) : !user ? (
+      ) : purchaseGate.showRegistrationOffer ? (
+        // Offered, never required. This is the shape guideline 5.1.1(v) asks
+        // for in as many words: "You may explain to the user that registering
+        // will enable them to access the purchased content from any of their
+        // supported devices and provide them a way to register at any time."
+        // The buy buttons below stay live whether or not this is acted on.
         <View style={{ gap: appTheme.spacing.gap }}>
           <StatusBlock
-            title="Sign in to buy credits"
-            body="Credit packs are tied to your Magicbooklet account and sync across devices."
+            title="Buy now, create an account whenever you like"
+            body="Your credits and creations stay on this device. Creating a free account protects them and lets you reach them from any device."
           />
-          <PrimaryButton
-            label="Sign in to continue"
-            onPress={() => router.push('/auth' as never)}
-            accent="primary"
+          <SecondaryButton
+            label="Create an account to sync"
+            onPress={() => router.push({
+              pathname: '/auth',
+              params: { mode: 'signup', returnTo: '/(tabs)/pricing' },
+            } as never)}
           />
         </View>
       ) : null}
@@ -441,7 +464,7 @@ export default function PricingScreen() {
         <SecondaryButton
           label={busyProductId === 'restore' ? 'Refreshing...' : 'Refresh credit balance'}
           onPress={() => void refreshBalance()}
-          disabled={!user || busyProductId !== null}
+          disabled={!identityUserId || busyProductId !== null}
           accessibilityHint="Checks your Magic Booklet account for previously credited purchases without opening the App Store restore flow"
         />
       </View>

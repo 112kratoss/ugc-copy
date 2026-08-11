@@ -58,6 +58,12 @@ function buildSupabaseAuthPatch(percent = DEFAULT_AUTH_DB_POOL_PERCENT) {
     password_hibp_enabled: true,
     db_max_pool_size: percent,
     db_max_pool_size_unit: 'percent',
+    // Guest checkout (App Review 5.1.1(v)). supabase/config.toml governs the
+    // local stack only, so production would otherwise reject signInAnonymously()
+    // and every first-launch mobile session would fail with the buyer seeing a
+    // dead purchase screen. Migration 20260811100000 must be applied first — it
+    // is what stops each anonymous row from minting 25 credits.
+    external_anonymous_users_enabled: true,
   };
 }
 
@@ -66,6 +72,7 @@ function redactedAuthFields(config) {
     password_hibp_enabled: config.password_hibp_enabled,
     db_max_pool_size: config.db_max_pool_size,
     db_max_pool_size_unit: config.db_max_pool_size_unit,
+    external_anonymous_users_enabled: config.external_anonymous_users_enabled,
   };
 }
 
@@ -274,6 +281,7 @@ function selfTest() {
     password_hibp_enabled: true,
     db_max_pool_size: 17,
     db_max_pool_size_unit: 'percent',
+    external_anonymous_users_enabled: true,
   });
   assert.throws(() => buildSupabaseAuthPatch(0), /between 1 and 100/);
   assert.deepEqual(buildRevenueCatProbePayload(123), {

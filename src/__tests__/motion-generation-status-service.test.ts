@@ -8,7 +8,8 @@ import {
 
 function createStatusClientMock(overrides: Record<string, unknown> = {}) {
   const selects: string[] = [];
-  const eqs: Array<{ column: string; value: unknown }> = [];
+  // `value` for eq(), `values` for the linked-owner in() filter.
+  const eqs: Array<{ column: string; value?: unknown; values?: unknown[] }> = [];
   const generation = {
     id: 'gen-motion-1',
     prediction_id: 'task-motion-1',
@@ -44,10 +45,20 @@ function createStatusClientMock(overrides: Record<string, unknown> = {}) {
               eqs.push({ column, value });
               return query;
             },
+            in(column: string, values: unknown[]) {
+              filters[column] = values;
+              eqs.push({ column, values });
+              return query;
+            },
             single() {
               if (
                 filters.prediction_id === generation.prediction_id
-                && filters.user_id === generation.user_id
+                // The owner filter is now `in` over the linked-account set, so
+                // it arrives as an array. Accept either shape so the mock keeps
+                // describing ownership rather than a specific query operator.
+                && (Array.isArray(filters.user_id)
+                  ? filters.user_id.includes(generation.user_id)
+                  : filters.user_id === generation.user_id)
               ) {
                 return Promise.resolve({ data: generation, error: null });
               }
@@ -108,7 +119,10 @@ describe('getMotionGenerationStatusForRoute', () => {
     ]);
     expect(adminClient.eqs).toEqual([
       { column: 'prediction_id', value: 'task-motion-1' },
-      { column: 'user_id', value: 'user-1' },
+      // Owner scoping is `in` over the linked-account set: a generation started
+      // before the person registered keeps its guest UUID, so an `eq` here would
+      // 404 their own in-flight work the moment they signed up.
+      { column: 'user_id', values: ['user-1'] },
     ]);
     expect(userClient.selects).toEqual([]);
     expect(createAdminSupabase).toHaveBeenCalledTimes(1);

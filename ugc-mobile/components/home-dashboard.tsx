@@ -127,7 +127,10 @@ export function HomeDashboard() {
     comments?: string | string[];
     replyTo?: string | string[];
   }>();
-  const { user, api, credits, signOut } = useAuth();
+  // `user` keeps gating the community actions on this screen (remix, save,
+  // follow). Only the viewer's own creations strip reads `identityUserId`, so a
+  // guest can find what they just generated.
+  const { user, identityUserId, api, credits, signOut } = useAuth();
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
@@ -163,8 +166,8 @@ export function HomeDashboard() {
   const viewerFeedQueryKey = useMemo(() => createShowcaseFeedViewerQueryKey(user?.id), [user?.id]);
 
   const generationsQuery = useQuery({
-    queryKey: ['home-generations', user?.id],
-    enabled: Boolean(user),
+    queryKey: ['home-generations', identityUserId],
+    enabled: Boolean(identityUserId),
     queryFn: () => api.listGenerations(true, { limit: 12 }),
     staleTime: 1000 * 60,
   });
@@ -184,9 +187,9 @@ export function HomeDashboard() {
   });
 
   useEffect(() => {
-    if (!isFocused || !user || generationsQuery.isFetching || !generationsQuery.isStale) return;
+    if (!isFocused || !identityUserId || generationsQuery.isFetching || !generationsQuery.isStale) return;
     void generationsQuery.refetch();
-  }, [generationsQuery.isFetching, generationsQuery.isStale, isFocused, user?.id]);
+  }, [generationsQuery.isFetching, generationsQuery.isStale, isFocused, identityUserId]);
 
   useEffect(() => {
     if (!isFocused || !user || !menuVisible || sellerPostsQuery.isFetching || !sellerPostsQuery.isStale) return;

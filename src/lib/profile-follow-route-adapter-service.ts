@@ -1,3 +1,4 @@
+import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
@@ -46,7 +47,11 @@ async function getAuthenticatedUserId(
     error,
   } = await supabase.auth.getUser();
 
-  return error || !user ? null : user.id;
+  // Guests hold a valid JWT but are not registered. Before anonymous
+  // sessions existed these two were the same thing, so this check read
+  // `!user` alone; it now has to say which it means. Registered-only per
+  // route-identity-policy.ts.
+  return error || !user || isGuestUser(user) ? null : user.id;
 }
 
 function createProfileFollowResponse(result: ProfileFollowRouteResult) {

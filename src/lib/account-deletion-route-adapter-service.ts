@@ -1,3 +1,4 @@
+import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
@@ -71,7 +72,10 @@ export async function deleteAccountRouteResponse({
   const userClient = resolved.createUserClient(request);
   const { data: { user }, error: authError } = await userClient.auth.getUser();
 
-  if (authError || !user) {
+  // Registered-only per route-identity-policy.ts. A guest holds a valid
+    // JWT, so `!user` alone stopped meaning "not registered" the moment
+    // anonymous sessions existed.
+    if (authError || !user || isGuestUser(user)) {
     return applyPrivateNoStoreApiResponseHeaders(
       NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
       request,

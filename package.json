@@ -43,7 +43,8 @@
     "typecheck:scripts": "tsc --project tsconfig.scripts.json --noEmit",
     "typecheck:tests": "tsc --project tsconfig.tests.json --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "ops:guest-acceptance": "bash scripts/guest-checkout-acceptance.sh"
   },
   "dependencies": {
     "@sentry/nextjs": "^10.69.0",

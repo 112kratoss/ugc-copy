@@ -215,6 +215,15 @@ export const WELCOME_CREDIT_CLAIM_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+// Keyed on the registering account, not the guest, so a caller cannot reset the
+// window by minting a fresh anonymous session. A real user merges once; the
+// headroom is for retries after a flaky sign-in.
+export const ACCOUNT_MERGE_RATE_LIMIT = {
+  scope: 'account:merge-guest',
+  limit: 10,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const MOBILE_PUSH_TOKEN_REGISTER_RATE_LIMIT = {
   scope: 'mobile-push-token:register',
   limit: 20,

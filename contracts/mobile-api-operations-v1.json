@@ -51,6 +51,16 @@
       "path": "/api/account",
       "auth": "required"
     },
+    "prepareGuestAccountMerge": {
+      "method": "POST",
+      "path": "/api/account/merge/prepare",
+      "auth": "required"
+    },
+    "mergeGuestAccount": {
+      "method": "POST",
+      "path": "/api/account/merge",
+      "auth": "required"
+    },
     "getReferralOverview": {
       "method": "GET",
       "path": "/api/referrals/me",

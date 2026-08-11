@@ -6,6 +6,20 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { AppState, Platform } from 'react-native';
 
 import { env, getMissingMobileEnvKeys } from './env';
+import {
+  resolveMergeRedeemAction,
+  resolveMergeRedeemFailureAction,
+  shouldPrepareGuestMerge,
+  shouldRedeemGuestMerge,
+  type GuestMergeState,
+} from './guest-merge';
+import {
+  clearGuestMergeTicket,
+  readGuestMergeTicket,
+  storeGuestMergeTicket,
+} from './guest-merge-ticket-storage';
+import { getRegisteredUser, isGuestSession } from './guest-session';
+import type { GuestAccountMergeStatus } from './types';
 import { signInWithNativeApple } from './apple-auth';
 import { signInWithGoogleOAuth } from './google-auth';
 import {
@@ -45,7 +59,27 @@ export { getAccountReauthenticationMethods } from './account-reauthentication';
 
 interface AuthContextValue {
   session: Session | null;
+  /**
+   * The registered account, or null.
+   *
+   * Deliberately null for guests even though a guest holds a real Supabase
+   * session. Roughly seventy `!user` checks across this app mean "is this
+   * person registered?" — they gate publishing, comments, follows, the
+   * marketplace and payouts. Letting an anonymous session flow through here
+   * would open all of them at once. Surfaces that should serve guests read
+   * `isGuest` / `identityUserId` instead, and opt in one at a time.
+   */
   user: User | null;
+  /** True when the backend identity is an anonymous (guest) session. */
+  isGuest: boolean;
+  /** The backend user id for guests and registered users alike. */
+  identityUserId: string | null;
+  /** Lifecycle of the guest->account link. `pending` survives app restarts. */
+  mergeState: GuestMergeState;
+  /** Set only for a settled outcome the user must be told about. */
+  mergeOutcome: GuestAccountMergeStatus | null;
+  /** Dismisses the recovery banner without touching the stored ticket. */
+  acknowledgeMergeOutcome: () => void;
   credits: number | null;
   isLoading: boolean;
   isAuthConfigured: boolean;
@@ -63,6 +97,8 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 const CACHED_ACCESS_TOKEN_MIN_TTL_MS = 30 * 1000;
+
+export { getRegisteredUser, isGuestSession } from './guest-session';
 
 export function isAccountReauthenticationRequired(error: unknown) {
   return error instanceof ApiError
@@ -85,6 +121,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const missingEnvKeys = useMemo(() => getMissingMobileEnvKeys(), []);
   const sessionUserIdRef = useRef<string | null>(null);
   const sessionRef = useRef<Session | null>(null);
+  const guestBootstrapRef = useRef(false);
+  const [mergeState, setMergeState] = useState<GuestMergeState>('idle');
+  const [mergeOutcome, setMergeOutcome] = useState<GuestAccountMergeStatus | null>(null);
   const authStateVersionRef = useRef(0);
   const profileRefreshRef = useRef<{ promise: Promise<void>; userId: string; version: number } | null>(null);
 
@@ -106,6 +145,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const resetAuthState = useCallback(() => {
     applySessionState(null);
+  }, [applySessionState]);
+
+  /**
+   * Give this device a backend identity without asking for anything.
+   *
+   * This is what App Review 5.1.1(v) required: a buyer must be able to purchase
+   * credits without registering, and credits are a server-side balance, so the
+   * balance needs somewhere to live. An anonymous Supabase user is a real
+   * auth.users row, so every existing endpoint — purchase sync, the credit
+   * ledger, generation — works against it unchanged.
+   *
+   * Failure is not fatal and must never be. If anonymous sign-ins are disabled
+   * on the project, or the device is offline, the app falls back to exactly the
+   * behaviour it had before guests existed: signed out, with sign-in prompts on
+   * the surfaces that need an account. A hard failure here would leave a
+   * first-launch user staring at a dead app.
+   */
+  const ensureGuestSession = useCallback(async () => {
+    if (!isSupabaseConfigured || guestBootstrapRef.current) return;
+    guestBootstrapRef.current = true;
+
+    try {
+      await initializeSupabaseAuth();
+      const { data, error } = await supabase.auth.getSession();
+      if (error) throw error;
+      if (data.session) return;
+
+      const { data: guest, error: guestError } = await supabase.auth.signInAnonymously();
+      if (guestError) throw guestError;
+      if (guest.session) applySessionState(guest.session);
+    } catch (error) {
+      console.warn('Could not start a guest session; continuing signed out', error);
+      guestBootstrapRef.current = false;
+    }
   }, [applySessionState]);
 
   const getAccessToken = useCallback(async () => {
@@ -150,9 +223,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }),
     [getAccessToken]
   );
+  const registeredUser = useMemo(() => getRegisteredUser(session), [session]);
+  const isGuest = isGuestSession(session);
+  const identityUserId = session?.user?.id ?? null;
   const accountReauthenticationMethods = useMemo(
-    () => getAccountReauthenticationMethods(session?.user ?? null),
-    [session?.user],
+    () => getAccountReauthenticationMethods(registeredUser),
+    [registeredUser],
   );
 
   const refreshProfileForUser = useCallback((userId: string) => {
@@ -259,6 +335,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           void refreshProfileForUser(latestSession.user.id).catch((profileError) => {
             console.warn('Failed to refresh hydrated profile', profileError);
           });
+        } else {
+          // No stored session: this is a first launch, a reinstall, or the tail
+          // of a sign-out. Claim a guest identity now rather than at the
+          // paywall, so the purchase screen never has to block on a network
+          // round trip while someone is trying to pay.
+          void ensureGuestSession();
         }
       } catch (error) {
         if (!active) return;
@@ -275,18 +357,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       active = false;
       subscription.unsubscribe();
     };
-  }, [applySessionState, refreshProfileForUser, resetAuthState]);
+  }, [applySessionState, ensureGuestSession, refreshProfileForUser, resetAuthState]);
 
   useEffect(() => {
     if (Platform.OS !== 'ios' && Platform.OS !== 'android') {
       return;
     }
 
-    if (!session?.user?.id) {
+    // Registered accounts only. A guest has no way to receive a notification
+    // worth sending — no follows, no comments, no marketplace — and push tokens
+    // registered against a guest row would be stranded the moment it merges.
+    if (!registeredUser) {
       return;
     }
 
-    const userId = session.user.id;
+    const userId = registeredUser.id;
     const syncPushRegistration = () => queryClient.fetchQuery({
       queryKey: ['mobile-push-registration', userId],
       queryFn: () => registerForMobilePushNotifications(api, { requestPermission: false }),
@@ -307,20 +392,107 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       unsubscribePushTokenChanges();
       appStateSubscription.remove();
     };
-  }, [api, queryClient, session?.user?.id]);
+  }, [api, queryClient, registeredUser]);
+
+  const acknowledgeMergeOutcome = useCallback(() => setMergeOutcome(null), []);
 
   useEffect(() => {
-    if (!session?.user?.id) return;
+    // A referral reward is for signing up. Claiming it against a guest row
+    // would burn the invite on an identity that has not registered yet.
+    if (!registeredUser) return;
 
     void claimPendingReferral(api).catch((error) => {
       console.warn('Failed to claim pending referral after authentication', error);
     });
-  }, [api, session?.user?.id]);
+  }, [api, registeredUser]);
+
+  /**
+   * Mint and store the ticket that will carry this guest's credits across.
+   *
+   * Runs *before* authentication, while the guest session is still the caller.
+   * Throws on failure, and the sign-in is abandoned as a result: continuing
+   * would replace the only session that can prove ownership of the guest's
+   * balance, with nothing held back to reclaim it. Losing purchased credits
+   * silently is far worse than a sign-in the user can retry.
+   */
+  const prepareGuestMerge = useCallback(async (previousSession: Session | null) => {
+    if (!shouldPrepareGuestMerge(previousSession)) return;
+
+    setMergeState('preparing');
+    try {
+      const { ticket } = await api.prepareGuestAccountMerge();
+      await storeGuestMergeTicket(ticket);
+      setMergeState('pending');
+    } catch (error) {
+      setMergeState('failed');
+      console.warn('Could not prepare the guest account link', error);
+      throw new Error(
+        'We could not prepare your guest credits for transfer, so we stopped before '
+        + 'switching accounts. Your credits are safe on this device. Check your '
+        + 'connection and try again.',
+      );
+    }
+  }, [api]);
+
+  /**
+   * Redeem the stored ticket against the registered session.
+   *
+   * Safe to call at any time: it is a no-op without a ticket, and the ticket is
+   * only cleared on a settled outcome. Failures are swallowed because the ticket
+   * survives them — this runs again at the next launch or foreground, which is
+   * what makes a crash between sign-in and redemption survivable.
+   */
+  const redeemGuestMerge = useCallback(async () => {
+    // Read from the session already in hand rather than asking Supabase again.
+    // This runs on every launch and every foreground, and auth-provider-
+    // performance.test.tsx pins the number of getSession() calls at startup
+    // precisely so additions like this cannot quietly add I/O to the cold path.
+    const ticket = await readGuestMergeTicket();
+    if (!shouldRedeemGuestMerge(ticket, sessionRef.current)) return;
+
+    setMergeState('merging');
+
+    // The decision itself lives in guest-merge.ts so it is testable without
+    // rendering: it is what determines whether a bad network costs someone the
+    // credits they paid for.
+    let action;
+    try {
+      const result = await api.mergeGuestAccount(ticket as string);
+      action = resolveMergeRedeemAction(result.status);
+    } catch (error) {
+      console.warn('Could not link guest data yet; will retry', error);
+      action = resolveMergeRedeemFailureAction();
+    }
+
+    if (action.clearTicket) await clearGuestMergeTicket();
+    setMergeState(action.nextState);
+    setMergeOutcome(action.outcome);
+  }, [api]);
+
+  useEffect(() => {
+    // The retry that makes a ticket worth having. A crash, a dead network, or
+    // the user killing the app between sign-in and redemption leaves a stored
+    // ticket behind; this picks it up on the next launch and on every return to
+    // the foreground, until the server gives a settled answer.
+    if (!registeredUser) return;
+
+    void redeemGuestMerge();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void redeemGuestMerge();
+    });
+
+    return () => subscription.remove();
+  }, [redeemGuestMerge, registeredUser]);
 
   const signInWithPassword = async (email: string, password: string) => {
     if (!isSupabaseConfigured) {
       throw new Error(`Configure mobile auth first: ${missingEnvKeys.join(', ')}`);
     }
+
+    // Prepared before the sign-in replaces the guest session. Throws — and so
+    // abandons the sign-in — rather than risk stranding purchased credits.
+    const previousSession = sessionRef.current;
+    await prepareGuestMerge(previousSession);
 
     try {
       await initializeSupabaseAuth();
@@ -330,6 +502,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw normalizeSupabaseAuthError(error);
     }
 
+    await redeemGuestMerge();
     await refreshProfile();
   };
 
@@ -342,6 +515,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error('Apple sign-in is available on iOS only.');
     }
 
+    const previousSession = sessionRef.current;
+    await prepareGuestMerge(previousSession);
+
     try {
       await initializeSupabaseAuth();
       await signInWithNativeApple(supabase);
@@ -349,6 +525,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw normalizeSupabaseAuthError(error);
     }
 
+    await redeemGuestMerge();
     await refreshProfile();
   };
 
@@ -361,6 +538,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error('Google sign-in is available on Android only in this app.');
     }
 
+    const previousSession = sessionRef.current;
+    await prepareGuestMerge(previousSession);
+
     try {
       await initializeSupabaseAuth();
       await signInWithGoogleOAuth(supabase);
@@ -368,6 +548,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw normalizeSupabaseAuthError(error);
     }
 
+    await redeemGuestMerge();
     await refreshProfile();
   };
 
@@ -378,11 +559,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await clearPersistedSupabaseAuthSession();
     }
     resetAuthState();
+    // Signing out drops back to a guest identity rather than to nothing, so
+    // browsing and buying keep working. The bootstrap latch is cleared because
+    // the previous guest session is gone with the sign-out.
+    guestBootstrapRef.current = false;
+    void ensureGuestSession();
     router.replace('/auth');
   };
 
   const deleteAccount = async (reauthentication?: AccountDeletionReauthentication) => {
-    if (!session?.user) {
+    if (!registeredUser) {
       throw new Error('Sign in before deleting your account.');
     }
 
@@ -397,7 +583,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           await initializeSupabaseAuth();
         }
         const result = await reauthenticateAccountForDeletion({
-          currentUser: session.user,
+          currentUser: registeredUser,
           method: reauthentication,
           supabase,
         });
@@ -429,7 +615,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     <AuthContext.Provider
       value={{
         session,
-        user: session?.user ?? null,
+        user: registeredUser,
+        isGuest,
+        identityUserId,
+        mergeState,
+        mergeOutcome,
+        acknowledgeMergeOutcome,
         credits,
         isLoading,
         isAuthConfigured: isSupabaseConfigured,

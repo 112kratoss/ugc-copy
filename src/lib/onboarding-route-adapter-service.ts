@@ -309,6 +309,19 @@ export async function postWelcomeCreditsClaimRouteResponse({
   try {
     const user = await authenticate(request, resolved);
     if (!user) return privateJson(request, { error: 'Unauthorized' }, 401);
+
+    // Guests are authenticated but not registered, and an anonymous identity is
+    // free and unlimited — any credit it can claim is a faucet. The RPC refuses
+    // this too (20260811120000); rejecting here keeps a scripted attempt off the
+    // rate limiter and the service-role client entirely.
+    if (user.is_anonymous === true) {
+      return privateJson(
+        request,
+        { error: 'Create an account to claim your welcome credits.', status: 'not_eligible' },
+        403,
+      );
+    }
+
     const body = await request.json().catch(() => ({})) as { sourceSurface?: unknown };
     const sourceSurface = body.sourceSurface === 'web' ? 'web' : 'mobile';
     const admin = resolved.createServiceClient();

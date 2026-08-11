@@ -147,6 +147,22 @@ export async function patchProfileRouteResult({
       return createProfileRouteResult(request, { error: 'Unauthorized' }, 401);
     }
 
+    // Guests hold a valid JWT but have no public presence: they cannot post,
+    // comment, follow or sell, so a username buys them nothing they can use.
+    // It does buy two things worth denying. A username is unique and finite, so
+    // unlimited anonymous sessions could squat every good handle; and setting
+    // one used to be enough to pass the welcome-credit eligibility check, which
+    // reads "identity claimed" as a proxy for "registered". The database refuses
+    // that claim outright now (20260811120000) — this is the outer of the two
+    // gates, and the one that gives an honest error instead of a silent no-op.
+    if (user.is_anonymous === true) {
+      return createProfileRouteResult(
+        request,
+        { error: 'Create an account to set up your creator profile.' },
+        403,
+      );
+    }
+
     const result = await resolvedDependencies.updateProfileForRoute({
       userId: user.id,
       body: await request.json(),

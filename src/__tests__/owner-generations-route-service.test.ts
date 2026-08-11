@@ -128,9 +128,12 @@ describe('listOwnerGenerationsForRoute', () => {
     });
 
     expect(ownerClient.selectedColumns).toEqual([
+      // The linked-account lookup: work made before the person registered keeps
+      // its guest UUID, so the owner filter has to be a set rather than an id.
+      'id',
       'id, status, created_at, completed_at, model, category, archived_at, template_run_id, template_run_step_id, studio_visible',
     ]);
-    expect(ownerClient.filters).toContainEqual({ column: 'user_id', value: 'user-1' });
+    expect(ownerClient.inFilters).toContainEqual({ column: 'user_id', values: ['user-1'] });
     expect(ownerClient.nullFilters).toEqual(['archived_at']);
     expect(ownerClient.orFilters).toEqual([
       'and(template_run_id.is.null,template_run_step_id.is.null),studio_visible.eq.true',

@@ -1,3 +1,4 @@
+import { resolveLinkedAccountIds } from '@/lib/account-identity';
 import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -74,7 +75,7 @@ export async function archiveOwnerGenerationForRoute({
       showcase_asset_path: null,
     })
     .eq('id', generationId)
-    .eq('user_id', ownerUserId)
+    .in('user_id', await resolveLinkedAccountIds(adminSupabase, ownerUserId))
     .is('template_run_id', null)
     .is('template_run_step_id', null)
     .is('archived_at', null)
@@ -128,7 +129,7 @@ export async function restoreOwnerGenerationForRoute({
       archived_by_user_id: null,
     })
     .eq('id', generationId)
-    .eq('user_id', ownerUserId)
+    .in('user_id', await resolveLinkedAccountIds(adminSupabase, ownerUserId))
     .is('template_run_id', null)
     .is('template_run_step_id', null)
     .not('archived_at', 'is', null)
