@@ -1,3 +1,4 @@
+import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
@@ -57,7 +58,7 @@ async function getAuthenticatedUserId(
     error: authError,
   } = await supabase.auth.getUser();
 
-  return authError || !user
+  return authError || !user || isGuestUser(user)
     ? { ok: false as const }
     : { ok: true as const, supabase, userId: user.id };
 }

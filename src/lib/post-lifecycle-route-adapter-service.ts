@@ -1,3 +1,4 @@
+import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
@@ -69,7 +70,10 @@ async function handlePostLifecyclePOST({
     error: authError,
   } = await supabase.auth.getUser();
 
-  if (authError || !user) {
+  // Registered-only per route-identity-policy.ts. A guest holds a valid
+    // JWT, so `!user` alone stopped meaning "not registered" the moment
+    // anonymous sessions existed.
+    if (authError || !user || isGuestUser(user)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

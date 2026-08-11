@@ -137,6 +137,38 @@ describe('profile route adapter service', () => {
     });
   });
 
+  it('refuses to let a guest claim a username', async () => {
+    // Two reasons, one gate. A username is unique and finite, and anonymous
+    // sessions are free and unlimited, so guests could squat every good handle.
+    // Setting one was also enough to pass the welcome-credit eligibility check,
+    // which reads "identity claimed" as a proxy for "registered" — that payout
+    // is refused in the database now, and this stops the attempt earlier.
+    createUserClient.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: { ...user, email: null, is_anonymous: true } },
+          error: null,
+        })),
+      },
+    });
+
+    const result = await patchProfileRouteResult({
+      request: new Request('https://app.example/api/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'freeloader', displayName: 'Free Loader' }),
+      }),
+      dependencies: {
+        createUserClient,
+        createServiceClient,
+        updateProfileForRoute,
+      },
+    });
+
+    expect(result.status).toBe(403);
+    expect(updateProfileForRoute).not.toHaveBeenCalled();
+  });
+
   it('maps profile rate-limit failures into body and headers', async () => {
     updateProfileForRoute.mockResolvedValueOnce({
       ok: false,

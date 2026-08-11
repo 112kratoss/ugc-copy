@@ -1,3 +1,4 @@
+import { isGuestUser } from '@/lib/account-identity';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -51,7 +52,10 @@ async function getAuthenticatedMobileUserId(userSupabase: UserSupabaseClient) {
     error: authError,
   } = await userSupabase.auth.getUser();
 
-  return authError || !user ? null : user.id;
+  // Registered-only. A guest has no follows, comments or marketplace activity
+  // to be notified about, and a push token registered against a guest row is
+  // stranded the moment that identity is linked to an account.
+  return authError || !user || isGuestUser(user) ? null : user.id;
 }
 
 function mobileNotificationErrorResult(error: MobileNotificationError): MobileNotificationPreferencesRouteResult {

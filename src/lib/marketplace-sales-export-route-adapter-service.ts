@@ -1,3 +1,4 @@
+import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
@@ -48,7 +49,10 @@ async function handleMarketplaceSalesExportGET(
     error: authError,
   } = await supabase.auth.getUser();
 
-  if (authError || !user) {
+  // Registered-only per route-identity-policy.ts. A guest holds a valid
+    // JWT, so `!user` alone stopped meaning "not registered" the moment
+    // anonymous sessions existed.
+    if (authError || !user || isGuestUser(user)) {
     return new Response('Unauthorized', { status: 401 });
   }
 
