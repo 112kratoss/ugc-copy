@@ -96,4 +96,47 @@ describe('onboarding route adapter service', () => {
       p_source_surface: 'mobile',
     });
   });
+
+  it('refuses a guest, even one that has set a username', async () => {
+    // The faucet this closes: anonymous sign-in is free and unlimited, and the
+    // eligibility rule reads "identity claimed" (real username + display name)
+    // as a proxy for "registered". PATCH /api/profile accepts any valid JWT,
+    // and a guest has one, so the proxy was bypassable —
+    //   signInAnonymously -> set username -> claim -> 25 credits -> generate
+    // repeatable on every fresh session. Anonymity is now checked directly.
+    const guest = {
+      id: '9c2f0a5e-7c1b-4a6e-9f3a-2b8d4e6f1a20',
+      created_at: '2026-08-11T10:00:00.000Z',
+      is_anonymous: true,
+    };
+    const rpc = vi.fn();
+    const createServiceClient = vi.fn();
+    const enforceBackendRateLimit = vi.fn();
+    const userClient = {
+      auth: {
+        getUser: vi.fn(async () => ({ data: { user: guest }, error: null })),
+      },
+    } as unknown as SupabaseClient;
+
+    const response = await postWelcomeCreditsClaimRouteResponse({
+      request: new Request('https://app.example/api/credits/welcome/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceSurface: 'mobile' }),
+      }),
+      dependencies: {
+        createUserClient: vi.fn(() => userClient),
+        createServiceClient,
+        enforceBackendRateLimit,
+      },
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ status: 'not_eligible' });
+    // Rejected before the service-role client is even built, so a scripted
+    // attempt cannot burn the rate limiter or reach the RPC.
+    expect(rpc).not.toHaveBeenCalled();
+    expect(createServiceClient).not.toHaveBeenCalled();
+    expect(enforceBackendRateLimit).not.toHaveBeenCalled();
+  });
 });
