@@ -449,7 +449,10 @@ export function MediaCreationScreen({
 }) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const { user, api, credits, updateCredits } = useAuth();
+  // `user` still gates remix restore, which pulls another creator's source
+  // media out of the community feed. Generating and enhancing key off
+  // `identityUserId` so a guest can spend the credits they just bought.
+  const { user, identityUserId, api, credits, updateCredits } = useAuth();
   const catalogQuery = useGenerationModelCatalog(api);
   const catalog = catalogQuery.catalog;
   const refetchCatalog = catalogQuery.refetch;
@@ -988,7 +991,10 @@ export function MediaCreationScreen({
       setMessage(null);
       return;
     }
-    if (!user) {
+    // Only fires if the guest bootstrap failed outright (offline, or anonymous
+    // sign-ins disabled on the project). Signing in is then the one way left to
+    // get a backend identity, so the prompt is a fallback rather than a gate.
+    if (!identityUserId) {
       openAuthForCurrentDraft();
       return;
     }
@@ -1072,7 +1078,9 @@ export function MediaCreationScreen({
       setWorkspaceVisible(true);
       return;
     }
-    if (!user) {
+    // Guests generate. Credits are a server-side balance on their identity, so
+    // there is nothing account-specific to ask for before spending them.
+    if (!identityUserId) {
       openAuthForCurrentDraft();
       return;
     }

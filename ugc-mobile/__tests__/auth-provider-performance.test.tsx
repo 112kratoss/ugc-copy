@@ -44,6 +44,11 @@ vi.mock('../lib/api-client', () => ({
 }));
 
 vi.mock('../lib/feed-installation-id', () => ({ getFeedInstallationId: vi.fn() }));
+vi.mock('../lib/guest-merge-ticket-storage', () => ({
+  readGuestMergeTicket: vi.fn(async () => null),
+  storeGuestMergeTicket: vi.fn(async () => undefined),
+  clearGuestMergeTicket: vi.fn(async () => undefined),
+}));
 vi.mock('../lib/generation-model-catalog', () => ({ GENERATION_MODEL_CATALOG_SCHEMA_VERSION: 1 }));
 vi.mock('../lib/apple-auth', () => ({ signInWithNativeApple: vi.fn() }));
 vi.mock('../lib/google-auth', () => ({ signInWithGoogleOAuth: vi.fn() }));

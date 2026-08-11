@@ -196,6 +196,11 @@ const extendedOperationCases: Array<{
     }) ?? Promise.reject(new Error('Catalog v2 start operation is unavailable.')),
   },
   { key: 'validateProfile', call: (api) => api.validateProfile({ displayName: 'Creator One' }) },
+  { key: 'prepareGuestAccountMerge', call: (api) => api.prepareGuestAccountMerge() },
+  {
+    key: 'mergeGuestAccount',
+    call: (api) => api.mergeGuestAccount('a'.repeat(64)),
+  },
   { key: 'listViewerUnlocks', call: (api) => api.listViewerUnlocks({ limit: 24, offset: 0 }) },
   { key: 'getViewerUnlock', call: (api) => api.getViewerUnlock('unlock-1') },
   { key: 'getViewerUnlockFileUrl', call: (api) => api.getViewerUnlockFileUrl('unlock-1', 'retained/file.zip') },

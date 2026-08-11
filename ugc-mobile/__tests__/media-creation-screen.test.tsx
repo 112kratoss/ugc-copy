@@ -18,7 +18,13 @@ const routerState = vi.hoisted(() => ({
 }));
 
 const authState = vi.hoisted(() => ({
-  user: { id: 'user-123', email: 'creator@example.com' },
+  // Nullable: guests hold a backend identity but no registered account, and the
+  // guest generation case below asserts that distinction.
+  user: null as { id: string; email: string } | null,
+  // Generating keys off the backend identity, not registration, so guests can
+  // spend the credits they bought. For a registered user the two are the same.
+  identityUserId: 'user-123' as string | null,
+  isGuest: false,
   credits: 999,
   updateCredits: vi.fn(),
   api: {
@@ -202,6 +208,9 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     routerState.push.mockClear();
     authState.updateCredits.mockClear();
     authState.credits = 999;
+    authState.user = { id: 'user-123', email: 'creator@example.com' };
+    authState.identityUserId = 'user-123';
+    authState.isGuest = false;
     authState.api.startGeneration = undefined;
     authState.api.startImageGeneration.mockReset();
     authState.api.getImageGeneration.mockReset();
@@ -1455,6 +1464,55 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(tree!.root.findAll((node) => String(node.type) === 'view' && node.props.testID === 'creator-contextual-blocker')).toHaveLength(1);
     expect(text).not.toContain('Ready check');
     expect(text).not.toContain('Generation checks');
+  });
+
+  it('lets a guest generate without registering', async () => {
+    // App Review rejected 0.0.5 (28) under guideline 5.1.1(v) for requiring
+    // registration before purchase. Buying is only half of it: credits a guest
+    // paid for have to be spendable too, or the purchase they were allowed to
+    // make buys them nothing.
+    //
+    // `user` stays null for guests on purpose — roughly seventy `!user` checks
+    // across this app mean "is this person registered?" and gate publishing,
+    // comments, follows and payouts. This screen reads `identityUserId`, which
+    // is the backend identity either way.
+    vi.useFakeTimers();
+    authState.user = null;
+    authState.isGuest = true;
+    authState.identityUserId = 'guest-1';
+    authState.api.startImageGeneration.mockResolvedValue({
+      success: true,
+      predictionId: 'prediction-guest-1',
+      generationId: 'gen-guest-1',
+      status: 'processing',
+      remainingCredits: 480,
+    });
+    authState.api.getImageGeneration.mockResolvedValue({
+      status: 'succeeded',
+      output: 'https://cdn.example.com/guest-output.png',
+    });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" />);
+    });
+
+    const promptInput = tree!.root.findAll((node) => String(node.type) === 'textinput')[0];
+    renderer.act(() => {
+      promptInput.props.onChangeText('A guest-made product shot.');
+    });
+
+    await renderer.act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Generate \u00b7 8 credits').props.onPress();
+    });
+
+    // Generated, not bounced to /auth.
+    expect(authState.api.startImageGeneration).toHaveBeenCalledTimes(1);
+    expect(routerState.push).not.toHaveBeenCalled();
   });
 
   it('offers a post handoff after a generation succeeds with a generation id', async () => {

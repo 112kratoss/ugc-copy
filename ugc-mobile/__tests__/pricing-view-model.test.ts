@@ -6,6 +6,7 @@ import {
   getPricingPlanCarouselOffset,
   getPricingPlanIdForCarouselOffset,
   getPurchaseButtonLabel,
+  resolvePurchaseGate,
   resolveSelectedPricingPlan,
 } from '../lib/pricing-view-model';
 
@@ -45,5 +46,46 @@ describe('mobile pricing selection', () => {
     expect(getPricingPlanCarouselOffset('starter', 280)).toBe(0);
     expect(getPricingPlanCarouselOffset('creator', 280)).toBe(280);
     expect(getPricingPlanCarouselOffset('pro', 280)).toBe(560);
+  });
+});
+
+describe('guest purchase gate (App Review 5.1.1(v))', () => {
+  it('lets a guest buy credits without registering', () => {
+    // The rejection, expressed as an assertion. Apple rejected 0.0.5 (28)
+    // because the app required registration before an In-App Purchase that is
+    // not account-based. If this ever goes false, the rejection comes back.
+    const gate = resolvePurchaseGate({ identityUserId: 'guest-1', isGuest: true });
+
+    expect(gate.canPurchase).toBe(true);
+    expect(gate.blockedReason).toBeNull();
+  });
+
+  it('offers registration to a guest without requiring it', () => {
+    // Guideline 5.1.1(v) in as many words: "You may explain to the user that
+    // registering will enable them to access the purchased content from any of
+    // their supported devices". Offered alongside a live buy button, never
+    // in place of one.
+    const gate = resolvePurchaseGate({ identityUserId: 'guest-1', isGuest: true });
+
+    expect(gate.showRegistrationOffer).toBe(true);
+    expect(gate.canPurchase).toBe(true);
+  });
+
+  it('does not pester a registered user to register', () => {
+    const gate = resolvePurchaseGate({ identityUserId: 'user-1', isGuest: false });
+
+    expect(gate.canPurchase).toBe(true);
+    expect(gate.showRegistrationOffer).toBe(false);
+  });
+
+  it('blocks on a missing identity without demanding sign-up', () => {
+    // No identity means the guest bootstrap has not landed — first launch,
+    // offline, or anonymous sign-ins disabled server-side. That is a retryable
+    // state, not a reason to ask for an account.
+    const gate = resolvePurchaseGate({ identityUserId: null, isGuest: false });
+
+    expect(gate.canPurchase).toBe(false);
+    expect(gate.blockedReason).toBe('no_identity');
+    expect(gate.showRegistrationOffer).toBe(false);
   });
 });

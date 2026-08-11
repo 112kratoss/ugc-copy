@@ -144,6 +144,40 @@ export interface ReferralOverviewResponse {
   recentRewards: ReferralReward[];
 }
 
+/**
+ * `merged` — the guest's balance moved and its data is now reachable from this
+ *   account. `already_merged` — a replay of the same redemption; treat as
+ *   success. Both clear the stored ticket.
+ *
+ * `conflict` — the guest was already linked to a different account (two devices
+ *   raced). `expired` — the ticket outlived its window. `not_eligible` — refused,
+ *   and NOT terminal: the ticket stays spendable, so this one is retried rather
+ *   than surfaced. None of these may be reported as a successful transfer.
+ */
+export type GuestAccountMergeStatus =
+  | 'merged'
+  | 'already_merged'
+  | 'conflict'
+  | 'expired'
+  | 'not_eligible';
+
+export interface GuestAccountMergeResponse {
+  status: GuestAccountMergeStatus;
+  creditsMoved: number;
+  promotionalCreditsMoved: number;
+  credits: number | null;
+}
+
+/**
+ * Minted while still a guest, because that is the last moment the guest can
+ * prove who it is. Persisted in Keychain/Keystore so a crash or a lost network
+ * between sign-in and redemption costs a retry rather than the balance.
+ */
+export interface GuestAccountMergeTicketResponse {
+  ticket: string;
+  expiresAt: string;
+}
+
 export interface ReferralLinkRequest {
   next?: string;
 }

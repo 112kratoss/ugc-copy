@@ -9,6 +9,44 @@ export function resolveSelectedPricingPlan(planId: PricingPlanId): MobilePricing
     ?? MOBILE_PRICING_PLANS[0];
 }
 
+export type PurchaseGate = {
+  /** Whether the buy button may be pressed at all. */
+  canPurchase: boolean;
+  /** Offer registration, never require it. */
+  showRegistrationOffer: boolean;
+  /** Set only when purchase is genuinely unavailable, never to demand sign-up. */
+  blockedReason: 'no_identity' | null;
+};
+
+/**
+ * Who may buy credits.
+ *
+ * This is the rule App Review rejected 0.0.5 (28) over. Guideline 5.1.1(v):
+ * registration must not be a precondition for an In-App Purchase that is not
+ * account-based. So the only thing purchase depends on is having a backend
+ * identity to hold the balance — which a guest has.
+ *
+ * Extracted from the screen so the rule is asserted directly rather than
+ * inferred from a rendered tree. If this ever starts returning false for a
+ * guest, the rejection comes straight back.
+ */
+export function resolvePurchaseGate({
+  identityUserId,
+  isGuest,
+}: {
+  identityUserId: string | null;
+  isGuest: boolean;
+}): PurchaseGate {
+  if (!identityUserId) {
+    // Not "please register" — the guest bootstrap simply has not landed yet
+    // (first launch, offline, or anonymous sign-ins disabled server-side). The
+    // screen says so and stays retryable.
+    return { canPurchase: false, showRegistrationOffer: false, blockedReason: 'no_identity' };
+  }
+
+  return { canPurchase: true, showRegistrationOffer: isGuest, blockedReason: null };
+}
+
 export function formatPricingDisplayPrice(
   _plan: MobilePricingPlan,
   nativePrice?: string | null
