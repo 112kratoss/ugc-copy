@@ -25,6 +25,9 @@ const EVENT_TYPES = new Set<ShowcaseFeedEventType>([
 ]);
 const SOURCE_SURFACES = new Set(['showcase', 'showcase-reel', 'feed']);
 const SAFE_IDENTIFIER_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+const UUID_IDENTIFIER_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const BIGINT_IDENTIFIER_PATTERN = /^[1-9][0-9]{0,18}$/;
+const POSTGRES_BIGINT_MAX = BigInt('9223372036854775807');
 const MAX_METADATA_BYTES = 4_096;
 const MAX_EVENT_AGE_MS = 24 * 60 * 60 * 1_000;
 const MAX_EVENT_FUTURE_MS = 5 * 60 * 1_000;
@@ -63,6 +66,18 @@ export type ShowcaseFeedEventPayload = {
   occurredAt: string;
   metadata: Record<string, string | number | boolean | null>;
 };
+
+export type ShowcaseFeedEventRecordResult =
+  | { ok: true; body: { success: true; duplicate?: boolean } }
+  | { ok: false; status: number; body: { error: string } };
+
+export type ShowcaseFeedEventBatchRecordResult =
+  | {
+    ok: true;
+    body: { success: true; recorded: number; rejected: number };
+    results: ShowcaseFeedEventRecordResult[];
+  }
+  | { ok: false; status: 500; body: { error: string } };
 
 export type ShowcaseFeedEventParseResult =
   | { ok: true; payload: ShowcaseFeedEventPayload }
@@ -134,6 +149,17 @@ function normalizeOptionalIdentifier(value: unknown) {
   return typeof value === 'string' && SAFE_IDENTIFIER_PATTERN.test(value) ? value : undefined;
 }
 
+function normalizeOptionalUuidIdentifier(value: unknown) {
+  if (value === undefined || value === null || value === '') return null;
+  return typeof value === 'string' && UUID_IDENTIFIER_PATTERN.test(value) ? value : undefined;
+}
+
+function normalizeOptionalBigintIdentifier(value: unknown) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || !BIGINT_IDENTIFIER_PATTERN.test(value)) return undefined;
+  return BigInt(value) <= POSTGRES_BIGINT_MAX ? value : undefined;
+}
+
 function normalizeOptionalInteger(value: unknown, max: number) {
   if (value === undefined || value === null) return null;
   const number = Number(value);
@@ -173,9 +199,9 @@ export function parseShowcaseFeedEventPayload(value: unknown): ShowcaseFeedEvent
   }
 
   const clientEventId = normalizeOptionalIdentifier(value.clientEventId);
-  const feedSessionId = normalizeOptionalIdentifier(value.feedSessionId);
-  const deliveryId = normalizeOptionalIdentifier(value.deliveryId);
-  const postId = normalizeOptionalIdentifier(value.postId);
+  const feedSessionId = normalizeOptionalUuidIdentifier(value.feedSessionId);
+  const deliveryId = normalizeOptionalBigintIdentifier(value.deliveryId);
+  const postId = normalizeOptionalUuidIdentifier(value.postId);
   const position = normalizeOptionalInteger(value.position, 10_000);
   const durationMs = normalizeOptionalInteger(value.durationMs, 24 * 60 * 60 * 1_000);
   const progress = normalizeOptionalProgress(value.progress);
@@ -260,11 +286,14 @@ async function validateDelivery({
   if (payload.deliveryId) {
     const { data, error } = await serviceClient
       .from('feed_session_items')
-      .select('id, session_id, post_id')
+      .select('id, session_id, post_id, position')
       .eq('id', payload.deliveryId)
       .maybeSingle();
     if (error || !data || data.post_id !== payload.postId || (payload.feedSessionId && data.session_id !== payload.feedSessionId)) {
       return { ok: false as const, error: 'Feed delivery does not match this post.' };
+    }
+    if (payload.position !== null && Number(data.position) !== payload.position) {
+      return { ok: false as const, error: 'Feed event position does not match its delivery.' };
     }
     resolvedSessionId = String(data.session_id);
   }
@@ -272,16 +301,30 @@ async function validateDelivery({
   if (resolvedSessionId) {
     const { data, error } = await serviceClient
       .from('feed_sessions')
-      .select('id, viewer_user_id, anonymous_key_hash, expires_at')
+      .select('id, viewer_user_id, anonymous_key_hash, created_at, expires_at')
       .eq('id', resolvedSessionId)
       .maybeSingle();
-    if (error || !data || Date.parse(data.expires_at) <= Date.now()) {
-      return { ok: false as const, error: 'Feed session was not found or has expired.' };
+    const occurredAtMs = Date.parse(payload.occurredAt);
+    const sessionCreatedAtMs = data ? Date.parse(data.created_at) : Number.NaN;
+    const sessionExpiresAtMs = data ? Date.parse(data.expires_at) : Number.NaN;
+    if (
+      error
+      || !data
+      || !Number.isFinite(occurredAtMs)
+      || !Number.isFinite(sessionCreatedAtMs)
+      || !Number.isFinite(sessionExpiresAtMs)
+      || occurredAtMs < sessionCreatedAtMs
+      || occurredAtMs >= sessionExpiresAtMs
+    ) {
+      return { ok: false as const, error: 'Feed session was not found or was inactive when this event occurred.' };
     }
-    if (data.viewer_user_id && data.viewer_user_id !== actorUserId) {
+    if (data.viewer_user_id !== null && data.viewer_user_id !== actorUserId) {
       return { ok: false as const, error: 'Feed session does not belong to this viewer.' };
     }
-    if (!data.viewer_user_id && data.anonymous_key_hash && data.anonymous_key_hash !== anonymousKeyHash) {
+    if (
+      data.viewer_user_id === null
+      && (actorUserId !== null || data.anonymous_key_hash !== anonymousKeyHash)
+    ) {
       return { ok: false as const, error: 'Feed session does not belong to this viewer.' };
     }
   }
@@ -463,10 +506,7 @@ export async function recordShowcaseFeedEvent({
   anonymousKeyHash: string;
   payload: ShowcaseFeedEventPayload;
   serviceClient: SupabaseClient;
-}): Promise<
-  | { ok: true; body: { success: true; duplicate?: boolean } }
-  | { ok: false; status: number; body: { error: string } }
-> {
+}): Promise<ShowcaseFeedEventRecordResult> {
   const { data: post, error: postError } = await serviceClient
     .from('posts')
     .select('id, user_id, visibility, archived_at')
@@ -580,9 +620,11 @@ export async function recordShowcaseFeedEvent({
 
     if (error?.code === '23505') {
       existingResult = await loadExistingFeedEvent(serviceClient, payload.clientEventId);
+      if (existingResult.error) {
+        return { ok: false, status: 500, body: { error: 'Failed to record feed event.' } };
+      }
       const existingByClientIdMatches = Boolean(
-        !existingResult.error
-        && existingResult.data
+        existingResult.data
         && existingEventMatchesRequest({
           actorUserId,
           anonymousKeyHash,
@@ -591,6 +633,9 @@ export async function recordShowcaseFeedEvent({
           payload,
         }),
       );
+      if (existingResult.data && !existingByClientIdMatches) {
+        return { ok: false, status: 409, body: { error: 'Feed event ID is already used by a different event.' } };
+      }
       const cappedResult = existingByClientIdMatches
         ? { data: null, error: null }
         : await loadCappedFeedEvent({
@@ -632,4 +677,105 @@ export async function recordShowcaseFeedEvent({
   return duplicate
     ? { ok: true, body: { success: true, duplicate: true } }
     : { ok: true, body: { success: true } };
+}
+
+type FeedEventBatchRpcOutcome = {
+  index?: unknown;
+  ok?: unknown;
+  duplicate?: unknown;
+  status?: unknown;
+  error?: unknown;
+};
+
+type FeedEventBatchRpcResponse = {
+  success?: unknown;
+  recorded?: unknown;
+  rejected?: unknown;
+  outcomes?: unknown;
+};
+
+/**
+ * Sends a parsed batch through one service-role RPC. Deep event semantics live
+ * in the database so the inserts and preference side effects share one
+ * transaction; this wrapper only validates and translates the RPC contract.
+ */
+export async function recordShowcaseFeedEvents({
+  actorUserId,
+  anonymousKeyHash,
+  payloads,
+  serviceClient,
+}: {
+  actorUserId: string | null;
+  anonymousKeyHash: string;
+  payloads: ShowcaseFeedEventPayload[];
+  serviceClient: SupabaseClient;
+}): Promise<ShowcaseFeedEventBatchRecordResult> {
+  const { data, error } = await serviceClient.rpc('record_showcase_feed_events', {
+    p_actor_user_id: actorUserId,
+    p_anonymous_key_hash: anonymousKeyHash,
+    p_events: payloads,
+  });
+
+  if (error || !isRecord(data)) {
+    return { ok: false, status: 500, body: { error: 'Failed to record feed event batch.' } };
+  }
+
+  const response = data as FeedEventBatchRpcResponse;
+  const outcomes = Array.isArray(response.outcomes)
+    ? response.outcomes as FeedEventBatchRpcOutcome[]
+    : null;
+  if (
+    response.success !== true
+    || !Number.isInteger(response.recorded)
+    || !Number.isInteger(response.rejected)
+    || !outcomes
+    || outcomes.length !== payloads.length
+  ) {
+    return { ok: false, status: 500, body: { error: 'Failed to record feed event batch.' } };
+  }
+
+  const results: ShowcaseFeedEventRecordResult[] = [];
+  for (let index = 0; index < outcomes.length; index += 1) {
+    const outcome = outcomes[index];
+    if (!isRecord(outcome) || outcome.index !== index || typeof outcome.ok !== 'boolean') {
+      return { ok: false, status: 500, body: { error: 'Failed to record feed event batch.' } };
+    }
+    if (outcome.ok) {
+      results.push(outcome.duplicate === true
+        ? { ok: true, body: { success: true, duplicate: true } }
+        : { ok: true, body: { success: true } });
+      continue;
+    }
+    if (!Number.isInteger(outcome.status) || typeof outcome.error !== 'string') {
+      return { ok: false, status: 500, body: { error: 'Failed to record feed event batch.' } };
+    }
+    results.push({
+      ok: false,
+      status: outcome.status as number,
+      body: { error: outcome.error },
+    });
+  }
+
+  const recorded = response.recorded as number;
+  const rejected = response.rejected as number;
+  if (
+    recorded !== results.filter((result) => result.ok).length
+    || rejected !== results.filter((result) => !result.ok).length
+  ) {
+    return { ok: false, status: 500, body: { error: 'Failed to record feed event batch.' } };
+  }
+
+  // Defensive compatibility for a database function that reports an
+  // unexpected per-entry failure rather than throwing. Mobile acknowledges a
+  // successful HTTP response as durable, so any retryable outcome must make
+  // the whole transport retryable.
+  if (results.some((result) => !result.ok && result.status >= 500)) {
+    return { ok: false, status: 500, body: { error: 'Failed to record feed event batch.' } };
+  }
+
+  return {
+    ok: true,
+    body: { success: true, recorded, rejected },
+    results,
+  };
 }

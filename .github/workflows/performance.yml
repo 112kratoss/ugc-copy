@@ -51,7 +51,15 @@ jobs:
           PERF_MAX_RPS: ${{ inputs.max_rps || '25' }}
           PERF_PROFILE: edge
           PERF_WARMUP_REQUESTS: "2"
-        run: node scripts/performance-load-test.mjs --profile "$PERF_PROFILE" --output performance-load-results.json
+          # Durable bot credentials mint a fresh short-lived user token on every
+          # run. The harness fails before load starts if any credential is absent
+          # or sign-in fails, and never serializes credentials or the token.
+          PERF_AUTH_SUPABASE_URL: ${{ secrets.PERF_AUTH_SUPABASE_URL }}
+          PERF_AUTH_SUPABASE_ANON_KEY: ${{ secrets.PERF_AUTH_SUPABASE_ANON_KEY }}
+          PERF_AUTH_BOT_EMAIL: ${{ secrets.PERF_AUTH_BOT_EMAIL }}
+          PERF_AUTH_BOT_PASSWORD: ${{ secrets.PERF_AUTH_BOT_PASSWORD }}
+          PERF_REQUIRE_SIGNED_IN: "1"
+        run: node scripts/performance-load-test.mjs --profile "$PERF_PROFILE" --require-signed-in --output performance-load-results.json
 
       - name: Upload detailed performance report
         if: always()

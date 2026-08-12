@@ -12,7 +12,16 @@ export const IMMERSIVE_HORIZONTAL_LIST_TUNING = {
   windowSize: 3,
 } as const;
 
-export const SHOWCASE_DRAW_DISTANCE = 500;
+/**
+ * How far past the viewport FlashList mounts showcase cells, in dp.
+ *
+ * 500 was roughly two masonry rows, so a normal flick outran it and landed on
+ * cells that were still mounting. ~900 keeps three to four rows staged ahead
+ * without changing what actually streams: feed cards are poster-only, and
+ * autoplay stays capped at SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS by viewability,
+ * so the extra staged cells cost small preview images, not video.
+ */
+export const SHOWCASE_DRAW_DISTANCE = 900;
 export const SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS = 1;
 export const HOME_RAIL_DRAW_DISTANCE = 400;
 

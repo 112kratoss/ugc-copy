@@ -115,7 +115,10 @@ describe('FeedClient snapshot restore', () => {
     });
 
     it('writes a snapshot for later restores', () => {
-        render(<FeedClient initialFeed={serverPage} initialChipId="for-you" />);
+        const { unmount } = render(<FeedClient initialFeed={serverPage} initialChipId="for-you" />);
+        // Snapshot writes are idle-debounced; leaving the route flushes the
+        // pending value synchronously so back navigation can restore it.
+        unmount();
 
         const stored = window.sessionStorage.getItem(
             `magicbooklet:showcase:v2:${homeFeedCacheKey()}`

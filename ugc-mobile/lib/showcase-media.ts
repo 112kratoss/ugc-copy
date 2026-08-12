@@ -9,7 +9,10 @@ export function getShowcasePreviewMediaItems(item: ShowcaseFeedItem): ShowcaseMe
   return [{
     id: `${item.id}:primary`,
     url: item.mediaUrl,
-    previewUrl: mediaKind === 'image' ? item.mediaUrl : null,
+    // A post-level media URL is the source of record, not proof that a small
+    // derivative exists. Keep legacy records on the same placeholder path so
+    // normal feed tiles never disguise the original as a preview download.
+    previewUrl: null,
     previewThumbhash: null,
     previewCacheKey: item.id,
     gridReady: mediaKind === 'image',
@@ -29,6 +32,24 @@ export function hasShowcasePreviewMedia(item: ShowcaseFeedItem) {
 
 export function getShowcaseMediaPreviewUrl(item: ShowcaseMediaItem) {
   return item.preview?.previewUrl ?? item.previewUrl ?? null;
+}
+
+export type ShowcaseImageTileSource = 'preview' | 'source-fallback' | 'pending';
+
+/**
+ * Choose what a small image tile may fetch without turning a missing derivative
+ * into a full-resolution source download. The source is only a recovery path
+ * after a real preview URL failed; a preview that does not exist yet stays a
+ * lightweight placeholder.
+ */
+export function resolveShowcaseImageTileSource(
+  item: ShowcaseMediaItem,
+  failedPreviewUrl: string | null,
+): ShowcaseImageTileSource {
+  const previewUrl = getShowcaseMediaPreviewUrl(item);
+  if (!previewUrl) return 'pending';
+  if (previewUrl === failedPreviewUrl) return 'source-fallback';
+  return 'preview';
 }
 
 /**

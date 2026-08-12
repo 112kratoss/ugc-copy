@@ -34,6 +34,7 @@ import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
 import ProfileShareButton from '@/app/components/ProfileShareButton';
 import TextPostPreviewCard from '@/app/components/TextPostPreviewCard';
 import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
+import { loadShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import { resolvePlaybackUrl } from '@/lib/media-descriptor';
 import { getBundleAccessLabel, type PostResourceKind } from '@/lib/post-resource-bundles';
@@ -139,7 +140,7 @@ function ReelLoadingFallback() {
 }
 
 const ShowcaseReelViewer = dynamic(
-  () => import('@/app/showcase/ShowcaseReelViewer'),
+  () => loadShowcaseReelViewer(),
   { ssr: false, loading: ReelLoadingFallback }
 );
 

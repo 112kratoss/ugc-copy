@@ -52,13 +52,8 @@ const FALLBACK_VIDEO_ASPECT_RATIO = 16 / 9;
  */
 export function buildShowcaseMasonry(items: ShowcaseFeedItem[]) {
   return items
-    .filter((item) => !isTextOnlyShowcasePost(item) && isShowcaseGridReady(item))
+    .filter((item) => !isTextOnlyShowcasePost(item))
     .map(showcaseToMasonryCard);
-}
-
-export function isShowcaseGridReady(item: ShowcaseFeedItem) {
-  const cover = item.mediaItems?.[0];
-  return cover?.preview?.gridReady ?? cover?.gridReady ?? false;
 }
 
 export function getShowcaseGridLayout(windowWidth: number): ShowcaseGridLayout {
@@ -132,7 +127,7 @@ export function getShowcaseMediaHeight(
 ) {
   const aspectRatio = normalizeAspectRatio(resolvedAspectRatio)
     ?? card.aspectRatio
-    ?? (card.mediaKind === 'video' ? FALLBACK_VIDEO_ASPECT_RATIO : null);
+    ?? (card.mediaKind === 'video' && card.previewUrl ? FALLBACK_VIDEO_ASPECT_RATIO : null);
   if (!aspectRatio) return card.height;
 
   return Math.round(Math.max(

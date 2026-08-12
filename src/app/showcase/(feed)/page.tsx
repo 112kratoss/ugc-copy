@@ -17,6 +17,7 @@ import {
 } from '@/lib/showcase';
 import { createMetadata } from '@/lib/seo';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
+import { isTextOnlyPost } from '@/lib/post-feed-presentation';
 import { getInlineShowcasePriorityPoster } from '@/lib/showcase-priority-poster';
 
 type ShowcasePageProps = {
@@ -37,10 +38,12 @@ function getPriorityVideoPoster(feed: ShowcaseFeedPage): {
     sourceUrl: string;
     preloadUrl: string;
 } | null {
-    const priorityItem = feed.items.slice(0, SHOWCASE_INITIAL_RENDER_COUNT).find((item) => (
-        item.postFormat !== 'text'
-        && (Boolean(item.mediaItems?.length) || Boolean(item.mediaUrl && item.mediaKind))
-    ));
+    const priorityItem = feed.items
+        .filter((item) => !isTextOnlyPost(item))
+        .slice(0, SHOWCASE_INITIAL_RENDER_COUNT)
+        .find((item) => (
+            Boolean(item.mediaItems?.length) || Boolean(item.mediaUrl && item.mediaKind)
+        ));
     if (!priorityItem) {
         return null;
     }

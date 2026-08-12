@@ -12,16 +12,18 @@ import {
     buildShowcaseClientCacheKey,
     hasFreshShowcaseClientSnapshot,
 } from '@/lib/showcase-client-cache';
-import type {
-    ShowcaseCategory,
-    ShowcaseFeedItem,
-    ShowcaseFeedPage,
-    ShowcaseMediaItem,
-    ShowcasePriorityPosterData,
-    ShowcaseResourceFilter,
-    ShowcaseSort,
-    ShowcaseUnlockFilter,
+import {
+    SHOWCASE_INITIAL_RENDER_COUNT,
+    type ShowcaseCategory,
+    type ShowcaseFeedItem,
+    type ShowcaseFeedPage,
+    type ShowcaseMediaItem,
+    type ShowcasePriorityPosterData,
+    type ShowcaseResourceFilter,
+    type ShowcaseSort,
+    type ShowcaseUnlockFilter,
 } from '@/lib/showcase';
+import { isTextOnlyPost } from '@/lib/post-feed-presentation';
 import type { SourceToolOption } from '@/lib/source-tools';
 
 export interface ShowcaseBootstrapClientProps {
@@ -34,6 +36,12 @@ export interface ShowcaseBootstrapClientProps {
     sourceToolOptions: SourceToolOption[];
     initialPriorityPoster?: ShowcasePriorityPosterData | null;
 }
+
+// Long enough that the handoff lands after the first paint's work has drained,
+// short enough that a viewer reading the first card finds a live grid.
+const SHOWCASE_ACTIVATION_IDLE_TIMEOUT_MS = 1_200;
+const SHOWCASE_ACTIVATION_FALLBACK_MS = 1_200;
+const SHOWCASE_FOCUSED_ACTIVATION_RETRY_MS = 250;
 
 const CATEGORY_LINKS: Array<{ id: ShowcaseCategory; label: string }> = [
     { id: 'all', label: 'All posts' },
@@ -116,24 +124,24 @@ function getPriorityPosterUrl(
 
 function BootstrapCard({
     item,
+    isPriority,
     priorityPoster,
     onOpen,
 }: {
     item: ShowcaseFeedItem;
+    isPriority: boolean;
     priorityPoster: ShowcasePriorityPosterData | null;
     onOpen: (postId: string) => void;
 }) {
     const mediaItems = getItemMediaItems(item);
     const cover = mediaItems.slice().sort((left, right) => left.sortOrder - right.sortOrder)[0];
     const posterUrl = getPriorityPosterUrl(item, cover, priorityPoster);
-    const summary = item.body.trim() || item.prompt.trim();
-
     return (
         <article
             data-showcase-bootstrap-card="true"
             className="min-w-0 overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]"
         >
-            {item.postFormat === 'text' ? (
+            {isTextOnlyPost(item) ? (
                 <button
                     type="button"
                     onClick={() => onOpen(item.id)}
@@ -146,15 +154,13 @@ function BootstrapCard({
                     <span className="mt-4 block text-xl font-extrabold text-[var(--ui-text-primary)]">
                         {item.title}
                     </span>
-                    {summary ? (
-                        <span className="mt-3 line-clamp-5 block text-sm leading-6 text-[var(--ui-text-muted)]">
-                            {summary}
-                        </span>
-                    ) : null}
+                    <span className="mt-3 line-clamp-5 block text-sm leading-6 text-[var(--ui-text-muted)]">
+                        {item.body.trim() || item.prompt.trim()}
+                    </span>
                 </button>
             ) : (
                 <div className="relative overflow-hidden bg-black" style={{ aspectRatio: '4 / 5' }}>
-                    {posterUrl ? (
+                    {isPriority && posterUrl ? (
                         // The server-selected inline poster remains the single priority LCP image.
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
@@ -226,6 +232,8 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
     const [isActivating, setIsActivating] = useState(false);
     const fullClientPromiseRef = useRef<Promise<ComponentType<ShowcaseBootstrapClientProps>> | null>(null);
     const initialScrollYRef = useRef<number | null>(null);
+    const bootstrapRootRef = useRef<HTMLDivElement | null>(null);
+    const shouldRelayAnonymousDemandRef = useRef(false);
 
     const loadFullClient = useCallback(() => {
         if (!fullClientPromiseRef.current) {
@@ -236,7 +244,11 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
         return fullClientPromiseRef.current;
     }, []);
 
-    const activate = useCallback((postId?: string) => {
+    const activate = useCallback((postId?: string, relayAnonymousDemand = false) => {
+        if (relayAnonymousDemand) {
+            shouldRelayAnonymousDemandRef.current = true;
+        }
+
         if (postId) {
             const params = new URLSearchParams(window.location.search);
             params.set('post', postId);
@@ -272,6 +284,53 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
             return;
         }
 
+        // Hand off during the first idle window rather than waiting for a
+        // pointer or scroll. The shell's cards are already painted, so this
+        // only upgrades them in place — but it means the grid is live before
+        // the viewer reaches for it instead of after.
+        let focusedRetryHandle: number | null = null;
+        const activateWhenFocusIsSafe = () => {
+            const activeElement = document.activeElement;
+            if (
+                activeElement
+                && activeElement !== document.body
+                && bootstrapRootRef.current?.contains(activeElement)
+            ) {
+                // Replacing the shell while a filter, creator link, or card
+                // owns focus would send keyboard users back to the document.
+                focusedRetryHandle = window.setTimeout(
+                    activateWhenFocusIsSafe,
+                    SHOWCASE_FOCUSED_ACTIVATION_RETRY_MS,
+                );
+                return;
+            }
+            activate();
+        };
+
+        if (typeof window.requestIdleCallback !== 'function') {
+            const handle = window.setTimeout(activateWhenFocusIsSafe, SHOWCASE_ACTIVATION_FALLBACK_MS);
+            return () => {
+                window.clearTimeout(handle);
+                if (focusedRetryHandle !== null) window.clearTimeout(focusedRetryHandle);
+            };
+        }
+
+        const handle = window.requestIdleCallback(activateWhenFocusIsSafe, {
+            timeout: SHOWCASE_ACTIVATION_IDLE_TIMEOUT_MS,
+        });
+        return () => {
+            if (typeof window.cancelIdleCallback === 'function') {
+                window.cancelIdleCallback(handle);
+            }
+            if (focusedRetryHandle !== null) window.clearTimeout(focusedRetryHandle);
+        };
+    }, [FullShowcaseClient, activate, isActivating, isAuthLoading]);
+
+    useEffect(() => {
+        if (isAuthLoading || FullShowcaseClient || isActivating) {
+            return;
+        }
+
         const cacheKey = buildShowcaseClientCacheKey({
             viewerId: user?.id ?? null,
             category: props.initialCategory,
@@ -297,27 +356,27 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
     ]);
 
     useEffect(() => {
-        if (FullShowcaseClient || isActivating) {
+        if (FullShowcaseClient) {
             return;
         }
 
         const activateFromPointer = (event: PointerEvent) => {
             if (!shouldDeferGlobalActivation(event.target)) {
-                activate();
+                activate(undefined, true);
             }
         };
         const activateFromKeyboard = (event: KeyboardEvent) => {
             if (!shouldDeferGlobalActivation(event.target)) {
-                activate();
+                activate(undefined, true);
             }
         };
         const activateFromScroll = () => {
             const initialScrollY = initialScrollYRef.current ?? window.scrollY;
             if (Math.abs(window.scrollY - initialScrollY) >= 24) {
-                activate();
+                activate(undefined, true);
             }
         };
-        const activateFromGesture = () => activate();
+        const activateFromGesture = () => activate(undefined, true);
 
         window.addEventListener('pointerdown', activateFromPointer, { passive: true });
         window.addEventListener('keydown', activateFromKeyboard);
@@ -332,16 +391,17 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
             window.removeEventListener('touchmove', activateFromGesture);
             window.removeEventListener('scroll', activateFromScroll);
         };
-    }, [FullShowcaseClient, activate, isActivating]);
+    }, [FullShowcaseClient, activate]);
 
     useEffect(() => {
-        if (!FullShowcaseClient) {
+        if (!FullShowcaseClient || !shouldRelayAnonymousDemandRef.current) {
             return;
         }
 
-        // The activating pointer/key/scroll happened before the full client
-        // mounted. Relay that demand after its listeners are attached so the
-        // anonymous feed session can be established during idle time.
+        // Only relay a genuine interaction that happened while the bootstrap
+        // owned the page. Idle/cache/auth handoffs may load the richer UI, but
+        // must not manufacture anonymous personalization demand.
+        shouldRelayAnonymousDemandRef.current = false;
         const handle = window.setTimeout(() => {
             window.dispatchEvent(new Event('showcase:demand'));
         }, 0);
@@ -377,11 +437,17 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
         return <FullShowcaseClient {...props} />;
     }
 
-    const firstItem = props.initialFeed.items[0] ?? null;
+    const bootstrapItems = props.initialFeed.items
+        .filter((item) => !isTextOnlyPost(item))
+        .slice(0, SHOWCASE_INITIAL_RENDER_COUNT);
+    const priorityMediaItemId = bootstrapItems.find((item) => (
+        getItemMediaItems(item).length > 0
+    ))?.id ?? null;
     const priorityPoster = props.initialPriorityPoster ?? null;
 
     return (
         <div
+            ref={bootstrapRootRef}
             className="ui-page ui-page-ambient min-h-screen py-5 font-[family-name:var(--font-geist-sans)] sm:py-7"
             aria-busy={isActivating || undefined}
         >
@@ -466,13 +532,17 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
                     </div>
                 </nav>
 
-                {firstItem ? (
+                {bootstrapItems.length > 0 ? (
                     <div className={SHOWCASE_FEED_GRID_CLASS}>
-                        <BootstrapCard
-                            item={firstItem}
-                            priorityPoster={priorityPoster}
-                            onOpen={activate}
-                        />
+                        {bootstrapItems.map((item) => (
+                            <BootstrapCard
+                                key={item.id}
+                                item={item}
+                                isPriority={item.id === priorityMediaItemId}
+                                priorityPoster={priorityPoster}
+                                onOpen={(postId) => activate(postId, true)}
+                            />
+                        ))}
                     </div>
                 ) : (
                     <div className="rounded-[28px] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-6 py-16 text-center text-[var(--ui-text-muted)]">

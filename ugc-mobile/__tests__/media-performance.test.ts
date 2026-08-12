@@ -24,9 +24,11 @@ describe('mobile media performance configuration', () => {
     });
   });
 
-  it('limits showcase pre-rendering and autoplay to one video', () => {
+  it('stages showcase cells ahead of the scroll while keeping autoplay at one video', () => {
     expect(HOME_RAIL_DRAW_DISTANCE).toBe(400);
-    expect(SHOWCASE_DRAW_DISTANCE).toBe(500);
+    // Three to four masonry rows, so a flick does not outrun the mounted cells.
+    expect(SHOWCASE_DRAW_DISTANCE).toBe(900);
+    // Draw distance must not widen autoplay: that stays viewability-capped.
     expect(SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS).toBe(1);
   });
 });

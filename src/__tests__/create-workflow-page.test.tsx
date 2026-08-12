@@ -388,8 +388,15 @@ describe('CreateWorkflowPage', () => {
 
   async function renderLoadedPage(options?: { initialImportShareId?: string | null }) {
     render(<CreateWorkflowPage initialImportShareId={options?.initialImportShareId ?? null} />);
-    await screen.findByDisplayValue('Workflow canvas');
-    await screen.findByTestId(`node-select-${canvasesById['canvas-1']?.graph.nodes[0]?.id}`);
+    // Full-suite runs can keep the mocked workflow bootstrap behind other
+    // worker-heavy tests for slightly longer than Testing Library's 1s
+    // default. This assertion is about the loaded state, not bootstrap speed.
+    await screen.findByDisplayValue('Workflow canvas', {}, { timeout: 5_000 });
+    await screen.findByTestId(
+      `node-select-${canvasesById['canvas-1']?.graph.nodes[0]?.id}`,
+      {},
+      { timeout: 5_000 },
+    );
   }
 
   function getWorkflowTitleInput() {

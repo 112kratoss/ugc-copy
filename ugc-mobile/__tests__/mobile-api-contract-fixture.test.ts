@@ -231,6 +231,16 @@ const extendedOperationCases: Array<{
       sourceSurface: 'showcase',
     }),
   },
+  {
+    key: 'recordShowcaseFeedEvents',
+    call: (api) => api.recordShowcaseFeedEvents([{
+      clientEventId: 'feed-event-batch-1',
+      postId: 'post-1',
+      eventType: 'impression',
+      sourceSurface: 'showcase',
+      occurredAt: '2026-08-12T00:00:00.000Z',
+    }], { accessToken: 'captured-token' }),
+  },
   { key: 'getCreatorProfile', call: (api) => api.getCreatorProfile('creator-one') },
   { key: 'reportPost', call: (api) => api.reportPost('post-1', { reason: 'unsafe_content' }) },
   {

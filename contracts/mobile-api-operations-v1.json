@@ -146,6 +146,11 @@
       "path": "/api/showcase/feed/events",
       "auth": "required"
     },
+    "recordShowcaseFeedEvents": {
+      "method": "POST",
+      "path": "/api/showcase/feed/events",
+      "auth": "optional"
+    },
     "getSavedMedia": {
       "method": "GET",
       "path": "/api/showcase/saved-media",

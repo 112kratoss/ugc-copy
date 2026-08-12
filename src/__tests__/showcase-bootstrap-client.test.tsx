@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ShowcaseBootstrapClient, {
   type ShowcaseBootstrapClientProps,
 } from '@/app/showcase/ShowcaseBootstrapClient';
-import type { ShowcaseFeedItem } from '@/lib/showcase';
+import { SHOWCASE_INITIAL_RENDER_COUNT, type ShowcaseFeedItem } from '@/lib/showcase';
 import {
   buildShowcaseClientCacheKey,
   clearShowcaseClientCacheForTests,
@@ -76,13 +76,19 @@ function createItem(overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFeedItem
 }
 
 function createProps(): ShowcaseBootstrapClientProps {
+  // One more item than the shell paints, so the prefix boundary is testable.
+  const trailingItems = Array.from({ length: SHOWCASE_INITIAL_RENDER_COUNT }, (_, index) => createItem({
+    id: `post-trailing-${index + 1}`,
+    title: `Trailing campaign ${index + 1}`,
+  }));
+
   return {
     initialFeed: {
-      items: [createItem(), createItem({ id: 'post-deferred', title: 'Deferred campaign' })],
+      items: [createItem(), ...trailingItems],
       pageInfo: {
         hasMore: true,
-        nextOffset: 2,
-        limit: 2,
+        nextOffset: 12,
+        limit: 12,
         offset: 0,
       },
     },
@@ -126,7 +132,7 @@ describe('ShowcaseBootstrapClient', () => {
     vi.unstubAllGlobals();
   });
 
-  it('keeps the full client unloaded while SSR-compatible links and the exact poster stay usable', async () => {
+  it('paints a full grid prefix with SSR-compatible links before the full client loads', async () => {
     render(<ShowcaseBootstrapClient {...createProps()} />);
 
     await act(async () => Promise.resolve());
@@ -143,13 +149,129 @@ describe('ShowcaseBootstrapClient', () => {
       'href',
       '/showcase?sort=recent'
     );
-    expect(screen.getByRole('img', { name: 'Priority campaign' })).toHaveAttribute(
-      'src',
-      'data:image/webp;base64,UklGRg=='
-    );
-    expect(screen.getByRole('img', { name: 'Priority campaign' }).parentElement)
-      .toHaveStyle({ aspectRatio: '4 / 5' });
-    expect(screen.queryByText('Deferred campaign')).not.toBeInTheDocument();
+
+    const priorityImage = screen.getByRole('img', { name: 'Priority campaign' });
+    expect(priorityImage).toHaveAttribute('src', 'data:image/webp;base64,UklGRg==');
+    expect(priorityImage).toHaveAttribute('loading', 'eager');
+    expect(priorityImage).toHaveAttribute('fetchpriority', 'high');
+    expect(priorityImage.parentElement).toHaveStyle({ aspectRatio: '4 / 5' });
+
+    // The shell fills the grid, but only the priority card attaches media.
+    const cards = document.querySelectorAll('[data-showcase-bootstrap-card="true"]');
+    expect(cards).toHaveLength(SHOWCASE_INITIAL_RENDER_COUNT);
+    expect(screen.queryByRole('img', { name: 'Trailing campaign 1' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('img')).toHaveLength(1);
+
+    // Items past the prefix wait for the interactive client.
+    expect(screen.queryByText(`Trailing campaign ${SHOWCASE_INITIAL_RENDER_COUNT}`)).not.toBeInTheDocument();
+  });
+
+  it('hands off during idle time without manufacturing anonymous personalization demand', async () => {
+    vi.useFakeTimers();
+    const demandListener = vi.fn();
+    window.addEventListener('showcase:demand', demandListener);
+    try {
+      render(<ShowcaseBootstrapClient {...createProps()} />);
+
+      expect(screen.queryByTestId('full-showcase-client')).not.toBeInTheDocument();
+
+      await act(async () => {
+        vi.advanceTimersByTime(1_200);
+        await Promise.resolve();
+      });
+      await act(async () => Promise.resolve());
+
+      expect(screen.getByTestId('full-showcase-client')).toBeInTheDocument();
+      expect(demandListener).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('showcase:demand', demandListener);
+      vi.useRealTimers();
+    }
+  });
+
+  it('relays genuine card demand after the interactive client mounts', async () => {
+    const demandListener = vi.fn();
+    window.addEventListener('showcase:demand', demandListener);
+    try {
+      render(<ShowcaseBootstrapClient {...createProps()} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open Priority campaign in viewer' }));
+
+      expect(await screen.findByTestId('full-showcase-client')).toBeInTheDocument();
+      await waitFor(() => expect(demandListener).toHaveBeenCalledTimes(1));
+    } finally {
+      window.removeEventListener('showcase:demand', demandListener);
+    }
+  });
+
+  it('filters feed-only text posts before taking the handoff prefix', () => {
+    const props = createProps();
+    props.initialFeed.items.unshift(createItem({
+      id: 'text-only-post',
+      title: 'Creator note',
+      category: 'text',
+      postFormat: 'text',
+      mediaUrl: null,
+      mediaKind: null,
+      mediaItems: [],
+    }));
+
+    render(<ShowcaseBootstrapClient {...props} />);
+
+    expect(screen.queryByText('Creator note')).not.toBeInTheDocument();
+    expect(document.querySelectorAll('[data-showcase-bootstrap-card="true"]'))
+      .toHaveLength(SHOWCASE_INITIAL_RENDER_COUNT);
+    expect(screen.getByText(`Trailing campaign ${SHOWCASE_INITIAL_RENDER_COUNT - 1}`))
+      .toBeInTheDocument();
+    expect(screen.queryByText(`Trailing campaign ${SHOWCASE_INITIAL_RENDER_COUNT}`))
+      .not.toBeInTheDocument();
+  });
+
+  it('prioritizes the first usable media instead of the first placeholder tile', () => {
+    const props = createProps();
+    props.initialFeed.items.unshift(createItem({
+      id: 'pending-media-post',
+      title: 'Pending media',
+      category: 'image',
+      postFormat: 'media',
+      mediaUrl: null,
+      mediaKind: null,
+      mediaItems: [],
+    }));
+
+    render(<ShowcaseBootstrapClient {...props} />);
+
+    const priorityImage = screen.getByRole('img', { name: 'Priority campaign' });
+    expect(priorityImage).toHaveAttribute('loading', 'eager');
+    expect(priorityImage).toHaveAttribute('fetchpriority', 'high');
+    expect(screen.getAllByRole('img')).toHaveLength(1);
+  });
+
+  it('does not replace the bootstrap while keyboard focus is inside it', async () => {
+    vi.useFakeTimers();
+    try {
+      render(<ShowcaseBootstrapClient {...createProps()} />);
+      const imagesLink = screen.getByRole('link', { name: 'Images' });
+      imagesLink.focus();
+
+      await act(async () => {
+        vi.advanceTimersByTime(1_200);
+        await Promise.resolve();
+      });
+
+      expect(imagesLink).toHaveFocus();
+      expect(screen.queryByTestId('full-showcase-client')).not.toBeInTheDocument();
+
+      imagesLink.blur();
+      await act(async () => {
+        vi.advanceTimersByTime(250);
+        await Promise.resolve();
+      });
+      await act(async () => Promise.resolve());
+      expect(screen.getByTestId('full-showcase-client')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('imports the full client on card activation and opens the selected post query', async () => {
@@ -162,7 +284,6 @@ describe('ShowcaseBootstrapClient', () => {
       expect(screen.getByTestId('full-showcase-client')).toBeInTheDocument();
     });
     expect(new URLSearchParams(window.location.search).get('post')).toBe('post-priority');
-    expect(fullClientModuleLoaded).toHaveBeenCalledTimes(1);
     expect(fullClientProps).toHaveBeenLastCalledWith(expect.objectContaining({
       initialFeed: props.initialFeed,
       initialPriorityPoster: props.initialPriorityPoster,

@@ -14,6 +14,7 @@ import {
   getFeedAnonymousKeyHash,
   parseShowcaseFeedEventBatchPayload,
   recordShowcaseFeedEvent,
+  recordShowcaseFeedEvents,
 } from '@/lib/showcase-feed-events-service';
 import {
   FEED_ANONYMOUS_COOKIE_MAX_AGE_SECONDS,
@@ -33,6 +34,7 @@ type ShowcaseFeedEventsRouteDependencies = {
   resolveFeedAnonymousIdentity?: typeof resolveFeedAnonymousIdentity;
   parseShowcaseFeedEventBatchPayload?: typeof parseShowcaseFeedEventBatchPayload;
   recordShowcaseFeedEvent?: typeof recordShowcaseFeedEvent;
+  recordShowcaseFeedEvents?: typeof recordShowcaseFeedEvents;
   logError?: typeof logBackendRouteError;
 };
 
@@ -47,6 +49,7 @@ function resolveDependencies(dependencies: ShowcaseFeedEventsRouteDependencies |
     parseShowcaseFeedEventBatchPayload:
       dependencies?.parseShowcaseFeedEventBatchPayload ?? parseShowcaseFeedEventBatchPayload,
     recordShowcaseFeedEvent: dependencies?.recordShowcaseFeedEvent ?? recordShowcaseFeedEvent,
+    recordShowcaseFeedEvents: dependencies?.recordShowcaseFeedEvents ?? recordShowcaseFeedEvents,
     logError: dependencies?.logError ?? logBackendRouteError,
   };
 }
@@ -116,39 +119,40 @@ async function handleShowcaseFeedEventPOST(
       return NextResponse.json({ error: 'Failed to check feed event limits.' }, { status: 500 });
     }
 
-    // Auth and the rate-limit write happen once above, whatever the batch size:
-    // that, rather than the inserts, is what a fully-watched reel was paying
-    // seven times over.
-    const results = [];
-    for (const payload of parsed.payloads) {
-      results.push(await dependencies.recordShowcaseFeedEvent({
+    if (!parsed.batched) {
+      const result = await dependencies.recordShowcaseFeedEvent({
         actorUserId,
         anonymousKeyHash,
-        payload,
+        payload: parsed.payloads[0],
         serviceClient,
-      }));
-    }
-
-    if (!parsed.batched) {
+      });
       // Answer a single-event request exactly as before. Mobile builds sending
       // one event per request stay in the wild for as long as their store train
       // takes, and they parse this body.
-      const [result] = results;
       return attachAnonymousFeedCookie(
         NextResponse.json(result.body, { status: result.ok ? 200 : result.status }),
         anonymousIdentity,
       );
     }
 
-    // A batch is telemetry a client has already dropped from its queue, so a
-    // rejected event is reported rather than retried and never fails the flush.
-    const recorded = results.filter((result) => result.ok).length;
+    // Auth, rate limiting and persistence each happen once for the entire
+    // batch. The RPC returns mixed outcomes after isolating poison entries with
+    // nested savepoints; transport/schema failures are retryable 500s and never
+    // fall back to the old serial path.
+    const result = await dependencies.recordShowcaseFeedEvents({
+      actorUserId,
+      anonymousKeyHash,
+      payloads: parsed.payloads,
+      serviceClient,
+    });
+    if (!result.ok) {
+      return attachAnonymousFeedCookie(
+        NextResponse.json(result.body, { status: result.status }),
+        anonymousIdentity,
+      );
+    }
     return attachAnonymousFeedCookie(
-      NextResponse.json({
-        success: true,
-        recorded,
-        rejected: parsed.payloads.length - recorded,
-      }),
+      NextResponse.json(result.body),
       anonymousIdentity,
     );
   } catch (error) {

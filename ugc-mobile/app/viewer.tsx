@@ -70,6 +70,11 @@ import {
   removeShowcaseFeedItemsFromInfiniteData,
   type ShowcaseFeedEventDetails,
 } from '@/lib/showcase-feed-events';
+import {
+  enqueueShowcaseFeedEvent,
+  flushShowcaseFeedEvents,
+  isBatchedShowcaseFeedEventType,
+} from '@/lib/feed-event-queue';
 import { getShowcasePlaybackUrl } from '@/lib/showcase-media';
 import {
   createShowcaseMediaProgressTracker,
@@ -231,8 +236,13 @@ export default function ImmersivePreviewViewerScreen() {
       algorithmVersion: item.recommendation?.algorithmVersion ?? algorithmVersion,
       sourceSurface: 'showcase-reel',
     }, details);
-    return api.recordShowcaseFeedEvent(request).then(() => undefined);
+    return isBatchedShowcaseFeedEventType(eventType)
+      ? enqueueShowcaseFeedEvent(request).then(() => undefined)
+      : api.recordShowcaseFeedEvent(request).then(() => undefined);
   }, [algorithmVersion, api, feedSessionId]);
+  useEffect(() => {
+    if (!isFocused) void flushShowcaseFeedEvents();
+  }, [isFocused]);
   const recordViewerFeedEvent = useCallback((
     item: ImmersivePreviewItem,
     eventType: ShowcaseFeedEventType,

@@ -11,10 +11,18 @@ import type { VisualMediaDescriptor } from '@/lib/media-descriptor';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
 
 export const SHOWCASE_PAGE_SIZE = 12;
-export const SHOWCASE_INITIAL_PAGE_SIZE = 2;
-// The priority media card fills the first mobile viewport. Keep hydration to
-// that card, then reveal the remaining bootstrap near the user's scroll.
-export const SHOWCASE_INITIAL_RENDER_COUNT = 1;
+// A full page in the bootstrap keeps the grid from sitting near-empty while
+// the client fills in. It matches SHOWCASE_PAGE_SIZE so every anonymous
+// surface shares one cached feed entry, but stays a separate knob in case the
+// bootstrap payload ever needs to shrink again.
+export const SHOWCASE_INITIAL_PAGE_SIZE = 12;
+// How many cards the pre-activation bootstrap shell paints, and therefore how
+// many the interactive client must already show when it takes over — dropping
+// back to one and ticking up would read as the grid emptying itself. Six fills
+// a desktop row and a half without hydrating the whole page at once. The shell
+// fetches only the priority poster; the remaining cards reserve stable space
+// until the interactive client takes over.
+export const SHOWCASE_INITIAL_RENDER_COUNT = 6;
 
 export interface ShowcasePriorityPosterData {
     postId: string;

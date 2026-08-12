@@ -15,6 +15,7 @@ const SHOWCASE_CLIENT_CACHE_VERSION = 'v2';
 const SHOWCASE_CLIENT_CACHE_STORAGE_PREFIX = `magicbooklet:showcase:${SHOWCASE_CLIENT_CACHE_VERSION}:`;
 const SHOWCASE_CLIENT_CACHE_TTL_MS = 10 * 60 * 1_000;
 const SHOWCASE_CLIENT_CACHE_MAX_ENTRIES = 8;
+export const SHOWCASE_SNAPSHOT_MAX_OFFSET_ITEMS = 36;
 
 /** Which paginated surface a snapshot belongs to. */
 export type ShowcaseClientCacheSurface = 'showcase' | 'home-feed';
@@ -139,8 +140,29 @@ export function writeShowcaseClientSnapshot(
   snapshot: Omit<ShowcaseClientSnapshot, 'cachedAt'>,
   now = Date.now()
 ): ShowcaseClientSnapshot {
+  const isPureOffsetSnapshot = snapshot.feed.pageInfo.nextCursor == null
+    && typeof snapshot.feed.pageInfo.nextOffset === 'number';
+  const boundedSnapshot = isPureOffsetSnapshot
+    && snapshot.feed.items.length > SHOWCASE_SNAPSHOT_MAX_OFFSET_ITEMS
+    ? {
+        ...snapshot,
+        feed: {
+          ...snapshot.feed,
+          items: snapshot.feed.items.slice(0, SHOWCASE_SNAPSHOT_MAX_OFFSET_ITEMS),
+          pageInfo: {
+            ...snapshot.feed.pageInfo,
+            hasMore: true,
+            nextOffset: SHOWCASE_SNAPSHOT_MAX_OFFSET_ITEMS,
+          },
+        },
+        renderedItemCount: Math.min(
+          snapshot.renderedItemCount,
+          SHOWCASE_SNAPSHOT_MAX_OFFSET_ITEMS
+        ),
+      }
+    : snapshot;
   const nextSnapshot: ShowcaseClientSnapshot = {
-    ...snapshot,
+    ...boundedSnapshot,
     cachedAt: now,
   };
 

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import FeedClient from '@/app/feed/FeedClient';
@@ -60,6 +60,7 @@ function page(
 }
 
 let intersect: (() => void) | null = null;
+let observerIntersections: Array<() => void> = [];
 
 function requestedUrls(fetchMock: ReturnType<typeof vi.fn>) {
     return fetchMock.mock.calls.map((call) => String(call[0]));
@@ -69,12 +70,15 @@ describe('FeedClient cursor pagination', () => {
     beforeEach(() => {
         clearShowcaseClientCacheForTests();
         intersect = null;
+        observerIntersections = [];
         vi.stubGlobal('IntersectionObserver', class {
             constructor(callback: IntersectionObserverCallback) {
-                intersect = () => callback(
+                const triggerIntersection = () => callback(
                     [{ isIntersecting: true } as IntersectionObserverEntry],
                     this as unknown as IntersectionObserver,
                 );
+                observerIntersections.push(triggerIntersection);
+                intersect = triggerIntersection;
             }
             observe() {}
             unobserve() {}
@@ -158,5 +162,48 @@ describe('FeedClient cursor pagination', () => {
         // The second page continues from the cursor the first page returned, not
         // from the one the server rendered with.
         expect(requestedUrls(fetchMock)[1]).toContain('cursor=rank-cursor-2');
+    });
+
+    it('cannot reuse the previous ranked cursor while replacing the lane', async () => {
+        let resolveRecentLane: (response: Response) => void = () => undefined;
+        const recentLane = new Promise<Response>((resolve) => {
+            resolveRecentLane = resolve;
+        });
+        const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url.includes('sort=recent') && url.includes('offset=0')) return recentLane;
+            return new Response(
+                JSON.stringify(page([item('wrong-continuation')], { nextOffset: null })),
+                { status: 200, headers: { 'Content-Type': 'application/json' } },
+            );
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        render(<FeedClient
+            initialFeed={page(
+                [item('post-1'), item('post-2')],
+                { nextOffset: 2, nextCursor: 'old-ranked-cursor' },
+            )}
+            initialChipId="for-you"
+        />);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Recent' }));
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+        // A queued observer notification from the lane being left must not
+        // interrupt the replacement request, even if it arrives before React
+        // finishes disconnecting that observer.
+        act(() => {
+            for (const triggerIntersection of observerIntersections) triggerIntersection();
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(requestedUrls(fetchMock)[0]).not.toContain('old-ranked-cursor');
+
+        resolveRecentLane(new Response(
+            JSON.stringify(page([item('recent-post')], { nextOffset: null })),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ));
+        expect(await screen.findByText('card:recent-post')).toBeInTheDocument();
+        expect(screen.queryByText('card:wrong-continuation')).not.toBeInTheDocument();
     });
 });

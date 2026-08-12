@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseClient from '@/app/showcase/ShowcaseClient';
 import {
-  SHOWCASE_INITIAL_PAGE_SIZE,
+  SHOWCASE_INITIAL_RENDER_COUNT,
+  SHOWCASE_PAGE_SIZE,
   type ShowcaseFeedItem,
   type ShowcaseFeedPage,
 } from '@/lib/showcase';
@@ -248,7 +249,7 @@ describe('ShowcaseClient save actions', () => {
     });
   });
 
-  it('uses a poster-only anonymous shell for the single critical visual card and opens the reel', async () => {
+  it('gives anonymous viewers the same complete card the bootstrap shell handed over', async () => {
     authState.session = null;
     authState.user = null;
     const items = [
@@ -277,22 +278,19 @@ describe('ShowcaseClient save actions', () => {
       />
     );
 
-    expect(container.querySelector('[data-showcase-lightweight-card="true"]')).toBeInTheDocument();
-    expect(screen.getByRole('img', { name: 'Campaign Frame' })).toHaveAttribute(
-      'src',
-      'data:image/webp;base64,UklGRg=='
-    );
-    expect(screen.getByText('Creator Name')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /save campaign frame/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /more actions for campaign frame/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Share' })).not.toBeInTheDocument();
+    // No intermediate poster-only card: the static bootstrap shell already
+    // played that role, so upgrading through a second stripped-down card
+    // would only add another visible mutation.
+    expect(container.querySelector('[data-showcase-lightweight-card="true"]')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Creator Name')).toHaveLength(items.length);
+    expect(screen.getByRole('button', { name: /save campaign frame\. 4 saves/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /more actions for campaign frame/i })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /open campaign frame in viewer/i }));
+    fireEvent.click(screen.getByRole('img', { name: 'Campaign Frame' }));
 
     await waitFor(() => {
       expect(new URLSearchParams(window.location.search).get('post')).toBe('post-1');
     });
-    expect(container.querySelector('[data-showcase-lightweight-card="true"]')).not.toBeInTheDocument();
     expect(await screen.findByRole('button', { name: /showcase/i })).toBeInTheDocument();
   });
 
@@ -305,78 +303,45 @@ describe('ShowcaseClient save actions', () => {
     expect(container.querySelector('[data-showcase-lightweight-card="true"]')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /save campaign frame\. 4 saves/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /more actions for campaign frame/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Share' })).toBeInTheDocument();
-  });
-
-  it('restores the complete anonymous card when deferred rendering begins', async () => {
-    authState.session = null;
-    authState.user = null;
-    const { container } = renderShowcase([
-      createShowcaseItem(),
-      createShowcaseItem({ id: 'post-2', generationId: 'gen-2', title: 'Deferred Campaign' }),
-    ]);
-
-    expect(container.querySelector('[data-showcase-lightweight-card="true"]')).toBeInTheDocument();
-    const deferredObserver = intersectionObservers.find((observer) => (
-      observer.observedTargets.some((target) => (
-        target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
-      ))
-    ));
-
-    act(() => {
-      deferredObserver?.trigger(true);
-    });
-
-    await waitFor(() => {
-      expect(container.querySelector('[data-showcase-lightweight-card="true"]')).not.toBeInTheDocument();
-    });
-    expect(screen.getByRole('button', { name: /save campaign frame\. 4 saves/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /more actions for campaign frame/i })).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Share' })).toHaveLength(2);
   });
 
-  it('hydrates only the priority card and reveals one deferred card per sentinel approach', async () => {
-    const items = Array.from({ length: 5 }, (_, index) => createShowcaseItem({
+  it('takes over the bootstrap prefix, then fills the rest one card per tick without scrolling', () => {
+    vi.useFakeTimers();
+    const items = Array.from({ length: SHOWCASE_INITIAL_RENDER_COUNT + 3 }, (_, index) => createShowcaseItem({
       id: `post-${index + 1}`,
       generationId: `gen-${index + 1}`,
       title: `Campaign ${index + 1}`,
       mediaUrl: `https://example.com/campaign-${index + 1}.jpg`,
     }));
+    const firstDeferred = SHOWCASE_INITIAL_RENDER_COUNT + 1;
 
     renderShowcase(items);
 
-    expect(screen.getByText('Campaign 1')).toBeInTheDocument();
-    expect(screen.queryByText('Campaign 2')).not.toBeInTheDocument();
-
-    const deferredObserver = intersectionObservers.find((observer) => (
-      observer.observedTargets.some((target) => (
-        target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
-      ))
-    ));
-    expect(deferredObserver?.rootMargin).toBe('200px 0px');
+    // The client mounts showing exactly what the bootstrap shell painted, so
+    // the grid never shrinks at handoff.
+    expect(screen.getByText(`Campaign ${SHOWCASE_INITIAL_RENDER_COUNT}`)).toBeInTheDocument();
+    expect(screen.queryByText(`Campaign ${firstDeferred}`)).not.toBeInTheDocument();
 
     act(() => {
-      deferredObserver?.trigger(true);
+      vi.advanceTimersByTime(159);
     });
-    expect(await screen.findByText('Campaign 2')).toBeInTheDocument();
-    expect(screen.queryByText('Campaign 3')).not.toBeInTheDocument();
-
-    // Repeated intersecting callbacks for the same boundary entry must not
-    // restart the old immediate reveal chain.
-    act(() => {
-      deferredObserver?.trigger(true);
-    });
-    expect(screen.queryByText('Campaign 3')).not.toBeInTheDocument();
+    expect(screen.queryByText(`Campaign ${firstDeferred}`)).not.toBeInTheDocument();
 
     act(() => {
-      deferredObserver?.trigger(false);
-      deferredObserver?.trigger(true);
+      vi.advanceTimersByTime(1);
     });
-    expect(await screen.findByText('Campaign 3')).toBeInTheDocument();
-    expect(screen.queryByText('Campaign 4')).not.toBeInTheDocument();
+    expect(screen.getByText(`Campaign ${firstDeferred}`)).toBeInTheDocument();
+    expect(screen.queryByText(`Campaign ${firstDeferred + 1}`)).not.toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(160 * 2);
+    });
+    expect(screen.getByText(`Campaign ${items.length}`)).toBeInTheDocument();
   });
 
-  it('reveals a complete desktop column row so the sentinel cannot stall in a partial row', async () => {
+  it('reveals a complete desktop column row per tick so wide grids fill in a few frames', () => {
+    vi.useFakeTimers();
     vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
       matches: query === '(min-width: 1280px)',
       media: query,
@@ -387,7 +352,7 @@ describe('ShowcaseClient save actions', () => {
       removeEventListener: vi.fn(),
       dispatchEvent: vi.fn(),
     })));
-    const items = Array.from({ length: 6 }, (_, index) => createShowcaseItem({
+    const items = Array.from({ length: SHOWCASE_INITIAL_RENDER_COUNT + 5 }, (_, index) => createShowcaseItem({
       id: `desktop-post-${index + 1}`,
       generationId: `desktop-gen-${index + 1}`,
       title: `Desktop Campaign ${index + 1}`,
@@ -396,65 +361,23 @@ describe('ShowcaseClient save actions', () => {
 
     renderShowcase(items);
 
-    expect(screen.getByText('Desktop Campaign 1')).toBeInTheDocument();
-    expect(screen.queryByText('Desktop Campaign 2')).not.toBeInTheDocument();
+    expect(screen.getByText(`Desktop Campaign ${SHOWCASE_INITIAL_RENDER_COUNT}`)).toBeInTheDocument();
+    expect(screen.queryByText(`Desktop Campaign ${SHOWCASE_INITIAL_RENDER_COUNT + 1}`)).not.toBeInTheDocument();
 
-    const deferredObserver = intersectionObservers.find((observer) => (
-      observer.observedTargets.some((target) => (
-        target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
-      ))
-    ));
+    // One xl row is four columns wide.
     act(() => {
-      deferredObserver?.trigger(true);
+      vi.advanceTimersByTime(160);
     });
-
-    expect(await screen.findByText('Desktop Campaign 5')).toBeInTheDocument();
-    expect(screen.queryByText('Desktop Campaign 6')).not.toBeInTheDocument();
+    expect(screen.getByText(`Desktop Campaign ${SHOWCASE_INITIAL_RENDER_COUNT + 4}`)).toBeInTheDocument();
+    expect(screen.queryByText(`Desktop Campaign ${SHOWCASE_INITIAL_RENDER_COUNT + 5}`)).not.toBeInTheDocument();
 
     act(() => {
-      deferredObserver?.trigger(false);
-      deferredObserver?.trigger(true);
+      vi.advanceTimersByTime(160);
     });
-    expect(await screen.findByText('Desktop Campaign 6')).toBeInTheDocument();
+    expect(screen.getByText(`Desktop Campaign ${SHOWCASE_INITIAL_RENDER_COUNT + 5}`)).toBeInTheDocument();
   });
 
-  it('keeps startup quiet for five seconds and reveals at a long fallback cadence', () => {
-    vi.useFakeTimers();
-    vi.stubGlobal('IntersectionObserver', undefined);
-    const items = Array.from({ length: 3 }, (_, index) => createShowcaseItem({
-      id: `fallback-post-${index + 1}`,
-      generationId: `fallback-gen-${index + 1}`,
-      title: `Fallback Campaign ${index + 1}`,
-    }));
-
-    renderShowcase(items);
-
-    expect(screen.getByText('Fallback Campaign 1')).toBeInTheDocument();
-    expect(screen.queryByText('Fallback Campaign 2')).not.toBeInTheDocument();
-
-    act(() => {
-      vi.advanceTimersByTime(5_000);
-    });
-    expect(screen.queryByText('Fallback Campaign 2')).not.toBeInTheDocument();
-
-    act(() => {
-      vi.advanceTimersByTime(3_000);
-    });
-    expect(screen.getByText('Fallback Campaign 2')).toBeInTheDocument();
-    expect(screen.queryByText('Fallback Campaign 3')).not.toBeInTheDocument();
-
-    act(() => {
-      vi.advanceTimersByTime(7_999);
-    });
-    expect(screen.queryByText('Fallback Campaign 3')).not.toBeInTheDocument();
-
-    act(() => {
-      vi.advanceTimersByTime(1);
-    });
-    expect(screen.getByText('Fallback Campaign 3')).toBeInTheDocument();
-  });
-
-  it('establishes an anonymous feed session after demand and idle without hydrating hidden cards', () => {
+  it('establishes an anonymous feed session only after demand and an idle window', () => {
     vi.useFakeTimers();
     authState.session = null;
     authState.user = null;
@@ -493,12 +416,24 @@ describe('ShowcaseClient save actions', () => {
       />
     );
 
+    const drainIdleCallbacks = () => act(() => {
+      // Other idle work (the debounced restore-cache write) shares this queue,
+      // so drain it rather than counting entries.
+      while (idleCallbacks.length > 0) {
+        idleCallbacks.shift()?.({ didTimeout: false, timeRemaining: () => 50 });
+      }
+    });
+
     act(() => {
       vi.advanceTimersByTime(7_999);
     });
+    // Card hydration no longer waits for demand — the reveal ticks fill the
+    // bootstrap — but the anonymous feed session must not start on its own.
     expect(screen.getByText('Anonymous Campaign 1')).toBeInTheDocument();
-    expect(screen.queryByText('Anonymous Campaign 2')).not.toBeInTheDocument();
-    expect(idleCallbacks).toHaveLength(0);
+    expect(screen.getByText('Anonymous Campaign 5')).toBeInTheDocument();
+
+    // Idle alone must not establish the session: only real demand may.
+    drainIdleCallbacks();
     expect(fetchMock).not.toHaveBeenCalledWith(
       expect.stringMatching(/^\/api\/showcase\/feed\?/),
       expect.anything()
@@ -506,21 +441,15 @@ describe('ShowcaseClient save actions', () => {
 
     fireEvent.pointerDown(window);
 
-    expect(idleCallbacks).toHaveLength(1);
     expect(fetchMock).not.toHaveBeenCalledWith(
       expect.stringMatching(/^\/api\/showcase\/feed\?/),
       expect.anything()
     );
 
-    act(() => {
-      idleCallbacks.shift()?.({
-        didTimeout: false,
-        timeRemaining: () => 50,
-      });
-    });
+    drainIdleCallbacks();
 
     expect(fetchMock).toHaveBeenCalledWith(
-      `/api/showcase/feed?limit=${SHOWCASE_INITIAL_PAGE_SIZE}`,
+      `/api/showcase/feed?limit=${SHOWCASE_PAGE_SIZE}`,
       expect.objectContaining({
       headers: undefined,
       })
@@ -738,15 +667,6 @@ describe('ShowcaseClient save actions', () => {
       }),
     ]);
 
-    const deferredObserver = intersectionObservers.find((observer) => (
-      observer.observedTargets.some((target) => (
-        target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
-      ))
-    ));
-    act(() => {
-      deferredObserver?.trigger(true);
-    });
-
     expect(await screen.findByRole('img', { name: 'First visual frame' }))
       .toHaveAttribute('fetchpriority', 'high');
   });
@@ -926,19 +846,7 @@ describe('ShowcaseClient save actions', () => {
     });
     expect(feedFetch).toHaveBeenCalledWith('/api/showcase/feed?limit=12&offset=2&sort=recent');
 
-    let deferredObserver: (typeof intersectionObservers)[number] | undefined;
-    await waitFor(() => {
-      deferredObserver = intersectionObservers.findLast((observer) => (
-        observer.observedTargets.some((target) => (
-          target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
-        ))
-      ));
-      expect(deferredObserver).toBeDefined();
-    });
-    act(() => {
-      deferredObserver?.trigger(true);
-    });
-
+    // Appended pages ride the same reveal ticks — no scrolling required.
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Second Campaign Frame' })).toBeInTheDocument();
     });
@@ -1007,18 +915,27 @@ describe('ShowcaseClient save actions', () => {
     await waitFor(() => {
       expect(feedFetch).toHaveBeenCalledTimes(1);
     });
+    const loadMoreSkeleton = document.querySelector('[data-showcase-load-more-skeleton="true"]');
+    expect(loadMoreSkeleton).toHaveAttribute('aria-hidden', 'true');
+    expect(loadMoreSkeleton?.children).toHaveLength(1);
 
-    resolveFeed({
-      ok: true,
-      json: async () => ({
-        items: [],
-        pageInfo: {
-          hasMore: false,
-          nextOffset: null,
-          limit: 12,
-          offset: 12,
-        },
-      }),
+    await act(async () => {
+      resolveFeed({
+        ok: true,
+        json: async () => ({
+          items: [],
+          pageInfo: {
+            hasMore: false,
+            nextOffset: null,
+            limit: 12,
+            offset: 12,
+          },
+        }),
+      });
+    });
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-showcase-load-more-skeleton="true"]')).toBeNull();
     });
   });
 
@@ -1118,21 +1035,6 @@ describe('ShowcaseClient save actions', () => {
       }));
     });
     expect(screen.getByText('Server fallback')).toBeInTheDocument();
-    expect(screen.queryByText('Ranked for you')).not.toBeInTheDocument();
-
-    let initialDeferredObserver: (typeof intersectionObservers)[number] | undefined;
-    await waitFor(() => {
-      initialDeferredObserver = intersectionObservers.findLast((observer) => (
-        observer.observedTargets.some((target) => (
-          target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
-          && target.isConnected
-        ))
-      ));
-      expect(initialDeferredObserver).toBeDefined();
-    });
-    act(() => {
-      initialDeferredObserver?.trigger(true);
-    });
 
     expect(await screen.findByText('Ranked for you')).toBeInTheDocument();
     expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual([
@@ -1156,20 +1058,6 @@ describe('ShowcaseClient save actions', () => {
 
     await waitFor(() => {
       expect(feedFetch).toHaveBeenCalledWith(expect.stringContaining('cursor=cursor-1'));
-    });
-
-    let deferredObserver: (typeof intersectionObservers)[number] | undefined;
-    await waitFor(() => {
-      deferredObserver = intersectionObservers.findLast((observer) => (
-        observer.observedTargets.some((target) => (
-          target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
-          && target.isConnected
-        ))
-      ));
-      expect(deferredObserver).toBeDefined();
-    });
-    act(() => {
-      deferredObserver?.trigger(true);
     });
 
     expect(await screen.findByText('More for you')).toBeInTheDocument();
@@ -1209,7 +1097,7 @@ describe('ShowcaseClient save actions', () => {
               hasMore: false,
               nextOffset: null,
               nextCursor: null,
-              limit: SHOWCASE_INITIAL_PAGE_SIZE,
+              limit: SHOWCASE_PAGE_SIZE,
               offset: 0,
             },
           }),
@@ -1249,29 +1137,22 @@ describe('ShowcaseClient save actions', () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByText('Server fallback')).toBeInTheDocument();
-    expect(screen.queryByText('Anonymous discovery')).not.toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith(
-      `/api/showcase/feed?limit=${SHOWCASE_INITIAL_PAGE_SIZE}`,
+      `/api/showcase/feed?limit=${SHOWCASE_PAGE_SIZE}`,
       expect.objectContaining({
         headers: undefined,
       })
     );
 
-    const deferredObserver = intersectionObservers.findLast((observer) => (
-      observer.observedTargets.some((target) => (
-        target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
-        && target.isConnected
-      ))
-    ));
-    expect(deferredObserver).toBeDefined();
-    act(() => {
-      deferredObserver?.trigger(true);
-    });
-    expect(screen.getByText('Anonymous discovery')).toBeInTheDocument();
+    // The card already on screen keeps its slot; the ranked result lands
+    // behind it rather than replacing what the viewer is looking at.
+    expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual([
+      'Server fallback',
+      'Anonymous discovery',
+    ]);
   });
 
-  it('retries a transient anonymous feed refresh without hydrating the fallback backlog', async () => {
+  it('retries a transient anonymous feed refresh and keeps visible cards in place', async () => {
     vi.useFakeTimers();
     vi.stubGlobal('requestIdleCallback', vi.fn((callback: IdleRequestCallback) => {
       callback({
@@ -1308,7 +1189,7 @@ describe('ShowcaseClient save actions', () => {
             hasMore: false,
             nextOffset: null,
             nextCursor: null,
-            limit: SHOWCASE_INITIAL_PAGE_SIZE,
+            limit: SHOWCASE_PAGE_SIZE,
             offset: 0,
           },
         }),
@@ -1351,7 +1232,7 @@ describe('ShowcaseClient save actions', () => {
     });
     expect(feedFetch).toHaveBeenCalledTimes(1);
     expect(screen.getByText('Retry Fallback 1')).toBeInTheDocument();
-    expect(screen.queryByText('Retry Fallback 2')).not.toBeInTheDocument();
+    expect(screen.getByText('Retry Fallback 2')).toBeInTheDocument();
 
     await act(async () => {
       vi.advanceTimersByTime(2_000);
@@ -1359,22 +1240,14 @@ describe('ShowcaseClient save actions', () => {
       await Promise.resolve();
     });
 
+    // Both fallback cards keep their slots across the retry, and the
+    // recovered ranking lands behind them.
     expect(feedFetch).toHaveBeenCalledTimes(2);
-    expect(screen.getByText('Retry Fallback 1')).toBeInTheDocument();
-    expect(screen.queryByText('Recovered discovery')).not.toBeInTheDocument();
-    expect(screen.queryByText('Retry Fallback 2')).not.toBeInTheDocument();
-
-    const deferredObserver = intersectionObservers.findLast((observer) => (
-      observer.observedTargets.some((target) => (
-        target.getAttribute('data-showcase-deferred-reveal-sentinel') === 'true'
-        && target.isConnected
-      ))
-    ));
-    expect(deferredObserver).toBeDefined();
-    act(() => {
-      deferredObserver?.trigger(true);
-    });
-    expect(screen.getByText('Recovered discovery')).toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual([
+      'Retry Fallback 1',
+      'Retry Fallback 2',
+      'Recovered discovery',
+    ]);
   });
 
   it('optimistically removes a post after Not interested and records ranked feedback', async () => {

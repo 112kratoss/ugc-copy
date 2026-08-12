@@ -648,8 +648,20 @@ export async function resolvePostRowsToFeedItems(
       });
       const generationInfo = post.generation_id ? generationInfoMap.get(post.generation_id) : null;
       if (generationInfo?.previewUrl && mediaItems[0] && !mediaItems[0].previewUrl) {
+        const previewUrl = generationInfo.previewUrl;
         mediaItems = [
-          { ...mediaItems[0], previewUrl: generationInfo.previewUrl },
+          {
+            ...mediaItems[0],
+            previewUrl,
+            previewStatus: 'ready',
+            gridReady: true,
+            preview: {
+              ...mediaItems[0].preview,
+              previewUrl,
+              status: 'ready',
+              gridReady: true,
+            },
+          },
           ...mediaItems.slice(1),
         ];
       }

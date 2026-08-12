@@ -327,6 +327,59 @@ describe('mobile api client caching', () => {
     expect((init.headers as Headers).get('x-magicbooklet-installation-id')).toBe(installationId);
   });
 
+  it('posts a feed-event batch with only the explicitly captured identity token', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ success: true, recorded: 1, rejected: 0 }));
+    const getAccessToken = vi.fn(async () => 'current-token-that-must-not-be-read');
+    const installationId = `fid_${'e'.repeat(64)}`;
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken,
+      getInstallationId: async () => installationId,
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    const events = [{
+      clientEventId: 'showcase:batch-1',
+      deliveryId: 'delivery-1',
+      postId: 'post-1',
+      eventType: 'impression' as const,
+      sourceSurface: 'showcase' as const,
+      occurredAt: '2026-08-12T00:00:00.000Z',
+    }];
+
+    await api.recordShowcaseFeedEvents(events, { accessToken: 'captured-token' });
+
+    const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect(String(url)).toBe('https://magicbooklet.test/api/showcase/feed/events');
+    expect(JSON.parse(String(init.body))).toEqual({ events });
+    expect((init.headers as Headers).get('Authorization')).toBe('Bearer captured-token');
+    expect((init.headers as Headers).get('x-magicbooklet-installation-id')).toBe(installationId);
+    expect(getAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('sends a signed-out feed-event batch without borrowing a current token', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ success: true, recorded: 1, rejected: 0 }));
+    const getAccessToken = vi.fn(async () => 'must-not-be-used');
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken,
+      getInstallationId: async () => `fid_${'f'.repeat(64)}`,
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.recordShowcaseFeedEvents([{
+      clientEventId: 'showcase:guest-batch-1',
+      deliveryId: 'delivery-guest-1',
+      postId: 'post-1',
+      eventType: 'open',
+      sourceSurface: 'showcase',
+      occurredAt: '2026-08-12T00:00:00.000Z',
+    }], { accessToken: null });
+
+    const [, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    expect((init.headers as Headers).get('Authorization')).toBeNull();
+    expect(getAccessToken).not.toHaveBeenCalled();
+  });
+
   it('adds the same persistent installation identity to ranked feed pages but not unrelated APIs', async () => {
     const installationId = `fid_${'d'.repeat(64)}`;
     const getInstallationId = vi.fn(async () => installationId);

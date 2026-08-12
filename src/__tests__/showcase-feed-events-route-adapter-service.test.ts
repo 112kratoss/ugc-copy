@@ -2,7 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { postShowcaseFeedEventRouteResponse } from '@/lib/showcase-feed-events-route-adapter-service';
-import { parseShowcaseFeedEventPayload } from '@/lib/showcase-feed-events-service';
+import {
+  parseShowcaseFeedEventPayload,
+  type ShowcaseFeedEventBatchRecordResult,
+  type ShowcaseFeedEventPayload,
+} from '@/lib/showcase-feed-events-service';
+
+const POST_ID = '72000000-0000-4000-8000-000000000001';
 
 function createUserClient(userId: string | null, error: Error | null = null) {
   return {
@@ -31,7 +37,7 @@ describe('showcase feed events route adapter', () => {
       },
       body: JSON.stringify({
         clientEventId: 'event-1',
-        postId: 'post-1',
+        postId: POST_ID,
         eventType: 'impression',
         sourceSurface: 'showcase',
         position: 0,
@@ -61,7 +67,7 @@ describe('showcase feed events route adapter', () => {
     expect(recordShowcaseFeedEvent).toHaveBeenCalledWith(expect.objectContaining({
       actorUserId: 'viewer-1',
       anonymousKeyHash: 'anon-hash',
-      payload: expect.objectContaining({ eventType: 'impression', postId: 'post-1', position: 0 }),
+      payload: expect.objectContaining({ eventType: 'impression', postId: POST_ID, position: 0 }),
     }));
   });
 
@@ -80,7 +86,7 @@ describe('showcase feed events route adapter', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           clientEventId: 'event-anon-1',
-          postId: 'post-1',
+          postId: POST_ID,
           eventType: 'open',
           sourceSurface: 'showcase-reel',
         }),
@@ -122,7 +128,7 @@ describe('showcase feed events route adapter', () => {
         },
         body: JSON.stringify({
           clientEventId: 'event-expired-1',
-          postId: 'post-1',
+          postId: POST_ID,
           eventType: 'not_interested',
           sourceSurface: 'showcase',
         }),
@@ -146,24 +152,50 @@ describe('showcase feed events route adapter', () => {
   it('rejects unsupported event types and oversized or malformed optional values', () => {
     expect(parseShowcaseFeedEventPayload({
       clientEventId: 'event-1',
-      postId: 'post-1',
+      postId: POST_ID,
       eventType: 'like',
       sourceSurface: 'showcase',
     })).toMatchObject({ ok: false, status: 400 });
 
     expect(parseShowcaseFeedEventPayload({
       clientEventId: 'event-2',
-      postId: 'post-1',
+      postId: POST_ID,
       eventType: 'dwell',
       sourceSurface: 'showcase',
       durationMs: -1,
     })).toMatchObject({ ok: false, status: 400 });
   });
 
+  it('accepts only database-safe UUID and bigint identifier shapes', () => {
+    expect(parseShowcaseFeedEventPayload({
+      clientEventId: 'event-valid-identifiers',
+      feedSessionId: '73000000-0000-4000-8000-000000000001',
+      deliveryId: '9223372036854775807',
+      postId: POST_ID,
+      eventType: 'impression',
+      sourceSurface: 'showcase',
+    })).toMatchObject({ ok: true });
+
+    for (const identifiers of [
+      { postId: 'post-not-a-uuid' },
+      { feedSessionId: 'session-not-a-uuid' },
+      { deliveryId: 'delivery-not-a-bigint' },
+      { deliveryId: '9223372036854775808' },
+    ]) {
+      expect(parseShowcaseFeedEventPayload({
+        clientEventId: 'event-invalid-identifiers',
+        postId: POST_ID,
+        eventType: 'impression',
+        sourceSurface: 'showcase',
+        ...identifiers,
+      })).toMatchObject({ ok: false, status: 400 });
+    }
+  });
+
   function batchEvent(index: number) {
     return {
       clientEventId: `event-${index}`,
-      postId: 'post-1',
+      postId: POST_ID,
       eventType: 'impression',
       sourceSurface: 'showcase',
       position: index,
@@ -173,6 +205,11 @@ describe('showcase feed events route adapter', () => {
   // Generic so each mock's precise call signature survives into the dependency
   // object; a widened vi.fn type stops matching the adapter's contract.
   function batchDependencies<TRecord, TLimit>(recordShowcaseFeedEvent: TRecord, enforceBackendRateLimit: TLimit) {
+    const recordShowcaseFeedEvents = vi.fn(async ({ payloads }: { payloads: ShowcaseFeedEventPayload[] }) => ({
+      ok: true as const,
+      body: { success: true as const, recorded: payloads.length, rejected: 0 },
+      results: payloads.map(() => ({ ok: true as const, body: { success: true as const } })),
+    }));
     return {
       createUserClient: vi.fn(() => createUserClient('viewer-1')),
       createServiceClient: vi.fn(() => ({}) as SupabaseClient),
@@ -180,6 +217,7 @@ describe('showcase feed events route adapter', () => {
       getFeedAnonymousKeyHash: vi.fn(() => 'anon-hash'),
       getFeedNetworkKeyHash: vi.fn(() => 'network-hash'),
       recordShowcaseFeedEvent,
+      recordShowcaseFeedEvents,
     };
   }
 
@@ -208,7 +246,16 @@ describe('showcase feed events route adapter', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ success: true, recorded: 7, rejected: 0 });
-    expect(recordShowcaseFeedEvent).toHaveBeenCalledTimes(7);
+    expect(recordShowcaseFeedEvent).not.toHaveBeenCalled();
+    expect(dependencies.recordShowcaseFeedEvents).toHaveBeenCalledTimes(1);
+    expect(dependencies.recordShowcaseFeedEvents).toHaveBeenCalledWith(expect.objectContaining({
+      actorUserId: 'viewer-1',
+      anonymousKeyHash: 'anon-hash',
+      payloads: expect.arrayContaining([
+        expect.objectContaining({ clientEventId: 'event-0' }),
+        expect.objectContaining({ clientEventId: 'event-6' }),
+      ]),
+    }));
     expect(enforceBackendRateLimit).toHaveBeenCalledTimes(1);
     expect(dependencies.createUserClient).toHaveBeenCalledTimes(1);
   });
@@ -246,7 +293,7 @@ describe('showcase feed events route adapter', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ success: true, recorded: 2, rejected: 0 });
-    expect(recordShowcaseFeedEvent).toHaveBeenCalledTimes(2);
+    expect(recordShowcaseFeedEvent).not.toHaveBeenCalled();
   });
 
   it('rejects an oversized batch instead of accepting unbounded work per request', async () => {
@@ -263,6 +310,52 @@ describe('showcase feed events route adapter', () => {
     expect(response.status).toBe(400);
     // Rejected before auth or any privileged work.
     expect(enforceBackendRateLimit).not.toHaveBeenCalled();
+    expect(recordShowcaseFeedEvent).not.toHaveBeenCalled();
+  });
+
+  it('returns mixed RPC outcomes as a successful batch flush', async () => {
+    const recordShowcaseFeedEvent = vi.fn();
+    const enforceBackendRateLimit = vi.fn(async () => ({
+      allowed: true, limit: 300, remaining: 299, retryAfterSeconds: 0, resetAt: new Date().toISOString(),
+    }));
+    const dependencies = batchDependencies(recordShowcaseFeedEvent, enforceBackendRateLimit);
+    const recordShowcaseFeedEvents = vi.fn(async (): Promise<ShowcaseFeedEventBatchRecordResult> => ({
+      ok: true,
+      body: { success: true, recorded: 1, rejected: 1 },
+      results: [
+        { ok: true, body: { success: true } },
+        { ok: false, status: 409, body: { error: 'Feed event ID is already used by a different event.' } },
+      ],
+    }));
+
+    const response = await postShowcaseFeedEventRouteResponse({
+      request: batchRequest({ events: [batchEvent(0), batchEvent(1)] }),
+      dependencies: { ...dependencies, recordShowcaseFeedEvents },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ success: true, recorded: 1, rejected: 1 });
+  });
+
+  it('returns 500 without a serial fallback when the batch RPC fails', async () => {
+    const recordShowcaseFeedEvent = vi.fn();
+    const enforceBackendRateLimit = vi.fn(async () => ({
+      allowed: true, limit: 300, remaining: 299, retryAfterSeconds: 0, resetAt: new Date().toISOString(),
+    }));
+    const dependencies = batchDependencies(recordShowcaseFeedEvent, enforceBackendRateLimit);
+    const recordShowcaseFeedEvents = vi.fn(async (): Promise<ShowcaseFeedEventBatchRecordResult> => ({
+      ok: false,
+      status: 500,
+      body: { error: 'Failed to record feed event batch.' },
+    }));
+
+    const response = await postShowcaseFeedEventRouteResponse({
+      request: batchRequest({ events: [batchEvent(0), batchEvent(1)] }),
+      dependencies: { ...dependencies, recordShowcaseFeedEvents },
+    });
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: 'Failed to record feed event batch.' });
     expect(recordShowcaseFeedEvent).not.toHaveBeenCalled();
   });
 });

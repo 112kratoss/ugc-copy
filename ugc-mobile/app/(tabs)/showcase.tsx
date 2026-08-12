@@ -53,6 +53,11 @@ import {
   type ShowcaseFeedEventDetails,
 } from '@/lib/showcase-feed-events';
 import {
+  enqueueShowcaseFeedEvent,
+  flushShowcaseFeedEvents,
+  isBatchedShowcaseFeedEventType,
+} from '@/lib/feed-event-queue';
+import {
   buildShowcaseMasonry,
   getShowcaseGridLayout,
   getShowcaseMediaHeight,
@@ -171,8 +176,15 @@ export default function ShowcaseScreen() {
       algorithmVersion: item.recommendation?.algorithmVersion ?? runtime.algorithmVersion,
       sourceSurface: 'showcase',
     }, details);
-    void runtime.api.recordShowcaseFeedEvent(request).catch(() => null);
+    if (isBatchedShowcaseFeedEventType(eventType)) {
+      void enqueueShowcaseFeedEvent(request);
+    } else {
+      void runtime.api.recordShowcaseFeedEvent(request).catch(() => null);
+    }
   }, []);
+  useEffect(() => {
+    if (!isFocused) void flushShowcaseFeedEvents();
+  }, [isFocused]);
   const onPlaybackViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<ShowcaseMasonryCard>> }) => {
     const visibleItems = getVisibleCardItems(viewableItems);
     const nextVideoIds = selectActiveShowcaseVideoIds(visibleItems, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS);
@@ -539,7 +551,10 @@ export default function ShowcaseScreen() {
         numColumns={2}
         optimizeItemArrangement={false}
         onEndReached={requestNextPage}
-        onEndReachedThreshold={0.32}
+        // Pending-preview posts now keep their place in the masonry feed, so a
+        // half-screen runway is enough to hide the next-page round trip without
+        // prefetching as aggressively as the temporary filtered-feed tuning.
+        onEndReachedThreshold={0.5}
         onRefresh={handleRefresh}
         refreshing={isRefreshing}
         renderItem={renderCard}

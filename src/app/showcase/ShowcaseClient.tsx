@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Loader2, Heart, Image as ImageIcon, Video, Layers, TrendingUp, ShoppingBag, BookText, BadgeDollarSign, SlidersHorizontal, X, RefreshCw, Play } from 'lucide-react';
+import { Loader2, Heart, Image as ImageIcon, Video, Layers, TrendingUp, ShoppingBag, BookText, BadgeDollarSign, SlidersHorizontal, X, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/app/components/AuthProvider';
 import CreatorIdentity from '@/app/components/CreatorIdentity';
 import PublicShareButton from '@/app/components/PublicShareButton';
@@ -12,6 +12,10 @@ import SkeletonLoader from '@/app/components/SkeletonLoader';
 import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
+import {
+    loadShowcaseReelViewer,
+    warmShowcaseReelViewer,
+} from '@/app/showcase/showcase-reel-loader';
 import {
     QualifiedImpressionBoundary,
     ShowcaseFeedbackMenu,
@@ -21,7 +25,6 @@ import {
     type ShowcaseFeedbackAction,
 } from '@/app/showcase/ShowcaseFeedInteraction';
 import {
-    SHOWCASE_INITIAL_PAGE_SIZE,
     SHOWCASE_INITIAL_RENDER_COUNT,
     SHOWCASE_PAGE_SIZE,
     type ShowcaseCategory,
@@ -45,7 +48,6 @@ import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
 import { isTextOnlyPost } from '@/lib/post-feed-presentation';
 import type { SourceToolOption } from '@/lib/source-tools';
-import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import { mergeShowcaseFeedKeepingVisibleItems } from '@/lib/showcase-feed-stability';
 import {
     buildShowcaseClientCacheKey,
@@ -53,6 +55,7 @@ import {
     writeShowcaseClientSnapshot,
     type ShowcaseClientSnapshot,
 } from '@/lib/showcase-client-cache';
+import { scheduleIdleWork } from '@/lib/schedule-idle-work';
 
 function ShowcaseReelLoadingFallback() {
     return (
@@ -70,7 +73,7 @@ function ShowcaseReelLoadingFallback() {
 }
 
 const ShowcaseReelViewer = dynamic(
-    () => import('@/app/showcase/ShowcaseReelViewer'),
+    () => loadShowcaseReelViewer(),
     {
         ssr: false,
         loading: ShowcaseReelLoadingFallback,
@@ -96,8 +99,12 @@ const SORTS: Array<{ id: ShowcaseSort; label: string }> = [
 ];
 
 const DEFAULT_SHOWCASE_SORT: ShowcaseSort = 'for-you';
-const SHOWCASE_DEFERRED_REVEAL_ROOT_MARGIN = '200px 0px';
-const SHOWCASE_DEFERRED_REVEAL_FALLBACK_MS = 8_000;
+// One responsive grid row per tick keeps hydration work batched while filling
+// the grid faster than anyone scrolls. Reveals ride transitions, so input
+// stays responsive; the cadence only paces mounting, never data fetching.
+const SHOWCASE_DEFERRED_REVEAL_TICK_MS = 160;
+const SHOWCASE_REEL_WARM_IDLE_TIMEOUT_MS = 2_000;
+const SHOWCASE_SNAPSHOT_IDLE_TIMEOUT_MS = 1_000;
 const SHOWCASE_ANONYMOUS_REFRESH_IDLE_TIMEOUT_MS = 3_000;
 const SHOWCASE_REFRESH_RETRY_BASE_MS = 2_000;
 const SHOWCASE_REFRESH_MAX_RETRIES = 2;
@@ -120,20 +127,6 @@ function getShowcaseDeferredRevealBatchSize(): number {
         return 2;
     }
     return 1;
-}
-
-function scheduleIdleWork(callback: () => void, timeout = 1_000): () => void {
-    if (typeof window.requestIdleCallback === 'function') {
-        const handle = window.requestIdleCallback(callback, { timeout });
-        return () => {
-            if (typeof window.cancelIdleCallback === 'function') {
-                window.cancelIdleCallback(handle);
-            }
-        };
-    }
-
-    const handle = window.setTimeout(callback, 80);
-    return () => window.clearTimeout(handle);
 }
 
 const SHOWCASE_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
@@ -171,95 +164,6 @@ interface ShowcaseClientProps {
     initialResource: ShowcaseResourceFilter;
     sourceToolOptions: SourceToolOption[];
     initialPriorityPoster?: ShowcasePriorityPosterData | null;
-}
-
-function AnonymousShowcaseCardShell({
-    item,
-    mediaItems,
-    priorityPoster,
-    onOpen,
-}: {
-    item: ShowcaseFeedItem;
-    mediaItems: ShowcaseMediaItem[];
-    priorityPoster: ShowcasePriorityPosterData | null;
-    onOpen: () => void;
-}) {
-    const cover = mediaItems.slice().sort((left, right) => left.sortOrder - right.sortOrder)[0];
-    const coverPreviewUrl = cover?.previewUrl
-        ?? (cover?.mediaKind === 'image' ? cover.url : null);
-    const posterUrl = cover && priorityPoster?.postId === item.id && priorityPoster.mediaId === cover.id
-        ? priorityPoster.dataUrl
-        : coverPreviewUrl
-            ? buildOptimizedPreviewImageUrl(coverPreviewUrl)
-            : null;
-    const creatorContent = (
-        <span className="truncate text-xs font-semibold text-zinc-300">
-            {item.creator.name}
-        </span>
-    );
-
-    return (
-        <div
-            data-showcase-lightweight-card="true"
-            className="overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]"
-        >
-            <div className="relative overflow-hidden bg-black" style={{ aspectRatio: '4 / 5' }}>
-                {posterUrl ? (
-                    // This deliberately avoids the stateful image/carousel subtree during critical hydration.
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                        src={posterUrl}
-                        alt={item.title}
-                        loading="eager"
-                        fetchPriority="high"
-                        decoding="async"
-                        className="absolute inset-0 h-full w-full object-cover"
-                    />
-                ) : (
-                    <div className="absolute inset-0 flex items-center justify-center text-zinc-500" aria-hidden="true">
-                        {cover?.mediaKind === 'video'
-                            ? <Video className="h-10 w-10" />
-                            : <ImageIcon className="h-10 w-10" />}
-                    </div>
-                )}
-
-                <span className="pointer-events-none absolute left-3 top-3 z-[1] rounded-full border border-white/10 bg-black/65 px-2.5 py-1 text-[11px] font-semibold capitalize text-white">
-                    {item.category}
-                </span>
-                {cover?.mediaKind === 'video' ? (
-                    <span className="pointer-events-none absolute bottom-3 left-3 z-[1] inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/65 text-white">
-                        <Play className="h-4 w-4 fill-current" aria-hidden="true" />
-                    </span>
-                ) : null}
-                <button
-                    type="button"
-                    onClick={onOpen}
-                    className="ui-focus-ring absolute inset-0 z-[2] h-full w-full"
-                    aria-label={`Open ${item.title} in viewer`}
-                />
-            </div>
-
-            <div className="flex items-center justify-between gap-3 px-4 py-3">
-                <div className="min-w-0">
-                    <h3 className="truncate text-sm font-semibold text-zinc-100">{item.title}</h3>
-                    {item.creator.username ? (
-                        <Link
-                            href={`/creators/${item.creator.username}`}
-                            prefetch={false}
-                            className="ui-focus-ring mt-1 block min-h-6 max-w-full rounded-sm leading-6 hover:text-white"
-                        >
-                            {creatorContent}
-                        </Link>
-                    ) : (
-                        <div className="mt-1 leading-6">{creatorContent}</div>
-                    )}
-                </div>
-                <span className="shrink-0 text-[10px] font-bold uppercase tracking-[0.14em] text-zinc-500">
-                    {item.category}
-                </span>
-            </div>
-        </div>
-    );
 }
 
 function getItemResourceKinds(item: ShowcaseFeedItem): PostResourceKind[] {
@@ -418,7 +322,6 @@ export default function ShowcaseClient({
         )
     ));
     const renderedItemCountRef = useRef(renderedItemCount);
-    const [hasActivatedInitialAnonymousCard, setHasActivatedInitialAnonymousCard] = useState(false);
     const [hasAnonymousPersonalizationDemand, setHasAnonymousPersonalizationDemand] = useState(() => (
         Boolean(searchParams.get('post'))
     ));
@@ -434,13 +337,25 @@ export default function ShowcaseClient({
     const anonymousHiddenPostIdsRef = useRef(new Set<string>());
     const anonymousHiddenCreatorIdsRef = useRef(new Set<string>());
     const anonymousPersonalizationStartedRef = useRef(false);
-    const deferredRevealSentinelRef = useRef<HTMLDivElement | null>(null);
     const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
     const reelHistoryModeRef = useRef<'pushed' | 'direct' | null>(
         searchParams.get('post') ? 'direct' : null
     );
     const directPostRequestRef = useRef<string | null>(null);
     const selectedItemIdRef = useRef<string | null>(selectedItemId);
+    const pendingSnapshotRef = useRef<{
+        key: string;
+        snapshot: Omit<ShowcaseClientSnapshot, 'cachedAt'>;
+    } | null>(null);
+    const flushShowcaseSnapshot = useCallback(() => {
+        const pending = pendingSnapshotRef.current;
+        if (!pending) {
+            return;
+        }
+
+        pendingSnapshotRef.current = null;
+        writeShowcaseClientSnapshot(pending.key, pending.snapshot);
+    }, []);
     const initialSnapshotRef = useRef({
         initialFeed,
         initialCategory,
@@ -457,6 +372,10 @@ export default function ShowcaseClient({
         feedSessionIdForEventsRef.current = feedSessionId;
         renderedItemCountRef.current = renderedItemCount;
     }, [feedSessionId, items, renderedItemCount, selectedItemId]);
+
+    useEffect(() => (
+        scheduleIdleWork(warmShowcaseReelViewer, SHOWCASE_REEL_WARM_IDLE_TIMEOUT_MS)
+    ), []);
 
     const currentShowcasePath = searchParams.toString()
         ? `${pathname}?${searchParams.toString()}`
@@ -475,11 +394,6 @@ export default function ShowcaseClient({
     const renderedItems = tileableItems.slice(0, renderedItemCount);
     const hasDeferredItems = renderedItemCount < tileableItems.length;
     const hasAuthenticatedSession = Boolean(user && session?.access_token);
-    const shouldUseInitialAnonymousCardShell = !isAuthLoading
-        && !hasAuthenticatedSession
-        && !hasActivatedInitialAnonymousCard
-        && hasDeferredItems
-        && renderedItemCount === SHOWCASE_INITIAL_RENDER_COUNT;
     const priorityMediaItemId = renderedItems.find((item) => (
         item.postFormat !== 'text' && getItemMediaItems(item).length > 0
     ))?.id ?? null;
@@ -489,18 +403,40 @@ export default function ShowcaseClient({
             ...item,
             isSaved: savedItemIds.has(item.id),
         }));
-        const snapshot: Omit<ShowcaseClientSnapshot, 'cachedAt'> = {
-            feed: {
-                ...initialFeed,
-                items: itemsWithSavedState,
-                pageInfo,
-                feedSessionId,
+        pendingSnapshotRef.current = {
+            key: showcaseClientCacheKey,
+            snapshot: {
+                feed: {
+                    ...initialFeed,
+                    items: itemsWithSavedState,
+                    pageInfo,
+                    feedSessionId,
+                },
+                renderedItemCount,
+                savedItemIds: [...savedItemIds],
             },
-            renderedItemCount,
-            savedItemIds: [...savedItemIds],
         };
-        writeShowcaseClientSnapshot(showcaseClientCacheKey, snapshot);
-    }, [feedSessionId, initialFeed, items, pageInfo, renderedItemCount, savedItemIds, showcaseClientCacheKey]);
+        // Writing here means serializing the whole feed and touching
+        // sessionStorage synchronously — tens of KB that grow with every page
+        // loaded. `renderedItemCount` changes on every reveal tick, so doing it
+        // eagerly would put that stall between each row of cards. Returning the
+        // canceller debounces to the last change, and this is only a
+        // back-navigation restore cache, so idle is soon enough.
+        return scheduleIdleWork(flushShowcaseSnapshot, SHOWCASE_SNAPSHOT_IDLE_TIMEOUT_MS);
+    }, [
+        feedSessionId,
+        flushShowcaseSnapshot,
+        initialFeed,
+        items,
+        pageInfo,
+        renderedItemCount,
+        savedItemIds,
+        showcaseClientCacheKey,
+    ]);
+
+    // A viewer leaving the page is exactly who the restore cache is for, and
+    // the debounced write may still be pending.
+    useEffect(() => flushShowcaseSnapshot, [flushShowcaseSnapshot]);
 
     useEffect(() => {
         const postParam = searchParams.get('post');
@@ -666,7 +602,6 @@ export default function ShowcaseClient({
         setItems(visibleInitialItems);
         setPageInfo(initialFeed.pageInfo);
         setRenderedItemCount(Math.min(SHOWCASE_INITIAL_RENDER_COUNT, visibleInitialItems.length));
-        setHasActivatedInitialAnonymousCard(false);
         setFeedSessionId(getShowcaseFeedSessionId(initialFeed));
         setIsLoadingMore(false);
         setLoadMoreError(null);
@@ -681,15 +616,18 @@ export default function ShowcaseClient({
     }, [initialCategory, initialFeed, initialResource, initialSort, initialTool, initialUnlock, setItems, setSavedItemIds, user]);
 
     useEffect(() => {
-        const sentinel = deferredRevealSentinelRef.current;
-        if (!sentinel || !hasDeferredItems || isLoadingInitialFeed) {
+        if (!hasDeferredItems || isLoadingInitialFeed) {
             return;
         }
 
-        let fallbackHandle: number | null = null;
-        let sentinelWasNear = false;
+        // Fill the grid on a short cadence instead of waiting on scroll
+        // boundaries: the priority card owns the first paint, then every tick
+        // mounts one more responsive row until nothing is deferred. The effect
+        // re-runs (and the chain stops) when hasDeferredItems flips false.
+        let tickHandle: number | null = null;
 
         const revealNextItems = () => {
+            tickHandle = null;
             const batchSize = getShowcaseDeferredRevealBatchSize();
             startTransition(() => {
                 setRenderedItemCount((currentCount) => Math.min(
@@ -697,60 +635,14 @@ export default function ShowcaseClient({
                     items.length
                 ));
             });
+            tickHandle = window.setTimeout(revealNextItems, SHOWCASE_DEFERRED_REVEAL_TICK_MS);
         };
 
-        const scheduleFallback = () => {
-            if (fallbackHandle !== null) {
-                window.clearTimeout(fallbackHandle);
-            }
-
-            fallbackHandle = window.setTimeout(() => {
-                fallbackHandle = null;
-                revealNextItems();
-                scheduleFallback();
-            }, SHOWCASE_DEFERRED_REVEAL_FALLBACK_MS);
-        };
-
-        // The fallback keeps the complete bootstrap reachable when observers
-        // are unavailable or no scroll event crosses the reveal boundary. Its
-        // long cadence keeps the first five seconds free of deferred-card work.
-        scheduleFallback();
-
-        if (typeof IntersectionObserver === 'undefined') {
-            return () => {
-                if (fallbackHandle !== null) {
-                    window.clearTimeout(fallbackHandle);
-                }
-            };
-        }
-
-        const observer = new IntersectionObserver((entries) => {
-            const sentinelIsNear = entries.some((entry) => entry.isIntersecting);
-            if (!sentinelIsNear) {
-                sentinelWasNear = false;
-                return;
-            }
-
-            // A single boundary entry reveals at most one responsive row.
-            // Keeping this observer attached avoids a fresh observe callback
-            // after every render, which previously chained all deferred work.
-            if (sentinelWasNear) {
-                return;
-            }
-
-            sentinelWasNear = true;
-            revealNextItems();
-            scheduleFallback();
-        }, {
-            rootMargin: SHOWCASE_DEFERRED_REVEAL_ROOT_MARGIN,
-        });
-
-        observer.observe(sentinel);
+        tickHandle = window.setTimeout(revealNextItems, SHOWCASE_DEFERRED_REVEAL_TICK_MS);
 
         return () => {
-            observer.disconnect();
-            if (fallbackHandle !== null) {
-                window.clearTimeout(fallbackHandle);
+            if (tickHandle !== null) {
+                window.clearTimeout(tickHandle);
             }
         };
     }, [hasDeferredItems, isLoadingInitialFeed, items.length, startTransition]);
@@ -804,9 +696,7 @@ export default function ShowcaseClient({
         const controller = new AbortController();
         let retryHandle: number | null = null;
         const params = new URLSearchParams({
-            limit: String(hasAuthenticatedSession
-                ? SHOWCASE_PAGE_SIZE
-                : SHOWCASE_INITIAL_PAGE_SIZE),
+            limit: String(SHOWCASE_PAGE_SIZE),
         });
         setNonDefaultParam(params, 'category', category, 'all');
         setNonDefaultParam(params, 'tool', tool, 'all');
@@ -1473,15 +1363,16 @@ export default function ShowcaseClient({
                         </Link>
                     </div>
                 ) : (
-                    <div className={SHOWCASE_FEED_GRID_CLASS}>
+                    <div
+                        className={SHOWCASE_FEED_GRID_CLASS}
+                        onPointerEnter={warmShowcaseReelViewer}
+                        onTouchStart={warmShowcaseReelViewer}
+                    >
                             {renderedItems.map((item, itemIndex) => {
                                 const resourceKinds = getItemResourceKinds(item);
                                 const isSaved = savedItemIds.has(item.id);
                                 const mediaItems = getItemMediaItems(item);
                                 const isMixedMedia = new Set(mediaItems.map((mediaItem) => mediaItem.mediaKind)).size > 1;
-                                const useInitialAnonymousCardShell = shouldUseInitialAnonymousCardShell
-                                    && itemIndex === 0
-                                    && mediaItems.length > 0;
 
                                 return (
                                     <QualifiedImpressionBoundary
@@ -1490,20 +1381,8 @@ export default function ShowcaseClient({
                                         position={itemIndex}
                                         feedSessionId={feedSessionId}
                                         accessToken={session?.access_token ?? null}
-                                        className="flex min-w-0 flex-col"
+                                        className="flex min-w-0 flex-col [content-visibility:auto] [contain-intrinsic-size:auto_520px]"
                                     >
-                                        {useInitialAnonymousCardShell ? (
-                                            <AnonymousShowcaseCardShell
-                                                item={item}
-                                                mediaItems={mediaItems}
-                                                priorityPoster={initialPriorityPoster}
-                                                onOpen={() => {
-                                                    setHasActivatedInitialAnonymousCard(true);
-                                                    openPreview(item);
-                                                }}
-                                            />
-                                        ) : (
-                                            <>
                                         {/* Pinterest Style Card Frame */}
                                         <div className="group relative overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition duration-200 hover:border-[rgba(255,122,89,0.28)] hover:shadow-[0_12px_40px_rgba(0,0,0,0.42)] focus-within:border-[rgba(255,122,89,0.34)]">
                                             <div className="relative overflow-hidden bg-black">
@@ -1640,21 +1519,27 @@ export default function ShowcaseClient({
                                                 </div>
                                             )}
                                         </div>
-                                            </>
-                                        )}
                                     </QualifiedImpressionBoundary>
                                 );
                             })}
                     </div>
                 )}
 
-                {hasDeferredItems && !isLoadingInitialFeed ? (
+                {isLoadingMore ? (
                     <div
-                        ref={deferredRevealSentinelRef}
-                        data-showcase-deferred-reveal-sentinel="true"
+                        className={SHOWCASE_FEED_GRID_CLASS}
                         aria-hidden="true"
-                        className="h-px"
-                    />
+                        data-showcase-load-more-skeleton="true"
+                    >
+                        {Array.from(
+                            { length: getShowcaseDeferredRevealBatchSize() },
+                            (_, index) => (
+                                <div key={index} className="min-w-0">
+                                    <SkeletonLoader className="h-64" />
+                                </div>
+                            )
+                        )}
+                    </div>
                 ) : null}
 
                 {pageInfo.hasMore && !isLoadingInitialFeed && !hasDeferredItems ? (

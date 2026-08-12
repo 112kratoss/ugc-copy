@@ -27,6 +27,10 @@ vi.mock('lucide-react-native', () => ({
   Images: (props: MockProps) => React.createElement('images-icon', props),
 }));
 
+vi.mock('expo-image', () => ({
+  Image: (props: MockProps) => React.createElement('expo-image', props),
+}));
+
 vi.mock('@/components/feed-media-frame', () => ({
   FeedMediaFrame: (props: MockProps) => React.createElement('feed-media-frame', props),
 }));
@@ -103,21 +107,58 @@ function findAllByNodeType(tree: renderer.ReactTestRenderer, type: string) {
 }
 
 describe('ShowcaseMediaPreview', () => {
-  it('uses the original image when a generated image preview is unavailable', () => {
+  it('renders a pending plate without fetching the original image when a preview is unavailable', () => {
     const tree = renderPreview(
       <ShowcaseMediaPreview
         accent="#60a5fa"
         height={180}
-        mediaItems={[media({ previewUrl: null })]}
+        mediaItems={[media({ previewUrl: null, previewStatus: 'processing' })]}
         radius={12}
         recyclingKey="creator-profile:post-1"
         width={160}
       />
     );
 
-    const [frame] = findAllByNodeType(tree, 'feed-media-frame');
-    expect(frame.props.kind).toBe('image');
-    expect(frame.props.url).toBe('https://cdn.example.com/original.jpg');
+    expect(findAllByNodeType(tree, 'feed-media-frame')).toHaveLength(0);
+    expect(findAllByNodeType(tree, 'images-icon')).toHaveLength(1);
+  });
+
+  it('uses a thumbhash for a pending image when one is available', () => {
+    const tree = renderPreview(
+      <ShowcaseMediaPreview
+        accent="#60a5fa"
+        height={180}
+        mediaItems={[media({
+          previewUrl: null,
+          previewStatus: 'processing',
+          previewThumbhash: 'thumbhash-value',
+        })]}
+        radius={12}
+        recyclingKey="creator-profile:post-1"
+        width={160}
+      />
+    );
+
+    const [placeholder] = findAllByNodeType(tree, 'expo-image');
+    expect(placeholder.props.placeholder).toEqual({ thumbhash: 'thumbhash-value' });
+    expect(findAllByNodeType(tree, 'feed-media-frame')).toHaveLength(0);
+    expect(findAllByNodeType(tree, 'images-icon')).toHaveLength(0);
+  });
+
+  it('does not fetch the original when preview generation has failed', () => {
+    const tree = renderPreview(
+      <ShowcaseMediaPreview
+        accent="#60a5fa"
+        height={180}
+        mediaItems={[media({ previewUrl: null, previewStatus: 'failed' })]}
+        radius={12}
+        recyclingKey="creator-profile:post-1"
+        width={160}
+      />
+    );
+
+    expect(findAllByNodeType(tree, 'feed-media-frame')).toHaveLength(0);
+    expect(findAllByNodeType(tree, 'images-icon')).toHaveLength(1);
   });
 
   it('falls back to the original image when a generated preview fails', () => {
@@ -196,7 +237,7 @@ describe('ShowcaseMediaPreview', () => {
         accent="#60a5fa"
         height={180}
         mediaItems={[
-          media({ id: 'image-1' }),
+          media({ id: 'image-1', previewUrl: 'https://cdn.example.com/image-1.preview.webp' }),
           media({ id: 'video-1', mediaKind: 'video', url: 'https://cdn.example.com/original.mp4' }),
         ]}
         radius={12}
@@ -214,11 +255,12 @@ describe('ShowcaseMediaPreview', () => {
     expect(list.props.windowSize).toBe(3);
   });
 
-  it('synthesizes an image preview from a post-level media URL', () => {
+  it('does not disguise a legacy post-level source URL as an image preview', () => {
     const previews = getShowcasePreviewMediaItems(item({ mediaItems: undefined }));
 
     expect(previews).toHaveLength(1);
     expect(previews[0].mediaKind).toBe('image');
-    expect(previews[0].previewUrl).toBe('https://cdn.example.com/original.jpg');
+    expect(previews[0].url).toBe('https://cdn.example.com/original.jpg');
+    expect(previews[0].previewUrl).toBeNull();
   });
 });

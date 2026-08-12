@@ -6,6 +6,8 @@
       "timeoutMs": 10000,
       "minRequests": 10,
       "maxErrorRate": 0.01,
+      "p95EncodedBodyBytes": 393216,
+      "p95DecodedBytes": 786432,
       "p95TtfbMs": 1500,
       "p99TtfbMs": 3000,
       "p95TotalMs": 2200,
@@ -26,14 +28,18 @@
         "path": "/showcase",
         "method": "GET",
         "expectedStatuses": [200],
-        "weight": 1
+        "weight": 1,
+        "p95EncodedBodyBytes": 278528,
+        "p95DecodedBytes": 557056
       },
       {
         "name": "marketplace-page",
         "path": "/marketplace",
         "method": "GET",
         "expectedStatuses": [200],
-        "weight": 1
+        "weight": 1,
+        "p95EncodedBodyBytes": 294912,
+        "p95DecodedBytes": 589824
       },
       {
         "name": "model-catalog-api",
@@ -41,6 +47,8 @@
         "method": "GET",
         "expectedStatuses": [200],
         "weight": 2,
+        "p95EncodedBodyBytes": 28672,
+        "p95DecodedBytes": 57344,
         "p95TtfbMs": 800,
         "p99TtfbMs": 1500,
         "p95TotalMs": 1000,
@@ -52,10 +60,30 @@
         "method": "GET",
         "expectedStatuses": [200],
         "weight": 2,
+        "p95EncodedBodyBytes": 24576,
+        "p95DecodedBytes": 49152,
         "p95TtfbMs": 1200,
         "p99TtfbMs": 2500,
         "p95TotalMs": 1600,
         "p99TotalMs": 3200
+      }
+    ],
+    "signedInTargets": [
+      {
+        "name": "showcase-for-you-feed-authenticated",
+        "path": "/api/showcase/feed?sort=for-you&limit=12",
+        "method": "GET",
+        "auth": "bearer",
+        "expectedStatuses": [200],
+        "weight": 1,
+        "minRequests": 10,
+        "maxRequestsPerRun": 40,
+        "p95EncodedBodyBytes": 24576,
+        "p95DecodedBytes": 49152,
+        "p95TtfbMs": 1800,
+        "p99TtfbMs": 3500,
+        "p95TotalMs": 2400,
+        "p99TotalMs": 4500
       }
     ],
     "originTargets": [
@@ -68,6 +96,8 @@
         "cacheBust": true,
         "weight": 1,
         "minRequests": 10,
+        "p95EncodedBodyBytes": 49152,
+        "p95DecodedBytes": 49152,
         "p95TtfbMs": 1800,
         "p99TtfbMs": 3500,
         "p95TotalMs": 2400,

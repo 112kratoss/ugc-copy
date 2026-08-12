@@ -48,6 +48,7 @@ import type {
   PostResourceFileSignResponse,
   RemixSourceBundle,
   ShowcaseFeedEventRequest,
+  ShowcaseFeedEventBatchResponse,
   ShowcaseFeedEventResponse,
   ShowcaseFeedResponse,
   ShowcasePostResponse,
@@ -619,6 +620,16 @@ export function createApiClient({
         method: 'POST',
         body: JSON.stringify(body),
       }),
+    recordShowcaseFeedEvents: (
+      events: ShowcaseFeedEventRequest[],
+      options: { accessToken: string | null },
+    ) => request<ShowcaseFeedEventBatchResponse>('/api/showcase/feed/events', {
+      method: 'POST',
+      headers: options.accessToken
+        ? { Authorization: `Bearer ${options.accessToken}` }
+        : undefined,
+      body: JSON.stringify({ events }),
+    }, { auth: false }),
     getSavedMedia: (params?: Record<string, QueryValue>) =>
       request<ShowcaseFeedResponse>(`/api/showcase/saved-media${buildQuery(params)}`),
     // A 404 here is authoritative. This used to fall back to scanning a recent

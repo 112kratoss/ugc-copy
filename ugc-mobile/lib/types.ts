@@ -750,6 +750,7 @@ export interface ShowcaseFeedEventRequest {
   durationMs?: number;
   progress?: number;
   sourceSurface: 'showcase' | 'showcase-reel';
+  occurredAt?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -757,6 +758,12 @@ export interface ShowcaseFeedEventResponse {
   success: boolean;
   accepted?: boolean;
   duplicate?: boolean;
+}
+
+export interface ShowcaseFeedEventBatchResponse {
+  success: true;
+  recorded: number;
+  rejected: number;
 }
 
 export interface ShowcaseFeedItem {

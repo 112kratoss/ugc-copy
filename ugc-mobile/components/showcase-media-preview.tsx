@@ -1,4 +1,5 @@
 import { Images } from 'lucide-react-native';
+import { Image } from 'expo-image';
 import { useEffect, useState } from 'react';
 import { AccessibilityInfo, FlatList, Platform, Pressable, Text, View } from 'react-native';
 
@@ -9,6 +10,7 @@ import {
   getShowcaseMediaPreviewUrl,
   getShowcaseMediaRenditionUrl,
   getShowcasePreviewMediaItems,
+  resolveShowcaseImageTileSource,
 } from '@/lib/showcase-media';
 import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/types';
 
@@ -250,11 +252,59 @@ function ShowcaseMediaSlide({
     );
   }
 
+  const imageTileSource = resolveShowcaseImageTileSource(item, failedPreviewUrl);
+
+  if (imageTileSource === 'pending') {
+    return (
+      <View
+        style={{
+          width,
+          height,
+          overflow: 'hidden',
+          borderRadius: radius,
+          borderCurve: 'continuous',
+          borderWidth: 1,
+          borderColor: `${accent}4d`,
+          backgroundColor: '#050506',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {previewThumbhash ? (
+          <Image
+            placeholder={{ thumbhash: previewThumbhash }}
+            placeholderContentFit="cover"
+            contentFit="cover"
+            pointerEvents="none"
+            style={{ position: 'absolute', inset: 0 }}
+          />
+        ) : (
+          <View
+            style={{
+              width: 46,
+              height: 46,
+              borderRadius: 23,
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderWidth: 1,
+              borderColor: `${accent}66`,
+              backgroundColor: `${accent}22`,
+            }}
+          >
+            <Images size={19} color="#ffffff" />
+          </View>
+        )}
+      </View>
+    );
+  }
+
+  const imageUrl = imageTileSource === 'preview' ? previewUrl! : item.url;
+
   // The fallback source gets its own cache key: reusing the preview's key
   // would file the original's bytes under the preview's disk-cache entry, and
   // for legacy items (previewUrl === url) the key change is what releases
   // StableMediaImage's failure latch so the fallback attempt happens at all.
-  const frameCacheKey = usablePreviewUrl
+  const frameCacheKey = imageTileSource === 'preview'
     ? previewCacheKey
     : previewCacheKey
       ? `${previewCacheKey}:source`
@@ -263,13 +313,13 @@ function ShowcaseMediaSlide({
   return (
     <FeedMediaFrame
       kind="image"
-      url={usablePreviewUrl ?? item.url}
+      url={imageUrl}
       cacheKey={frameCacheKey}
       thumbhash={previewThumbhash}
       imageBackdrop="none"
       imageContentFit="cover"
       onImageError={() => {
-        if (usablePreviewUrl) setFailedPreviewUrl(usablePreviewUrl);
+        if (imageTileSource === 'preview') setFailedPreviewUrl(previewUrl);
       }}
       transition={120}
       recyclingKey={recyclingKey}

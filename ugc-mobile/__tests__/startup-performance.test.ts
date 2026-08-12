@@ -33,7 +33,8 @@ describe('mobile startup performance contracts', () => {
     const applySessionStart = authSource.indexOf('const applySessionState');
     const applySessionEnd = authSource.indexOf('const resetAuthState', applySessionStart);
     const applySessionSource = authSource.slice(applySessionStart, applySessionEnd);
-    const hydrationStart = authSource.indexOf('const latestSession = data.session ?? null;', authSource.indexOf('useEffect(() =>'));
+    const hydrationEffectStart = authSource.indexOf('supabase.auth.onAuthStateChange');
+    const hydrationStart = authSource.indexOf('const latestSession = data.session ?? null;', hydrationEffectStart);
     const hydrationEnd = authSource.indexOf('} catch (error)', hydrationStart);
     const hydrationSource = authSource.slice(hydrationStart, hydrationEnd);
 

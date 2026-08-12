@@ -937,6 +937,13 @@ describe('showcase feed', () => {
     expect(page.items[0].mediaItems?.[0]).toMatchObject({
       mediaKind: 'video',
       previewUrl: 'https://proxy.example.com/generated_videos/user-1/generated-video.preview.webp',
+      previewStatus: 'ready',
+      gridReady: true,
+      preview: {
+        previewUrl: 'https://proxy.example.com/generated_videos/user-1/generated-video.preview.webp',
+        status: 'ready',
+        gridReady: true,
+      },
     });
   });
 

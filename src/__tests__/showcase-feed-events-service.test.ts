@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
   recordShowcaseFeedEvent,
+  recordShowcaseFeedEvents,
   type ShowcaseFeedEventPayload,
 } from '@/lib/showcase-feed-events-service';
 
@@ -94,7 +95,7 @@ function createServiceClient({
         select: () => query,
         eq: () => query,
         maybeSingle: async () => ({
-          data: { id: 'delivery-1', session_id: 'session-1', post_id: 'post-1' },
+          data: { id: 'delivery-1', session_id: 'session-1', post_id: 'post-1', position: 0 },
           error: null,
         }),
       };
@@ -110,6 +111,7 @@ function createServiceClient({
             id: 'session-1',
             viewer_user_id: 'viewer-1',
             anonymous_key_hash: null,
+            created_at: '2020-01-01T00:00:00.000Z',
             expires_at: '2099-01-01T00:00:00.000Z',
           },
           error: null,
@@ -295,8 +297,10 @@ describe('recordShowcaseFeedEvent idempotency', () => {
     const conflicting: ExistingEvent = {
       post_id: 'post-1',
       creator_user_id: 'creator-1',
-      event_type: 'share',
-      source_surface: 'showcase',
+      // This also matches the semantic per-viewer cap. The occupied client ID
+      // must still win because its source differs from this request.
+      event_type: 'not_interested',
+      source_surface: 'showcase-reel',
       viewer_user_id: 'viewer-1',
       anonymous_key_hash: null,
     };
@@ -469,5 +473,107 @@ describe('recordShowcaseFeedEvent media progress', () => {
     });
 
     expect(result).toEqual({ ok: true, body: { success: true, duplicate: true } });
+  });
+});
+
+describe('recordShowcaseFeedEvents RPC wrapper', () => {
+  it('sends one RPC for signed-in payloads and translates mixed outcomes', async () => {
+    const rpc = vi.fn(async () => ({
+      data: {
+        success: true,
+        recorded: 1,
+        rejected: 1,
+        outcomes: [
+          { index: 0, ok: true, duplicate: true },
+          { index: 1, ok: false, status: 409, error: 'conflict' },
+        ],
+      },
+      error: null,
+    }));
+    const payloads = [payload(), payload({ clientEventId: 'event-2' })];
+
+    const result = await recordShowcaseFeedEvents({
+      actorUserId: 'viewer-1',
+      anonymousKeyHash: 'anon-hash',
+      payloads,
+      serviceClient: { rpc } as unknown as SupabaseClient,
+    });
+
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc).toHaveBeenCalledWith('record_showcase_feed_events', {
+      p_actor_user_id: 'viewer-1',
+      p_anonymous_key_hash: 'anon-hash',
+      p_events: payloads,
+    });
+    expect(result).toEqual({
+      ok: true,
+      body: { success: true, recorded: 1, rejected: 1 },
+      results: [
+        { ok: true, body: { success: true, duplicate: true } },
+        { ok: false, status: 409, body: { error: 'conflict' } },
+      ],
+    });
+  });
+
+  it('passes the guest identity and fails closed on transport or malformed responses', async () => {
+    const payloads = [payload()];
+    const transportRpc = vi.fn(async () => ({ data: null, error: { code: 'PGRST500' } }));
+    const transportResult = await recordShowcaseFeedEvents({
+      actorUserId: null,
+      anonymousKeyHash: 'anonymous-hash-value-with-at-least-32-characters',
+      payloads,
+      serviceClient: { rpc: transportRpc } as unknown as SupabaseClient,
+    });
+    expect(transportRpc).toHaveBeenCalledWith('record_showcase_feed_events', expect.objectContaining({
+      p_actor_user_id: null,
+      p_anonymous_key_hash: 'anonymous-hash-value-with-at-least-32-characters',
+    }));
+    expect(transportResult).toEqual({
+      ok: false,
+      status: 500,
+      body: { error: 'Failed to record feed event batch.' },
+    });
+
+    const malformedResult = await recordShowcaseFeedEvents({
+      actorUserId: null,
+      anonymousKeyHash: 'anonymous-hash-value-with-at-least-32-characters',
+      payloads,
+      serviceClient: {
+        rpc: vi.fn(async () => ({
+          data: { success: true, recorded: 1, rejected: 0, outcomes: [] },
+          error: null,
+        })),
+      } as unknown as SupabaseClient,
+    });
+    expect(malformedResult.ok).toBe(false);
+  });
+
+  it('makes a per-entry server failure retryable for the whole batch', async () => {
+    const payloads = [payload(), payload({ clientEventId: 'event-2' })];
+    const result = await recordShowcaseFeedEvents({
+      actorUserId: 'viewer-1',
+      anonymousKeyHash: 'anon-hash',
+      payloads,
+      serviceClient: {
+        rpc: vi.fn(async () => ({
+          data: {
+            success: true,
+            recorded: 1,
+            rejected: 1,
+            outcomes: [
+              { index: 0, ok: true },
+              { index: 1, ok: false, status: 500, error: 'temporary database failure' },
+            ],
+          },
+          error: null,
+        })),
+      } as unknown as SupabaseClient,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      body: { error: 'Failed to record feed event batch.' },
+    });
   });
 });

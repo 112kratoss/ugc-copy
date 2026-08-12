@@ -31,6 +31,12 @@ import {
 } from './account-reauthentication';
 import { ApiError, createApiClient, type MagicbookletApiClient } from './api-client';
 import { getFeedInstallationId } from './feed-installation-id';
+import {
+  beginShowcaseFeedEventIdentityTransition,
+  configureFeedEventQueue,
+  flushShowcaseFeedEvents,
+  restoreShowcaseFeedEvents,
+} from './feed-event-queue';
 import { GENERATION_MODEL_CATALOG_SCHEMA_VERSION } from './generation-model-catalog';
 import { claimPendingReferral } from './referral-attribution';
 import {
@@ -172,6 +178,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (error) throw error;
       if (data.session) return;
 
+      // Drain events recorded while fully signed out before replacing the
+      // installation identity with a Supabase guest. Installation-scoped
+      // entries remain sendable after the transition if this best-effort flush
+      // has to back off.
+      void flushShowcaseFeedEvents();
       const { data: guest, error: guestError } = await supabase.auth.signInAnonymously();
       if (guestError) throw guestError;
       if (guest.session) applySessionState(guest.session);
@@ -223,6 +234,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }),
     [getAccessToken]
   );
+  useEffect(() => {
+    configureFeedEventQueue({
+      api,
+      getAccessToken,
+      getIdentityUserId: () => sessionUserIdRef.current,
+    });
+    void restoreShowcaseFeedEvents();
+    void flushShowcaseFeedEvents();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') void flushShowcaseFeedEvents();
+    });
+    return () => subscription.remove();
+  }, [api, getAccessToken, session?.user?.id]);
   const registeredUser = useMemo(() => getRegisteredUser(session), [session]);
   const isGuest = isGuestSession(session);
   const identityUserId = session?.user?.id ?? null;
@@ -484,6 +508,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.remove();
   }, [redeemGuestMerge, registeredUser]);
 
+  const beginFeedIdentityTransition = (previousSession: Session | null) => {
+    const userId = previousSession?.user?.id;
+    const accessToken = previousSession?.access_token;
+    if (!userId || !accessToken) {
+      // Installation-scoped events stay universally sendable, including after
+      // an anonymous guest session is minted.
+      void flushShowcaseFeedEvents();
+      return null;
+    }
+
+    // The bearer token lives only in memory. The queue performs its immediate
+    // drain in the background and applies persisted backoff without placing a
+    // 30-second telemetry request on the sign-in/sign-out critical path.
+    return beginShowcaseFeedEventIdentityTransition({
+      identityKey: `user:${userId}`,
+      accessToken,
+      accessTokenExpiresAt: typeof previousSession.expires_at === 'number'
+        ? previousSession.expires_at * 1_000
+        : null,
+    });
+  };
+
   const signInWithPassword = async (email: string, password: string) => {
     if (!isSupabaseConfigured) {
       throw new Error(`Configure mobile auth first: ${missingEnvKeys.join(', ')}`);
@@ -493,14 +539,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // abandons the sign-in — rather than risk stranding purchased credits.
     const previousSession = sessionRef.current;
     await prepareGuestMerge(previousSession);
+    const feedIdentityTransition = beginFeedIdentityTransition(previousSession);
 
     try {
       await initializeSupabaseAuth();
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
     } catch (error) {
+      feedIdentityTransition?.cancel();
       throw normalizeSupabaseAuthError(error);
     }
+    feedIdentityTransition?.commit();
 
     await redeemGuestMerge();
     await refreshProfile();
@@ -517,13 +566,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const previousSession = sessionRef.current;
     await prepareGuestMerge(previousSession);
+    const feedIdentityTransition = beginFeedIdentityTransition(previousSession);
 
     try {
       await initializeSupabaseAuth();
       await signInWithNativeApple(supabase);
     } catch (error) {
+      feedIdentityTransition?.cancel();
       throw normalizeSupabaseAuthError(error);
     }
+    feedIdentityTransition?.commit();
 
     await redeemGuestMerge();
     await refreshProfile();
@@ -540,24 +592,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const previousSession = sessionRef.current;
     await prepareGuestMerge(previousSession);
+    const feedIdentityTransition = beginFeedIdentityTransition(previousSession);
 
     try {
       await initializeSupabaseAuth();
       await signInWithGoogleOAuth(supabase);
     } catch (error) {
+      feedIdentityTransition?.cancel();
       throw normalizeSupabaseAuthError(error);
     }
+    feedIdentityTransition?.commit();
 
     await redeemGuestMerge();
     await refreshProfile();
   };
 
   const signOut = async () => {
-    if (isSupabaseConfigured) {
-      await unregisterMobilePushNotifications(api);
-      await supabase.auth.signOut();
-      await clearPersistedSupabaseAuthSession();
+    const feedIdentityTransition = beginFeedIdentityTransition(sessionRef.current);
+    try {
+      if (isSupabaseConfigured) {
+        await unregisterMobilePushNotifications(api);
+        await supabase.auth.signOut();
+      }
+    } catch (error) {
+      feedIdentityTransition?.cancel();
+      throw error;
     }
+    feedIdentityTransition?.commit();
+    if (isSupabaseConfigured) await clearPersistedSupabaseAuthSession();
     resetAuthState();
     // Signing out drops back to a guest identity rather than to nothing, so
     // browsing and buying keep working. The bootstrap latch is cleared because
@@ -571,6 +633,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!registeredUser) {
       throw new Error('Sign in before deleting your account.');
     }
+    // Capture the original account before reauthentication can replace the
+    // Supabase session (including the mismatch path below).
+    const feedIdentityTransition = beginFeedIdentityTransition(sessionRef.current);
 
     let appleAuthorizationCode: string | undefined;
     if (reauthentication) {
@@ -594,9 +659,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         if (error instanceof AccountReauthenticationAccountMismatchError) {
           await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
+          feedIdentityTransition?.commit();
           await clearPersistedSupabaseAuthSession();
           resetAuthState();
           router.replace('/auth');
+        } else {
+          feedIdentityTransition?.cancel();
         }
         throw normalizeSupabaseAuthError(error);
       }
@@ -605,7 +673,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await unregisterMobilePushNotifications(api).catch((error) => {
       console.warn('Could not unregister push notifications before account deletion', error);
     });
-    await api.deleteAccount('DELETE', appleAuthorizationCode ? { appleAuthorizationCode } : {});
+    try {
+      await api.deleteAccount('DELETE', appleAuthorizationCode ? { appleAuthorizationCode } : {});
+    } catch (error) {
+      feedIdentityTransition?.cancel();
+      throw error;
+    }
+    feedIdentityTransition?.commit();
     await clearPersistedSupabaseAuthSession();
     resetAuthState();
     router.replace('/auth');

@@ -10,6 +10,8 @@ import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
 import { publishNavigationStart } from '@/app/components/navigation-progress-state';
 import FeedMediaLightbox from '@/app/feed/FeedMediaLightbox';
 import FeedPostCard, { type FeedDetailContext } from '@/app/feed/FeedPostCard';
+import WindowedFeedList from '@/app/feed/WindowedFeedList';
+import SkeletonLoader from '@/app/components/SkeletonLoader';
 import { FEED_CHIPS, FEED_PAGE_SIZE, getFeedChip, type FeedChipId } from '@/lib/post-feed-chips';
 import { buildPostFeedCards } from '@/lib/post-feed-presentation';
 import {
@@ -22,9 +24,13 @@ import {
     buildShowcaseClientCacheKey,
     readShowcaseClientSnapshot,
     writeShowcaseClientSnapshot,
+    type ShowcaseClientSnapshot,
 } from '@/lib/showcase-client-cache';
+import { scheduleIdleDebouncedWork } from '@/lib/schedule-idle-work';
 
 const PAGE_DETAIL_CONTEXT: FeedDetailContext = { from: 'community', returnTo: '/feed' };
+const FEED_SNAPSHOT_QUIET_PERIOD_MS = 1_000;
+const FEED_SNAPSHOT_IDLE_TIMEOUT_MS = 1_000;
 
 /**
  * The open lightbox, held as a snapshot rather than a lookup by id: switching
@@ -136,7 +142,21 @@ export default function FeedClient({
     const requestIdRef = useRef(0);
     const activeRequestRef = useRef<AbortController | null>(null);
     const pendingLoadMoreKeyRef = useRef<string | null>(null);
+    // State updates commit after the current event. This ref closes the small
+    // gap in which an old IntersectionObserver callback can otherwise abort a
+    // lane-replacement request before `switching` reaches the observer effect.
+    const pagingBlockedRef = useRef(false);
     const sentinelRef = useRef<HTMLDivElement | null>(null);
+    const pendingFeedSnapshotRef = useRef<{
+        key: string;
+        snapshot: Omit<ShowcaseClientSnapshot, 'cachedAt'>;
+    } | null>(null);
+    const flushFeedSnapshot = useCallback(() => {
+        const pending = pendingFeedSnapshotRef.current;
+        if (!pending) return;
+        pendingFeedSnapshotRef.current = null;
+        writeShowcaseClientSnapshot(pending.key, pending.snapshot);
+    }, []);
 
     const {
         items,
@@ -168,6 +188,8 @@ export default function FeedClient({
         replace: boolean,
         cursor: string | null = null,
     ) => {
+        if (!replace && pagingBlockedRef.current) return;
+
         // A lane switch always restarts the ranking, so it never carries a
         // cursor forward from the lane it is leaving.
         const continuationCursor = replace ? null : cursor;
@@ -178,6 +200,7 @@ export default function FeedClient({
         activeRequestRef.current?.abort();
         const controller = new AbortController();
         activeRequestRef.current = controller;
+        pagingBlockedRef.current = true;
 
         if (!replace) pendingLoadMoreKeyRef.current = requestKey;
         if (replace) setSwitching(true); else setLoadingMore(true);
@@ -234,6 +257,7 @@ export default function FeedClient({
             if (replace) {
                 setItems([]);
                 setNextOffset(null);
+                setNextCursor(null);
                 setLoadError('Could not load this lane.');
             } else {
                 setLoadError('Could not load more posts. What you already loaded is still here.');
@@ -244,6 +268,7 @@ export default function FeedClient({
             }
             if (requestId === requestIdRef.current) {
                 activeRequestRef.current = null;
+                pagingBlockedRef.current = false;
                 setLoadingMore(false);
                 setSwitching(false);
             }
@@ -261,40 +286,58 @@ export default function FeedClient({
         // snapshot worth coming back to.
         if (chipId !== initialChipId || items.length === 0) return;
 
-        writeShowcaseClientSnapshot(cacheKey, {
-            feed: {
-                ...seedFeed,
-                items,
-                pageInfo: {
-                    ...seedFeed.pageInfo,
-                    // hasMore keys on either continuation, or restoring a
-                    // snapshot whose last page returned a cursor but no offset
-                    // would look like the end of the feed.
-                    hasMore: nextOffset !== null || nextCursor !== null,
-                    nextOffset,
-                    nextCursor,
+        pendingFeedSnapshotRef.current = {
+            key: cacheKey,
+            snapshot: {
+                feed: {
+                    ...seedFeed,
+                    items,
+                    pageInfo: {
+                        ...seedFeed.pageInfo,
+                        // hasMore keys on either continuation, or restoring a
+                        // snapshot whose last page returned a cursor but no offset
+                        // would look like the end of the feed.
+                        hasMore: nextOffset !== null || nextCursor !== null,
+                        nextOffset,
+                        nextCursor,
+                    },
                 },
+                renderedItemCount: items.length,
+                savedItemIds: [...savedItemIds],
             },
-            renderedItemCount: items.length,
-            savedItemIds: [...savedItemIds],
-        });
-    }, [cacheKey, chipId, initialChipId, items, nextCursor, nextOffset, savedItemIds, seedFeed]);
+        };
+        return scheduleIdleDebouncedWork(
+            flushFeedSnapshot,
+            FEED_SNAPSHOT_QUIET_PERIOD_MS,
+            FEED_SNAPSHOT_IDLE_TIMEOUT_MS,
+        );
+    }, [cacheKey, chipId, flushFeedSnapshot, initialChipId, items, nextCursor, nextOffset, savedItemIds, seedFeed]);
+
+    useEffect(() => flushFeedSnapshot, [flushFeedSnapshot]);
 
     useEffect(() => {
         const sentinel = sentinelRef.current;
         // A ranked lane can hand back a cursor and no offset, so either
         // continuation means there is more to load.
-        if (!sentinel || (nextOffset === null && nextCursor === null)) return;
+        if (
+            !sentinel
+            || switching
+            || loadingMore
+            || (nextOffset === null && nextCursor === null)
+        ) return;
 
         const observer = new IntersectionObserver((entries) => {
-            if (entries.some((entry) => entry.isIntersecting)) {
+            if (
+                !pagingBlockedRef.current
+                && entries.some((entry) => entry.isIntersecting)
+            ) {
                 void fetchPage(chipId, nextOffset ?? 0, false, nextCursor);
             }
         }, { rootMargin: '600px 0px' });
 
         observer.observe(sentinel);
         return () => observer.disconnect();
-    }, [chipId, fetchPage, nextCursor, nextOffset]);
+    }, [chipId, fetchPage, loadingMore, nextCursor, nextOffset, switching]);
 
     const selectChip = useCallback((nextChipId: FeedChipId) => {
         if (nextChipId === chipId) return;
@@ -304,6 +347,7 @@ export default function FeedClient({
         setLightbox(null);
         setItems([]);
         setNextOffset(null);
+        setNextCursor(null);
         void fetchPage(nextChipId, 0, true);
     }, [chipId, fetchPage, setItems]);
 
@@ -407,8 +451,14 @@ export default function FeedClient({
                     </p>
                 </div>
             ) : (
-                <div className="flex flex-col gap-3">
-                    {cards.map((card, cardIndex) => (
+                <WindowedFeedList
+                    items={cards}
+                    getKey={(card) => card.id}
+                    // Comment threads own fetched pages, reply expansion and an
+                    // unsent draft. Keep an open conversation alive even after
+                    // its card scrolls beyond the ordinary 24-card window.
+                    pinnedKeys={commentsOpenIds}
+                    renderItem={(card, cardIndex) => (
                         <FeedPostCard
                             key={card.id}
                             card={card}
@@ -461,9 +511,17 @@ export default function FeedClient({
                                 router.prefetch(buildShowcaseDetailPath(card.id, detailContext));
                             }}
                         />
+                    )}
+                />
+            )}
+
+            {loadingMore ? (
+                <div aria-hidden="true" className="flex flex-col gap-3" data-feed-load-more-skeleton="true">
+                    {[0, 1].map((placeholder) => (
+                        <SkeletonLoader key={placeholder} className="h-64 rounded-[1.5rem]" />
                     ))}
                 </div>
-            )}
+            ) : null}
 
             <div ref={sentinelRef} aria-hidden="true" />
 

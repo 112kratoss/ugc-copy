@@ -115,7 +115,7 @@ function FeedPostCardView({
 
     return (
         <article
-            className="cursor-pointer overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition hover:border-[var(--ui-border-default)]"
+            className="cursor-pointer overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition hover:border-[var(--ui-border-default)] [content-visibility:auto] [contain-intrinsic-size:auto_640px]"
             // Pointing at a card is the earliest honest signal that it is about
             // to be opened. Warming here is why the click feels instant; the
             // post links stay `prefetch={false}` so nothing is fetched for

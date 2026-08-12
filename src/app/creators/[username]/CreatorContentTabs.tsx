@@ -20,6 +20,7 @@ import {
 import { useAuth } from '@/app/components/AuthProvider';
 import { useOptimisticPostSave } from '@/app/components/useOptimisticPostSave';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
+import { loadShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
 import { formatBundleAccessLabel } from '@/lib/marketplace-trust';
 import { getBundleAccessLabel } from '@/lib/post-resource-bundles';
@@ -43,7 +44,7 @@ function ShowcaseReelLoadingFallback() {
 }
 
 const ShowcaseReelViewer = dynamic(
-  () => import('@/app/showcase/ShowcaseReelViewer'),
+  () => loadShowcaseReelViewer(),
   {
     ssr: false,
     loading: ShowcaseReelLoadingFallback,

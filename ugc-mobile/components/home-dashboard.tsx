@@ -76,6 +76,11 @@ import {
   type ShowcaseFeedEventDetails,
 } from '@/lib/showcase-feed-events';
 import {
+  enqueueShowcaseFeedEvent,
+  flushShowcaseFeedEvents,
+  isBatchedShowcaseFeedEventType,
+} from '@/lib/feed-event-queue';
+import {
   SHOWCASE_FEED_STALE_TIME_MS,
   createShowcaseFeedQueryKey,
   createShowcaseFeedViewerQueryKey,
@@ -227,8 +232,15 @@ export function HomeDashboard() {
       },
       { ...details, metadata: { ...(details.metadata ?? {}), surface: 'home-feed' } }
     );
-    void runtime.api.recordShowcaseFeedEvent(request).catch(() => null);
+    if (isBatchedShowcaseFeedEventType(eventType)) {
+      void enqueueShowcaseFeedEvent(request);
+    } else {
+      void runtime.api.recordShowcaseFeedEvent(request).catch(() => null);
+    }
   }, []);
+  useEffect(() => {
+    if (!isFocused) void flushShowcaseFeedEvents();
+  }, [isFocused]);
 
   const onPlaybackViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<HomeFeedCard>> }) => {
     const visibleItems = viewableItems

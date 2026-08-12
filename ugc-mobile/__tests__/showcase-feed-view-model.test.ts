@@ -47,7 +47,7 @@ function item(overrides: Partial<ShowcaseFeedItem>): ShowcaseFeedItem {
       sortOrder: 0,
     }]).map((media) => ({
       ...media,
-      previewUrl: media.previewUrl ?? `${media.url}.preview.webp`,
+      previewUrl: media.previewUrl === undefined ? `${media.url}.preview.webp` : media.previewUrl,
       gridReady: media.gridReady ?? true,
     })),
   };
@@ -105,6 +105,31 @@ describe('showcase feed view model', () => {
     ]);
 
     expect(cards.map((card) => card.id)).toEqual(['image-post']);
+  });
+
+  it('keeps pending-preview posts in the masonry feed', () => {
+    const cards = buildShowcaseMasonry([
+      item({
+        id: 'pending-image',
+        mediaItems: [{
+          id: 'pending-image:media',
+          url: 'https://cdn.example.com/pending-image.jpg',
+          previewUrl: null,
+          previewStatus: 'processing',
+          gridReady: false,
+          mediaKind: 'image',
+          contentType: 'image/jpeg',
+          originalName: 'pending-image.jpg',
+          width: null,
+          height: null,
+          durationSeconds: null,
+          sortOrder: 0,
+        }],
+      }),
+    ]);
+
+    expect(cards.map((card) => card.id)).toEqual(['pending-image']);
+    expect(cards[0]?.previewUrl).toBeNull();
   });
 
   it('describes paid unlocks and remixable posts for feed card CTAs', () => {
@@ -272,5 +297,33 @@ describe('showcase feed view model', () => {
     expect(video?.aspectRatio).toBeNull();
     expect(getShowcaseMediaHeight(video, 180)).toBe(104);
     expect(getShowcaseMediaHeight(video, 180, 9 / 16)).toBe(320);
+  });
+
+  it('uses the stable card bucket for a pending dimensionless video', () => {
+    const [video] = buildShowcaseMasonry([
+      item({
+        id: 'pending-video-without-dimensions',
+        category: 'video',
+        mediaKind: 'video',
+        mediaItems: [{
+          id: 'pending-video:media',
+          url: 'https://cdn.example.com/pending-video.mp4',
+          previewUrl: null,
+          previewStatus: 'processing',
+          gridReady: false,
+          mediaKind: 'video',
+          contentType: 'video/mp4',
+          originalName: 'pending-video.mp4',
+          width: null,
+          height: null,
+          durationSeconds: null,
+          sortOrder: 0,
+        }],
+      }),
+    ]);
+
+    expect(video?.previewUrl).toBeNull();
+    expect(getShowcaseMediaHeight(video, 180)).toBe(video?.height);
+    expect(getShowcaseMediaHeight(video, 180)).toBeGreaterThan(104);
   });
 });
