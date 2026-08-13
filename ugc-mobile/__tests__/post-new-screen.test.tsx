@@ -189,7 +189,14 @@ vi.mock('lucide-react-native', () => {
   };
 });
 
-vi.mock('@/lib/media', () => ({
+// The real @/lib/media imports the expo pickers, whose native core does not
+// resolve under vitest — stub them so importOriginal below can load the module.
+vi.mock('expo-document-picker', () => ({ getDocumentAsync: vi.fn() }));
+vi.mock('expo-image-picker', () => ({ launchImageLibraryAsync: vi.fn() }));
+vi.mock('@/lib/media', async (importOriginal) => ({
+  // Pure helpers (duration limits, ms→s conversion) stay real; only the
+  // picker/upload side effects are stubbed.
+  ...(await importOriginal<typeof import('../lib/media')>()),
   pickMedia: vi.fn(),
   pickMediaList: vi.fn(),
   pickResourceDocument: vi.fn(),

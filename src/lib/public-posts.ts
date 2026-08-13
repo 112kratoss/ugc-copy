@@ -279,9 +279,12 @@ export async function getPublicPostDetail(
         mediaKey: 'media-1',
         url: generation.url,
         // This legacy generation-cover path has no post_media row behind it, so
-        // there is no rendition to point at.
+        // there is no rendition to point at. The 'skipped' is a placeholder,
+        // not a lean-source verdict — feed stream stays null (poster-only).
         renditionUrl: null,
         renditionStatus: 'skipped',
+        teaserUrl: null,
+        feedStreamUrl: null,
         previewUrl: generation.previewUrl,
         previewThumbhash: preview.thumbhash,
         previewStatus: preview.status,

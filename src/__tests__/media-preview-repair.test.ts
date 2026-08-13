@@ -518,6 +518,72 @@ describe('showcase feed rendition repair', () => {
     ]));
   });
 
+  it('keeps a landed teaser and the probed duration when the transcode then fails', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    // Simulate the real ordering: probe and teaser land via callbacks, then
+    // the full rendition of the long source times out.
+    renditionMocks.createPostMediaRendition.mockImplementation((async (params: {
+      onInputProbe?: (probe: unknown) => void;
+      onTeaserOutcome?: (outcome: unknown) => void;
+    }) => {
+      params.onInputProbe?.({ width: 720, height: 1280, durationSeconds: 95.5 });
+      params.onTeaserOutcome?.({
+        status: 'ready',
+        teaserStoragePath: 'posts/user/clip.teaser.abc123.mp4',
+        teaserBytes: 900_000,
+      });
+      throw new Error('ffmpeg terminated by SIGKILL after 120000ms.');
+    }) as never);
+    const { supabase, updates } = createRenditionClient([
+      { ...pendingVideoRow, teaser_storage_path: null, duration_seconds: null },
+    ]);
+
+    const summary = await repairPostMediaRenditions(withAdmissionFallback(supabase) as never);
+
+    expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
+    expect(updates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        table: 'post_media',
+        payload: expect.objectContaining({
+          rendition_status: 'failed',
+          // The whole point of teaser-first: the timeout must not lose these.
+          teaser_storage_path: 'posts/user/clip.teaser.abc123.mp4',
+          teaser_bytes: 900_000,
+          teaser_generated_at: expect.any(String),
+          duration_seconds: 95.5,
+        }),
+      }),
+    ]));
+  });
+
+  it('forwards an existing teaser so a retry never regenerates it', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    const { supabase } = createRenditionClient([
+      { ...pendingVideoRow, rendition_status: 'failed', teaser_storage_path: 'posts/user/clip.teaser.old.mp4' },
+    ]);
+
+    await repairPostMediaRenditions(withAdmissionFallback(supabase) as never);
+
+    expect(renditionMocks.createPostMediaRendition).toHaveBeenCalledWith(
+      expect.objectContaining({ existingTeaserPath: 'posts/user/clip.teaser.old.mp4' }),
+    );
+  });
+
+  it('switches teaser work off entirely when the claim row predates the columns', async () => {
+    const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+    // pendingVideoRow deliberately has no teaser_storage_path key — the shape
+    // an old claim RPC or un-migrated database returns.
+    const { supabase } = createRenditionClient([pendingVideoRow]);
+
+    await repairPostMediaRenditions(withAdmissionFallback(supabase) as never);
+
+    const [params] = renditionMocks.createPostMediaRendition.mock.calls[0] as unknown as [Record<string, unknown>];
+    // A truthy sentinel suppresses teaser work, and no outcome callback is
+    // attached, so no update can ever reference a column that might not exist.
+    expect(params.existingTeaserPath).toBeTruthy();
+    expect(params.onTeaserOutcome).toBeUndefined();
+  });
+
   it('leaves image rows alone', async () => {
     const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
     const { supabase } = createRenditionClient([{

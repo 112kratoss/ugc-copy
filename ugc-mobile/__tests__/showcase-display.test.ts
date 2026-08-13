@@ -74,6 +74,35 @@ describe('showcase display helpers', () => {
     ]);
   });
 
+  it('holds a playing video that is still visible, even below a newer one', () => {
+    const visibleItems = [
+      item({ id: 'entering-at-top', category: 'video', mediaKind: 'video', mediaUrl: 'https://cdn.example.com/video-1.mp4' }),
+      item({ id: 'already-playing', category: 'video', mediaKind: 'video', mediaUrl: 'https://cdn.example.com/video-2.mp4' }),
+    ];
+
+    // Position alone would promote the card sliding in at the top edge.
+    expect(selectActiveShowcaseVideoIds(visibleItems, 1, ['already-playing'])).toEqual(['already-playing']);
+  });
+
+  it('promotes by position once the held video is no longer visible', () => {
+    const visibleItems = [
+      item({ id: 'next-video', category: 'video', mediaKind: 'video', mediaUrl: 'https://cdn.example.com/video-1.mp4' }),
+    ];
+
+    expect(selectActiveShowcaseVideoIds(visibleItems, 1, ['scrolled-away'])).toEqual(['next-video']);
+  });
+
+  it('fills the slots left over by held videos', () => {
+    const visibleItems = [
+      item({ id: 'a', category: 'video', mediaKind: 'video', mediaUrl: 'https://cdn.example.com/a.mp4' }),
+      item({ id: 'b', category: 'video', mediaKind: 'video', mediaUrl: 'https://cdn.example.com/b.mp4' }),
+      item({ id: 'c', category: 'video', mediaKind: 'video', mediaUrl: 'https://cdn.example.com/c.mp4' }),
+    ];
+
+    // 'c' is held; 'a' fills the remaining slot, and nothing is duplicated.
+    expect(selectActiveShowcaseVideoIds(visibleItems, 2, ['c'])).toEqual(['c', 'a']);
+  });
+
   it('does not select an active video when no visible item can preview', () => {
     expect(
       selectActiveShowcaseVideoId([

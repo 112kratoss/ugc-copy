@@ -578,6 +578,8 @@ describe('ShowcaseMediaCarousel', () => {
           kind: 'video',
           url: 'https://example.com/clip.mp4',
           renditionUrl: RENDITION,
+          teaserUrl: null,
+          feedStreamUrl: null,
           previewUrl: null,
           thumbhash: null,
           cacheKey: 'video-1',

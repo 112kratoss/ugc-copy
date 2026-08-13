@@ -39,6 +39,7 @@ import {
 } from '@/lib/temporary-media-upload-sign';
 import { type PostMediaRenditionStatus } from '@/lib/post-media-rendition';
 import { defaultPostMediaKey, normalizePostMediaKey } from '@/lib/post-media-key';
+import { POST_VIDEO_DURATION_LIMIT_MESSAGE, POST_VIDEO_MAX_DURATION_SECONDS } from '@/lib/post-video-limits';
 import { isCreatorProfileCheckError } from '@/lib/marketplace-trust';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
@@ -126,6 +127,10 @@ type ExistingPostMediaRow = {
   rendition_error?: string | null;
   rendition_generated_at?: string | null;
   rendition_bytes?: number | null;
+  teaser_storage_path?: string | null;
+  teaser_bytes?: number | null;
+  teaser_generated_at?: string | null;
+  teaser_error?: string | null;
   external_url: string | null;
   media_kind: 'image' | 'video';
   content_type: string | null;
@@ -146,6 +151,8 @@ type SubmittedEditMediaItem =
       originalName: string;
       contentType: string;
       mediaKind: 'image' | 'video';
+      /** Client-reported seed; the rendition sweep's probe overwrites it. */
+      durationSeconds?: number | null;
     };
 
 export type PostUpdateRequestBody = {
@@ -410,6 +417,7 @@ async function loadOwnedPostMedia(
   const BASE_COLUMNS = 'id, storage_path, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order';
   const PREVIEW_COLUMNS = 'preview_storage_path, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at';
   const RENDITION_COLUMNS = 'rendition_storage_path, rendition_status, rendition_attempt_count, rendition_error, rendition_generated_at, rendition_bytes';
+  const TEASER_COLUMNS = 'teaser_storage_path, teaser_bytes, teaser_generated_at, teaser_error';
 
   const selectOwnedMedia = (columns: string) => adminSupabase
     .from('post_media')
@@ -423,9 +431,15 @@ async function loadOwnedPostMedia(
     && pattern.test(candidate.message),
   );
 
-  const previewResult = await selectOwnedMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}`);
+  const previewResult = await selectOwnedMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}, ${TEASER_COLUMNS}`);
   let data = previewResult.data as ExistingPostMediaRow[] | null;
   let error = previewResult.error;
+
+  if (isMissingColumn(error, /teaser_(storage_path|bytes|generated_at|error)/)) {
+    const withoutTeaser = await selectOwnedMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}`);
+    data = withoutTeaser.data as ExistingPostMediaRow[] | null;
+    error = withoutTeaser.error;
+  }
 
   if (isMissingColumn(error, /rendition_(storage_path|status|attempt_count|error|generated_at|bytes)/)) {
     const withoutRendition = await selectOwnedMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}`);
@@ -538,6 +552,20 @@ async function parseSubmittedEditMediaItems(params: {
     const originalName = typeof descriptor.originalName === 'string' && descriptor.originalName.trim()
       ? descriptor.originalName.trim()
       : path.basename(storagePath);
+    const reportedDurationSeconds = typeof descriptor.durationSeconds === 'number'
+      && Number.isFinite(descriptor.durationSeconds)
+      && descriptor.durationSeconds >= 0
+      ? descriptor.durationSeconds
+      : null;
+
+    // Advisory: client-reported, so this only catches honest clients early.
+    // The rendition sweep's probe of the actual file demotes anything that
+    // lied to poster-only in the feed.
+    if (mediaKind === 'video' && reportedDurationSeconds !== null
+      && reportedDurationSeconds > POST_VIDEO_MAX_DURATION_SECONDS) {
+      return { items: null, error: POST_VIDEO_DURATION_LIMIT_MESSAGE };
+    }
+
     const filePath = storagePath.slice(`${UPLOADS_BUCKET}/`.length);
     submitted.push({
       source: 'uploaded',
@@ -547,6 +575,7 @@ async function parseSubmittedEditMediaItems(params: {
       originalName,
       contentType,
       mediaKind,
+      durationSeconds: reportedDurationSeconds,
     });
   }
 
@@ -690,7 +719,7 @@ async function prepareEditedPostMedia(params: {
           previewGeneratedAt: item.row.preview_generated_at ?? null,
           // replace_post_media deletes and re-inserts, so an untouched item has
           // to carry its rendition across or every edit would discard it and
-          // force a needless re-encode.
+          // force a needless re-encode. The teaser rides for the same reason.
           renditionStoragePath: item.row.rendition_storage_path ?? null,
           renditionStatus: item.row.rendition_status
             ?? (item.row.media_kind === 'video' ? 'pending' : 'skipped'),
@@ -698,6 +727,10 @@ async function prepareEditedPostMedia(params: {
           renditionError: item.row.rendition_error ?? null,
           renditionGeneratedAt: item.row.rendition_generated_at ?? null,
           renditionBytes: item.row.rendition_bytes ?? null,
+          teaserStoragePath: item.row.teaser_storage_path ?? null,
+          teaserBytes: item.row.teaser_bytes ?? null,
+          teaserGeneratedAt: item.row.teaser_generated_at ?? null,
+          teaserError: item.row.teaser_error ?? null,
           externalUrl: item.row.external_url,
           mediaKind: item.row.media_kind,
           contentType: item.row.content_type,
@@ -802,20 +835,23 @@ async function prepareEditedPostMedia(params: {
         originalName: item.originalName,
         width: preview?.width ?? null,
         height: preview?.height ?? null,
+        // Client-reported seed; the rendition sweep's probe overwrites it.
+        durationSeconds: item.mediaKind === 'video' ? item.durationSeconds ?? null : null,
         sortOrder: index,
       });
     }
 
     const retainedStoragePaths = new Set(
       persistedMediaItems
-        .flatMap((item) => [item.storagePath, item.previewStoragePath, item.renditionStoragePath])
+        .flatMap((item) => [item.storagePath, item.previewStoragePath, item.renditionStoragePath, item.teaserStoragePath])
         .filter((storagePath): storagePath is string => Boolean(storagePath)),
     );
-    // Renditions belong on both sides: a dropped video's feed rendition is its
-    // own public object, and skipping it left the exact URL the feed had been
-    // serving fetchable forever -- the same gap takedown revocation had.
+    // Renditions and teasers belong on both sides: a dropped video's feed
+    // objects are their own public URLs, and skipping them left the exact URL
+    // the feed had been serving fetchable forever -- the same gap takedown
+    // revocation had.
     const removedStoragePaths = existingMediaRows
-      .flatMap((row) => [row.storage_path, row.preview_storage_path, row.rendition_storage_path])
+      .flatMap((row) => [row.storage_path, row.preview_storage_path, row.rendition_storage_path, row.teaser_storage_path])
       .filter((storagePath): storagePath is string =>
         Boolean(storagePath) && !retainedStoragePaths.has(storagePath as string),
       );

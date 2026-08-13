@@ -30,6 +30,14 @@ export interface VisualMediaDescriptor {
    * not produced one, so callers must fall back to `url`.
    */
   renditionUrl?: string | null;
+  /** 8s muted head of a long clip; feed-only. */
+  teaserUrl?: string | null;
+  /**
+   * The server's decision of what a feed card may autoplay. An explicit null
+   * means poster-only and is authoritative; absent means an older server, and
+   * the client falls back to teaser then rendition — never to `url`.
+   */
+  feedStreamUrl?: string | null;
   previewUrl: string | null;
   thumbhash: string | null;
   cacheKey: string;
@@ -678,6 +686,8 @@ export interface ShowcaseMediaItem {
   mediaKey?: string;
   url: string;
   renditionUrl?: string | null;
+  teaserUrl?: string | null;
+  feedStreamUrl?: string | null;
   previewUrl?: string | null;
   previewThumbhash?: string | null;
   previewStatus?: MediaPreviewStatus;

@@ -290,6 +290,25 @@
                 "height": 1024,
                 "durationSeconds": null,
                 "sortOrder": 0
+              },
+              {
+                "id": "post-media-2",
+                "url": "https://cdn.example.test/post-1-clip.mp4",
+                "renditionUrl": "https://cdn.example.test/post-1-clip.feed.abc123.mp4",
+                "teaserUrl": "https://cdn.example.test/post-1-clip.teaser.abc123.mp4",
+                "feedStreamUrl": "https://cdn.example.test/post-1-clip.teaser.abc123.mp4",
+                "previewUrl": "https://cdn.example.test/post-1-clip-preview.jpg",
+                "previewThumbhash": null,
+                "previewStatus": "ready",
+                "previewCacheKey": "post-media:2",
+                "gridReady": true,
+                "mediaKind": "video",
+                "contentType": "video/mp4",
+                "originalName": "launch-clip.mp4",
+                "width": 720,
+                "height": 1280,
+                "durationSeconds": 95.5,
+                "sortOrder": 1
               }
             ],
             "model": "Nano Banana 2.0",

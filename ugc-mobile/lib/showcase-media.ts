@@ -61,10 +61,9 @@ export function getShowcaseMediaRenditionUrl(item: ShowcaseMediaItem): string | 
 }
 
 /**
- * What any surface that plays a clip should stream — the scrolling feed row and
- * the immersive viewer alike. Prefers the small rendition and falls back to the
- * source, so posts published before the rendition pipeline — and ones that
- * legitimately skipped it — still play.
+ * What the immersive viewer streams for a deliberate watch. Prefers the small
+ * rendition and falls back to the source, so posts published before the
+ * rendition pipeline — and ones that legitimately skipped it — still play.
  *
  * The viewer deliberately insisted on `url` for full quality until the 2026-08
  * scaling audit measured the cost: sources run ~23 Mbps against a 720p/1.4 Mbps
@@ -74,6 +73,25 @@ export function getShowcaseMediaRenditionUrl(item: ShowcaseMediaItem): string | 
  */
 export function getShowcasePlaybackUrl(item: ShowcaseMediaItem): string {
   return getShowcaseMediaRenditionUrl(item) ?? item.url;
+}
+
+/**
+ * What an autoplaying FEED card may stream — deliberately not
+ * getShowcasePlaybackUrl. A feed glance must never pull the raw source: that
+ * `renditionUrl ?? url` fallback is exactly how a long video whose transcode
+ * failed used to stream tens of MB per scroll.
+ *
+ * The server's `feedStreamUrl` decision is authoritative when the field is
+ * PRESENT — including an explicit null, which means poster-only (`??` would
+ * wrongly skip past that verdict into the fallbacks). Only when the field is
+ * absent entirely (older server) does the client fall back to teaser, then
+ * rendition — and never to `url`.
+ */
+export function getShowcaseFeedStreamUrl(item: ShowcaseMediaItem): string | null {
+  const descriptorDecision = item.preview ? item.preview.feedStreamUrl : undefined;
+  if (descriptorDecision !== undefined) return descriptorDecision;
+  if (item.feedStreamUrl !== undefined) return item.feedStreamUrl;
+  return item.preview?.teaserUrl ?? item.teaserUrl ?? getShowcaseMediaRenditionUrl(item);
 }
 
 export function hasShowcaseVideoWithoutPreview(item: ShowcaseFeedItem) {

@@ -96,7 +96,7 @@ import {
   type VideoCreationDraft,
   type VideoModelId,
 } from '@/lib/media-creation-view-model';
-import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia } from '@/lib/media';
+import { assetDurationSeconds, pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia } from '@/lib/media';
 import {
   findActiveReferenceMention,
   insertHandleAtSelection,
@@ -372,12 +372,6 @@ function creatorParameterSummary(draft: CreationDraft, model: CreatorCatalogMode
   }
   const duration = draft.referenceVideo ? getMotionDuration(draft) : null;
   return [draft.mode.toUpperCase(), duration ? `${duration}s` : 'Add motion'].join(' · ');
-}
-
-function assetDurationSeconds(value?: number | null) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  // Expo ImagePicker reports video duration in milliseconds.
-  return Math.max(0, value / 1000);
 }
 
 function mediaSummary(media: MediaDraft) {

@@ -51,6 +51,12 @@ export interface PostComposerMediaItem {
   storagePath?: string | null;
   existingId?: string | null;
   previewUrl?: string | null;
+  /**
+   * Picker-reported (already converted to seconds). Advisory: the server's
+   * rendition probe of the actual file is the value of record; this powers the
+   * early over-ceiling rejection at publish and seeds duration_seconds.
+   */
+  durationSeconds?: number | null;
 }
 
 export interface PostComposerMediaItemPayload {
@@ -59,6 +65,7 @@ export interface PostComposerMediaItemPayload {
   existingId?: string;
   contentType?: string;
   originalName?: string;
+  durationSeconds?: number;
 }
 
 export interface PostComposerMadeWithRow {
@@ -1026,6 +1033,7 @@ export function buildPostComposerMediaItemsPayload(draft: PostComposerDraft): Po
         storagePath: item.storagePath,
         contentType: item.type,
         originalName: item.name,
+        ...(typeof item.durationSeconds === 'number' ? { durationSeconds: item.durationSeconds } : {}),
       };
     })
     .filter((item): item is PostComposerMediaItemPayload => item !== null);

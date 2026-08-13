@@ -127,7 +127,15 @@ vi.mock('@/components/media-preview', () => ({
   StableMediaImage: (props: MockProps) => React.createElement('stable-media-image', props),
 }));
 
-vi.mock('@/lib/media', () => ({
+// The real @/lib/media imports the expo pickers, whose native core does not
+// resolve under vitest — stub them so importOriginal below can load the module.
+vi.mock('expo-document-picker', () => ({ getDocumentAsync: vi.fn() }));
+vi.mock('expo-image-picker', () => ({ launchImageLibraryAsync: vi.fn() }));
+
+vi.mock('@/lib/media', async (importOriginal) => ({
+  // Pure helpers (assetDurationSeconds, duration-limit predicates) stay real;
+  // only the picker/upload side effects are stubbed.
+  ...(await importOriginal<typeof import('../lib/media')>()),
   pickAudioDocument: vi.fn(),
   pickMedia: vi.fn(),
   pickMediaList: vi.fn(),

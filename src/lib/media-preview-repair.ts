@@ -3,7 +3,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { createGenerationOutputPreview } from '@/lib/generation-output-preview';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
-import { createPostMediaRendition } from '@/lib/post-media-rendition';
+import { createPostMediaRendition, type PostMediaTeaserOutcome } from '@/lib/post-media-rendition';
+import type { VideoProbeResult } from '@/lib/video-rendition';
 import { getStoredMediaLocation } from '@/lib/server-helpers';
 import {
   fetchWithProviderRetry,
@@ -78,6 +79,13 @@ type PostMediaRenditionRepairRow = {
   storage_path: string;
   content_type: string | null;
   rendition_attempt_count: number | null;
+  /**
+   * Absent (not just null) when the claim came from a pre-teaser RPC or a
+   * database without the teaser columns — the worker gates all teaser work on
+   * field presence so it never writes a column that might not exist.
+   */
+  teaser_storage_path?: string | null;
+  duration_seconds?: number | null;
 };
 
 type ClaimedRows<T> = { rows: T[]; leased: boolean };
@@ -105,6 +113,22 @@ export function isMissingRenditionColumnError(error: unknown): boolean {
 
   const { code, message = '' } = error as { code?: string; message?: string };
   return (code === '42703' || code === 'PGRST204') && /rendition_/.test(message);
+}
+
+/**
+ * Deliberately distinct from the rendition matcher: missing teaser columns
+ * only degrade the sweep to teasers-off (retry the claim without them), while
+ * missing rendition columns disable rendition work entirely. Folding the two
+ * into one regex would turn "teaser migration not applied yet" into "stop all
+ * rendition repair", which is exactly backwards.
+ */
+export function isMissingTeaserColumnError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const { code, message = '' } = error as { code?: string; message?: string };
+  return (code === '42703' || code === 'PGRST204') && /teaser_/.test(message);
 }
 
 export async function hasRepairableMediaPreviews(supabase: SupabaseClient): Promise<boolean> {
@@ -282,6 +306,27 @@ async function repairPostMediaRendition(
   leaseOwner?: string,
 ): Promise<boolean> {
   const attempts = row.rendition_attempt_count ?? 0;
+  // Field presence, not value: a pre-teaser claim RPC or database returns rows
+  // without the field at all, and then no update may reference the columns.
+  const teaserColumnsPresent = 'teaser_storage_path' in row;
+  let inputProbe: VideoProbeResult | null = null;
+  let teaserOutcome: PostMediaTeaserOutcome | null = null;
+  // The probe and the teaser both precede the full transcode, so their results
+  // must survive every exit below — including the throw path.
+  const midFlightSpread = () => ({
+    ...(inputProbe?.durationSeconds != null ? { duration_seconds: inputProbe.durationSeconds } : {}),
+    ...(teaserOutcome?.status === 'ready'
+      ? {
+        teaser_storage_path: teaserOutcome.teaserStoragePath,
+        teaser_bytes: teaserOutcome.teaserBytes,
+        teaser_generated_at: new Date().toISOString(),
+        teaser_error: null,
+      }
+      : {}),
+    ...(teaserOutcome?.status === 'failed'
+      ? { teaser_error: teaserOutcome.error.slice(0, 500) }
+      : {}),
+  });
   try {
     if (!leaseOwner) {
       await supabase.from('post_media').update({ rendition_status: 'processing' }).eq('id', row.id);
@@ -297,6 +342,16 @@ async function repairPostMediaRendition(
       contentType: row.content_type || body.type,
       storagePath: row.storage_path,
       supabase,
+      // Content-hashed teasers never go stale, so an existing one is final. A
+      // truthy sentinel also stands in when the columns are unavailable —
+      // teaser work without a recordable outcome would be wasted encode time.
+      existingTeaserPath: teaserColumnsPresent
+        ? row.teaser_storage_path ?? null
+        : 'teaser-columns-unavailable',
+      onInputProbe: (probe) => { inputProbe = probe; },
+      ...(teaserColumnsPresent
+        ? { onTeaserOutcome: (outcome: PostMediaTeaserOutcome) => { teaserOutcome = outcome; } }
+        : {}),
     });
 
     // 'skipped' is a correct terminal answer, not a failure — record it so the
@@ -306,6 +361,7 @@ async function repairPostMediaRendition(
         rendition_status: 'skipped',
         rendition_attempt_count: attempts + 1,
         rendition_error: `Rendition skipped: ${rendition.reason}.`,
+        ...midFlightSpread(),
         rendition_locked_at: null,
         rendition_locked_by: null,
       }).eq('id', row.id);
@@ -325,6 +381,8 @@ async function repairPostMediaRendition(
       // Backfill the dimensions and duration the original publish never captured.
       ...(rendition.width === null ? {} : { width: rendition.width }),
       ...(rendition.height === null ? {} : { height: rendition.height }),
+      ...midFlightSpread(),
+      // The output probe wins over the input probe when both landed.
       ...(rendition.durationSeconds === null ? {} : { duration_seconds: rendition.durationSeconds }),
       rendition_locked_at: null,
       rendition_locked_by: null,
@@ -338,6 +396,9 @@ async function repairPostMediaRendition(
       rendition_status: 'failed',
       rendition_attempt_count: Math.min(MAX_RENDITION_ATTEMPTS, attempts + 1),
       rendition_error: error instanceof Error ? error.message.slice(0, 500) : 'Rendition generation failed.',
+      // The whole point of teaser-first: a timeout here must not lose the
+      // teaser that already uploaded, nor the probed duration.
+      ...midFlightSpread(),
       rendition_locked_at: null,
       rendition_locked_by: null,
     }).eq('id', row.id);
@@ -386,9 +447,13 @@ async function claimRenditionRepairRows(
     throw claimed.error;
   }
 
-  const { data, error } = await supabase
+  // Two-tier, mirroring the degrade ladder in post-media.ts: first ask with
+  // the teaser columns, and on a database that has not applied that migration
+  // retry without them — the rows then lack the field entirely, which is what
+  // switches the worker's teaser step off.
+  const selectRenditionRows = (columns: string) => supabase
     .from('post_media')
-    .select('id, storage_path, content_type, rendition_attempt_count')
+    .select(columns)
     .eq('media_kind', 'video')
     .in('rendition_status', UNRESOLVED_STATUSES)
     .lt('rendition_attempt_count', MAX_RENDITION_ATTEMPTS)
@@ -396,12 +461,19 @@ async function claimRenditionRepairRows(
     .order('created_at', { ascending: true })
     .limit(batchSize);
 
+  let { data, error } = await selectRenditionRows(
+    'id, storage_path, content_type, rendition_attempt_count, teaser_storage_path, duration_seconds',
+  );
+  if (error && isMissingTeaserColumnError(error)) {
+    ({ data, error } = await selectRenditionRows('id, storage_path, content_type, rendition_attempt_count'));
+  }
+
   if (error) {
     if (isMissingRenditionColumnError(error)) return null;
     throw error;
   }
 
-  return { rows: (data ?? []) as PostMediaRenditionRepairRow[], leased: false };
+  return { rows: (data ?? []) as unknown as PostMediaRenditionRepairRow[], leased: false };
 }
 
 export async function repairPostMediaRenditions(

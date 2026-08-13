@@ -7,10 +7,13 @@ import {
   RENDITION_MAX_HEIGHT,
   RENDITION_MAX_WIDTH,
   RENDITION_MIN_SAVING_RATIO,
+  TEASER_MIN_SOURCE_SECONDS,
+  TEASER_SECONDS,
   VideoRenditionSkipped,
 } from '@/lib/video-rendition';
 import {
   buildPostMediaRenditionPath,
+  buildPostMediaTeaserPath,
   isRenditionEligibleVideo,
 } from '@/lib/post-media-rendition';
 
@@ -48,6 +51,35 @@ describe('rendition ffmpeg arguments', () => {
   it('puts the output path last and overwrites without prompting', () => {
     expect(args[0]).toBe('-y');
     expect(args[args.length - 1]).toBe('/tmp/out.mp4');
+  });
+});
+
+describe('teaser ffmpeg arguments', () => {
+  const teaserArgs = buildRenditionArgs('/tmp/in.mp4', '/tmp/teaser.mp4', {
+    maxDurationSeconds: TEASER_SECONDS,
+    stripAudio: true,
+  });
+  const teaserArgString = teaserArgs.join(' ');
+
+  it('trims to the teaser length', () => {
+    expect(teaserArgString).toContain(`-t ${TEASER_SECONDS}`);
+  });
+
+  it('drops the audio stream entirely — the feed always plays muted', () => {
+    expect(teaserArgs).toContain('-an');
+    expect(teaserArgs).not.toContain('0:a:0?');
+    expect(teaserArgString).not.toContain('-c:a');
+  });
+
+  it('keeps the encode ladder and faststart of the full rendition', () => {
+    expect(teaserArgString).toContain('-c:v libx264');
+    expect(teaserArgString).toContain('-maxrate 1400k');
+    expect(teaserArgString).toContain('-movflags +faststart');
+  });
+
+  it('pins the thresholds the sweep gates teaser work on', () => {
+    expect(TEASER_MIN_SOURCE_SECONDS).toBe(30);
+    expect(TEASER_SECONDS).toBe(8);
   });
 });
 
@@ -144,6 +176,14 @@ describe('rendition storage paths', () => {
     const source = 'posts/abc/0/clip.mp4';
     expect(buildPostMediaRenditionPath(source, 'abc123'))
       .not.toBe(`${source.slice(0, -4)}.preview.abc123.webp`);
+  });
+
+  it('gives the teaser its own content-addressed object beside the rendition', () => {
+    expect(buildPostMediaTeaserPath('posts/abc/0/clip.mp4', 'deadbeef'))
+      .toBe('posts/abc/0/clip.teaser.deadbeef.mp4');
+    // Distinct infix: the same source must be able to hold both objects.
+    expect(buildPostMediaTeaserPath('posts/abc/0/clip.mp4', 'deadbeef'))
+      .not.toBe(buildPostMediaRenditionPath('posts/abc/0/clip.mp4', 'deadbeef'));
   });
 });
 

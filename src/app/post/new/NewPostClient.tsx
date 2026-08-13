@@ -28,6 +28,12 @@ import {
   isCreatorProfileReadinessError,
 } from '@/lib/marketplace-trust';
 import { createClientPostMediaKey, defaultPostMediaKey } from '@/lib/post-media-key';
+import {
+  POST_VIDEO_DURATION_LIMIT_MESSAGE,
+  POST_VIDEO_MAX_DURATION_SECONDS,
+  POST_VIDEO_MAX_UPLOAD_BYTES,
+  POST_VIDEO_UPLOAD_BYTES_MESSAGE,
+} from '@/lib/post-video-limits';
 import { getCurrentInternalPath, getSafeInternalReturnPath } from '@/lib/share';
 import { trackProductEvent } from '@/lib/product-analytics';
 import {
@@ -124,6 +130,12 @@ interface ComposerMediaItem {
    * not re-send files that already made it up.
    */
   storagePath: string | null;
+  /**
+   * Measured from the picked file's metadata at append time; null when the
+   * browser could not read it. Client-reported and therefore advisory — the
+   * rendition sweep's probe is the value of record server-side.
+   */
+  durationSeconds?: number | null;
 }
 
 /**
@@ -262,7 +274,67 @@ function inferCategoryFromContentType(contentType: string | null | undefined): P
   return null;
 }
 
-function createComposerMediaItem(file: File, index: number): ComposerMediaItem {
+/**
+ * How long the metadata probe may stall before the file is let through with an
+ * unknown duration. Metadata loads resolve in milliseconds when they resolve
+ * at all; a codec the browser chokes on must not wedge the composer.
+ */
+const VIDEO_METADATA_READ_TIMEOUT_MS = 4000;
+
+/**
+ * Reads a picked video's duration from a metadata-only load (the pattern
+ * CreateMotionClient uses for reference clips). Resolves null when the browser
+ * cannot read it — the caller lets those through for the server layers, whose
+ * ffmpeg probe of the actual file is the authoritative check anyway.
+ */
+function readVideoFileDurationSeconds(file: File): Promise<number | null> {
+  return new Promise((resolve) => {
+    let probe: HTMLVideoElement;
+    let objectUrl: string;
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+
+    const finish = (value: number | null) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      probe.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      probe.removeEventListener('error', handleError);
+      probe.src = '';
+      URL.revokeObjectURL(objectUrl);
+      resolve(value);
+    };
+
+    const handleLoadedMetadata = () => {
+      finish(Number.isFinite(probe.duration) ? probe.duration : null);
+    };
+    const handleError = () => finish(null);
+
+    try {
+      probe = document.createElement('video');
+      // An empty canPlayType means this browser could not decode the file, so
+      // a metadata load would only ever end in the error path — skip straight
+      // to "unknown". (This is also what keeps jsdom-based tests, whose media
+      // elements never fire load events, from hanging here.)
+      if (!probe.canPlayType || probe.canPlayType(file.type) === '') {
+        resolve(null);
+        return;
+      }
+      probe.preload = 'metadata';
+      objectUrl = URL.createObjectURL(file);
+    } catch {
+      resolve(null);
+      return;
+    }
+
+    timeout = setTimeout(() => finish(null), VIDEO_METADATA_READ_TIMEOUT_MS);
+    probe.addEventListener('loadedmetadata', handleLoadedMetadata);
+    probe.addEventListener('error', handleError);
+    probe.src = objectUrl;
+  });
+}
+
+function createComposerMediaItem(file: File, index: number, durationSeconds: number | null = null): ComposerMediaItem {
   return {
     id: `new-${Date.now()}-${index}-${file.name}`,
     existingId: null,
@@ -273,6 +345,7 @@ function createComposerMediaItem(file: File, index: number): ComposerMediaItem {
     contentType: file.type || null,
     originalName: file.name,
     storagePath: null,
+    durationSeconds,
   };
 }
 
@@ -1233,7 +1306,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     }
   };
 
-  const appendMediaFiles = (files: File[]) => {
+  const appendMediaFiles = async (files: File[]) => {
     const supportedFiles = files.filter(
       (candidate) => candidate.type.startsWith('image/') || candidate.type.startsWith('video/')
     );
@@ -1241,15 +1314,42 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
       return;
     }
 
+    // Refuse what the browser can measure before any bytes upload: size is
+    // synchronous, duration comes from a metadata-only load. An unreadable
+    // duration passes — the publish check and the rendition sweep's probe of
+    // the actual file are the layers equipped to judge those.
+    const rejections: string[] = [];
+    const admitted: Array<{ file: File; durationSeconds: number | null }> = [];
+    for (const candidate of supportedFiles) {
+      if (!candidate.type.startsWith('video/')) {
+        admitted.push({ file: candidate, durationSeconds: null });
+        continue;
+      }
+      if (candidate.size > POST_VIDEO_MAX_UPLOAD_BYTES) {
+        if (!rejections.includes(POST_VIDEO_UPLOAD_BYTES_MESSAGE)) rejections.push(POST_VIDEO_UPLOAD_BYTES_MESSAGE);
+        continue;
+      }
+      const durationSeconds = await readVideoFileDurationSeconds(candidate);
+      if (durationSeconds !== null && durationSeconds > POST_VIDEO_MAX_DURATION_SECONDS) {
+        if (!rejections.includes(POST_VIDEO_DURATION_LIMIT_MESSAGE)) rejections.push(POST_VIDEO_DURATION_LIMIT_MESSAGE);
+        continue;
+      }
+      // The measured value rides along to publish so the server can reject
+      // over-ceiling reports early and seed duration_seconds.
+      admitted.push({ file: candidate, durationSeconds });
+    }
+
     // Computed from the render snapshot, not inside the updater: updaters must
     // stay pure (Strict Mode replays them, and collecting into an outer array
     // from one is exactly the impurity that replay duplicates). Appends only
     // arrive from discrete user events, so the snapshot is always current; the
     // slice inside the updater is a pure re-cap in case it ever is not.
-    const accepted = supportedFiles
+    const accepted = admitted
       .slice(0, Math.max(0, 5 - mediaItems.length))
-      .map((candidate, index) => createComposerMediaItem(candidate, mediaItems.length + index));
+      .map((candidate, index) =>
+        createComposerMediaItem(candidate.file, mediaItems.length + index, candidate.durationSeconds));
     if (accepted.length === 0) {
+      if (rejections.length > 0) setError({ section: 'post', message: rejections.join(' ') });
       return;
     }
 
@@ -1261,12 +1361,16 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
     // publish. Failures are deliberately non-blocking: the item keeps its File,
     // so the publish flow still uploads anything that did not make it.
     void uploadAddedMedia(accepted);
+
+    // After resetFeedback, so a partial rejection is still visible next to the
+    // files that did make it in.
+    if (rejections.length > 0) setError({ section: 'post', message: rejections.join(' ') });
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    appendMediaFiles(Array.from(e.dataTransfer.files ?? []));
+    void appendMediaFiles(Array.from(e.dataTransfer.files ?? []));
   };
 
   const handleMiddleClick = () => {
@@ -1519,6 +1623,7 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
           storagePath: item.storagePath,
           contentType: item.contentType ?? item.file?.type ?? '',
           originalName: item.originalName ?? item.file?.name ?? '',
+          ...(item.durationSeconds != null ? { durationSeconds: item.durationSeconds } : {}),
         };
       }
       return null;
@@ -2590,7 +2695,10 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
                           multiple
                           className="sr-only"
                           onChange={(event) => {
-                            appendMediaFiles(Array.from(event.target.files ?? []));
+                            // Array.from copies the FileList, so resetting the
+                            // input below does not invalidate the async gate's
+                            // File references.
+                            void appendMediaFiles(Array.from(event.target.files ?? []));
                             event.currentTarget.value = '';
                           }}
                         />

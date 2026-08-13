@@ -32,6 +32,19 @@ export const RENDITION_GOP = 60;
 export const RENDITION_CONTENT_TYPE = 'video/mp4';
 
 /**
+ * Sources longer than this also get a teaser: a short, muted head of the clip
+ * that the feed streams instead of the full rendition. Feed previews are
+ * glanced at, not watched, so beyond ~30s the extra length is pure egress.
+ */
+export const TEASER_MIN_SOURCE_SECONDS = 30;
+/**
+ * Teaser length. Also why the teaser is encoded before the full rendition: an
+ * 8s input never approaches RENDITION_TIMEOUT_MS, so the teaser survives
+ * exactly when the full transcode of a long source dies.
+ */
+export const TEASER_SECONDS = 8;
+
+/**
  * Inputs above this never reach ffmpeg. A serverless invocation has neither the
  * disk nor the CPU budget, and a rendition that times out is worse than none.
  */
@@ -77,7 +90,11 @@ export function buildRenditionScaleFilter(): string {
     + ':force_original_aspect_ratio=decrease:force_divisible_by=2';
 }
 
-export function buildRenditionArgs(inputPath: string, outputPath: string): string[] {
+export function buildRenditionArgs(
+  inputPath: string,
+  outputPath: string,
+  options: { maxDurationSeconds?: number; stripAudio?: boolean } = {},
+): string[] {
   return [
     '-y',
     '-i',
@@ -86,8 +103,8 @@ export function buildRenditionArgs(inputPath: string, outputPath: string): strin
     // and the trailing `?` keeps silent sources from failing the encode.
     '-map',
     '0:v:0',
-    '-map',
-    '0:a:0?',
+    ...(options.stripAudio ? ['-an'] : ['-map', '0:a:0?']),
+    ...(options.maxDurationSeconds !== undefined ? ['-t', String(options.maxDurationSeconds)] : []),
     '-vf',
     buildRenditionScaleFilter(),
     '-r',
@@ -108,12 +125,9 @@ export function buildRenditionArgs(inputPath: string, outputPath: string): strin
     RENDITION_BUFSIZE,
     '-g',
     String(RENDITION_GOP),
-    '-c:a',
-    'aac',
-    '-b:a',
-    RENDITION_AUDIO_BITRATE,
-    '-ac',
-    '1',
+    ...(options.stripAudio
+      ? []
+      : ['-c:a', 'aac', '-b:a', RENDITION_AUDIO_BITRATE, '-ac', '1']),
     // moov atom up front so playback starts before the whole file arrives.
     '-movflags',
     '+faststart',
@@ -222,7 +236,46 @@ export async function createVideoRenditionFromFile(
   }
 }
 
-export async function createVideoRenditionBuffer(body: Blob): Promise<VideoRenditionResult> {
+/**
+ * Encodes the short muted head of a long clip for feed autoplay. Same encode
+ * ladder as the full rendition, but capped at TEASER_SECONDS and without an
+ * audio stream (the feed always plays muted). Deliberately no `not-smaller`
+ * check: a trim is always worth keeping — its entire point is bounding what
+ * the feed streams, not saving bytes over the source.
+ */
+export async function createVideoTeaserFromFile(inputPath: string): Promise<VideoRenditionResult> {
+  const tempDir = await mkdtemp(path.join(/* turbopackIgnore: true */ tmpdir(), 'feed-teaser-'));
+  const outputPath = path.join(/* turbopackIgnore: true */ tempDir, 'teaser.mp4');
+
+  try {
+    await runFfmpeg(buildRenditionArgs(inputPath, outputPath, {
+      maxDurationSeconds: TEASER_SECONDS,
+      stripAudio: true,
+    }));
+
+    const { size } = await stat(outputPath);
+    const probe = await probeVideoFile(outputPath);
+    return {
+      buffer: await readFile(outputPath),
+      bytes: size,
+      width: probe.width,
+      height: probe.height,
+      durationSeconds: probe.durationSeconds,
+    };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Stages a source blob as a temp file and hands it to `work`, so one download
+ * can feed the input probe, the teaser, and the full rendition without being
+ * written three times. Applies the byte gate before anything touches disk.
+ */
+export async function withVideoInputFile<T>(
+  body: Blob,
+  work: (inputPath: string, sourceBytes: number) => Promise<T>,
+): Promise<T> {
   const sourceBytes = body.size;
   if (sourceBytes > RENDITION_MAX_INPUT_BYTES) {
     throw new VideoRenditionSkipped(
@@ -239,8 +292,13 @@ export async function createVideoRenditionBuffer(body: Blob): Promise<VideoRendi
       Readable.fromWeb(body.stream() as NodeReadableStream<Uint8Array>),
       createWriteStream(inputPath, { flags: 'wx' }),
     );
-    return await createVideoRenditionFromFile(inputPath, sourceBytes);
+    return await work(inputPath, sourceBytes);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+}
+
+export async function createVideoRenditionBuffer(body: Blob): Promise<VideoRenditionResult> {
+  return withVideoInputFile(body, (inputPath, sourceBytes) =>
+    createVideoRenditionFromFile(inputPath, sourceBytes));
 }

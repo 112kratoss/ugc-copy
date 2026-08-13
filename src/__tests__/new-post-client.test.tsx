@@ -2214,7 +2214,9 @@ describe('NewPostClient', () => {
       },
     });
 
-    expect(screen.getByText('2 of 5 media added')).toBeInTheDocument();
+    // findByText: appending is async now — the composer reads video metadata
+    // (duration gate) before accepting files.
+    expect(await screen.findByText('2 of 5 media added')).toBeInTheDocument();
     expect(screen.getByLabelText('Post media order')).toBeInTheDocument();
 
     fillRequiredTitle();

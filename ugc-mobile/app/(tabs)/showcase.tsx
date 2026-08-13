@@ -24,7 +24,14 @@ import { WorkspaceSideMenuGestureLayer } from '@/components/workspace-side-menu-
 import { useAuth } from '@/lib/auth';
 import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
-import { isShowcaseVideoPreviewCandidate, selectActiveShowcaseVideoIds } from '@/lib/showcase-display';
+import { isShowcaseVideoPreviewCandidate } from '@/lib/showcase-display';
+import {
+  INITIAL_SHOWCASE_ACTIVATION_STATE,
+  SHOWCASE_SETTLE_CONFIRM_MS,
+  getVisibleCardItems,
+  reduceShowcaseActivation,
+  type ShowcaseActivationEvent,
+} from '@/lib/showcase-feed-activation';
 import {
   SHOWCASE_FEED_STALE_TIME_MS,
   createShowcaseFeedQueryKey,
@@ -110,6 +117,10 @@ const SKELETON_HEIGHTS = [
 ];
 const LOAD_MORE_COOLDOWN_MS = 800;
 const FEED_HORIZONTAL_PADDING = 8;
+/** One relayout per tick instead of one per resolved preview image. */
+const SHOWCASE_ASPECT_RATIO_FLUSH_MS = 50;
+/** Stable empty list so a blurred feed does not churn `extraData`. */
+const NO_ACTIVE_VIDEO_IDS: string[] = [];
 
 export default function ShowcaseScreen() {
   const { api, user } = useAuth();
@@ -144,13 +155,20 @@ export default function ShowcaseScreen() {
   const activeToolLabel = useMemo(() => activeTool ? formatToolLabel(activeTool) : null, [activeTool]);
   const [activeVideoIds, setActiveVideoIds] = useState<string[]>([]);
   const [resolvedAspectRatios, setResolvedAspectRatios] = useState<Record<string, number>>({});
-  const visibleActiveVideoIds = isFocused ? activeVideoIds : [];
+  // A fresh `[]` here would defeat the extraData memo on every blurred render.
+  const visibleActiveVideoIds = isFocused ? activeVideoIds : NO_ACTIVE_VIDEO_IDS;
   const [isSwipingMedia, setIsSwipingMedia] = useState(false);
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
   const lastLoadMoreItemCountRef = useRef(0);
   const aspectRatioRequestsRef = useRef(new Set<string>());
+  // Scroll phase lives in a ref: these handlers fire continuously, and only a
+  // committed election needs to reach React.
+  const activationRef = useRef(INITIAL_SHOWCASE_ACTIVATION_STATE);
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingAspectRatiosRef = useRef<Record<string, number>>({});
+  const aspectRatioFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const qualifiedImpressionsRef = useRef(new Set<string>());
   const feedEventRuntimeRef = useRef({
     api,
@@ -185,11 +203,65 @@ export default function ShowcaseScreen() {
   useEffect(() => {
     if (!isFocused) void flushShowcaseFeedEvents();
   }, [isFocused]);
-  const onPlaybackViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<ShowcaseMasonryCard>> }) => {
-    const visibleItems = getVisibleCardItems(viewableItems);
-    const nextVideoIds = selectActiveShowcaseVideoIds(visibleItems, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS);
-    setActiveVideoIds((current) => (sameStringList(current, nextVideoIds) ? current : nextVideoIds));
+  const dispatchActivation = useCallback((event: ShowcaseActivationEvent) => {
+    const previous = activationRef.current;
+    const next = reduceShowcaseActivation(previous, event, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS);
+    activationRef.current = next;
+
+    if (settleTimerRef.current) {
+      clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = null;
+    }
+    // A fling whose momentum the platform never announces would otherwise sit
+    // in `settling` forever, so arm a confirm timer whenever we enter it.
+    if (next.scroll === 'settling') {
+      settleTimerRef.current = setTimeout(
+        () => dispatchActivation({ type: 'settleTimeout' }),
+        SHOWCASE_SETTLE_CONFIRM_MS
+      );
+    }
+
+    // `elect` reuses the previous array when nothing changed, so this is a
+    // pointer comparison rather than a re-render on every scroll event.
+    if (next.activeIds !== previous.activeIds) setActiveVideoIds(next.activeIds);
   }, []);
+
+  useEffect(() => () => {
+    if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+    if (aspectRatioFlushRef.current) clearTimeout(aspectRatioFlushRef.current);
+  }, []);
+
+  /**
+   * Coalesces resolved preview ratios into one state write per tick.
+   *
+   * Each ratio changes a card's masonry height, so writing them one at a time
+   * produced a relayout per image — cards visibly jumping as you scrolled into
+   * them, on top of a full-list re-render each time via extraData.
+   */
+  const queueAspectRatio = useCallback((cardId: string, aspectRatio: number) => {
+    pendingAspectRatiosRef.current[cardId] = aspectRatio;
+    if (aspectRatioFlushRef.current) return;
+
+    aspectRatioFlushRef.current = setTimeout(() => {
+      aspectRatioFlushRef.current = null;
+      const pending = pendingAspectRatiosRef.current;
+      pendingAspectRatiosRef.current = {};
+
+      setResolvedAspectRatios((current) => {
+        let next: Record<string, number> | null = null;
+        for (const [cardId, ratio] of Object.entries(pending)) {
+          if (current[cardId] === ratio) continue;
+          next = next ?? { ...current };
+          next[cardId] = ratio;
+        }
+        return next ?? current;
+      });
+    }, SHOWCASE_ASPECT_RATIO_FLUSH_MS);
+  }, []);
+
+  const onPlaybackViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<ShowcaseMasonryCard>> }) => {
+    dispatchActivation({ type: 'viewableItemsChanged', items: getVisibleCardItems(viewableItems) });
+  }, [dispatchActivation]);
   const onQualifiedViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<ShowcaseMasonryCard>> }) => {
     if (!feedEventRuntimeRef.current.isFocused) return;
     for (const token of viewableItems) {
@@ -260,7 +332,10 @@ export default function ShowcaseScreen() {
     if (typeof Image.loadAsync !== 'function') return;
 
     for (const card of cards) {
-      if (card.aspectRatio || !card.previewUrl || resolvedAspectRatios[card.id]) {
+      // `pendingAspectRatios` covers the window between a resolved ratio and
+      // its batched flush, where `resolvedAspectRatios` does not know yet.
+      if (card.aspectRatio || !card.previewUrl
+        || resolvedAspectRatios[card.id] || pendingAspectRatiosRef.current[card.id]) {
         continue;
       }
       const requestKey = `${card.id}:${card.previewUrl}`;
@@ -271,11 +346,7 @@ export default function ShowcaseScreen() {
         .then((image) => {
           const aspectRatio = image.width / image.height;
           if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) return;
-          setResolvedAspectRatios((current) => (
-            current[card.id] === aspectRatio
-              ? current
-              : { ...current, [card.id]: aspectRatio }
-          ));
+          queueAspectRatio(card.id, aspectRatio);
         })
         .catch(() => null)
         .finally(() => {
@@ -293,6 +364,7 @@ export default function ShowcaseScreen() {
   }, [routeTool]);
 
   useEffect(() => {
+    dispatchActivation({ type: 'reset' });
     setActiveVideoIds([]);
     setFeedbackItem(null);
     qualifiedImpressionsRef.current.clear();
@@ -519,6 +591,14 @@ export default function ShowcaseScreen() {
     router.push(`/creators/${encodeURIComponent(username)}` as never);
   };
 
+  // Memoized: an inline literal here changes identity on every parent render,
+  // which makes FlashList re-render every mounted cell instead of only when
+  // activation or a resolved ratio actually changed.
+  const feedExtraData = useMemo(
+    () => ({ visibleActiveVideoIds, resolvedAspectRatios }),
+    [visibleActiveVideoIds, resolvedAspectRatios]
+  );
+
   const renderCard: ListRenderItem<ShowcaseMasonryCard> = ({ item, target }) => {
     return (
       <MasonryCardCell layout={gridLayout}>
@@ -544,7 +624,14 @@ export default function ShowcaseScreen() {
         contentInsetAdjustmentBehavior="never"
         data={isFirstLoad ? [] : cards}
         drawDistance={SHOWCASE_DRAW_DISTANCE}
-        extraData={{ visibleActiveVideoIds, resolvedAspectRatios }}
+        extraData={feedExtraData}
+        onScrollBeginDrag={() => dispatchActivation({ type: 'dragBegin' })}
+        onScrollEndDrag={(event) => dispatchActivation({
+          type: 'dragEnd',
+          velocityY: event.nativeEvent.velocity?.y,
+        })}
+        onMomentumScrollBegin={() => dispatchActivation({ type: 'momentumBegin' })}
+        onMomentumScrollEnd={() => dispatchActivation({ type: 'momentumEnd' })}
         getItemType={(item) => item.mediaKind ?? item.item.category}
         keyExtractor={(item) => item.id}
         masonry
@@ -676,22 +763,6 @@ function showcaseFeedErrorBody(error: unknown) {
   }
 
   return 'Check your connection, then try again.';
-}
-
-function getVisibleCardItems(viewableItems: Array<ViewToken<ShowcaseMasonryCard>>) {
-  const items: ShowcaseFeedItem[] = [];
-
-  for (const token of viewableItems) {
-    if (!token.isViewable || !token.item) continue;
-    items.push(token.item.item);
-  }
-
-  return items;
-}
-
-function sameStringList(left: string[], right: string[]) {
-  if (left.length !== right.length) return false;
-  return left.every((value, index) => value === right[index]);
 }
 
 function MasonryCardCell({ children, layout }: { children: React.ReactNode; layout: ShowcaseGridLayout }) {

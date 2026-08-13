@@ -90,6 +90,81 @@ describe('preparePostCreationSubmission', () => {
     });
   });
 
+  it('carries a reported video duration through, discarding malformed reports', async () => {
+    const buildFormData = (durationSeconds: unknown) => {
+      const formData = new FormData();
+      formData.set('title', 'Studio lighting reference');
+      formData.set('postFormat', 'media');
+      formData.set('category', 'video');
+      formData.set('mediaItems', JSON.stringify([{
+        storagePath: 'uploads/user-1/clip.mp4',
+        originalName: 'clip.mp4',
+        contentType: 'video/mp4',
+        durationSeconds,
+      }]));
+      return formData;
+    };
+
+    const reported = await preparePostCreationSubmission({
+      formData: buildFormData(42.5),
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+    expect(reported).toMatchObject({
+      ok: true,
+      submission: { submittedMediaItems: [{ durationSeconds: 42.5 }] },
+    });
+
+    for (const malformed of ['90', -3, Number.NaN]) {
+      const result = await preparePostCreationSubmission({
+        formData: buildFormData(malformed),
+        userId: 'user-1',
+        sourceToolCatalog,
+      });
+      // Malformed reports read as absent, never as an error: the value is
+      // advisory and the rendition sweep probes the real file later.
+      expect(result).toMatchObject({
+        ok: true,
+        submission: { submittedMediaItems: [{ durationSeconds: null }] },
+      });
+    }
+  });
+
+  it('rejects a video whose reported duration is over the ceiling, but never an image', async () => {
+    const buildFormData = (contentType: string, name: string) => {
+      const formData = new FormData();
+      formData.set('title', 'Studio lighting reference');
+      formData.set('postFormat', 'media');
+      formData.set('category', contentType.startsWith('video/') ? 'video' : 'image');
+      formData.set('mediaItems', JSON.stringify([{
+        storagePath: `uploads/user-1/${name}`,
+        originalName: name,
+        contentType,
+        durationSeconds: 601,
+      }]));
+      return formData;
+    };
+
+    const rejected = await preparePostCreationSubmission({
+      formData: buildFormData('video/mp4', 'clip.mp4'),
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+    expect(rejected).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'Videos must be 10 minutes or shorter.' },
+    });
+
+    // A bogus duration on an image is ignored — only videos are gated.
+    const image = await preparePostCreationSubmission({
+      formData: buildFormData('image/png', 'proof.png'),
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+    expect(image).toMatchObject({ ok: true });
+  });
+
   it('preserves submitted media keys and validates resource scopes against them', async () => {
     const buildFormData = (scopeKey: string) => {
       const formData = new FormData();
