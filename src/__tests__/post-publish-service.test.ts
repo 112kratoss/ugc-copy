@@ -39,10 +39,12 @@ async function prepareStagedMediaSubmission({
   fileName,
   contentType,
   category = 'image',
+  durationSeconds,
 }: {
   fileName: string;
   contentType: string;
   category?: string;
+  durationSeconds?: number;
 }) {
   const formData = new FormData();
   formData.set('title', 'Studio lighting reference');
@@ -50,9 +52,20 @@ async function prepareStagedMediaSubmission({
   formData.set('category', category);
   formData.set('visibility', 'public');
   formData.set('sourceTool', 'magicbooklet');
-  formData.set('mediaStoragePath', `uploads/user-1/${fileName}`);
-  formData.set('mediaOriginalName', fileName);
-  formData.set('mediaContentType', contentType);
+  if (durationSeconds !== undefined) {
+    // The duration slot only exists on the mediaItems JSON form, which is what
+    // both composers actually send.
+    formData.set('mediaItems', JSON.stringify([{
+      storagePath: `uploads/user-1/${fileName}`,
+      originalName: fileName,
+      contentType,
+      durationSeconds,
+    }]));
+  } else {
+    formData.set('mediaStoragePath', `uploads/user-1/${fileName}`);
+    formData.set('mediaOriginalName', fileName);
+    formData.set('mediaContentType', contentType);
+  }
 
   const prepared = await preparePostCreationSubmission({
     formData,
@@ -638,6 +651,63 @@ describe('publishPreparedPost', () => {
       mediaKind: 'video',
       contentType: 'video/mp4',
     });
+  });
+
+  it('seeds duration_seconds from the client report on the staged video path', async () => {
+    const prepared = await prepareStagedMediaSubmission({
+      fileName: 'clip.mp4',
+      contentType: 'video/mp4',
+      category: 'video',
+      durationSeconds: 47.2,
+    });
+    const insertPostMediaItems = vi.fn();
+
+    const result = await publishPreparedPost({
+      adminSupabase: adminSupabaseDouble({
+        storage: {
+          from: vi.fn(() => ({
+            info: vi.fn(async () => ({
+              data: { size: 13 * 1024 * 1024, contentType: 'video/mp4' },
+              error: null,
+            })),
+            copy: vi.fn(async () => ({ data: { path: 'posts/post-1/0/clip.mp4' }, error: null })),
+            download: vi.fn(),
+            remove: vi.fn(async () => ({ data: [], error: null })),
+          })),
+        },
+        from: vi.fn(() => ({
+          update: vi.fn(() => ({ in: vi.fn(() => ({ is: vi.fn(async () => ({ error: null })) })) })),
+        })),
+      }),
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      submission: prepared.submission,
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        createPostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'private' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'public' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        insertPostMediaItems,
+        insertPostSourceTools: vi.fn(),
+        createPostMediaPreview: vi.fn(),
+        createPostMediaRendition: vi.fn(),
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    const [{ mediaItems }] = insertPostMediaItems.mock.calls[0];
+    // Client-reported seed only: the rendition sweep's probe of the actual
+    // file overwrites this and is the value of record.
+    expect(mediaItems[0]).toMatchObject({ mediaKind: 'video', durationSeconds: 47.2 });
   });
 
   it('previews a staged image inline but leaves the row pending when that fails', async () => {

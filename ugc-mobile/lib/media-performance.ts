@@ -23,6 +23,21 @@ export const IMMERSIVE_HORIZONTAL_LIST_TUNING = {
  */
 export const SHOWCASE_DRAW_DISTANCE = 900;
 export const SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS = 1;
+
+/**
+ * How far ahead a feed preview may buffer, in seconds.
+ *
+ * ExoPlayer defaults to 20s of forward buffer on Android, so a single
+ * activation downloads 20s of video no matter how briefly it is watched — and
+ * for a clip whose rendition failed (long sources time out at 120s of ffmpeg
+ * and then fall back to the full-size original) that is the most expensive
+ * request the feed can make. A preview is glanced at, not watched, so 8s keeps
+ * the loop seamless while cutting the worst case roughly by a third.
+ *
+ * Feed only. The immersive viewer keeps ExoPlayer's defaults, because there
+ * the user has chosen to watch and stalling matters more than bytes.
+ */
+export const FEED_PREVIEW_FORWARD_BUFFER_SECONDS = 8;
 export const HOME_RAIL_DRAW_DISTANCE = 400;
 
 /**

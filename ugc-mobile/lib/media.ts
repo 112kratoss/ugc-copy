@@ -30,6 +30,42 @@ const RESOURCE_FILES_BUCKET = 'post_resource_files';
 // oversized pick fails before the bytes are pushed anywhere.
 const MAX_RESOURCE_FILE_SIZE_BYTES = 50 * 1024 * 1024;
 
+/**
+ * Mirrors POST_VIDEO_MAX_DURATION_SECONDS in src/lib/post-media.ts. Checked
+ * here so an over-long video is refused before any bytes are uploaded; the
+ * server re-checks the reported duration at publish, and the rendition
+ * sweep's probe of the actual file is the boundary for anything that slips
+ * past both.
+ */
+export const POST_VIDEO_MAX_DURATION_SECONDS = 600;
+
+export const POST_VIDEO_DURATION_LIMIT_MESSAGE =
+  `Videos must be ${POST_VIDEO_MAX_DURATION_SECONDS / 60} minutes or shorter.`;
+
+export function assetDurationSeconds(value?: number | null) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  // Expo ImagePicker reports video duration in milliseconds.
+  return Math.max(0, value / 1000);
+}
+
+/**
+ * True only for a picked video that is confidently over the post limit. An
+ * unknown duration returns false — the picker cannot always read metadata,
+ * and silently refusing those files would block legitimate uploads that the
+ * server-side probe is equipped to judge properly.
+ */
+export function isPostVideoOverDurationLimit(asset: {
+  type?: string | null;
+  mimeType?: string | null;
+  duration?: number | null;
+}): boolean {
+  const isVideo = asset.type === 'video' || Boolean(asset.mimeType?.startsWith('video/'));
+  if (!isVideo) return false;
+  const seconds = assetDurationSeconds(asset.duration);
+  if (seconds === null) return false;
+  return seconds > POST_VIDEO_MAX_DURATION_SECONDS;
+}
+
 const REFERENCE_MEDIA_FAMILY_BY_EXTENSION = new Map<string, 'image' | 'video' | 'audio'>([
   ['jpg', 'image'],
   ['jpeg', 'image'],

@@ -83,6 +83,14 @@ export interface ShowcaseMediaItem {
      * fall back to `url` — which also stays what downloads and remixes use.
      */
     renditionUrl?: string | null;
+    /** 8s muted head of a long clip; feed-only. Absent until encoded. */
+    teaserUrl?: string | null;
+    /**
+     * Server-computed feed-stream decision (teaser, rendition, provably-lean
+     * source, or null for poster-only). Clients that understand it must not
+     * re-derive the fallback chain — and must never autoplay `url` in a feed.
+     */
+    feedStreamUrl?: string | null;
     previewUrl?: string | null;
     previewThumbhash?: string | null;
     previewStatus?: 'pending' | 'processing' | 'ready' | 'failed';

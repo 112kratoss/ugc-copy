@@ -12,6 +12,18 @@ export interface VisualMediaDescriptor {
    * source of record, and is what downloads and remixes must use.
    */
   renditionUrl: string | null;
+  /**
+   * 8s muted head of a long clip, encoded so the feed can autoplay a bounded
+   * amount of a video whose full length would be pure egress. Feed-only —
+   * viewers keep streaming the rendition.
+   */
+  teaserUrl: string | null;
+  /**
+   * The server-computed decision of what an autoplaying feed card may stream:
+   * teaser, rendition, source (only when provably lean), or null for
+   * poster-only. Clients should not re-derive this.
+   */
+  feedStreamUrl: string | null;
   previewUrl: string | null;
   thumbhash: string | null;
   cacheKey: string;
@@ -29,6 +41,8 @@ export function buildVisualMediaDescriptor(input: {
   url: string;
   storageKey: string;
   renditionUrl?: string | null;
+  teaserUrl?: string | null;
+  feedStreamUrl?: string | null;
   previewUrl: string | null;
   previewStorageKey: string | null;
   previewThumbhash: string | null;
@@ -43,6 +57,8 @@ export function buildVisualMediaDescriptor(input: {
     kind: input.kind,
     url: input.url,
     renditionUrl: input.renditionUrl ?? null,
+    teaserUrl: input.teaserUrl ?? null,
+    feedStreamUrl: input.feedStreamUrl ?? null,
     previewUrl: input.previewUrl,
     thumbhash: input.previewThumbhash,
     cacheKey: input.previewStorageKey || input.storageKey || input.id,

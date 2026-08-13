@@ -1204,6 +1204,69 @@ describe('updateOwnerPostForRoute', () => {
     expect(downloads).toEqual([]);
   });
 
+  it('rejects an edit whose new video reports a duration over the ceiling', async () => {
+    const { client, copied } = createSupabaseMock({
+      bundle: null,
+      stagedInfo: { size: 13 * 1024 * 1024, contentType: 'video/mp4' },
+      downloadedMedia: blobOfSize(13 * 1024 * 1024, 'video/mp4'),
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'private',
+        title: 'Proof post',
+        description: null,
+        prompt: null,
+        body: null,
+        category: 'video',
+        post_format: 'media',
+        source_tool: null,
+        source_tool_slug: null,
+        source_kind: 'external',
+        archived_at: null,
+        showcase_asset_path: 'posts/post-1/a.mp4',
+        output_url: null,
+        review_status: 'visible',
+      },
+    });
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        mediaItems: [{
+          mediaKey: 'proof-a',
+          storagePath: 'uploads/user-1/marathon.mp4',
+          contentType: 'video/mp4',
+          originalName: 'marathon.mp4',
+          durationSeconds: 601,
+        }],
+        resourceBundle: { accessMode: 'none' },
+      },
+      dependencies: {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'private' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('Expected the over-ceiling edit to be rejected');
+    expect(result.status).toBe(400);
+    expect(result.body.error).toBe('Videos must be 10 minutes or shorter.');
+    // Advisory check runs at parse time, before any storage promotion.
+    expect(copied).toEqual([]);
+  });
+
   it('copies edited video into the public bucket without reading the bytes', async () => {
     const { client, copied, downloads, uploaded } = createSupabaseMock({
       bundle: null,

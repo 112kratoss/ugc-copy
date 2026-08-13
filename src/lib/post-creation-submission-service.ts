@@ -8,6 +8,7 @@ import {
 } from '@/lib/post-resource-bundles';
 import { getMediaKindFromContentType, MAX_POST_MEDIA_ITEMS } from '@/lib/post-media';
 import { defaultPostMediaKey, normalizePostMediaKey } from '@/lib/post-media-key';
+import { POST_VIDEO_DURATION_LIMIT_MESSAGE, POST_VIDEO_MAX_DURATION_SECONDS } from '@/lib/post-video-limits';
 import {
   normalizeSourceToolInputWithCatalog,
   normalizeSourceToolSelectionsWithCatalog,
@@ -42,6 +43,13 @@ export type SubmittedPostMediaItem =
       temporaryStoragePath: string;
       originalName: string;
       contentType: string;
+      /**
+       * Client-reported, so advisory only: it powers the early over-ceiling
+       * rejection and seeds post_media.duration_seconds, but the rendition
+       * sweep's probe of the actual file is the value of record and
+       * overwrites it.
+       */
+      durationSeconds?: number | null;
     };
 
 export interface PostCreationSubmission {
@@ -219,10 +227,17 @@ function parseMediaItemsPayload(params: {
       temporaryStoragePath: location.filePath,
       originalName: location.originalName,
       contentType: location.contentType,
+      durationSeconds: parseReportedDurationSeconds(descriptor.durationSeconds),
     });
   }
 
   return { items, error: null };
+}
+
+/** A malformed or negative report reads as absent, never as an error. */
+function parseReportedDurationSeconds(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+  return value;
 }
 
 function validateSubmittedMediaItems(items: SubmittedPostMediaItem[]): string | null {
@@ -243,6 +258,18 @@ function validateSubmittedMediaItems(items: SubmittedPostMediaItem[]): string | 
 
     if (!getMediaKindFromContentType(item.contentType)) {
       return 'Post media must be an image or video.';
+    }
+
+    // Advisory: the duration is client-reported, so this only catches honest
+    // clients early. A lie slips through and the rendition sweep's probe of
+    // the actual file demotes it to poster-only in the feed.
+    if (
+      item.source === 'uploaded'
+      && item.contentType.startsWith('video/')
+      && typeof item.durationSeconds === 'number'
+      && item.durationSeconds > POST_VIDEO_MAX_DURATION_SECONDS
+    ) {
+      return POST_VIDEO_DURATION_LIMIT_MESSAGE;
     }
   }
 

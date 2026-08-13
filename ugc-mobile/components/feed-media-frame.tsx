@@ -46,7 +46,13 @@ const absoluteFill = {
   inset: 0,
 };
 
-const videoViewProps = {
+/**
+ * Presentation for every feed-side `VideoView`, shared with FeedVideoPreview so
+ * the two cannot drift. `useExoShutter: false` means ExoPlayer draws no black
+ * shutter before the first frame — the caller's poster is the only cover, so a
+ * consumer that drops its poster early will show the bare surface.
+ */
+export const FEED_VIDEO_VIEW_PROPS = {
   allowsPictureInPicture: false,
   fullscreenOptions: { enable: false },
   nativeControls: false,
@@ -125,7 +131,7 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
             <View pointerEvents="none" style={[absoluteFill, { backgroundColor: 'rgba(0,0,0,0.44)' }]} />
           ) : null}
           <VideoView
-            {...videoViewProps}
+            {...FEED_VIDEO_VIEW_PROPS}
             player={props.player}
             contentFit={props.videoContentFit ?? 'contain'}
             onFirstFrameRender={props.onFirstFrameRender}

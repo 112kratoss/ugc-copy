@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { resolveStoredMediaUrl } from '@/lib/server-helpers';
 import { buildVisualMediaDescriptor, type VisualMediaDescriptor } from '@/lib/media-descriptor';
 import type { PostMediaRenditionStatus } from '@/lib/post-media-rendition';
+import { resolvePostVideoFeedStreamUrl } from '@/lib/post-video-limits';
 import { defaultPostMediaKey, normalizePostMediaKey } from '@/lib/post-media-key';
 import { getPostMediaKind, resolvePostMediaUrl, type PostMediaRow as LegacyPostMediaRow } from '@/lib/posts-server';
 import type { ShowcaseMediaKind, ShowcasePostFormat, ShowcaseItemCategory } from '@/lib/showcase';
@@ -19,6 +20,9 @@ export interface PostMediaSummary {
   url: string;
   renditionUrl: string | null;
   renditionStatus: PostMediaRenditionStatus;
+  teaserUrl: string | null;
+  /** Server-computed feed-stream decision; null means poster-only in the feed. */
+  feedStreamUrl: string | null;
   previewUrl: string | null;
   previewThumbhash: string | null;
   previewStatus: 'pending' | 'processing' | 'ready' | 'failed';
@@ -49,6 +53,10 @@ export interface PostMediaPersistInput {
   renditionError?: string | null;
   renditionGeneratedAt?: string | null;
   renditionBytes?: number | null;
+  teaserStoragePath?: string | null;
+  teaserBytes?: number | null;
+  teaserGeneratedAt?: string | null;
+  teaserError?: string | null;
   externalUrl?: string | null;
   mediaKind: ShowcaseMediaKind;
   contentType: string | null;
@@ -76,6 +84,10 @@ interface PostMediaDbRow {
   rendition_error?: string | null;
   rendition_generated_at?: string | null;
   rendition_bytes?: number | null;
+  teaser_storage_path?: string | null;
+  teaser_bytes?: number | null;
+  teaser_generated_at?: string | null;
+  teaser_error?: string | null;
   external_url: string | null;
   media_kind: ShowcaseMediaKind;
   content_type: string | null;
@@ -121,6 +133,16 @@ function isMissingPostMediaRenditionColumnError(error: unknown): boolean {
   const { code, message = '' } = error as SupabaseSchemaError;
   return (code === '42703' || code === 'PGRST204')
     && /rendition_(storage_path|status|attempt_count|error|generated_at|bytes)/.test(message);
+}
+
+function isMissingPostMediaTeaserColumnError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const { code, message = '' } = error as SupabaseSchemaError;
+  return (code === '42703' || code === 'PGRST204')
+    && /teaser_(storage_path|bytes|generated_at|error)/.test(message);
 }
 
 export function isMissingPostMediaSchemaError(error: unknown): boolean {
@@ -193,12 +215,28 @@ async function resolvePostMediaDbRows(
           : null;
         const renditionStatus: PostMediaRenditionStatus = row.rendition_status
           ?? (row.media_kind === 'video' ? 'pending' : 'skipped');
+        // Path presence is the teaser's ready signal: the worker records it
+        // only after the content-hashed object uploaded.
+        const teaserUrl = row.teaser_storage_path
+          ? supabase.storage.from(SHOWCASE_MEDIA_BUCKET).getPublicUrl(row.teaser_storage_path).data.publicUrl
+          : null;
+        const feedStreamUrl = row.media_kind === 'video'
+          ? resolvePostVideoFeedStreamUrl({
+            url,
+            renditionUrl,
+            teaserUrl,
+            renditionStatus,
+            durationSeconds: row.duration_seconds,
+          })
+          : null;
         const preview = buildVisualMediaDescriptor({
           id: row.id,
           kind: row.media_kind,
           url,
           storageKey: row.storage_path ?? row.external_url ?? row.id,
           renditionUrl,
+          teaserUrl,
+          feedStreamUrl,
           previewUrl,
           previewStorageKey: row.preview_storage_path ?? null,
           previewThumbhash: row.preview_thumbhash ?? null,
@@ -214,6 +252,8 @@ async function resolvePostMediaDbRows(
           url,
           renditionUrl,
           renditionStatus,
+          teaserUrl,
+          feedStreamUrl,
           previewUrl,
           previewThumbhash: row.preview_thumbhash ?? null,
           previewStatus,
@@ -248,6 +288,7 @@ export async function loadPostMediaItemsMap(
   const BASE_COLUMNS = 'id, post_id, storage_path, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order';
   const PREVIEW_COLUMNS = 'preview_storage_path, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at';
   const RENDITION_COLUMNS = 'rendition_storage_path, rendition_status, rendition_attempt_count, rendition_error, rendition_generated_at, rendition_bytes';
+  const TEASER_COLUMNS = 'teaser_storage_path, teaser_bytes, teaser_generated_at, teaser_error';
 
   const selectPostMedia = (columns: string) => supabase
     .from('post_media')
@@ -255,9 +296,15 @@ export async function loadPostMediaItemsMap(
     .in('post_id', uniquePostIds)
     .order('sort_order', { ascending: true });
 
-  const fullResult = await selectPostMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}`);
+  const fullResult = await selectPostMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}, ${TEASER_COLUMNS}`);
   let data = fullResult.data as PostMediaDbRow[] | null;
   let error = fullResult.error;
+
+  if (isMissingPostMediaTeaserColumnError(error)) {
+    const withoutTeaser = await selectPostMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}`);
+    data = withoutTeaser.data as PostMediaDbRow[] | null;
+    error = withoutTeaser.error;
+  }
 
   if (isMissingPostMediaRenditionColumnError(error)) {
     const withoutRendition = await selectPostMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}`);
@@ -322,6 +369,8 @@ export async function buildLegacyPostMediaItems(params: {
     url,
     storageKey: params.row.showcase_asset_path ?? params.row.output_url ?? `${params.postId}:cover`,
     renditionUrl: null,
+    teaserUrl: null,
+    feedStreamUrl: null,
     previewUrl: null,
     previewStorageKey: null,
     previewThumbhash: null,
@@ -337,7 +386,12 @@ export async function buildLegacyPostMediaItems(params: {
     url,
     // Legacy cover rows predate post_media, so there is no rendition to point at.
     renditionUrl: null,
+    // 'skipped' here is a placeholder, not a genuine not-smaller verdict, so
+    // the feed-stream policy's skipped⇒source rule must not see it: these
+    // covers stay poster-only in the feed (bitrate unknown).
     renditionStatus: 'skipped',
+    teaserUrl: null,
+    feedStreamUrl: null,
     previewUrl: null,
     previewThumbhash: null,
     previewStatus: 'pending',
@@ -380,6 +434,11 @@ export async function insertPostMediaItems(params: {
       rendition_error: item.renditionError ?? null,
       rendition_generated_at: item.renditionGeneratedAt ?? (item.renditionStoragePath ? new Date().toISOString() : null),
       rendition_bytes: item.renditionBytes ?? null,
+      teaser_storage_path: item.teaserStoragePath ?? null,
+      teaser_bytes: item.teaserBytes ?? null,
+      // A recorded path must carry its generation time (table CHECK).
+      teaser_generated_at: item.teaserGeneratedAt ?? (item.teaserStoragePath ? new Date().toISOString() : null),
+      teaser_error: item.teaserError ?? null,
       external_url: item.externalUrl ?? null,
       media_kind: item.mediaKind,
       content_type: item.contentType,
@@ -396,7 +455,8 @@ export async function insertPostMediaItems(params: {
     const removeMediaKey = isMissingPostMediaKeyColumnError(error);
     const removePreviewFields = isMissingPostMediaPreviewColumnError(error);
     const removeRenditionFields = isMissingPostMediaRenditionColumnError(error);
-    if (!removeMediaKey && !removePreviewFields && !removeRenditionFields) {
+    const removeTeaserFields = isMissingPostMediaTeaserColumnError(error);
+    if (!removeMediaKey && !removePreviewFields && !removeRenditionFields && !removeTeaserFields) {
       break;
     }
 
@@ -420,6 +480,12 @@ export async function insertPostMediaItems(params: {
         delete fallbackRow.rendition_error;
         delete fallbackRow.rendition_generated_at;
         delete fallbackRow.rendition_bytes;
+      }
+      if (removeTeaserFields) {
+        delete fallbackRow.teaser_storage_path;
+        delete fallbackRow.teaser_bytes;
+        delete fallbackRow.teaser_generated_at;
+        delete fallbackRow.teaser_error;
       }
       return fallbackRow;
     });

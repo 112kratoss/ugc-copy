@@ -1,9 +1,9 @@
 import { createPostsRouteHandlers } from '@/lib/posts-route-adapter-service';
 
 export const runtime = 'nodejs';
-// Publishing returns as soon as the post exists, then transcodes the video in
-// an after() callback. The budget covers that post-response work, not the
-// request the user waits on.
+// Video work is queue/cron-owned (media-preview-repair) — publish defers it
+// entirely on the staged path. The budget exists for the legacy multipart
+// path, which still transcodes inline before responding.
 export const maxDuration = 300;
 
 export const { GET, POST } = createPostsRouteHandlers();

@@ -27,6 +27,39 @@ vi.mock('../lib/upload-file', async () => {
   };
 });
 
+describe('post video duration limit', () => {
+  it('converts picker milliseconds to seconds', async () => {
+    const { assetDurationSeconds } = await import('../lib/media');
+
+    expect(assetDurationSeconds(8000)).toBe(8);
+    expect(assetDurationSeconds(0)).toBe(0);
+    expect(assetDurationSeconds(null)).toBeNull();
+    expect(assetDurationSeconds(undefined)).toBeNull();
+    expect(assetDurationSeconds(Number.NaN)).toBeNull();
+  });
+
+  it('flags only videos confidently over the limit', async () => {
+    const { isPostVideoOverDurationLimit, POST_VIDEO_MAX_DURATION_SECONDS } = await import('../lib/media');
+    const overLimitMs = (POST_VIDEO_MAX_DURATION_SECONDS + 1) * 1000;
+
+    expect(isPostVideoOverDurationLimit({ type: 'video', duration: overLimitMs })).toBe(true);
+    expect(isPostVideoOverDurationLimit({ mimeType: 'video/mp4', duration: overLimitMs })).toBe(true);
+    // At the limit exactly is allowed.
+    expect(isPostVideoOverDurationLimit({ type: 'video', duration: POST_VIDEO_MAX_DURATION_SECONDS * 1000 })).toBe(false);
+    // Images are never gated, even with a bogus duration.
+    expect(isPostVideoOverDurationLimit({ type: 'image', duration: overLimitMs })).toBe(false);
+    // Unknown duration defers to the server-side probe.
+    expect(isPostVideoOverDurationLimit({ type: 'video', duration: null })).toBe(false);
+    expect(isPostVideoOverDurationLimit({ type: 'video' })).toBe(false);
+  });
+
+  it('names the limit in minutes in the user-facing message', async () => {
+    const { POST_VIDEO_DURATION_LIMIT_MESSAGE } = await import('../lib/media');
+
+    expect(POST_VIDEO_DURATION_LIMIT_MESSAGE).toBe('Videos must be 10 minutes or shorter.');
+  });
+});
+
 describe('mobile media uploads', () => {
   beforeEach(() => {
     uploadState.inspectUriUpload.mockReset();

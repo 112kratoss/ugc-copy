@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  getShowcaseFeedStreamUrl,
   getShowcasePlaybackUrl,
   getShowcaseMediaRenditionUrl,
 } from '@/lib/showcase-media';
@@ -72,5 +73,44 @@ describe('showcase playback source', () => {
     // the point, so resolving playback must never overwrite it.
     expect(item.url).toBe('https://cdn.test/showcase/clip.mp4');
     expect(getShowcasePlaybackUrl(item)).not.toBe(item.url);
+  });
+});
+
+describe('showcase feed stream source', () => {
+  it('obeys the server decision, including an explicit poster-only null', () => {
+    expect(getShowcaseFeedStreamUrl(mediaItem({
+      feedStreamUrl: 'https://cdn.test/clip.teaser.abc.mp4',
+      renditionUrl: 'https://cdn.test/clip.feed.abc.mp4',
+    }))).toBe('https://cdn.test/clip.teaser.abc.mp4');
+
+    // Null is a verdict, not an absence: the server decided poster-only and
+    // the client must not fall back past it — that fallback is how raw
+    // sources reached the feed in the first place.
+    expect(getShowcaseFeedStreamUrl(mediaItem({
+      feedStreamUrl: null,
+      renditionUrl: 'https://cdn.test/clip.feed.abc.mp4',
+      teaserUrl: 'https://cdn.test/clip.teaser.abc.mp4',
+    }))).toBeNull();
+  });
+
+  it('falls back teaser-then-rendition only when the field is absent entirely', () => {
+    // Older servers never send feedStreamUrl at all.
+    expect(getShowcaseFeedStreamUrl(mediaItem({
+      teaserUrl: 'https://cdn.test/clip.teaser.abc.mp4',
+      renditionUrl: 'https://cdn.test/clip.feed.abc.mp4',
+    }))).toBe('https://cdn.test/clip.teaser.abc.mp4');
+
+    expect(getShowcaseFeedStreamUrl(mediaItem({
+      renditionUrl: 'https://cdn.test/clip.feed.abc.mp4',
+    }))).toBe('https://cdn.test/clip.feed.abc.mp4');
+  });
+
+  it('never returns the raw source, unlike the viewer helper', () => {
+    const bare = mediaItem();
+
+    // Same item, two verdicts: the viewer may stream the source deliberately,
+    // the feed goes poster-only.
+    expect(getShowcasePlaybackUrl(bare)).toBe(bare.url);
+    expect(getShowcaseFeedStreamUrl(bare)).toBeNull();
   });
 });

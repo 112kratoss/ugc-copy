@@ -30,7 +30,8 @@ import {
   markMediaUploadIntentsConsumed,
 } from '@/lib/media-upload-intents';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
-import { createPostMediaRendition } from '@/lib/post-media-rendition';
+import { createPostMediaRendition, type PostMediaTeaserOutcome } from '@/lib/post-media-rendition';
+import type { VideoProbeResult } from '@/lib/video-rendition';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
 import {
@@ -355,6 +356,9 @@ export async function publishPreparedPost({
           originalName: mediaItem.originalName,
           width: preview?.width ?? null,
           height: preview?.height ?? null,
+          // Client-reported seed; the rendition sweep's probe of the actual
+          // file overwrites it and is the value of record.
+          durationSeconds: mediaKind === 'video' ? mediaItem.durationSeconds ?? null : null,
           sortOrder: index,
         });
         continue;
@@ -403,12 +407,21 @@ export async function publishPreparedPost({
       // fail because a transcode did.
       let rendition: Awaited<ReturnType<typeof createPostMediaRendition>> | null = null;
       let renditionFailed = false;
+      // Object properties, not bare lets: the values land via callbacks, and
+      // TypeScript's flow analysis would otherwise keep a bare let narrowed to
+      // its null initializer at every later read.
+      const captured: {
+        inputProbe: VideoProbeResult | null;
+        teaserOutcome: PostMediaTeaserOutcome | null;
+      } = { inputProbe: null, teaserOutcome: null };
       try {
         rendition = await resolvedDependencies.createPostMediaRendition({
           body: mediaBody,
           contentType: mediaItem.contentType || mediaBody.type,
           storagePath,
           supabase: adminSupabase,
+          onInputProbe: (probe) => { captured.inputProbe = probe; },
+          onTeaserOutcome: (outcome) => { captured.teaserOutcome = outcome; },
         });
         if (rendition.status === 'ready') {
           storagePathsToCleanup.push(rendition.renditionStoragePath);
@@ -416,6 +429,11 @@ export async function publishPreparedPost({
       } catch (renditionError) {
         renditionFailed = true;
         logBackendWarning('failed_to_create_post_media_rendition', { error: renditionError });
+      }
+      const teaserOutcome = captured.teaserOutcome;
+      const inputProbe = captured.inputProbe;
+      if (teaserOutcome?.status === 'ready') {
+        storagePathsToCleanup.push(teaserOutcome.teaserStoragePath);
       }
 
       persistedMediaItems.push({
@@ -439,12 +457,19 @@ export async function publishPreparedPost({
         renditionError: renditionFailed ? 'Rendition generation failed.' : null,
         renditionGeneratedAt: rendition?.status === 'ready' ? new Date().toISOString() : null,
         renditionBytes: rendition?.status === 'ready' ? rendition.renditionBytes : null,
+        teaserStoragePath: teaserOutcome?.status === 'ready' ? teaserOutcome.teaserStoragePath : null,
+        teaserBytes: teaserOutcome?.status === 'ready' ? teaserOutcome.teaserBytes : null,
+        teaserGeneratedAt: teaserOutcome?.status === 'ready' ? new Date().toISOString() : null,
+        teaserError: teaserOutcome?.status === 'failed' ? teaserOutcome.error.slice(0, 500) : null,
         mediaKind,
         contentType: mediaItem.contentType || mediaBody.type || null,
         originalName: mediaItem.originalName,
         width: preview?.width ?? (rendition?.status === 'ready' ? rendition.width : null),
         height: preview?.height ?? (rendition?.status === 'ready' ? rendition.height : null),
-        durationSeconds: rendition?.status === 'ready' ? rendition.durationSeconds : null,
+        // Output probe first, input probe when the transcode never finished.
+        durationSeconds: (rendition?.status === 'ready' ? rendition.durationSeconds : null)
+          ?? inputProbe?.durationSeconds
+          ?? null,
         sortOrder: index,
       });
     }

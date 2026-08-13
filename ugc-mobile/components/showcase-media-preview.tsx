@@ -7,8 +7,8 @@ import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { IMMERSIVE_HORIZONTAL_LIST_TUNING } from '@/lib/media-performance';
 import {
+  getShowcaseFeedStreamUrl,
   getShowcaseMediaPreviewUrl,
-  getShowcaseMediaRenditionUrl,
   getShowcasePreviewMediaItems,
   resolveShowcaseImageTileSource,
 } from '@/lib/showcase-media';
@@ -237,7 +237,7 @@ function ShowcaseMediaSlide({
       <View style={{ width, height }}>
         <FeedVideoPreview
           url={item.url}
-          renditionUrl={getShowcaseMediaRenditionUrl(item)}
+          streamUrl={getShowcaseFeedStreamUrl(item)}
           previewUrl={usablePreviewUrl}
           previewCacheKey={previewCacheKey}
           previewThumbhash={previewThumbhash}

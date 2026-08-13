@@ -325,9 +325,10 @@ describe('/api/posts route', () => {
     sourceToolInsertError = null;
   });
 
-  it('budgets for the post-response transcode the publish path defers', async () => {
-    // Publishing returns as soon as the post exists and finishes the rendition
-    // in an after() callback; without this the callback is cut short.
+  it('budgets for the inline transcode of the legacy multipart path', async () => {
+    // The staged path defers all video work to the repair sweep; only the
+    // legacy multipart path still transcodes before responding, and without
+    // this budget that transcode is cut short.
     const route = await import('@/app/api/posts/route');
 
     expect(route.maxDuration).toBe(300);

@@ -33,7 +33,15 @@ import { StableMediaImage } from '@/components/media-preview';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import { truncateInfiniteDataToFirstPage } from '@/lib/profile-media-query';
-import { pickMediaList, pickResourceDocument, uploadPickedMedia, uploadResourceDocument } from '@/lib/media';
+import {
+  POST_VIDEO_DURATION_LIMIT_MESSAGE,
+  assetDurationSeconds,
+  isPostVideoOverDurationLimit,
+  pickMediaList,
+  pickResourceDocument,
+  uploadPickedMedia,
+  uploadResourceDocument,
+} from '@/lib/media';
 import {
   clearPersistedPostComposerDraft,
   getPostComposerDraftSignature,
@@ -2423,7 +2431,8 @@ export default function NewPostScreen() {
             fileName: asset.fileName,
             mimeType: asset.mimeType,
             kind: getPickedAssetKind(asset),
-            durationSeconds: asset.duration ?? null,
+            // ImagePickerAsset.duration is milliseconds; the API speaks seconds.
+            durationSeconds: assetDurationSeconds(asset.duration),
             sizeBytes: asset.fileSize ?? null,
             signal: controller.signal,
             onProgress: (progress) => {
@@ -2451,6 +2460,7 @@ export default function NewPostScreen() {
             type: uploaded.mimeType,
             mediaKind: uploaded.kind === 'video' ? 'video' as const : 'image' as const,
             storagePath: uploaded.storagePath,
+            durationSeconds: uploaded.durationSeconds ?? null,
           } satisfies PostComposerMediaItem;
         },
         { signal: controller.signal }
@@ -2496,11 +2506,28 @@ export default function NewPostScreen() {
     setIsPickingMedia(true);
     try {
       const picked = await pickMediaList(kind, { allowsMultipleSelection: true });
+      const overlongCount = picked.filter(isPostVideoOverDurationLimit).length;
+      const allowed = picked.filter((asset) => !isPostVideoOverDurationLimit(asset));
       const availableSlots = Math.max(0, 5 - draft.mediaItems.length);
-      const selected = picked.slice(0, availableSlots);
-      if (selected.length === 0) return;
+      const selected = allowed.slice(0, availableSlots);
+      const overlongMessage = overlongCount > 0
+        ? {
+          tone: 'danger' as const,
+          title: overlongCount === 1 ? 'Video too long' : `${overlongCount} videos too long`,
+          body: POST_VIDEO_DURATION_LIMIT_MESSAGE,
+        }
+        : null;
+      if (selected.length === 0) {
+        if (overlongMessage) setMessage(overlongMessage);
+        return;
+      }
       setIsPickingMedia(false);
       await uploadSelectedMedia(selected);
+      if (overlongMessage) {
+        // Restore the notice after the upload runs (it clears messages on
+        // start) — but never on top of an upload failure it just reported.
+        setMessage((current) => current ?? overlongMessage);
+      }
     } catch (error) {
       setMessage({ tone: 'danger', title: 'Could not pick media', body: error instanceof Error ? error.message : 'Try again.' });
     } finally {

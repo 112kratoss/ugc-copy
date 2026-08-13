@@ -1013,6 +1013,10 @@ async function getLegacyShowcaseFeedPageBase(
             mediaKey: 'media-1',
             url: mediaUrl,
             previewUrl,
+            // Synthetic generation covers have no post_media row: no rendition,
+            // no teaser, and no feed stream (poster-only in the feed).
+            teaserUrl: null,
+            feedStreamUrl: null,
             mediaKind: getPostMediaKind(resolvedCategory, 'media') ?? 'image',
             contentType: null,
             originalName: null,
