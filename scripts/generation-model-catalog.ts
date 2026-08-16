@@ -126,7 +126,15 @@ export type CatalogReleaseManifest = {
   upgrade: {
     legacyDescriptorsToV2: true;
   };
+  /** The complete inventory of the release being cloned, asserted before any change. */
   expectedModelIds: string[];
+  /**
+   * Model ids this release INTRODUCES, which by definition are absent from
+   * `expectedModelIds`. Declaring them is deliberate: it keeps the base-inventory guard
+   * exact while making "this release adds models" a reviewable statement rather than a
+   * side effect of an entry that happens not to match anything.
+   */
+  addsModelIds?: string[];
   defaults: Record<'web' | 'mobile', Record<CatalogKind, string>>;
   entries: CatalogManifestEntry[];
   acceptanceQuotes: Array<{
@@ -766,13 +774,25 @@ export function validateCatalogManifest(value: unknown): CatalogReleaseManifest 
     throw new Error('expectedModelIds must be sorted.');
   }
 
+  const addsModelIds = manifest.addsModelIds === undefined
+    ? []
+    : requireStringArray(manifest.addsModelIds, 'addsModelIds');
+  for (const added of addsModelIds) {
+    if (expectedModelIds.includes(added)) {
+      throw new Error(`${added} is already in expectedModelIds and cannot be added.`);
+    }
+  }
+
   const entries = requireArray(manifest.entries, 'entries')
     .map((entry, index) => parseManifestEntry(entry, `entries[${index}]`));
   if (entries.length === 0) throw new Error('entries cannot be empty.');
   const entryIds = entries.map((entry) => entry.modelId);
   if (new Set(entryIds).size !== entryIds.length) throw new Error('entries contains duplicates.');
   for (const entry of entries) {
-    if (!expectedModelIds.includes(entry.modelId)) {
+    // An entry either replaces a model in the base inventory or introduces one this
+    // release explicitly declares. Anything else is a typo, and silently seeding a
+    // model nobody listed is exactly what these guards exist to prevent.
+    if (!expectedModelIds.includes(entry.modelId) && !addsModelIds.includes(entry.modelId)) {
       throw new Error(`${entry.modelId} is missing from expectedModelIds.`);
     }
     assertEntryPolicy(entry, 2);
@@ -837,6 +857,7 @@ export function validateCatalogManifest(value: unknown): CatalogReleaseManifest 
     },
     upgrade: { legacyDescriptorsToV2: true },
     expectedModelIds,
+    ...(addsModelIds.length > 0 ? { addsModelIds } : {}),
     defaults: parseDefaults(manifest.defaults),
     entries,
     acceptanceQuotes,
@@ -1213,13 +1234,28 @@ export function materializeCatalogManifest(
       ),
     },
   ]));
+  const addsModelIds = manifest.addsModelIds ?? [];
   for (const replacement of manifest.entries) {
     const previous = byId.get(replacement.modelId);
-    if (!previous) throw new Error(`Cannot replace missing base model ${replacement.modelId}.`);
+    if (!previous) {
+      // New models are legal only when the manifest declared them. The staging RPC
+      // upserts public.generation_models from the entries, so an undeclared id here
+      // would quietly create a model no reviewer approved.
+      if (!addsModelIds.includes(replacement.modelId)) {
+        throw new Error(`Cannot replace missing base model ${replacement.modelId}.`);
+      }
+      byId.set(replacement.modelId, replacement);
+      continue;
+    }
     if (previous.kind !== replacement.kind) {
       throw new Error(`Cannot change immutable kind for ${replacement.modelId}.`);
     }
     byId.set(replacement.modelId, replacement);
+  }
+  for (const added of addsModelIds) {
+    if (!manifest.entries.some((entry) => entry.modelId === added)) {
+      throw new Error(`addsModelIds lists ${added} but no entry defines it.`);
+    }
   }
 
   const release: MaterializedCatalogRelease = {

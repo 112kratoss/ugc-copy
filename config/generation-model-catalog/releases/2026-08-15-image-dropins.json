@@ -16,11 +16,9 @@
     "gemini-omni-video",
     "gpt-image-2",
     "grok-imagine-image",
-    "grok-imagine-image-2",
     "grok-imagine-video",
     "hailuo-2.3",
     "happyhorse-1.1",
-    "ideogram-character",
     "ideogram-v3",
     "imagen-4",
     "imagen-4-fast",
@@ -32,8 +30,6 @@
     "nano-banana-2",
     "nano-banana-2-lite",
     "nano-banana-pro",
-    "qwen3",
-    "qwen3-pro",
     "seedance-1.5-pro",
     "seedance-2",
     "seedance-2-fast",
@@ -45,6 +41,12 @@
     "wan-2.7-image",
     "wan-2.7-image-pro",
     "z-image"
+  ],
+  "addsModelIds": [
+    "grok-imagine-image-2",
+    "ideogram-character",
+    "qwen3",
+    "qwen3-pro"
   ],
   "defaults": {
     "web": {

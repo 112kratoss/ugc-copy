@@ -89,6 +89,15 @@ export interface EmitManifestOptions {
   revision: string;
   basedOn: string;
   changeNote: string;
+  /**
+   * The complete model inventory of the release this one is BASED ON — it is a guard
+   * asserting "the release I am cloning contains exactly these", not the inventory that
+   * results. A release that adds models therefore lists the ids WITHOUT them; getting
+   * this backwards fails materialization with "active model inventory does not match".
+   */
+  expectedModelIds?: string[];
+  /** Model ids this release introduces; absent from expectedModelIds by definition. */
+  addsModelIds?: string[];
   expectedExclude?: string[];
   acceptanceQuotes?: unknown[] | null;
 }
@@ -125,10 +134,12 @@ export function emitManifest(options: EmitManifestOptions) {
   });
 
   const expectedExclude = options.expectedExclude ?? [];
-  const expectedModelIds = catalog.models
-    .map((model) => model.id)
-    .filter((id) => !expectedExclude.includes(id))
-    .sort();
+  const expectedModelIds = options.expectedModelIds
+    ? [...options.expectedModelIds].sort()
+    : catalog.models
+        .map((model) => model.id)
+        .filter((id) => !expectedExclude.includes(id))
+        .sort();
 
   const defaults = { web: { ...catalog.defaults }, mobile: { ...catalog.defaults } };
 
@@ -144,6 +155,7 @@ export function emitManifest(options: EmitManifestOptions) {
     },
     upgrade: { legacyDescriptorsToV2: true },
     expectedModelIds,
+    ...(options.addsModelIds?.length ? { addsModelIds: [...options.addsModelIds].sort() } : {}),
     defaults,
     entries,
     ...(options.acceptanceQuotes?.length ? { acceptanceQuotes: options.acceptanceQuotes } : {}),
