@@ -28,6 +28,20 @@ const VERIFIED_PROVIDER_IDS: Partial<Record<ImageModelId, { text: string; refere
   'seedream-5-lite': { text: 'seedream/5-lite-text-to-image', reference: 'seedream/5-lite-image-to-image' },
   'wan-2.7-image': { text: 'wan/2-7-image', reference: 'wan/2-7-image' },
   'wan-2.7-image-pro': { text: 'wan/2-7-image-pro', reference: 'wan/2-7-image-pro' },
+  // Verified 2026-08-15. Grok Imagine 2.0 publishes an `image-edit` endpoint, but its
+  // required input is a prior Kie `task_id` rather than an image URL, so no reference
+  // variant is reachable from our flow and both columns resolve to text-to-image.
+  'grok-imagine-image-2': {
+    text: 'grok-imagine-image-2-0/text-to-image',
+    reference: 'grok-imagine-image-2-0/text-to-image',
+  },
+  'qwen3': { text: 'qwen3/text-to-image', reference: 'qwen3/image-to-image' },
+  // Documented under market/qwen3-pro/*, but the model enum nests Pro inside the
+  // qwen3 vendor namespace — the docs path is not the id.
+  'qwen3-pro': { text: 'qwen3/pro-text-to-image', reference: 'qwen3/pro-image-to-image' },
+  // `reference_image_urls` is required by the spec, so there is no text-only mode;
+  // both columns are the same endpoint and validation enforces the reference.
+  'ideogram-character': { text: 'ideogram/character', reference: 'ideogram/character' },
   // UNVERIFIED. No published spec was found for z-image under any probed path
   // on docs.kie.ai, so this records current behaviour rather than a confirmed
   // provider id. It is listed so the completeness check below still forces a

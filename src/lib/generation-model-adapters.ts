@@ -23,6 +23,8 @@ export type CatalogGenerationInputAsset = {
   durationSeconds?: number | null;
   label?: string | null;
   handle?: string | null;
+  /** Element descriptor id, preserved so remix can round-trip named elements. */
+  elementId?: string | null;
   storagePath?: string | null;
   sourceGenerationId?: string | null;
 };

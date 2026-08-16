@@ -21,7 +21,7 @@ export const MOTION_MODELS = {
   'kling-3.0': {
     id: 'kling-3.0' as const,
     displayName: 'Kling 3.0',
-    description: 'Latest model with enhanced fidelity and motion accuracy',
+    description: 'Latest model — enhanced fidelity and motion accuracy',
     badge: 'New',
     badgeColor: 'from-[#ff7a59] to-orange-500',
     maxDuration: 30,
@@ -51,7 +51,7 @@ export const IMAGE_MODELS = {
   'nano-banana-2': {
     id: 'nano-banana-2' as const,
     displayName: 'Nano Banana 2.0',
-    description: 'Versatile image generation with Google Search grounding',
+    description: 'Versatile image gen with Google Search grounding',
     badge: 'Recommended',
     badgeColor: 'from-blue-500 to-cyan-500',
     accentColor: 'blue',
@@ -65,7 +65,7 @@ export const IMAGE_MODELS = {
   'nano-banana-pro': {
     id: 'nano-banana-pro' as const,
     displayName: 'Nano Banana Pro',
-    description: 'High-fidelity generation with multi-image references',
+    description: 'High-fidelity generation with multi-image reference',
     badge: 'Pro',
     badgeColor: 'from-sky-500 to-blue-500',
     accentColor: 'blue',
@@ -114,7 +114,7 @@ export const IMAGE_MODELS = {
   },
   'wan-2.7-image': {
     id: 'wan-2.7-image' as const, displayName: 'Wan 2.7 Image',
-    description: 'Affordable generation and editing with up to nine references', badge: 'Value',
+    description: 'Affordable text generation and editing with up to nine references', badge: 'Value',
     badgeColor: 'from-emerald-500 to-cyan-500', accentColor: 'blue', maxImages: 9,
     supportsGoogleSearch: false, supportsOutputFormat: false, aspectRatios: ['auto'] as const,
     resolutions: ['1K', '2K'] as const, outputFormats: ['jpg'] as const,
@@ -137,6 +137,7 @@ export const IMAGE_MODELS = {
   },
   'ideogram-v3': {
     id: 'ideogram-v3' as const, displayName: 'Ideogram V3', description: 'Strong typography, logos, posters, and single-image remixing', badge: 'Design', badgeColor: 'from-fuchsia-500 to-violet-500', accentColor: 'amber', maxImages: 1, supportsGoogleSearch: false, supportsOutputFormat: false, aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'] as const, resolutions: ['1K'] as const, outputFormats: ['jpg'] as const,
+    qualityModes: ['turbo', 'balanced', 'quality'] as const,
   },
   'flux-2-pro': {
     id: 'flux-2-pro' as const,
@@ -179,6 +180,65 @@ export const IMAGE_MODELS = {
     aspectRatios: ['3:2', '2:3', '1:1', '9:16', '16:9'] as const,
     resolutions: ['1K'] as const,
     outputFormats: ['jpg'] as const,
+    qualityModes: ['standard', 'quality'] as const,
+  },
+  'grok-imagine-image-2': {
+    id: 'grok-imagine-image-2' as const,
+    displayName: 'Grok Imagine 2.0',
+    description: 'Newer xAI generation with sharper prompt adherence',
+    badge: 'New',
+    badgeColor: 'from-amber-500 to-orange-500',
+    accentColor: 'amber',
+    maxImages: 0,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: false,
+    aspectRatios: ['1:1', '2:3', '3:2', '16:9', '9:16'] as const,
+    resolutions: ['1K'] as const,
+    outputFormats: ['jpg'] as const,
+  },
+  'qwen3': {
+    id: 'qwen3' as const,
+    displayName: 'Qwen Image 3.0',
+    description: 'Low-cost generation and editing at a flat 1K/2K rate',
+    badge: 'Value',
+    badgeColor: 'from-emerald-500 to-teal-500',
+    accentColor: 'blue',
+    maxImages: 10,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: true,
+    aspectRatios: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9'] as const,
+    resolutions: ['1K', '2K'] as const,
+    outputFormats: ['jpg', 'png'] as const,
+  },
+  'qwen3-pro': {
+    id: 'qwen3-pro' as const,
+    displayName: 'Qwen Image 3.0 Pro',
+    description: 'Higher-fidelity Qwen tier with 2K output',
+    badge: 'Pro',
+    badgeColor: 'from-teal-500 to-cyan-500',
+    accentColor: 'blue',
+    maxImages: 10,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: true,
+    aspectRatios: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9'] as const,
+    resolutions: ['1K', '2K'] as const,
+    outputFormats: ['jpg', 'png'] as const,
+  },
+  'ideogram-character': {
+    id: 'ideogram-character' as const,
+    displayName: 'Ideogram Character',
+    description: 'Keeps one character consistent across every shot',
+    badge: 'Character',
+    badgeColor: 'from-fuchsia-500 to-violet-500',
+    accentColor: 'amber',
+    maxImages: 4,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: false,
+    aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'] as const,
+    resolutions: ['1K'] as const,
+    outputFormats: ['jpg'] as const,
+    qualityModes: ['turbo', 'balanced', 'quality'] as const,
+    requiresReference: true,
   },
 } as const;
 
@@ -207,9 +267,10 @@ export function supportsImageResolutionControl(modelId: ImageModelId): boolean {
 }
 
 export function getImageQualityModes(modelId: ImageModelId): readonly ImageQualityMode[] {
-  if (modelId === 'ideogram-v3') return ['turbo', 'balanced', 'quality'];
-  if (modelId === 'grok-imagine-image') return ['standard', 'quality'];
-  return [];
+  // Mirrors the server implementation: driven by the entry's declared modes so
+  // the two copies cannot disagree about which models expose a quality picker.
+  const model = IMAGE_MODELS[modelId];
+  return 'qualityModes' in model ? model.qualityModes as readonly ImageQualityMode[] : [];
 }
 
 export const VIDEO_MODELS = {
@@ -369,27 +430,109 @@ export const VIDEO_MODELS = {
       { value: 'fun', label: 'Fun' },
     ] as const,
   },
+  'seedance-2-5': {
+    id: 'seedance-2-5' as const,
+    displayName: 'Seedance 2.5',
+    description: 'Latest ByteDance model with 30-second output and audio references',
+    supportsMultiShot: false,
+    supportsSound: true,
+    supportsFixedLens: false,
+    aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9'] as const,
+    durations: [4, 5, 6, 8, 10, 12, 15, 20, 25, 30] as const,
+    singleShotDurationRange: { min: 4, max: 30, default: 5 } as const,
+    resolutions: ['480p', '720p'] as const,
+    modeOptions: [] as const,
+  },
+  'kling-o3': {
+    id: 'kling-o3' as const,
+    displayName: 'Kling O3',
+    description: 'Multi-shot Kling with named subjects and 4K output',
+    supportsMultiShot: true,
+    supportsSound: true,
+    supportsFixedLens: false,
+    aspectRatios: ['16:9', '9:16', '1:1'] as const,
+    durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+    singleShotDurationRange: { min: 3, max: 15, default: 5 } as const,
+    resolutions: ['720p', '1080p', '4k'] as const,
+    modeOptions: [] as const,
+  },
+  'minimax-h3': {
+    id: 'minimax-h3' as const,
+    displayName: 'MiniMax H3',
+    description: 'Hailuo H3 generation from text, a frame, or references',
+    supportsMultiShot: false,
+    supportsSound: false,
+    supportsFixedLens: false,
+    aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] as const,
+    durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+    singleShotDurationRange: { min: 4, max: 15, default: 6 } as const,
+    resolutions: ['768P', '2K'] as const,
+    modeOptions: [] as const,
+  },
 } as const;
 
 export type VideoModelId = keyof typeof VIDEO_MODELS;
 
+/**
+ * Mirrors the server implementation in @/lib/models. This is the fallback used before
+ * the catalog descriptor is available; descriptor-derived affordances are authoritative
+ * once it loads. Keep the two in step — the registry parity suite compares behaviour.
+ */
 export function getVideoElementSupport(
   modelId: VideoModelId,
   options: { mode?: string; isMultiShot?: boolean } = {}
-): { enabled: boolean; maxElements: number; reason: string | null } {
-  if (options.isMultiShot) return { enabled: false, maxElements: 0, reason: 'Reusable references are available in single-shot only.' };
-  if (modelId === 'seedance-1.5-pro') return { enabled: true, maxElements: 2, reason: null };
-  if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini' || modelId === 'wan-2.7') return { enabled: true, maxElements: 5, reason: null };
-  if (modelId === 'happyhorse-1.1') return { enabled: true, maxElements: 9, reason: null };
-  if (modelId === 'gemini-omni-video') return { enabled: true, maxElements: 7, reason: null };
+): { enabled: boolean; maxElements: number; maxNamed: number; reason: string | null } {
+  // Kling O3 carries named subjects across a multi-shot run; every other model loses
+  // reference support in multi-shot.
+  if (options.isMultiShot && modelId !== 'kling-o3') {
+    return { enabled: false, maxElements: 0, maxNamed: 0, reason: 'Reusable references are available in single-shot only.' };
+  }
+  if (modelId === 'seedance-1.5-pro') return { enabled: true, maxElements: 2, maxNamed: 2, reason: null };
+  if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini' || modelId === 'seedance-2-5' || modelId === 'wan-2.7') return { enabled: true, maxElements: 5, maxNamed: 5, reason: null };
+  // 7 reference images, at most 3 of them named as provider-resolved subjects.
+  if (modelId === 'kling-o3') return { enabled: true, maxElements: 7, maxNamed: 3, reason: null };
+  if (modelId === 'minimax-h3') return { enabled: true, maxElements: 5, maxNamed: 5, reason: null };
+  if (modelId === 'happyhorse-1.1') return { enabled: true, maxElements: 9, maxNamed: 9, reason: null };
+  if (modelId === 'gemini-omni-video') return { enabled: true, maxElements: 7, maxNamed: 7, reason: null };
   if (modelId === 'veo-3.1') {
     return options.mode === 'veo3_fast' || options.mode === 'veo3_lite'
-      ? { enabled: true, maxElements: 3, reason: null }
-      : { enabled: false, maxElements: 0, reason: 'Reusable references require Veo Lite or Fast.' };
+      ? { enabled: true, maxElements: 3, maxNamed: 3, reason: null }
+      : { enabled: false, maxElements: 0, maxNamed: 0, reason: 'Reusable references require Veo Lite or Fast.' };
   }
-  if (modelId === 'grok-imagine-video') return { enabled: true, maxElements: 1, reason: null };
-  if (modelId === 'kling-3.0-video') return { enabled: false, maxElements: 0, reason: 'Reusable image references are not available for Kling yet.' };
-  return { enabled: false, maxElements: 0, reason: 'Reusable references are not available for this model yet.' };
+  if (modelId === 'grok-imagine-video') return { enabled: true, maxElements: 1, maxNamed: 1, reason: null };
+  if (modelId === 'kling-3.0-video') return { enabled: false, maxElements: 0, maxNamed: 0, reason: 'Reusable image references are not available for Kling yet.' };
+  return { enabled: false, maxElements: 0, maxNamed: 0, reason: 'Reusable references are not available for this model yet.' };
+}
+
+/**
+ * Reference clip/track capacity per video model, mirroring VIDEO_INPUT_LIMITS on the
+ * server. This is the pre-catalog fallback: once a descriptor is available its
+ * `inputs.videoReferences` / `inputs.audioReferences` are authoritative.
+ *
+ * It exists because the workflow canvas used to hardcode "Seedance and Kling only",
+ * which silently contradicted the descriptors — and the create-video surface — for
+ * wan-2.7 (5 clips + 1 track), gemini-omni-video (1 clip) and minimax-h3 (1 + 1).
+ */
+export function getVideoReferenceSupport(modelId: VideoModelId): { videos: number; audios: number } {
+  switch (modelId) {
+    case 'seedance-2':
+    case 'seedance-2-fast':
+    case 'seedance-2-mini':
+    case 'seedance-2-5':
+      return { videos: 3, audios: 3 };
+    case 'wan-2.7':
+      return { videos: 5, audios: 1 };
+    case 'minimax-h3':
+      return { videos: 1, audios: 1 };
+    case 'gemini-omni-video':
+      return { videos: 1, audios: 0 };
+    // Kling's slot carries named video elements rather than plain reference clips, but
+    // the canvas routes both through the reference-video handle.
+    case 'kling-3.0-video':
+      return { videos: 3, audios: 0 };
+    default:
+      return { videos: 0, audios: 0 };
+  }
 }
 
 export function getVideoDurationRange(modelId: VideoModelId): { min: number; max: number; default: number } | null {

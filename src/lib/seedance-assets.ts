@@ -30,8 +30,11 @@ export function createSeedanceAssetMetadata(
   };
 }
 
-export function isSeedance2VideoModelId(modelId: string): modelId is 'seedance-2' | 'seedance-2-fast' | 'seedance-2-mini' {
-  return modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini';
+export function isSeedance2VideoModelId(modelId: string): modelId is 'seedance-2' | 'seedance-2-fast' | 'seedance-2-mini' | 'seedance-2-5' {
+  return modelId === 'seedance-2'
+    || modelId === 'seedance-2-fast'
+    || modelId === 'seedance-2-mini'
+    || modelId === 'seedance-2-5';
 }
 
 export function getSeedanceAssetStatusLabel(status: SeedanceAssetStatus): string {

@@ -321,8 +321,33 @@ const GOOGLE_SEARCH_RULES = [
   'Because Google Search grounding is enabled, only lean on real-world specificity the user actually asked for.',
 ];
 
+// Aliases double as the enhance endpoint's allowlist: SUPPORTED_ENHANCEMENT_MODELS is
+// built from these keys, and prompt-enhancement-service rejects anything missing from it.
+// Newer models borrow the closest existing playbook until they earn their own.
 const MODEL_ALIASES: Record<string, string> = {
   'kling-3.0-video': 'kling-3.0/video',
+  'grok-imagine-image-2': 'grok-imagine-image',
+  'qwen3': 'seedream-5-pro',
+  'qwen3-pro': 'seedream-5-pro',
+  'ideogram-character': 'seedream-5-pro',
+  'seedance-2-5': 'seedance-2',
+  'kling-o3': 'kling-3.0/video',
+  'minimax-h3': 'kling-3.0/video',
+  // Registration audit 2026-08-16: these thirteen live models were absent from
+  // every enhancer registry, so the enhance endpoint returned HTTP 400 for them.
+  'seedream-5-lite': 'seedream-5-pro',
+  'wan-2.7-image': 'seedream-5-pro',
+  'wan-2.7-image-pro': 'seedream-5-pro',
+  'imagen-4-fast': 'nano-banana-2',
+  'imagen-4': 'nano-banana-2',
+  'imagen-4-ultra': 'nano-banana-2',
+  'ideogram-v3': 'seedream-5-pro',
+  'kling-3.0-turbo': 'kling-3.0/video',
+  'seedance-2-mini': 'seedance-2',
+  'wan-2.7': 'seedance-2',
+  'happyhorse-1.1': 'kling-3.0/video',
+  'gemini-omni-video': 'seedance-2',
+  'hailuo-2.3': 'kling-3.0/video',
 };
 
 const SEEDANCE_PLAYBOOK_MODEL_IDS = new Set([

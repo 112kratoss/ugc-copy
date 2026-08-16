@@ -134,6 +134,103 @@ const IMAGE_PROVIDER_MODELS: Record<ImageModelId, Record<string, string>> = {
     text: 'grok-imagine/text-to-image',
     reference: 'grok-imagine/image-to-image',
   },
+  // Grok Imagine 2.0 exposes an image-edit endpoint too, but it edits a prior Kie task by id
+  // rather than an uploaded image, so only the text variant is reachable from our flow.
+  'grok-imagine-image-2': {
+    default: 'grok-imagine-image-2-0/text-to-image',
+    text: 'grok-imagine-image-2-0/text-to-image',
+  },
+  'qwen3': {
+    text: 'qwen3/text-to-image',
+    reference: 'qwen3/image-to-image',
+  },
+  // The docs path is market/qwen3-pro/*, but the provider ids nest Pro under the qwen3 vendor.
+  'qwen3-pro': {
+    text: 'qwen3/pro-text-to-image',
+    reference: 'qwen3/pro-image-to-image',
+  },
+  // Character references are mandatory, so both admission modes resolve to the same endpoint.
+  'ideogram-character': {
+    default: 'ideogram/character',
+    text: 'ideogram/character',
+    reference: 'ideogram/character',
+  },
+};
+
+/**
+ * Shared by both Nano Banana tiers — they take the same provider fields, so keeping one
+ * definition stops a provider change from landing on one tier and missing the other.
+ */
+const NANO_BANANA_ADAPTER_CONFIG: Record<string, unknown> = {
+  settings: {
+    aspectRatio: { field: 'aspect_ratio' },
+    resolution: { field: 'resolution' },
+    outputFormat: { field: 'output_format' },
+    googleSearch: { field: 'google_search' },
+  },
+  slots: { imageReferences: { field: 'image_input', cardinality: 'many', source: 'url' } },
+};
+
+/** Shared by both Qwen tiers, for the same reason. */
+const QWEN_IMAGE_ADAPTER_CONFIG: Record<string, unknown> = {
+  settings: {
+    resolution: { field: 'resolution' },
+    aspectRatio: { field: 'image_size' },
+    outputFormat: { field: 'output_format', transform: 'jpg-to-jpeg' },
+  },
+  constants: { prompt_extend: true, nsfw_checker: true },
+  slots: { imageReferences: { field: 'image_urls', cardinality: 'many', source: 'url' } },
+  variantSelector: { type: 'slot-presence', slot: 'imageReferences', present: 'reference', absent: 'text' },
+};
+
+/**
+ * Declarative kie-task-v1 adapter configs for image models whose provider payloads
+ * are exactly expressible as bindings (no conditional field logic). Models listed
+ * here run through `buildGenerationProviderRequest` instead of the hand-coded
+ * payload ladder in generation-services; the ladder branches stay only as the
+ * deployment-window fallback until the catalog release flips production, and the
+ * golden tests in kie-task-image-adapter-parity.test.ts pin the two paths equal.
+ *
+ * Deliberately NOT migratable with the current transform set: seedream-5-pro/lite
+ * (resolution→quality ternary), ideogram-v3/-character (aspect→image_size value
+ * map), wan-2.7-image/-pro (per-image bbox_list), grok-imagine-image (fields
+ * conditional on reference presence). Video models need per-variant field sets
+ * the adapter cannot yet express.
+ */
+const KIE_TASK_IMAGE_ADAPTER_CONFIGS: Partial<Record<ImageModelId, Record<string, unknown>>> = {
+  'imagen-4-fast': { settings: { aspectRatio: { field: 'aspect_ratio' } } },
+  'imagen-4': { settings: { aspectRatio: { field: 'aspect_ratio' } } },
+  'imagen-4-ultra': { settings: { aspectRatio: { field: 'aspect_ratio' } } },
+  'z-image': {
+    settings: { aspectRatio: { field: 'aspect_ratio' } },
+    constants: { nsfw_checker: true },
+  },
+  'grok-imagine-image-2': { settings: { aspectRatio: { field: 'aspect_ratio' } } },
+  'nano-banana-2-lite': {
+    settings: { aspectRatio: { field: 'aspect_ratio' } },
+    slots: { imageReferences: { field: 'image_urls', cardinality: 'many', source: 'url' } },
+  },
+  'nano-banana-2': NANO_BANANA_ADAPTER_CONFIG,
+  'nano-banana-pro': NANO_BANANA_ADAPTER_CONFIG,
+  'qwen3': QWEN_IMAGE_ADAPTER_CONFIG,
+  'qwen3-pro': QWEN_IMAGE_ADAPTER_CONFIG,
+  'flux-2-pro': {
+    settings: {
+      aspectRatio: { field: 'aspect_ratio' },
+      resolution: { field: 'resolution' },
+    },
+    constants: { nsfw_checker: true },
+    slots: { imageReferences: { field: 'input_urls', cardinality: 'many', source: 'url' } },
+    variantSelector: { type: 'slot-presence', slot: 'imageReferences', present: 'reference', absent: 'text' },
+  },
+  'gpt-image-2': {
+    settings: {
+      aspectRatio: { field: 'aspect_ratio' },
+      resolution: { field: 'resolution' },
+    },
+    slots: { imageReferences: { field: 'input_urls', cardinality: 'many', source: 'url' } },
+    variantSelector: { type: 'slot-presence', slot: 'imageReferences', present: 'reference', absent: 'text' },
+  },
 };
 
 const VIDEO_PROVIDER_MODELS: Record<VideoModelId, Record<string, string>> = {
@@ -175,6 +272,20 @@ const VIDEO_PROVIDER_MODELS: Record<VideoModelId, Record<string, string>> = {
     default: 'grok-imagine/text-to-video',
     text: 'grok-imagine/text-to-video',
     image: 'grok-imagine/image-to-video',
+  },
+  'seedance-2-5': { default: 'bytedance/seedance-2-5' },
+  // Kling markets 3.0 Omni as "Kling O3"; the provider ids keep the versioned vendor prefix.
+  'kling-o3': {
+    default: 'kling-3.0-omni/text-to-video',
+    text: 'kling-3.0-omni/text-to-video',
+    image: 'kling-3.0-omni/image-to-video',
+    reference: 'kling-3.0-omni/reference-to-video',
+  },
+  'minimax-h3': {
+    default: 'minimax-h3/text-to-video',
+    text: 'minimax-h3/text-to-video',
+    image: 'minimax-h3/image-to-video',
+    reference: 'minimax-h3/reference-to-video',
   },
 };
 
@@ -253,18 +364,20 @@ function imagePricingExpression(model: (typeof IMAGE_MODELS)[ImageModelId]): Pri
       ),
     );
   }
-  if ('qualityPricing' in model && model.id === 'ideogram-v3') {
+  if ('qualityPricing' in model && (model.id === 'ideogram-v3' || model.id === 'ideogram-character')) {
     return lookup(
       [selector('setting', 'qualityMode', { defaultValue: 'turbo' })],
       model.qualityPricing,
     );
   }
   if ('additionalReferenceCredit' in model) {
+    // Seedream bundles the first reference into the base price; Qwen bills every one.
+    const freeReferences = 'referenceCreditIncludesFirst' in model && model.referenceCreditIncludesFirst ? 0 : 1;
     const byResolutionAndCount = Object.fromEntries(
       Object.entries(model.pricing).map(([resolution, credits]) => [
         resolution,
         countTable(model.maxImages, (count) => (
-          Math.ceil(Number(credits) + Math.max(0, count - 1) * model.additionalReferenceCredit)
+          Math.ceil(Number(credits) + Math.max(0, count - freeReferences) * model.additionalReferenceCredit)
         )),
       ]),
     );
@@ -283,7 +396,7 @@ function imagePricingExpression(model: (typeof IMAGE_MODELS)[ImageModelId]): Pri
 }
 
 function seedanceReferencePricing(
-  model: (typeof VIDEO_MODELS)['seedance-2' | 'seedance-2-fast' | 'seedance-2-mini'],
+  model: (typeof VIDEO_MODELS)['seedance-2' | 'seedance-2-fast' | 'seedance-2-mini' | 'seedance-2-5'],
 ): PricingExpression {
   return {
     strategy: 'reference-adjustment',
@@ -336,11 +449,24 @@ function videoPricingExpression(model: (typeof VIDEO_MODELS)[VideoModelId]): Pri
     case 'seedance-2':
     case 'seedance-2-fast':
     case 'seedance-2-mini':
+    case 'seedance-2-5':
       return seedanceReferencePricing(model);
+    case 'kling-o3':
+      return perSecond(lookup(
+        [
+          selector('setting', 'resolution', { defaultValue: '720p' }),
+          selector('setting', 'sound', { defaultValue: false }),
+        ],
+        Object.fromEntries(Object.entries(model.pricing).map(([resolution, rates]) => [
+          resolution,
+          { false: rates.noSound, true: rates.withSound },
+        ])),
+      ));
     case 'kling-3.0-turbo':
     case 'wan-2.7':
     case 'happyhorse-1.1':
     case 'grok-imagine-video':
+    case 'minimax-h3':
       return perSecond(lookup(
         [selector('setting', 'resolution', { defaultValue: model.resolutions[0] })],
         model.pricing,
@@ -423,6 +549,16 @@ function validationConfigForModel(
   modelId: string,
 ): Record<string, unknown> {
   const rules: Array<Record<string, unknown>> = [];
+  if (kind === 'image' && modelId === 'ideogram-character') {
+    // `reference_image_urls` is required by the provider — there is no text-only
+    // mode — so catch the empty case here rather than as a 422 from Kie.
+    rules.push({
+      type: 'min-slot-count',
+      slotKey: 'imageReferences',
+      min: 1,
+      message: 'Add at least one character reference image.',
+    });
+  }
   if (kind === 'image' && modelId === 'gpt-image-2') {
     rules.push(
       {
@@ -465,18 +601,24 @@ function validationConfigForModel(
         conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'frames' }],
       },
     );
-    if (['seedance-1.5-pro', 'seedance-2', 'seedance-2-fast', 'seedance-2-mini', 'wan-2.7', 'happyhorse-1.1', 'gemini-omni-video', 'veo-3.1', 'grok-imagine-video'].includes(modelId)) {
+    // Every model that publishes reference-image capacity must appear here, or its
+    // reference mode is capped at 0 by the else branch below and the quote rejects any
+    // run that attaches one — which is exactly how seedance-2-5, kling-o3, and
+    // minimax-h3 shipped with their reference support unreachable.
+    if (['seedance-1.5-pro', 'seedance-2', 'seedance-2-fast', 'seedance-2-mini', 'seedance-2-5', 'wan-2.7', 'happyhorse-1.1', 'gemini-omni-video', 'veo-3.1', 'grok-imagine-video', 'kling-o3', 'minimax-h3'].includes(modelId)) {
       const max = modelId === 'seedance-1.5-pro'
         ? 2
         : modelId === 'happyhorse-1.1'
           ? 9
           : modelId === 'gemini-omni-video'
             ? 7
-            : modelId === 'veo-3.1'
-              ? 3
-              : modelId === 'grok-imagine-video'
-                ? 1
-                : 5;
+            : modelId === 'kling-o3'
+              ? 7
+              : modelId === 'veo-3.1'
+                ? 3
+                : modelId === 'grok-imagine-video'
+                  ? 1
+                  : 5;
       rules.push({
         type: 'max-slot-count',
         slotKey: 'images',
@@ -559,13 +701,16 @@ function validationConfigForModel(
         },
       );
     }
-    if (['seedance-2', 'seedance-2-fast', 'seedance-2-mini'].includes(modelId)) {
+    if (['seedance-2', 'seedance-2-fast', 'seedance-2-mini', 'seedance-2-5'].includes(modelId)) {
+      // 2.5 generates up to 30s where the rest of the family stops at 15, so the cap
+      // tracks the model rather than the family name.
+      const max = modelId === 'seedance-2-5' ? 30 : 15;
       rules.push({
         type: 'combined-duration',
         slotKeys: ['videoReferences'],
-        max: 15,
+        max,
         field: 'videos',
-        message: 'Reference videos may be at most 15 seconds in total.',
+        message: `Reference videos may be at most ${max} seconds in total.`,
       });
     }
   }
@@ -590,11 +735,12 @@ function validationConfigForModel(
 export function buildCodeGenerationModelOperations(): GenerationModelOperationalConfig[] {
   const imageEntries = Object.values(IMAGE_MODELS).map((model) => {
     const pricing = imagePricingExpression(model);
+    const kieTaskAdapterConfig = KIE_TASK_IMAGE_ADAPTER_CONFIGS[model.id];
     return {
       modelId: model.id,
       kind: 'image' as const,
-      adapterKey: 'image-v1' as const,
-      adapterConfig: {},
+      adapterKey: kieTaskAdapterConfig ? ('kie-task-v1' as const) : ('image-v1' as const),
+      adapterConfig: kieTaskAdapterConfig ?? {},
       providerModelMap: IMAGE_PROVIDER_MODELS[model.id],
       pricingStrategy: pricing.strategy,
       pricingConfig: pricing.config,

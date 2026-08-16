@@ -55,6 +55,19 @@ const IMAGE_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
   'flux-2-pro': 120_000,
   'z-image': 75_000,
   'grok-imagine-image': 105_000,
+  'grok-imagine-image-2': 105_000,
+  'qwen3': 105_000,
+  'qwen3-pro': 135_000,
+  'ideogram-character': 120_000,
+  // Registration audit 2026-08-16: these models had no estimate, which silently
+  // disabled their progress bars (estimateGenerationDurationMs returns null).
+  'seedream-5-lite': 105_000,
+  'wan-2.7-image': 90_000,
+  'wan-2.7-image-pro': 120_000,
+  'imagen-4-fast': 60_000,
+  'imagen-4': 90_000,
+  'imagen-4-ultra': 120_000,
+  'ideogram-v3': 90_000,
 };
 
 const IMAGE_RESOLUTION_ESTIMATE_MS: Record<string, number> = {
@@ -70,6 +83,16 @@ const VIDEO_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
   'seedance-2-fast': 120_000,
   'veo-3.1': 210_000,
   'grok-imagine-video': 150_000,
+  'seedance-2-5': 180_000,
+  'kling-o3': 120_000,
+  'minimax-h3': 150_000,
+  // Registration audit 2026-08-16: previously missing, so no progress bar.
+  'kling-3.0-turbo': 90_000,
+  'seedance-2-mini': 120_000,
+  'wan-2.7': 150_000,
+  'happyhorse-1.1': 150_000,
+  'gemini-omni-video': 180_000,
+  'hailuo-2.3': 120_000,
 };
 
 const MOTION_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
