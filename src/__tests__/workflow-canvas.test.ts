@@ -23,6 +23,7 @@ import {
   validateWorkflowConnection,
   validateWorkflowTemplateAuthoringGraph,
   type ImageInputNodeData,
+  type VideoGenerateNodeData,
 } from '@/lib/workflow-canvas';
 
 function createImageReferenceGraph(count: number, model: 'nano-banana-2' | 'nano-banana-pro' | 'gpt-image-2' = 'nano-banana-2') {
@@ -949,7 +950,12 @@ describe('workflow canvas helpers', () => {
     // them. kling-o3 carries them even in multi-shot.
     for (const model of ['wan-2.7', 'kling-o3', 'minimax-h3'] as const) {
       const videoNode = createWorkflowNode('video-generate', { x: 240, y: 0 });
-      videoNode.data = { ...videoNode.data, model };
+      // Spreading the node data widens it across the whole WorkflowNodeData union, so
+      // narrow back to the video-generate member before assigning.
+      videoNode.data = {
+        ...(videoNode.data as VideoGenerateNodeData),
+        model,
+      } satisfies VideoGenerateNodeData;
       const sourceImage = createWorkflowNode('image-input', { x: 0, y: 0 });
       const graph = normalizeWorkflowGraph({
         nodes: [videoNode, sourceImage],
