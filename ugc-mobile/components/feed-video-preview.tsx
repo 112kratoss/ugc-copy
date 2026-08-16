@@ -1,5 +1,5 @@
 import { Image } from 'expo-image';
-import { useVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
+import { createVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
 import { Play } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
@@ -13,6 +13,12 @@ const absoluteFill = {
   position: 'absolute' as const,
   inset: 0,
 };
+
+// Fabric can apply a queued VideoView mount after React has already unmounted
+// the layer. Releasing the SharedObject in that same commit leaves Android
+// trying to attach a dead player. Keep the paused player alive long enough for
+// the native view transaction to detach before releasing it.
+const PLAYER_RELEASE_GRACE_MS = 100;
 
 /**
  * A feed video tile: poster while idle, muted looping preview while active.
@@ -66,7 +72,6 @@ export function FeedVideoPreview({
   const [firstFrameUrl, setFirstFrameUrl] = useState<string | null>(null);
   const [playbackErrorUrl, setPlaybackErrorUrl] = useState<string | null>(null);
   const [playerMounted, setPlayerMounted] = useState(canPlay);
-  const playerRef = useRef<VideoPlayer | null>(null);
 
   const usablePreviewUrl = previewUrl && previewUrl !== failedPosterUrl ? previewUrl : null;
   const hasFirstFrame = Boolean(streamUrl) && firstFrameUrl === streamUrl;
@@ -86,17 +91,8 @@ export function FeedVideoPreview({
       return;
     }
 
-    // Pause while the layer is still mounted, then drop it on the next commit.
-    // `useVideoPlayer` releases its shared object as the layer unmounts, so a
-    // pause from an unmount cleanup would touch a dead player; deferring the
-    // unmount by one commit keeps this call legal. A whole-tree unmount skips
-    // this path entirely, which is why it never pauses.
-    try {
-      playerRef.current?.pause();
-    } catch {
-      // Already released by a source swap — nothing left to pause.
-    }
-    playerRef.current = null;
+    // The player layer owns pause/release ordering. Dropping it here works for
+    // both viewability handoffs and whole-screen navigation.
     setPlayerMounted(false);
     setFirstFrameUrl(null);
     setPlaybackErrorUrl(null);
@@ -144,9 +140,9 @@ export function FeedVideoPreview({
 
       {playerMounted && streamUrl ? (
         <FeedVideoPlayerLayer
+          key={streamUrl}
           url={streamUrl}
           contentFit={videoContentFit}
-          playerRef={playerRef}
           onFirstFrame={handleFirstFrame}
           onPlaybackError={handlePlaybackError}
         />
@@ -204,17 +200,16 @@ export function FeedVideoPreview({
 function FeedVideoPlayerLayer({
   url,
   contentFit,
-  playerRef,
   onFirstFrame,
   onPlaybackError,
 }: {
   url: string;
   contentFit: 'cover' | 'contain';
-  playerRef: { current: VideoPlayer | null };
   onFirstFrame: () => void;
   onPlaybackError: (errored: boolean) => void;
 }) {
-  const player = useVideoPlayer({ uri: url, useCaching: true }, (instance) => {
+  const [player] = useState<VideoPlayer>(() => {
+    const instance = createVideoPlayer({ uri: url, useCaching: true });
     instance.loop = true;
     instance.muted = true;
     instance.volume = 0;
@@ -224,12 +219,32 @@ function FeedVideoPlayerLayer({
     instance.bufferOptions = {
       preferredForwardBufferDuration: FEED_PREVIEW_FORWARD_BUFFER_SECONDS,
     };
+    return instance;
   });
+  const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    playerRef.current = player;
+    if (releaseTimerRef.current) {
+      clearTimeout(releaseTimerRef.current);
+      releaseTimerRef.current = null;
+    }
     player.play();
-  }, [player, playerRef]);
+    return () => {
+      try {
+        player.pause();
+      } catch {
+        // The native player may already be gone during a development reload.
+      }
+      releaseTimerRef.current = setTimeout(() => {
+        releaseTimerRef.current = null;
+        try {
+          player.release();
+        } catch {
+          // Release is idempotent from the preview's point of view.
+        }
+      }, PLAYER_RELEASE_GRACE_MS);
+    };
+  }, [player]);
 
   useEffect(() => {
     const subscription = player.addListener('statusChange', (event) => {

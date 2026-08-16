@@ -7,6 +7,7 @@ const videoState = vi.hoisted(() => ({
     addListener: vi.fn(() => ({ remove: vi.fn() })),
     play: vi.fn(),
     pause: vi.fn(),
+    release: vi.fn(),
     loop: false,
     muted: false,
     volume: 1,
@@ -14,13 +15,12 @@ const videoState = vi.hoisted(() => ({
     staysActiveInBackground: true,
     bufferOptions: undefined as { preferredForwardBufferDuration?: number } | undefined,
   },
-  useVideoPlayer: vi.fn(),
+  createVideoPlayer: vi.fn(),
 }));
 
 vi.mock('expo-video', () => ({
-  useVideoPlayer: (url: string, setup?: (player: typeof videoState.player) => void) => {
-    videoState.useVideoPlayer(url);
-    setup?.(videoState.player);
+  createVideoPlayer: (source: unknown) => {
+    videoState.createVideoPlayer(source);
     return videoState.player;
   },
   VideoView: (props: Record<string, unknown>) => React.createElement('video-view', props),
@@ -79,7 +79,8 @@ describe('FeedVideoPreview', () => {
     videoState.player.addListener.mockClear();
     videoState.player.play.mockClear();
     videoState.player.pause.mockClear();
-    videoState.useVideoPlayer.mockClear();
+    videoState.player.release.mockClear();
+    videoState.createVideoPlayer.mockClear();
     videoState.player.loop = false;
     videoState.player.muted = false;
     videoState.player.volume = 1;
@@ -109,7 +110,8 @@ describe('FeedVideoPreview', () => {
     );
   }
 
-  it('does not touch the released video player during unmount', () => {
+  it('pauses before releasing the video player after native detach', () => {
+    vi.useFakeTimers();
     let tree: { unmount: () => void } | undefined;
 
     renderer.act(() => {
@@ -126,7 +128,7 @@ describe('FeedVideoPreview', () => {
     });
 
     expect(videoState.player.play).toHaveBeenCalledTimes(1);
-    expect(videoState.useVideoPlayer).toHaveBeenCalledTimes(1);
+    expect(videoState.createVideoPlayer).toHaveBeenCalledTimes(1);
     expect(videoState.player.pause).not.toHaveBeenCalled();
 
     const videoViews = (tree as renderer.ReactTestRenderer).root.findAll((node) => String(node.type) === 'video-view');
@@ -136,7 +138,13 @@ describe('FeedVideoPreview', () => {
       tree!.unmount();
     });
 
-    expect(videoState.player.pause).not.toHaveBeenCalled();
+    expect(videoState.player.pause).toHaveBeenCalledTimes(1);
+    expect(videoState.player.release).not.toHaveBeenCalled();
+    renderer.act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(videoState.player.release).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 
   it('renders a poster without creating a player while inactive', () => {
@@ -155,7 +163,7 @@ describe('FeedVideoPreview', () => {
       );
     });
 
-    expect(videoState.useVideoPlayer).not.toHaveBeenCalled();
+    expect(videoState.createVideoPlayer).not.toHaveBeenCalled();
     expect(tree!.root.findAll((node) => String(node.type) === 'video-view')).toHaveLength(0);
     const images = tree!.root.findAll((node) => String(node.type) === 'image');
     expect(images).toHaveLength(1);
@@ -181,7 +189,7 @@ describe('FeedVideoPreview', () => {
 
     // The old `renditionUrl || url` fallback would have streamed the source
     // here — the exact egress amplifier the feed-stream policy removes.
-    expect(videoState.useVideoPlayer).not.toHaveBeenCalled();
+    expect(videoState.createVideoPlayer).not.toHaveBeenCalled();
     expect(tree!.root.findAll((node) => String(node.type) === 'video-view')).toHaveLength(0);
     const images = tree!.root.findAll((node) => String(node.type) === 'image');
     expect(images).toHaveLength(1);
@@ -203,7 +211,7 @@ describe('FeedVideoPreview', () => {
       );
     });
 
-    expect(videoState.useVideoPlayer).not.toHaveBeenCalled();
+    expect(videoState.createVideoPlayer).not.toHaveBeenCalled();
     expect(videoState.player.play).not.toHaveBeenCalled();
     const videoViews = tree!.root.findAll((node) => String(node.type) === 'video-view');
     expect(videoViews).toHaveLength(0);
@@ -267,8 +275,7 @@ describe('FeedVideoPreview', () => {
     });
 
     // Two activations started playback twice — `play` runs once per player
-    // lifecycle, unlike the `useVideoPlayer` hook, which also fires on the
-    // extra render that the deferred unmount deliberately performs.
+    // lifecycle, without recreating the poster beneath it.
     expect(videoState.player.play).toHaveBeenCalledTimes(2);
     // ...but the poster underneath never remounted, so it never re-faded.
     expect(imageState.mounts).toBe(1);
