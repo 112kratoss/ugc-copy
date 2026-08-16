@@ -1367,7 +1367,7 @@ export function MediaCreationScreen({
       <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
         <ScrollView
           ref={scrollRef}
-          contentInsetAdjustmentBehavior="automatic"
+          contentInsetAdjustmentBehavior="never"
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
           style={{ flex: 1 }}
@@ -1579,7 +1579,7 @@ export function MediaCreationScreen({
       <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
         <ScrollView
           ref={scrollRef}
-          contentInsetAdjustmentBehavior="automatic"
+          contentInsetAdjustmentBehavior="never"
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
           style={{ flex: 1 }}
@@ -1769,7 +1769,7 @@ export function MediaCreationScreen({
       {insideTab ? <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: topInset, backgroundColor: appTheme.colors.background, zIndex: 3 }} /> : null}
       <ScrollView
         ref={scrollRef}
-        contentInsetAdjustmentBehavior="automatic"
+        contentInsetAdjustmentBehavior="never"
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         style={{ flex: 1 }}

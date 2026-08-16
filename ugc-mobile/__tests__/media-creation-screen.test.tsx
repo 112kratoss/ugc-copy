@@ -428,6 +428,25 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(text).not.toContain('Choose model');
   });
 
+  it.each(['image', 'video', 'motion'] as const)(
+    'uses only the manual safe-area inset for the %s creator scroll view',
+    (tool) => {
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<MediaCreationScreen initialTool={tool} insideTab />);
+      });
+
+      const creatorScrollView = tree!.root.findAll(
+        (node) => String(node.type) === 'scrollview' && node.props.style?.flex === 1,
+      )[0];
+
+      expect(creatorScrollView.props.contentInsetAdjustmentBehavior).toBe('never');
+      expect(creatorScrollView.props.contentContainerStyle).toEqual(
+        expect.objectContaining({ paddingTop: 34 }),
+      );
+    },
+  );
+
   it('shows frame inputs in the video composer and keeps the model out of parameters', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
