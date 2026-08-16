@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   applyGenerationModelCatalogToRegistries,
   getActiveRegistryModels,
-  type GenerationModelCatalog,
 } from '@/lib/generation-model-client';
+import type { GenerationModelCatalog } from '@/lib/generation-model-catalog';
 
 /**
  * Catalog-first exposure on web: a model published to the DB catalog but absent
