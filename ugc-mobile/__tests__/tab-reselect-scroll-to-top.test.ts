@@ -24,4 +24,11 @@ describe('bottom-tab reselect scroll-to-top wiring', () => {
     expect(source).toContain('useScrollToTop(scrollRef)');
     expect(source).toContain('ref={scrollRef}');
   });
+
+  it('starts each Home feed lane from a fresh list origin', () => {
+    const source = readSource('components/home-dashboard.tsx');
+
+    expect(source).toContain('key={`home-feed-${activeChipId}`}');
+    expect(source).toContain('maintainVisibleContentPosition={{ disabled: true }}');
+  });
 });

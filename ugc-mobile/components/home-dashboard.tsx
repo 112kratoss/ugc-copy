@@ -655,6 +655,10 @@ export function HomeDashboard() {
   return (
     <View style={{ flex: 1, backgroundColor: DASHBOARD_COLORS.background, paddingTop: topInset }}>
       <FlashList
+        // A lane is a new feed, not a mutation of the visible one. Remounting
+        // gives it a true native origin; reusing the list preserves iOS's old
+        // content offset and can place the first media card above the screen.
+        key={`home-feed-${activeChipId}`}
         ref={feedRef}
         data={cards}
         keyExtractor={(card) => card.id}
@@ -662,6 +666,7 @@ export function HomeDashboard() {
         getItemType={(card) => card.previewKind}
         extraData={visibleActiveVideoIds}
         drawDistance={SHOWCASE_DRAW_DISTANCE}
+        maintainVisibleContentPosition={{ disabled: true }}
         onEndReached={requestNextPage}
         onEndReachedThreshold={0.32}
         refreshControl={(
