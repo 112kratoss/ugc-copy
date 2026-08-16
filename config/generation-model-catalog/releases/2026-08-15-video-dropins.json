@@ -29,8 +29,6 @@
     "kling-3.0",
     "kling-3.0-turbo",
     "kling-3.0-video",
-    "kling-o3",
-    "minimax-h3",
     "nano-banana-2",
     "nano-banana-2-lite",
     "nano-banana-pro",
@@ -38,7 +36,6 @@
     "qwen3-pro",
     "seedance-1.5-pro",
     "seedance-2",
-    "seedance-2-5",
     "seedance-2-fast",
     "seedance-2-mini",
     "seedream-5-lite",
@@ -48,6 +45,11 @@
     "wan-2.7-image",
     "wan-2.7-image-pro",
     "z-image"
+  ],
+  "addsModelIds": [
+    "kling-o3",
+    "minimax-h3",
+    "seedance-2-5"
   ],
   "defaults": {
     "web": {

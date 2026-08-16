@@ -23,6 +23,7 @@ interface Manifest {
   mode: string;
   release: { revision: string; basedOnRevision: string; schemaVersion: number };
   expectedModelIds: string[];
+  addsModelIds?: string[];
   entries: ManifestEntry[];
   acceptanceQuotes?: Array<{ modelId: string; settings: Record<string, unknown>; expectedCredits: number }>;
 }
@@ -72,16 +73,27 @@ const EXPECTED_PROVIDER_IDS: Record<string, Record<string, string>> = {
 };
 
 describe('drop-in model release manifests', () => {
+  // `expectedModelIds` guards the inventory of the release being CLONED, so a release
+  // that adds models lists the ids without them and names the additions separately.
+  // Asserting the resulting count here is the mistake that fails materialization.
   it('adds exactly the four image models and nothing else', () => {
     expect(imageManifest.entries.map((entry) => entry.modelId).sort())
       .toEqual(['grok-imagine-image-2', 'ideogram-character', 'qwen3', 'qwen3-pro']);
-    expect(imageManifest.expectedModelIds).toHaveLength(33);
+    expect(imageManifest.expectedModelIds).toHaveLength(29);
+    expect(imageManifest.addsModelIds?.slice().sort())
+      .toEqual(['grok-imagine-image-2', 'ideogram-character', 'qwen3', 'qwen3-pro']);
+    for (const added of imageManifest.addsModelIds ?? []) {
+      expect(imageManifest.expectedModelIds).not.toContain(added);
+    }
   });
 
-  it('adds exactly the three video models and nothing else', () => {
+  it('adds exactly the three video models on top of the image release', () => {
     expect(videoManifest.entries.map((entry) => entry.modelId).sort())
       .toEqual(['kling-o3', 'minimax-h3', 'seedance-2-5']);
-    expect(videoManifest.expectedModelIds).toHaveLength(36);
+    // Base is the image release: the original 29 plus its four additions.
+    expect(videoManifest.expectedModelIds).toHaveLength(33);
+    expect(videoManifest.addsModelIds?.slice().sort())
+      .toEqual(['kling-o3', 'minimax-h3', 'seedance-2-5']);
   });
 
   it('chains the video release onto the image release', () => {
