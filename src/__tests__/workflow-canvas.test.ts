@@ -921,7 +921,9 @@ describe('workflow canvas helpers', () => {
     expect(inspectWorkflowNodeCapabilities(graph, unrelatedImageNode).issues.map((issue) => issue.code)).not.toContain('duplicate-element-handles');
   });
 
-  it('rejects new general image-reference connections on workflow video nodes', () => {
+  it('gates image-reference connections on the model capability, not a family list', () => {
+    // The default video node is Kling 3.0 Cinematic, which genuinely takes no reusable
+    // image references — so the connection is refused with the model's own reason.
     const videoNode = createWorkflowNode('video-generate', { x: 240, y: 0 });
     const sourceImage = createWorkflowNode('image-input', { x: 0, y: 0 });
     const graph = normalizeWorkflowGraph({
@@ -938,7 +940,32 @@ describe('workflow canvas helpers', () => {
     });
 
     expect(validation.valid).toBe(false);
-    expect(validation.message).toMatch(/use Start frame and optional End frame/i);
+    expect(validation.message).toMatch(/not available for Kling/i);
+  });
+
+  it('allows image-reference connections on non-Seedance models that publish capacity', () => {
+    // wan-2.7 and minimax-h3 both declare reusable image references; the old
+    // Seedance-only gate rejected them in the canvas while the create page accepted
+    // them. kling-o3 carries them even in multi-shot.
+    for (const model of ['wan-2.7', 'kling-o3', 'minimax-h3'] as const) {
+      const videoNode = createWorkflowNode('video-generate', { x: 240, y: 0 });
+      videoNode.data = { ...videoNode.data, model };
+      const sourceImage = createWorkflowNode('image-input', { x: 0, y: 0 });
+      const graph = normalizeWorkflowGraph({
+        nodes: [videoNode, sourceImage],
+        edges: [],
+      });
+
+      const validation = validateWorkflowConnectionForGraph({
+        graph,
+        sourceNodeId: sourceImage.id,
+        sourceHandle: 'image',
+        targetNodeId: videoNode.id,
+        targetHandle: 'image-reference',
+      });
+
+      expect(validation.valid, model).toBe(true);
+    }
   });
 
   it('still allows start and end frame connections on workflow video nodes', () => {

@@ -76,6 +76,8 @@ import {
     type ImageQualityMode,
     type ImageResolution,
 } from '@/lib/client-generation-models';
+import { getImageInputAffordances } from '@/lib/generation-model-affordances';
+import type { GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import {
     getActiveRegistryModels,
     resolveCatalogModelId,
@@ -810,7 +812,14 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     });
     const currentCost = quoteUi.costCredits;
     const availableResolutions = getImageResolutionOptions(selectedModel, aspectRatio);
-    const showResolutionControl = supportsImageResolutionControl(selectedModel);
+    // Descriptor-derived where the catalog is available: a resolution control offering a
+    // single value is a fixed setting, not a choice worth rendering. Falls back to the
+    // per-model list before the catalog loads.
+    const imageAffordances = getImageInputAffordances(
+        (model as { catalogDescriptor?: GenerationModelDescriptor }).catalogDescriptor,
+    );
+    const showResolutionControl = imageAffordances?.showResolutionControl
+        ?? supportsImageResolutionControl(selectedModel);
     const isGrokImageModel = selectedModel === 'grok-imagine-image';
     const qualityModes = getImageQualityModes(selectedModel);
     const insufficientCredits = userCredits !== null && currentCost !== null && userCredits < currentCost;
@@ -1596,12 +1605,17 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(20,20,24,0.96),rgba(9,9,11,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
                                 >
                                     <h2 className="text-sm font-semibold text-white mb-1">
-                                        {selectedModel === 'ideogram-v3' ? 'Generation speed' : 'Grok quality'}
+                                        {/* The descriptor already labels this control per model ("Speed" for the
+                                            Ideogram tiers, "Quality" elsewhere), so a new model with quality modes
+                                            no longer lands under a heading naming a different vendor. */}
+                                        {imageAffordances?.qualityModeLabel
+                                            ? `Generation ${imageAffordances.qualityModeLabel.toLowerCase()}`
+                                            : (selectedModel === 'ideogram-v3' ? 'Generation speed' : 'Grok quality')}
                                     </h2>
                                     <p className="text-sm text-zinc-400 mb-4">
-                                        {selectedModel === 'ideogram-v3'
-                                            ? 'Choose faster drafts or spend more credits for final-detail output.'
-                                            : 'Quality applies to prompt-only Grok runs; edits use fixed image-to-image pricing.'}
+                                        {selectedModel === 'grok-imagine-image'
+                                            ? 'Quality applies to prompt-only Grok runs; edits use fixed image-to-image pricing.'
+                                            : 'Choose faster drafts or spend more credits for final-detail output.'}
                                     </p>
                                     <div className={`grid gap-3 ${qualityModes.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
                                         {qualityModes.map((mode) => (

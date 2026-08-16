@@ -1104,6 +1104,24 @@ export function getKieImageModelId(model: ImageModelId, referenceCount: number):
   if (model === 'wan-2.7-image') return 'wan/2-7-image';
   if (model === 'wan-2.7-image-pro') return 'wan/2-7-image-pro';
 
+  // Grok Imagine 2.0 also publishes an `image-edit` endpoint, but it edits a prior
+  // Kie task by id rather than an uploaded image, so references never select it.
+  if (model === 'grok-imagine-image-2') return 'grok-imagine-image-2-0/text-to-image';
+
+  if (model === 'qwen3') {
+    return referenceCount > 0 ? 'qwen3/image-to-image' : 'qwen3/text-to-image';
+  }
+
+  // Qwen's Pro tier is documented under market/qwen3-pro/* but the model enum nests
+  // it inside the qwen3 vendor namespace. Verified 2026-08-15 against
+  // https://docs.kie.ai/market/qwen3-pro/text-to-image.md and .../image-to-image.md.
+  if (model === 'qwen3-pro') {
+    return referenceCount > 0 ? 'qwen3/pro-image-to-image' : 'qwen3/pro-text-to-image';
+  }
+
+  // Character references are mandatory, so both admission modes hit the same endpoint.
+  if (model === 'ideogram-character') return 'ideogram/character';
+
   // Everything else sends the app id unchanged, which is correct only because
   // those ids are byte-identical to the provider's (nano-banana-2,
   // nano-banana-2-lite, nano-banana-pro, z-image). Adding a model whose
@@ -1517,6 +1535,65 @@ export async function startImageGeneration(params: {
     ?? await loadGenerationModelOperationalConfig(model, catalogRevision
       ? { catalogRevision, schemaVersion: 1 }
       : undefined);
+
+  // Declaratively-adapted models skip the hand-coded payload ladder entirely:
+  // the adapterConfig in the model's operational config builds the provider
+  // request, and startCatalogGeneration owns reservation/settlement. Because
+  // this keys off the *loaded* config, production only takes this path once a
+  // catalog release flips the model's adapterKey — the ladder below stays as
+  // the deployment-window fallback until then. All validation above (aspect
+  // ratio, resolution, reference caps, element handles) has already run.
+  if (runtimeConfig?.adapterKey === 'kie-task-v1') {
+    const referenceSources = normalizedReferences.length > 0
+      ? normalizedReferences
+      : normalizeMediaUrlList(imageUrls).map((url) => ({
+          url,
+          displayName: null,
+          handle: null,
+          storagePath: null,
+          sourceGenerationId: null,
+        }));
+    return startCatalogGeneration({
+      supabase,
+      creditSupabase,
+      userId,
+      clientRequestKeyHash,
+      operation: runtimeConfig,
+      catalogRevision: catalogRevision ?? 'code',
+      prompt: compiledPrompt,
+      settings: {
+        aspectRatio,
+        resolution,
+        outputFormat,
+        googleSearch,
+      },
+      // resolvedImageUrls already went through resolveGenerationMediaSource as
+      // part of validation above, so they are passed pre-resolved; the source
+      // arrays share order, letting element metadata align by index. Element
+      // descriptors carry the storage identity when references arrive as bare
+      // urls (the imageUrls path) — dropping them broke input snapshotting and
+      // remix lineage for element-driven generations.
+      inputs: referenceSources.map((reference, index) => ({
+        slot: 'imageReferences',
+        kind: 'image' as const,
+        url: resolvedImageUrls[index] ?? reference.url,
+        label: normalizedElements[index]?.displayName ?? reference.displayName ?? null,
+        handle: normalizedElements[index]?.handle ?? reference.handle ?? null,
+        elementId: normalizedElements[index]?.id ?? null,
+        storagePath: normalizedElements[index]?.storagePath ?? reference.storagePath ?? null,
+        sourceGenerationId: normalizedElements[index]?.sourceGenerationId
+          ?? reference.sourceGenerationId
+          ?? null,
+      })),
+      inputsPreResolved: true,
+      quotedCostCredits: cost,
+      sourceGenerationId,
+      persistInputMedia,
+      privateRecipe,
+      templateContext,
+    });
+  }
+
   const providerModel = resolveProviderModelId(
     runtimeConfig,
     resolvedImageUrls.length > 0 ? 'reference' : 'text',
@@ -1622,6 +1699,38 @@ export async function startImageGeneration(params: {
       if (resolvedImageUrls.length > 0) {
         input.input_urls = resolvedImageUrls;
       }
+    } else if (model === 'grok-imagine-image-2') {
+      // Text-to-image only: the provider's edit endpoint keys off a prior task id,
+      // so references never reach this model.
+      input = {
+        prompt: compiledPrompt,
+        aspect_ratio: aspectRatio,
+      };
+    } else if (model === 'qwen3' || model === 'qwen3-pro') {
+      input = {
+        prompt: compiledPrompt,
+        resolution,
+        image_size: aspectRatio,
+        output_format: outputFormat === 'jpg' ? 'jpeg' : outputFormat,
+        prompt_extend: true,
+        nsfw_checker: true,
+      };
+
+      if (resolvedImageUrls.length > 0) {
+        input.image_urls = resolvedImageUrls;
+      }
+    } else if (model === 'ideogram-character') {
+      // The provider requires at least one character reference; validation rejects
+      // the request before we get here if none were supplied.
+      input = {
+        prompt: compiledPrompt,
+        rendering_speed: qualityMode.toUpperCase(),
+        style: 'AUTO',
+        expand_prompt: true,
+        image_size: getIdeogramImageSize(aspectRatio),
+        reference_image_urls: resolvedImageUrls,
+        num_images: 1,
+      };
     } else if (model === 'z-image') {
       input = {
         prompt: compiledPrompt,
@@ -1874,7 +1983,12 @@ export async function startVideoGeneration(params: {
 
   const videoElementSupport = getVideoElementSupport(model, { mode, isMultiShot });
   const isSeedance2Family = isSeedance2VideoModelId(model);
-  const supportsMultimodalReferences = isSeedance2Family || model === 'wan-2.7' || model === 'gemini-omni-video';
+  // minimax-h3's provider branch consumes reference_video_urls/reference_audio_urls, so
+  // omitting it here silently discarded every clip and track the user attached.
+  const supportsMultimodalReferences = isSeedance2Family
+    || model === 'wan-2.7'
+    || model === 'gemini-omni-video'
+    || model === 'minimax-h3';
   const resolvedReferenceImageUrls = normalizedReferences.length > 0
     ? await resolveMediaUrls(supabase, normalizedReferences.map((reference) => reference.url))
     : useLegacyFrameUrls
@@ -2147,6 +2261,76 @@ export async function startVideoGeneration(params: {
         input.aspect_ratio = aspectRatio;
       }
       body = { model: providerModelId, input };
+    } else if (model === 'kling-o3') {
+      // Kling O3 (3.0 Omni) renames the fields its 3.0 sibling uses: `audio` for
+      // sound, `customize_multi_shots` for multi-shot, and an integer duration.
+      const klingO3ImageUrls = providerReferenceImageUrls.length > 0
+        ? providerReferenceImageUrls
+        : frameImageUrls;
+      providerModelId = resolveProviderModelId(
+        runtimeConfig,
+        providerReferenceImageUrls.length > 0
+          ? 'reference'
+          : (frameImageUrls.length > 0 ? 'image' : 'text'),
+        providerReferenceImageUrls.length > 0
+          ? 'kling-3.0-omni/reference-to-video'
+          : (frameImageUrls.length > 0
+            ? 'kling-3.0-omni/image-to-video'
+            : 'kling-3.0-omni/text-to-video'),
+      );
+
+      const input: Record<string, unknown> = {
+        prompt: compiledPrompt,
+        resolution,
+        aspect_ratio: aspectRatio,
+        duration: totalDuration,
+        audio: soundEnabled,
+        customize_multi_shots: Boolean(isMultiShot),
+      };
+
+      if (isMultiShot) {
+        input.multi_prompt = normalizedMultiPrompts.map((shot) => ({
+          prompt: shot.prompt,
+          duration: shot.duration,
+        }));
+      }
+
+      if (klingO3ImageUrls.length > 0) {
+        input.image_urls = klingO3ImageUrls;
+      }
+
+      body = { model: providerModelId, input };
+    } else if (selectedModel.provider === 'minimax') {
+      const usesReferences = providerReferenceImageUrls.length > 0
+        || resolvedReferenceVideoUrls.length > 0
+        || resolvedReferenceAudioUrls.length > 0;
+      providerModelId = resolveProviderModelId(
+        runtimeConfig,
+        usesReferences ? 'reference' : (frameImageUrls.length > 0 ? 'image' : 'text'),
+        usesReferences
+          ? 'minimax-h3/reference-to-video'
+          : (frameImageUrls.length > 0 ? 'minimax-h3/image-to-video' : 'minimax-h3/text-to-video'),
+      );
+
+      const input: Record<string, unknown> = {
+        prompt: compiledPrompt,
+        duration,
+        resolution,
+      };
+
+      if (usesReferences) {
+        input.aspect_ratio = aspectRatio;
+        if (providerReferenceImageUrls.length > 0) input.reference_image_urls = providerReferenceImageUrls;
+        if (resolvedReferenceVideoUrls.length > 0) input.reference_video_urls = resolvedReferenceVideoUrls;
+        if (resolvedReferenceAudioUrls.length > 0) input.reference_audio_urls = resolvedReferenceAudioUrls;
+      } else if (frameImageUrls.length > 0) {
+        if (frameImageUrls[0]) input.first_frame_url = frameImageUrls[0];
+        if (frameImageUrls[1]) input.last_frame_url = frameImageUrls[1];
+      } else {
+        input.aspect_ratio = aspectRatio;
+      }
+
+      body = { model: providerModelId, input };
     } else if (selectedModel.provider === 'kling') {
       const input: Record<string, unknown> = {
         mode,
@@ -2330,7 +2514,7 @@ export async function startVideoGeneration(params: {
         model: providerModelId,
         input,
       };
-    } else {
+    } else if (selectedModel.provider === 'veo') {
       endpoint = 'https://api.kie.ai/api/v1/veo/generate';
       providerModelId = resolveProviderModelId(
         runtimeConfig,
@@ -2356,6 +2540,16 @@ export async function startVideoGeneration(params: {
           ? { imageUrls: referenceImageUrls }
           : (frameImageUrls.length > 0 ? { imageUrls: frameImageUrls } : {})),
       };
+    } else {
+      // This ladder used to end in an implicit Veo fallthrough: any video model
+      // without an explicit branch was silently ROUTED to the Veo endpoint and
+      // generated on the wrong provider API. The `satisfies never` makes a new
+      // provider a compile error here; the throw guards runtime casts.
+      selectedModel satisfies never;
+      throw new GenerationServiceError(
+        `No provider payload branch for video model ${model}.`,
+        500,
+      );
     }
 
     const reservation = await startGenerationRecord(creditSupabase, {
@@ -2724,6 +2918,14 @@ export async function startCatalogGeneration(params: {
   quotedCostCredits: number;
   sourceGenerationId?: string | null;
   persistInputMedia?: boolean;
+  privateRecipe?: boolean;
+  templateContext?: TemplateGenerationContext;
+  /**
+   * Callers that already ran the assets through resolveGenerationMediaSource
+   * (the legacy start services do, as part of their validation) set this to
+   * avoid a second resolve — re-signing an already-signed URL is wasted work.
+   */
+  inputsPreResolved?: boolean;
 }): Promise<GenerationStartResult> {
   requireKieGenerationConfiguration();
   const {
@@ -2740,25 +2942,18 @@ export async function startCatalogGeneration(params: {
     quotedCostCredits,
     sourceGenerationId = null,
     persistInputMedia = true,
+    privateRecipe = false,
+    templateContext,
+    inputsPreResolved = false,
   } = params;
 
+  if (templateContext && !privateRecipe) {
+    throw new GenerationServiceError('Template generations must keep their recipe private.', 500);
+  }
   if (!Number.isInteger(quotedCostCredits) || quotedCostCredits < 0) {
     throw new GenerationServiceError('Invalid quoted generation cost.', 500);
   }
 
-  const resolvedInputs = await Promise.all(inputs.map(async (asset) => ({
-    ...asset,
-    url: typeof asset.url === 'string' && asset.url.trim()
-      ? await resolveGenerationMediaSource(supabase, asset.url)
-      : null,
-  })));
-  const providerRequest = buildGenerationProviderRequest({
-    operation,
-    prompt: typeof prompt === 'string' ? prompt.trim() : '',
-    settings,
-    inputs: resolvedInputs,
-    shots,
-  });
   const durationSetting = settings.duration;
   const duration = typeof durationSetting === 'number' && Number.isFinite(durationSetting)
     ? durationSetting
@@ -2777,14 +2972,33 @@ export async function startCatalogGeneration(params: {
       duration,
       cost: quotedCostCredits,
       client_request_key_hash: clientRequestKeyHash,
-      prompt: typeof prompt === 'string' ? prompt.trim() : '',
+      prompt: privateRecipe ? null : (typeof prompt === 'string' ? prompt.trim() : ''),
       category: operation.kind === 'image' ? 'image' : 'video',
       creation_mode: operation.kind === 'motion' ? 'motion' : null,
       source_generation_id: sourceGenerationId,
-      workflow_settings: {
+      // Legacy readers (remix-source-server, generation detail views) consume
+      // top-level setting keys, `elements`, and `compiledPrompt` from
+      // workflow_settings. Keep those alongside the catalog-native
+      // settings/inputs shape so migrating a model between payload paths never
+      // changes what downstream features can read.
+      workflow_settings: privateRecipe ? {} : {
+        ...settings,
         model: operation.modelId,
         catalogRevision,
+        compiledPrompt: typeof prompt === 'string' ? prompt.trim() : '',
         settings,
+        ...(() => {
+          const elements = inputs
+            .filter((asset) => asset.handle)
+            .map((asset) => ({
+              ...(asset.elementId ? { id: asset.elementId } : {}),
+              displayName: asset.label ?? asset.handle ?? '',
+              handle: asset.handle!,
+              storagePath: asset.storagePath ?? null,
+              sourceGenerationId: asset.sourceGenerationId ?? null,
+            }));
+          return elements.length > 0 ? { elements } : {};
+        })(),
         ...(shots.length > 0 ? { shots } : {}),
         inputs: inputs.map((asset) => ({
           slot: asset.slot,
@@ -2801,7 +3015,7 @@ export async function startCatalogGeneration(params: {
             : {}),
         })),
       },
-    });
+    }, templateContext);
     generationId = reservation.generationId;
     if (reservation.predictionId) {
       return {
@@ -2813,6 +3027,26 @@ export async function startCatalogGeneration(params: {
       };
     }
 
+    // Resolved after the replay check on purpose: signing every input URL is a storage
+    // round-trip per asset, and on a client retry the reservation returns the original
+    // prediction and all of that work would be thrown away. Adapter errors raised here
+    // settle through the quiet-settle catch below, which is an already-handled path.
+    const resolvedInputs = inputsPreResolved
+      ? inputs.map((asset) => ({ ...asset, url: asset.url ?? null }))
+      : await Promise.all(inputs.map(async (asset) => ({
+          ...asset,
+          url: typeof asset.url === 'string' && asset.url.trim()
+            ? await resolveGenerationMediaSource(supabase, asset.url)
+            : null,
+        })));
+    const providerRequest = buildGenerationProviderRequest({
+      operation,
+      prompt: typeof prompt === 'string' ? prompt.trim() : '',
+      settings,
+      inputs: resolvedInputs,
+      shots,
+    });
+
     predictionId = await createKieTask(
       providerRequest.body,
       providerRequest.endpoint,
@@ -2821,6 +3055,10 @@ export async function startCatalogGeneration(params: {
     await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
     if (persistInputMedia) {
+      // Reference images are numbered per media type so their labels read the same as
+      // the legacy path's ("Reference image 1"), which downstream remix and creation
+      // views display verbatim.
+      let referenceImageOrdinal = 0;
       const candidates: PersistGenerationInputCandidate[] = resolvedInputs.flatMap((asset, index) => {
         if (!asset.url) return [];
         const mediaType = asset.kind === 'video'
@@ -2839,16 +3077,24 @@ export async function startCatalogGeneration(params: {
                 : asset.kind === 'character'
                   ? 'character_image'
                   : 'reference_image';
+        if (role === 'reference_image') referenceImageOrdinal += 1;
         return [{
           mediaType,
           role,
-          label: asset.label ?? asset.slot,
+          label: asset.label
+            ?? (role === 'reference_image' ? `Reference image ${referenceImageOrdinal}` : asset.slot),
           sourceUrl: asset.url,
           sourceStoragePath: asset.storagePath ?? null,
           sourceGenerationId: asset.sourceGenerationId ?? null,
           sortOrder: index,
+          // Element identity must survive: toRemixImageElement reads id/displayName/handle
+          // back out of this metadata, and without them remix falls back to the row id
+          // and loses the name the user gave the reference.
           metadata: {
             slot: asset.slot,
+            ...(asset.elementId ? { id: asset.elementId } : {}),
+            ...(asset.label ? { displayName: asset.label } : {}),
+            ...(asset.handle ? { handle: asset.handle } : {}),
             ...(typeof asset.durationSeconds === 'number'
               ? { durationSeconds: asset.durationSeconds }
               : {}),
@@ -2873,13 +3119,25 @@ export async function startCatalogGeneration(params: {
     };
   } catch (error) {
     if (!predictionId && generationId) {
-      await settleGenerationStartFailureQuietly({
-        creditSupabase,
-        error,
-        generationId,
-        userId,
-        cost: quotedCostCredits,
-      });
+      if (templateContext) {
+        await settleTemplateGenerationStartFailureQuietly({
+          creditSupabase,
+          error,
+          generationId,
+          model: operation.modelId,
+          templateContext,
+          userId,
+          cost: quotedCostCredits,
+        });
+      } else {
+        await settleGenerationStartFailureQuietly({
+          creditSupabase,
+          error,
+          generationId,
+          userId,
+          cost: quotedCostCredits,
+        });
+      }
     }
     throw error;
   }

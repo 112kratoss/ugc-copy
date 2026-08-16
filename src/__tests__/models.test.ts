@@ -51,6 +51,31 @@ describe('Model Pricing', () => {
             expect(getImageCost('flux-2-pro', '2K')).toBe(7);
             expect(getImageCost('z-image', '1K')).toBe(1);
         });
+        it('bills every Qwen reference, unlike Seedream which bundles the first', () => {
+            // Kie: "Input images are charged at 0.5 credits per image" — no free first
+            // image, which is the one way Qwen diverges from the Seedream surcharge shape.
+            // The surcharge path rounds to whole credits, so a 4.8-credit base bills as 5 —
+            // the same value the catalog quote produces, which the parity test pins.
+            expect(getImageCost('qwen3', '1K')).toBe(5);
+            expect(getImageCost('qwen3', '2K')).toBe(5);
+            expect(getImageCost('qwen3', '1K', { referenceCount: 1 })).toBe(6); // ceil(4.8 + 0.5)
+            expect(getImageCost('qwen3', '1K', { referenceCount: 4 })).toBe(7); // ceil(4.8 + 2.0)
+            // Seedream at the same reference count is cheaper because one ride free.
+            expect(getImageCost('seedream-5-pro', '1K', { referenceCount: 1 })).toBe(7);
+        });
+        it('prices the Qwen Pro tier by resolution', () => {
+            expect(getImageCost('qwen3-pro', '1K')).toBe(7); // ceil(6.4)
+            expect(getImageCost('qwen3-pro', '2K')).toBe(12);
+            expect(getImageCost('qwen3-pro', '2K', { referenceCount: 2 })).toBe(13); // ceil(12 + 1.0)
+        });
+        it('prices Ideogram Character by rendering speed', () => {
+            expect(getImageCost('ideogram-character', '1K', { qualityMode: 'turbo' })).toBe(12);
+            expect(getImageCost('ideogram-character', '1K', { qualityMode: 'balanced' })).toBe(18);
+            expect(getImageCost('ideogram-character', '1K', { qualityMode: 'quality' })).toBe(24);
+        });
+        it('prices Grok Imagine 2.0 flat regardless of aspect ratio', () => {
+            expect(getImageCost('grok-imagine-image-2', '1K')).toBe(4);
+        });
         it('grok image pricing follows quality and reference mode', () => {
             expect(getImageCost('grok-imagine-image', '1K')).toBe(4);
             expect(getImageCost('grok-imagine-image', '1K', { qualityMode: 'quality' })).toBe(5);
@@ -124,6 +149,42 @@ describe('Model Pricing', () => {
         });
         it('seedance 2 fast 480p 12s with reference video uses the lower tier', () => {
             expect(getVideoCost('seedance-2-fast', { resolution: '480p', durationSeconds: 12, hasReferenceVideo: true })).toBe(108);
+        });
+        it('prices seedance 2.5 from its own 480p/720p tiers', () => {
+            // 720p noVideo 63/s, withVideo 38/s; 480p 28/s and 17/s.
+            expect(getVideoCost('seedance-2-5', { resolution: '720p', durationSeconds: 10 })).toBe(630);
+            expect(getVideoCost('seedance-2-5', { resolution: '720p', durationSeconds: 10, hasReferenceVideo: true })).toBe(380);
+            expect(getVideoCost('seedance-2-5', { resolution: '480p', durationSeconds: 4 })).toBe(112);
+            expect(getVideoCost('seedance-2-5', { resolution: '480p', durationSeconds: 4, hasReferenceVideo: true })).toBe(68);
+        });
+        it('prices seedance 2.5 across its full 30-second range', () => {
+            // Regression guard: 2.5 generates up to 30s where the rest of the family stops at 15.
+            expect(getVideoCost('seedance-2-5', { resolution: '480p', durationSeconds: 30 })).toBe(840);
+        });
+        it('prices kling o3 by resolution and native audio', () => {
+            expect(getVideoCost('kling-o3', { resolution: '720p', durationSeconds: 3 })).toBe(42);
+            expect(getVideoCost('kling-o3', { resolution: '1080p', durationSeconds: 10, sound: true })).toBe(230);
+            expect(getVideoCost('kling-o3', { resolution: '1080p', durationSeconds: 10 })).toBe(180);
+            // 4K bills the same with or without audio.
+            expect(getVideoCost('kling-o3', { resolution: '4k', durationSeconds: 5, sound: true })).toBe(335);
+            expect(getVideoCost('kling-o3', { resolution: '4k', durationSeconds: 5 })).toBe(335);
+        });
+        it('undercuts kling 3.0 at 1080p with sound, which is why o3 exists', () => {
+            const o3 = getVideoCost('kling-o3', { resolution: '1080p', durationSeconds: 10, sound: true });
+            const kling3 = getVideoCost('kling-3.0-video', { mode: 'pro', durationSeconds: 10, sound: true });
+            expect(o3).toBeLessThan(kling3);
+        });
+        it('prices minimax h3 from its uppercase resolution enum', () => {
+            expect(getVideoCost('minimax-h3', { resolution: '768P', durationSeconds: 6 })).toBe(96);
+            expect(getVideoCost('minimax-h3', { resolution: '2K', durationSeconds: 6 })).toBe(156);
+        });
+        it('never falls through new video models to Veo pricing', () => {
+            // getVideoCost has no default branch: an unmatched id silently bills at Veo
+            // rates, which are an order of magnitude higher than these models.
+            for (const modelId of ['seedance-2-5', 'kling-o3', 'minimax-h3'] as const) {
+                const veoFallthrough = getVideoCost('veo-3.1', { resolution: '720p', durationSeconds: 1 });
+                expect(getVideoCost(modelId, { durationSeconds: 1 })).not.toBe(veoFallthrough);
+            }
         });
         it('prices the new Kie video models from their provider tiers', () => {
             expect(getVideoCost('seedance-2-mini', { resolution: '720p', durationSeconds: 10 })).toBe(205);

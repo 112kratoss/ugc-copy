@@ -22,6 +22,8 @@ import PublicShareButton from '@/app/components/PublicShareButton';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import { clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, getVideoElementSupport, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/client-generation-models';
+import { getVideoInputAffordances } from '@/lib/generation-model-affordances';
+import type { GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import {
     getActiveRegistryModels,
     resolveCatalogModelId,
@@ -687,17 +689,30 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const currentFixedLens = videoModel.supportsFixedLens ? fixedLens : false;
     const currentIsMultiShot = videoModel.supportsMultiShot ? isMultiShot : false;
     const isGrokVideoModel = selectedModel === 'grok-imagine-video';
-    const videoElementSupport = getVideoElementSupport(selectedModel, {
-        mode: currentMode,
-        isMultiShot: currentIsMultiShot,
-    });
-    const canUseVideoElements = videoElementSupport.enabled;
-    const activeReferenceMode = canUseVideoElements ? (isGeminiOmniVideoModel ? 'elements' : referenceMode) : 'frames';
-    const combinesFrameWithReferences = isWanVideoModel && activeReferenceMode === 'elements';
-    const supportsEndFrame = !['grok-imagine-video', 'kling-3.0-turbo', 'hailuo-2.3', 'happyhorse-1.1', 'gemini-omni-video'].includes(selectedModel);
+    // Capabilities come from the model's catalog descriptor, so what the picker offers
+    // and what the server accepts cannot drift apart. Before the catalog loads the
+    // module falls back to the previous hardcoded tables, keeping first paint identical.
+    const affordances = getVideoInputAffordances(
+        (videoModel as { catalogDescriptor?: GenerationModelDescriptor }).catalogDescriptor,
+        selectedModel,
+        { referenceMode, mode: currentMode, isMultiShot: currentIsMultiShot },
+    );
+    const videoElementSupport = {
+        enabled: affordances.elements.enabled,
+        maxElements: affordances.elements.maxTotal,
+        maxNamed: affordances.elements.maxNamed,
+        reason: affordances.elements.disabledReason,
+    };
+    const canUseVideoElements = affordances.elements.enabled;
+    const activeReferenceMode = affordances.activeMode;
+    // Named video elements live in their own always-active input mode, so their count is
+    // quotable regardless of which reference mode is showing.
+    const videoElementsSlotActive = affordances.namedVideoElements.enabled;
+    const combinesFrameWithReferences = affordances.combineFramesWithReferences;
+    const supportsEndFrame = affordances.frames.end;
     const activeSupportsEndFrame = supportsEndFrame && !combinesFrameWithReferences;
-    const referenceVideoLimit = isGeminiOmniVideoModel ? 1 : isWanVideoModel ? 5 : 3;
-    const referenceAudioLimit = supportsReferenceAudio ? (isWanVideoModel ? 1 : 3) : 0;
+    const referenceVideoLimit = affordances.referenceVideos.max;
+    const referenceAudioLimit = affordances.referenceAudios.max;
     const totalDuration = currentIsMultiShot
         ? multiPrompts.reduce((acc, curr) => acc + curr.duration, 0)
         : (selectedModel === 'veo-3.1' ? videoModel.durations[0] : currentDuration);
@@ -741,7 +756,17 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         : [],
                 },
                 audioReferences: { count: activeReferenceMode === 'elements' ? referenceAudios.length : 0 },
-                videoElements: { count: klingVideoElements.length },
+                // The videoElements slot is declared inside the elements-conditioned
+                // "references" input mode, but this surface never puts Kling into
+                // elements mode (getVideoElementSupport disables elements for it), so
+                // reporting a count here made the quote reject every run outright with
+                // "Video elements is unavailable with the selected settings." Report the
+                // count only while the slot is actually active. The catalog change that
+                // gives videoElements its own always-active mode restores full
+                // validation; see generation-model-catalog.ts videoInputModes.
+                videoElements: {
+                    count: videoElementsSlotActive ? klingVideoElements.length : 0,
+                },
                 startFrame: { count: Number(Boolean(startImageUrl || startImageFile)) },
                 endFrame: { count: activeSupportsEndFrame ? Number(Boolean(endImageUrl || endImageFile)) : 0 },
                 preparedVoices: { count: isGeminiOmniVideoModel ? preparedAudioIds.length : 0 },
@@ -756,7 +781,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 : [],
         },
         catalogRevision: modelCatalog.catalog.revision,
-    } : null, [activeReferenceMode, activeSupportsEndFrame, characterIds.length, currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, elements.length, endImageFile, endImageUrl, frameReferenceCount, isGeminiOmniVideoModel, klingVideoElements.length, modelCatalog.catalog, preparedAudioIds.length, referenceAudios.length, referenceVideos, selectedModel, startImageFile, startImageUrl, totalDuration]);
+    } : null, [activeReferenceMode, activeSupportsEndFrame, characterIds.length, currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, elements.length, endImageFile, endImageUrl, frameReferenceCount, isGeminiOmniVideoModel, klingVideoElements.length, modelCatalog.catalog, videoElementsSlotActive, preparedAudioIds.length, referenceAudios.length, referenceVideos, selectedModel, startImageFile, startImageUrl, totalDuration]);
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED' && quoteState.error?.code !== 'MODEL_UNAVAILABLE') return;
@@ -2357,12 +2382,19 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return;
         }
 
-        if (isSeedance2Family) {
+        // Combined reference-clip budget comes from the descriptor constraint, so the
+        // pre-submit check and the server quote enforce the same number with the same
+        // copy. The previous hardcoded 15 kept blocking Seedance 2.5 after its budget
+        // grew to 30 seconds.
+        const combinedDurationConstraint = affordances.activeConstraints.find(
+            (constraint) => constraint.type === 'combined-duration',
+        );
+        if (combinedDurationConstraint) {
             const knownReferenceVideoDuration = referenceVideos.reduce((total, reference) => {
                 return total + (typeof reference.durationSeconds === 'number' ? reference.durationSeconds : 0);
             }, 0);
-            if (knownReferenceVideoDuration > 15) {
-                setError('Seedance 2 reference videos must stay within the 15 second combined limit.');
+            if (knownReferenceVideoDuration > combinedDurationConstraint.max) {
+                setError(combinedDurationConstraint.message);
                 return;
             }
         }

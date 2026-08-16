@@ -311,6 +311,88 @@ export const IMAGE_MODELS = {
         },
         qualityModes: ['standard', 'quality'] as const,
     },
+    'grok-imagine-image-2': {
+        id: 'grok-imagine-image-2' as const,
+        displayName: 'Grok Imagine 2.0',
+        description: 'Newer xAI generation with sharper prompt adherence',
+        badge: 'New',
+        badgeColor: 'from-amber-500 to-orange-500',
+        accentColor: 'amber',
+        // Text-to-image only: the provider's image-edit variant keys off a prior Kie task id
+        // rather than an uploaded image, so there is no reference mode to expose.
+        maxImages: 0,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: false,
+        aspectRatios: ['1:1', '2:3', '3:2', '16:9', '9:16'] as const,
+        resolutions: ['1K'] as const,
+        outputFormats: ['jpg'] as const,
+        pricing: {
+            '1K': 4,
+            '2K': 4,
+            '4K': 4,
+        },
+    },
+    'qwen3': {
+        id: 'qwen3' as const,
+        displayName: 'Qwen Image 3.0',
+        description: 'Low-cost generation and editing at a flat 1K/2K rate',
+        badge: 'Value',
+        badgeColor: 'from-emerald-500 to-teal-500',
+        accentColor: 'blue',
+        maxImages: 10,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: true,
+        aspectRatios: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9'] as const,
+        resolutions: ['1K', '2K'] as const,
+        outputFormats: ['jpg', 'png'] as const,
+        pricing: {
+            '1K': 4.8,
+            '2K': 4.8,
+            '4K': 4.8,
+        },
+        additionalReferenceCredit: 0.5,
+        // Qwen bills every input image, unlike Seedream which lets the first one through free.
+        referenceCreditIncludesFirst: true,
+    },
+    'qwen3-pro': {
+        id: 'qwen3-pro' as const,
+        displayName: 'Qwen Image 3.0 Pro',
+        description: 'Higher-fidelity Qwen tier with 2K output',
+        badge: 'Pro',
+        badgeColor: 'from-teal-500 to-cyan-500',
+        accentColor: 'blue',
+        maxImages: 10,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: true,
+        aspectRatios: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9'] as const,
+        resolutions: ['1K', '2K'] as const,
+        outputFormats: ['jpg', 'png'] as const,
+        pricing: {
+            '1K': 6.4,
+            '2K': 12,
+            '4K': 12,
+        },
+        additionalReferenceCredit: 0.5,
+        referenceCreditIncludesFirst: true,
+    },
+    'ideogram-character': {
+        id: 'ideogram-character' as const,
+        displayName: 'Ideogram Character',
+        description: 'Keeps one character consistent across every shot',
+        badge: 'Character',
+        badgeColor: 'from-fuchsia-500 to-violet-500',
+        accentColor: 'amber',
+        maxImages: 4,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: false,
+        aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'] as const,
+        resolutions: ['1K'] as const,
+        outputFormats: ['jpg'] as const,
+        qualityModes: ['turbo', 'balanced', 'quality'] as const,
+        qualityPricing: { turbo: 12, balanced: 18, quality: 24 },
+        /** The provider requires at least one character reference; there is no text-only mode. */
+        requiresReference: true,
+    },
 } as const;
 
 export type ImageModelId = keyof typeof IMAGE_MODELS;
@@ -363,9 +445,10 @@ export function isValidImageQualityMode(value: string): value is ImageQualityMod
 }
 
 export function getImageQualityModes(modelId: ImageModelId): readonly ImageQualityMode[] {
-    if (modelId === 'ideogram-v3') return IMAGE_MODELS[modelId].qualityModes;
-    if (modelId === 'grok-imagine-image') return IMAGE_MODELS[modelId].qualityModes;
-    return [];
+    // Data-driven on purpose: the previous per-id list silently dropped
+    // ideogram-character's declared modes, so its Speed selector never rendered.
+    const model = IMAGE_MODELS[modelId];
+    return 'qualityModes' in model ? model.qualityModes : [];
 }
 
 // ─── Video Models ─────────────────────────────────────────────────────────────
@@ -694,6 +777,88 @@ export const VIDEO_MODELS = {
             '720p': 3,
         },
     },
+    'seedance-2-5': {
+        id: 'seedance-2-5' as const,
+        displayName: 'Seedance 2.5',
+        description: 'Latest ByteDance model with 30-second output and audio references',
+        provider: 'seedance' as const,
+        apiModelId: 'bytedance/seedance-2-5',
+        enhancerModelId: 'seedance-2-5',
+        supportsMultiShot: false,
+        supportsSound: true,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9'] as const,
+        durations: [4, 5, 6, 8, 10, 12, 15, 20, 25, 30] as const,
+        singleShotDurationRange: {
+            min: 4,
+            max: 30,
+            default: 5,
+        } as const,
+        modeOptions: [] as const,
+        // 2.5 trades the 1080p/4k tiers of Seedance 2 for longer output.
+        resolutions: ['480p', '720p'] as const,
+        pricing: {
+            '480p': {
+                noVideo: 28,
+                withVideo: 17,
+            },
+            '720p': {
+                noVideo: 63,
+                withVideo: 38,
+            },
+        },
+    },
+    'kling-o3': {
+        id: 'kling-o3' as const,
+        displayName: 'Kling O3',
+        description: 'Multi-shot Kling with named subjects and 4K output',
+        provider: 'kling' as const,
+        apiModelId: 'kling-3.0-omni/text-to-video',
+        enhancerModelId: 'kling-3.0-video',
+        supportsMultiShot: true,
+        supportsSound: true,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '9:16', '1:1'] as const,
+        durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+        singleShotDurationRange: {
+            min: 3,
+            max: 15,
+            default: 5,
+        } as const,
+        modeOptions: [] as const,
+        resolutions: ['720p', '1080p', '4k'] as const,
+        /** Credits per second, keyed by resolution + native audio. */
+        pricing: {
+            '720p': { noSound: 14, withSound: 18 },
+            '1080p': { noSound: 18, withSound: 23 },
+            '4k': { noSound: 67, withSound: 67 },
+        },
+    },
+    'minimax-h3': {
+        id: 'minimax-h3' as const,
+        displayName: 'MiniMax H3',
+        description: 'Hailuo H3 generation from text, a frame, or references',
+        provider: 'minimax' as const,
+        apiModelId: 'minimax-h3/text-to-video',
+        enhancerModelId: 'minimax-h3',
+        supportsMultiShot: false,
+        supportsSound: false,
+        supportsFixedLens: false,
+        aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] as const,
+        durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+        singleShotDurationRange: {
+            min: 4,
+            max: 15,
+            default: 6,
+        } as const,
+        modeOptions: [] as const,
+        // The provider spells these with an uppercase P; the value is sent verbatim.
+        resolutions: ['768P', '2K'] as const,
+        pricing: {
+            '768P': 16,
+            '2K': 26,
+        },
+    },
 } as const;
 
 export type VideoModelId = keyof typeof VIDEO_MODELS;
@@ -701,11 +866,14 @@ export type VideoModelId = keyof typeof VIDEO_MODELS;
 export function getVideoElementSupport(
     modelId: VideoModelId,
     options: { mode?: string; isMultiShot?: boolean } = {}
-): { enabled: boolean; maxElements: number; reason: string | null } {
-    if (options.isMultiShot) {
+): { enabled: boolean; maxElements: number; maxNamed: number; reason: string | null } {
+    // Kling O3 is the one model that carries named subjects across a multi-shot run, so
+    // multi-shot no longer disables references for everything indiscriminately.
+    if (options.isMultiShot && modelId !== 'kling-o3') {
         return {
             enabled: false,
             maxElements: 0,
+            maxNamed: 0,
             reason: 'Reusable references are available in single-shot only.',
         };
     }
@@ -714,24 +882,36 @@ export function getVideoElementSupport(
         return {
             enabled: true,
             maxElements: 2,
+            maxNamed: 2,
             reason: null,
         };
     }
 
-    if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini' || modelId === 'wan-2.7') {
+    if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini' || modelId === 'seedance-2-5' || modelId === 'wan-2.7') {
         return {
             enabled: true,
             maxElements: 5,
+            maxNamed: 5,
             reason: null,
         };
     }
 
+    // Kling O3 accepts 7 reference images and names at most 3 of them as subjects the
+    // provider resolves natively from @mentions.
+    if (modelId === 'kling-o3') {
+        return { enabled: true, maxElements: 7, maxNamed: 3, reason: null };
+    }
+
+    if (modelId === 'minimax-h3') {
+        return { enabled: true, maxElements: 5, maxNamed: 5, reason: null };
+    }
+
     if (modelId === 'happyhorse-1.1') {
-        return { enabled: true, maxElements: 9, reason: null };
+        return { enabled: true, maxElements: 9, maxNamed: 9, reason: null };
     }
 
     if (modelId === 'gemini-omni-video') {
-        return { enabled: true, maxElements: 7, reason: null };
+        return { enabled: true, maxElements: 7, maxNamed: 7, reason: null };
     }
 
     if (modelId === 'veo-3.1') {
@@ -739,6 +919,7 @@ export function getVideoElementSupport(
             return {
                 enabled: true,
                 maxElements: 3,
+                maxNamed: 3,
                 reason: null,
             };
         }
@@ -746,6 +927,7 @@ export function getVideoElementSupport(
         return {
             enabled: false,
             maxElements: 0,
+            maxNamed: 0,
             reason: 'Reusable references require Veo Lite or Fast.',
         };
     }
@@ -754,6 +936,7 @@ export function getVideoElementSupport(
         return {
             enabled: true,
             maxElements: 1,
+            maxNamed: 1,
             reason: null,
         };
     }
@@ -762,6 +945,7 @@ export function getVideoElementSupport(
         return {
             enabled: false,
             maxElements: 0,
+            maxNamed: 0,
             reason: 'Reusable image references are not available for Kling yet.',
         };
     }
@@ -769,6 +953,7 @@ export function getVideoElementSupport(
     return {
         enabled: false,
         maxElements: 0,
+        maxNamed: 0,
         reason: 'Reusable references are not available for this model yet.',
     };
 }
@@ -893,8 +1078,8 @@ export function getImageCost(
         return options.qualityMode === 'quality' ? pricing.quality : pricing.standard;
     }
 
-    if (modelId === 'ideogram-v3') {
-        const pricing = IMAGE_MODELS['ideogram-v3'].qualityPricing;
+    if (modelId === 'ideogram-v3' || modelId === 'ideogram-character') {
+        const pricing = IMAGE_MODELS[modelId].qualityPricing;
         const qualityMode = options.qualityMode === 'quality'
             ? 'quality'
             : options.qualityMode === 'balanced'
@@ -903,10 +1088,13 @@ export function getImageCost(
         return pricing[qualityMode];
     }
 
-    if (modelId === 'seedream-5-pro') {
-        const baseCost = (IMAGE_MODELS[modelId].pricing as Partial<Record<ImageResolution, number>>)[resolution] ?? IMAGE_MODELS[modelId].pricing['1K'];
-        const additionalReferences = Math.max(0, (options.referenceCount ?? 0) - 1);
-        return Math.ceil(baseCost + (additionalReferences * IMAGE_MODELS[modelId].additionalReferenceCredit));
+    if (modelId === 'seedream-5-pro' || modelId === 'qwen3' || modelId === 'qwen3-pro') {
+        const model = IMAGE_MODELS[modelId];
+        const baseCost = (model.pricing as Partial<Record<ImageResolution, number>>)[resolution] ?? model.pricing['1K'];
+        // Seedream bundles the first reference into the base price; Qwen bills every one.
+        const freeReferences = 'referenceCreditIncludesFirst' in model && model.referenceCreditIncludesFirst ? 0 : 1;
+        const chargeableReferences = Math.max(0, (options.referenceCount ?? 0) - freeReferences);
+        return Math.ceil(baseCost + (chargeableReferences * model.additionalReferenceCredit));
     }
 
     const pricing = IMAGE_MODELS[modelId].pricing as Partial<Record<ImageResolution, number>>;
@@ -944,7 +1132,7 @@ export function getVideoCost(
         return options.sound ? pricing.withSound[durationKey] : pricing.noSound[durationKey];
     }
 
-    if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini') {
+    if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini' || modelId === 'seedance-2-5') {
         const pricingTable = VIDEO_MODELS[modelId].pricing;
         const resolution = options.resolution && options.resolution in pricingTable
             ? options.resolution as keyof typeof pricingTable
@@ -953,6 +1141,25 @@ export function getVideoCost(
         const pricing = pricingTable[resolution];
         const perSecond = options.hasReferenceVideo ? pricing.withVideo : pricing.noVideo;
         return Math.ceil(durationSeconds * perSecond);
+    }
+
+    if (modelId === 'kling-o3') {
+        const pricingTable = VIDEO_MODELS['kling-o3'].pricing;
+        const resolution = options.resolution && options.resolution in pricingTable
+            ? options.resolution as keyof typeof pricingTable
+            : '720p';
+        const durationSeconds = options.durationSeconds ?? getDefaultVideoDuration(modelId);
+        const pricing = pricingTable[resolution];
+        return Math.ceil(durationSeconds * (options.sound ? pricing.withSound : pricing.noSound));
+    }
+
+    if (modelId === 'minimax-h3') {
+        const pricingTable = VIDEO_MODELS['minimax-h3'].pricing;
+        const resolution = options.resolution && options.resolution in pricingTable
+            ? options.resolution as keyof typeof pricingTable
+            : '768P';
+        const durationSeconds = options.durationSeconds ?? getDefaultVideoDuration(modelId);
+        return Math.ceil(durationSeconds * pricingTable[resolution]);
     }
 
     if (modelId === 'kling-3.0-turbo' || modelId === 'wan-2.7') {
@@ -999,15 +1206,21 @@ export function getVideoCost(
         return Math.ceil(durationSeconds * pricingTable[resolution]);
     }
 
-    const resolution = options.resolution === '1080p' || options.resolution === '4k'
-        ? options.resolution
-        : '720p';
-    if (options.mode === 'veo3') {
-        const variant = options.hasReferenceImage ? 'reference' : 'text';
-        return VIDEO_MODELS['veo-3.1'].pricing.veo3[variant][resolution];
+    if (modelId === 'veo-3.1') {
+        const resolution = options.resolution === '1080p' || options.resolution === '4k'
+            ? options.resolution
+            : '720p';
+        if (options.mode === 'veo3') {
+            const variant = options.hasReferenceImage ? 'reference' : 'text';
+            return VIDEO_MODELS['veo-3.1'].pricing.veo3[variant][resolution];
+        }
+        const mode = options.mode === 'veo3_lite' ? 'veo3_lite' : 'veo3_fast';
+        return VIDEO_MODELS['veo-3.1'].pricing[mode][resolution];
     }
-    const mode = options.mode === 'veo3_lite' ? 'veo3_lite' : 'veo3_fast';
-    return VIDEO_MODELS['veo-3.1'].pricing[mode][resolution];
+
+    // Every model must be matched explicitly. This used to fall through to Veo
+    // pricing, which silently billed unmatched models at 30-250 credits/gen.
+    throw new Error(`getVideoCost has no pricing branch for video model: ${modelId satisfies never}`);
 }
 
 /** Calculate credits for a voiceover generation. */

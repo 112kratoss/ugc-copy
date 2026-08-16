@@ -14,12 +14,14 @@ import {
   getDefaultVideoDuration,
   getImageResolutionOptions,
   getVideoElementSupport,
+  getVideoReferenceSupport,
   type ImageOutputFormat,
   type ImageModelId,
   type ImageResolution,
   type MotionModelId,
   type VideoModelId,
 } from '@/lib/client-generation-models';
+import { isSeedance2VideoModelId } from '@/lib/seedance-assets';
 
 type VoiceoverModelId = 'text-to-speech-turbo-2-5' | 'text-to-speech-multilingual-v2' | 'text-to-dialogue-v3';
 type SoundEffectModelId = 'sound-effect-v2';
@@ -101,7 +103,10 @@ function createSeedanceAssetMetadata(overrides?: Partial<SeedanceAssetMetadata>)
 }
 
 export function isSeedance2VideoModel(modelId: VideoModelId): boolean {
-  return modelId === 'seedance-2' || modelId === 'seedance-2-fast';
+  // Delegates to the single family predicate so the canvas can never disagree
+  // with the server about which models are Seedance 2 (it previously excluded
+  // seedance-2-mini, silently dropping its multimodal reference UI).
+  return isSeedance2VideoModelId(modelId);
 }
 
 export interface TextInputNodeData extends BaseWorkflowNodeData {
@@ -2952,18 +2957,24 @@ export function validateWorkflowConnectionForGraph(params: {
     if (targetNode.type === 'video-generate') {
       const data = normalizeNodeData('video-generate', targetNode.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
 
-      if (!isSeedance2VideoModel(data.model)) {
+      // Whether a video node takes reusable image references is the model's own
+      // capability, not a Seedance-family privilege — the old family gate rejected
+      // connections on wan-2.7, gemini-omni-video, kling-o3 and minimax-h3 even though
+      // every one of them publishes image-reference capacity.
+      const modelElementSupport = getVideoElementSupport(data.model, {
+        mode: data.mode,
+        isMultiShot: data.isMultiShot,
+      });
+      if (!modelElementSupport.enabled) {
         return {
           valid: false,
-          message: 'Workflow video nodes now use Start frame and optional End frame instead of general image references.',
+          message: modelElementSupport.reason
+            ?? 'Workflow video nodes now use Start frame and optional End frame instead of general image references.',
         };
       }
 
       const currentCount = countIncomingEdgesForTargetHandle(graph, targetNodeId, 'image-reference');
-      const maxElements = getVideoElementSupport(data.model, {
-        mode: data.mode,
-        isMultiShot: data.isMultiShot,
-      }).maxElements;
+      const maxElements = modelElementSupport.maxElements;
 
       if (currentCount >= maxElements) {
         return {
@@ -2988,7 +2999,6 @@ export function validateWorkflowConnectionForGraph(params: {
   if (targetNode.type === 'video-generate') {
     const data = normalizeNodeData('video-generate', targetNode.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
     const isSeedance2Family = isSeedance2VideoModel(data.model);
-    const isKlingVideoModel = data.model === 'kling-3.0-video';
 
     if (normalizedTargetHandle === 'start-frame') {
       if (isSeedance2Family) {
@@ -3052,26 +3062,42 @@ export function validateWorkflowConnectionForGraph(params: {
       }
     }
 
-    if (normalizedTargetHandle === 'reference-video' && !isSeedance2Family && !isKlingVideoModel) {
+    // Capacity comes from the model's own limits rather than a hardcoded family list,
+    // which previously rejected reference clips and audio on wan-2.7, gemini-omni-video
+    // and minimax-h3 even though their descriptors publish them and the create-video
+    // surface accepts them.
+    const referenceSupport = getVideoReferenceSupport(data.model);
+
+    if (normalizedTargetHandle === 'reference-video' && referenceSupport.videos === 0) {
       return {
         valid: false,
-        message: 'Reference videos are available on Kling 3.0 Video, Seedance 2, and Seedance 2 Fast only.',
+        message: `${VIDEO_MODELS[data.model].displayName} does not support reference videos.`,
       };
     }
 
-    if (normalizedTargetHandle === 'reference-audio' && !isSeedance2Family) {
+    if (normalizedTargetHandle === 'reference-audio' && referenceSupport.audios === 0) {
       return {
         valid: false,
-        message: 'Reference audio is available on Seedance 2 and Seedance 2 Fast only.',
+        message: `${VIDEO_MODELS[data.model].displayName} does not support reference audio.`,
       };
     }
 
-    if (normalizedTargetHandle === 'reference-video' && (isSeedance2Family || isKlingVideoModel)) {
+    if (normalizedTargetHandle === 'reference-video' && referenceSupport.videos > 0) {
       const currentCount = countIncomingEdgesForTargetHandle(graph, targetNodeId, 'reference-video');
-      if (currentCount >= 3) {
+      if (currentCount >= referenceSupport.videos) {
         return {
           valid: false,
-          message: `${VIDEO_MODELS[data.model].displayName} supports up to 3 reference videos per node.`,
+          message: `${VIDEO_MODELS[data.model].displayName} supports up to ${referenceSupport.videos} reference videos per node.`,
+        };
+      }
+    }
+
+    if (normalizedTargetHandle === 'reference-audio' && referenceSupport.audios > 0) {
+      const currentCount = countIncomingEdgesForTargetHandle(graph, targetNodeId, 'reference-audio');
+      if (currentCount >= referenceSupport.audios) {
+        return {
+          valid: false,
+          message: `${VIDEO_MODELS[data.model].displayName} supports up to ${referenceSupport.audios} reference audio tracks per node.`,
         };
       }
     }

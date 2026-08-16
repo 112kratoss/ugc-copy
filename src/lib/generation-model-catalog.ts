@@ -81,6 +81,13 @@ export type CatalogInputSlot = {
   min: number;
   max: number;
   supportsNaming?: boolean;
+  /**
+   * Upper bound on how many assets in this slot may carry a name, when that is lower
+   * than `max`. Kling O3 takes 7 reference images but names at most 3 as subjects.
+   * Absent means every asset may be named. Optional by design: mobile's slot parser
+   * rebuilds from known keys, so unknown extras are ignored and no release is needed.
+   */
+  maxNamed?: number;
   durationMetadata?: 'optional' | 'required';
   maxDurationSeconds?: number;
   conditions?: CatalogCondition[];
@@ -267,7 +274,11 @@ function imageDescriptors(): GenerationModelDescriptor[] {
     if (model.supportsGoogleSearch) controls.push(booleanControl('googleSearch', 'Google Search'));
     const qualityModes = getImageQualityModes(model.id);
     if (qualityModes.length > 0) {
-      controls.push(choiceControl('qualityMode', model.id === 'ideogram-v3' ? 'Speed' : 'Quality', qualityModes));
+      controls.push(choiceControl(
+        'qualityMode',
+        model.id === 'ideogram-v3' || model.id === 'ideogram-character' ? 'Speed' : 'Quality',
+        qualityModes,
+      ));
     }
     return {
       id: model.id,
@@ -305,19 +316,48 @@ function imageDescriptors(): GenerationModelDescriptor[] {
   });
 }
 
-function getVideoInputLimits(modelId: VideoModelId) {
-  if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini') {
-    return { images: 5, videos: 3, audios: 3, startFrame: true, endFrame: true };
-  }
-  if (modelId === 'seedance-1.5-pro') return { images: 2, videos: 0, audios: 0, startFrame: true, endFrame: true };
-  if (modelId === 'grok-imagine-video') return { images: 1, videos: 0, audios: 0, startFrame: true, endFrame: false };
-  if (modelId === 'kling-3.0-video') return { images: 0, videos: 3, audios: 0, startFrame: true, endFrame: true };
-  if (modelId === 'kling-3.0-turbo') return { images: 0, videos: 0, audios: 0, startFrame: true, endFrame: false };
-  if (modelId === 'wan-2.7') return { images: 5, videos: 5, audios: 1, startFrame: true, endFrame: true };
-  if (modelId === 'happyhorse-1.1') return { images: 9, videos: 0, audios: 0, startFrame: true, endFrame: false };
-  if (modelId === 'gemini-omni-video') return { images: 7, videos: 1, audios: 0, startFrame: false, endFrame: false };
-  if (modelId === 'hailuo-2.3') return { images: 0, videos: 0, audios: 0, startFrame: true, endFrame: false };
-  return { images: 3, videos: 0, audios: 0, startFrame: true, endFrame: true };
+interface VideoInputLimits {
+  images: number;
+  videos: number;
+  audios: number;
+  startFrame: boolean;
+  endFrame: boolean;
+}
+
+/**
+ * Total record on purpose: TypeScript forces an explicit entry for every video
+ * model. This used to end in a silent `{images: 3, startFrame: true, endFrame:
+ * true}` default that granted new models slots they never declared.
+ */
+const VIDEO_INPUT_LIMITS: Record<VideoModelId, VideoInputLimits> = {
+  'seedance-2': { images: 5, videos: 3, audios: 3, startFrame: true, endFrame: true },
+  'seedance-2-fast': { images: 5, videos: 3, audios: 3, startFrame: true, endFrame: true },
+  'seedance-2-mini': { images: 5, videos: 3, audios: 3, startFrame: true, endFrame: true },
+  'seedance-2-5': { images: 5, videos: 3, audios: 3, startFrame: true, endFrame: true },
+  // Kling O3 has no discrete frame slots — image-to-video and reference-to-video both
+  // take `image_urls`, so the start frame stands in for the single-image variant.
+  'kling-o3': { images: 7, videos: 0, audios: 0, startFrame: true, endFrame: false },
+  // MiniMax bills for input images past the first five, so we cap references there.
+  'minimax-h3': { images: 5, videos: 1, audios: 1, startFrame: true, endFrame: true },
+  'seedance-1.5-pro': { images: 2, videos: 0, audios: 0, startFrame: true, endFrame: true },
+  'grok-imagine-video': { images: 1, videos: 0, audios: 0, startFrame: true, endFrame: false },
+  'kling-3.0-video': { images: 0, videos: 3, audios: 0, startFrame: true, endFrame: true },
+  'kling-3.0-turbo': { images: 0, videos: 0, audios: 0, startFrame: true, endFrame: false },
+  'wan-2.7': { images: 5, videos: 5, audios: 1, startFrame: true, endFrame: true },
+  'happyhorse-1.1': { images: 9, videos: 0, audios: 0, startFrame: true, endFrame: false },
+  'gemini-omni-video': { images: 7, videos: 1, audios: 0, startFrame: false, endFrame: false },
+  'hailuo-2.3': { images: 0, videos: 0, audios: 0, startFrame: true, endFrame: false },
+  // Veo previously received the silent default; these are its live effective values.
+  'veo-3.1': { images: 3, videos: 0, audios: 0, startFrame: true, endFrame: true },
+};
+
+function getVideoInputLimits(modelId: VideoModelId): VideoInputLimits {
+  return VIDEO_INPUT_LIMITS[modelId];
+}
+
+/** Longest reference clip a Seedance model accepts, which tracks its own output ceiling. */
+function seedanceReferenceCapSeconds(modelId: VideoModelId): number {
+  return modelId === 'seedance-2-5' ? 30 : 15;
 }
 
 function videoInputModes(
@@ -356,6 +396,12 @@ function videoInputModes(
     });
   }
   const referenceSlots: CatalogInputSlot[] = [];
+  // Kling's video elements are named subjects the provider combines WITH start frames
+  // (see the kling branch in generation-services), so they cannot live in the
+  // frames-vs-references either/or. They get their own always-active mode below;
+  // keeping them inside the elements-conditioned mode made every run that attached one
+  // unquotable, because this model never enters elements mode.
+  const videoElementSlots: CatalogInputSlot[] = [];
   if (limits.images > 0) {
     referenceSlots.push({
       key: 'imageReferences',
@@ -365,23 +411,30 @@ function videoInputModes(
       min: 0,
       max: limits.images,
       supportsNaming: true,
+      // Kling O3 accepts 7 reference images but names at most 3 of them as subjects.
+      ...(modelId === 'kling-o3' ? { maxNamed: 3 } : {}),
     });
   }
   if (limits.videos > 0) {
-    const videoSlotKey = modelId === 'kling-3.0-video'
-      ? 'videoElements'
-      : 'videoReferences';
-    referenceSlots.push({
-      key: videoSlotKey,
+    const isNamedVideoElementSlot = modelId === 'kling-3.0-video';
+    const videoSlot: CatalogInputSlot = {
+      key: isNamedVideoElementSlot ? 'videoElements' : 'videoReferences',
       kind: 'video',
       role: 'reference',
-      label: modelId === 'kling-3.0-video' ? 'Video elements' : 'Reference videos',
+      label: isNamedVideoElementSlot ? 'Video elements' : 'Reference videos',
       min: 0,
       max: limits.videos,
-      ...(modelId === 'kling-3.0-video' ? { supportsNaming: true } : {}),
+      ...(isNamedVideoElementSlot ? { supportsNaming: true } : {}),
       durationMetadata: modelId.startsWith('seedance-2') ? 'required' : 'optional',
-      ...(modelId.startsWith('seedance-2') ? { maxDurationSeconds: 15 } : {}),
-    });
+      // Seedance 2.5 shares the `seedance-2` prefix but generates up to 30s, so the
+      // family's 15s reference cap would wrongly truncate it.
+      ...(modelId.startsWith('seedance-2') ? { maxDurationSeconds: seedanceReferenceCapSeconds(modelId) } : {}),
+    };
+    if (isNamedVideoElementSlot) {
+      videoElementSlots.push(videoSlot);
+    } else {
+      referenceSlots.push(videoSlot);
+    }
   }
   if (limits.audios > 0) {
     referenceSlots.push({
@@ -392,7 +445,7 @@ function videoInputModes(
       min: 0,
       max: limits.audios,
       durationMetadata: 'optional',
-      ...(modelId.startsWith('seedance-2') ? { maxDurationSeconds: 15 } : {}),
+      ...(modelId.startsWith('seedance-2') ? { maxDurationSeconds: seedanceReferenceCapSeconds(modelId) } : {}),
     });
   }
   if (modelId === 'wan-2.7') {
@@ -414,6 +467,15 @@ function videoInputModes(
         ? [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'elements' }]
         : undefined,
       slots: referenceSlots,
+    });
+  }
+  if (videoElementSlots.length > 0) {
+    // Unconditioned on purpose: named video elements coexist with either reference mode.
+    modes.push({
+      key: 'video-elements',
+      label: 'Video elements',
+      default: frameSlots.length === 0 && referenceSlots.length === 0,
+      slots: videoElementSlots,
     });
   }
   if (modelId === 'gemini-omni-video') {
@@ -463,13 +525,15 @@ function videoInputConstraints(modelId: VideoModelId): CatalogInputConstraint[] 
       message: 'Gemini Omni supports seven reference slots; videos use two and characters use one.',
     }];
   }
-  if (modelId === 'seedance-2' || modelId === 'seedance-2-fast' || modelId === 'seedance-2-mini') {
+  if (modelId.startsWith('seedance-2')) {
+    // Tracks the model's own output ceiling: 2.5 reaches 30s, the rest stop at 15.
+    const max = seedanceReferenceCapSeconds(modelId);
     return [
       {
         type: 'combined-duration',
         slotKeys: ['videoReferences'],
-        max: 15,
-        message: 'Reference videos may be at most 15 seconds in total.',
+        max,
+        message: `Reference videos may be at most ${max} seconds in total.`,
       },
     ];
   }
@@ -481,8 +545,15 @@ function videoDescriptors(): GenerationModelDescriptor[] {
     const durationRange = getVideoDurationRange(model.id);
     const controls: CatalogControl[] = [choiceControl('aspectRatio', 'Aspect ratio', model.aspectRatios)];
     if (model.modeOptions.length > 0) {
+      // The label travels with the model so surfaces don't each keep their own
+      // per-id ternary deciding what to call this control.
+      const modeLabel = model.id === 'veo-3.1'
+        ? 'Model variant'
+        : model.id === 'grok-imagine-video'
+          ? 'Grok mode'
+          : 'Quality mode';
       controls.push({
-        ...choiceControl('mode', 'Mode', model.modeOptions.map((option) => option.value)),
+        ...choiceControl('mode', modeLabel, model.modeOptions.map((option) => option.value)),
         options: model.modeOptions.map((option) => ({ value: option.value, label: option.label })),
       });
     }
