@@ -212,6 +212,9 @@ export function applyGenerationModelCatalogToRegistries(
         catalogManaged: true,
         catalogActive: true,
         catalogInputs: model.inputs,
+        catalogDescriptor: model,
+        catalogSortOrder: model.sortOrder,
+        catalogRecommended: model.recommended,
       };
       continue;
     }
@@ -240,6 +243,9 @@ export function applyGenerationModelCatalogToRegistries(
         catalogManaged: true,
         catalogActive: true,
         catalogInputs: model.inputs,
+        catalogDescriptor: model,
+        catalogSortOrder: model.sortOrder,
+        catalogRecommended: model.recommended,
       };
       continue;
     }
@@ -261,12 +267,30 @@ export function applyGenerationModelCatalogToRegistries(
       catalogManaged: true,
       catalogActive: true,
       catalogInputs: model.inputs,
+      catalogDescriptor: model,
+      catalogSortOrder: model.sortOrder,
+      catalogRecommended: model.recommended,
     };
   }
 }
 
+/**
+ * Pickers render this list in order. Sorting by the catalog's own `sortOrder` is what
+ * finally makes that field (and `recommended`) mean something on web — the registries are
+ * keyed objects, so without this the UI showed bundled insertion order and every
+ * catalog-only model landed at the end regardless of where the catalog placed it.
+ * Entries with no sort order keep their relative position behind the sorted ones.
+ */
 export function getActiveRegistryModels<T extends Record<string, unknown>>(registry: Record<string, T>): T[] {
-  return Object.values(registry).filter((model) => model.catalogActive !== false);
+  return Object.values(registry)
+    .filter((model) => model.catalogActive !== false)
+    .map((model, index) => ({ model, index }))
+    .sort((a, b) => {
+      const aOrder = typeof a.model.catalogSortOrder === 'number' ? a.model.catalogSortOrder : Number.MAX_SAFE_INTEGER;
+      const bOrder = typeof b.model.catalogSortOrder === 'number' ? b.model.catalogSortOrder : Number.MAX_SAFE_INTEGER;
+      return aOrder === bOrder ? a.index - b.index : aOrder - bOrder;
+    })
+    .map((entry) => entry.model);
 }
 
 export function resolveCatalogModelId(

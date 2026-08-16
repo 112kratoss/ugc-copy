@@ -1,0 +1,841 @@
+{
+  "manifestVersion": 1,
+  "mode": "clone-active",
+  "release": {
+    "schemaVersion": 2,
+    "revision": "image-dropins-20260815",
+    "basedOnRevision": "wan-provider-id-fix-20260725",
+    "changeNote": "Add four drop-in image models: grok-imagine-image-2 (text-to-image only; the provider edit endpoint keys off a prior task id), qwen3 and qwen3-pro (note the provider nests Pro under qwen3/pro-*, not the qwen3-pro docs path), and ideogram-character (reference-required, rendering-speed pricing). Existing entries are untouched.",
+    "createdBy": "catalog-operations"
+  },
+  "upgrade": {
+    "legacyDescriptorsToV2": true
+  },
+  "expectedModelIds": [
+    "flux-2-pro",
+    "gemini-omni-video",
+    "gpt-image-2",
+    "grok-imagine-image",
+    "grok-imagine-image-2",
+    "grok-imagine-video",
+    "hailuo-2.3",
+    "happyhorse-1.1",
+    "ideogram-character",
+    "ideogram-v3",
+    "imagen-4",
+    "imagen-4-fast",
+    "imagen-4-ultra",
+    "kling-2.6",
+    "kling-3.0",
+    "kling-3.0-turbo",
+    "kling-3.0-video",
+    "nano-banana-2",
+    "nano-banana-2-lite",
+    "nano-banana-pro",
+    "qwen3",
+    "qwen3-pro",
+    "seedance-1.5-pro",
+    "seedance-2",
+    "seedance-2-fast",
+    "seedance-2-mini",
+    "seedream-5-lite",
+    "seedream-5-pro",
+    "veo-3.1",
+    "wan-2.7",
+    "wan-2.7-image",
+    "wan-2.7-image-pro",
+    "z-image"
+  ],
+  "defaults": {
+    "web": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    },
+    "mobile": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    }
+  },
+  "entries": [
+    {
+      "modelId": "grok-imagine-image-2",
+      "kind": "image",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "grok-imagine-image-2",
+        "kind": "image",
+        "displayName": "Grok Imagine 2.0",
+        "description": "Newer xAI generation with sharper prompt adherence",
+        "badge": "New",
+        "recommended": false,
+        "sortOrder": 150,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "1:1",
+            "options": [
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "2:3",
+                "label": "2:3"
+              },
+              {
+                "value": "3:2",
+                "label": "3:2"
+              },
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "1K",
+            "options": [
+              {
+                "value": "1K",
+                "label": "1K"
+              }
+            ]
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": null,
+          "videoReferences": null,
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": false,
+          "endFrame": false,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "prompt-only",
+            "label": "Prompt only",
+            "default": true,
+            "slots": []
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "kie-task-v1",
+      "adapterConfig": {
+        "settings": {
+          "aspectRatio": {
+            "field": "aspect_ratio"
+          }
+        }
+      },
+      "providerModelMap": {
+        "default": "grok-imagine-image-2-0/text-to-image",
+        "text": "grok-imagine-image-2-0/text-to-image"
+      },
+      "pricingStrategy": "lookup",
+      "pricingConfig": {
+        "dimensions": [
+          {
+            "source": "setting",
+            "key": "resolution",
+            "defaultValue": "1K"
+          }
+        ],
+        "table": {
+          "1K": 4,
+          "2K": 4,
+          "4K": 4
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "normalizedDefaults": {
+          "outputFormat": "jpg",
+          "googleSearch": false
+        },
+        "rules": []
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "qwen3",
+      "kind": "image",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "qwen3",
+        "kind": "image",
+        "displayName": "Qwen Image 3.0",
+        "description": "Low-cost generation and editing at a flat 1K/2K rate",
+        "badge": "Value",
+        "recommended": false,
+        "sortOrder": 160,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "1:1",
+            "options": [
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "3:2",
+                "label": "3:2"
+              },
+              {
+                "value": "2:3",
+                "label": "2:3"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              },
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "21:9",
+                "label": "21:9"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "1K",
+            "options": [
+              {
+                "value": "1K",
+                "label": "1K"
+              },
+              {
+                "value": "2K",
+                "label": "2K"
+              }
+            ]
+          },
+          {
+            "key": "outputFormat",
+            "label": "Output format",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "jpg",
+            "options": [
+              {
+                "value": "jpg",
+                "label": "jpg"
+              },
+              {
+                "value": "png",
+                "label": "png"
+              }
+            ]
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": true
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 10,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": false,
+          "endFrame": false,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "references",
+            "label": "Reference images",
+            "default": true,
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 10,
+                "supportsNaming": true
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "kie-task-v1",
+      "adapterConfig": {
+        "settings": {
+          "resolution": {
+            "field": "resolution"
+          },
+          "aspectRatio": {
+            "field": "image_size"
+          },
+          "outputFormat": {
+            "field": "output_format",
+            "transform": "jpg-to-jpeg"
+          }
+        },
+        "constants": {
+          "prompt_extend": true,
+          "nsfw_checker": true
+        },
+        "slots": {
+          "imageReferences": {
+            "field": "image_urls",
+            "cardinality": "many",
+            "source": "url"
+          }
+        },
+        "variantSelector": {
+          "type": "slot-presence",
+          "slot": "imageReferences",
+          "present": "reference",
+          "absent": "text"
+        }
+      },
+      "providerModelMap": {
+        "text": "qwen3/text-to-image",
+        "reference": "qwen3/image-to-image"
+      },
+      "pricingStrategy": "lookup",
+      "pricingConfig": {
+        "dimensions": [
+          {
+            "source": "setting",
+            "key": "resolution",
+            "defaultValue": "1K"
+          },
+          {
+            "source": "inputCount",
+            "key": "images",
+            "defaultValue": 0
+          }
+        ],
+        "table": {
+          "1K": {
+            "0": 5,
+            "1": 6,
+            "2": 6,
+            "3": 7,
+            "4": 7,
+            "5": 8,
+            "6": 8,
+            "7": 9,
+            "8": 9,
+            "9": 10,
+            "10": 10
+          },
+          "2K": {
+            "0": 5,
+            "1": 6,
+            "2": 6,
+            "3": 7,
+            "4": 7,
+            "5": 8,
+            "6": 8,
+            "7": 9,
+            "8": 9,
+            "9": 10,
+            "10": 10
+          },
+          "4K": {
+            "0": 5,
+            "1": 6,
+            "2": 6,
+            "3": 7,
+            "4": 7,
+            "5": 8,
+            "6": 8,
+            "7": 9,
+            "8": 9,
+            "9": 10,
+            "10": 10
+          }
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "normalizedDefaults": {
+          "outputFormat": "jpg",
+          "googleSearch": false
+        },
+        "rules": []
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "qwen3-pro",
+      "kind": "image",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "qwen3-pro",
+        "kind": "image",
+        "displayName": "Qwen Image 3.0 Pro",
+        "description": "Higher-fidelity Qwen tier with 2K output",
+        "badge": "Pro",
+        "recommended": false,
+        "sortOrder": 170,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "1:1",
+            "options": [
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "3:2",
+                "label": "3:2"
+              },
+              {
+                "value": "2:3",
+                "label": "2:3"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              },
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "21:9",
+                "label": "21:9"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "1K",
+            "options": [
+              {
+                "value": "1K",
+                "label": "1K"
+              },
+              {
+                "value": "2K",
+                "label": "2K"
+              }
+            ]
+          },
+          {
+            "key": "outputFormat",
+            "label": "Output format",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "jpg",
+            "options": [
+              {
+                "value": "jpg",
+                "label": "jpg"
+              },
+              {
+                "value": "png",
+                "label": "png"
+              }
+            ]
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": true
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 10,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": false,
+          "endFrame": false,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "references",
+            "label": "Reference images",
+            "default": true,
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 10,
+                "supportsNaming": true
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "kie-task-v1",
+      "adapterConfig": {
+        "settings": {
+          "resolution": {
+            "field": "resolution"
+          },
+          "aspectRatio": {
+            "field": "image_size"
+          },
+          "outputFormat": {
+            "field": "output_format",
+            "transform": "jpg-to-jpeg"
+          }
+        },
+        "constants": {
+          "prompt_extend": true,
+          "nsfw_checker": true
+        },
+        "slots": {
+          "imageReferences": {
+            "field": "image_urls",
+            "cardinality": "many",
+            "source": "url"
+          }
+        },
+        "variantSelector": {
+          "type": "slot-presence",
+          "slot": "imageReferences",
+          "present": "reference",
+          "absent": "text"
+        }
+      },
+      "providerModelMap": {
+        "text": "qwen3/pro-text-to-image",
+        "reference": "qwen3/pro-image-to-image"
+      },
+      "pricingStrategy": "lookup",
+      "pricingConfig": {
+        "dimensions": [
+          {
+            "source": "setting",
+            "key": "resolution",
+            "defaultValue": "1K"
+          },
+          {
+            "source": "inputCount",
+            "key": "images",
+            "defaultValue": 0
+          }
+        ],
+        "table": {
+          "1K": {
+            "0": 7,
+            "1": 7,
+            "2": 8,
+            "3": 8,
+            "4": 9,
+            "5": 9,
+            "6": 10,
+            "7": 10,
+            "8": 11,
+            "9": 11,
+            "10": 12
+          },
+          "2K": {
+            "0": 12,
+            "1": 13,
+            "2": 13,
+            "3": 14,
+            "4": 14,
+            "5": 15,
+            "6": 15,
+            "7": 16,
+            "8": 16,
+            "9": 17,
+            "10": 17
+          },
+          "4K": {
+            "0": 12,
+            "1": 13,
+            "2": 13,
+            "3": 14,
+            "4": 14,
+            "5": 15,
+            "6": 15,
+            "7": 16,
+            "8": 16,
+            "9": 17,
+            "10": 17
+          }
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "normalizedDefaults": {
+          "outputFormat": "jpg",
+          "googleSearch": false
+        },
+        "rules": []
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "ideogram-character",
+      "kind": "image",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "ideogram-character",
+        "kind": "image",
+        "displayName": "Ideogram Character",
+        "description": "Keeps one character consistent across every shot",
+        "badge": "Character",
+        "recommended": false,
+        "sortOrder": 180,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "1:1",
+            "options": [
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              },
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "1K",
+            "options": [
+              {
+                "value": "1K",
+                "label": "1K"
+              }
+            ]
+          },
+          {
+            "key": "qualityMode",
+            "label": "Speed",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "turbo",
+            "options": [
+              {
+                "value": "turbo",
+                "label": "turbo"
+              },
+              {
+                "value": "balanced",
+                "label": "balanced"
+              },
+              {
+                "value": "quality",
+                "label": "quality"
+              }
+            ]
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 4,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": false,
+          "endFrame": false,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "references",
+            "label": "Reference images",
+            "default": true,
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 4,
+                "supportsNaming": true
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "image-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "ideogram/character",
+        "text": "ideogram/character",
+        "reference": "ideogram/character"
+      },
+      "pricingStrategy": "lookup",
+      "pricingConfig": {
+        "dimensions": [
+          {
+            "source": "setting",
+            "key": "qualityMode",
+            "defaultValue": "turbo"
+          }
+        ],
+        "table": {
+          "turbo": 12,
+          "balanced": 18,
+          "quality": 24
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "normalizedDefaults": {
+          "outputFormat": "jpg",
+          "googleSearch": false
+        },
+        "rules": [
+          {
+            "type": "min-slot-count",
+            "slotKey": "imageReferences",
+            "min": 1,
+            "message": "Add at least one character reference image."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    }
+  ]
+}

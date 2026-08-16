@@ -2281,7 +2281,15 @@ function NodeEditorContent({
           )}
           {videoModel.modeOptions.length > 0 && (
             <SelectField
-              label={videoGenerateNode.model === 'veo-3.1' ? 'Model variant' : videoGenerateNode.model === 'grok-imagine-video' ? 'Grok mode' : 'Quality mode'}
+              // The catalog labels this control per model, so a new model with modes no
+              // longer falls through to a heading that names a different vendor.
+              label={
+                (videoModel as { catalogDescriptor?: { controls: Array<{ key: string; label: string }> } })
+                  .catalogDescriptor?.controls.find((control) => control.key === 'mode')?.label
+                ?? (videoGenerateNode.model === 'veo-3.1'
+                  ? 'Model variant'
+                  : videoGenerateNode.model === 'grok-imagine-video' ? 'Grok mode' : 'Quality mode')
+              }
               value={videoGenerateNode.mode}
               onChange={(value) => onUpdateNode(node.id, { ...node.data, mode: value } as Partial<WorkflowNodeData>)}
               options={videoModel.modeOptions.map((option) => ({

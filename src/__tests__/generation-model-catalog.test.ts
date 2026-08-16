@@ -145,8 +145,13 @@ describe('generation model quotes', () => {
 
     for (const model of catalog.models) {
       const settings = Object.fromEntries(model.controls.map((control) => [control.key, control.defaultValue]));
+      // Models whose provider requires an input declare a min-slot rule, so the
+      // default-settings quote has to satisfy it or validation throws before pricing.
+      const requiresOneImage = model.id === 'hailuo-2.3'
+        || model.id === 'ideogram-character'
+        || model.kind === 'motion';
       const inputCounts = {
-        images: model.id === 'hailuo-2.3' || model.kind === 'motion' ? 1 : 0,
+        images: requiresOneImage ? 1 : 0,
         videos: model.kind === 'motion' ? 1 : 0,
         audios: 0,
       };

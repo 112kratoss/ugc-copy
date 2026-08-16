@@ -44,7 +44,8 @@
     "typecheck:tests": "tsc --project tsconfig.tests.json --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "ops:guest-acceptance": "bash scripts/guest-checkout-acceptance.sh"
+    "ops:guest-acceptance": "bash scripts/guest-checkout-acceptance.sh",
+    "ops:generation-model-catalog:emit": "tsx scripts/emit-generation-model-catalog-entries.ts"
   },
   "dependencies": {
     "@sentry/nextjs": "^10.69.0",

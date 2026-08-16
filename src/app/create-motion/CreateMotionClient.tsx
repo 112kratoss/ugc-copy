@@ -916,7 +916,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                                                     Max {Number((motionModel as unknown as { maxVideoDuration?: number; maxDuration?: number }).maxVideoDuration ?? (motionModel as unknown as { maxDuration?: number }).maxDuration ?? 30)}s
                                                                 </span>
                                                                 <span className="rounded-full border border-white/8 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
-                                                                    720p / 1080p
+                                                                    {(motionModel.resolutions as readonly string[]).join(' / ')}
                                                                 </span>
                                                             </div>
                                                         </div>
