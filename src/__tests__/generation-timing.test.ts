@@ -187,4 +187,33 @@ describe('generation timing', () => {
       durationSeconds: 10,
     })).toBe(260_000);
   });
+
+  it('falls back to a kind-level estimate for models missing from the tuned tables', () => {
+    // Catalog-published models reach clients without a table entry; a null
+    // estimate would silently drop their progress bars.
+    expect(estimateGenerationDurationMs({
+      kind: 'image',
+      model: 'catalog-only-image',
+      resolution: '2K',
+    })).toBe(135_000);
+
+    expect(estimateGenerationDurationMs({
+      kind: 'video',
+      model: 'catalog-only-video',
+      durationSeconds: 5,
+    })).toBe(210_000);
+
+    expect(estimateGenerationDurationMs({
+      kind: 'motion',
+      model: 'catalog-only-motion',
+      resolution: '1080p',
+      durationSeconds: 10,
+    })).toBe(350_000);
+  });
+
+  it('still returns null when no model id is available', () => {
+    expect(estimateGenerationDurationMs({ kind: 'image' })).toBeNull();
+    expect(estimateGenerationDurationMs({ kind: 'video', durationSeconds: 5 })).toBeNull();
+    expect(estimateGenerationDurationMs({ kind: 'motion' })).toBeNull();
+  });
 });

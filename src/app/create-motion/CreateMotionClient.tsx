@@ -54,37 +54,16 @@ import { useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useTicker } from '@/lib/use-ticker';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
 import {
-    applyGenerationModelCatalogToRegistries,
     getActiveRegistryModels,
     resolveCatalogModelId,
     resolveWebGenerationQuoteUi,
     useWebGenerationModelCatalog,
     useWebGenerationModelQuote,
 } from '@/lib/generation-model-client';
-
-// ─── Model Registry ───────────────────────────────────────────────────────────
-const MOTION_MODELS = {
-    'kling-2.6': {
-        id: 'kling-2.6',
-        displayName: 'Kling 2.6',
-        description: 'Reliable motion transfer with smooth character animation',
-        badge: 'Stable',
-        badgeColor: 'from-sky-500 to-blue-500',
-        maxVideoDuration: 30, // seconds
-        characterOrientations: ['video', 'image'] as const,
-        resolutions: ['720p', '1080p'] as const,
-    },
-    'kling-3.0': {
-        id: 'kling-3.0',
-        displayName: 'Kling 3.0',
-        description: 'Latest model — enhanced fidelity and motion accuracy',
-        badge: 'New',
-        badgeColor: 'from-[#ff7a59] to-orange-500',
-        maxVideoDuration: 30,
-        characterOrientations: ['video', 'image'] as const,
-        resolutions: ['720p', '1080p'] as const,
-    },
-} as const;
+// The shared mirror is the single client-side registry: it is pinned to the
+// server registry by model-registry-parity.test.ts and hydrated in place by
+// useWebGenerationModelCatalog when the catalog arrives.
+import { MOTION_MODELS } from '@/lib/client-generation-models';
 
 type ModelId = keyof typeof MOTION_MODELS;
 
@@ -187,7 +166,6 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const maxVideoDuration = Number((model as unknown as { maxVideoDuration?: number; maxDuration?: number }).maxVideoDuration ?? (model as unknown as { maxDuration?: number }).maxDuration ?? 30);
     useEffect(() => {
         if (!modelCatalog.catalog) return;
-        applyGenerationModelCatalogToRegistries(modelCatalog.catalog, { image: {}, video: {}, motion: MOTION_MODELS as unknown as Record<string, Record<string, unknown>> });
         const preferDefault = !hasResolvedInitialCatalogModel.current && !remixId && !prefillModel;
         const nextModelId = resolveCatalogModelId(modelCatalog.catalog, 'motion', selectedModel, { preferDefault });
         hasResolvedInitialCatalogModel.current = true;

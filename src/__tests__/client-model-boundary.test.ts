@@ -16,8 +16,15 @@ const browserFacingFiles = [
   'src/app/creations/page.tsx',
   'src/app/create-image/CreateImageClient.tsx',
   'src/app/create-video/CreateVideoClient.tsx',
+  'src/app/create-motion/CreateMotionClient.tsx',
   'src/app/create-workflow/WorkflowNodeEditors.tsx',
   'src/app/create-workflow/WorkflowCanvasNodes.tsx',
+];
+
+const createClientFiles = [
+  'src/app/create-image/CreateImageClient.tsx',
+  'src/app/create-video/CreateVideoClient.tsx',
+  'src/app/create-motion/CreateMotionClient.tsx',
 ];
 
 const workflowAssistantClientFiles = [
@@ -32,6 +39,15 @@ describe('client model boundary', () => {
     for (const file of browserFacingFiles) {
       const source = readFileSync(join(repoRoot, file), 'utf8');
       expect(source, file).not.toContain("@/lib/models");
+    }
+  });
+
+  it('keeps create clients on the shared parity-tested registry instead of local copies', () => {
+    // CreateMotionClient once carried its own MOTION_MODELS const, which sat
+    // outside model-registry-parity.test.ts and drifted unguarded.
+    for (const file of createClientFiles) {
+      const source = readFileSync(join(repoRoot, file), 'utf8');
+      expect(source, file).not.toMatch(/const (IMAGE|VIDEO|MOTION)_MODELS\s*=/);
     }
   });
 

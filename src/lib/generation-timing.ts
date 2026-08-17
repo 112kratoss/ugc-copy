@@ -100,6 +100,17 @@ const MOTION_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
   'kling-3.0': 240_000,
 };
 
+// Catalog-published models can reach clients without ever being added to the
+// hand-tuned tables above, and a missing entry must not return null: a null
+// estimate silently removes the progress bar, which is how the 2026-08-16
+// registration audit found whole cohorts shipping without one. These are the
+// medians of each table, applied only when a model id is present but unlisted.
+const KIND_DEFAULT_BASE_ESTIMATE_MS: Record<'image' | 'video' | 'motion', number> = {
+  image: 105_000,
+  video: 150_000,
+  motion: 210_000,
+};
+
 function normalizeNumericTimestamp(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value > 1e12 ? value : value * SECOND_MS;
@@ -457,7 +468,9 @@ export function estimateGenerationDurationMs(params: {
   hasReferenceVideo?: boolean | null;
 }): number | null {
   if (params.kind === 'image') {
-    const baseMs = params.model ? IMAGE_MODEL_BASE_ESTIMATE_MS[params.model] : null;
+    const baseMs = params.model
+      ? IMAGE_MODEL_BASE_ESTIMATE_MS[params.model] ?? KIND_DEFAULT_BASE_ESTIMATE_MS.image
+      : null;
     if (!baseMs) {
       return null;
     }
@@ -470,7 +483,9 @@ export function estimateGenerationDurationMs(params: {
   }
 
   if (params.kind === 'video') {
-    const baseMs = params.model ? VIDEO_MODEL_BASE_ESTIMATE_MS[params.model] : null;
+    const baseMs = params.model
+      ? VIDEO_MODEL_BASE_ESTIMATE_MS[params.model] ?? KIND_DEFAULT_BASE_ESTIMATE_MS.video
+      : null;
     if (!baseMs) {
       return null;
     }
@@ -501,7 +516,9 @@ export function estimateGenerationDurationMs(params: {
   }
 
   if (params.kind === 'motion') {
-    const baseMs = params.model ? MOTION_MODEL_BASE_ESTIMATE_MS[params.model] : null;
+    const baseMs = params.model
+      ? MOTION_MODEL_BASE_ESTIMATE_MS[params.model] ?? KIND_DEFAULT_BASE_ESTIMATE_MS.motion
+      : null;
     if (!baseMs) {
       return null;
     }

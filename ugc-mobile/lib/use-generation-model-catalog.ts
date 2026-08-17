@@ -88,15 +88,6 @@ export function useGenerationModelCatalog(api: GenerationCatalogApi) {
     return refetch();
   }, [refetch]);
 
-  const refreshForRevision = useCallback((catalogRevision: string | null | undefined) => {
-    const currentRevision = query.data?.revision ?? cachedCatalog?.revision;
-    if (!catalogRevision || catalogRevision === currentRevision) {
-      return Promise.resolve(query.data ?? cachedCatalog);
-    }
-    forceRefreshRef.current = true;
-    return refetch().then((result) => result.data ?? null);
-  }, [cachedCatalog, query.data, refetch]);
-
   const catalog = (query.data ?? cachedCatalog) as GenerationModelCatalogV2 | null;
   const unavailableError = !catalog && query.error instanceof Error ? query.error : null;
   return {
@@ -111,7 +102,6 @@ export function useGenerationModelCatalog(api: GenerationCatalogApi) {
     refreshError: catalog && query.error instanceof Error ? query.error : null,
     refetch: forceRefetch,
     retry: forceRefetch,
-    refreshForRevision,
     isUsingCache: Boolean(cachedCatalog && !hasNetworkCatalog),
   };
 }
