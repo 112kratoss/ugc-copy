@@ -51,7 +51,7 @@ import {
 } from '@/lib/creator-profile-view-model';
 import { env } from '@/lib/env';
 import { formatCompactCount } from '@/lib/home-view-model';
-import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
+import { showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia, hasShowcaseVideoWithoutPreview } from '@/lib/showcase-media';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from '@/lib/showcase-display';
@@ -258,9 +258,9 @@ export function CreatorProfileScreen({
 
   const openProfileItem = (item: ShowcaseFeedItem) => {
     queryClient.setQueryData(createShowcasePostQueryKey(item.id, user?.id), { success: true, item });
-    router.push(immersiveViewerHref({
+    router.push(showcaseFeedItemOpenHref({
+      item,
       source: 'creator-profile',
-      initialId: item.id,
       creatorUsername: data?.profile.username ?? username,
     }) as never);
   };
