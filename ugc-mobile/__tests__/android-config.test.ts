@@ -90,9 +90,9 @@ end
     const productionPodfile = setIosBuildProfileAutolinking(podfile);
 
     expect(packageJson.dependencies['expo-dev-client']).toBeUndefined();
-    expect(packageJson.devDependencies['expo-dev-client']).toBe('~55.0.37');
+    expect(packageJson.devDependencies['expo-dev-client']).toBe('~55.0.38');
     expect(packageJson.scripts.postinstall).toBe('patch-package');
-    expect(packageJson.dependencies.expo).toMatch(/^\^55\./);
+    expect(packageJson.dependencies.expo).toMatch(/^[~^]55\./);
     expect(appJson.expo.plugins).toContain('./plugins/withBuildProfileAutolinking');
     expect(easJson.build.development.env.MAGICBOOKLET_INCLUDE_DEV_CLIENT).toBe('true');
     expect(easJson.build.preview.env.MAGICBOOKLET_INCLUDE_DEV_CLIENT).toBe('false');
