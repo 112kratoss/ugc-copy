@@ -12,6 +12,7 @@ import {
   immersiveViewerHref,
   immersiveViewerReturnPath,
   selectActiveImmersiveVideoId,
+  showcaseFeedItemOpenHref,
   textPostViewerHref,
 } from '../lib/immersive-preview-view-model';
 import type { GenerationListItem, OwnerPostListItem, ShowcaseFeedItem } from '../lib/types';
@@ -85,6 +86,72 @@ describe('immersive preview view model', () => {
       .toBe('/post/saved-post?source=profile-saved');
     expect(textPostViewerHref({ postId: 'saved/post', source: 'profile-saved', comments: true }))
       .toBe('/post/saved%2Fpost?source=profile-saved&comments=saved%2Fpost');
+  });
+
+  it('opens showcase-feed text posts in the reading screen from every surface', () => {
+    const textPost = showcaseItem({ id: 'text-1', category: 'text', postFormat: 'text' });
+
+    // Creator profile: the tile renders as text, so the tap must agree.
+    expect(showcaseFeedItemOpenHref({
+      item: textPost,
+      source: 'creator-profile',
+      creatorUsername: 'luna',
+    })).toBe('/post/text-1');
+
+    // Showcase tab: feed-session context is irrelevant to a text post.
+    expect(showcaseFeedItemOpenHref({
+      item: textPost,
+      source: 'showcase-feed',
+      feedSessionId: 'session-1',
+      algorithmVersion: 'v3',
+    })).toBe('/post/text-1');
+
+    expect(showcaseFeedItemOpenHref({ item: textPost, source: 'showcase-feed', comments: true }))
+      .toBe('/post/text-1?comments=text-1');
+  });
+
+  it('keeps media posts in the reel and preserves their viewer context', () => {
+    expect(showcaseFeedItemOpenHref({
+      item: showcaseItem({ id: 'media-1', mediaUrl: 'https://cdn.test/a.jpg', mediaKind: 'image' }),
+      source: 'creator-profile',
+      creatorUsername: 'luna',
+    })).toEqual({
+      pathname: '/viewer',
+      params: { source: 'creator-profile', initialId: 'media-1', creatorUsername: 'luna' },
+    });
+
+    expect(showcaseFeedItemOpenHref({
+      item: showcaseItem({ id: 'media-2', mediaUrl: 'https://cdn.test/b.mp4', mediaKind: 'video' }),
+      source: 'showcase-feed',
+      feedSessionId: 'session-1',
+      algorithmVersion: 'v3',
+    })).toEqual({
+      pathname: '/viewer',
+      params: {
+        source: 'showcase-feed',
+        initialId: 'media-2',
+        feedSessionId: 'session-1',
+        algorithmVersion: 'v3',
+      },
+    });
+  });
+
+  it('treats a text-category post that carries media as a reel post', () => {
+    // `isTextOnlyShowcasePost` requires the absence of media — a text post with an
+    // attached image still has something to fill the reel.
+    expect(showcaseFeedItemOpenHref({
+      item: showcaseItem({
+        id: 'text-with-media',
+        category: 'text',
+        postFormat: 'text',
+        mediaUrl: 'https://cdn.test/c.jpg',
+        mediaKind: 'image',
+      }),
+      source: 'creator-profile',
+    })).toEqual({
+      pathname: '/viewer',
+      params: { source: 'creator-profile', initialId: 'text-with-media' },
+    });
   });
 
   it('opens profile text posts in the reading screen and media in the reel', () => {
