@@ -74,6 +74,14 @@ async function handleRevenueCatWebhookPOST(
   const expectedAuthorization = dependencies.getExpectedAuthorization();
   if (!expectedAuthorization) {
     dependencies.logError('RevenueCat webhook authorization is not configured.');
+    // Durable, not just a log line: while the token is unset every store
+    // refund RevenueCat delivers bounces on this 503 until redelivery gives
+    // up, so backend health must be able to see it happening.
+    await dependencies.recordPaymentWebhookProcessingFailure({
+      serviceName: REVENUECAT_WEBHOOK_PROCESSING_SERVICE_NAME,
+      failureCode: 'webhook_auth_unconfigured',
+      status: 503,
+    });
     return NextResponse.json({ error: 'Webhook is not configured.' }, { status: 503 });
   }
 
@@ -130,6 +138,8 @@ async function handleRevenueCatWebhookPOST(
         authority,
         provider: verified.provider,
         transactionId: verified.transactionId,
+        storeReportedPrice: event.storeReportedPrice,
+        storeReportedCurrency: event.storeReportedCurrency,
       });
 
       return NextResponse.json({

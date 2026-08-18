@@ -149,7 +149,7 @@ export async function collectAdminRevenueReport(
   ] = await Promise.all([
     client
       .from('transactions')
-      .select('id, user_id, status, amount, credits, created_at, razorpay_payment_id')
+      .select('id, user_id, status, amount, credits, currency, created_at, razorpay_payment_id')
       // Mobile purchases also land here; they are reported on the mobile rail
       // from `mobile_store_transactions` instead. See the module comment.
       .is('mobile_product_id', null)
@@ -198,11 +198,13 @@ export async function collectAdminRevenueReport(
     summarizeRail('razorpay-credits', 'Credit purchases (web)', creditRows.map((row) => ({
       status: String(row.status ?? ''),
       amountSubunits: typeof row.amount === 'number' ? row.amount : null,
-      // `transactions` has no currency column; web Razorpay billing is INR.
-      currency: 'INR',
+      currency: String(row.currency ?? 'INR'),
       credits: typeof row.credits === 'number' ? row.credits : null,
     }))),
-    summarizeRail('mobile-iap', 'Mobile in-app purchases', mobileRows.map((row) => ({
+    // "Nominal list price" because mobile amounts are the catalog's INR price,
+    // not what the store charged the buyer; the store-reported price captured
+    // from RevenueCat webhooks lives on `mobile_store_transactions`.
+    summarizeRail('mobile-iap', 'Mobile in-app purchases (nominal list price)', mobileRows.map((row) => ({
       status: String(row.status ?? ''),
       amountSubunits: typeof row.amount_subunits === 'number' ? row.amount_subunits : null,
       currency: String(row.currency ?? 'INR'),
@@ -226,7 +228,7 @@ export async function collectAdminRevenueReport(
       rail: 'razorpay-credits' as const,
       status: String(row.status ?? ''),
       amountSubunits: typeof row.amount === 'number' ? row.amount : null,
-      currency: 'INR',
+      currency: String(row.currency ?? 'INR'),
       userId: (row.user_id as string | null) ?? null,
       createdAt: String(row.created_at ?? ''),
       reference: (row.razorpay_payment_id as string | null) ?? null,

@@ -52,7 +52,8 @@ secret for rotation, compares fixed-length digests, bounds the request body,
 and applies a 15-second timeout to the signed Vercel forward.
 - Provider media import allowlist: `MEDIA_IMPORT_HOST_ALLOWLIST` (comma-separated HTTPS hostnames; `*.example.com` matches subdomains only). Include every provider CDN host that can appear in temporary generation output URLs. Imports fail closed when a host is absent, redirects leave the allowlist, DNS resolves privately, the media type is invalid, or the response exceeds its byte limit.
 - Razorpay: `NEXT_PUBLIC_RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and `RAZORPAY_WEBHOOK_SECRET`.
-- RevenueCat: `REVENUECAT_SECRET_API_KEY` or `REVENUECAT_REST_API_KEY`, plus `REVENUECAT_WEBHOOK_AUTH_TOKEN`.
+- RevenueCat: `REVENUECAT_SECRET_API_KEY` or `REVENUECAT_REST_API_KEY`, plus `REVENUECAT_WEBHOOK_AUTH_TOKEN`. Both are production-validated: backend health reports invalid commerce config when either is unset, which fails release verification.
+- Creator payouts: `CREATOR_PAYOUT_DETAILS_ENCRYPTION_KEY` (base64 of 32 random bytes, `openssl rand -base64 32`). Encrypts `creator_payout_requests.payout_details` at rest. Deliberately not deploy-blocking, but payout requests fail closed in production until it is set.
 - Invite attribution hashing: `REFERRAL_ATTRIBUTION_HASH_SECRET` set to a dedicated long random secret.
 - Verified iOS links: `APPLE_TEAM_ID` and `IOS_BUNDLE_ID`.
 - Verified Android links: `ANDROID_APP_SHA256_FINGERPRINTS` and `ANDROID_PACKAGE_NAME`.

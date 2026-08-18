@@ -223,4 +223,53 @@ describe('requestCreatorPayout', () => {
 
     expect(result).toMatchObject({ ok: false, code: 'INVALID_DETAILS' });
   });
+
+  it('bounds the plaintext length before encryption, not after', async () => {
+    // The DB CHECK now sizes ciphertext, so it can no longer bound what the
+    // creator typed; the service must.
+    const { client, rpc } = createSupabaseMock({});
+
+    const result = await requestCreatorPayout({
+      adminSupabase: client,
+      userId: 'creator-1',
+      payoutMethod: 'upi',
+      payoutDetails: 'x'.repeat(501),
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 400, code: 'INVALID_DETAILS' });
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('stores ciphertext, never plaintext, when the encryption key is configured', async () => {
+    vi.stubEnv(
+      'CREATOR_PAYOUT_DETAILS_ENCRYPTION_KEY',
+      Buffer.alloc(32, 7).toString('base64'),
+    );
+    try {
+      const { client, rpc } = createSupabaseMock({
+        rpcResult: { status: 'requested', request_id: 'request-1', amount_token_subunits: 1_500_000 },
+      });
+
+      await requestCreatorPayout({
+        adminSupabase: client,
+        userId: 'creator-1',
+        payoutMethod: 'upi',
+        payoutDetails: '  creator@upi  ',
+      });
+
+      const [, rpcArgs] = rpc.mock.calls[0] as unknown as [string, { p_payout_details: string }];
+      const stored = rpcArgs.p_payout_details;
+      expect(stored.startsWith('enc.v1.')).toBe(true);
+      expect(stored).not.toContain('creator@upi');
+
+      const { decryptCreatorPayoutDetails } = await import('@/lib/creator-payout-details-crypto');
+      expect(decryptCreatorPayoutDetails(stored)).toEqual({
+        ok: true,
+        plaintext: 'creator@upi',
+        encrypted: true,
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });

@@ -35,6 +35,7 @@ function createAdminSupabaseMock(options?: {
   assets?: MarketplaceAssetRow[];
   purchases?: MarketplacePurchaseRow[];
   rateLimited?: boolean;
+  freeUnlockResult?: Record<string, unknown>;
 }) {
   const assets = options?.assets ?? [{
     id: 'asset-1',
@@ -106,6 +107,13 @@ function createAdminSupabaseMock(options?: {
             status: 'recorded',
             provider_order_id: args.p_provider_order_id,
           },
+          error: null,
+        };
+      }
+      if (fn === 'unlock_free_marketplace_asset') {
+        return {
+          data: options?.freeUnlockResult
+            ?? { status: 'completed', seller_user_id: 'seller-1', purchase_id: 'purchase-1' },
           error: null,
         };
       }
@@ -237,5 +245,94 @@ describe('createMarketplaceOrderForRoute', () => {
         },
       },
     ]);
+  });
+
+  it('unlocks free listings through the atomic RPC with consistent references', async () => {
+    const admin = createAdminSupabaseMock({
+      assets: [{
+        id: 'asset-free',
+        title: 'Free Prompt Pack',
+        price_usd_cents: 0,
+        status: 'active',
+        seller_user_id: 'seller-1',
+      }],
+    });
+    const ids = ['11111111-aaaa-4aaa-8aaa-111111111111', '22222222-bbbb-4bbb-8bbb-222222222222'];
+
+    const result = await createMarketplaceOrderForRoute({
+      adminSupabase: admin.client,
+      assetId: 'asset-free',
+      buyerUserId: 'buyer-1',
+      countryCode: 'IN',
+      randomId: () => ids.shift() ?? 'exhausted',
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      body: { success: true, free: true, alreadyProcessed: false },
+    });
+    expect(admin.rpcCalls.at(-1)).toEqual({
+      fn: 'unlock_free_marketplace_asset',
+      args: {
+        p_buyer_user_id: 'buyer-1',
+        p_asset_id: 'asset-free',
+        p_order_reference: 'free_11111111-aaaa-4aaa-8aaa-111111111111',
+        p_payment_reference: 'free_unlock_22222222-bbbb-4bbb-8bbb-222222222222',
+      },
+    });
+    // The dedupe and the order/purchase writes live inside the RPC now; the
+    // app-side path must not insert order rows of its own.
+    expect(admin.inserts).toEqual([]);
+  });
+
+  it('reports a lost free-unlock race as already purchased, not an error', async () => {
+    const admin = createAdminSupabaseMock({
+      assets: [{
+        id: 'asset-free',
+        title: 'Free Prompt Pack',
+        price_usd_cents: 0,
+        status: 'active',
+        seller_user_id: 'seller-1',
+      }],
+      freeUnlockResult: { status: 'already_owned', seller_user_id: 'seller-1' },
+    });
+
+    const result = await createMarketplaceOrderForRoute({
+      adminSupabase: admin.client,
+      assetId: 'asset-free',
+      buyerUserId: 'buyer-1',
+      countryCode: 'IN',
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      body: { success: true, alreadyPurchased: true },
+    });
+  });
+
+  it('rejects a free unlock whose listing gained a price mid-request', async () => {
+    const admin = createAdminSupabaseMock({
+      assets: [{
+        id: 'asset-free',
+        title: 'Free Prompt Pack',
+        price_usd_cents: 0,
+        status: 'active',
+        seller_user_id: 'seller-1',
+      }],
+      freeUnlockResult: { status: 'not_free' },
+    });
+
+    const result = await createMarketplaceOrderForRoute({
+      adminSupabase: admin.client,
+      assetId: 'asset-free',
+      buyerUserId: 'buyer-1',
+      countryCode: 'IN',
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      body: { error: 'This listing is no longer free.' },
+    });
   });
 });

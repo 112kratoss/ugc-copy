@@ -21,6 +21,14 @@ export interface RevenueCatPurchaseEvent {
   provider: Exclude<MobilePurchaseProvider, 'revenuecat' | 'sandbox'>;
   transactionId: string;
   userId: string;
+  /**
+   * What the store actually charged, as RevenueCat reported it
+   * (`price_in_purchased_currency` + `currency`). Evidence for revenue
+   * reporting only — the settlement amount stays the server catalog's nominal
+   * price. Both null when the event omits or malforms the pair.
+   */
+  storeReportedPrice: number | null;
+  storeReportedCurrency: string | null;
 }
 
 type ParseResult =
@@ -47,6 +55,25 @@ function storeProvider(
   if (store === 'APP_STORE') return 'app_store';
   if (store === 'PLAY_STORE') return 'play_store';
   return null;
+}
+
+function storeReportedPricePair(event: Record<string, unknown>): {
+  storeReportedPrice: number | null;
+  storeReportedCurrency: string | null;
+} {
+  const price = event.price_in_purchased_currency;
+  const currency = nonEmptyString(event.currency);
+  if (
+    typeof price !== 'number'
+    || !Number.isFinite(price)
+    || price < 0
+    || !currency
+    || !/^[A-Z]{3}$/.test(currency)
+  ) {
+    return { storeReportedPrice: null, storeReportedCurrency: null };
+  }
+
+  return { storeReportedPrice: price, storeReportedCurrency: currency };
 }
 
 export function webhookAuthorizationMatches(actual: string | null, expected: string) {
@@ -102,6 +129,7 @@ export function parseRevenueCatRefundEvent(payload: unknown): ParseResult {
         provider,
         transactionId,
         userId,
+        ...storeReportedPricePair(event),
       },
     };
   }

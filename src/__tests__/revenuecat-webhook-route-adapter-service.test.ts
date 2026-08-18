@@ -46,6 +46,9 @@ const purchasePayload = {
     app_user_id: '6a0bf06c-2829-45c7-93c1-06f5fe4bc15d',
     store: 'PLAY_STORE',
     event_timestamp_ms: 1_766_000_000_100,
+    price: 22.99,
+    price_in_purchased_currency: 1999,
+    currency: 'INR',
   },
 };
 
@@ -55,6 +58,7 @@ describe('RevenueCat webhook route adapter service', () => {
     const createServiceClient = vi.fn(
       () => ({ rpc }) as unknown as SupabaseClient,
     );
+    const recordPaymentWebhookProcessingFailure = vi.fn(async () => {});
 
     const response = await postRevenueCatWebhookRouteResponse({
       request: webhookRequest(refundPayload, 'Bearer revenuecat-webhook-secret', {
@@ -64,6 +68,7 @@ describe('RevenueCat webhook route adapter service', () => {
         createServiceClient,
         getExpectedAuthorization: () => '',
         logError: vi.fn(),
+        recordPaymentWebhookProcessingFailure,
       },
     });
 
@@ -73,6 +78,13 @@ describe('RevenueCat webhook route adapter service', () => {
     await expect(response.json()).resolves.toEqual({ error: 'Webhook is not configured.' });
     expect(createServiceClient).not.toHaveBeenCalled();
     expect(rpc).not.toHaveBeenCalled();
+    // Durable, not just a log line: every refund RevenueCat delivers while the
+    // token is unset bounces here, and backend health must be able to see it.
+    expect(recordPaymentWebhookProcessingFailure).toHaveBeenCalledWith({
+      serviceName: 'revenuecat-webhook-processing',
+      failureCode: 'webhook_auth_unconfigured',
+      status: 503,
+    });
   });
 
   it('rejects oversized payloads before JSON parsing or privileged work', async () => {
@@ -208,6 +220,10 @@ describe('RevenueCat webhook route adapter service', () => {
       adminSupabase,
       provider: 'play_store',
       transactionId: 'GPA.9876-5432-1098-76543',
+      // Store-charged price travels with the settlement as evidence; the
+      // amount authority stays the server catalog.
+      storeReportedPrice: 1999,
+      storeReportedCurrency: 'INR',
     }));
   });
 

@@ -446,6 +446,39 @@ describe('mobile commerce helpers', () => {
     );
   });
 
+  it('rejects purchases RevenueCat reports without a store transaction id', async () => {
+    // The transaction id keys settlement idempotency. The old synthetic
+    // `productId_purchaseDate` fallback could settle the same purchase twice
+    // once RevenueCat later reported the real id, so id-less purchases now
+    // fail closed instead.
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      subscriber: {
+        non_subscriptions: {
+          'magicbooklet.credits.creator': [
+            {
+              store: 'app_store',
+              purchase_date: '2026-05-12T12:00:00Z',
+            },
+          ],
+        },
+      },
+    }), {
+      headers: { 'content-type': 'application/json' },
+      status: 200,
+    }));
+
+    await expect(verifyMobilePurchase({
+      userId,
+      productId: 'magicbooklet.credits.creator',
+      provider: 'app_store',
+      fetcher: fetcher as unknown as typeof fetch,
+      revenueCatApiKey: 'rc-secret',
+    })).rejects.toMatchObject({
+      status: 400,
+      message: 'Mobile purchase receipt did not include a store transaction id.',
+    });
+  });
+
   it('rejects invalid RevenueCat receipts', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
       subscriber: {
@@ -817,6 +850,8 @@ describe('mobile commerce helpers', () => {
         p_store_transaction_id: '1000000123456800',
         p_external_order_id: buildMobileExternalOrderId('app_store', '1000000123456800'),
         p_payment_id: 'mobile_app_store_1000000123456800',
+        p_store_reported_price: null,
+        p_store_reported_currency: null,
       });
       return {
         data: {
@@ -944,6 +979,8 @@ describe('mobile commerce helpers', () => {
         p_store_transaction_id: 'GPA.1000-2000-3000',
         p_external_order_id: buildMobileExternalOrderId('play_store', 'GPA.1000-2000-3000'),
         p_payment_id: 'mobile_play_store_GPA.1000-2000-3000',
+        p_store_reported_price: null,
+        p_store_reported_currency: null,
       });
       return {
         data: {
@@ -1286,6 +1323,36 @@ describe('mobile commerce helpers', () => {
       restoredCreditPurchases: 1,
     });
     expect(fakeSupabase.transactions).toHaveLength(1);
+  });
+
+  it('skips restoring purchases RevenueCat reports without a store transaction id', async () => {
+    const fakeSupabase = createCreditSupabase({ credits: 100 });
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      subscriber: {
+        non_subscriptions: {
+          'magicbooklet.credits.starter': [
+            {
+              store: 'app_store',
+              purchase_date: '2026-05-13T12:00:00Z',
+            },
+          ],
+        },
+      },
+    }), {
+      headers: { 'content-type': 'application/json' },
+      status: 200,
+    }));
+
+    await expect(restoreMobileEntitlements(fakeSupabase.client, userId, {
+      fetcher: fetcher as unknown as typeof fetch,
+      revenueCatApiKey: 'rc-secret',
+    })).resolves.toMatchObject({
+      success: true,
+      credits: 100,
+      restoredCreditPurchases: 0,
+    });
+    // No settlement may be keyed off a synthesized id.
+    expect(fakeSupabase.transactions).toHaveLength(0);
   });
 
   it('fails restore reconciliation clearly when RevenueCat verification is not configured', async () => {

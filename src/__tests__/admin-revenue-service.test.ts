@@ -174,6 +174,47 @@ describe('admin revenue report', () => {
     ]);
   });
 
+  it('reads the recorded currency on the web credit rail instead of assuming INR', async () => {
+    // `transactions.currency` exists now; the rail must trust it so a future
+    // non-INR billing rail cannot silently masquerade as rupees.
+    const client = createClient({
+      transactions: [
+        { id: 't1', status: 'success', amount: 41500, credits: 500, currency: 'INR', created_at: '2026-07-20T00:00:00.000Z' },
+        { id: 't2', status: 'success', amount: 999, credits: 100, currency: 'USD', created_at: '2026-07-21T00:00:00.000Z' },
+      ],
+      mobile_store_transactions: [],
+      marketplace_orders: [],
+      post_resource_bundle_orders: [],
+      creator_resource_wallets: [],
+    });
+
+    const report = await collectAdminRevenueReport(client, { now: NOW });
+    const web = report.rails.find((rail) => rail.key === 'razorpay-credits');
+
+    expect(web?.totalsByCurrency).toEqual([
+      { currency: 'INR', grossSubunits: 41500, succeededCount: 1 },
+      { currency: 'USD', grossSubunits: 999, succeededCount: 1 },
+    ]);
+    expect(report.recentOrders.map((order) => order.currency).sort()).toEqual(['INR', 'USD']);
+  });
+
+  it('labels the mobile rail as nominal list price', async () => {
+    // Mobile amounts are the catalog's INR list price, not what the store
+    // charged; the label keeps the operator from reading them as settled cash.
+    const client = createClient({
+      transactions: [],
+      mobile_store_transactions: [],
+      marketplace_orders: [],
+      post_resource_bundle_orders: [],
+      creator_resource_wallets: [],
+    });
+
+    const report = await collectAdminRevenueReport(client, { now: NOW });
+
+    expect(report.rails.find((rail) => rail.key === 'mobile-iap')?.label)
+      .toBe('Mobile in-app purchases (nominal list price)');
+  });
+
   it('leaves creditsIssued null on rails that do not issue credits', async () => {
     const client = createClient({
       transactions: [],
