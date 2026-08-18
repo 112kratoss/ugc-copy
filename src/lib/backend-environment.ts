@@ -1,3 +1,14 @@
+// Deliberately NOT marked `server-only`, unlike the other modules that read the
+// service-role key. `next.config.ts` imports this module, and Next compiles the
+// config to next.config.compiled.js and runs it in plain Node -- outside the
+// bundler graph that aliases `server-only`, so the import fails to resolve and
+// takes the whole build down with MODULE_NOT_FOUND.
+//
+// The protection here is therefore by convention: this module must only ever be
+// imported by server code and by next.config.ts. If it ever needs a hard guard,
+// split the env-name table that the config needs away from the value-reading
+// helpers, and mark only the latter.
+
 export type BackendEnvironmentStatus = 'ok' | 'degraded';
 
 export type BackendEnvironmentHealth = {

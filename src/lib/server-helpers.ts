@@ -2,6 +2,23 @@
  * Shared server-side helpers for API routes.
  * Centralizes Supabase client creation, user authentication,
  * and credit deduction logic to eliminate duplication.
+ *
+ * NOTE: this module cannot currently be marked `server-only`, and that is a
+ * symptom rather than a decision. It is reachable from a client component today:
+ *
+ *   server-helpers <- provider-fetch-attempts <- provider-fetch
+ *     <- prompt-enhancer <- workflow-blueprint <- creator-tools.tsx
+ *     <- CreatorStudio.tsx <- CreateImageClient.tsx ("use client")
+ *
+ * provider-fetch-attempts calls createServiceClient() for real, so that edge is
+ * a value import, not a type import. Adding `import 'server-only'` here fails
+ * the build with exactly that trace rather than silently passing.
+ *
+ * The service-role key value does not reach the browser -- Next inlines only
+ * NEXT_PUBLIC_* env vars into client bundles -- but the module graph is wrong,
+ * and the guard cannot be restored until the chain is split (give provider-fetch
+ * a client-safe surface, or inject the recorder instead of importing it).
+ * Do not add `server-only` here before doing that.
  */
 
 import { NextResponse } from 'next/server';
