@@ -4,8 +4,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
   listOpenModerationReports,
+  listResolvedModerationReports,
   resolvePostReport,
   resolveSubjectReport,
+  type ModerationHistorySnapshot,
   type ModerationQueueSnapshot,
   type PostReportResolution,
   type SubjectReportResolution,
@@ -57,6 +59,80 @@ export async function collectAdminModerationQueue(
     ...snapshot,
     openCount: snapshot.postReports.length + snapshot.subjectReports.length,
     oldestOpenAt: createdTimestamps[0] ?? null,
+  };
+}
+
+export const ADMIN_MODERATION_HISTORY_PAGE_SIZE = 25;
+
+/** A resolved report plus the operator name behind the reviewer id. */
+export type AdminModerationHistory = ModerationHistorySnapshot & {
+  reviewers: Record<string, { username: string | null; displayName: string | null }>;
+  pageSize: number;
+  /**
+   * Separate offsets because the two families are separate tables with very
+   * different volumes: a shared cursor would page a short list past its end
+   * whenever the operator advanced the long one.
+   */
+  postOffset: number;
+  subjectOffset: number;
+};
+
+/**
+ * Reviewer ids are `auth.users` ids, which mean nothing on screen. Resolving
+ * them through `profiles` keeps the id as the durable record while giving the
+ * operator a name to read. A reviewer with no profile row degrades to the bare
+ * id rather than dropping the decision from the history.
+ */
+async function hydrateReviewerNames(
+  client: SupabaseClient,
+  reviewerIds: string[],
+): Promise<AdminModerationHistory['reviewers']> {
+  const uniqueIds = [...new Set(reviewerIds)];
+  if (uniqueIds.length === 0) return {};
+
+  const { data, error } = await client
+    .from('profiles')
+    .select('id, username, display_name')
+    .in('id', uniqueIds);
+  if (error) throw error;
+
+  const reviewers: AdminModerationHistory['reviewers'] = {};
+  for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+    reviewers[String(row.id)] = {
+      username: (row.username as string | null) ?? null,
+      displayName: (row.display_name as string | null) ?? null,
+    };
+  }
+  return reviewers;
+}
+
+export async function collectAdminModerationHistory(
+  client: SupabaseClient,
+  options: { postOffset?: number; subjectOffset?: number; pageSize?: number } = {},
+): Promise<AdminModerationHistory> {
+  const pageSize = options.pageSize ?? ADMIN_MODERATION_HISTORY_PAGE_SIZE;
+  const postOffset = options.postOffset ?? 0;
+  const subjectOffset = options.subjectOffset ?? 0;
+
+  const snapshot = await listResolvedModerationReports(client, {
+    limit: pageSize,
+    postOffset,
+    subjectOffset,
+  });
+
+  const reviewerIds = [
+    ...snapshot.postReports.map((report) => report.reviewedBy),
+    ...snapshot.subjectReports.map((report) => report.reviewedBy),
+  ].filter((id): id is string => Boolean(id));
+
+  return {
+    ...snapshot,
+    reviewers: await hydrateReviewerNames(client, reviewerIds),
+    pageSize,
+    // The snapshot's offsets, not the requested ones: a request past the end
+    // falls back to the first page and the pager must say so.
+    postOffset: snapshot.offsets.postReports,
+    subjectOffset: snapshot.offsets.subjectReports,
   };
 }
 

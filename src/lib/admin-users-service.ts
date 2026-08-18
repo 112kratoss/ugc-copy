@@ -2,6 +2,8 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { runPagedQuery } from '@/lib/admin-paged-query';
+
 /**
  * Read models for the admin Users & credits area.
  *
@@ -87,6 +89,11 @@ function normalizeSearchLimit(limit: number | undefined) {
   return Math.min(limit, MAX_SEARCH_LIMIT);
 }
 
+function normalizeOffset(offset: number | undefined) {
+  if (!offset || !Number.isInteger(offset) || offset < 0) return 0;
+  return offset;
+}
+
 /**
  * PostgREST `or=` takes a comma-separated filter list, so a raw comma, parenthesis
  * or wildcard in the search term would change the filter's shape. Stripping the
@@ -96,29 +103,44 @@ function sanitizeSearchTerm(term: string): string {
   return term.replace(/[,()*\\]/g, '').trim().slice(0, 64);
 }
 
+export type AdminUserSearchResult = {
+  users: AdminUserSummary[];
+  /** Matches across the whole table, not just this page. */
+  total: number;
+  /** The window actually returned; see `runPagedQuery`. */
+  offset: number;
+};
+
 export async function searchAdminUsers(
   client: SupabaseClient,
-  options: { term?: string; limit?: number } = {},
-): Promise<AdminUserSummary[]> {
+  options: { term?: string; limit?: number; offset?: number } = {},
+): Promise<AdminUserSearchResult> {
   const limit = normalizeSearchLimit(options.limit);
   const term = sanitizeSearchTerm(options.term ?? '');
 
-  let query = client
-    .from('profiles')
-    .select('id, username, display_name, avatar_url, credits, promotional_credits, created_at')
-    .order('created_at', { ascending: false })
-    .limit(limit);
+  const page = await runPagedQuery<Record<string, unknown>>(
+    (from, to) => {
+      const query = client
+        .from('profiles')
+        .select(
+          'id, username, display_name, avatar_url, credits, promotional_credits, created_at',
+          { count: 'exact' },
+        )
+        .order('created_at', { ascending: false })
+        // `created_at` is not unique, so a tiebreaker keeps a row from
+        // appearing on two consecutive pages (or on neither).
+        .order('id', { ascending: false })
+        .range(from, to);
 
-  if (term) {
-    query = UUID_PATTERN.test(term)
-      ? query.eq('id', term)
-      : query.or(`username.ilike.%${term}%,display_name.ilike.%${term}%`);
-  }
+      if (!term) return query;
+      return UUID_PATTERN.test(term)
+        ? query.eq('id', term)
+        : query.or(`username.ilike.%${term}%,display_name.ilike.%${term}%`);
+    },
+    { offset: normalizeOffset(options.offset), pageSize: limit },
+  );
 
-  const { data, error } = await query;
-  if (error) throw error;
-
-  return (data ?? []).map((row) => ({
+  const users = page.rows.map((row) => ({
     id: row.id as string,
     username: (row.username as string | null) ?? null,
     displayName: (row.display_name as string | null) ?? null,
@@ -127,6 +149,8 @@ export async function searchAdminUsers(
     promotionalCredits: (row.promotional_credits as number | null) ?? 0,
     createdAt: (row.created_at as string | null) ?? null,
   }));
+
+  return { users, total: page.total, offset: page.offset };
 }
 
 async function countRows(

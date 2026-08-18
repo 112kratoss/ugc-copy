@@ -2,6 +2,8 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { runPagedQuery } from '@/lib/admin-paged-query';
+
 /**
  * Read models for the admin System area: the cron job registry, the generation
  * model catalog control plane, and the inbound contact queue.
@@ -42,13 +44,27 @@ export type AdminSystemSnapshot = {
     entryCount: number;
     releases: Array<{ id: string; revision: string; status: string; createdAt: string; changeNote: string | null }>;
   };
-  contactMessages: Array<{ id: string; name: string; email: string; subject: string; createdAt: string }>;
+  contactMessages: Array<{
+    id: string;
+    name: string;
+    email: string;
+    subject: string;
+    /** The actual enquiry. Without it the queue is a list of senders, not a queue. */
+    message: string;
+    createdAt: string;
+  }>;
+  contactMessageTotal: number;
+  /** Where the contact list actually landed; see `runPagedQuery`. */
+  contactOffset: number;
 };
+
+export const CONTACT_PAGE_SIZE = 25;
 
 export async function collectAdminSystemSnapshot(
   client: SupabaseClient,
-  options: { now?: Date } = {},
+  options: { now?: Date; contactOffset?: number } = {},
 ): Promise<AdminSystemSnapshot> {
+  const contactOffset = Math.max(options.contactOffset ?? 0, 0);
   const now = options.now ?? new Date();
   const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
 
@@ -73,14 +89,19 @@ export async function collectAdminSystemSnapshot(
       .select('id, revision, status, change_note, created_at, activated_at')
       .order('created_at', { ascending: false })
       .limit(10),
-    client
-      .from('contact_messages')
-      .select('id, name, email, subject, created_at')
-      .order('created_at', { ascending: false })
-      .limit(25),
+    runPagedQuery<Record<string, unknown>>(
+      (from, to) => client
+        .from('contact_messages')
+        .select('id, name, email, subject, message, created_at', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(from, to),
+      { offset: contactOffset, pageSize: CONTACT_PAGE_SIZE },
+    ),
   ]);
 
-  for (const result of [runs, dayRuns, locks, releases, contact]) {
+  // `contact` is omitted: runPagedQuery already threw on any error it saw.
+  for (const result of [runs, dayRuns, locks, releases]) {
     if (result.error) throw result.error;
   }
 
@@ -157,12 +178,15 @@ export async function collectAdminSystemSnapshot(
         changeNote: (row.change_note as string | null) ?? null,
       })),
     },
-    contactMessages: ((contact.data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+    contactMessages: contact.rows.map((row) => ({
       id: String(row.id),
       name: String(row.name ?? ''),
       email: String(row.email ?? ''),
       subject: String(row.subject ?? ''),
+      message: String(row.message ?? ''),
       createdAt: String(row.created_at ?? ''),
     })),
+    contactMessageTotal: contact.total,
+    contactOffset: contact.offset,
   };
 }

@@ -1,16 +1,20 @@
+import { Mail } from 'lucide-react';
+
 import { Surface, Text } from '@/app/components/DesignSystem';
-import { collectAdminSystemSnapshot } from '@/lib/admin-system-service';
+import { CONTACT_PAGE_SIZE, collectAdminSystemSnapshot } from '@/lib/admin-system-service';
 import { createServiceClient } from '@/lib/server-helpers';
 
 import {
   DataTable,
   EmptyState,
   PageHeader,
+  Pagination,
   StatCard,
   StatusBadge,
   Td,
   formatRelative,
   formatTimestamp,
+  parseOffset,
 } from '../AdminUi';
 
 export const dynamic = 'force-dynamic';
@@ -21,8 +25,14 @@ function formatDuration(durationMs: number | null): string {
   return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
-export default async function AdminSystemPage() {
-  const snapshot = await collectAdminSystemSnapshot(createServiceClient());
+export default async function AdminSystemPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ contact?: string }>;
+}) {
+  const { contact } = await searchParams;
+  const contactOffset = parseOffset(contact, CONTACT_PAGE_SIZE);
+  const snapshot = await collectAdminSystemSnapshot(createServiceClient(), { contactOffset });
 
   const failingJobs = snapshot.jobSummaries.filter((job) => job.failureCount24h > 0);
   const now = new Date();
@@ -146,17 +156,53 @@ export default async function AdminSystemPage() {
         {snapshot.contactMessages.length === 0 ? (
           <EmptyState message="No contact messages." />
         ) : (
-          <DataTable columns={['Received', 'Name', 'Email', 'Subject']}>
+          <div className="flex flex-col gap-2">
             {snapshot.contactMessages.map((message) => (
-              <tr key={message.id}>
-                <Td>{formatTimestamp(message.createdAt)}</Td>
-                <Td>{message.name}</Td>
-                <Td mono>{message.email}</Td>
-                <Td truncateWidth={320}>{message.subject}</Td>
-              </tr>
+              <Surface key={message.id} variant="card" padding="md">
+                {/*
+                  A native <details> keeps the queue scannable without shipping
+                  a client component: the body is the whole point of the record,
+                  but forty expanded enquiries are unreadable at a glance.
+                */}
+                <details className="group">
+                  <summary className="ui-focus-ring flex cursor-pointer flex-wrap items-center justify-between gap-3 rounded-lg">
+                    <div className="min-w-0">
+                      <Text as="span" variant="label">{message.subject || 'No subject'}</Text>
+                      <Text variant="caption" className="mt-0.5 block">
+                        {message.name} · {formatRelative(message.createdAt)}
+                      </Text>
+                    </div>
+                    <a
+                      href={`mailto:${message.email}?subject=${encodeURIComponent(`Re: ${message.subject}`)}`}
+                      className="ui-button ui-button-secondary ui-focus-ring shrink-0"
+                    >
+                      <Mail className="h-4 w-4" aria-hidden />
+                      Reply
+                    </a>
+                  </summary>
+
+                  <div className="mt-3 border-t border-[var(--ui-border-subtle)] pt-3">
+                    <Text variant="bodySm" className="whitespace-pre-wrap text-[var(--ui-text-secondary)]">
+                      {message.message || 'No message body recorded.'}
+                    </Text>
+                    <Text variant="caption" className="mt-3 block font-mono">
+                      {message.email} · {formatTimestamp(message.createdAt)}
+                    </Text>
+                  </div>
+                </details>
+              </Surface>
             ))}
-          </DataTable>
+          </div>
         )}
+
+        <Pagination
+          basePath="/admin/system"
+          offsetParam="contact"
+          offset={snapshot.contactOffset}
+          pageSize={CONTACT_PAGE_SIZE}
+          total={snapshot.contactMessageTotal}
+          noun="contact messages"
+        />
       </section>
     </>
   );

@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import Link from 'next/link';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -165,6 +167,109 @@ export function Td({
         </div>
       ) : children}
     </td>
+  );
+}
+
+/**
+ * Reads an `offset` query parameter.
+ *
+ * A hostile or fat-fingered value must not become a negative or fractional
+ * range: PostgREST would either error or silently return a different window
+ * than the control claims to be showing, so anything unparseable falls back to
+ * the first page.
+ */
+export function parseOffset(value: string | undefined, pageSize: number): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) return 0;
+  // Snap to a page boundary so "showing 12-36 of 400" can never be rendered.
+  return Math.floor(parsed / pageSize) * pageSize;
+}
+
+/**
+ * Every admin list was previously capped at a fixed limit and rendered without
+ * any sign that rows had been dropped, so an operator looking past the cap saw
+ * a partial answer that looked complete. This states the window explicitly and
+ * only offers a direction that actually has rows.
+ */
+export function Pagination({
+  basePath,
+  offset,
+  pageSize,
+  total,
+  offsetParam = 'offset',
+  otherParams = {},
+  noun = 'rows',
+}: {
+  basePath: string;
+  offset: number;
+  pageSize: number;
+  total: number;
+  offsetParam?: string;
+  otherParams?: Record<string, string>;
+  noun?: string;
+}) {
+  // `offset` is always a window the query actually returned: each service
+  // falls back to the first page when asked for one past the end, so this can
+  // never render an impossible range like "showing 1001-7 of 7".
+  const firstShown = total === 0 ? 0 : offset + 1;
+  const lastShown = Math.min(offset + pageSize, total);
+  const hasPrevious = offset > 0;
+  const hasNext = offset + pageSize < total;
+
+  function hrefForOffset(nextOffset: number): string {
+    const query = new URLSearchParams(otherParams);
+    if (nextOffset > 0) {
+      query.set(offsetParam, String(nextOffset));
+    } else {
+      query.delete(offsetParam);
+    }
+    const queryString = query.toString();
+    return queryString ? `${basePath}?${queryString}` : basePath;
+  }
+
+  // A single page needs no controls, but the count still reassures the operator
+  // that nothing was truncated.
+  if (!hasPrevious && !hasNext) {
+    return total > 0 ? (
+      <Text variant="caption" className="mt-3 block">
+        {total.toLocaleString()} {noun}
+      </Text>
+    ) : null;
+  }
+
+  return (
+    <nav
+      aria-label={`${noun} pagination`}
+      className="mt-3 flex flex-wrap items-center justify-between gap-3"
+    >
+      <Text variant="caption">
+        Showing {firstShown.toLocaleString()}–{lastShown.toLocaleString()} of {total.toLocaleString()} {noun}
+      </Text>
+      <div className="flex items-center gap-2">
+        {hasPrevious ? (
+          <Link href={hrefForOffset(offset - pageSize)} className="ui-button ui-button-secondary ui-focus-ring">
+            <ChevronLeft className="h-4 w-4" aria-hidden />
+            Previous
+          </Link>
+        ) : (
+          <span className="ui-button ui-button-secondary pointer-events-none opacity-40" aria-disabled>
+            <ChevronLeft className="h-4 w-4" aria-hidden />
+            Previous
+          </span>
+        )}
+        {hasNext ? (
+          <Link href={hrefForOffset(offset + pageSize)} className="ui-button ui-button-secondary ui-focus-ring">
+            Next
+            <ChevronRight className="h-4 w-4" aria-hidden />
+          </Link>
+        ) : (
+          <span className="ui-button ui-button-secondary pointer-events-none opacity-40" aria-disabled>
+            Next
+            <ChevronRight className="h-4 w-4" aria-hidden />
+          </span>
+        )}
+      </div>
+    </nav>
   );
 }
 

@@ -4,18 +4,34 @@ import { Search } from 'lucide-react';
 import { searchAdminUsers } from '@/lib/admin-users-service';
 import { createServiceClient } from '@/lib/server-helpers';
 
-import { DataTable, EmptyState, PageHeader, Td, formatTimestamp, shortId } from '../AdminUi';
+import {
+  DataTable,
+  EmptyState,
+  PageHeader,
+  Pagination,
+  Td,
+  formatTimestamp,
+  parseOffset,
+  shortId,
+} from '../AdminUi';
 
 export const dynamic = 'force-dynamic';
+
+const PAGE_SIZE = 50;
 
 export default async function AdminUsersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{ q?: string; offset?: string }>;
 }) {
-  const { q } = await searchParams;
+  const { q, offset: offsetParam } = await searchParams;
   const term = (q ?? '').trim();
-  const users = await searchAdminUsers(createServiceClient(), { term, limit: 50 });
+  const offset = parseOffset(offsetParam, PAGE_SIZE);
+  const { users, total, offset: effectiveOffset } = await searchAdminUsers(createServiceClient(), {
+    term,
+    limit: PAGE_SIZE,
+    offset,
+  });
 
   return (
     <>
@@ -65,6 +81,15 @@ export default async function AdminUsersPage({
           ))}
         </DataTable>
       )}
+
+      <Pagination
+        basePath="/admin/users"
+        offset={effectiveOffset}
+        pageSize={PAGE_SIZE}
+        total={total}
+        otherParams={term ? { q: term } : {}}
+        noun="users"
+      />
     </>
   );
 }
