@@ -1,6 +1,9 @@
 import Link from 'next/link';
 import { Search } from 'lucide-react';
 
+import { Text } from '@/app/components/DesignSystem';
+
+import { getAdminUserAccountStates } from '@/lib/admin-user-sanction-service';
 import { searchAdminUsers } from '@/lib/admin-users-service';
 import { createServiceClient } from '@/lib/server-helpers';
 
@@ -9,6 +12,7 @@ import {
   EmptyState,
   PageHeader,
   Pagination,
+  StatusBadge,
   Td,
   formatTimestamp,
   parseOffset,
@@ -27,11 +31,18 @@ export default async function AdminUsersPage({
   const { q, offset: offsetParam } = await searchParams;
   const term = (q ?? '').trim();
   const offset = parseOffset(offsetParam, PAGE_SIZE);
-  const { users, total, offset: effectiveOffset } = await searchAdminUsers(createServiceClient(), {
+  const client = createServiceClient();
+  const { users, total, offset: effectiveOffset } = await searchAdminUsers(client, {
     term,
     limit: PAGE_SIZE,
     offset,
   });
+
+  // Resolved for the rendered page only, in one round trip. A suspended account
+  // looks identical to an active one in this table otherwise, so an operator
+  // searching for a user they just actioned cannot tell it worked.
+  const accountStates = await getAdminUserAccountStates(client, users.map((user) => user.id))
+    .catch(() => new Map());
 
   return (
     <>
@@ -64,7 +75,7 @@ export default async function AdminUsersPage({
       {users.length === 0 ? (
         <EmptyState message={term ? `No users match “${term}”.` : 'No users found.'} />
       ) : (
-        <DataTable columns={['User', 'Username', 'Credits', 'Promo credits', 'Joined', 'Id']}>
+        <DataTable columns={['User', 'Username', 'Status', 'Credits', 'Promo credits', 'Joined', 'Id']}>
           {users.map((user) => (
             <tr key={user.id} className="hover:bg-[var(--ui-surface-2)]">
               <Td>
@@ -73,6 +84,11 @@ export default async function AdminUsersPage({
                 </Link>
               </Td>
               <Td>{user.username ? `@${user.username}` : '—'}</Td>
+              <Td>
+                {accountStates.get(user.id)?.isSuspended
+                  ? <StatusBadge status="suspended" tone="danger" />
+                  : <Text as="span" variant="caption">Active</Text>}
+              </Td>
               <Td>{user.credits.toLocaleString()}</Td>
               <Td>{user.promotionalCredits.toLocaleString()}</Td>
               <Td>{formatTimestamp(user.createdAt)}</Td>

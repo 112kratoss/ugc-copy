@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 
@@ -48,14 +49,27 @@ function ReviewerCell({
 }
 
 /**
- * A decision with no rationale predates the mandatory-note rule, and saying so
- * is more useful than an em dash that reads like a rendering bug.
+ * The rationale spans the full table width on its own row.
+ *
+ * As a trailing column it was the first thing clipped by the table's horizontal
+ * scroll — which put the one field this page exists to show off the right-hand
+ * edge. A decision with no rationale predates the mandatory-note rule, and
+ * saying so is more useful than an em dash that reads like a rendering bug.
  */
-function ResolutionNote({ note }: { note: string | null }) {
-  if (!note) {
-    return <span className="italic text-[var(--ui-text-faint)]">No note recorded</span>;
-  }
-  return <>{note}</>;
+function RationaleRow({ columnCount, note }: { columnCount: number; note: string | null }) {
+  return (
+    <tr>
+      <td
+        colSpan={columnCount}
+        className="border-b border-[var(--ui-border-subtle)] px-4 pb-3 text-sm text-[var(--ui-text-secondary)]"
+      >
+        <span className="text-xs font-bold uppercase tracking-[0.08em] text-[var(--ui-text-faint)]">
+          Rationale
+        </span>{' '}
+        {note ?? <span className="italic text-[var(--ui-text-faint)]">No note recorded</span>}
+      </td>
+    </tr>
+  );
 }
 
 export default async function AdminModerationHistoryPage({
@@ -95,25 +109,29 @@ export default async function AdminModerationHistoryPage({
         {history.postReports.length === 0 ? (
           <EmptyState message="No resolved post reports on this page." />
         ) : (
-          <DataTable columns={['Decided', 'Action', 'Reason', 'Post', 'Reviewer', 'Rationale']}>
+          <DataTable columns={['Decided', 'Action', 'Reason', 'Post', 'Reviewer']}>
             {history.postReports.map((report) => (
-              <tr key={report.id}>
-                <Td>{formatTimestamp(report.reviewedAt)}</Td>
-                <Td>
-                  <StatusBadge
-                    status={report.resolutionAction ?? report.status}
-                    tone={report.resolutionAction === 'take_down' ? 'danger' : 'ok'}
-                  />
-                </Td>
-                <Td><StatusBadge status={report.reason} tone="warning" /></Td>
-                <Td truncateWidth={220}>
-                  <Link href={`/post/${report.postId}`} target="_blank" rel="noreferrer" className="underline">
-                    {report.post?.title || 'Untitled post'}
-                  </Link>
-                </Td>
-                <Td><ReviewerCell reviewerId={report.reviewedBy} reviewers={history.reviewers} /></Td>
-                <Td truncateWidth={320}><ResolutionNote note={report.resolutionNote} /></Td>
-              </tr>
+              <Fragment key={report.id}>
+                <tr>
+                  <Td className="border-b-0">{formatTimestamp(report.reviewedAt)}</Td>
+                  <Td className="border-b-0">
+                    <StatusBadge
+                      status={report.resolutionAction ?? report.status}
+                      tone={report.resolutionAction === 'take_down' ? 'danger' : 'ok'}
+                    />
+                  </Td>
+                  <Td className="border-b-0"><StatusBadge status={report.reason} tone="warning" /></Td>
+                  <Td className="border-b-0" truncateWidth={220}>
+                    <Link href={`/post/${report.postId}`} target="_blank" rel="noreferrer" className="underline">
+                      {report.post?.title || 'Untitled post'}
+                    </Link>
+                  </Td>
+                  <Td className="border-b-0">
+                    <ReviewerCell reviewerId={report.reviewedBy} reviewers={history.reviewers} />
+                  </Td>
+                </tr>
+                <RationaleRow columnCount={5} note={report.resolutionNote} />
+              </Fragment>
             ))}
           </DataTable>
         )}
@@ -137,32 +155,36 @@ export default async function AdminModerationHistoryPage({
         {history.subjectReports.length === 0 ? (
           <EmptyState message="No resolved subject reports on this page." />
         ) : (
-          <DataTable columns={['Decided', 'Outcome', 'Target', 'Reason', 'Subject', 'Reviewer', 'Rationale']}>
+          <DataTable columns={['Decided', 'Outcome', 'Target', 'Reason', 'Subject', 'Reviewer']}>
             {history.subjectReports.map((report) => (
-              <tr key={report.id}>
-                <Td>{formatTimestamp(report.reviewedAt)}</Td>
-                <Td>
-                  <StatusBadge
-                    status={report.status}
-                    tone={report.status === 'resolved' ? 'danger' : 'ok'}
-                  />
-                </Td>
-                <Td><StatusBadge status={report.targetType} tone="neutral" /></Td>
-                <Td><StatusBadge status={report.reason} tone="warning" /></Td>
-                <Td>
-                  {report.reportedUserId ? (
-                    <Link href={`/admin/users/${report.reportedUserId}`} className="font-mono text-xs underline">
-                      {shortId(report.reportedUserId)}
-                    </Link>
-                  ) : (
-                    <span className="font-mono text-xs">
-                      {shortId(report.generationId ?? report.commentId)}
-                    </span>
-                  )}
-                </Td>
-                <Td><ReviewerCell reviewerId={report.reviewedBy} reviewers={history.reviewers} /></Td>
-                <Td truncateWidth={320}><ResolutionNote note={report.resolutionNote} /></Td>
-              </tr>
+              <Fragment key={report.id}>
+                <tr>
+                  <Td className="border-b-0">{formatTimestamp(report.reviewedAt)}</Td>
+                  <Td className="border-b-0">
+                    <StatusBadge
+                      status={report.status}
+                      tone={report.status === 'resolved' ? 'danger' : 'ok'}
+                    />
+                  </Td>
+                  <Td className="border-b-0"><StatusBadge status={report.targetType} tone="neutral" /></Td>
+                  <Td className="border-b-0"><StatusBadge status={report.reason} tone="warning" /></Td>
+                  <Td className="border-b-0">
+                    {report.reportedUserId ? (
+                      <Link href={`/admin/users/${report.reportedUserId}`} className="font-mono text-xs underline">
+                        {shortId(report.reportedUserId)}
+                      </Link>
+                    ) : (
+                      <span className="font-mono text-xs">
+                        {shortId(report.generationId ?? report.commentId)}
+                      </span>
+                    )}
+                  </Td>
+                  <Td className="border-b-0">
+                    <ReviewerCell reviewerId={report.reviewedBy} reviewers={history.reviewers} />
+                  </Td>
+                </tr>
+                <RationaleRow columnCount={6} note={report.resolutionNote} />
+              </Fragment>
             ))}
           </DataTable>
         )}

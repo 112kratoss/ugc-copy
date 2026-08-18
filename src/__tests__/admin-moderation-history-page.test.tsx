@@ -18,9 +18,7 @@ vi.mock('@/lib/server-helpers', () => ({
 }));
 
 vi.mock('next/link', () => ({
-  default: ({ prefetch, ...props }: ComponentPropsWithoutRef<'a'> & { prefetch?: boolean }) => (
-    <a {...props} />
-  ),
+  default: (props: ComponentPropsWithoutRef<'a'>) => <a {...props} />,
 }));
 
 import AdminModerationHistoryPage from '@/app/admin/(console)/moderation/history/page';
