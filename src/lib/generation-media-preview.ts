@@ -6,6 +6,19 @@ import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache'
 import { toStorageUploadBody } from '@/lib/storage-upload-body';
 
 const PREVIEW_MAX_SIZE = 720;
+/**
+ * The read-back is retried because it is not read-after-write consistent.
+ * Preview paths are content-addressed, so regenerating one upserts over an object
+ * that already exists at that exact path, and the immediate read can still serve
+ * the previous copy. That happened during the repair of the corrupt previews: the
+ * bytes on disk were already correct, but verification read the stale object and
+ * failed a preview that was in fact fine — which would burn its retry budget and
+ * strand it. A first read that disagrees is therefore treated as possibly stale
+ * rather than as proof of corruption; genuine corruption still fails, just after
+ * a few hundred milliseconds more.
+ */
+const PREVIEW_READBACK_ATTEMPTS = 3;
+const PREVIEW_READBACK_RETRY_MS = 250;
 
 export function buildGenerationPreviewPath(storagePath: string, contentHash: string) {
   const normalized = storagePath.replace(/^\/+/, '');
@@ -140,23 +153,28 @@ async function assertStoredPreviewIsIntact({
   location: { bucket: string; filePath: string };
   expected: Buffer;
 }) {
-  const stored = await supabase.storage.from(location.bucket).download(location.filePath);
+  let mismatch = '';
 
-  if (stored.error || !stored.data) {
-    throw stored.error ?? new Error(`Preview ${location.filePath} could not be read back after upload`);
+  for (let attempt = 1; attempt <= PREVIEW_READBACK_ATTEMPTS; attempt += 1) {
+    const stored = await supabase.storage.from(location.bucket).download(location.filePath);
+
+    if (stored.error || !stored.data) {
+      throw stored.error ?? new Error(`Preview ${location.filePath} could not be read back after upload`);
+    }
+
+    const bytes = new Uint8Array(await stored.data.arrayBuffer());
+    if (bytes.length === expected.length && isDecodableWebp(bytes)) return;
+
+    mismatch = bytes.length === expected.length
+      ? 'is not a decodable WebP after upload'
+      : `stored ${bytes.length} bytes but ${expected.length} were encoded`;
+
+    if (attempt < PREVIEW_READBACK_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, PREVIEW_READBACK_RETRY_MS));
+    }
   }
 
-  const bytes = new Uint8Array(await stored.data.arrayBuffer());
-
-  if (bytes.length !== expected.length) {
-    throw new Error(
-      `Preview ${location.filePath} stored ${bytes.length} bytes but ${expected.length} were encoded`
-    );
-  }
-
-  if (!isDecodableWebp(bytes)) {
-    throw new Error(`Preview ${location.filePath} is not a decodable WebP after upload`);
-  }
+  throw new Error(`Preview ${location.filePath} ${mismatch}`);
 }
 
 function getStorageLocation(storagePath: string) {

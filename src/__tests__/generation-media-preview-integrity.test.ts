@@ -139,6 +139,34 @@ describe('uploadGenerationPreview integrity check', () => {
     })).rejects.toThrow(/not a decodable WebP/);
   });
 
+  /**
+   * Storage is not read-after-write consistent for an upsert over an existing
+   * content-addressed path: the first read can still return the previous object.
+   * A real repair hit this — correct bytes on disk, stale bytes read back — and
+   * without the retry it would fail a preview that was fine and burn its budget.
+   */
+  it('tolerates a stale first read and accepts the object once it settles', async () => {
+    const preview = await encodedPreview();
+    const stale = corruptViaUtf8RoundTrip(preview);
+    const upload = vi.fn(async () => ({ error: null }));
+    let call = 0;
+    const download = vi.fn(async () => {
+      call += 1;
+      const body = call === 1 ? stale : preview;
+      return { error: null, data: { arrayBuffer: async () => Uint8Array.from(body).buffer } };
+    });
+    const supabase = { storage: { from: vi.fn(() => ({ upload, download })) } };
+
+    const result = await uploadGenerationPreview({
+      preview,
+      storagePath: 'generated_images/user-1/output.jpg',
+      supabase: supabase as never,
+    });
+
+    expect(result).toMatchObject({ previewStatus: 'ready' });
+    expect(download).toHaveBeenCalledTimes(2);
+  });
+
   it('throws when the object cannot be read back at all', async () => {
     const preview = await encodedPreview();
     const upload = vi.fn(async () => ({ error: null }));
