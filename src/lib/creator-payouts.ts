@@ -3,6 +3,7 @@ import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { encryptCreatorPayoutDetails } from '@/lib/creator-payout-details-crypto';
 import { POST_RESOURCE_TOKEN_SUBUNITS, POST_RESOURCE_TOKENS_PER_USD } from '@/lib/post-resource-commerce';
 
 /** $100, expressed in the token subunits the wallet is denominated in. */
@@ -162,10 +163,22 @@ export async function requestCreatorPayout({
   payoutMethod: string;
   payoutDetails: string;
 }): Promise<RequestCreatorPayoutResult> {
+  // The plaintext bound lives here now: the database CHECK and the RPC only
+  // see ciphertext, whose length says nothing about what the creator typed.
+  const trimmedDetails = payoutDetails.trim();
+  if (trimmedDetails.length < 3 || trimmedDetails.length > 500) {
+    return {
+      ok: false,
+      status: 400,
+      code: 'INVALID_DETAILS',
+      error: 'Add the account details we should send the payout to.',
+    };
+  }
+
   const { data, error } = await adminSupabase.rpc('request_creator_payout', {
     p_user_id: userId,
     p_payout_method: payoutMethod,
-    p_payout_details: payoutDetails,
+    p_payout_details: encryptCreatorPayoutDetails(trimmedDetails),
   });
 
   if (error) {

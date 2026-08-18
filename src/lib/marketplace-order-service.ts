@@ -163,31 +163,41 @@ export async function createMarketplaceOrderForRoute({
   }
 
   if (asset.price_usd_cents === 0) {
-    const freeOrderId = `free_${randomId()}`;
-    const { error: orderError } = await adminSupabase
-      .from('marketplace_orders')
-      .insert({
-        asset_id: assetId,
-        buyer_user_id: buyerUserId,
-        razorpay_order_id: freeOrderId,
-        razorpay_payment_id: `free_${randomId()}`,
-        amount_subunits: 0,
-        currency: 'USD',
-        status: 'created',
-      });
+    // One atomic RPC instead of the old insert-then-complete dance: the asset
+    // row lock plus the (asset_id, buyer_user_id) purchase constraint make a
+    // concurrent double-unlock converge on `already_owned` instead of
+    // stranding a duplicate order.
+    const { data: unlockData, error: unlockError } = await adminSupabase.rpc('unlock_free_marketplace_asset', {
+      p_buyer_user_id: buyerUserId,
+      p_asset_id: assetId,
+      p_order_reference: `free_${randomId()}`,
+      p_payment_reference: `free_unlock_${randomId()}`,
+    });
 
-    if (orderError) {
-      logBackendError('failed_to_create_free_marketplace_order', { error: orderError });
+    if (unlockError) {
+      logBackendError('failed_to_unlock_free_marketplace_asset', { error: unlockError });
       return { ok: false, status: 500, body: { error: 'Failed to unlock free listing.' } };
     }
 
-    const { data: completed, error: completionError } = await adminSupabase.rpc('complete_marketplace_purchase', {
-      p_razorpay_order_id: freeOrderId,
-      p_razorpay_payment_id: `free_unlock_${randomId()}`,
-    });
+    const unlockCandidate = Array.isArray(unlockData) ? unlockData[0] : unlockData;
+    const unlockStatus = unlockCandidate && typeof unlockCandidate === 'object' && !Array.isArray(unlockCandidate)
+      ? String((unlockCandidate as { status?: unknown }).status ?? '')
+      : '';
 
-    if (completionError) {
-      logBackendError('failed_to_complete_free_marketplace_purchase', { error: completionError });
+    if (unlockStatus === 'already_owned') {
+      return { ok: true, body: { success: true, alreadyPurchased: true } };
+    }
+    if (unlockStatus === 'owned_by_user') {
+      return { ok: false, status: 400, body: { error: 'You already own this listing.' } };
+    }
+    if (unlockStatus === 'not_found') {
+      return { ok: false, status: 404, body: { error: 'Listing not found.' } };
+    }
+    if (unlockStatus === 'not_free') {
+      return { ok: false, status: 409, body: { error: 'This listing is no longer free.' } };
+    }
+    if (unlockStatus !== 'completed') {
+      logBackendError('unexpected_free_marketplace_unlock_status', { status: unlockStatus });
       return { ok: false, status: 500, body: { error: 'Failed to unlock free listing.' } };
     }
 
@@ -196,7 +206,7 @@ export async function createMarketplaceOrderForRoute({
       body: {
         success: true,
         free: true,
-        alreadyProcessed: !completed,
+        alreadyProcessed: false,
       },
     };
   }

@@ -3,6 +3,7 @@ import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { decryptCreatorPayoutDetails } from '@/lib/creator-payout-details-crypto';
 import { formatTokenSubunitsAsUsd } from '@/lib/creator-payouts';
 
 export interface OpenCreatorPayoutRequest {
@@ -79,10 +80,32 @@ export async function listOpenCreatorPayoutRequests(
     amountTokenSubunits: row.amount_token_subunits,
     amountUsd: formatTokenSubunitsAsUsd(row.amount_token_subunits),
     payoutMethod: row.payout_method,
-    payoutDetails: row.payout_details,
+    payoutDetails: readPayoutDetails(row),
     requestedAt: row.requested_at,
     lifetimeEarnedTokenSubunits: wallets.get(row.user_id) ?? 0,
   }));
+}
+
+/**
+ * Details are stored AES-256-GCM encrypted (legacy rows are plaintext and pass
+ * through). A row that fails to decrypt keeps the queue rendering — one broken
+ * or re-keyed row must not take the whole operator view down with it.
+ */
+function readPayoutDetails(row: PayoutQueueRow): string {
+  const decrypted = decryptCreatorPayoutDetails(row.payout_details);
+  if (decrypted.ok) {
+    return decrypted.plaintext;
+  }
+
+  logBackendError('creator_payout_details_decrypt_failed', {
+    requestId: row.id,
+    reason: decrypted.reason,
+  });
+  return '[payout details unavailable: '
+    + (decrypted.reason === 'key_unconfigured'
+      ? 'CREATOR_PAYOUT_DETAILS_ENCRYPTION_KEY is not configured'
+      : 'stored ciphertext failed to decrypt')
+    + ']';
 }
 
 export type ResolveCreatorPayoutResult =

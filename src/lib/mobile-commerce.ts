@@ -315,14 +315,17 @@ function revenueCatStoreProvider(purchase: RevenueCatPurchase): RestorableMobile
   return settledPurchaseProvider(purchase, 'revenuecat');
 }
 
-function revenueCatPurchaseTransactionId(productId: string, purchase: RevenueCatPurchase) {
+/**
+ * Only the store's own transaction id (or RevenueCat's id for it) may key a
+ * settlement. There used to be a synthetic `productId_purchaseDate` fallback
+ * here; because this value becomes the settlement idempotency key, a purchase
+ * first settled under the synthetic key would settle a second time once
+ * RevenueCat began reporting the real id for it. Purchases without a real id
+ * are now rejected (verify) or skipped (restore) instead.
+ */
+function revenueCatPurchaseTransactionId(purchase: RevenueCatPurchase) {
   const explicitId = String(purchase.store_transaction_id ?? purchase.id ?? '').trim();
-  if (explicitId) {
-    return explicitId;
-  }
-
-  const purchaseDate = String(purchase.purchase_date ?? '').trim();
-  return purchaseDate ? `${productId}_${purchaseDate}` : null;
+  return explicitId || null;
 }
 
 function listRestorableMobileCreditPurchases(response: RevenueCatResponse): RestorableMobileCreditPurchase[] {
@@ -340,7 +343,7 @@ function listRestorableMobileCreditPurchases(response: RevenueCatResponse): Rest
         continue;
       }
 
-      const transactionId = revenueCatPurchaseTransactionId(productId, purchase);
+      const transactionId = revenueCatPurchaseTransactionId(purchase);
       if (!transactionId) {
         continue;
       }
@@ -401,9 +404,11 @@ export async function verifyMobilePurchase({
     throw new MobileCommerceError('Mobile purchase receipt is invalid or not owned by this user.', 400);
   }
 
-  const verifiedTransactionId = revenueCatPurchaseTransactionId(productId, purchase) ?? normalizeOptionalString(transactionId);
+  // Deliberately no fallback to the client-supplied transaction id: an id
+  // RevenueCat did not report cannot be trusted to key a credit settlement.
+  const verifiedTransactionId = revenueCatPurchaseTransactionId(purchase);
   if (!verifiedTransactionId) {
-    throw new MobileCommerceError('Mobile purchase receipt is invalid or not owned by this user.', 400);
+    throw new MobileCommerceError('Mobile purchase receipt did not include a store transaction id.', 400);
   }
 
   return {
@@ -626,6 +631,8 @@ export async function completeMobilePurchase({
   authority,
   provider,
   transactionId,
+  storeReportedPrice = null,
+  storeReportedCurrency = null,
   invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
 }: {
   adminSupabase: SupabaseClient;
@@ -633,6 +640,9 @@ export async function completeMobilePurchase({
   authority: MobilePurchaseAuthority;
   provider: MobilePurchaseProvider;
   transactionId: string;
+  /** Store-charged price evidence from a RevenueCat webhook event, if any. */
+  storeReportedPrice?: number | null;
+  storeReportedCurrency?: string | null;
   invalidateMarketplaceResourceListCache?: () => void;
 }): Promise<MobileCommerceSyncResult> {
   const externalOrderId = buildMobileExternalOrderId(provider, transactionId);
@@ -644,6 +654,8 @@ export async function completeMobilePurchase({
     p_store_transaction_id: transactionId,
     p_external_order_id: externalOrderId,
     p_payment_id: `mobile_${provider}_${transactionId}`,
+    p_store_reported_price: storeReportedPrice,
+    p_store_reported_currency: storeReportedCurrency,
   });
 
   if (error || !isRecord(data)) {

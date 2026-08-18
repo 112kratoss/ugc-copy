@@ -93,10 +93,41 @@ describe('backend environment contract', () => {
     ]);
   });
 
+  it('marks unconfigured RevenueCat settlement config invalid in production', () => {
+    // Without the webhook token every store refund bounces on a 503 until
+    // RevenueCat stops redelivering; without the API key no purchase can be
+    // verified. Both must fail release verification, not merely read as a
+    // missing capability.
+    const health = collectBackendEnvironmentHealth({
+      ...COMPLETE_ENVIRONMENT,
+      NODE_ENV: 'production',
+      REVENUECAT_WEBHOOK_AUTH_TOKEN: undefined,
+      REVENUECAT_SECRET_API_KEY: '   ',
+    });
+
+    expect(health.status).toBe('degraded');
+    expect(health.invalid).toEqual([
+      'revenuecat-webhook-auth-unconfigured',
+      'revenuecat-api-key-unconfigured',
+    ]);
+  });
+
+  it('accepts the REST API key fallback for the production RevenueCat check', () => {
+    const health = collectBackendEnvironmentHealth({
+      ...COMPLETE_ENVIRONMENT,
+      NODE_ENV: 'production',
+      REVENUECAT_SECRET_API_KEY: undefined,
+      REVENUECAT_REST_API_KEY: 'revenuecat-rest-key',
+    });
+
+    expect(health.invalid).toEqual([]);
+  });
+
   it('documents every production-only secret in the environment template', () => {
     const template = fs.readFileSync(path.resolve(process.cwd(), '.env.example'), 'utf8');
     const gitignore = fs.readFileSync(path.resolve(process.cwd(), '.gitignore'), 'utf8');
 
+    expect(template).toContain('CREATOR_PAYOUT_DETAILS_ENCRYPTION_KEY=');
     expect(template).toContain('CRON_SECRET=');
     expect(template).toContain('OPS_READ_SECRET=');
     expect(template).toContain('KIE_WEBHOOK_HMAC_KEY=');

@@ -193,6 +193,7 @@ export async function createCreditRazorpayOrderForRoute({
       razorpay_order_id: razorpayOrder.id,
       amount: amountInSubunits,
       credits: plan.credits,
+      currency: 'INR',
       status: 'created',
     })
     .select('id')

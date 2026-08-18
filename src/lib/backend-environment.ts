@@ -51,6 +51,20 @@ export function collectInvalidProductionCommerceSettings(
   if (environment.MOBILE_COMMERCE_ALLOW_SANDBOX === '1') {
     invalid.push('mobile-commerce-sandbox-disabled');
   }
+  // RevenueCat is settlement infrastructure: without the webhook auth token the
+  // webhook answers 503 and store refunds are silently redelivered until they
+  // expire, and without the API key purchases cannot be verified at all. In
+  // production both must be flagged as invalid commerce config, not merely
+  // "missing", so health hard-fails release verification.
+  if (!environment.REVENUECAT_WEBHOOK_AUTH_TOKEN?.trim()) {
+    invalid.push('revenuecat-webhook-auth-unconfigured');
+  }
+  if (
+    !environment.REVENUECAT_SECRET_API_KEY?.trim()
+    && !environment.REVENUECAT_REST_API_KEY?.trim()
+  ) {
+    invalid.push('revenuecat-api-key-unconfigured');
+  }
   return invalid;
 }
 

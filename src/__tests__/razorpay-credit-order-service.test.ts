@@ -167,6 +167,7 @@ describe('createCreditRazorpayOrderForRoute', () => {
     expect(admin.calls.inserts).toEqual([
       {
         user_id: 'user_123456789',
+        currency: 'INR',
         razorpay_order_id: 'order_123',
         amount: 41500,
         credits: 500,
