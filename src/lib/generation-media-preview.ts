@@ -96,11 +96,66 @@ export async function uploadGenerationPreview({
     throw upload.error;
   }
 
+  await assertStoredPreviewIsIntact({ supabase, location, expected: preview });
+
   return {
     previewStoragePath,
     previewThumbhash: await getPreviewThumbhash(preview),
     previewStatus: 'ready' as const,
   };
+}
+
+/** A WebP file is a RIFF container: "RIFF" at byte 0 and "WEBP" at byte 8. */
+export function isDecodableWebp(bytes: Uint8Array) {
+  if (bytes.length < 12) return false;
+
+  const header = Buffer.from(bytes.subarray(0, 12));
+  return header.toString('ascii', 0, 4) === 'RIFF'
+    && header.toString('ascii', 8, 12) === 'WEBP';
+}
+
+/**
+ * Read the object back and prove the bytes that landed are the bytes we encoded.
+ *
+ * An upload that "succeeds" but stores a corrupt file is worse than one that fails:
+ * the caller records `preview_status: 'ready'`, and the repair job only ever revisits
+ * `pending`/`failed`/`processing` — so a silently mangled preview is never retried and
+ * stays broken forever. Four production previews reached exactly that state: their
+ * bytes had been round-tripped through a UTF-8 decode, which replaces every byte that
+ * is not valid UTF-8 with U+FFFD (`EF BF BD`). That inflates the file and shifts the
+ * RIFF header, so every client fails to decode it while the row still claims success.
+ *
+ * Length alone catches that class, because the substitution can only grow the file;
+ * the magic-byte check additionally catches truncation and wrong-format writes.
+ * Throwing here costs one small read and converts permanent silent breakage into an
+ * ordinary retry.
+ */
+async function assertStoredPreviewIsIntact({
+  supabase,
+  location,
+  expected,
+}: {
+  supabase: SupabaseClient;
+  location: { bucket: string; filePath: string };
+  expected: Buffer;
+}) {
+  const stored = await supabase.storage.from(location.bucket).download(location.filePath);
+
+  if (stored.error || !stored.data) {
+    throw stored.error ?? new Error(`Preview ${location.filePath} could not be read back after upload`);
+  }
+
+  const bytes = new Uint8Array(await stored.data.arrayBuffer());
+
+  if (bytes.length !== expected.length) {
+    throw new Error(
+      `Preview ${location.filePath} stored ${bytes.length} bytes but ${expected.length} were encoded`
+    );
+  }
+
+  if (!isDecodableWebp(bytes)) {
+    throw new Error(`Preview ${location.filePath} is not a decodable WebP after upload`);
+  }
 }
 
 function getStorageLocation(storagePath: string) {

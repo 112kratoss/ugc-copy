@@ -15,10 +15,20 @@ describe('generation media previews', () => {
         background: '#6d28d9',
       },
     }).jpeg().toBuffer();
-    const upload = vi.fn(async () => ({ error: null }));
+    // The upload is read back and checked for integrity, so the double has to
+    // return the bytes it was handed.
+    let written: Buffer | null = null;
+    const upload = vi.fn(async (_path: string, body: Buffer) => {
+      written = body;
+      return { error: null };
+    });
+    const download = vi.fn(async () => ({
+      error: null,
+      data: { arrayBuffer: async () => Uint8Array.from(written ?? Buffer.alloc(0)).buffer },
+    }));
     const supabase = {
       storage: {
-        from: vi.fn(() => ({ upload })),
+        from: vi.fn(() => ({ upload, download })),
       },
     };
 
