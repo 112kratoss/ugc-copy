@@ -1,14 +1,16 @@
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+import type { RefObject } from 'react';
 import { BlurView } from 'expo-blur';
 import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
 import { router } from 'expo-router';
 import { Bell, Home, Plus, Users, User } from 'lucide-react-native';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, Pressable, Text, useWindowDimensions, View } from 'react-native';
+import { AccessibilityInfo, Animated, Pressable, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MagicCreateMenu } from '@/components/magic-create-menu';
 import { getCreateMenuActionHref, type CreateMenuActionId } from '@/lib/create-menu-view-model';
+import { useSpringState } from '@/lib/motion';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { appTheme } from '@/lib/theme';
@@ -27,7 +29,18 @@ const ON_PRIMARY = appTheme.colors.onPrimary ?? '#1A0E0A';
 // carry itself. Darkening the tint instead would just walk back to a flat bar.
 const GLASS_TINT = 'rgba(17,18,21,0.20)';
 const GLASS_BORDER = 'rgba(255,255,255,0.16)';
-const GLASS_INACTIVE = 'rgba(255,255,255,0.90)';
+const TRANSLUCENT_INACTIVE = 'rgba(255,255,255,0.90)';
+// Android's blur is softer than the iOS material, so it carries a heavier tint
+// than GLASS_TINT while still letting the backdrop through.
+const BLUR_TINT = 'rgba(17,18,21,0.35)';
+// Reduce Transparency gets a genuinely opaque bar. This is the one branch that
+// should *not* thin out — those users asked for less see-through, not more.
+const SOLID_FILL = 'rgba(17,18,21,0.96)';
+
+// Same swap the create menu uses: the focused component tests mock react-native
+// down to the primitives this file renders, so Animated.View is absent there.
+const IS_TEST_ENVIRONMENT = typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
+const AnimatedView = (IS_TEST_ENVIRONMENT ? View : Animated.View) as typeof Animated.View;
 
 const VISIBLE_TABS = [
   { route: 'index', label: 'Home', Icon: Home },
@@ -37,11 +50,14 @@ const VISIBLE_TABS = [
 ] as const;
 
 /**
- * Availability is only half the question: Reduce Transparency leaves the
- * component available but strips the effect, so honour it and fall back to the
- * solid bar instead of shipping a half-rendered material.
+ * Three surfaces, not two. Reduce Transparency and "no Liquid Glass" are
+ * different needs that used to share one fallback: Android wants a real blur
+ * with a thin tint, while Reduce Transparency wants an opaque bar. Collapsing
+ * them means either Android stays flat or accessibility regresses.
  */
-function useLiquidGlassEnabled() {
+export type TabBarSurfaceMode = 'glass' | 'blur' | 'solid';
+
+function useTabBarSurfaceMode(): TabBarSurfaceMode {
   // Availability is fixed for the process (it depends on the OS and the SDK the
   // binary was built against), but reading it per mount rather than at module
   // scope keeps both branches reachable in tests without registry resets.
@@ -49,8 +65,9 @@ function useLiquidGlassEnabled() {
   const [reduceTransparency, setReduceTransparency] = useState(false);
 
   useEffect(() => {
-    if (!available) return;
-
+    // Read this regardless of glass support: the blur surface is translucent
+    // too, so an Android user with Reduce Transparency on must reach the opaque
+    // branch just like an iOS one does.
     let active = true;
     AccessibilityInfo.isReduceTransparencyEnabled().then((enabled) => {
       if (active) setReduceTransparency(enabled);
@@ -64,16 +81,21 @@ function useLiquidGlassEnabled() {
       active = false;
       subscription.remove();
     };
-  }, [available]);
+  }, []);
 
-  return available && !reduceTransparency;
+  if (reduceTransparency) return 'solid';
+  return available ? 'glass' : 'blur';
 }
 
-export function MagicTabBar({ state, navigation }: BottomTabBarProps) {
+export function MagicTabBar({
+  state,
+  navigation,
+  blurTarget,
+}: BottomTabBarProps & { blurTarget?: RefObject<View | null> }) {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const [createMenuVisible, setCreateMenuVisible] = useState(false);
-  const glassEnabled = useLiquidGlassEnabled();
+  const surfaceMode = useTabBarSurfaceMode();
   const pendingCreateAction = useRef<CreateMenuActionId | null>(null);
   const pendingActionFallback = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -86,7 +108,9 @@ export function MagicTabBar({ state, navigation }: BottomTabBarProps) {
   const metrics = getMagicTabBarMetrics(width, bottomInset);
   const activeRoute = state.routes[state.index]?.name;
   const { isCompact, centerSize, barHeight, centerGap, tabIconSize, tabLabelSize } = metrics;
-  const inactiveColor = glassEnabled ? GLASS_INACTIVE : appTheme.colors.muted;
+  // Any translucent surface needs the text to carry itself; only the opaque
+  // bar is a known enough backdrop for muted grey.
+  const inactiveColor = surfaceMode === 'solid' ? appTheme.colors.muted : TRANSLUCENT_INACTIVE;
 
   const navigateTo = (routeName: string) => {
     const event = navigation.emit({
@@ -177,7 +201,7 @@ export function MagicTabBar({ state, navigation }: BottomTabBarProps) {
           backgroundColor: 'transparent',
         }}
       />
-      <TabBarSurface glass={glassEnabled} barHeight={barHeight}>
+      <TabBarSurface mode={surfaceMode} barHeight={barHeight} blurTarget={blurTarget}>
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: isCompact ? 6 : 8, paddingVertical: isCompact ? 4 : 6 }}>
           <TabButton item={VISIBLE_TABS[0]} active={activeRoute === 'index'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('index')} />
           <TabButton item={VISIBLE_TABS[1]} active={activeRoute === 'showcase'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('showcase')} />
@@ -219,12 +243,14 @@ export function MagicTabBar({ state, navigation }: BottomTabBarProps) {
 }
 
 function TabBarSurface({
-  glass,
+  mode,
   barHeight,
+  blurTarget,
   children,
 }: {
-  glass: boolean;
+  mode: TabBarSurfaceMode;
   barHeight: number;
+  blurTarget?: RefObject<View | null>;
   children: ReactNode;
 }) {
   const shape = {
@@ -236,7 +262,7 @@ function TabBarSurface({
     boxShadow: '0 12px 30px rgba(0,0,0,0.34)',
   };
 
-  if (glass) {
+  if (mode === 'glass') {
     // No backgroundColor: the material is the surface. colorScheme is pinned
     // dark because app.json sets userInterfaceStyle dark — 'auto' would track
     // the system and light up the bar on a light-mode device.
@@ -252,15 +278,24 @@ function TabBarSurface({
     );
   }
 
+  if (mode === 'solid') {
+    return (
+      <View style={{ ...shape, borderColor: appTheme.colors.border, backgroundColor: SOLID_FILL }}>
+        {children}
+      </View>
+    );
+  }
+
   return (
     <BlurView
       intensity={16}
       tint="dark"
-      style={{
-        ...shape,
-        borderColor: appTheme.colors.border,
-        backgroundColor: 'rgba(17,18,21,0.96)',
-      }}
+      // Android renders nothing without a target to sample, and only gets a real
+      // GPU blur from SDK 31+; below that the method degrades to a plain
+      // semi-transparent view rather than burning RenderScript on old hardware.
+      blurMethod="dimezisBlurViewSdk31Plus"
+      blurTarget={blurTarget}
+      style={{ ...shape, borderColor: GLASS_BORDER, backgroundColor: BLUR_TINT }}
     >
       {children}
     </BlurView>
@@ -284,6 +319,14 @@ function TabButton({
 }) {
   const Icon = item.Icon;
   const color = active ? PRIMARY : inactiveColor;
+  const progress = useSpringState(active);
+  // `progress` is null under test, where AnimatedView is a plain View; fall back
+  // to the settled value so the rendered tree still reflects the active state.
+  const settled = active ? 1 : 0;
+  const iconScale = progress?.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, appTheme.motion.scale.selected],
+  });
 
   return (
     <Pressable
@@ -305,20 +348,25 @@ function TabButton({
         opacity: pressed ? 0.75 : 1,
       })}
     >
-      {active ? (
-        <View
-          pointerEvents="none"
-          style={{
-            position: 'absolute',
-            top: 2,
-            width: 18,
-            height: 3,
-            borderRadius: 2,
-            backgroundColor: PRIMARY,
-          }}
-        />
-      ) : null}
-      <Icon size={iconSize} color={color} strokeWidth={active ? 2.5 : 2.1} />
+      <AnimatedView
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          top: 2,
+          width: 18,
+          height: 3,
+          borderRadius: 2,
+          backgroundColor: PRIMARY,
+          // Always mounted so the spring has something to drive; scaleX grows it
+          // out of the centre rather than animating width, which the native
+          // driver cannot handle.
+          opacity: progress ?? settled,
+          transform: [{ scaleX: progress ?? settled }],
+        }}
+      />
+      <AnimatedView style={{ transform: [{ scale: iconScale ?? 1 }] }}>
+        <Icon size={iconSize} color={color} strokeWidth={active ? 2.5 : 2.1} />
+      </AnimatedView>
       <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.76} style={{ color, fontSize: labelSize, fontWeight: active ? '800' : '600' }}>{item.label}</Text>
     </Pressable>
   );

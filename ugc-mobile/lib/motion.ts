@@ -138,6 +138,36 @@ export function usePressMotion(disabled = false) {
   };
 }
 
+/**
+ * Spring-driven 0->1 progress for selection states. Mirrors `useAnimatedState`
+ * but settles with a spring instead of a fixed curve, which is what makes a
+ * selection read as expressive rather than merely animated. Reduced motion
+ * snaps instantly, same as everywhere else in this module.
+ */
+export function useSpringState(active: boolean) {
+  const reducedMotion = useReducedMotion();
+  const [progress] = useState<Animated.Value | null>(() => createValue(active ? 1 : 0));
+
+  useEffect(() => {
+    if (!progress) return;
+
+    progress.stopAnimation();
+    if (reducedMotion || !animatedApi?.spring) {
+      progress.setValue(active ? 1 : 0);
+      return;
+    }
+
+    animatedApi.spring(progress, {
+      toValue: active ? 1 : 0,
+      tension: appTheme.motion.spring.tension,
+      friction: appTheme.motion.spring.friction,
+      useNativeDriver: true,
+    }).start();
+  }, [active, progress, reducedMotion]);
+
+  return progress;
+}
+
 /** Animates binary state changes such as a switch thumb; reduced motion updates instantly. */
 export function useAnimatedState(active: boolean) {
   const reducedMotion = useReducedMotion();
