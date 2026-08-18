@@ -14,6 +14,11 @@ const routerState = vi.hoisted(() => ({
   push: vi.fn(),
 }));
 
+const glassState = vi.hoisted(() => ({
+  available: false,
+  reduceTransparency: false,
+}));
+
 vi.mock('expo-router', () => ({
   router: routerState,
 }));
@@ -29,11 +34,21 @@ vi.mock('react-native', () => ({
   View: ({ children, ...props }: MockProps) =>
     React.createElement('view', props, children),
   useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
+  AccessibilityInfo: {
+    isReduceTransparencyEnabled: () => Promise.resolve(glassState.reduceTransparency),
+    addEventListener: () => ({ remove: () => {} }),
+  },
 }));
 
 vi.mock('expo-blur', () => ({
   BlurView: ({ children, ...props }: MockProps) =>
     React.createElement('blur-view', props, children),
+}));
+
+vi.mock('expo-glass-effect', () => ({
+  GlassView: ({ children, ...props }: MockProps) =>
+    React.createElement('glass-view', props, children),
+  isLiquidGlassAvailable: () => glassState.available,
 }));
 
 vi.mock('expo-linear-gradient', () => ({
@@ -121,9 +136,74 @@ function renderTabBar(activeIndex = 0) {
   return { tree: tree!, navigation };
 }
 
+async function renderTabBarAsync(activeIndex = 0) {
+  let result: ReturnType<typeof renderTabBar> | undefined;
+  await renderer.act(async () => {
+    result = renderTabBar(activeIndex);
+  });
+  return result!;
+}
+
 describe('MagicTabBar', () => {
   beforeEach(() => {
     routerState.push.mockClear();
+    glassState.available = false;
+    glassState.reduceTransparency = false;
+  });
+
+  it('swaps the blur surface for Liquid Glass when the OS supports it', async () => {
+    glassState.available = true;
+
+    const { tree } = await renderTabBarAsync();
+
+    expect(tree.root.findAll((node) => String(node.type) === 'glass-view')).toHaveLength(1);
+    expect(tree.root.findAll((node) => String(node.type) === 'blur-view')).toHaveLength(0);
+  });
+
+  it('leaves the glass surface unpainted so the material is actually visible', async () => {
+    glassState.available = true;
+
+    const { tree } = await renderTabBarAsync();
+
+    const glass = tree.root.find((node) => String(node.type) === 'glass-view');
+    const style = glass.props.style as Record<string, unknown>;
+
+    // The opaque panel fill is what defeated the old BlurView; if it ever comes
+    // back on this branch the material renders as a flat slab. Tint is the other
+    // route to the same mistake, so bound its alpha rather than pinning the
+    // exact value — the design can move, the material still has to show through.
+    expect(style.backgroundColor).toBeUndefined();
+    expect(glass.props.colorScheme).toBe('dark');
+
+    const tintAlpha = Number(/rgba\([^)]*,\s*([\d.]+)\)/.exec(glass.props.tintColor as string)?.[1]);
+    expect(tintAlpha).toBeLessThan(0.5);
+  });
+
+  it('brightens the inactive labels under glass so they carry themselves', async () => {
+    const solid = await renderTabBarAsync();
+    const solidLabel = solid.tree.root.findByProps({ accessibilityLabel: 'Showcase' });
+
+    glassState.available = true;
+    const glass = await renderTabBarAsync();
+    const glassLabel = glass.tree.root.findByProps({ accessibilityLabel: 'Showcase' });
+
+    // Muted grey is safe against a known dark bar. Under glass the backdrop is
+    // whatever post scrolled past, so inactive tabs get a brighter colour.
+    const solidIcon = solidLabel.findByType('users-icon' as never);
+    const glassIcon = glassLabel.findByType('users-icon' as never);
+
+    expect(solidIcon.props.color).toBe('#a1a1aa');
+    expect(glassIcon.props.color).toBe('rgba(255,255,255,0.90)');
+  });
+
+  it('falls back to the solid blur bar when Reduce Transparency is on', async () => {
+    glassState.available = true;
+    glassState.reduceTransparency = true;
+
+    const { tree } = await renderTabBarAsync();
+
+    expect(tree.root.findAll((node) => String(node.type) === 'glass-view')).toHaveLength(0);
+    expect(tree.root.findAll((node) => String(node.type) === 'blur-view')).toHaveLength(1);
   });
 
   it('keeps the bottom safe-area continuation transparent under the restored nav', () => {
