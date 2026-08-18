@@ -2,7 +2,20 @@
  * Shared server-side helpers for API routes.
  * Centralizes Supabase client creation, user authentication,
  * and credit deduction logic to eliminate duplication.
+ *
+ * `server-only` is load-bearing, not decorative: createServiceClient reads the
+ * service-role key, so a client component importing this module must fail the
+ * build rather than bundle server code into the browser.
+ *
+ * This module was previously reachable from a client component through
+ * creator-tools -> workflow-blueprint -> prompt-enhancer -> provider-fetch ->
+ * provider-fetch-attempts, which calls createServiceClient() for real. The
+ * launch-URL helpers client code actually wanted now live in
+ * `creator-launch-urls`, which breaks that chain and lets this guard stand.
+ * If this import starts failing the build again, read the trace: something has
+ * re-linked server code into the client graph.
  */
+import 'server-only';
 
 import { NextResponse } from 'next/server';
 import { logBackendError } from '@/lib/backend-logger';

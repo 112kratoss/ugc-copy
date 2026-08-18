@@ -1,3 +1,6 @@
+// Uses createServiceClient, so this module must never reach a client bundle.
+import 'server-only';
+
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendWarning } from '@/lib/backend-logger';
 
