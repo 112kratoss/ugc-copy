@@ -1,9 +1,10 @@
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { BlurView } from 'expo-blur';
+import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
 import { router } from 'expo-router';
 import { Bell, Home, Plus, Users, User } from 'lucide-react-native';
-import { useEffect, useRef, useState } from 'react';
-import { Pressable, Text, useWindowDimensions, View } from 'react-native';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { AccessibilityInfo, Pressable, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MagicCreateMenu } from '@/components/magic-create-menu';
@@ -17,6 +18,17 @@ const PRIMARY_STRONG = appTheme.colors.primaryStrong ?? '#FF8A6D';
 const PRIMARY_PRESSED = appTheme.colors.pressed ?? 'rgba(255,122,89,0.13)';
 const ON_PRIMARY = appTheme.colors.onPrimary ?? '#1A0E0A';
 
+// The glass branch drops the opaque panel fill on purpose — a near-solid
+// background cancels the material outright.
+//
+// Legibility is handled by brightening the labels rather than by darkening the
+// tint. Muted grey works on the solid bar because that bar is a known colour;
+// under glass the backdrop is whatever post scrolled past, so the text has to
+// carry itself. Darkening the tint instead would just walk back to a flat bar.
+const GLASS_TINT = 'rgba(17,18,21,0.20)';
+const GLASS_BORDER = 'rgba(255,255,255,0.16)';
+const GLASS_INACTIVE = 'rgba(255,255,255,0.90)';
+
 const VISIBLE_TABS = [
   { route: 'index', label: 'Home', Icon: Home },
   { route: 'showcase', label: 'Showcase', Icon: Users },
@@ -24,10 +36,44 @@ const VISIBLE_TABS = [
   { route: 'profile', label: 'Profile', Icon: User },
 ] as const;
 
+/**
+ * Availability is only half the question: Reduce Transparency leaves the
+ * component available but strips the effect, so honour it and fall back to the
+ * solid bar instead of shipping a half-rendered material.
+ */
+function useLiquidGlassEnabled() {
+  // Availability is fixed for the process (it depends on the OS and the SDK the
+  // binary was built against), but reading it per mount rather than at module
+  // scope keeps both branches reachable in tests without registry resets.
+  const [available] = useState(isLiquidGlassAvailable);
+  const [reduceTransparency, setReduceTransparency] = useState(false);
+
+  useEffect(() => {
+    if (!available) return;
+
+    let active = true;
+    AccessibilityInfo.isReduceTransparencyEnabled().then((enabled) => {
+      if (active) setReduceTransparency(enabled);
+    });
+    const subscription = AccessibilityInfo.addEventListener(
+      'reduceTransparencyChanged',
+      setReduceTransparency
+    );
+
+    return () => {
+      active = false;
+      subscription.remove();
+    };
+  }, [available]);
+
+  return available && !reduceTransparency;
+}
+
 export function MagicTabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const [createMenuVisible, setCreateMenuVisible] = useState(false);
+  const glassEnabled = useLiquidGlassEnabled();
   const pendingCreateAction = useRef<CreateMenuActionId | null>(null);
   const pendingActionFallback = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -40,6 +86,7 @@ export function MagicTabBar({ state, navigation }: BottomTabBarProps) {
   const metrics = getMagicTabBarMetrics(width, bottomInset);
   const activeRoute = state.routes[state.index]?.name;
   const { isCompact, centerSize, barHeight, centerGap, tabIconSize, tabLabelSize } = metrics;
+  const inactiveColor = glassEnabled ? GLASS_INACTIVE : appTheme.colors.muted;
 
   const navigateTo = (routeName: string) => {
     const event = navigation.emit({
@@ -130,28 +177,15 @@ export function MagicTabBar({ state, navigation }: BottomTabBarProps) {
           backgroundColor: 'transparent',
         }}
       />
-      <BlurView
-        intensity={16}
-        tint="dark"
-        style={{
-          minHeight: barHeight,
-          overflow: 'hidden',
-          borderRadius: barHeight / 2,
-          borderCurve: 'continuous',
-          borderWidth: 1,
-          borderColor: appTheme.colors.border,
-          backgroundColor: 'rgba(17,18,21,0.96)',
-          boxShadow: '0 12px 30px rgba(0,0,0,0.34)',
-        }}
-      >
+      <TabBarSurface glass={glassEnabled} barHeight={barHeight}>
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: isCompact ? 6 : 8, paddingVertical: isCompact ? 4 : 6 }}>
-          <TabButton item={VISIBLE_TABS[0]} active={activeRoute === 'index'} iconSize={tabIconSize} labelSize={tabLabelSize} onPress={() => navigateTo('index')} />
-          <TabButton item={VISIBLE_TABS[1]} active={activeRoute === 'showcase'} iconSize={tabIconSize} labelSize={tabLabelSize} onPress={() => navigateTo('showcase')} />
+          <TabButton item={VISIBLE_TABS[0]} active={activeRoute === 'index'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('index')} />
+          <TabButton item={VISIBLE_TABS[1]} active={activeRoute === 'showcase'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('showcase')} />
           <View style={{ width: centerGap, flexShrink: 0 }} />
-          <TabButton item={VISIBLE_TABS[2]} active={activeRoute === 'studio'} iconSize={tabIconSize} labelSize={tabLabelSize} onPress={() => navigateTo('studio')} />
-          <TabButton item={VISIBLE_TABS[3]} active={activeRoute === 'profile'} iconSize={tabIconSize} labelSize={tabLabelSize} onPress={() => navigateTo('profile')} />
+          <TabButton item={VISIBLE_TABS[2]} active={activeRoute === 'studio'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('studio')} />
+          <TabButton item={VISIBLE_TABS[3]} active={activeRoute === 'profile'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('profile')} />
         </View>
-      </BlurView>
+      </TabBarSurface>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Open create menu"
@@ -184,21 +218,72 @@ export function MagicTabBar({ state, navigation }: BottomTabBarProps) {
   );
 }
 
+function TabBarSurface({
+  glass,
+  barHeight,
+  children,
+}: {
+  glass: boolean;
+  barHeight: number;
+  children: ReactNode;
+}) {
+  const shape = {
+    minHeight: barHeight,
+    overflow: 'hidden' as const,
+    borderRadius: barHeight / 2,
+    borderCurve: 'continuous' as const,
+    borderWidth: 1,
+    boxShadow: '0 12px 30px rgba(0,0,0,0.34)',
+  };
+
+  if (glass) {
+    // No backgroundColor: the material is the surface. colorScheme is pinned
+    // dark because app.json sets userInterfaceStyle dark — 'auto' would track
+    // the system and light up the bar on a light-mode device.
+    return (
+      <GlassView
+        glassEffectStyle="regular"
+        colorScheme="dark"
+        tintColor={GLASS_TINT}
+        style={{ ...shape, borderColor: GLASS_BORDER }}
+      >
+        {children}
+      </GlassView>
+    );
+  }
+
+  return (
+    <BlurView
+      intensity={16}
+      tint="dark"
+      style={{
+        ...shape,
+        borderColor: appTheme.colors.border,
+        backgroundColor: 'rgba(17,18,21,0.96)',
+      }}
+    >
+      {children}
+    </BlurView>
+  );
+}
+
 function TabButton({
   item,
   active,
   iconSize,
   labelSize,
+  inactiveColor,
   onPress,
 }: {
   item: (typeof VISIBLE_TABS)[number];
   active: boolean;
   iconSize: number;
   labelSize: number;
+  inactiveColor: string;
   onPress: () => void;
 }) {
   const Icon = item.Icon;
-  const color = active ? PRIMARY : appTheme.colors.muted;
+  const color = active ? PRIMARY : inactiveColor;
 
   return (
     <Pressable
