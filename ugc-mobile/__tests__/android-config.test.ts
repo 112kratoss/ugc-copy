@@ -110,6 +110,25 @@ end
     expect(setIosBuildProfileAutolinking(productionPodfile)).toBe(productionPodfile);
   });
 
+  it('never strips a native module that expo-updates depends on', () => {
+    // OTA updates run in production builds, so anything expo-updates needs must
+    // survive autolinking there. expo-manifests was on the exclusion list from
+    // when only the dev client used it; leaving it there breaks the CocoaPods
+    // graph ("Unable to find a specification for EXManifests depended upon by
+    // EXUpdates") in exactly the profiles that ship, while development builds
+    // stay green — so nothing local would have caught it.
+    const updatesManifest = JSON.parse(
+      readFileSync(join(projectRoot, 'node_modules/expo-updates/package.json'), 'utf8')
+    ) as { dependencies?: Record<string, string> };
+
+    const updatesDependencies = Object.keys(updatesManifest.dependencies ?? {});
+    const stripped = DEVELOPMENT_ONLY_NATIVE_MODULES.filter((moduleName) =>
+      updatesDependencies.includes(moduleName)
+    );
+
+    expect(stripped).toEqual([]);
+  });
+
   it('enables native Sign in with Apple for iOS builds', () => {
     const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
 

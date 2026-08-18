@@ -188,9 +188,12 @@ describe('MagicTabBar', () => {
     // SDK31+ variant skips RenderScript on hardware that would choke on it.
     expect(blur.props.blurMethod).toBe('dimezisBlurViewSdk31Plus');
 
+    // Bound rather than pinned: the exact tint is a design call that moved once
+    // already. What must not come back is the opaque fill that made this bar a
+    // flat slab, so the check sits well below that and leaves the design room.
     const style = blur.props.style as Record<string, unknown>;
     const tintAlpha = Number(/rgba\([^)]*,\s*([\d.]+)\)/.exec(style.backgroundColor as string)?.[1]);
-    expect(tintAlpha).toBeLessThan(0.5);
+    expect(tintAlpha).toBeLessThan(0.8);
   });
 
   it('brightens the inactive labels on translucent surfaces only', async () => {

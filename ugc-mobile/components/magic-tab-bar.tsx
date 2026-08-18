@@ -32,7 +32,11 @@ const GLASS_BORDER = 'rgba(255,255,255,0.16)';
 const TRANSLUCENT_INACTIVE = 'rgba(255,255,255,0.90)';
 // Android's blur is softer than the iOS material, so it carries a heavier tint
 // than GLASS_TINT while still letting the backdrop through.
-const BLUR_TINT = 'rgba(17,18,21,0.35)';
+const BLUR_TINT = 'rgba(17,18,21,0.60)';
+// Held at 16 for years because the opaque fill made it invisible; a real blur
+// needs real intensity. Raising this quiets a busy backdrop without making the
+// bar more opaque, which is the trade a heavier tint alone would force.
+const BLUR_INTENSITY = 55;
 // Reduce Transparency gets a genuinely opaque bar. This is the one branch that
 // should *not* thin out — those users asked for less see-through, not more.
 const SOLID_FILL = 'rgba(17,18,21,0.96)';
@@ -288,7 +292,7 @@ function TabBarSurface({
 
   return (
     <BlurView
-      intensity={16}
+      intensity={BLUR_INTENSITY}
       tint="dark"
       // Android renders nothing without a target to sample, and only gets a real
       // GPU blur from SDK 31+; below that the method degrades to a plain
