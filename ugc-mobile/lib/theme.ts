@@ -191,6 +191,13 @@ export const appTheme = {
     },
     scale: {
       pressed: 0.985,
+      selected: 1.12,
+    },
+    // Springs rather than eased curves: the settle is the point. Friction is
+    // high enough that the overshoot reads as responsiveness, not a glitch.
+    spring: {
+      tension: 190,
+      friction: 13,
     },
   },
   shadow: {

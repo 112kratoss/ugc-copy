@@ -87,8 +87,29 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Resolve Playwright version
+        id: playwright-version
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
+
+      # The browser download is the slow, stall-prone half; the system deps are
+      # apt packages that are largely preinstalled on the runner. On a cache hit
+      # skip the download entirely. The timeout keeps a hung CDN fetch from
+      # eating the whole 30-minute job budget before any test runs.
       - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 6
+        run: |
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+            npx playwright install-deps chromium
+          else
+            npx playwright install --with-deps chromium
+          fi
 
       # Playwright boots its own dev server on :3100 with the E2E auth bypass
       # (see playwright.config.ts). The authenticated workflow test stubs only

@@ -1,4 +1,7 @@
+import { BlurTargetView } from 'expo-blur';
 import { Tabs } from 'expo-router';
+import { useRef } from 'react';
+import type { View } from 'react-native';
 
 import { MagicTabBar } from '@/components/magic-tab-bar';
 import { useReducedMotion } from '@/lib/motion';
@@ -6,14 +9,19 @@ import { appTheme } from '@/lib/theme';
 
 export default function TabLayout() {
   const reducedMotion = useReducedMotion();
+  // Android's blur has to be told what to sample; it renders nothing without a
+  // target. Everywhere else BlurTargetView is a plain View, so wrapping the
+  // navigator costs nothing off-Android.
+  const blurTarget = useRef<View>(null);
 
   return (
+    <BlurTargetView ref={blurTarget} style={{ flex: 1 }}>
     <Tabs
       backBehavior="history"
       tabBar={(props) => (
         props.state.routes[props.state.index]?.name === 'creator'
           ? null
-          : <MagicTabBar {...props} />
+          : <MagicTabBar {...props} blurTarget={blurTarget} />
       )}
       screenOptions={{
         animation: reducedMotion ? 'none' : 'fade',
@@ -61,5 +69,6 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
+    </BlurTargetView>
   );
 }

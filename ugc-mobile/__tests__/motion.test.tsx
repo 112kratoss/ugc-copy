@@ -10,6 +10,8 @@ const nativeState = vi.hoisted(() => ({
   preferenceReads: 0,
   removeListenerCalls: 0,
   valueInitials: [] as number[],
+  springTargets: [] as number[],
+  reduceMotion: false,
 }));
 
 vi.mock('react-native', () => {
@@ -27,7 +29,7 @@ vi.mock('react-native', () => {
     AccessibilityInfo: {
       isReduceMotionEnabled: () => {
         nativeState.preferenceReads += 1;
-        return Promise.resolve(false);
+        return Promise.resolve(nativeState.reduceMotion);
       },
       addEventListener: () => {
         nativeState.addListenerCalls += 1;
@@ -41,11 +43,15 @@ vi.mock('react-native', () => {
     Animated: {
       Value: MockAnimatedValue,
       timing: () => ({ start: vi.fn() }),
+      spring: (_value: unknown, config: { toValue: number }) => {
+        nativeState.springTargets.push(config.toValue);
+        return { start: vi.fn() };
+      },
     },
   };
 });
 
-import { useAnimatedState, usePressMotion, useReducedMotion } from '../lib/motion';
+import { useAnimatedState, usePressMotion, useReducedMotion, useSpringState } from '../lib/motion';
 
 function ReducedMotionProbe({ testID }: { testID: string }) {
   const reducedMotion = useReducedMotion();
@@ -62,12 +68,38 @@ function AnimatedValueProbe({ active }: { active: boolean }) {
   });
 }
 
+function SpringProbe({ active }: { active: boolean }) {
+  const progress = useSpringState(active);
+  return React.createElement('probe', { active, progress });
+}
+
 describe('motion hooks', () => {
   beforeEach(() => {
     nativeState.addListenerCalls = 0;
     nativeState.preferenceReads = 0;
     nativeState.removeListenerCalls = 0;
     nativeState.valueInitials = [];
+    nativeState.springTargets = [];
+    nativeState.reduceMotion = false;
+  });
+
+  it('settles selection with a spring rather than a fixed curve', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<SpringProbe active={false} />);
+    });
+
+    renderer.act(() => {
+      tree!.update(<SpringProbe active />);
+    });
+
+    // A timing curve here would mean the selection reads as merely animated;
+    // the spring settle is the whole point of the expressive treatment.
+    expect(nativeState.springTargets).toContain(1);
+
+    renderer.act(() => {
+      tree!.unmount();
+    });
   });
 
   it('shares one native reduced-motion subscription across consumers', () => {

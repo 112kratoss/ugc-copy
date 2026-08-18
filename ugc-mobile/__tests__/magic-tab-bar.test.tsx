@@ -179,31 +179,60 @@ describe('MagicTabBar', () => {
     expect(tintAlpha).toBeLessThan(0.5);
   });
 
-  it('brightens the inactive labels under glass so they carry themselves', async () => {
-    const solid = await renderTabBarAsync();
-    const solidLabel = solid.tree.root.findByProps({ accessibilityLabel: 'Showcase' });
+  it('asks Android for a real blur and gives it a target to sample', async () => {
+    const { tree } = await renderTabBarAsync();
 
+    const blur = tree.root.find((node) => String(node.type) === 'blur-view');
+
+    // Without a method Android renders a plain semi-transparent view, and the
+    // SDK31+ variant skips RenderScript on hardware that would choke on it.
+    expect(blur.props.blurMethod).toBe('dimezisBlurViewSdk31Plus');
+
+    // Bound rather than pinned: the exact tint is a design call that moved once
+    // already. What must not come back is the opaque fill that made this bar a
+    // flat slab, so the check sits well below that and leaves the design room.
+    const style = blur.props.style as Record<string, unknown>;
+    const tintAlpha = Number(/rgba\([^)]*,\s*([\d.]+)\)/.exec(style.backgroundColor as string)?.[1]);
+    expect(tintAlpha).toBeLessThan(0.8);
+  });
+
+  it('brightens the inactive labels on translucent surfaces only', async () => {
+    glassState.reduceTransparency = true;
+    const solid = await renderTabBarAsync();
+    const solidIcon = solid.tree.root
+      .findByProps({ accessibilityLabel: 'Showcase' })
+      .findByType('users-icon' as never);
+
+    glassState.reduceTransparency = false;
     glassState.available = true;
     const glass = await renderTabBarAsync();
-    const glassLabel = glass.tree.root.findByProps({ accessibilityLabel: 'Showcase' });
+    const glassIcon = glass.tree.root
+      .findByProps({ accessibilityLabel: 'Showcase' })
+      .findByType('users-icon' as never);
 
-    // Muted grey is safe against a known dark bar. Under glass the backdrop is
-    // whatever post scrolled past, so inactive tabs get a brighter colour.
-    const solidIcon = solidLabel.findByType('users-icon' as never);
-    const glassIcon = glassLabel.findByType('users-icon' as never);
-
+    // Muted grey is safe against a known opaque bar. Once the surface is
+    // translucent the backdrop is whatever post scrolled past, so the label has
+    // to carry itself.
     expect(solidIcon.props.color).toBe('#a1a1aa');
     expect(glassIcon.props.color).toBe('rgba(255,255,255,0.90)');
   });
 
-  it('falls back to the solid blur bar when Reduce Transparency is on', async () => {
+  it('drops to a genuinely opaque bar when Reduce Transparency is on', async () => {
     glassState.available = true;
     glassState.reduceTransparency = true;
 
     const { tree } = await renderTabBarAsync();
 
+    // Neither effect surface should render: this branch exists for users who
+    // asked for less see-through, so it must not quietly stay translucent.
     expect(tree.root.findAll((node) => String(node.type) === 'glass-view')).toHaveLength(0);
-    expect(tree.root.findAll((node) => String(node.type) === 'blur-view')).toHaveLength(1);
+    expect(tree.root.findAll((node) => String(node.type) === 'blur-view')).toHaveLength(0);
+
+    const opaque = tree.root.findAll((node) => {
+      const style = node.props.style as Record<string, unknown> | undefined;
+      return node.type === 'view' && style?.backgroundColor === 'rgba(17,18,21,0.96)';
+    });
+    expect(opaque).toHaveLength(1);
   });
 
   it('keeps the bottom safe-area continuation transparent under the restored nav', () => {
