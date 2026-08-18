@@ -172,6 +172,41 @@ export function immersivePreviewOpenHref(
   return immersiveViewerHref({ source: item.source, initialId: item.id });
 }
 
+/**
+ * The immersive viewer is a media reel, so a text-only post has nothing to fill
+ * it and opens its own screen instead of being dropped into a vertical feed of
+ * other people's media. Every `ShowcaseFeedItem` surface routes taps through
+ * here so the predicate that renders a tile as text is the same one that decides
+ * where the tile opens.
+ */
+export function showcaseFeedItemOpenHref({
+  algorithmVersion,
+  comments,
+  creatorUsername,
+  feedSessionId,
+  item,
+  source,
+}: {
+  algorithmVersion?: string | null;
+  comments?: boolean;
+  creatorUsername?: string | null;
+  feedSessionId?: string | null;
+  item: ShowcaseFeedItem;
+  source: PreviewViewerSource;
+}) {
+  if (isTextOnlyShowcasePost(item)) {
+    return textPostViewerHref({ comments, postId: item.id });
+  }
+
+  return immersiveViewerHref({
+    algorithmVersion,
+    creatorUsername,
+    feedSessionId,
+    source,
+    initialId: item.id,
+  });
+}
+
 export function immersiveViewerReturnPath({
   algorithmVersion,
   creatorUsername,

@@ -22,7 +22,7 @@ import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
 import { CreatorAvatar, SecondaryButton, StatusBlock } from '@/components/ui';
 import { WorkspaceSideMenuGestureLayer } from '@/components/workspace-side-menu-gesture-layer';
 import { useAuth } from '@/lib/auth';
-import { immersiveViewerHref } from '@/lib/immersive-preview-view-model';
+import { showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { isShowcaseVideoPreviewCandidate } from '@/lib/showcase-display';
 import {
@@ -418,9 +418,9 @@ export default function ShowcaseScreen() {
       success: true,
       item,
     });
-    router.push(immersiveViewerHref({
+    router.push(showcaseFeedItemOpenHref({
+      item,
       source: 'showcase-feed',
-      initialId: item.id,
       feedSessionId: feedSession.feedSessionId,
       algorithmVersion: item.recommendation?.algorithmVersion ?? feedSession.algorithmVersion,
     }) as never);
