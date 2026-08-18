@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
 import { ArrowLeft, ExternalLink, ShieldBan } from 'lucide-react';
 
 import { Surface, Text } from '@/app/components/DesignSystem';
@@ -23,6 +22,7 @@ import {
   shortId,
 } from '../../AdminUi';
 import { CreditAdjustmentForm } from './CreditAdjustmentForm';
+import { UserNotFoundPanel } from './UserNotFoundPanel';
 import { UserSanctionForm } from './UserSanctionForm';
 
 export const dynamic = 'force-dynamic';
@@ -46,7 +46,7 @@ export default async function AdminUserDetailPage({
 
   const detail = await getAdminUserDetail(client, userId).catch(() => null);
   if (!detail) {
-    notFound();
+    return <UserNotFoundPanel userId={userId} />;
   }
 
   // These tables only exist after their admin migrations are applied, so a
