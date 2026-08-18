@@ -34,7 +34,12 @@ import {
   immersivePreviewOpenHref,
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
-import { buildProfileFeedCards, type ProfileFeedCard } from '@/lib/profile-feed-card-view-model';
+import {
+  FEED_LANDING_RETRY_DELAYS_MS,
+  buildProfileFeedCards,
+  shouldReassertFeedLanding,
+  type ProfileFeedCard,
+} from '@/lib/profile-feed-card-view-model';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
@@ -66,7 +71,9 @@ export function ProfileMediaFeedScreen() {
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const listRef = useRef<FlashListRef<ProfileFeedCard>>(null);
-  const positionedRef = useRef(false);
+  const landedRef = useRef(false);
+  const readerTookOverRef = useRef(false);
+  const landingAttemptsRef = useRef(0);
   const [actionsOpenItemId, setActionsOpenItemId] = useState<string | null>(null);
   const [commentsOpenItemId, setCommentsOpenItemId] = useState<string | null>(null);
   const [expandedBodyIds, setExpandedBodyIds] = useState<Record<string, boolean>>({});
@@ -115,19 +122,41 @@ export function ProfileMediaFeedScreen() {
   );
 
   /**
-   * `initialScrollIndex` is only honoured at mount. The source query usually resolves
-   * from cache synchronously, but when it doesn't the list has already painted at the
-   * top by the time the tapped item exists — so land on it explicitly once it does.
+   * Land on the tapped card, re-asserting until it is actually on screen.
    * Scrolling (rather than reordering) is what keeps the items above it reachable.
+   *
+   * The previous single deferred frame could be dropped entirely: it marked itself
+   * done synchronously but scrolled a frame later, so any change to `cards` or
+   * `initialIndex` in between — routine, since the source and profile queries settle
+   * independently — cancelled the pending frame and the re-run then saw the work as
+   * already done. Whatever position the list happened to hold became final, which is
+   * how tapping the sixth creation opened the oldest one on iOS.
    */
   useEffect(() => {
-    if (positionedRef.current || !cards.length || initialIndex <= 0) return;
-    positionedRef.current = true;
-    const frame = requestAnimationFrame(() => {
-      listRef.current?.scrollToIndex({ index: initialIndex, animated: false });
-    });
-    return () => cancelAnimationFrame(frame);
+    landedRef.current = false;
+    readerTookOverRef.current = false;
+    landingAttemptsRef.current = 0;
+  }, [initialId]);
+
+  const landOnTarget = useCallback(() => {
+    if (!shouldReassertFeedLanding({
+      targetIndex: initialIndex,
+      cardCount: cards.length,
+      landed: landedRef.current,
+      readerTookOver: readerTookOverRef.current,
+      attempts: landingAttemptsRef.current,
+    })) return;
+
+    landingAttemptsRef.current += 1;
+    listRef.current?.scrollToIndex({ index: initialIndex, animated: false });
   }, [cards.length, initialIndex]);
+
+  useEffect(() => {
+    landOnTarget();
+    const timers = FEED_LANDING_RETRY_DELAYS_MS.map((delay) => setTimeout(landOnTarget, delay));
+
+    return () => timers.forEach(clearTimeout);
+  }, [landOnTarget]);
 
   const openItem = useCallback((
     item: ImmersivePreviewItem,
@@ -304,9 +333,18 @@ export function ProfileMediaFeedScreen() {
         initialScrollIndex={initialIndex}
         getItemType={(card) => card.isTextOnly ? 'text' : card.item.mediaKind ?? 'image'}
         extraData={{ activeVideoId, expandedBodyIds, pendingAction }}
+        onScrollBeginDrag={() => {
+          // The reader's own scroll outranks the landing: never yank them back.
+          readerTookOverRef.current = true;
+        }}
         onViewableItemsChanged={({ viewableItems }: { viewableItems: Array<ViewToken<ProfileFeedCard>> }) => {
           const firstVideo = viewableItems.find((token) => token.item?.item.mediaKind === 'video');
           setActiveVideoId(firstVideo?.item?.id ?? null);
+
+          if (!landedRef.current && initialId
+            && viewableItems.some((token) => token.item?.id === initialId)) {
+            landedRef.current = true;
+          }
         }}
         viewabilityConfig={{ itemVisiblePercentThreshold: 60 }}
         ItemSeparatorComponent={() => <View style={{ height: CARD_GAP }} />}

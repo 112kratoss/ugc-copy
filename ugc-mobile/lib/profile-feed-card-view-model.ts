@@ -13,6 +13,45 @@ const TEXT_BODY_LINES = 6;
 /** Matches the single size PostTextBlock renders every body at. */
 const BODY_FONT_SIZE = 14;
 
+/**
+ * Landing the feed on the tapped card is a retry, not a single shot.
+ * `initialScrollIndex` is only honoured at mount, and the two queries behind the
+ * list (source data and profile) settle independently, so the list the first
+ * scroll addresses is not always the list that ends up rendered. Re-asserting
+ * until the card is actually on screen makes the landing independent of which
+ * order those resolve in — the timing difference that made a tap open the wrong
+ * creation on iOS while Android happened to land correctly.
+ *
+ * Delays rather than a single frame because a card's height is only final once
+ * its body text has wrapped; the last attempt is late enough to outlast that.
+ */
+export const FEED_LANDING_RETRY_DELAYS_MS = [64, 160, 320, 640];
+export const MAX_FEED_LANDING_ATTEMPTS = FEED_LANDING_RETRY_DELAYS_MS.length + 1;
+
+/**
+ * `targetIndex >= cardCount` is rejected rather than clamped: FlashList clamps an
+ * out-of-range scroll to the end of the list, which silently lands the reader on
+ * the oldest card instead of admitting it could not find the one they asked for.
+ */
+export function shouldReassertFeedLanding({
+  targetIndex,
+  cardCount,
+  landed,
+  readerTookOver,
+  attempts,
+}: {
+  targetIndex: number;
+  cardCount: number;
+  landed: boolean;
+  readerTookOver: boolean;
+  attempts: number;
+}) {
+  if (landed || readerTookOver) return false;
+  if (targetIndex <= 0 || targetIndex >= cardCount) return false;
+
+  return attempts < MAX_FEED_LANDING_ATTEMPTS;
+}
+
 export interface ProfileFeedCard {
   id: string;
   item: ImmersivePreviewItem;
