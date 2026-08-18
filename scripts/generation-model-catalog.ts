@@ -1600,6 +1600,127 @@ async function loadActiveRevision(client: SupabaseClient): Promise<string> {
   return requireString(data.revision, 'active revision');
 }
 
+export type TemplateCatalogReviewOutcome = {
+  reviewedCount: number;
+  disabled: Array<{
+    templateId: string;
+    slug: string | null;
+    name: string | null;
+    missingModels: string[];
+  }>;
+  skipped: Array<{ templateId: string; reason: string }>;
+};
+
+function generateNodeModelIds(snapshot: unknown): string[] | null {
+  if (!isRecord(snapshot) || !isRecord(snapshot.graph)) return null;
+  const nodes = Array.isArray(snapshot.graph.nodes) ? snapshot.graph.nodes : null;
+  if (!nodes) return null;
+  const models: string[] = [];
+  for (const node of nodes) {
+    if (!isRecord(node) || !isRecord(node.data)) continue;
+    if (node.type !== 'image-generate' && node.type !== 'video-generate') continue;
+    if (typeof node.data.model !== 'string' || !node.data.model) return null;
+    models.push(node.data.model);
+  }
+  return models;
+}
+
+/**
+ * Runs after a release activates (publish or rollback): active templates whose
+ * generate nodes reference models absent from the release get disabled so
+ * consumers stop starting runs the provider can no longer serve. Templates
+ * pin their quoting revision, so this is about model retirement, not pricing.
+ */
+export async function reviewActiveTemplatesForCatalog(
+  client: SupabaseClient,
+  availableModelIds: ReadonlySet<string>,
+): Promise<TemplateCatalogReviewOutcome> {
+  const outcome: TemplateCatalogReviewOutcome = { reviewedCount: 0, disabled: [], skipped: [] };
+  const { data: templateData, error: templateError } = await client
+    .from('templates')
+    .select('id, slug, name, active_version_id')
+    .eq('status', 'active')
+    .eq('is_active', true);
+  if (templateError) throw templateError;
+  const templates = (templateData ?? []) as Array<{
+    id: string;
+    slug: string | null;
+    name: string | null;
+    active_version_id: string | null;
+  }>;
+  outcome.reviewedCount = templates.length;
+  if (!templates.length) return outcome;
+
+  const versionIds = templates.flatMap((template) => (
+    template.active_version_id ? [template.active_version_id] : []
+  ));
+  const { data: versionData, error: versionError } = versionIds.length
+    ? await client
+      .from('template_versions')
+      .select('id, graph_snapshot')
+      .in('id', versionIds)
+    : { data: [], error: null };
+  if (versionError) throw versionError;
+  const snapshots = new Map((versionData ?? []).map((row) => (
+    [(row as { id: string }).id, (row as { graph_snapshot: unknown }).graph_snapshot]
+  )));
+
+  for (const template of templates) {
+    const snapshot = template.active_version_id ? snapshots.get(template.active_version_id) : undefined;
+    if (snapshot === undefined) {
+      outcome.skipped.push({ templateId: template.id, reason: 'active version snapshot is unavailable' });
+      continue;
+    }
+    const models = generateNodeModelIds(snapshot);
+    if (models === null) {
+      outcome.skipped.push({ templateId: template.id, reason: 'active version snapshot is unreadable' });
+      continue;
+    }
+    const missingModels = [...new Set(models.filter((model) => !availableModelIds.has(model)))];
+    if (!missingModels.length) continue;
+    const { error: disableError } = await client
+      .from('templates')
+      .update({ status: 'disabled', is_active: false })
+      .eq('id', template.id)
+      .eq('status', 'active');
+    if (disableError) throw disableError;
+    outcome.disabled.push({
+      templateId: template.id,
+      slug: template.slug,
+      name: template.name,
+      missingModels,
+    });
+  }
+  return outcome;
+}
+
+async function runPostReleaseTemplateReview(client: SupabaseClient): Promise<JsonObject> {
+  try {
+    const active = await loadActiveCatalog(client);
+    const review = await reviewActiveTemplatesForCatalog(
+      client,
+      new Set(active.entries.map((entry) => entry.modelId)),
+    );
+    return {
+      status: review.disabled.length || review.skipped.length ? 'attention' : 'clean',
+      reviewedCount: review.reviewedCount,
+      disabled: review.disabled.map((entry) => ({
+        templateId: entry.templateId,
+        slug: entry.slug,
+        missingModels: entry.missingModels,
+      })),
+      skipped: review.skipped,
+    };
+  } catch (error) {
+    // The release itself already activated; a review failure must be visible
+    // but must not be mistaken for a failed publish.
+    return {
+      status: 'failed',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export async function runGenerationModelCatalogCli(
   args: string[],
   environment: NodeJS.ProcessEnv = process.env,
@@ -1645,6 +1766,7 @@ export async function runGenerationModelCatalogCli(
       targetRevision,
       expectedActive,
       status: isRecord(data) && typeof data.status === 'string' ? data.status : 'completed',
+      templateReview: await runPostReleaseTemplateReview(client),
     });
     return;
   }
@@ -1693,6 +1815,7 @@ export async function runGenerationModelCatalogCli(
       revision: manifest.release.revision,
       expectedActive,
       status: isRecord(data) && typeof data.status === 'string' ? data.status : 'published',
+      templateReview: await runPostReleaseTemplateReview(client),
     });
     return;
   }

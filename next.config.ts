@@ -155,6 +155,8 @@ const nextConfig: NextConfig = {
     "/api/posts": ["./node_modules/ffmpeg-static/**"],
     "/api/posts/*": ["./node_modules/ffmpeg-static/**"],
     "/api/showcase/publish": ["./node_modules/ffmpeg-static/**"],
+    // Template publish derives the catalog poster frame from the demo video.
+    "/api/templates/*/publish": ["./node_modules/ffmpeg-static/**"],
   },
   outputFileTracingExcludes: {
     "**/*": [

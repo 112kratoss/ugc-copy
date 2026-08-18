@@ -53,7 +53,11 @@ import {
   type SeedanceAssetCollections,
   type SeedanceAssetMetadata,
 } from '@/lib/seedance-assets';
-import { quotePublishedGenerationModel } from '@/lib/generation-model-catalog-store';
+import {
+  quotePublishedGenerationModel,
+  quotePublishedGenerationModelAtRevision,
+} from '@/lib/generation-model-catalog-store';
+import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 
 export interface WorkflowRunExecutionResult {
   runId: string;
@@ -596,6 +600,15 @@ export async function executeWorkflowRunnableNode(params: {
   node: WorkflowCanvasNode;
   graph: WorkflowCanvasGraph;
   catalogRevision?: string | null;
+  /**
+   * When true, `catalogRevision` is treated as a trusted server-side pin and
+   * nodes are quoted against that exact release. Only the template run engine
+   * may opt in: its pins are compiled server-side at publish/test time. Canvas
+   * runs store the CLIENT's revision, so for them the default freshness check
+   * (409 on mismatch) must stay — pinned quoting there would let a stale or
+   * crafted client buy at historical prices.
+   */
+  quoteAtPinnedRevision?: boolean;
   clientRequestKeyHash?: string | null;
   persistInputMedia?: boolean;
   privateRecipe?: boolean;
@@ -607,6 +620,7 @@ export async function executeWorkflowRunnableNode(params: {
     node,
     graph,
     catalogRevision = null,
+    quoteAtPinnedRevision = false,
     clientRequestKeyHash = null,
     persistInputMedia = true,
     privateRecipe = false,
@@ -614,6 +628,11 @@ export async function executeWorkflowRunnableNode(params: {
   } = params;
   const creditSupabase = createServiceClient();
   const inputs = resolveNodeInputs(graph, node.id);
+  const quoteRunnableNode = (input: Omit<GenerationModelQuoteInput, 'catalogRevision'>) => (
+    quoteAtPinnedRevision && catalogRevision
+      ? quotePublishedGenerationModelAtRevision(input, { platform: 'web', revision: catalogRevision })
+      : quotePublishedGenerationModel({ ...input, catalogRevision }, { platform: 'web' })
+  );
 
   if (isApprovalGateNode(node)) {
     const data = normalizeNodeData('approval-gate', node.data as Partial<ApprovalGateNodeData>) as ApprovalGateNodeData;
@@ -642,7 +661,7 @@ export async function executeWorkflowRunnableNode(params: {
     if (!inputs.prompt) return buildBlockedError('Image generator is missing a prompt input.');
     const data = normalizeNodeData('image-generate', node.data as Partial<ImageGenerateNodeData>) as ImageGenerateNodeData;
     const elementPayload = getRunnableElementPayload(graph, node.id);
-    const quote = await quotePublishedGenerationModel({
+    const quote = await quoteRunnableNode({
       kind: 'image',
       modelId: data.model,
       settings: {
@@ -652,8 +671,7 @@ export async function executeWorkflowRunnableNode(params: {
         googleSearch: data.googleSearch,
       },
       inputCounts: { images: elementPayload.references.length, videos: 0, audios: 0 },
-      catalogRevision,
-    }, { platform: 'web' });
+    });
     const result = await startImageGeneration({
       supabase,
       creditSupabase,
@@ -706,7 +724,7 @@ export async function executeWorkflowRunnableNode(params: {
     const quotedDuration = data.isMultiShot
       ? data.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration || 0)), 0)
       : data.duration;
-    const quote = await quotePublishedGenerationModel({
+    const quote = await quoteRunnableNode({
       kind: 'video',
       modelId: data.model,
       settings: {
@@ -725,8 +743,7 @@ export async function executeWorkflowRunnableNode(params: {
         videos: elementPayload.referenceVideoUrls.length + klingVideoElements.length,
         audios: elementPayload.referenceAudioUrls.length,
       },
-      catalogRevision,
-    }, { platform: 'web' });
+    });
     const result = await startVideoGeneration({
       supabase,
       creditSupabase,
@@ -778,7 +795,7 @@ export async function executeWorkflowRunnableNode(params: {
       return buildBlockedError('Motion control requires both an image input and a video input.');
     }
 
-    const quote = await quotePublishedGenerationModel({
+    const quote = await quoteRunnableNode({
       kind: 'motion',
       modelId: data.model,
       settings: {
@@ -787,8 +804,7 @@ export async function executeWorkflowRunnableNode(params: {
         duration: 10,
       },
       inputCounts: { images: 1, videos: 1, audios: 0 },
-      catalogRevision,
-    }, { platform: 'web' });
+    });
     const result = await startMotionGeneration({
       supabase,
       creditSupabase,

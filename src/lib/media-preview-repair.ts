@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { logBackendError } from '@/lib/backend-logger';
 import { createGenerationOutputPreview } from '@/lib/generation-output-preview';
+import { createVideoPosterBuffer } from '@/lib/video-poster';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
 import { createPostMediaRendition, type PostMediaTeaserOutcome } from '@/lib/post-media-rendition';
 import type { VideoProbeResult } from '@/lib/video-rendition';
@@ -155,6 +157,8 @@ export async function hasRepairableMediaPreviews(supabase: SupabaseClient): Prom
 
   if (postMediaResult.error) throw postMediaResult.error;
   if (hasRows(postMediaResult.data)) return true;
+
+  if (await hasRepairableTemplateDemoPosters(supabase)) return true;
 
   // Renditions alone are enough work to justify a run; without this the job
   // would report "no repairable media" and skip the entire backfill.
@@ -683,6 +687,75 @@ async function mapWithConcurrency<T>(
   return output;
 }
 
+/**
+ * Small on purpose: the steady state is publish-time extraction in
+ * `publishMediaTemplate`, so this sweep only backfills templates published
+ * before posters existed and heals the rare extraction failure. Posters are
+ * bounded (2× the 30s ffmpeg poster timeout each), and the poster upload is
+ * an upsert so a retry after a failed row update is harmless.
+ */
+export const TEMPLATE_POSTER_BATCH_SIZE = 3;
+
+export async function hasRepairableTemplateDemoPosters(supabase: SupabaseClient): Promise<boolean> {
+  const result = await supabase
+    .from('templates')
+    .select('id')
+    .eq('status', 'active')
+    .eq('is_active', true)
+    .eq('output_kind', 'video')
+    .is('thumbnail_url', null)
+    .like('video_url', 'template_assets/%')
+    .limit(1);
+  if (result.error) throw result.error;
+  return hasRows(result.data);
+}
+
+export async function repairTemplateDemoPosters(
+  supabase: SupabaseClient,
+  options: { batchSize?: number } = {}
+): Promise<RepairSummary> {
+  const batchSize = Math.max(1, Math.min(options.batchSize ?? TEMPLATE_POSTER_BATCH_SIZE, 10));
+  const { data, error } = await supabase
+    .from('templates')
+    .select('id, video_url')
+    .eq('status', 'active')
+    .eq('is_active', true)
+    .eq('output_kind', 'video')
+    .is('thumbnail_url', null)
+    .like('video_url', 'template_assets/%')
+    .limit(batchSize);
+  if (error) throw error;
+  const rows = (data ?? []) as Array<{ id: string; video_url: string }>;
+  let completed = 0;
+  for (const row of rows) {
+    try {
+      const demoObjectPath = row.video_url.slice('template_assets/'.length);
+      const demoDirectory = demoObjectPath.split('/').slice(0, -1).join('/');
+      if (!demoDirectory) throw new Error('Template demo path has no version directory.');
+      const download = await supabase.storage.from('template_assets').download(demoObjectPath);
+      if (download.error || !download.data) {
+        throw download.error ?? new Error('Template demo could not be downloaded.');
+      }
+      const poster = await createVideoPosterBuffer(download.data);
+      const posterObjectPath = `${demoDirectory}/poster.webp`;
+      const upload = await supabase.storage.from('template_assets')
+        .upload(posterObjectPath, poster, { contentType: 'image/webp', upsert: true });
+      if (upload.error) throw upload.error;
+      const update = await supabase.from('templates')
+        .update({ thumbnail_url: `template_assets/${posterObjectPath}` })
+        .eq('id', row.id)
+        .is('thumbnail_url', null);
+      if (update.error) throw update.error;
+      completed += 1;
+    } catch (repairError) {
+      // Templates carry no attempt counter; the bounded batch plus upsert
+      // keeps hourly retries of a stubborn row cheap and harmless.
+      logBackendError('failed_to_repair_template_demo_poster', { templateId: row.id, error: repairError });
+    }
+  }
+  return { attempted: rows.length, completed, failed: rows.length - completed };
+}
+
 export async function repairMediaPreviews(
   supabase: SupabaseClient,
   options: {
@@ -724,6 +797,10 @@ export async function repairMediaPreviews(
   // strictly single-file so ffmpeg and temporary disk cannot fan out.
   const results = await mapWithConcurrency(repairRows, 4, (entry) => entry.worker());
 
+  // Template demo posters are poster-frame work too, so they run with the
+  // light pass — before renditions, which must never starve poster repair.
+  const templatePosters = await repairTemplateDemoPosters(supabase);
+
   // Runs after the preview pass so poster frames — which the feed needs before
   // anything can play at all — always win the shared duration budget.
   const renditions = await repairPostMediaRenditions(supabase, {
@@ -731,8 +808,8 @@ export async function repairMediaPreviews(
     lockedBy: `${lockedBy}:rendition`,
   });
 
-  const completed = results.filter(Boolean).length + renditions.completed;
-  const attempted = results.length + renditions.attempted;
+  const completed = results.filter(Boolean).length + templatePosters.completed + renditions.completed;
+  const attempted = results.length + templatePosters.attempted + renditions.attempted;
 
   if (completed > 0) {
     (options.invalidateFeedCache ?? invalidateShowcaseFeedCache)();

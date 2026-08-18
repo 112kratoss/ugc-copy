@@ -4,6 +4,7 @@ import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
+  CatalogError,
   GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
   buildGenerationModelCatalog,
   projectGenerationModelDescriptor,
@@ -710,27 +711,19 @@ export async function loadPublishedGenerationModelCatalogByRevision({
   );
 }
 
-export async function quotePublishedGenerationModel(
+async function quoteWithSnapshotLoader(
   input: GenerationModelQuoteInput,
-  options: { platform: CatalogPlatform; forceRefresh?: boolean },
+  loadSnapshot: (schemaVersion: number) => Promise<PublishedGenerationModelCatalogSnapshot>,
 ): Promise<GenerationModelQuote> {
   const schemaVersion = input.schemaVersion && input.schemaVersion >= 2 ? 2 : 1;
-  const snapshot = await loadPublishedGenerationModelCatalog({
-    platform: options.platform,
-    schemaVersion,
-    forceRefresh: options.forceRefresh,
-  });
+  const snapshot = await loadSnapshot(schemaVersion);
   let validationCatalog = snapshot.catalog;
   if (schemaVersion === 1 && (snapshot.releaseSchemaVersion ?? 1) >= 2) {
     const requestedDescriptor = snapshot.catalog.models.find((model) => (
       model.id === input.modelId && model.kind === input.kind
     ));
     if (requestedDescriptor) {
-      const fullSnapshot = await loadPublishedGenerationModelCatalog({
-        platform: options.platform,
-        schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
-        forceRefresh: options.forceRefresh,
-      });
+      const fullSnapshot = await loadSnapshot(GENERATION_MODEL_CATALOG_SCHEMA_VERSION);
       const fullDescriptor = fullSnapshot.catalog.models.find((model) => (
         model.id === input.modelId && model.kind === input.kind
       ));
@@ -748,6 +741,49 @@ export async function quotePublishedGenerationModel(
     catalog: validationCatalog,
     operations: snapshot.operations,
   });
+}
+
+export async function quotePublishedGenerationModel(
+  input: GenerationModelQuoteInput,
+  options: { platform: CatalogPlatform; forceRefresh?: boolean },
+): Promise<GenerationModelQuote> {
+  return quoteWithSnapshotLoader(input, (schemaVersion) => loadPublishedGenerationModelCatalog({
+    platform: options.platform,
+    schemaVersion,
+    forceRefresh: options.forceRefresh,
+  }));
+}
+
+/**
+ * Quotes against the exact catalog release named by `revision` instead of the
+ * currently published one. This is the trusted-pin path for the run engines:
+ * a template version freezes the revision that priced it, so its runs must
+ * keep quoting against that release even after later publishes. Never expose
+ * this to client-supplied revisions — that would let a stale or crafted
+ * client buy at historical prices.
+ */
+export async function quotePublishedGenerationModelAtRevision(
+  input: GenerationModelQuoteInput,
+  options: { platform: CatalogPlatform; revision: string; forceRefresh?: boolean },
+): Promise<GenerationModelQuote> {
+  const loadSnapshot = async (schemaVersion: number) => {
+    try {
+      return await loadPublishedGenerationModelCatalogByRevision({
+        revision: options.revision,
+        platform: options.platform,
+        schemaVersion,
+        forceRefresh: options.forceRefresh,
+      });
+    } catch (error) {
+      if (error instanceof GenerationModelCatalogSchemaUnavailableError) throw error;
+      throw new CatalogError(
+        'This item was published against a model catalog release that is no longer available.',
+        'CATALOG_CHANGED',
+        409,
+      );
+    }
+  };
+  return quoteWithSnapshotLoader({ ...input, catalogRevision: options.revision }, loadSnapshot);
 }
 
 export async function loadGenerationModelOperationalConfig(
