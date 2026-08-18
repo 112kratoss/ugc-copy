@@ -3,6 +3,7 @@ import sharp from 'sharp';
 
 import { getMediaContentHash, getPreviewThumbhash } from '@/lib/media-preview-metadata';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
+import { toStorageUploadBody } from '@/lib/storage-upload-body';
 
 const PREVIEW_MAX_SIZE = 720;
 
@@ -86,7 +87,7 @@ export async function uploadGenerationPreview({
 
   const upload = await supabase.storage
     .from(location.bucket)
-    .upload(location.filePath, preview, {
+    .upload(location.filePath, toStorageUploadBody(preview, 'image/webp'), {
       cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
       contentType: 'image/webp',
       upsert: true,

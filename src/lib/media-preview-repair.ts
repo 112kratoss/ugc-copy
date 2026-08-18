@@ -14,6 +14,7 @@ import {
   PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
 } from '@/lib/provider-fetch';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { toStorageUploadBody } from '@/lib/storage-upload-body';
 
 const MAX_PREVIEW_ATTEMPTS = 3;
 export const MAX_RENDITION_ATTEMPTS = 3;
@@ -739,7 +740,7 @@ export async function repairTemplateDemoPosters(
       const poster = await createVideoPosterBuffer(download.data);
       const posterObjectPath = `${demoDirectory}/poster.webp`;
       const upload = await supabase.storage.from('template_assets')
-        .upload(posterObjectPath, poster, { contentType: 'image/webp', upsert: true });
+        .upload(posterObjectPath, toStorageUploadBody(poster, 'image/webp'), { contentType: 'image/webp', upsert: true });
       if (upload.error) throw upload.error;
       const update = await supabase.from('templates')
         .update({ thumbnail_url: `template_assets/${posterObjectPath}` })
