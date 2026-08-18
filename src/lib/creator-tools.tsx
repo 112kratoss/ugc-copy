@@ -1,11 +1,14 @@
 import type { LucideIcon } from 'lucide-react';
 import { Clapperboard, Image as ImageIcon, UserSquare2, Video } from 'lucide-react';
 
+// Imported from creator-launch-urls, not workflow-blueprint: this module is
+// reachable from client components, and workflow-blueprint pulls in the
+// prompt-enhancer -> provider-fetch -> server-helpers chain.
 import {
   buildImageLaunchUrl,
   buildMotionLaunchUrl,
   buildVideoLaunchUrl,
-} from '@/lib/workflow-blueprint';
+} from '@/lib/creator-launch-urls';
 
 export type CreatorToolId = 'image' | 'video' | 'motion' | 'workflow';
 export type CreatorToolAccent = 'blue' | 'rose' | 'violet' | 'emerald' | 'amber';

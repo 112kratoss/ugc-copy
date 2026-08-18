@@ -118,19 +118,39 @@ export function readReferralVisitCookie(cookieHeader: string | null): string | n
 
 let hasWarnedAboutAttributionSecretFallback = false;
 
+/**
+ * Domain separator for the fallback subkey derivation. Fixed and versioned so
+ * the derived secret is stable across restarts; bumping the suffix deliberately
+ * rotates every referral risk digest.
+ */
+const ATTRIBUTION_HASH_SUBKEY_LABEL = 'magicbooklet/referral-attribution-hash/v1';
+
 function getAttributionHashSecret(): string {
   const dedicatedSecret = process.env.REFERRAL_ATTRIBUTION_HASH_SECRET?.trim();
   if (dedicatedSecret) return dedicatedSecret;
 
-  const fallbackSecret = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-  if (fallbackSecret) {
+  const fallbackRootKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (fallbackRootKey) {
     if (!hasWarnedAboutAttributionSecretFallback) {
       hasWarnedAboutAttributionSecretFallback = true;
       logBackendWarning('referral_attribution_hash_secret_fallback', {
-        message: 'REFERRAL_ATTRIBUTION_HASH_SECRET is not set; falling back to SUPABASE_SERVICE_ROLE_KEY for referral risk hashing. Configure the dedicated secret.',
+        message: 'REFERRAL_ATTRIBUTION_HASH_SECRET is not set; falling back to a key derived from SUPABASE_SERVICE_ROLE_KEY for referral risk hashing. Configure the dedicated secret.',
       });
     }
-    return fallbackSecret;
+    // Derive a dedicated subkey rather than handing the service-role key itself
+    // to the hashing path. The key that bypasses every RLS policy should not
+    // also be the value this module holds, passes around, and could surface in
+    // a stack frame or diagnostic. HMAC-SHA256 is a PRF, so the service-role
+    // key is not recoverable from the derived subkey.
+    //
+    // Note: this changes digests relative to the previous raw-key fallback. It
+    // only matters if production is actually on the fallback -- if the
+    // dedicated secret is configured, nothing changes. In the fallback case,
+    // stored ipHash/userAgentHash values rotate once, so referral fraud history
+    // restarts; rate-limit buckets simply re-fill.
+    return createHmac('sha256', fallbackRootKey)
+      .update(ATTRIBUTION_HASH_SUBKEY_LABEL)
+      .digest('hex');
   }
 
   if (process.env.NODE_ENV !== 'production') return 'local-referral-attribution-secret';

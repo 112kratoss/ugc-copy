@@ -267,20 +267,15 @@ export function buildWorkflowUserPrompt(input: WorkflowPlannerInput): string {
   ].join('\n');
 }
 
-export function buildImageLaunchUrl(prompt: string, model = 'nano-banana-pro', aspectRatio = '9:16'): string {
-  const params = new URLSearchParams({ prompt, model, aspectRatio });
-  return `/create-image?${params.toString()}`;
-}
-
-export function buildVideoLaunchUrl(prompt: string, model = 'kling-3.0-video', aspectRatio = '9:16', duration = '5'): string {
-  const params = new URLSearchParams({ prompt, model, aspectRatio, duration });
-  return `/create-video?${params.toString()}`;
-}
-
-export function buildMotionLaunchUrl(prompt: string, model = 'kling-3.0'): string {
-  const params = new URLSearchParams({ prompt, model });
-  return `/create-motion?${params.toString()}`;
-}
+// Moved to `creator-launch-urls` so client components can take the URL helpers
+// without dragging this module's server-side dependency chain (prompt-enhancer
+// -> provider-fetch -> server-helpers) into the browser bundle. Re-exported so
+// existing server-side importers keep working unchanged.
+export {
+  buildImageLaunchUrl,
+  buildMotionLaunchUrl,
+  buildVideoLaunchUrl,
+} from '@/lib/creator-launch-urls';
 
 export function createWorkflowGraphFromBlueprint(
   blueprint: WorkflowBlueprint,
