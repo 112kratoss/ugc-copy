@@ -256,6 +256,7 @@ describe('/api/razorpay/order route', () => {
     expect(mocks.insert).toHaveBeenCalledWith({
       amount: 41500,
       credits: 500,
+      currency: 'INR',
       razorpay_order_id: 'order_123',
       status: 'created',
       user_id: 'user_123456789',
