@@ -3,23 +3,19 @@
  * Centralizes Supabase client creation, user authentication,
  * and credit deduction logic to eliminate duplication.
  *
- * NOTE: this module cannot currently be marked `server-only`, and that is a
- * symptom rather than a decision. It is reachable from a client component today:
+ * `server-only` is load-bearing, not decorative: createServiceClient reads the
+ * service-role key, so a client component importing this module must fail the
+ * build rather than bundle server code into the browser.
  *
- *   server-helpers <- provider-fetch-attempts <- provider-fetch
- *     <- prompt-enhancer <- workflow-blueprint <- creator-tools.tsx
- *     <- CreatorStudio.tsx <- CreateImageClient.tsx ("use client")
- *
- * provider-fetch-attempts calls createServiceClient() for real, so that edge is
- * a value import, not a type import. Adding `import 'server-only'` here fails
- * the build with exactly that trace rather than silently passing.
- *
- * The service-role key value does not reach the browser -- Next inlines only
- * NEXT_PUBLIC_* env vars into client bundles -- but the module graph is wrong,
- * and the guard cannot be restored until the chain is split (give provider-fetch
- * a client-safe surface, or inject the recorder instead of importing it).
- * Do not add `server-only` here before doing that.
+ * This module was previously reachable from a client component through
+ * creator-tools -> workflow-blueprint -> prompt-enhancer -> provider-fetch ->
+ * provider-fetch-attempts, which calls createServiceClient() for real. The
+ * launch-URL helpers client code actually wanted now live in
+ * `creator-launch-urls`, which breaks that chain and lets this guard stand.
+ * If this import starts failing the build again, read the trace: something has
+ * re-linked server code into the client graph.
  */
+import 'server-only';
 
 import { NextResponse } from 'next/server';
 import { logBackendError } from '@/lib/backend-logger';
