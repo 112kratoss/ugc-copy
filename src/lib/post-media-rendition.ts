@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { getMediaContentHash } from '@/lib/media-preview-metadata';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
+import { toStorageUploadBody } from '@/lib/storage-upload-body';
 import {
   createVideoRenditionFromFile,
   createVideoTeaserFromFile,
@@ -121,7 +122,7 @@ export async function createPostMediaRendition({
           );
           const teaserUpload = await supabase.storage
             .from(SHOWCASE_MEDIA_BUCKET)
-            .upload(teaserStoragePath, teaser.buffer, {
+            .upload(teaserStoragePath, toStorageUploadBody(teaser.buffer, RENDITION_CONTENT_TYPE), {
               cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
               contentType: RENDITION_CONTENT_TYPE,
               upsert: true,
@@ -148,7 +149,7 @@ export async function createPostMediaRendition({
       );
       const upload = await supabase.storage
         .from(SHOWCASE_MEDIA_BUCKET)
-        .upload(renditionStoragePath, rendition.buffer, {
+        .upload(renditionStoragePath, toStorageUploadBody(rendition.buffer, RENDITION_CONTENT_TYPE), {
           cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
           contentType: RENDITION_CONTENT_TYPE,
           upsert: true,

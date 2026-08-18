@@ -34,6 +34,31 @@ function storageDouble({ stored }: { stored: Buffer }) {
   };
 }
 
+describe('storage upload body', () => {
+  /**
+   * The root cause, pinned. `StorageFileApi.uploadOrUpdate` only routes a Blob
+   * through its multipart path; a Node Buffer matches no branch and falls through
+   * to a raw body that is UTF-8 stringified in transit, inflating it ~1.8x. The
+   * repair job proved it in production: 79,616 encoded bytes stored as 144,323.
+   */
+  it('hands storage a Blob rather than a Buffer', async () => {
+    const preview = await encodedPreview();
+    const { supabase, upload } = storageDouble({ stored: preview });
+
+    await uploadGenerationPreview({
+      preview,
+      storagePath: 'generated_images/user-1/output.jpg',
+      supabase: supabase as never,
+    });
+
+    const [, body] = upload.mock.calls[0] as unknown as [string, unknown];
+    expect(body).toBeInstanceOf(Blob);
+    expect(Buffer.isBuffer(body)).toBe(false);
+    expect((body as Blob).type).toBe('image/webp');
+    expect((body as Blob).size).toBe(preview.length);
+  });
+});
+
 describe('isDecodableWebp', () => {
   it('accepts a real sharp-encoded WebP', async () => {
     expect(isDecodableWebp(await encodedPreview())).toBe(true);

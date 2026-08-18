@@ -17,14 +17,14 @@ describe('generation media previews', () => {
     }).jpeg().toBuffer();
     // The upload is read back and checked for integrity, so the double has to
     // return the bytes it was handed.
-    let written: Buffer | null = null;
-    const upload = vi.fn(async (_path: string, body: Buffer) => {
+    let written: Blob | null = null;
+    const upload = vi.fn(async (_path: string, body: Blob) => {
       written = body;
       return { error: null };
     });
     const download = vi.fn(async () => ({
       error: null,
-      data: { arrayBuffer: async () => Uint8Array.from(written ?? Buffer.alloc(0)).buffer },
+      data: { arrayBuffer: async () => (written ?? new Blob([])).arrayBuffer() },
     }));
     const supabase = {
       storage: {
@@ -45,9 +45,12 @@ describe('generation media previews', () => {
     expect(result?.previewStoragePath).toMatch(
       /^generated_images\/user-1\/output\.preview\.[a-f0-9]{16}\.webp$/
     );
+    // A Blob, never a Buffer: the storage client only routes Blobs through its
+    // multipart path, and a Buffer falls through to a raw body that gets UTF-8
+    // stringified in transit — which is what corrupted four stored previews.
     expect(upload).toHaveBeenCalledWith(
       expect.stringMatching(/^user-1\/output\.preview\.[a-f0-9]{16}\.webp$/),
-      expect.any(Buffer),
+      expect.any(Blob),
       expect.objectContaining({ cacheControl: '86400', upsert: true })
     );
   });

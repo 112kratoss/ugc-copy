@@ -128,7 +128,13 @@ describe('post media image previews', () => {
     expect(videoPosterState.createVideoPosterBuffer).toHaveBeenCalledWith(body);
     expect(upload).toHaveBeenCalledTimes(1);
     expect(upload.mock.calls[0]?.[0]).toBe(result?.previewStoragePath);
-    expect(upload.mock.calls[0]?.[1]).toEqual(await videoPosterState.createVideoPosterBuffer.mock.results[0]?.value);
+    // Uploaded as a Blob carrying the poster's bytes, not as the Buffer itself:
+    // the storage client only sends Blobs down its multipart path, and a Buffer
+    // falls through to a raw body that gets UTF-8 stringified in transit.
+    const posterBytes: Buffer = await videoPosterState.createVideoPosterBuffer.mock.results[0]?.value;
+    const uploadedBody = upload.mock.calls[0]?.[1] as unknown as Blob;
+    expect(uploadedBody).toBeInstanceOf(Blob);
+    expect(Buffer.from(await uploadedBody.arrayBuffer())).toEqual(posterBytes);
     expect(upload.mock.calls[0]?.[2]).toMatchObject({
       cacheControl: '86400',
       contentType: 'image/webp',

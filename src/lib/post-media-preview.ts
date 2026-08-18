@@ -3,6 +3,7 @@ import sharp from 'sharp';
 
 import { getMediaContentHash, getPreviewThumbhash } from '@/lib/media-preview-metadata';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
+import { toStorageUploadBody } from '@/lib/storage-upload-body';
 
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 const PREVIEW_MAX_SIZE = 720;
@@ -55,7 +56,7 @@ export async function createPostMediaImagePreview({
   const previewStoragePath = buildPostMediaPreviewPath(storagePath, getMediaContentHash(preview));
   const upload = await supabase.storage
     .from(SHOWCASE_MEDIA_BUCKET)
-    .upload(previewStoragePath, preview, {
+    .upload(previewStoragePath, toStorageUploadBody(preview, 'image/webp'), {
       cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
       contentType: 'image/webp',
       upsert: true,
@@ -105,7 +106,7 @@ export async function createPostMediaPreview({
   const previewStoragePath = buildPostMediaPreviewPath(storagePath, getMediaContentHash(poster));
   const upload = await supabase.storage
     .from(SHOWCASE_MEDIA_BUCKET)
-    .upload(previewStoragePath, poster, {
+    .upload(previewStoragePath, toStorageUploadBody(poster, 'image/webp'), {
       cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
       contentType: 'image/webp',
       upsert: true,
