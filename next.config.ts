@@ -118,6 +118,22 @@ const contentSecurityPolicyReportOnly = [
 ].join("; ");
 
 const nextConfig: NextConfig = {
+  // Pin the workspace root instead of letting Next infer it from lockfiles.
+  // Inference walks up from the project directory and selects the OUTERMOST
+  // lockfile, so a build inside .claude/worktrees/<name>/ — which carries its
+  // own package-lock.json beneath the primary checkout's — roots at the parent
+  // checkout and inlines dependency paths as
+  // "/ROOT/.claude/worktrees/<name>/node_modules/next/dist/...". `build:verify`
+  // only allows "/ROOT/node_modules/next/dist/...", so it rejected worktree
+  // builds that were in fact correct.
+  //
+  // `__dirname` is the project directory: next.config.ts is transpiled to
+  // CommonJS and required as `<project>/next.config.compiled.js`, so it holds
+  // wherever the build was invoked from. Next copies this into
+  // `outputFileTracingRoot` too, which keeps the two roots in step.
+  turbopack: {
+    root: __dirname,
+  },
   // Inline the source-scoped route CSS to remove the render-blocking stylesheet
   // round trip. Public routes still exclude utilities used only by authenticated
   // tools; private routes add their supplemental utilities from route layouts.
