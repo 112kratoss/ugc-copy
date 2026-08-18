@@ -21,6 +21,17 @@ import { appTheme } from '@/lib/theme';
 const PRIMARY = appTheme.colors.primary ?? '#FF7A59';
 const PRIMARY_STRONG = appTheme.colors.primaryStrong ?? '#FF8A6D';
 const ON_PRIMARY = appTheme.colors.onPrimary ?? '#1A0E0A';
+// Sheet motion. The panel travels its own measured height so it reads as a sheet arriving from
+// the screen edge instead of a box blinking into place, and the two directions use opposite
+// curves: entering decelerates into rest, leaving accelerates away.
+const SHEET_ENTER_DURATION = 300;
+const SHEET_EXIT_DURATION = 220;
+// Keeps the panel's drop shadow past the screen edge while it is closed.
+const SHEET_HIDDEN_SLOP = 24;
+// Written out rather than imported from react-native's `Easing` so the focused component tests,
+// whose react-native mock only exposes the primitives this file renders, keep working.
+const easeOutCubic = (t: number) => 1 - (1 - t) ** 3;
+const easeInCubic = (t: number) => t * t * t;
 const IS_TEST_ENVIRONMENT = typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
 const FallbackModal = ({ children, visible }: ModalProps) => (
   visible ? <>{children}</> : null
@@ -51,7 +62,11 @@ export function MagicCreateMenu({
   const actionWidth = Math.max(116, (panelWidth - 52) / 2);
   const reduceMotionEnabled = useReducedMotion();
   const [rendered, setRendered] = useState(visible);
+  const [sheetHeight, setSheetHeight] = useState(0);
   const progress = useRef(createAnimatedValue(visible ? 1 : 0)).current;
+  // The slide distance is only known once the panel has been laid out, so opening waits for the
+  // first measurement. Without it the sheet would animate from a 0px offset and appear in place.
+  const measured = sheetHeight > 0;
 
   useEffect(() => {
     if (visible) setRendered(true);
@@ -63,11 +78,12 @@ export function MagicCreateMenu({
 
   useEffect(() => {
     if (!rendered) return;
+    if (visible && !measured) return;
 
     animateProgress(progress, visible ? 1 : 0, reduceMotionEnabled, () => {
       if (!visible) setRendered(false);
     });
-  }, [progress, reduceMotionEnabled, rendered, visible]);
+  }, [measured, progress, reduceMotionEnabled, rendered, visible]);
 
   useEffect(() => {
     if (IS_TEST_ENVIRONMENT || !visible || !BackHandler.addEventListener) return;
@@ -80,14 +96,16 @@ export function MagicCreateMenu({
     return () => subscription.remove();
   }, [onClose, visible]);
 
+  // The scrim reaches full strength by the time the panel is 60% of the way in, so the sheet
+  // settles onto an already-dimmed screen rather than darkening the world as it arrives.
   const backdropOpacity = progress
-    ? progress.interpolate({ inputRange: [0, 1], outputRange: [0, 0.72] })
+    ? progress.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0, 0.72, 0.72] })
     : 0.72;
-  const sheetOpacity = progress
-    ? progress.interpolate({ inputRange: [0, 1], outputRange: [0.72, 1] })
-    : 1;
+  // No cross-fade: the travel carries the entrance on its own, and fading a moving panel reads
+  // as smearing. Opacity is only used to hold the sheet back for the frame before it is measured.
+  const sheetOpacity = progress ? (measured ? 1 : 0) : 1;
   const sheetTranslateY = progress
-    ? progress.interpolate({ inputRange: [0, 1], outputRange: [32, 0] })
+    ? progress.interpolate({ inputRange: [0, 1], outputRange: [sheetHeight + SHEET_HIDDEN_SLOP, 0] })
     : 0;
 
   return (
@@ -119,6 +137,11 @@ export function MagicCreateMenu({
         <AnimatedView
           accessibilityViewIsModal
           importantForAccessibility="yes"
+          onLayout={(event) => {
+            const nextHeight = event.nativeEvent.layout.height;
+            // Ignore sub-pixel churn so a re-layout cannot restart the slide mid-animation.
+            setSheetHeight((current) => (Math.abs(current - nextHeight) > 1 ? nextHeight : current));
+          }}
           style={{
             width: panelWidth,
             alignSelf: 'center',
@@ -276,10 +299,13 @@ function animateProgress(
     return;
   }
 
+  const opening = toValue === 1;
+
   progress.stopAnimation();
   Animated.timing(progress, {
     toValue,
-    duration: toValue === 1 ? 180 : 150,
+    duration: opening ? SHEET_ENTER_DURATION : SHEET_EXIT_DURATION,
+    easing: opening ? easeOutCubic : easeInCubic,
     useNativeDriver: true,
   }).start(({ finished }) => {
     if (finished) onComplete();
