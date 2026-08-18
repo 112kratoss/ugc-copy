@@ -48,6 +48,7 @@ export const FFMPEG_REQUIRED_ROUTE_MANIFESTS = [
   'app/api/posts/route.js.nft.json',
   'app/api/posts/[postId]/route.js.nft.json',
   'app/api/showcase/publish/route.js.nft.json',
+  'app/api/templates/[id]/publish/route.js.nft.json',
 ];
 
 export function traceContainsFfmpeg(files) {

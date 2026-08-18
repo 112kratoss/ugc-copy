@@ -7,6 +7,7 @@ import path from 'node:path';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { canUserCreateDurableUpload } from '@/lib/account-deletion-guard';
+import { CatalogError } from '@/lib/generation-model-catalog';
 import {
 } from '@/lib/generation-services';
 import { syncGenerationStatuses } from '@/lib/generation-status-sync';
@@ -56,6 +57,10 @@ import {
 import { executeWorkflowRunnableNode } from '@/lib/workflow-runner';
 
 const TEMPLATE_INPUT_BUCKET = 'template_inputs' as const;
+const TEMPLATE_CATALOG_OUTDATED_MESSAGE =
+  'This template was published against a model catalog that is no longer available. It cannot generate until its creator republishes it.';
+const TEMPLATE_CANCELLED_MID_GENERATION_MESSAGE =
+  'This step was already generating when the run was cancelled, so its credits stay spent.';
 const MAX_IDEMPOTENCY_KEY_LENGTH = 256;
 const ACTIVE_GENERATION_STATUSES = new Set(['pending', 'waiting', 'processing']);
 const TERMINAL_RUN_STATUSES = new Set<TemplateRunStatus>(['succeeded', 'failed', 'cancelled']);
@@ -969,6 +974,10 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
         node,
         graph,
         catalogRevision: state.run.catalog_revision,
+        // The run's revision was compiled server-side at publish/test time, so
+        // quote against that exact release instead of freshness-checking it
+        // against the current catalog — a later publish must not strand runs.
+        quoteAtPinnedRevision: true,
         clientRequestKeyHash: generationIdempotencyHash(state.run.id, node.id, step.attempt),
         persistInputMedia: false,
         privateRecipe: true,
@@ -993,6 +1002,24 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
         });
       }
     } catch (error) {
+      if (error instanceof CatalogError) {
+        // The pinned catalog release can no longer serve this step (release
+        // pruned or model retired). Retrying is deterministic — fail the step
+        // loudly so the run surfaces needs_attention instead of sitting in
+        // queued while the durable job defers forever.
+        await client.from('template_run_steps').update({
+          status: 'failed',
+          can_retry: false,
+          error_message: TEMPLATE_CATALOG_OUTDATED_MESSAGE,
+          output_snapshot: failureSnapshot(step, 'provider_rejected'),
+          finished_at: new Date().toISOString(),
+        }).eq('id', step.id);
+        graph = updateNodeRunState(graph, node.id, {
+          status: 'failed',
+          error: TEMPLATE_CATALOG_OUTDATED_MESSAGE,
+        });
+        continue;
+      }
       const status = isRecord(error) && typeof error.status === 'number' ? error.status : 500;
       if (status !== 409) {
         const failure = getPublicGenerationStartFailure(error);
@@ -1250,8 +1277,30 @@ export async function retryTemplateRunStep(params: {
 }
 
 export async function cancelTemplateRun(client: SupabaseClient, runId: string, userId: string): Promise<TemplateRunDto> {
-  const state = await loadRunState(client, runId, userId);
+  let state = await loadRunState(client, runId, userId);
   if (!TERMINAL_RUN_STATUSES.has(state.run.status)) {
+    // Settle provider work that already finished before deciding what the
+    // cancel interrupts: a completed generation should read succeeded with its
+    // real cost on the books, not be blanket-cancelled.
+    const activeIds = Array.from(state.latestSteps.values()).flatMap((step) => {
+      if (step.status !== 'processing' || !step.generation_id) return [];
+      const generation = state.generations.get(step.generation_id);
+      return generation && ACTIVE_GENERATION_STATUSES.has(generation.status) ? [generation.id] : [];
+    });
+    if (activeIds.length) {
+      try {
+        await syncGenerationStatuses({
+          supabase: client,
+          creditSupabase: client,
+          generationIds: activeIds,
+        });
+      } catch (error) {
+        logBackendError('failed_to_synchronize_template_generations', { error: error });
+      }
+      state = await loadRunState(client, runId, userId);
+      await refreshGenerationSteps(client, state);
+      state = await loadRunState(client, runId, userId);
+    }
     const now = new Date().toISOString();
     await client.from('template_runs').update({
       status: 'cancelled',
@@ -1261,7 +1310,14 @@ export async function cancelTemplateRun(client: SupabaseClient, runId: string, u
     await client.from('template_run_steps').update({
       status: 'cancelled',
       finished_at: now,
-    }).eq('run_id', state.run.id).in('status', ['queued', 'processing', 'awaiting_approval']);
+    }).eq('run_id', state.run.id).in('status', ['queued', 'awaiting_approval']);
+    // There is no provider-side cancellation, so in-flight work keeps running
+    // and keeps its charge — say so instead of pretending it stopped.
+    await client.from('template_run_steps').update({
+      status: 'cancelled',
+      finished_at: now,
+      error_message: TEMPLATE_CANCELLED_MID_GENERATION_MESSAGE,
+    }).eq('run_id', state.run.id).eq('status', 'processing');
   }
   const cancelledState = await loadRunState(client, runId, userId);
   return toRunDto(client, await cleanupTemplateRunInputs(client, cancelledState));

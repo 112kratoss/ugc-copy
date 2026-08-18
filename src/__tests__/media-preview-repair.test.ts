@@ -59,6 +59,11 @@ function createSelectChain(result: { data: unknown[] | null; error: Error | null
       return chain;
     }),
     in: vi.fn(() => chain),
+    is: vi.fn((column: string, value: unknown) => {
+      equalities.push([column, value]);
+      return chain;
+    }),
+    like: vi.fn(() => chain),
     lt: vi.fn(() => chain),
     not: vi.fn(() => chain),
     order: vi.fn(() => chain),

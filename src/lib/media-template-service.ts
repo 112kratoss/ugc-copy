@@ -5,11 +5,13 @@ import { randomUUID } from 'node:crypto';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { logBackendError } from '@/lib/backend-logger';
 import {
   compileTemplateGraph,
   createTemplateSnapshotHash,
   validateAndCompileTemplateGraph,
 } from '@/lib/template-graph-compiler';
+import { createVideoPosterBuffer } from '@/lib/video-poster';
 import {
   isRecord,
   MediaTemplateError,
@@ -480,7 +482,31 @@ async function copyOwnedAssetToVersion(params: {
   const { error: uploadError } = await params.client.storage.from('template_assets')
     .upload(destination, blob, { contentType: blob.type || undefined, upsert: false });
   if (uploadError) throw new MediaTemplateError('Template media could not be stored.', 500, 'TEMPLATE_ASSET_COPY_FAILED');
-  return destination;
+  return { destination, blob };
+}
+
+/**
+ * Derives the catalog poster for a video template from the demo blob the
+ * publish already holds. Cosmetic: a failure must never fail the publish —
+ * the media-preview-repair sweep retries missing posters hourly.
+ */
+async function createTemplateDemoPosterAsset(params: {
+  client: SupabaseClient;
+  templateId: string;
+  versionId: string;
+  demoBlob: Blob;
+}): Promise<string | null> {
+  try {
+    const poster = await createVideoPosterBuffer(params.demoBlob);
+    const destination = `${params.templateId}/${params.versionId}/demo/poster.webp`;
+    const { error } = await params.client.storage.from('template_assets')
+      .upload(destination, poster, { contentType: 'image/webp', upsert: false });
+    if (error) throw error;
+    return destination;
+  } catch (error) {
+    logBackendError('failed_to_create_template_demo_poster', { templateId: params.templateId, error: error });
+    return null;
+  }
 }
 
 async function copyFixedAssets(params: {
@@ -499,7 +525,7 @@ async function copyFixedAssets(params: {
       const config = isRecord(node.data.templateInput) ? node.data.templateInput : {};
       if (config.mode !== 'fixed') continue;
       const storagePath = typeof node.data.storagePath === 'string' ? node.data.storagePath : '';
-      const destination = await copyOwnedAssetToVersion({
+      const { destination } = await copyOwnedAssetToVersion({
         client: params.client,
         userId: params.userId,
         templateId: params.templateId,
@@ -560,8 +586,9 @@ export async function publishMediaTemplate(client: SupabaseClient, userId: strin
   const versionId = randomUUID();
   const copied = await copyFixedAssets({ client, userId, templateId: template.id, versionId, compiled });
   let demoObjectPath: string;
+  let demoPosterPath: string | null = null;
   try {
-    demoObjectPath = await copyOwnedAssetToVersion({
+    const demoCopy = await copyOwnedAssetToVersion({
       client,
       userId,
       templateId: template.id,
@@ -570,7 +597,17 @@ export async function publishMediaTemplate(client: SupabaseClient, userId: strin
       kind: compiled.outputKind,
       destinationSegment: 'demo',
     });
+    demoObjectPath = demoCopy.destination;
     copied.copiedPaths.push(demoObjectPath);
+    if (compiled.outputKind === 'video') {
+      demoPosterPath = await createTemplateDemoPosterAsset({
+        client,
+        templateId: template.id,
+        versionId,
+        demoBlob: demoCopy.blob,
+      });
+      if (demoPosterPath) copied.copiedPaths.push(demoPosterPath);
+    }
   } catch (error) {
     if (copied.copiedPaths.length) await client.storage.from('template_assets').remove(copied.copiedPaths);
     throw error;
@@ -610,6 +647,18 @@ export async function publishMediaTemplate(client: SupabaseClient, userId: strin
   }
   if (activation.inserted !== true && copied.copiedPaths.length) {
     await client.storage.from('template_assets').remove(copied.copiedPaths);
+  }
+  if (activation.inserted === true && demoPosterPath) {
+    // The activation RPC assigns video_url from the demo; the derived poster
+    // is recorded separately so the catalog cards get a still image on both
+    // clients. Cosmetic — a failure here is healed by media-preview-repair.
+    const { error: posterError } = await client.from('templates')
+      .update({ thumbnail_url: `template_assets/${demoPosterPath}` })
+      .eq('id', template.id)
+      .eq('creator_user_id', userId);
+    if (posterError) {
+      logBackendError('failed_to_record_template_demo_poster', { templateId: template.id, error: posterError });
+    }
   }
   const updated = await loadOwnedTemplate(client, template.id, userId);
   return (await attachTemplateDetails(client, [updated], true))[0]!;
