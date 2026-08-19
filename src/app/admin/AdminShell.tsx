@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useState, type ReactNode } from 'react';
 import {
   Activity,
+  ScrollText,
   BadgeIndianRupee,
   Images,
   LayoutDashboard,
@@ -28,6 +29,7 @@ const NAV_ITEMS = [
   { href: '/admin/revenue', label: 'Revenue', icon: BadgeIndianRupee },
   { href: '/admin/payouts', label: 'Payouts', icon: Wallet },
   { href: '/admin/content', label: 'Content', icon: Images },
+  { href: '/admin/activity', label: 'Operator activity', icon: ScrollText },
   { href: '/admin/system', label: 'System', icon: Activity },
 ];
 

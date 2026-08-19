@@ -3,6 +3,7 @@ import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { runPagedQuery } from '@/lib/admin-paged-query';
 import { decryptCreatorPayoutDetails } from '@/lib/creator-payout-details-crypto';
 import { formatTokenSubunitsAsUsd } from '@/lib/creator-payouts';
 
@@ -84,6 +85,102 @@ export async function listOpenCreatorPayoutRequests(
     requestedAt: row.requested_at,
     lifetimeEarnedTokenSubunits: wallets.get(row.user_id) ?? 0,
   }));
+}
+
+export interface ResolvedCreatorPayoutRequest {
+  id: string;
+  userId: string;
+  username: string | null;
+  displayName: string | null;
+  amountTokenSubunits: number;
+  amountUsd: string;
+  payoutMethod: string;
+  status: 'paid' | 'rejected';
+  requestedAt: string;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+  /** Bank reference / UTR for a paid request, or the reason for a rejection. */
+  resolutionNote: string | null;
+  externalReference: string | null;
+}
+
+const RESOLVED_PAYOUT_STATUSES = ['paid', 'rejected'];
+
+/**
+ * The settled half of the queue.
+ *
+ * Once an operator marked a request paid or rejected it left the console
+ * entirely, so there was no way to answer "did we already pay this creator?"
+ * without a database session — and a creator disputing a payment is exactly
+ * when that question gets asked.
+ *
+ * `payout_details` is deliberately not decrypted here. The open queue reveals
+ * the destination because the operator needs it to send the money; once the
+ * request is settled that need is gone, and re-rendering a bank handle on a
+ * long scrollable history is exposure with no operational purpose.
+ */
+export async function listResolvedCreatorPayoutRequests(
+  adminSupabase: SupabaseClient,
+  options: { limit?: number; offset?: number } = {},
+): Promise<{ requests: ResolvedCreatorPayoutRequest[]; total: number; offset: number }> {
+  const limit = Math.min(Math.max(options.limit ?? 25, 1), 100);
+
+  const page = await runPagedQuery<Record<string, unknown>>(
+    (from, to) => adminSupabase
+      .from('creator_payout_requests')
+      .select(
+        'id, user_id, amount_token_subunits, payout_method, status, requested_at, resolved_at, resolved_by, resolution_note, external_reference',
+        { count: 'exact' },
+      )
+      .in('status', RESOLVED_PAYOUT_STATUSES)
+      .order('resolved_at', { ascending: false, nullsFirst: false })
+      .order('id', { ascending: false })
+      .range(from, to),
+    { offset: Math.max(options.offset ?? 0, 0), pageSize: limit },
+  ).catch((error) => {
+    logBackendError('creator_payout_history_load_failed', { error });
+    throw error;
+  });
+
+  const rows = page.rows;
+  if (rows.length === 0) {
+    return { requests: [], total: page.total, offset: page.offset };
+  }
+
+  const userIds = Array.from(new Set(rows.map((row) => String(row.user_id))));
+  const profilesResult = await adminSupabase
+    .from('profiles')
+    .select('id, username, display_name')
+    .in('id', userIds);
+
+  const profiles = new Map(
+    ((profilesResult.data ?? []) as Array<{ id: string; username: string | null; display_name: string | null }>)
+      .map((profile) => [profile.id, profile]),
+  );
+
+  return {
+    requests: rows.map((row) => {
+      const userId = String(row.user_id);
+      const amountTokenSubunits = Number(row.amount_token_subunits ?? 0);
+      return {
+        id: String(row.id),
+        userId,
+        username: profiles.get(userId)?.username ?? null,
+        displayName: profiles.get(userId)?.display_name ?? null,
+        amountTokenSubunits,
+        amountUsd: formatTokenSubunitsAsUsd(amountTokenSubunits),
+        payoutMethod: String(row.payout_method ?? ''),
+        status: row.status === 'paid' ? 'paid' as const : 'rejected' as const,
+        requestedAt: String(row.requested_at ?? ''),
+        resolvedAt: (row.resolved_at as string | null) ?? null,
+        resolvedBy: (row.resolved_by as string | null) ?? null,
+        resolutionNote: (row.resolution_note as string | null) ?? null,
+        externalReference: (row.external_reference as string | null) ?? null,
+      };
+    }),
+    total: page.total,
+    offset: page.offset,
+  };
 }
 
 /**

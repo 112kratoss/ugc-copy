@@ -1,9 +1,12 @@
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
-import { ArrowLeft, ExternalLink } from 'lucide-react';
+import { ArrowLeft, ExternalLink, ShieldBan } from 'lucide-react';
 
 import { Surface, Text } from '@/app/components/DesignSystem';
 import { listAdminCreditAdjustments } from '@/lib/admin-credit-adjustment-service';
+import {
+  getAdminUserAccountState,
+  listAdminUserSanctions,
+} from '@/lib/admin-user-sanction-service';
 import { getAdminUserDetail } from '@/lib/admin-users-service';
 import { createServiceClient } from '@/lib/server-helpers';
 
@@ -19,6 +22,9 @@ import {
   shortId,
 } from '../../AdminUi';
 import { CreditAdjustmentForm } from './CreditAdjustmentForm';
+import { GenerationModerationControls } from './GenerationModerationControls';
+import { UserNotFoundPanel } from './UserNotFoundPanel';
+import { UserSanctionForm } from './UserSanctionForm';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,12 +47,16 @@ export default async function AdminUserDetailPage({
 
   const detail = await getAdminUserDetail(client, userId).catch(() => null);
   if (!detail) {
-    notFound();
+    return <UserNotFoundPanel userId={userId} />;
   }
 
-  // The adjustments table only exists after the admin migration is applied, so
-  // a missing relation degrades to an empty list rather than a 500.
-  const adjustments = await listAdminCreditAdjustments(client, userId).catch(() => []);
+  // These tables only exist after their admin migrations are applied, so a
+  // missing relation degrades rather than taking the whole support record down.
+  const [adjustments, sanctions, accountState] = await Promise.all([
+    listAdminCreditAdjustments(client, userId).catch(() => []),
+    listAdminUserSanctions(client, userId).catch(() => []),
+    getAdminUserAccountState(client, userId).catch(() => ({ isSuspended: false, bannedUntil: null })),
+  ]);
 
   return (
     <>
@@ -73,6 +83,21 @@ export default async function AdminUserDetailPage({
           </Link>
         ) : undefined}
       />
+
+      {accountState.isSuspended ? (
+        <div
+          role="status"
+          className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-[var(--ui-accent-danger)] bg-[rgba(255,124,139,0.08)] px-4 py-3"
+        >
+          <ShieldBan className="h-5 w-5 shrink-0 text-[var(--ui-accent-danger)]" aria-hidden />
+          <Text as="span" variant="label" className="text-[var(--ui-accent-danger)]">
+            Account suspended — this user cannot sign in.
+          </Text>
+          <Text as="span" variant="caption">
+            Until {formatTimestamp(accountState.bannedUntil)}
+          </Text>
+        </div>
+      ) : null}
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Credits" value={detail.profile.credits} />
@@ -131,6 +156,38 @@ export default async function AdminUserDetailPage({
       </section>
 
       <section className="mt-8">
+        <UserSanctionForm
+          userId={detail.profile.id}
+          isSuspended={accountState.isSuspended}
+          bannedUntil={accountState.bannedUntil ? formatTimestamp(accountState.bannedUntil) : null}
+        />
+      </section>
+
+      <section className="mt-8">
+        <Text as="h2" variant="cardTitle" className="mb-3">Account sanctions</Text>
+        {sanctions.length === 0 ? (
+          <EmptyState message="No suspensions or reinstatements on record." />
+        ) : (
+          <DataTable columns={['Date', 'Action', 'Until', 'Reason', 'Operator']}>
+            {sanctions.map((sanction) => (
+              <tr key={sanction.id}>
+                <Td>{formatTimestamp(sanction.createdAt)}</Td>
+                <Td>
+                  <StatusBadge
+                    status={sanction.action === 'suspend' ? 'suspended' : 'reinstated'}
+                    tone={sanction.action === 'suspend' ? 'danger' : 'ok'}
+                  />
+                </Td>
+                <Td>{sanction.action === 'suspend' ? formatTimestamp(sanction.suspendedUntil) : '—'}</Td>
+                <Td truncateWidth={320}>{sanction.reason}</Td>
+                <Td mono>{shortId(sanction.reviewerId)}</Td>
+              </tr>
+            ))}
+          </DataTable>
+        )}
+      </section>
+
+      <section className="mt-8">
         <CreditAdjustmentForm
           userId={detail.profile.id}
           credits={detail.profile.credits}
@@ -175,15 +232,25 @@ export default async function AdminUserDetailPage({
         {detail.recentGenerations.length === 0 ? (
           <EmptyState message="No generations yet." />
         ) : (
-          <DataTable columns={['Date', 'Status', 'Model', 'Cost', 'Error', 'Id']}>
+            <DataTable columns={['Date', 'Status', 'Model', 'Cost', 'Error', 'Moderation']}>
             {detail.recentGenerations.map((generation) => (
               <tr key={generation.id}>
                 <Td>{formatTimestamp(generation.createdAt)}</Td>
                 <Td><StatusBadge status={generation.status} /></Td>
                 <Td>{generation.model ?? '—'}</Td>
                 <Td>{generation.cost?.toLocaleString() ?? '—'}</Td>
-                <Td truncateWidth={280}>{generation.errorMessage ?? '—'}</Td>
-                <Td mono>{shortId(generation.id)}</Td>
+                <Td truncateWidth={220}>{generation.errorMessage ?? '—'}</Td>
+                <Td>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {generation.moderationRemovedAt ? (
+                      <StatusBadge status="removed" tone="danger" />
+                    ) : null}
+                    <GenerationModerationControls
+                      generationId={generation.id}
+                      isRemoved={Boolean(generation.moderationRemovedAt)}
+                    />
+                  </div>
+                </Td>
               </tr>
             ))}
           </DataTable>

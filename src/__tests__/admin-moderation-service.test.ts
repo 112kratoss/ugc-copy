@@ -10,12 +10,14 @@ const moderationOpsMocks = vi.hoisted(() => ({
   listOpenModerationReports: vi.fn(),
   resolvePostReport: vi.fn(),
   resolveSubjectReport: vi.fn(),
+  applyPostModerationAction: vi.fn(),
 }));
 
 vi.mock('@/lib/showcase-feed-cache', () => cacheMocks);
 vi.mock('@/lib/moderation-ops', () => moderationOpsMocks);
 
 import {
+  applyAdminPostModeration,
   applyAdminPostReportDecision,
   applyAdminSubjectReportDecision,
 } from '@/lib/admin-moderation-service';
@@ -171,6 +173,111 @@ describe('applyAdminSubjectReportDecision', () => {
       reviewerId: REVIEWER_ID,
       action: 'resolve',
       resolutionNote: 'Removed the comment.',
+    });
+  });
+});
+
+
+describe('applyAdminPostModeration', () => {
+  const moderationResult = (overrides: Record<string, unknown> = {}) => ({
+    status: 'applied',
+    actionId: '40000000-0000-4000-8000-000000000004',
+    postId: POST_ID,
+    action: 'hide',
+    postReviewStatus: 'hidden',
+    postReviewStatusBefore: 'visible',
+    mediaRevocationRequired: false,
+    resolvedReportCount: 0,
+    affectedBundleCount: 0,
+    affectedAssetCount: 0,
+    error: null,
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    cacheMocks.invalidateShowcaseFeedCache.mockClear();
+    moderationOpsMocks.applyPostModerationAction.mockReset();
+  });
+
+  it('refuses an action with no rationale before touching the database', async () => {
+    await expect(applyAdminPostModeration(client, {
+      postId: POST_ID,
+      reviewerId: REVIEWER_ID,
+      action: 'hide',
+      reason: '   ',
+      idempotencyKey: 'key-1',
+    })).rejects.toThrow('A reason is required.');
+
+    expect(moderationOpsMocks.applyPostModerationAction).not.toHaveBeenCalled();
+  });
+
+  it.each(['hide', 'take_down', 'restore'] as const)(
+    'invalidates the showcase feed after a %s so cached pages stop disagreeing with the database',
+    async (action) => {
+      moderationOpsMocks.applyPostModerationAction.mockResolvedValue(moderationResult({ action }));
+
+      await applyAdminPostModeration(client, {
+        postId: POST_ID,
+        reviewerId: REVIEWER_ID,
+        action,
+        reason: 'policy 4.2',
+        idempotencyKey: `key-${action}`,
+      });
+
+      expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('re-invalidates on a replayed action, matching the re-sweep moderation-ops performs', async () => {
+    moderationOpsMocks.applyPostModerationAction.mockResolvedValue(
+      moderationResult({ status: 'already_applied' }),
+    );
+
+    await applyAdminPostModeration(client, {
+      postId: POST_ID,
+      reviewerId: REVIEWER_ID,
+      action: 'take_down',
+      reason: 'policy 4.2',
+      idempotencyKey: 'key-replay',
+    });
+
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['not_found', 'invalid', 'not_restorable'] as const)(
+    'does not invalidate the feed when the action was rejected (%s)',
+    async (status) => {
+      moderationOpsMocks.applyPostModerationAction.mockResolvedValue(moderationResult({ status }));
+
+      await applyAdminPostModeration(client, {
+        postId: POST_ID,
+        reviewerId: REVIEWER_ID,
+        action: 'restore',
+        reason: 'policy 4.2',
+        idempotencyKey: `key-${status}`,
+      });
+
+      expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    },
+  );
+
+  it('forwards the trimmed reason and the caller\'s idempotency key unchanged', async () => {
+    moderationOpsMocks.applyPostModerationAction.mockResolvedValue(moderationResult());
+
+    await applyAdminPostModeration(client, {
+      postId: POST_ID,
+      reviewerId: REVIEWER_ID,
+      action: 'hide',
+      reason: '  policy 4.2  ',
+      idempotencyKey: 'key-stable',
+    });
+
+    expect(moderationOpsMocks.applyPostModerationAction).toHaveBeenCalledWith(client, {
+      postId: POST_ID,
+      reviewerId: REVIEWER_ID,
+      action: 'hide',
+      reason: 'policy 4.2',
+      idempotencyKey: 'key-stable',
     });
   });
 });

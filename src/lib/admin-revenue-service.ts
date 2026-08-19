@@ -59,12 +59,27 @@ export type AdminRevenueReport = {
   since: string;
   rails: AdminRevenueRail[];
   recentOrders: AdminRevenueOrder[];
+  /** Orders across all rails in the window, so a pager knows its bounds. */
+  orderTotal: number;
+  orderOffset: number;
+  orderPageSize: number;
+  /**
+   * True when a rail returned a full page at the per-rail fetch cap, meaning
+   * the window holds more orders than were loaded. The rail summary counts and
+   * `orderTotal` are then both understatements, and saying so beats printing a
+   * total that quietly stopped counting.
+   */
+  ordersTruncated: boolean;
   creatorPayouts: {
     walletCount: number;
     availableTokenSubunits: number;
     lifetimeEarnedTokenSubunits: number;
   };
 };
+
+/** Per-rail row cap. High enough that hitting it is itself worth reporting. */
+const RAIL_FETCH_LIMIT = 2000;
+const DEFAULT_ORDER_PAGE_SIZE = 60;
 
 const SUCCESS_STATUSES = new Set(['success', 'paid', 'completed', 'succeeded', 'active']);
 const FAILURE_STATUSES = new Set(['failed', 'cancelled', 'canceled', 'refunded', 'reversed', 'expired']);
@@ -134,9 +149,16 @@ function summarizeRail(
 
 export async function collectAdminRevenueReport(
   client: SupabaseClient,
-  options: { windowDays?: AdminRevenueWindow; now?: Date } = {},
+  options: {
+    windowDays?: AdminRevenueWindow;
+    now?: Date;
+    orderOffset?: number;
+    orderPageSize?: number;
+  } = {},
 ): Promise<AdminRevenueReport> {
   const windowDays = options.windowDays ?? 30;
+  const orderPageSize = Math.min(Math.max(options.orderPageSize ?? DEFAULT_ORDER_PAGE_SIZE, 1), 200);
+  const orderOffset = Math.max(options.orderOffset ?? 0, 0);
   const now = options.now ?? new Date();
   const since = new Date(now.getTime() - windowDays * 24 * 60 * 60 * 1000).toISOString();
 
@@ -155,7 +177,7 @@ export async function collectAdminRevenueReport(
       .is('mobile_product_id', null)
       .gte('created_at', since)
       .order('created_at', { ascending: false })
-      .limit(2000),
+      .limit(RAIL_FETCH_LIMIT),
     client
       .from('mobile_store_transactions')
       .select('id, user_id, status, amount_subunits, currency, credits, created_at, product_id')
@@ -165,19 +187,19 @@ export async function collectAdminRevenueReport(
       .neq('provider', 'sandbox')
       .gte('created_at', since)
       .order('created_at', { ascending: false })
-      .limit(2000),
+      .limit(RAIL_FETCH_LIMIT),
     client
       .from('marketplace_orders')
       .select('id, buyer_user_id, status, amount_subunits, currency, created_at, razorpay_payment_id')
       .gte('created_at', since)
       .order('created_at', { ascending: false })
-      .limit(2000),
+      .limit(RAIL_FETCH_LIMIT),
     client
       .from('post_resource_bundle_orders')
       .select('id, buyer_user_id, status, amount_subunits, currency, created_at, razorpay_payment_id')
       .gte('created_at', since)
       .order('created_at', { ascending: false })
-      .limit(2000),
+      .limit(RAIL_FETCH_LIMIT),
     client
       .from('creator_resource_wallets')
       .select('available_token_subunits, lifetime_earned_token_subunits')
@@ -263,13 +285,23 @@ export async function collectAdminRevenueReport(
       createdAt: String(row.created_at ?? ''),
       reference: (row.razorpay_payment_id as string | null) ?? null,
     })),
-  ].sort((left, right) => right.createdAt.localeCompare(left.createdAt)).slice(0, 60);
+  ].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+
+  // This rail merge is paged in memory rather than by `.range()`, so it has to
+  // reproduce runPagedQuery's fallback itself: an offset past the end shows the
+  // first page, not an empty table, on every paged surface alike.
+  const effectiveOrderOffset = orderOffset >= recentOrders.length ? 0 : orderOffset;
 
   return {
     windowDays,
     since,
     rails,
-    recentOrders,
+    recentOrders: recentOrders.slice(effectiveOrderOffset, effectiveOrderOffset + orderPageSize),
+    orderTotal: recentOrders.length,
+    orderOffset: effectiveOrderOffset,
+    orderPageSize,
+    ordersTruncated: [creditRows, mobileRows, marketplaceRows, bundleRows]
+      .some((rows) => rows.length >= RAIL_FETCH_LIMIT),
     creatorPayouts: {
       walletCount: walletRows.length,
       availableTokenSubunits: walletRows.reduce(

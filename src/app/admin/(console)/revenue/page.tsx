@@ -9,15 +9,19 @@ import {
   DataTable,
   EmptyState,
   PageHeader,
+  Pagination,
   StatCard,
   StatusBadge,
   Td,
   formatSubunits,
   formatTimestamp,
+  parseOffset,
   shortId,
 } from '../AdminUi';
 
 export const dynamic = 'force-dynamic';
+
+const ORDER_PAGE_SIZE = 60;
 
 const WINDOWS: AdminRevenueWindow[] = [7, 30, 90];
 
@@ -29,11 +33,16 @@ function parseWindow(value: string | undefined): AdminRevenueWindow {
 export default async function AdminRevenuePage({
   searchParams,
 }: {
-  searchParams: Promise<{ window?: string }>;
+  searchParams: Promise<{ window?: string; orders?: string }>;
 }) {
-  const { window } = await searchParams;
+  const { window, orders } = await searchParams;
   const windowDays = parseWindow(window);
-  const report = await collectAdminRevenueReport(createServiceClient(), { windowDays });
+  const orderOffset = parseOffset(orders, ORDER_PAGE_SIZE);
+  const report = await collectAdminRevenueReport(createServiceClient(), {
+    windowDays,
+    orderOffset,
+    orderPageSize: ORDER_PAGE_SIZE,
+  });
 
   const totalSucceeded = report.rails.reduce((total, rail) => total + rail.succeededCount, 0);
   const totalPending = report.rails.reduce((total, rail) => total + rail.pendingCount, 0);
@@ -153,6 +162,23 @@ export default async function AdminRevenuePage({
             ))}
           </DataTable>
         )}
+
+        <Pagination
+          basePath="/admin/revenue"
+          offsetParam="orders"
+          offset={report.orderOffset}
+          pageSize={report.orderPageSize}
+          total={report.orderTotal}
+          otherParams={{ window: String(windowDays) }}
+          noun="orders"
+        />
+
+        {report.ordersTruncated ? (
+          <Text variant="caption" className="mt-2 block text-[var(--ui-accent-danger)]">
+            A payment rail returned its full row cap for this window, so these counts are a
+            lower bound. Narrow the window for exact figures.
+          </Text>
+        ) : null}
       </section>
     </>
   );

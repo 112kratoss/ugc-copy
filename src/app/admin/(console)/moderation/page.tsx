@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, History } from 'lucide-react';
 
 import { Surface, Text } from '@/app/components/DesignSystem';
 import { collectAdminModerationQueue } from '@/lib/admin-moderation-service';
@@ -39,6 +39,12 @@ export default async function AdminModerationPage() {
       <PageHeader
         title="Moderation"
         description="Open reports across posts, comments, users, and generations. Every decision records your reviewer id."
+        actions={
+          <Link href="/admin/moderation/history" className="ui-button ui-button-secondary ui-focus-ring">
+            <History className="h-4 w-4" aria-hidden />
+            Decision history
+          </Link>
+        }
       />
 
       <section className="grid gap-3 sm:grid-cols-3">

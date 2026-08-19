@@ -60,6 +60,18 @@ export const CONTACT_SUBMISSION_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const ADMIN_CONTENT_MODERATION_RATE_LIMIT = {
+  scope: 'admin-content-moderation',
+  limit: 60,
+  windowSeconds: 10 * 60,
+} as const;
+
+export const ADMIN_USER_SANCTION_RATE_LIMIT = {
+  scope: 'admin-user-sanction',
+  limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const POST_REPORT_RATE_LIMIT = {
   scope: 'post-report:submit',
   limit: 10,
@@ -163,6 +175,15 @@ export const ADMIN_LOGIN_RATE_LIMIT = {
 // here means a stuck retry loop or a compromised session, not support work.
 export const ADMIN_CREDIT_ADJUSTMENT_RATE_LIMIT = {
   scope: 'admin:credit-adjustment',
+  limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
+// Destructive and irreversible at the `take_down` end, and bounded by how fast
+// a human can actually review a post. A burst means a stuck retry loop or a
+// compromised session, not moderation work.
+export const ADMIN_POST_MODERATION_RATE_LIMIT = {
+  scope: 'admin:post-moderation',
   limit: 30,
   windowSeconds: 10 * 60,
 } as const;

@@ -2,6 +2,8 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { runPagedQuery } from '@/lib/admin-paged-query';
+
 /**
  * Read models for the admin Content area: published posts and the generation
  * pipeline behind them. Generation failures are surfaced separately because a
@@ -46,6 +48,20 @@ export type AdminContentSnapshot = {
     generations24h: number;
     failedGenerations24h: number;
   };
+  /**
+   * Row counts for the *filtered* lists, which is what a pager needs.
+   * `totals.posts` counts every post regardless of filter, so paging off it
+   * would offer pages that the active filter has no rows for.
+   */
+  pageTotals: {
+    posts: number;
+    generations: number;
+  };
+  /** Where each list actually landed; see `runPagedQuery`. */
+  pageOffsets: {
+    posts: number;
+    generations: number;
+  };
 };
 
 export type AdminPostFilter = 'all' | 'public' | 'hidden' | 'reported';
@@ -56,50 +72,72 @@ function normalizeLimit(limit: number | undefined) {
   return Math.min(limit, MAX_LIMIT);
 }
 
+function normalizeOffset(offset: number | undefined) {
+  if (!offset || !Number.isInteger(offset) || offset < 0) return 0;
+  return offset;
+}
+
 export async function collectAdminContentSnapshot(
   client: SupabaseClient,
   options: {
     postFilter?: AdminPostFilter;
     generationFilter?: AdminGenerationFilter;
     limit?: number;
+    postOffset?: number;
+    generationOffset?: number;
     now?: Date;
   } = {},
 ): Promise<AdminContentSnapshot> {
   const limit = normalizeLimit(options.limit);
+  const postOffset = normalizeOffset(options.postOffset);
+  const generationOffset = normalizeOffset(options.generationOffset);
   const now = options.now ?? new Date();
   const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
 
-  let postsQuery = client
-    .from('posts')
-    .select('id, user_id, title, visibility, review_status, post_format, category, report_count, save_count, comment_count, created_at')
-    .order('created_at', { ascending: false })
-    .limit(limit);
-
   const postFilter = options.postFilter ?? 'all';
-  if (postFilter === 'public') {
-    postsQuery = postsQuery.eq('visibility', 'public');
-  } else if (postFilter === 'hidden') {
-    postsQuery = postsQuery.neq('visibility', 'public');
-  } else if (postFilter === 'reported') {
-    postsQuery = postsQuery.gt('report_count', 0);
-  }
-
-  let generationsQuery = client
-    .from('generations')
-    .select('id, user_id, status, model, cost, creation_mode, error_message, created_at, completed_at')
-    .order('created_at', { ascending: false })
-    .limit(limit);
-
   const generationFilter = options.generationFilter ?? 'all';
-  if (generationFilter === 'failed') {
-    generationsQuery = generationsQuery.eq('status', 'failed');
-  } else if (generationFilter === 'processing') {
-    generationsQuery = generationsQuery.in('status', ['pending', 'processing', 'starting']);
-  }
+
+  const buildPostsQuery = (from: number, to: number) => {
+    const query = client
+      .from('posts')
+      .select(
+        'id, user_id, title, visibility, review_status, post_format, category, report_count, save_count, comment_count, created_at',
+        { count: 'exact' },
+      )
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(from, to);
+
+    if (postFilter === 'public') return query.eq('visibility', 'public');
+    if (postFilter === 'hidden') return query.neq('visibility', 'public');
+    if (postFilter === 'reported') return query.gt('report_count', 0);
+    return query;
+  };
+
+  const buildGenerationsQuery = (from: number, to: number) => {
+    const query = client
+      .from('generations')
+      .select(
+        'id, user_id, status, model, cost, creation_mode, error_message, created_at, completed_at',
+        { count: 'exact' },
+      )
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(from, to);
+
+    if (generationFilter === 'failed') return query.eq('status', 'failed');
+    if (generationFilter === 'processing') {
+      return query.in('status', ['pending', 'processing', 'starting']);
+    }
+    return query;
+  };
 
   const [posts, generations, postsCount, hiddenCount, generations24h, failed24h] = await Promise.all([
-    postsQuery,
-    generationsQuery,
+    runPagedQuery<Record<string, unknown>>(buildPostsQuery, { offset: postOffset, pageSize: limit }),
+    runPagedQuery<Record<string, unknown>>(buildGenerationsQuery, {
+      offset: generationOffset,
+      pageSize: limit,
+    }),
     client.from('posts').select('id', { count: 'exact', head: true }),
     client.from('posts').select('id', { count: 'exact', head: true }).neq('visibility', 'public'),
     client.from('generations').select('id', { count: 'exact', head: true }).gte('created_at', dayAgo),
@@ -110,12 +148,12 @@ export async function collectAdminContentSnapshot(
       .gte('created_at', dayAgo),
   ]);
 
-  for (const result of [posts, generations, postsCount, hiddenCount, generations24h, failed24h]) {
+  for (const result of [postsCount, hiddenCount, generations24h, failed24h]) {
     if (result.error) throw result.error;
   }
 
   return {
-    posts: ((posts.data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+    posts: posts.rows.map((row) => ({
       id: String(row.id),
       userId: String(row.user_id ?? ''),
       title: (row.title as string | null) ?? null,
@@ -128,7 +166,7 @@ export async function collectAdminContentSnapshot(
       commentCount: Number(row.comment_count ?? 0),
       createdAt: String(row.created_at ?? ''),
     })),
-    generations: ((generations.data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+    generations: generations.rows.map((row) => ({
       id: String(row.id),
       userId: String(row.user_id ?? ''),
       status: String(row.status ?? ''),
@@ -144,6 +182,14 @@ export async function collectAdminContentSnapshot(
       hiddenPosts: hiddenCount.count ?? 0,
       generations24h: generations24h.count ?? 0,
       failedGenerations24h: failed24h.count ?? 0,
+    },
+    pageTotals: {
+      posts: posts.total,
+      generations: generations.total,
+    },
+    pageOffsets: {
+      posts: posts.offset,
+      generations: generations.offset,
     },
   };
 }

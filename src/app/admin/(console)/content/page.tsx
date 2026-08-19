@@ -9,18 +9,24 @@ import {
 } from '@/lib/admin-content-service';
 import { createServiceClient } from '@/lib/server-helpers';
 
+import { PostModerationControls } from './PostModerationControls';
+
 import {
   DataTable,
   EmptyState,
   PageHeader,
+  Pagination,
   StatCard,
   StatusBadge,
   Td,
   formatTimestamp,
+  parseOffset,
   shortId,
 } from '../AdminUi';
 
 export const dynamic = 'force-dynamic';
+
+const PAGE_SIZE = 40;
 
 const POST_FILTERS: AdminPostFilter[] = ['all', 'public', 'hidden', 'reported'];
 const GENERATION_FILTERS: AdminGenerationFilter[] = ['all', 'failed', 'processing'];
@@ -60,9 +66,19 @@ function FilterLinks<T extends string>({
 export default async function AdminContentPage({
   searchParams,
 }: {
-  searchParams: Promise<{ posts?: string; generations?: string }>;
+  searchParams: Promise<{
+    posts?: string;
+    generations?: string;
+    postPage?: string;
+    generationPage?: string;
+  }>;
 }) {
-  const { posts: postsParam, generations: generationsParam } = await searchParams;
+  const {
+    posts: postsParam,
+    generations: generationsParam,
+    postPage,
+    generationPage,
+  } = await searchParams;
 
   const postFilter = (POST_FILTERS.includes(postsParam as AdminPostFilter)
     ? postsParam
@@ -71,9 +87,15 @@ export default async function AdminContentPage({
     ? generationsParam
     : 'all') as AdminGenerationFilter;
 
+  const postOffset = parseOffset(postPage, PAGE_SIZE);
+  const generationOffset = parseOffset(generationPage, PAGE_SIZE);
+
   const snapshot = await collectAdminContentSnapshot(createServiceClient(), {
     postFilter,
     generationFilter,
+    limit: PAGE_SIZE,
+    postOffset,
+    generationOffset,
   });
 
   return (
@@ -101,14 +123,17 @@ export default async function AdminContentPage({
             current={postFilter}
             options={POST_FILTERS}
             param="posts"
-            otherParams={{ generations: generationFilter }}
+            otherParams={{
+              generations: generationFilter,
+              ...(snapshot.pageOffsets.generations > 0 ? { generationPage: String(snapshot.pageOffsets.generations) } : {}),
+            }}
           />
         </div>
 
         {snapshot.posts.length === 0 ? (
           <EmptyState message="No posts match this filter." />
         ) : (
-          <DataTable columns={['Created', 'Title', 'Visibility', 'Review', 'Reports', 'Saves', 'Author']}>
+          <DataTable columns={['Created', 'Title', 'Visibility', 'Review', 'Reports', 'Saves', 'Author', 'Moderation']}>
             {snapshot.posts.map((post) => (
               <tr key={post.id}>
                 <Td>{formatTimestamp(post.createdAt)}</Td>
@@ -128,10 +153,27 @@ export default async function AdminContentPage({
                     {shortId(post.userId)}
                   </Link>
                 </Td>
+                <Td>
+                  <PostModerationControls postId={post.id} reviewStatus={post.reviewStatus} />
+                </Td>
               </tr>
             ))}
           </DataTable>
         )}
+
+        <Pagination
+          basePath="/admin/content"
+          offsetParam="postPage"
+          offset={snapshot.pageOffsets.posts}
+          pageSize={PAGE_SIZE}
+          total={snapshot.pageTotals.posts}
+          otherParams={{
+            posts: postFilter,
+            generations: generationFilter,
+            ...(snapshot.pageOffsets.generations > 0 ? { generationPage: String(snapshot.pageOffsets.generations) } : {}),
+          }}
+          noun="posts"
+        />
       </section>
 
       <section className="mt-8">
@@ -141,7 +183,10 @@ export default async function AdminContentPage({
             current={generationFilter}
             options={GENERATION_FILTERS}
             param="generations"
-            otherParams={{ posts: postFilter }}
+            otherParams={{
+              posts: postFilter,
+              ...(snapshot.pageOffsets.posts > 0 ? { postPage: String(snapshot.pageOffsets.posts) } : {}),
+            }}
           />
         </div>
 
@@ -166,6 +211,20 @@ export default async function AdminContentPage({
             ))}
           </DataTable>
         )}
+
+        <Pagination
+          basePath="/admin/content"
+          offsetParam="generationPage"
+          offset={snapshot.pageOffsets.generations}
+          pageSize={PAGE_SIZE}
+          total={snapshot.pageTotals.generations}
+          otherParams={{
+            posts: postFilter,
+            generations: generationFilter,
+            ...(snapshot.pageOffsets.posts > 0 ? { postPage: String(snapshot.pageOffsets.posts) } : {}),
+          }}
+          noun="generations"
+        />
       </section>
     </>
   );
