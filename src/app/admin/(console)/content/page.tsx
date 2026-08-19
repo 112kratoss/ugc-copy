@@ -9,6 +9,8 @@ import {
 } from '@/lib/admin-content-service';
 import { createServiceClient } from '@/lib/server-helpers';
 
+import { PostModerationControls } from './PostModerationControls';
+
 import {
   DataTable,
   EmptyState,
@@ -131,7 +133,7 @@ export default async function AdminContentPage({
         {snapshot.posts.length === 0 ? (
           <EmptyState message="No posts match this filter." />
         ) : (
-          <DataTable columns={['Created', 'Title', 'Visibility', 'Review', 'Reports', 'Saves', 'Author']}>
+          <DataTable columns={['Created', 'Title', 'Visibility', 'Review', 'Reports', 'Saves', 'Author', 'Moderation']}>
             {snapshot.posts.map((post) => (
               <tr key={post.id}>
                 <Td>{formatTimestamp(post.createdAt)}</Td>
@@ -150,6 +152,9 @@ export default async function AdminContentPage({
                   <Link href={`/admin/users/${post.userId}`} className="font-mono text-xs underline">
                     {shortId(post.userId)}
                   </Link>
+                </Td>
+                <Td>
+                  <PostModerationControls postId={post.id} reviewStatus={post.reviewStatus} />
                 </Td>
               </tr>
             ))}
