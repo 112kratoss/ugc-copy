@@ -117,6 +117,40 @@ const contentSecurityPolicyReportOnly = [
   buildCspDirective("report-uri", ["/api/security/csp-report"]),
 ].join("; ");
 
+// Only @img/sharp-libvips-* is shipped, not all of @img: sharp-wasm32 is another
+// 8.7 MB that a linux-x64 lambda never loads. The glob resolves to whichever
+// platform package the build installed, so it is correct on both macOS and CI.
+const SHARP_TRACE = ["./node_modules/@img/sharp-libvips-*/**"];
+const FFMPEG_TRACE = ["./node_modules/ffmpeg-static/**"];
+
+// Every route whose trace pulls sharp's native .node, and therefore needs the
+// libvips shared library beside it. Dynamic segments are "*" because a literal
+// "[id]" would read as a character class and never match. Keep this in step with
+// reality by running `npm run build:verify`, which fails the build if a route
+// traces the .node without the library.
+const SHARP_ROUTES = [
+  // Not only API routes: the templates page renders server-side through the
+  // same media helpers, which is exactly the kind of entry a hand-maintained
+  // list misses -- `build:verify` found this one.
+  "/templates",
+  "/api/cron/*",
+  "/api/generate-image",
+  "/api/generations",
+  "/api/posts/*/*",
+  "/api/template-runs/*",
+  "/api/template-runs/*/*",
+  "/api/template-runs/*/*/*",
+  "/api/template-runs/*/*/*/*",
+  "/api/templates",
+  "/api/templates/*",
+  "/api/templates/*/*",
+  "/api/webhooks/kie",
+  "/api/workflow-canvases/*/*",
+  "/api/workflow-canvases/*/*/*",
+  "/api/workflow-canvases/*/*/*/*",
+  "/api/workflow-canvases/*/*/*/*/*",
+];
+
 const nextConfig: NextConfig = {
   // Pin the workspace root instead of letting Next infer it from lockfiles.
   // Inference walks up from the project directory and selects the OUTERMOST
@@ -146,7 +180,15 @@ const nextConfig: NextConfig = {
   // and no rendition or video poster could be produced in production. Keeping
   // it external preserves a real runtime require, so `__dirname` points at the
   // node_modules directory outputFileTracingIncludes already ships.
-  // sharp needs no entry; Next externalizes it by default.
+  // sharp is externalized too, but externalizing is not the same as tracing:
+  // its .node binary dlopens libvips at runtime, and a dlopen is invisible to
+  // static analysis. The tracer therefore ships @img/sharp-libvips-*'s
+  // index.js, package.json and versions.json -- and omits the .so those exist
+  // to describe -- so every route touching the media stack dies on load with
+  // ERR_DLOPEN_FAILED. That took production's whole scheduler down on
+  // 2026-08-19 while every gate stayed green. SHARP_ROUTES below ships the
+  // library itself, and `build:verify` now fails any route that traces the
+  // .node without it, so this cannot silently regress again.
   //
   // The @sentry/* entries are load-bearing now that src/instrumentation.ts
   // exists: bundling them inlined "/ROOT/node_modules/@sentry/..." into the
@@ -163,16 +205,17 @@ const nextConfig: NextConfig = {
   // Keys are matched as globs, so a literal "[id]" reads as a character class
   // and never matches its route. Use "*" for dynamic segments.
   outputFileTracingIncludes: {
-    "/api/cron/backend-jobs": ["./node_modules/ffmpeg-static/**"],
-    "/api/cron/generation-completions": ["./node_modules/ffmpeg-static/**"],
-    "/api/cron/media-preview-repair": ["./node_modules/ffmpeg-static/**"],
-    "/api/generate": ["./node_modules/ffmpeg-static/**"],
-    "/api/generate-video": ["./node_modules/ffmpeg-static/**"],
-    "/api/posts": ["./node_modules/ffmpeg-static/**"],
-    "/api/posts/*": ["./node_modules/ffmpeg-static/**"],
-    "/api/showcase/publish": ["./node_modules/ffmpeg-static/**"],
+    ...Object.fromEntries(SHARP_ROUTES.map((route) => [route, SHARP_TRACE])),
+    "/api/cron/backend-jobs": [...FFMPEG_TRACE, ...SHARP_TRACE],
+    "/api/cron/generation-completions": [...FFMPEG_TRACE, ...SHARP_TRACE],
+    "/api/cron/media-preview-repair": [...FFMPEG_TRACE, ...SHARP_TRACE],
+    "/api/generate": [...FFMPEG_TRACE, ...SHARP_TRACE],
+    "/api/generate-video": [...FFMPEG_TRACE, ...SHARP_TRACE],
+    "/api/posts": [...FFMPEG_TRACE, ...SHARP_TRACE],
+    "/api/posts/*": [...FFMPEG_TRACE, ...SHARP_TRACE],
+    "/api/showcase/publish": [...FFMPEG_TRACE, ...SHARP_TRACE],
     // Template publish derives the catalog poster frame from the demo video.
-    "/api/templates/*/publish": ["./node_modules/ffmpeg-static/**"],
+    "/api/templates/*/publish": [...FFMPEG_TRACE, ...SHARP_TRACE],
   },
   outputFileTracingExcludes: {
     "**/*": [

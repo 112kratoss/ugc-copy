@@ -7,6 +7,13 @@ import { MAX_RENDITION_ATTEMPTS } from '@/lib/media-preview-repair';
 const nextConfig = fs.readFileSync(path.join(process.cwd(), 'next.config.ts'), 'utf8');
 
 describe('ffmpeg serverless configuration', () => {
+  it('keeps the trace constants pointing at the packages they name', () => {
+    // The route entries spread these, so an edit here would silently empty every
+    // route's include list while the assertions below still read correctly.
+    expect(nextConfig).toContain('const FFMPEG_TRACE = ["./node_modules/ffmpeg-static/**"];');
+    expect(nextConfig).toContain('const SHARP_TRACE = ["./node_modules/@img/sharp-libvips-*/**"];');
+  });
+
   it('keeps ffmpeg-static external so its __dirname survives bundling', () => {
     // Bundled, Turbopack inlines __dirname as "/ROOT/node_modules/ffmpeg-static",
     // a path no lambda has, and every spawn fails with ENOENT. build:verify
@@ -30,6 +37,18 @@ describe('ffmpeg serverless configuration', () => {
     expect(routeKeys.length).toBeGreaterThan(0);
     expect(routeKeys.filter((key) => key.includes('['))).toEqual([]);
     expect(routeKeys).toContain('/api/posts/*');
+
+    // SHARP_ROUTES is declared above the config and spread in, so it falls
+    // outside the slice above -- it needs the same glob-safety check, since a
+    // literal "[id]" there would fail exactly as silently.
+    const sharpRoutesBlock = nextConfig.slice(
+      nextConfig.indexOf('const SHARP_ROUTES = ['),
+      nextConfig.indexOf('const nextConfig'),
+    );
+    const sharpKeys = [...sharpRoutesBlock.matchAll(/"(\/[^"]*)"/g)].map(([, key]) => key);
+    expect(sharpKeys.length).toBeGreaterThan(0);
+    expect(sharpKeys.filter((key) => key.includes('['))).toEqual([]);
+    expect(sharpKeys).toContain('/api/webhooks/kie');
   });
 
   it('still ships the binary to the routes that transcode', () => {
@@ -39,7 +58,7 @@ describe('ffmpeg serverless configuration', () => {
       '/api/posts',
       '/api/showcase/publish',
     ]) {
-      expect(nextConfig).toContain(`"${route}": ["./node_modules/ffmpeg-static/**"]`);
+      expect(nextConfig).toContain(`"${route}": [...FFMPEG_TRACE, ...SHARP_TRACE]`);
     }
   });
 });
