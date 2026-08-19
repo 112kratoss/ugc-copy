@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const authenticateAdminRequestMock = vi.hoisted(() => vi.fn());
 const applyAdminUserSanctionMock = vi.hoisted(() => vi.fn());
-const enforceBackendRateLimitMock = vi.hoisted(() => vi.fn(async () => undefined));
+// Untyped on purpose: the wrapper below forwards two explicit arguments, so a
+// zero-arg implementation here would reject the spread at type-check time.
+const enforceBackendRateLimitMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/admin-auth', () => ({
   authenticateAdminRequest: (request: Request) => authenticateAdminRequestMock(request),
@@ -20,7 +22,9 @@ vi.mock('@/lib/backend-rate-limit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/backend-rate-limit')>();
   return {
     ...actual,
-    enforceBackendRateLimit: (...args: unknown[]) => enforceBackendRateLimitMock(...args),
+    enforceBackendRateLimit: (client: unknown, options: unknown) => (
+      enforceBackendRateLimitMock(client, options)
+    ),
   };
 });
 
