@@ -203,6 +203,7 @@ const SERVICE_ROUTES = [
   '/api/admin/users/credits',
   '/api/admin/payouts',
   '/api/admin/moderation/post-reports',
+  '/api/admin/moderation/posts',
   '/api/admin/moderation/subject-reports',
   '/api/admin/users/sanctions',
   '/api/admin/moderation/generations',

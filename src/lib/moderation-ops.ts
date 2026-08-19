@@ -104,6 +104,25 @@ export type PostReportResolution = {
   externalMediaRevocationRequired?: boolean;
 };
 
+export type PostModerationAction = 'hide' | 'take_down' | 'restore';
+
+export type PostModerationActionResult = {
+  status: 'applied' | 'already_applied' | 'not_found' | 'invalid' | 'not_restorable';
+  actionId: string | null;
+  postId: string;
+  action: PostModerationAction | null;
+  postReviewStatus: string | null;
+  postReviewStatusBefore: string | null;
+  mediaRevocationRequired: boolean;
+  resolvedReportCount: number;
+  affectedBundleCount: number;
+  affectedAssetCount: number;
+  error: string | null;
+  revokedMediaCount?: number;
+  mediaRevocationVerified?: boolean;
+  externalMediaRevocationRequired?: boolean;
+};
+
 export type SubjectReportResolution = {
   status: 'resolved' | 'dismissed' | 'already_resolved';
   reportId: string;
@@ -254,7 +273,7 @@ function isOwnedModerationMediaPath(path: string, postId: string, generationId: 
     || Boolean(generationId && path.startsWith(`showcase/${generationId}/`));
 }
 
-async function revokePostPublicMedia(
+export async function revokePostPublicMedia(
   supabase: SupabaseClient,
   postId: string,
 ): Promise<{
@@ -691,4 +710,93 @@ export async function resolveSubjectReport(
       ? result.resolved_report_count
       : undefined,
   };
+}
+
+
+/**
+ * Moderate a post that nobody reported.
+ *
+ * `resolvePostReport` can only reach a post through a `post_reports` row, which
+ * left an operator who spots violating content themselves — or who receives a
+ * DMCA demand by email — with no lever at all.
+ *
+ * `take_down` reuses the same verified Storage revocation as the report path,
+ * so a proactive removal is exactly as thorough as a reported one. `hide` runs
+ * everything except that revocation, which is what makes it reversible.
+ */
+export async function applyPostModerationAction(
+  supabase: SupabaseClient,
+  options: {
+    postId: string;
+    reviewerId: string;
+    action: PostModerationAction;
+    /** Mandatory: the audit row is the only durable record of why. */
+    reason: string;
+    /** Supplied by the caller so a double-submitted form cannot double-apply. */
+    idempotencyKey: string;
+  },
+): Promise<PostModerationActionResult> {
+  const postId = requireUuid(options.postId, 'Post id');
+  const reviewerId = requireUuid(options.reviewerId, 'Reviewer id');
+  const reason = options.reason?.trim() ?? '';
+  if (reason.length < 3 || reason.length > 1000) {
+    throw new Error('A reason of 3 to 1000 characters is required.');
+  }
+  const idempotencyKey = options.idempotencyKey?.trim() ?? '';
+  if (!idempotencyKey) {
+    throw new Error('An idempotency key is required.');
+  }
+
+  const { data, error } = await supabase.rpc('apply_admin_post_moderation', {
+    p_post_id: postId,
+    p_reviewer_id: reviewerId,
+    p_action: options.action,
+    p_reason: reason,
+    p_idempotency_key: idempotencyKey,
+  });
+  if (error) {
+    throw databaseError('Failed to apply post moderation action', error);
+  }
+
+  const row = asRecord(data);
+  const status = row.status;
+  if (
+    status !== 'applied'
+    && status !== 'already_applied'
+    && status !== 'not_found'
+    && status !== 'invalid'
+    && status !== 'not_restorable'
+  ) {
+    throw new Error('Post moderation resolver returned an invalid response.');
+  }
+
+  const rowAction = row.action;
+  const result: PostModerationActionResult = {
+    status,
+    actionId: typeof row.action_id === 'string' ? row.action_id : null,
+    postId: typeof row.post_id === 'string' ? row.post_id : postId,
+    action: rowAction === 'hide' || rowAction === 'take_down' || rowAction === 'restore'
+      ? rowAction
+      : null,
+    postReviewStatus: typeof row.post_review_status === 'string' ? row.post_review_status : null,
+    postReviewStatusBefore: typeof row.post_review_status_before === 'string'
+      ? row.post_review_status_before
+      : null,
+    mediaRevocationRequired: row.media_revocation_required === true,
+    resolvedReportCount: typeof row.resolved_report_count === 'number' ? row.resolved_report_count : 0,
+    affectedBundleCount: typeof row.affected_bundle_count === 'number' ? row.affected_bundle_count : 0,
+    affectedAssetCount: typeof row.affected_asset_count === 'number' ? row.affected_asset_count : 0,
+    error: typeof row.error === 'string' ? row.error : null,
+  };
+
+  // A replayed take-down re-sweeps Storage rather than trusting the first
+  // attempt, matching `resolvePostReport`: the RPC committing does not prove
+  // the revocation that follows it ever finished.
+  const requiresMediaRevocation = result.mediaRevocationRequired
+    && (result.status === 'applied' || result.status === 'already_applied');
+  if (!requiresMediaRevocation) {
+    return result;
+  }
+
+  return { ...result, ...await revokePostPublicMedia(supabase, result.postId) };
 }

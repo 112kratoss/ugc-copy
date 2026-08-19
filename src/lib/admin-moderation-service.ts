@@ -3,12 +3,15 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
+  applyPostModerationAction,
   listOpenModerationReports,
   listResolvedModerationReports,
   resolvePostReport,
   resolveSubjectReport,
   type ModerationHistorySnapshot,
   type ModerationQueueSnapshot,
+  type PostModerationAction,
+  type PostModerationActionResult,
   type PostReportResolution,
   type SubjectReportResolution,
 } from '@/lib/moderation-ops';
@@ -194,4 +197,40 @@ export async function applyAdminSubjectReportDecision(
   }
 
   return resolveSubjectReport(client, { ...options, resolutionNote: note });
+}
+
+
+/**
+ * Proactive post moderation — no report required.
+ *
+ * The feed cache invalidation matters on every action, not just removals: a
+ * restored post stays absent from cached pages until its tag is revalidated,
+ * so an operator undoing a mistake would otherwise watch nothing happen for up
+ * to the feed's revalidate window and reasonably conclude the tool is broken.
+ *
+ * As with the report path this lives here rather than in `moderation-ops.ts`,
+ * which is also driven by the tsx ops CLI where `next/cache` does not exist.
+ */
+export async function applyAdminPostModeration(
+  client: SupabaseClient,
+  options: {
+    postId: string;
+    reviewerId: string;
+    action: PostModerationAction;
+    reason: string;
+    idempotencyKey: string;
+  },
+): Promise<PostModerationActionResult> {
+  const reason = options.reason.trim();
+  if (!reason) {
+    throw new Error('A reason is required.');
+  }
+
+  const result = await applyPostModerationAction(client, { ...options, reason });
+
+  if (result.status === 'applied' || result.status === 'already_applied') {
+    invalidateShowcaseFeedCache();
+  }
+
+  return result;
 }

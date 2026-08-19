@@ -179,6 +179,15 @@ export const ADMIN_CREDIT_ADJUSTMENT_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+// Destructive and irreversible at the `take_down` end, and bounded by how fast
+// a human can actually review a post. A burst means a stuck retry loop or a
+// compromised session, not moderation work.
+export const ADMIN_POST_MODERATION_RATE_LIMIT = {
+  scope: 'admin:post-moderation',
+  limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const POST_RESOURCE_FREE_UNLOCK_RATE_LIMIT = {
   scope: 'post-resource-free-unlock:open',
   limit: 60,
