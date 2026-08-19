@@ -133,6 +133,11 @@ export async function restoreOwnerGenerationForRoute({
     .is('template_run_id', null)
     .is('template_run_step_id', null)
     .not('archived_at', 'is', null)
+    // An operator removal is enforced through `archived_at`, which this route
+    // clears -- so without this guard the creator of a moderated generation
+    // could simply un-archive it and put it back. The filter lives in the
+    // WHERE clause rather than a pre-read so it cannot be raced.
+    .is('moderation_removed_at', null)
     .select('id')
     .maybeSingle();
 

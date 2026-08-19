@@ -60,6 +60,12 @@ export const CONTACT_SUBMISSION_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+export const ADMIN_CONTENT_MODERATION_RATE_LIMIT = {
+  scope: 'admin-content-moderation',
+  limit: 60,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const ADMIN_USER_SANCTION_RATE_LIMIT = {
   scope: 'admin-user-sanction',
   limit: 30,

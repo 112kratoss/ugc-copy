@@ -15,6 +15,12 @@ vi.mock('@/lib/admin-system-service', () => ({
   ),
 }));
 
+vi.mock('@/app/admin/(console)/system/ContactTriageControls', () => ({
+  ContactTriageControls: ({ isHandled }: { isHandled: boolean }) => (
+    <div data-testid="triage" data-handled={String(isHandled)} />
+  ),
+}));
+
 vi.mock('@/lib/creator-payout-ops', () => ({
   listOpenCreatorPayoutRequests: (client: unknown) => listOpenCreatorPayoutRequestsMock(client),
   listResolvedCreatorPayoutRequests: (client: unknown, options: unknown) => (
@@ -70,6 +76,9 @@ function systemSnapshot(overrides: Record<string, unknown> = {}) {
       subject: 'Refund for a failed video',
       message: 'My generation failed twice and the credits were not returned.\nOrder #4821.',
       createdAt: '2026-08-18T10:00:00.000Z',
+      handledAt: null,
+      handledBy: null,
+      handledNote: null,
     }],
     contactMessageTotal: 1,
     contactOffset: 0,
@@ -114,6 +123,30 @@ describe('admin system page — contact queue', () => {
     expect(html).not.toMatch(/<details[^>]*\sopen/);
   });
 
+  it('defaults the queue to open enquiries so it shrinks as it is worked', async () => {
+    collectAdminSystemSnapshotMock.mockResolvedValue(systemSnapshot());
+
+    await renderPageToHtml(
+      await AdminSystemPage({ searchParams: Promise.resolve({}) }),
+    );
+
+    expect(collectAdminSystemSnapshotMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ contactFilter: 'open' }),
+    );
+  });
+
+  it('offers a triage control for each enquiry', async () => {
+    collectAdminSystemSnapshotMock.mockResolvedValue(systemSnapshot());
+
+    const html = await renderPageToHtml(
+      await AdminSystemPage({ searchParams: Promise.resolve({}) }),
+    );
+
+    expect(html).toContain('data-testid="triage"');
+    expect(html).toContain('data-handled="false"');
+  });
+
   it('passes the URL offset through to the snapshot query', async () => {
     collectAdminSystemSnapshotMock.mockResolvedValue(systemSnapshot({ contactOffset: 25 }));
 
@@ -123,7 +156,7 @@ describe('admin system page — contact queue', () => {
 
     expect(collectAdminSystemSnapshotMock).toHaveBeenLastCalledWith(
       expect.anything(),
-      { contactOffset: 25 },
+      { contactOffset: 25, contactFilter: 'open' },
     );
   });
 });

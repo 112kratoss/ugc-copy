@@ -24,6 +24,8 @@ export type AdminActivityKind =
   | 'user-sanction'
   | 'post-moderation'
   | 'subject-moderation'
+  | 'generation-moderation'
+  | 'contact-triage'
   | 'payout';
 
 export type AdminActivityEntry = {
@@ -75,7 +77,7 @@ export async function collectAdminActivity(
   const pageSize = Math.min(Math.max(options.pageSize ?? 50, 1), 200);
   const requestedOffset = Math.max(options.offset ?? 0, 0);
 
-  const [credits, sanctions, postReports, subjectReports, payouts] = await Promise.all([
+  const [credits, sanctions, postReports, subjectReports, payouts, generations, contact] = await Promise.all([
     client
       .from('admin_credit_adjustments')
       .select('id, user_id, reviewer_id, credits_delta, promotional_credits_delta, reason, created_at')
@@ -104,6 +106,19 @@ export async function collectAdminActivity(
       .not('resolved_at', 'is', null)
       .order('resolved_at', { ascending: false })
       .limit(PER_SOURCE_LIMIT),
+    client
+      .from('admin_generation_moderation_actions')
+      .select('id, generation_id, reviewer_id, action, reason, created_at')
+      .order('created_at', { ascending: false })
+      .limit(PER_SOURCE_LIMIT),
+    // Contact triage is a toggle on the row rather than an append-only log, so
+    // the feed shows the current handled state rather than a history of it.
+    client
+      .from('contact_messages')
+      .select('id, subject, handled_at, handled_by, handled_note')
+      .not('handled_at', 'is', null)
+      .order('handled_at', { ascending: false })
+      .limit(PER_SOURCE_LIMIT),
   ]);
 
   const creditRows = rows(credits);
@@ -111,6 +126,8 @@ export async function collectAdminActivity(
   const postRows = rows(postReports);
   const subjectRows = rows(subjectReports);
   const payoutRows = rows(payouts);
+  const generationRows = rows(generations);
+  const contactRows = rows(contact);
 
   const entries: AdminActivityEntry[] = [
     ...creditRows.map((row) => ({
@@ -168,6 +185,28 @@ export async function collectAdminActivity(
       summaryUntil: null,
       rationale: (row.resolution_note as string | null) ?? null,
     })),
+    ...generationRows.map((row) => ({
+      id: `generation-${row.id}`,
+      kind: 'generation-moderation' as const,
+      at: String(row.created_at ?? ''),
+      reviewerId: (row.reviewer_id as string | null) ?? null,
+      action: row.action === 'restore' ? 'restored a generation' : 'removed a generation',
+      subjectUserId: null,
+      summary: `Generation ${String(row.generation_id ?? '').slice(0, 8)}…`,
+      summaryUntil: null,
+      rationale: (row.reason as string | null) ?? null,
+    })),
+    ...contactRows.map((row) => ({
+      id: `contact-${row.id}`,
+      kind: 'contact-triage' as const,
+      at: String(row.handled_at ?? ''),
+      reviewerId: (row.handled_by as string | null) ?? null,
+      action: 'handled an enquiry',
+      subjectUserId: null,
+      summary: String(row.subject || 'No subject'),
+      summaryUntil: null,
+      rationale: (row.handled_note as string | null) ?? null,
+    })),
   ].sort((left, right) => right.at.localeCompare(left.at));
 
   // Matches runPagedQuery's contract: an offset past the end shows the first
@@ -179,7 +218,7 @@ export async function collectAdminActivity(
     total: entries.length,
     offset,
     pageSize,
-    truncated: [creditRows, sanctionRows, postRows, subjectRows, payoutRows]
+    truncated: [creditRows, sanctionRows, postRows, subjectRows, payoutRows, generationRows, contactRows]
       .some((source) => source.length >= PER_SOURCE_LIMIT),
   };
 }

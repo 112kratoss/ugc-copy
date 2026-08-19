@@ -205,6 +205,8 @@ const SERVICE_ROUTES = [
   '/api/admin/moderation/post-reports',
   '/api/admin/moderation/subject-reports',
   '/api/admin/users/sanctions',
+  '/api/admin/moderation/generations',
+  '/api/admin/contact',
   '/api/cron/account-deletion-resweeps',
   '/api/cron/backend-alert-delivery',
   '/api/cron/backend-jobs',

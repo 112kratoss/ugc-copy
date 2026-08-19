@@ -52,6 +52,9 @@ export type AdminSystemSnapshot = {
     /** The actual enquiry. Without it the queue is a list of senders, not a queue. */
     message: string;
     createdAt: string;
+    handledAt: string | null;
+    handledBy: string | null;
+    handledNote: string | null;
   }>;
   contactMessageTotal: number;
   /** Where the contact list actually landed; see `runPagedQuery`. */
@@ -60,11 +63,15 @@ export type AdminSystemSnapshot = {
 
 export const CONTACT_PAGE_SIZE = 25;
 
+/** The queue defaults to open work; handled messages stay reachable as a record. */
+export type AdminContactFilter = 'open' | 'handled' | 'all';
+
 export async function collectAdminSystemSnapshot(
   client: SupabaseClient,
-  options: { now?: Date; contactOffset?: number } = {},
+  options: { now?: Date; contactOffset?: number; contactFilter?: AdminContactFilter } = {},
 ): Promise<AdminSystemSnapshot> {
   const contactOffset = Math.max(options.contactOffset ?? 0, 0);
+  const contactFilter = options.contactFilter ?? 'open';
   const now = options.now ?? new Date();
   const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
 
@@ -90,12 +97,21 @@ export async function collectAdminSystemSnapshot(
       .order('created_at', { ascending: false })
       .limit(10),
     runPagedQuery<Record<string, unknown>>(
-      (from, to) => client
-        .from('contact_messages')
-        .select('id, name, email, subject, message, created_at', { count: 'exact' })
-        .order('created_at', { ascending: false })
-        .order('id', { ascending: false })
-        .range(from, to),
+      (from, to) => {
+        const query = client
+          .from('contact_messages')
+          .select(
+            'id, name, email, subject, message, created_at, handled_at, handled_by, handled_note',
+            { count: 'exact' },
+          )
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .range(from, to);
+
+        if (contactFilter === 'open') return query.is('handled_at', null);
+        if (contactFilter === 'handled') return query.not('handled_at', 'is', null);
+        return query;
+      },
       { offset: contactOffset, pageSize: CONTACT_PAGE_SIZE },
     ),
   ]);
@@ -185,6 +201,9 @@ export async function collectAdminSystemSnapshot(
       subject: String(row.subject ?? ''),
       message: String(row.message ?? ''),
       createdAt: String(row.created_at ?? ''),
+      handledAt: (row.handled_at as string | null) ?? null,
+      handledBy: (row.handled_by as string | null) ?? null,
+      handledNote: (row.handled_note as string | null) ?? null,
     })),
     contactMessageTotal: contact.total,
     contactOffset: contact.offset,

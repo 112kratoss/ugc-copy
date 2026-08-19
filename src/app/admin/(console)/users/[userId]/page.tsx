@@ -22,6 +22,7 @@ import {
   shortId,
 } from '../../AdminUi';
 import { CreditAdjustmentForm } from './CreditAdjustmentForm';
+import { GenerationModerationControls } from './GenerationModerationControls';
 import { UserNotFoundPanel } from './UserNotFoundPanel';
 import { UserSanctionForm } from './UserSanctionForm';
 
@@ -231,15 +232,25 @@ export default async function AdminUserDetailPage({
         {detail.recentGenerations.length === 0 ? (
           <EmptyState message="No generations yet." />
         ) : (
-          <DataTable columns={['Date', 'Status', 'Model', 'Cost', 'Error', 'Id']}>
+            <DataTable columns={['Date', 'Status', 'Model', 'Cost', 'Error', 'Moderation']}>
             {detail.recentGenerations.map((generation) => (
               <tr key={generation.id}>
                 <Td>{formatTimestamp(generation.createdAt)}</Td>
                 <Td><StatusBadge status={generation.status} /></Td>
                 <Td>{generation.model ?? '—'}</Td>
                 <Td>{generation.cost?.toLocaleString() ?? '—'}</Td>
-                <Td truncateWidth={280}>{generation.errorMessage ?? '—'}</Td>
-                <Td mono>{shortId(generation.id)}</Td>
+                <Td truncateWidth={220}>{generation.errorMessage ?? '—'}</Td>
+                <Td>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {generation.moderationRemovedAt ? (
+                      <StatusBadge status="removed" tone="danger" />
+                    ) : null}
+                    <GenerationModerationControls
+                      generationId={generation.id}
+                      isRemoved={Boolean(generation.moderationRemovedAt)}
+                    />
+                  </div>
+                </Td>
               </tr>
             ))}
           </DataTable>

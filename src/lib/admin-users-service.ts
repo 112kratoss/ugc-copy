@@ -81,6 +81,8 @@ export type AdminUserDetail = {
     cost: number | null;
     createdAt: string;
     errorMessage: string | null;
+    /** Set when an operator removed it; the creator cannot undo that. */
+    moderationRemovedAt: string | null;
   }>;
 };
 
@@ -250,7 +252,7 @@ export async function getAdminUserDetail(
       .maybeSingle(),
     client
       .from('generations')
-      .select('id, status, model, cost, created_at, error_message')
+      .select('id, status, model, cost, created_at, error_message, moderation_removed_at')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(15),
@@ -335,6 +337,7 @@ export async function getAdminUserDetail(
       cost: typeof row.cost === 'number' ? row.cost : null,
       createdAt: String(row.created_at ?? ''),
       errorMessage: (row.error_message as string | null) ?? null,
+      moderationRemovedAt: (row.moderation_removed_at as string | null) ?? null,
     })),
   };
 }

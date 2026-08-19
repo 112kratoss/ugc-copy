@@ -28,6 +28,8 @@ const KIND_LABELS: Record<AdminActivityKind, { label: string; tone: AdminStatusT
   'user-sanction': { label: 'account', tone: 'danger' },
   'post-moderation': { label: 'post', tone: 'neutral' },
   'subject-moderation': { label: 'report', tone: 'neutral' },
+  'generation-moderation': { label: 'generation', tone: 'neutral' },
+  'contact-triage': { label: 'contact', tone: 'ok' },
   payout: { label: 'payout', tone: 'warning' },
 };
 

@@ -1,9 +1,16 @@
-import { Mail } from 'lucide-react';
+import Link from 'next/link';
+import clsx from 'clsx';
+import { CheckCircle2, Mail } from 'lucide-react';
 
 import { Surface, Text } from '@/app/components/DesignSystem';
-import { CONTACT_PAGE_SIZE, collectAdminSystemSnapshot } from '@/lib/admin-system-service';
+import {
+  CONTACT_PAGE_SIZE,
+  collectAdminSystemSnapshot,
+  type AdminContactFilter,
+} from '@/lib/admin-system-service';
 import { createServiceClient } from '@/lib/server-helpers';
 
+import { ContactTriageControls } from './ContactTriageControls';
 import {
   DataTable,
   EmptyState,
@@ -28,11 +35,16 @@ function formatDuration(durationMs: number | null): string {
 export default async function AdminSystemPage({
   searchParams,
 }: {
-  searchParams: Promise<{ contact?: string }>;
+  searchParams: Promise<{ contact?: string; queue?: string }>;
 }) {
-  const { contact } = await searchParams;
+  const { contact, queue } = await searchParams;
   const contactOffset = parseOffset(contact, CONTACT_PAGE_SIZE);
-  const snapshot = await collectAdminSystemSnapshot(createServiceClient(), { contactOffset });
+  const contactFilter: AdminContactFilter =
+    queue === 'handled' || queue === 'all' ? queue : 'open';
+  const snapshot = await collectAdminSystemSnapshot(createServiceClient(), {
+    contactOffset,
+    contactFilter,
+  });
 
   const failingJobs = snapshot.jobSummaries.filter((job) => job.failureCount24h > 0);
   const now = new Date();
@@ -152,9 +164,31 @@ export default async function AdminSystemPage({
       </section>
 
       <section className="mt-8">
-        <Text as="h2" variant="cardTitle" className="mb-3">Contact messages</Text>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <Text as="h2" variant="cardTitle">Contact messages</Text>
+          {/* Defaults to open, so the queue shrinks as it is worked rather than
+              growing forever. Handled messages stay reachable as a record. */}
+          <div className="flex flex-wrap gap-1.5">
+            {(['open', 'handled', 'all'] as const).map((option) => (
+              <Link
+                key={option}
+                href={option === 'open' ? '/admin/system' : `/admin/system?queue=${option}`}
+                className={clsx(
+                  'ui-button ui-focus-ring capitalize',
+                  option === contactFilter ? 'ui-button-primary' : 'ui-button-secondary',
+                )}
+              >
+                {option}
+              </Link>
+            ))}
+          </div>
+        </div>
         {snapshot.contactMessages.length === 0 ? (
-          <EmptyState message="No contact messages." />
+          <EmptyState
+            message={contactFilter === 'open'
+              ? 'No open enquiries — the queue is clear.'
+              : 'No contact messages match this filter.'}
+          />
         ) : (
           <div className="flex flex-col gap-2">
             {snapshot.contactMessages.map((message) => (
@@ -167,7 +201,15 @@ export default async function AdminSystemPage({
                 <details className="group">
                   <summary className="ui-focus-ring flex cursor-pointer flex-wrap items-center justify-between gap-3 rounded-lg">
                     <div className="min-w-0">
-                      <Text as="span" variant="label">{message.subject || 'No subject'}</Text>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Text as="span" variant="label">{message.subject || 'No subject'}</Text>
+                        {message.handledAt ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-bold text-[#5ee9a4]">
+                            <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+                            Handled
+                          </span>
+                        ) : null}
+                      </div>
                       <Text variant="caption" className="mt-0.5 block">
                         {message.name} · {formatRelative(message.createdAt)}
                       </Text>
@@ -188,6 +230,18 @@ export default async function AdminSystemPage({
                     <Text variant="caption" className="mt-3 block font-mono">
                       {message.email} · {formatTimestamp(message.createdAt)}
                     </Text>
+
+                    {message.handledAt ? (
+                      <Text variant="caption" className="mt-2 block">
+                        Handled {formatTimestamp(message.handledAt)}
+                        {message.handledNote ? ` — ${message.handledNote}` : ''}
+                      </Text>
+                    ) : null}
+
+                    <ContactTriageControls
+                      messageId={message.id}
+                      isHandled={Boolean(message.handledAt)}
+                    />
                   </div>
                 </details>
               </Surface>
@@ -201,6 +255,7 @@ export default async function AdminSystemPage({
           offset={snapshot.contactOffset}
           pageSize={CONTACT_PAGE_SIZE}
           total={snapshot.contactMessageTotal}
+          otherParams={contactFilter === 'open' ? {} : { queue: contactFilter }}
           noun="contact messages"
         />
       </section>

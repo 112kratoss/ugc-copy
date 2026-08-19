@@ -177,9 +177,28 @@ describe('generation lifecycle service', () => {
         ['is', 'template_run_id', null],
         ['is', 'template_run_step_id', null],
         ['not', 'archived_at', 'is', null],
+        ['is', 'moderation_removed_at', null],
       ],
       selectColumns: 'id',
     }]);
+  });
+
+  /**
+   * An operator removal is enforced through `archived_at`, which this route
+   * clears — so without this filter the creator of a moderated generation could
+   * simply restore it and undo the moderation. It lives in the WHERE clause
+   * rather than a pre-read so it cannot be raced.
+   */
+  it('refuses to restore a generation an operator removed', async () => {
+    const client = createClient();
+
+    await restoreOwnerGenerationForRoute({
+      adminSupabase: client.client,
+      generationId: 'generation-1',
+      ownerUserId: 'user-1',
+    });
+
+    expect(client.updateCalls[0].filters).toContainEqual(['is', 'moderation_removed_at', null]);
   });
 
   it('returns not found when no archived owned generation matches', async () => {
