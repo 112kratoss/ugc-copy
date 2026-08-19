@@ -209,11 +209,81 @@ export async function verifyFfmpegBuildArtifact({
   return { ffmpegPath, traceManifests };
 }
 
+// sharp's platform package ships a .node binding that dlopens libvips at
+// runtime. A dlopen is invisible to static tracing, so Next happily ships the
+// binding while leaving @img/sharp-libvips-*'s actual .so behind -- and every
+// route that touches the media stack then dies on load with ERR_DLOPEN_FAILED.
+// Nothing else catches this: tests, lint, typecheck, the build and the release
+// all pass, and only the hourly backend watchdog notices. It took production's
+// scheduler down for four and a half hours on 2026-08-19.
+//
+// The invariant is self-policing on purpose: rather than pinning a route list
+// that drifts, this asserts the relationship -- any bundle carrying the binding
+// must carry the library too -- so a new media route cannot regress it.
+const SHARP_BINDING_PATTERN = /@img\/sharp-(?!libvips)[^/]*\/lib\/sharp-[^/]*\.node$/;
+const SHARP_LIBRARY_PATTERN = /@img\/sharp-libvips-[^/]*\/lib\/libvips-cpp/;
+
+async function collectTraceManifests(directory, found = []) {
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch {
+    return found;
+  }
+  for (const entry of entries) {
+    const full = path.join(directory, entry.name);
+    if (entry.isDirectory()) await collectTraceManifests(full, found);
+    else if (entry.name.endsWith('.nft.json')) found.push(full);
+  }
+  return found;
+}
+
+export async function verifySharpBuildArtifact(serverAppDirectory) {
+  const manifests = await collectTraceManifests(serverAppDirectory);
+  const needsLibrary = [];
+  const missingLibrary = [];
+
+  for (const manifest of manifests) {
+    let files;
+    try {
+      files = JSON.parse(await readFile(manifest, 'utf8')).files ?? [];
+    } catch {
+      continue;
+    }
+    if (!files.some((file) => SHARP_BINDING_PATTERN.test(file))) continue;
+    needsLibrary.push(manifest);
+    if (!files.some((file) => SHARP_LIBRARY_PATTERN.test(file))) missingLibrary.push(manifest);
+  }
+
+  if (missingLibrary.length > 0) {
+    const routes = missingLibrary
+      .map((manifest) => manifest.replace(/.*\/server\/app/, '').replace(/\/route\.js\.nft\.json$/, ''))
+      .sort();
+    throw new Error(
+      `${missingLibrary.length} route bundle(s) trace sharp's native binding without `
+      + `@img/sharp-libvips-*'s shared library, so they will fail at load with `
+      + `ERR_DLOPEN_FAILED:\n  ${routes.join('\n  ')}\n`
+      + 'Add "./node_modules/@img/sharp-libvips-*/**" to these routes in '
+      + 'next.config.ts outputFileTracingIncludes (see SHARP_ROUTES).',
+    );
+  }
+
+  return { needsLibrary: needsLibrary.length };
+}
+
 async function main() {
   const result = await verifyFfmpegBuildArtifact();
   console.log(
     `FFmpeg is valid on the build host, traced by ${result.traceManifests.length} server bundle(s), `
     + `resolvable at runtime in all ${FFMPEG_REQUIRED_ROUTE_MANIFESTS.length} required routes.`,
+  );
+
+  const sharp = await verifySharpBuildArtifact(
+    path.join(process.cwd(), '.next', 'server', 'app'),
+  );
+  console.log(
+    `sharp's libvips library is traced beside its native binding in all `
+    + `${sharp.needsLibrary} route bundle(s) that load it.`,
   );
 }
 
