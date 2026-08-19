@@ -7,6 +7,13 @@
     "icon": "./assets/images/icon.png",
     "scheme": "magicbooklet",
     "userInterfaceStyle": "dark",
+    "updates": {
+      "url": "https://u.expo.dev/80e0b101-06da-4b8c-a31f-60c90ba9bdfb",
+      "fallbackToCacheTimeout": 0
+    },
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
