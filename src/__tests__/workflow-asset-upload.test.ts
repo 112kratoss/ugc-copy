@@ -8,6 +8,8 @@ const supabaseMocks = vi.hoisted(() => ({
   createSignedUrl: vi.fn(),
 }));
 
+let finalizedPath = 'user-1/workflow-input-reference.png';
+
 vi.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
@@ -21,6 +23,7 @@ vi.mock('@/lib/supabase', () => ({
 
 describe('uploadWorkflowAssetWithSignedIntent', () => {
   beforeEach(() => {
+    finalizedPath = 'user-1/workflow-input-reference.png';
     supabaseMocks.getSession.mockReset();
     supabaseMocks.from.mockReset();
     supabaseMocks.upload.mockReset();
@@ -51,12 +54,26 @@ describe('uploadWorkflowAssetWithSignedIntent', () => {
           ok: true,
           json: async () => ({
             success: true,
+            uploadId: '10000000-0000-4000-8000-000000000001',
             bucket: 'generated_images',
-            path: 'user-1/workflow-input-reference.png',
-            storagePath: 'generated_images/user-1/workflow-input-reference.png',
+            path: finalizedPath,
+            storagePath: `generated_images/${finalizedPath}`,
             token: 'workflow-token',
             signedUploadUrl: 'https://storage.example.test/upload',
             expiresInSeconds: 7200,
+          }),
+        };
+      }
+
+      if (url === '/api/uploads/finalize') {
+        return {
+          ok: true,
+          json: async () => ({
+            bucket: 'generated_images',
+            path: 'user-1/workflow-input-reference.png',
+            storagePath: 'generated_images/user-1/workflow-input-reference.png',
+            contentType: 'image/png',
+            sizeBytes: 11,
           }),
         };
       }
@@ -110,6 +127,14 @@ describe('uploadWorkflowAssetWithSignedIntent', () => {
       file,
       { contentType: 'image/png' }
     );
+    expect(fetch).toHaveBeenCalledWith('/api/uploads/finalize', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer access-token',
+      },
+      body: JSON.stringify({ uploadId: '10000000-0000-4000-8000-000000000001' }),
+    });
     expect(fetch).toHaveBeenCalledWith('/api/uploads/workflow-asset/read-url', {
       method: 'POST',
       headers: {
@@ -122,5 +147,18 @@ describe('uploadWorkflowAssetWithSignedIntent', () => {
     });
     expect(supabaseMocks.createSignedUrl).not.toHaveBeenCalled();
     expect(supabaseMocks.upload).not.toHaveBeenCalled();
+  });
+
+  it('rejects a finalizer descriptor that does not match the signed target', async () => {
+    finalizedPath = 'user-2/workflow-input-reference.png';
+    const { uploadWorkflowAssetWithSignedIntent } = await import('@/lib/workflow-asset-upload');
+    const file = new File(['image-bytes'], 'Reference Image.PNG', { type: 'image/png' });
+
+    await expect(uploadWorkflowAssetWithSignedIntent(file, 'generated_images')).rejects.toThrow(
+      'Finalized workflow asset did not match its signed target.',
+    );
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => (
+      String(input) === '/api/uploads/workflow-asset/read-url'
+    ))).toBe(false);
   });
 });

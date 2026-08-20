@@ -3,6 +3,7 @@ import 'server-only';
 import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
+import { requireIdentity } from '@/lib/account-identity';
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import {
@@ -15,6 +16,7 @@ type WorkflowAssetUploadSignRouteDependencies = {
   createUploadId?: () => string;
   createUserClient?: typeof createUserClient;
   createWorkflowAssetUploadIntent?: typeof createWorkflowAssetUploadIntent;
+  requireIdentity?: typeof requireIdentity;
 };
 
 function resolveDependencies(dependencies: WorkflowAssetUploadSignRouteDependencies | undefined) {
@@ -24,20 +26,8 @@ function resolveDependencies(dependencies: WorkflowAssetUploadSignRouteDependenc
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     createWorkflowAssetUploadIntent:
       dependencies?.createWorkflowAssetUploadIntent ?? createWorkflowAssetUploadIntent,
+    requireIdentity: dependencies?.requireIdentity ?? requireIdentity,
   };
-}
-
-async function getAuthenticatedUserId(
-  request: Request,
-  dependencies: ReturnType<typeof resolveDependencies>,
-) {
-  const supabase = dependencies.createUserClient(request);
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
-
-  return authError || !user ? null : user.id;
 }
 
 function createWorkflowAssetUploadSignErrorResponse(
@@ -70,9 +60,18 @@ async function handleWorkflowAssetUploadSignPOST(
   request: Request,
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
-  const userId = await getAuthenticatedUserId(request, dependencies);
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const userClient = dependencies.createUserClient(request);
+  let serviceClient: ReturnType<typeof dependencies.createServiceClient> | null = null;
+  const getServiceClient = () => {
+    serviceClient ??= dependencies.createServiceClient();
+    return serviceClient;
+  };
+  const identity = await dependencies.requireIdentity(userClient, getServiceClient);
+  if (!identity.ok) {
+    return NextResponse.json(
+      { error: identity.error, code: identity.code },
+      { status: identity.status },
+    );
   }
 
   let body;
@@ -87,8 +86,8 @@ async function handleWorkflowAssetUploadSignPOST(
 
   const result = await dependencies.createWorkflowAssetUploadIntent({
     body,
-    userId,
-    client: dependencies.createServiceClient,
+    userId: identity.identity.userId,
+    client: getServiceClient,
     createUploadId: dependencies.createUploadId,
   });
 

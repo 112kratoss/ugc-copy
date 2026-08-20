@@ -79,6 +79,7 @@ describe('workflow canvas collection route adapter service', () => {
   it('delegates canvas creation with a rate-limit client and lazy JSON body fallback', async () => {
     const supabase = { kind: 'user-scoped' } as unknown as SupabaseClient;
     const rateLimitClient = { rpc: vi.fn() } as unknown as SupabaseClient;
+    const createServiceClient = vi.fn(() => rateLimitClient);
     const createWorkflowCanvasForRoute = vi.fn(
       async ({ readBody }): Promise<WorkflowCanvasCollectionRouteResult> => {
         await expect(readBody()).resolves.toEqual({});
@@ -108,7 +109,7 @@ describe('workflow canvas collection route adapter service', () => {
       }),
       dependencies: {
         authenticateRequest: vi.fn(async () => ({ supabase, userId: 'user-1' })),
-        createServiceClient: vi.fn(() => rateLimitClient),
+        createServiceClient,
         createWorkflowCanvasForRoute,
       },
     });
@@ -121,10 +122,12 @@ describe('workflow canvas collection route adapter service', () => {
     });
     expect(createWorkflowCanvasForRoute).toHaveBeenCalledWith({
       supabase,
+      uploadClient: rateLimitClient,
       rateLimitClient,
       userId: 'user-1',
       readBody: expect.any(Function),
     });
+    expect(createServiceClient).toHaveBeenCalledTimes(1);
   });
 
   it('maps create rate limits to standard private backend rate-limit responses before body parsing', async () => {
@@ -223,6 +226,7 @@ describe('workflow canvas collection route adapter service', () => {
     });
     expect(createWorkflowCanvasForRoute).toHaveBeenCalledWith({
       supabase,
+      uploadClient: rateLimitClient,
       rateLimitClient,
       userId: 'user-1',
       readBody: expect.any(Function),

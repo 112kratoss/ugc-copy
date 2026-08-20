@@ -21,6 +21,12 @@ import {
 const projectRoot = join(__dirname, '..');
 
 describe('Android native network config', () => {
+  it('disables Android application backups for regenerated native projects', () => {
+    const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
+
+    expect(appJson.expo.android.allowBackup).toBe(false);
+  });
+
   it('registers the Expo plugin that keeps regenerated Android projects local-API ready', () => {
     const appJson = JSON.parse(readFileSync(join(projectRoot, 'app.json'), 'utf8'));
 

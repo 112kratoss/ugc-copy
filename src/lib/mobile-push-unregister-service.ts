@@ -1,3 +1,4 @@
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -52,7 +53,7 @@ export async function unregisterMobilePushTokenForRoute(
     const {
       data: { user },
       error: authError,
-    } = await userSupabase.auth.getUser();
+    } = await getVerifiedAuthUserResult(userSupabase);
 
     if (authError || !user) {
       return { ok: false, body: { error: 'Unauthorized' }, status: 401 };

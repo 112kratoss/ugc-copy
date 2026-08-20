@@ -58,6 +58,7 @@ import {
   type SignedUrlUploadProgress,
 } from '@/lib/signed-url-upload';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
+import { finalizeSignedUpload } from '@/lib/upload-finalize-client';
 import { isUploadCancelledError, runWeightedUploadQueue, UploadCancelledError } from '@/lib/upload-queue';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
 import {
@@ -397,6 +398,7 @@ async function uploadResourceFile(
     });
     const uploadIntent = await signResponse.json() as {
       bucket?: 'post_resource_files';
+      uploadId?: string;
       path?: string;
       token?: string;
       signedUploadUrl?: string | null;
@@ -407,6 +409,7 @@ async function uploadResourceFile(
     if (
       !signResponse.ok
       || uploadIntent.bucket !== 'post_resource_files'
+      || !uploadIntent.uploadId
       || !uploadIntent.path
       || !uploadIntent.token
     ) {
@@ -433,30 +436,23 @@ async function uploadResourceFile(
     );
 
     if (options.signal?.aborted) throw new UploadCancelledError();
-    const finalizeResponse = await fetch('/api/posts/resource-files/finalize', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        path: uploadIntent.path,
-        fileName: file.name,
-        contentType: resolvedContentType,
-        sizeBytes: file.size,
-      }),
-      signal: options.signal,
-    });
-    const finalized = await finalizeResponse.json() as {
-      attachment?: PostResourceAttachment;
-      error?: string;
-    };
-    if (!finalizeResponse.ok || !finalized.attachment) {
-      throw new Error(finalized.error || 'Failed to verify resource upload.');
+    const finalized = await finalizeSignedUpload(
+      accessToken,
+      uploadIntent.uploadId,
+      options.signal,
+    );
+    if (finalized.bucket !== uploadIntent.bucket || finalized.path !== uploadIntent.path) {
+      throw new Error('Finalized resource upload did not match its signed target.');
     }
 
     if (options.signal?.aborted) throw new UploadCancelledError();
-    return finalized.attachment;
+    return {
+      label: file.name,
+      kind: 'file',
+      storagePath: finalized.path,
+      contentType: finalized.contentType,
+      sizeBytes: finalized.sizeBytes,
+    };
   } catch (error) {
     if (options.signal?.aborted && !isUploadCancelledError(error)) {
       throw new UploadCancelledError();

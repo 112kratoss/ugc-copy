@@ -3,6 +3,7 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { retainPurchasedUnlockFiles } from '@/lib/account-deletion-resource-retention';
+import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 
 const USER_PREFIX_BUCKETS = [
   'profiles',
@@ -24,6 +25,7 @@ const ACCOUNT_DELETION_RESWEEP_BATCH_LIMIT = 10;
 const ACCOUNT_DELETION_RESWEEP_LEASE_SECONDS = 10 * 60;
 
 export type AccountDeletionStorageManifest = {
+  ownerUserIds: string[];
   userPrefixBuckets: Array<(typeof USER_PREFIX_BUCKETS)[number]>;
   showcaseMediaPaths: string[];
   templateAssetPrefixes: string[];
@@ -104,16 +106,14 @@ function errorMessage(error: unknown, fallback: string) {
 
 function isMissingBucketError(error: unknown) {
   if (!isRecord(error)) return false;
-  const message = typeof error.message === 'string' ? error.message.toLowerCase() : '';
   const status = String(error.status ?? error.statusCode ?? '');
-  return status === '404' || message.includes('bucket not found');
+  return status === '404';
 }
 
 function isMissingAuthUserError(error: unknown) {
   if (!isRecord(error)) return false;
-  const message = typeof error.message === 'string' ? error.message.toLowerCase() : '';
   const status = String(error.status ?? error.statusCode ?? '');
-  return status === '404' || message.includes('user not found');
+  return status === '404';
 }
 
 function isAlreadyRevokedSessionError(error: unknown) {
@@ -122,14 +122,21 @@ function isAlreadyRevokedSessionError(error: unknown) {
   return status === '401' || status === '403' || status === '404';
 }
 
-function normalizedStringArray(value: unknown) {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(
-    value
-      .filter((item): item is string => typeof item === 'string')
-      .map((item) => item.trim())
-      .filter(Boolean),
-  )];
+function exactStringArray(value: unknown): string[] | null {
+  if (
+    !Array.isArray(value)
+    || value.some((item) => typeof item !== 'string' || !item || item !== item.trim())
+  ) return null;
+  return [...new Set(value as string[])];
+}
+
+function parseCanonicalManifestShowcasePath(storagePath: string): string | null {
+  const canonicalPath = parseCanonicalStorageObjectPath(storagePath, { minimumSegments: 3 });
+  if (!canonicalPath) return null;
+  const [scope, resourceId] = canonicalPath.split('/');
+  return (scope === 'showcase' || scope === 'posts') && UUID_PATTERN.test(resourceId ?? '')
+    ? canonicalPath
+    : null;
 }
 
 export function parseAccountDeletionStorageManifest(
@@ -137,7 +144,8 @@ export function parseAccountDeletionStorageManifest(
 ): AccountDeletionStorageManifest | null {
   if (!isRecord(value)) return null;
   if (
-    !Array.isArray(value.user_prefix_buckets)
+    !Array.isArray(value.owner_user_ids)
+    || !Array.isArray(value.user_prefix_buckets)
     || !Array.isArray(value.showcase_media_paths)
     || !Array.isArray(value.template_asset_prefixes)
   ) {
@@ -145,26 +153,36 @@ export function parseAccountDeletionStorageManifest(
   }
 
   const allowedBuckets = new Set<string>(USER_PREFIX_BUCKETS);
-  const rawUserPrefixBuckets = normalizedStringArray(value.user_prefix_buckets);
-  const showcaseMediaPaths = normalizedStringArray(value.showcase_media_paths);
-  const templateAssetPrefixes = normalizedStringArray(value.template_asset_prefixes);
+  const ownerUserIds = exactStringArray(value.owner_user_ids);
+  const rawUserPrefixBuckets = exactStringArray(value.user_prefix_buckets);
+  const showcaseMediaPaths = exactStringArray(value.showcase_media_paths);
+  const templateAssetPrefixes = exactStringArray(value.template_asset_prefixes);
+  if (!ownerUserIds || !rawUserPrefixBuckets || !showcaseMediaPaths || !templateAssetPrefixes) {
+    return null;
+  }
+  const canonicalShowcaseMediaPaths = showcaseMediaPaths.map(parseCanonicalManifestShowcasePath);
+  const canonicalTemplateAssetPrefixes = templateAssetPrefixes.map((prefix) =>
+    parseCanonicalStorageObjectPath(prefix, { minimumSegments: 1 }));
 
   if (
-    rawUserPrefixBuckets.length !== USER_PREFIX_BUCKETS.length
+    ownerUserIds.length === 0
+    || ownerUserIds.some((userId) => !UUID_PATTERN.test(userId))
+    || rawUserPrefixBuckets.length !== USER_PREFIX_BUCKETS.length
     || rawUserPrefixBuckets.some((bucket) => !allowedBuckets.has(bucket))
-    || showcaseMediaPaths.some(
-      (path) => path.startsWith('/') || path.includes('..') || path.includes('\\'),
+    || canonicalShowcaseMediaPaths.some((storagePath) => !storagePath)
+    || canonicalTemplateAssetPrefixes.some(
+      (prefix) => !prefix || !TEMPLATE_ID_PATTERN.test(prefix),
     )
-    || templateAssetPrefixes.some((prefix) => !TEMPLATE_ID_PATTERN.test(prefix))
   ) {
     return null;
   }
 
   return {
+    ownerUserIds,
     userPrefixBuckets:
       rawUserPrefixBuckets as Array<(typeof USER_PREFIX_BUCKETS)[number]>,
-    showcaseMediaPaths,
-    templateAssetPrefixes,
+    showcaseMediaPaths: canonicalShowcaseMediaPaths as string[],
+    templateAssetPrefixes: canonicalTemplateAssetPrefixes as string[],
   };
 }
 
@@ -172,12 +190,20 @@ async function listUserFiles(
   admin: SupabaseClient,
   bucket: string,
   prefix: string,
+  expectedRootSegment: string,
 ): Promise<string[]> {
+  const canonicalPrefix = parseCanonicalStorageObjectPath(prefix, {
+    minimumSegments: 1,
+    ownerUserId: expectedRootSegment,
+  });
+  if (!canonicalPrefix) {
+    throw new Error(`Could not inspect ${bucket} account files.`);
+  }
   const files: string[] = [];
   let offset = 0;
 
   while (true) {
-    const { data, error } = await admin.storage.from(bucket).list(prefix, {
+    const { data, error } = await admin.storage.from(bucket).list(canonicalPrefix, {
       limit: 1000,
       offset,
       sortBy: { column: 'name', order: 'asc' },
@@ -190,11 +216,14 @@ async function listUserFiles(
 
     const entries = (data ?? []) as StorageEntry[];
     for (const entry of entries) {
-      const path = `${prefix}/${entry.name}`;
+      const path = parseCanonicalStorageObjectPath(`${canonicalPrefix}/${entry.name}`, {
+        ownerUserId: expectedRootSegment,
+      });
+      if (!path) throw new Error(`Could not inspect ${bucket} account files.`);
       if (entry.id || entry.metadata) {
         files.push(path);
       } else {
-        files.push(...await listUserFiles(admin, bucket, path));
+        files.push(...await listUserFiles(admin, bucket, path, expectedRootSegment));
       }
     }
 
@@ -205,6 +234,71 @@ async function listUserFiles(
   return files;
 }
 
+async function assertStoragePathsAbsent(
+  admin: SupabaseClient,
+  bucket: string,
+  paths: string[],
+  expectedRootSegment?: string,
+) {
+  const pathsByParent = new Map<string, Set<string>>();
+
+  for (const storagePath of paths) {
+    const canonicalPath = parseCanonicalStorageObjectPath(
+      storagePath,
+      expectedRootSegment ? { ownerUserId: expectedRootSegment } : {},
+    );
+    if (!canonicalPath) {
+      throw new Error(`Could not verify ${bucket} account files.`);
+    }
+
+    const separatorIndex = canonicalPath.lastIndexOf('/');
+    if (separatorIndex <= 0) {
+      throw new Error(`Could not verify ${bucket} account files.`);
+    }
+    const parent = canonicalPath.slice(0, separatorIndex);
+    const existing = pathsByParent.get(parent) ?? new Set<string>();
+    existing.add(canonicalPath);
+    pathsByParent.set(parent, existing);
+  }
+
+  for (const [parent, expectedAbsent] of pathsByParent) {
+    const rootSegment = expectedRootSegment ?? parent.split('/')[0];
+    if (!rootSegment) throw new Error(`Could not verify ${bucket} account files.`);
+    const remainingPaths = await listUserFiles(admin, bucket, parent, rootSegment);
+    if (remainingPaths.some((path) => expectedAbsent.has(path))) {
+      throw new Error(`Could not verify ${bucket} account files were removed.`);
+    }
+  }
+}
+
+async function assertAccountStorageEmpty(
+  admin: SupabaseClient,
+  manifest: AccountDeletionStorageManifest,
+) {
+  for (const ownerUserId of manifest.ownerUserIds) {
+    for (const bucket of manifest.userPrefixBuckets) {
+      const remainingPaths = await listUserFiles(admin, bucket, ownerUserId, ownerUserId);
+      if (remainingPaths.length > 0) {
+        throw new Error(`Could not verify ${bucket} account files were removed.`);
+      }
+    }
+  }
+
+  await assertStoragePathsAbsent(admin, 'showcase_media', manifest.showcaseMediaPaths);
+
+  for (const templatePrefix of manifest.templateAssetPrefixes) {
+    const remainingPaths = await listUserFiles(
+      admin,
+      'template_assets',
+      templatePrefix,
+      templatePrefix,
+    );
+    if (remainingPaths.length > 0) {
+      throw new Error('Could not verify template_assets account files were removed.');
+    }
+  }
+}
+
 export async function removeAccountStorage(
   admin: SupabaseClient,
   userId: string,
@@ -213,33 +307,103 @@ export async function removeAccountStorage(
   let bucketsScanned = 0;
   let objectsRemoved = 0;
 
-  async function removePaths(bucket: string, paths: string[]) {
-    for (let index = 0; index < paths.length; index += 100) {
-      const batch = paths.slice(index, index + 100);
+  async function removePaths(bucket: string, paths: string[], expectedRootSegment?: string) {
+    const canonicalPaths = paths.map((storagePath) => parseCanonicalStorageObjectPath(
+      storagePath,
+      expectedRootSegment ? { ownerUserId: expectedRootSegment } : {},
+    ));
+    if (canonicalPaths.some((storagePath) => !storagePath)) {
+      throw new Error(`Could not remove ${bucket} account files.`);
+    }
+
+    for (let index = 0; index < canonicalPaths.length; index += 100) {
+      const batch = canonicalPaths.slice(index, index + 100) as string[];
       const { error } = await admin.storage.from(bucket).remove(batch);
       if (error && !isMissingBucketError(error)) {
         throw new Error(`Could not remove ${bucket} account files.`);
+      }
+      if (!error) {
+        await assertStoragePathsAbsent(admin, bucket, batch, expectedRootSegment);
       }
       objectsRemoved += batch.length;
     }
   }
 
-  for (const bucket of manifest.userPrefixBuckets) {
-    bucketsScanned += 1;
-    const paths = await listUserFiles(admin, bucket, userId);
-    await removePaths(bucket, paths);
+  if (!manifest.ownerUserIds.includes(userId)) {
+    throw new Error('Account deletion manifest does not include its target identity.');
+  }
+
+  for (const ownerUserId of manifest.ownerUserIds) {
+    if (!UUID_PATTERN.test(ownerUserId)) {
+      throw new Error('Account deletion manifest contains an invalid owner identity.');
+    }
+    for (const bucket of manifest.userPrefixBuckets) {
+      bucketsScanned += 1;
+      const paths = await listUserFiles(admin, bucket, ownerUserId, ownerUserId);
+      await removePaths(bucket, paths, ownerUserId);
+    }
   }
 
   bucketsScanned += 1;
-  await removePaths('showcase_media', manifest.showcaseMediaPaths);
+  const canonicalShowcasePaths = manifest.showcaseMediaPaths.map(parseCanonicalManifestShowcasePath);
+  if (canonicalShowcasePaths.some((storagePath) => !storagePath)) {
+    throw new Error('Account deletion manifest contains an invalid showcase path.');
+  }
+  await removePaths('showcase_media', canonicalShowcasePaths as string[]);
 
   for (const templatePrefix of manifest.templateAssetPrefixes) {
+    const canonicalPrefix = parseCanonicalStorageObjectPath(templatePrefix, { minimumSegments: 1 });
+    if (!canonicalPrefix || !TEMPLATE_ID_PATTERN.test(canonicalPrefix)) {
+      throw new Error('Account deletion manifest contains an invalid template prefix.');
+    }
     bucketsScanned += 1;
-    const paths = await listUserFiles(admin, 'template_assets', templatePrefix);
-    await removePaths('template_assets', paths);
+    const paths = await listUserFiles(admin, 'template_assets', canonicalPrefix, canonicalPrefix);
+    await removePaths('template_assets', paths, canonicalPrefix);
   }
 
+  // A successful delete response alone is not evidence that Storage removed
+  // every requested object. Re-list every durable owner prefix before callers
+  // are allowed to advance to Auth deletion. The delayed pass performs the
+  // same verification after all issued signed-upload capabilities have aged
+  // out, closing the window in which a late upload could recreate an object.
+  await assertAccountStorageEmpty(admin, manifest);
+
   return { bucketsScanned, objectsRemoved };
+}
+
+async function retainPurchasedFilesForOwners(
+  admin: SupabaseClient,
+  manifest: AccountDeletionStorageManifest,
+  retainPurchasedFiles: typeof retainPurchasedUnlockFiles,
+) {
+  for (const ownerUserId of manifest.ownerUserIds) {
+    await retainPurchasedFiles(admin, ownerUserId);
+  }
+}
+
+async function deleteLinkedAuthUsersGuestFirst(
+  admin: SupabaseClient,
+  targetUserId: string,
+  ownerUserIds: string[],
+): Promise<{ targetAlreadyMissing: boolean }> {
+  if (!ownerUserIds.includes(targetUserId)) {
+    throw new Error('Account deletion manifest does not include its target identity.');
+  }
+
+  const deletionOrder = [
+    ...ownerUserIds.filter((userId) => userId !== targetUserId),
+    targetUserId,
+  ];
+  let targetAlreadyMissing = false;
+
+  for (const userId of deletionOrder) {
+    const { error } = await admin.auth.admin.deleteUser(userId);
+    const alreadyMissing = Boolean(error && isMissingAuthUserError(error));
+    if (error && !alreadyMissing) throw error;
+    if (userId === targetUserId) targetAlreadyMissing = alreadyMissing;
+  }
+
+  return { targetAlreadyMissing };
 }
 
 async function prepareAccountDeletion(admin: SupabaseClient, userId: string) {
@@ -347,9 +511,12 @@ export async function executeInitialAccountDeletion({
     }
   }
 
+  // Close reservation issuance/finalization before copying retained sources;
+  // otherwise a legacy signed capability could race the source snapshot.
+  await markAccountDeletedUploadReservations(admin, preparation.manifest.ownerUserIds);
   // Retention is a hard gate: never sweep creator-prefixed storage or delete
   // Auth until every purchased revision has a durable neutral copy.
-  await retainPurchasedFiles(admin, userId);
+  await retainPurchasedFilesForOwners(admin, preparation.manifest, retainPurchasedFiles);
   const storage = await removeAccountStorage(admin, userId, preparation.manifest);
   const storageDeletedStatus = await markAccountDeletionStage(
     admin,
@@ -375,9 +542,12 @@ export async function executeInitialAccountDeletion({
     };
   }
 
-  const { error: deleteError } = await admin.auth.admin.deleteUser(userId);
-  const authUserAlreadyMissing = Boolean(deleteError && isMissingAuthUserError(deleteError));
-  if (deleteError && !authUserAlreadyMissing) throw deleteError;
+  const { targetAlreadyMissing: authUserAlreadyMissing } =
+    await deleteLinkedAuthUsersGuestFirst(
+      admin,
+      userId,
+      preparation.manifest.ownerUserIds,
+    );
 
   try {
     await markAccountDeletionStage(admin, userId, 'completed');
@@ -545,6 +715,29 @@ async function finalizeAccountDeletionResweep(
     | 'already_completed';
 }
 
+async function markAccountDeletedUploadReservations(
+  admin: SupabaseClient,
+  ownerUserIds: string[],
+) {
+  const { data, error } = await admin.rpc('mark_account_deleted_upload_reservations', {
+    p_owner_user_ids: ownerUserIds,
+  });
+  const marked = isRecord(data) ? data.marked : null;
+
+  if (
+    error
+    || !isRecord(data)
+    || data.status !== 'ok'
+    || typeof marked !== 'number'
+    || !Number.isSafeInteger(marked)
+    || marked < 0
+  ) {
+    throw new Error(
+      errorMessage(error, 'Could not mark deleted-account upload reservations.'),
+    );
+  }
+}
+
 export async function hasDueAccountDeletionInitialRetries(
   admin: SupabaseClient,
   now = new Date(),
@@ -650,7 +843,8 @@ export async function processAccountDeletionInitialRetries({
           throw new Error('Account deletion storage manifest is invalid.');
         }
 
-        await retainPurchasedFiles(admin, claim.userId);
+        await markAccountDeletedUploadReservations(admin, claim.manifest.ownerUserIds);
+        await retainPurchasedFilesForOwners(admin, claim.manifest, retainPurchasedFiles);
         const storage = await removeAccountStorage(admin, claim.userId, claim.manifest);
         summary.storageSwept += 1;
         summary.objectsRemoved += storage.objectsRemoved;
@@ -678,6 +872,14 @@ export async function processAccountDeletionInitialRetries({
         if (storageTransition !== 'storage_deleted') {
           throw new Error(`Unexpected storage deletion transition: ${storageTransition}.`);
         }
+      } else {
+        if (!claim.manifest) {
+          throw new Error('Account deletion storage manifest is invalid.');
+        }
+        // Rolling deployments may reclaim a job that reached auth_deleting
+        // before reservation tombstones existed. Close that compatibility gap
+        // idempotently before allowing the destructive Auth transition.
+        await markAccountDeletedUploadReservations(admin, claim.manifest.ownerUserIds);
       }
 
       const authTransition = await transitionAccountDeletionInitial(admin, {
@@ -701,8 +903,14 @@ export async function processAccountDeletionInitialRetries({
         throw new Error(`Unexpected auth deletion transition: ${authTransition}.`);
       }
 
-      const { error: deleteError } = await admin.auth.admin.deleteUser(claim.userId);
-      if (deleteError && !isMissingAuthUserError(deleteError)) throw deleteError;
+      if (!claim.manifest) {
+        throw new Error('Account deletion storage manifest is invalid.');
+      }
+      await deleteLinkedAuthUsersGuestFirst(
+        admin,
+        claim.userId,
+        claim.manifest.ownerUserIds,
+      );
 
       // On a normal delete the Auth trigger already moved the row and cleared
       // the lease. This explicit transition is the idempotent fallback for an
@@ -791,6 +999,12 @@ export async function processAccountDeletionResweeps({
       if (!claim.manifest) {
         throw new Error('Account deletion storage manifest is invalid.');
       }
+      // The service-only tombstone takes the shared reservation lock before
+      // the first Storage listing. This closes application-side finalization
+      // and consumption races; the subsequent canonical sweep then proves the
+      // target and every linked guest prefix empty. The RPC is idempotent and
+      // neither releases capacity nor deletes durable reservation rows.
+      await markAccountDeletedUploadReservations(admin, claim.manifest.ownerUserIds);
       const storage = await removeAccountStorage(admin, claim.userId, claim.manifest);
       summary.objectsRemoved += storage.objectsRemoved;
     } catch (error) {

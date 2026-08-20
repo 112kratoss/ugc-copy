@@ -24,7 +24,11 @@ import {
   type TemplateMediaKind,
   type TemplateVersionSnapshot,
 } from '@/lib/media-template-types';
-import { resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
+import {
+  getCanonicalStoredMediaLocation,
+  getUserOwnedStoredMediaLocation,
+} from '@/lib/storage-ownership';
 import type { WorkflowCanvasGraph } from '@/lib/workflow-canvas';
 
 const TEMPLATE_SELECT = [
@@ -147,7 +151,9 @@ async function getCreatorMap(client: SupabaseClient, creatorIds: string[]): Prom
     id: profile.id,
     username: profile.username,
     displayName: profile.display_name,
-    avatarUrl: profile.avatar_url ? await resolveStoredMediaUrl(client, profile.avatar_url) : null,
+    avatarUrl: profile.avatar_url
+      ? await resolveOwnedStoredMediaUrl(client, profile.avatar_url, profile.id)
+      : null,
   }] as const));
   return new Map(pairs);
 }
@@ -161,11 +167,30 @@ async function activeVersionCosts(client: SupabaseClient, versionIds: string[]) 
     .map((row) => [row.id, Math.max(0, Number(row.estimated_total_credits ?? 0))]));
 }
 
-async function resolveTemplateCatalogMediaUrl(client: SupabaseClient, value: string | null): Promise<string | null> {
+export async function resolveTemplateCatalogMediaUrl(
+  client: SupabaseClient,
+  value: string | null,
+  options: {
+    creatorUserId: string | null;
+    templateId: string;
+    activeVersionId: string | null;
+  },
+): Promise<string | null> {
   if (!value) return null;
-  if (!value.startsWith('template_assets/')) return resolveStoredMediaUrl(client, value);
-  const objectPath = value.slice('template_assets/'.length);
-  const { data, error } = await client.storage.from('template_assets').createSignedUrl(objectPath, 60 * 60);
+  if (!value.startsWith('template_assets/')) {
+    return options.creatorUserId
+      ? resolveOwnedStoredMediaUrl(client, value, options.creatorUserId)
+      : null;
+  }
+  const location = getCanonicalStoredMediaLocation(value, { allowedBuckets: ['template_assets'] });
+  if (!location) return null;
+  const requiredPrefix = options.activeVersionId
+    ? `${options.templateId}/${options.activeVersionId}/`
+    : `${options.templateId}/`;
+  if (!location.filePath.startsWith(requiredPrefix)) return null;
+  const { data, error } = await client.storage
+    .from(location.bucket)
+    .createSignedUrl(location.filePath, 60 * 60);
   return error || !data?.signedUrl ? null : data.signedUrl;
 }
 
@@ -214,8 +239,16 @@ async function attachTemplateDetails(
     creator: row.creator_user_id ? creators.get(row.creator_user_id) ?? null : null,
     estimatedTotalCredits: row.active_version_id ? costs.get(row.active_version_id) ?? null : null,
     includeAuthoring,
-    videoUrl: await resolveTemplateCatalogMediaUrl(client, row.video_url),
-    thumbnailUrl: await resolveTemplateCatalogMediaUrl(client, row.thumbnail_url),
+    videoUrl: await resolveTemplateCatalogMediaUrl(client, row.video_url, {
+      creatorUserId: row.creator_user_id,
+      templateId: row.id,
+      activeVersionId: row.active_version_id,
+    }),
+    thumbnailUrl: await resolveTemplateCatalogMediaUrl(client, row.thumbnail_url, {
+      creatorUserId: row.creator_user_id,
+      templateId: row.id,
+      activeVersionId: row.active_version_id,
+    }),
   })));
 }
 
@@ -420,29 +453,16 @@ export async function updateMediaTemplate(client: SupabaseClient, userId: string
   return (await attachTemplateDetails(client, [data as unknown as MediaTemplateRow], true))[0]!;
 }
 
-function parseStoragePath(value: string): { bucket: string; objectPath: string } {
-  const normalized = value.replace(/^\/+/, '');
-  const slash = normalized.indexOf('/');
-  if (slash <= 0 || slash === normalized.length - 1) {
-    throw new MediaTemplateError('A fixed template asset path is invalid.', 400, 'INVALID_FIXED_ASSET');
-  }
-  const bucket = normalized.slice(0, slash);
-  const objectPath = normalized.slice(slash + 1);
-  if (objectPath.includes('\\')) {
-    throw new MediaTemplateError('A fixed template asset path is invalid.', 400, 'INVALID_FIXED_ASSET');
-  }
-  const segments = objectPath.split('/');
-  try {
-    if (segments.some((segment) => {
-      const decoded = decodeURIComponent(segment);
-      return !decoded || decoded === '.' || decoded === '..';
-    })) {
-      throw new Error('unsafe path');
-    }
-  } catch {
-    throw new MediaTemplateError('A fixed template asset path is invalid.', 400, 'INVALID_FIXED_ASSET');
-  }
-  return { bucket, objectPath };
+export function resolveOwnedTemplateAssetSource(
+  storagePath: string,
+  userId: string,
+  kind: TemplateMediaKind,
+): { bucket: string; objectPath: string } | null {
+  const allowedBucket = kind === 'image' ? 'generated_images' : 'generated_videos';
+  const location = getUserOwnedStoredMediaLocation(storagePath, userId, {
+    allowedBuckets: [allowedBucket],
+  });
+  return location ? { bucket: location.bucket, objectPath: location.filePath } : null;
 }
 
 function mediaFileMatchesKind(blob: Blob, objectPath: string, kind: TemplateMediaKind): boolean {
@@ -463,9 +483,12 @@ async function copyOwnedAssetToVersion(params: {
   kind: TemplateMediaKind;
   destinationSegment: string;
 }) {
-  const source = parseStoragePath(params.sourceStoragePath);
-  const allowedBucket = params.kind === 'image' ? 'generated_images' : 'generated_videos';
-  if (source.bucket !== allowedBucket || source.objectPath.split('/')[0] !== params.userId) {
+  const source = resolveOwnedTemplateAssetSource(
+    params.sourceStoragePath,
+    params.userId,
+    params.kind,
+  );
+  if (!source) {
     throw new MediaTemplateError(
       'Template media must be an upload or result owned by the template creator.',
       400,

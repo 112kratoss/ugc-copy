@@ -6,9 +6,13 @@ import {
   type GenerationRestoreMediaDependencies,
 } from '@/lib/generation-restore-media-service';
 
-function makeMaybeSingleQuery<T>(value: () => T | null) {
+function makeMaybeSingleQuery<T>(
+  value: () => T | null,
+  onEq?: (column: string, filterValue: unknown) => void,
+) {
   const query = {
-    eq() {
+    eq(column: string, filterValue: unknown) {
+      onEq?.(column, filterValue);
       return query;
     },
     in() {
@@ -27,9 +31,10 @@ function makeMaybeSingleQuery<T>(value: () => T | null) {
   return query;
 }
 
-function makeUpdateQuery() {
+function makeUpdateQuery(onEq?: (column: string, filterValue: unknown) => void) {
   const query = {
-    eq() {
+    eq(column: string, filterValue: unknown) {
+      onEq?.(column, filterValue);
       return query;
     },
     in() {
@@ -38,17 +43,27 @@ function makeUpdateQuery() {
     is() {
       return query;
     },
-    then(resolve: (result: { error: null }) => void) {
-      resolve({ error: null });
+    select() {
+      return query;
+    },
+    async maybeSingle() {
+      return { data: { id: 'updated-row' }, error: null };
+    },
+    then(resolve: (result: { data: { id: string }; error: null }) => void) {
+      resolve({ data: { id: 'updated-row' }, error: null });
     },
   };
   return query;
 }
 
-function createAdminClientMock() {
+function createAdminClientMock(options: {
+  generationUserId?: string;
+  linkedGuestIds?: string[];
+} = {}) {
+  const generationUserId = options.generationUserId ?? 'user-1';
   const generation = {
     id: 'gen-1',
-    user_id: 'user-1',
+    user_id: generationUserId,
     status: 'succeeded',
     model: 'nano-banana-2',
     category: 'image',
@@ -64,6 +79,12 @@ function createAdminClientMock() {
   };
   const generationUpdates: Array<Record<string, unknown>> = [];
   const postUpdates: Array<Record<string, unknown>> = [];
+  const ownerFilters: Array<{
+    column: string;
+    operation: 'select' | 'update';
+    table: 'generations' | 'posts';
+    value: unknown;
+  }> = [];
   const storageRemoveCalls: Array<{ bucket: string; paths: string[] }> = [];
   const downloadMock = vi.fn(async () => ({
     data: new Blob(['replacement-image'], { type: 'image/png' }),
@@ -75,11 +96,15 @@ function createAdminClientMock() {
       if (table === 'generations') {
         return {
           select() {
-            return makeMaybeSingleQuery(() => generation);
+            return makeMaybeSingleQuery(() => generation, (column, value) => {
+              ownerFilters.push({ column, operation: 'select', table: 'generations', value });
+            });
           },
           update(payload: Record<string, unknown>) {
             generationUpdates.push(payload);
-            return makeUpdateQuery();
+            return makeUpdateQuery((column, value) => {
+              ownerFilters.push({ column, operation: 'update', table: 'generations', value });
+            });
           },
         };
       }
@@ -87,10 +112,52 @@ function createAdminClientMock() {
       if (table === 'posts') {
         return {
           select() {
-            return makeMaybeSingleQuery(() => linkedPost);
+            return makeMaybeSingleQuery(() => linkedPost, (column, value) => {
+              ownerFilters.push({ column, operation: 'select', table: 'posts', value });
+            });
           },
           update(payload: Record<string, unknown>) {
             postUpdates.push(payload);
+            return makeUpdateQuery((column, value) => {
+              ownerFilters.push({ column, operation: 'update', table: 'posts', value });
+            });
+          },
+        };
+      }
+
+      if (table === 'profiles') {
+        return {
+          select() {
+            const query = {
+              eq() {
+                return query;
+              },
+              then(resolve: (result: { data: Array<{ id: string }>; error: null }) => unknown) {
+                return Promise.resolve({
+                  data: (options.linkedGuestIds ?? []).map((id) => ({ id })),
+                  error: null,
+                }).then(resolve);
+              },
+            };
+            return query;
+          },
+        };
+      }
+
+      // No row represents a legacy client upload. The consumer must retain the
+      // compatibility behavior while still accepting explicitly finalized new
+      // uploads when a reservation exists.
+      if (table === 'upload_byte_reservations') {
+        return {
+          select() {
+            return makeMaybeSingleQuery(() => null);
+          },
+        };
+      }
+
+      if (table === 'media_upload_intents') {
+        return {
+          update() {
             return makeUpdateQuery();
           },
         };
@@ -104,17 +171,19 @@ function createAdminClientMock() {
           download: downloadMock,
           async remove(paths: string[]) {
             storageRemoveCalls.push({ bucket, paths });
-            return { data: null, error: null };
+            return { data: paths.map((name) => ({ name })), error: null };
           },
         };
       },
     },
+    rpc: vi.fn(async () => ({ data: null, error: null })),
   };
 
   return {
     client: client as unknown as SupabaseClient,
     downloadMock,
     generationUpdates,
+    ownerFilters,
     postUpdates,
     storageRemoveCalls,
   };
@@ -175,5 +244,43 @@ describe('restoreGenerationMediaForRoute', () => {
       bucket: 'uploads',
       paths: ['user-1/replacement.png'],
     });
+  });
+
+  it('mutates the actual linked guest owner after the registered account authorizes it', async () => {
+    const admin = createAdminClientMock({
+      generationUserId: 'guest-1',
+      linkedGuestIds: ['guest-1'],
+    });
+    const dependencies = {
+      isCompatibleGenerationMediaType: vi.fn(() => true),
+      persistGenerationMediaBlob: vi.fn(async () => ({
+        outputUrl: 'generated_images/guest-1/restored-gen-1.png',
+        createdLocation: {
+          bucket: 'generated_images' as const,
+          filePath: 'guest-1/restored-gen-1.png',
+        },
+      })),
+    } satisfies Partial<GenerationRestoreMediaDependencies>;
+
+    await expect(restoreGenerationMediaForRoute({
+      adminSupabase: admin.client,
+      body: {
+        storagePath: 'uploads/user-1/replacement.png',
+        originalName: 'replacement.png',
+        contentType: 'image/png',
+      },
+      generationId: 'gen-1',
+      userId: 'user-1',
+      dependencies,
+    })).resolves.toMatchObject({ ok: true });
+
+    expect(dependencies.persistGenerationMediaBlob).toHaveBeenCalledWith(expect.objectContaining({
+      generation: expect.objectContaining({ userId: 'guest-1' }),
+    }));
+    expect(admin.ownerFilters).toEqual(expect.arrayContaining([
+      { column: 'user_id', operation: 'select', table: 'posts', value: 'guest-1' },
+      { column: 'user_id', operation: 'update', table: 'generations', value: 'guest-1' },
+      { column: 'user_id', operation: 'update', table: 'posts', value: 'guest-1' },
+    ]));
   });
 });

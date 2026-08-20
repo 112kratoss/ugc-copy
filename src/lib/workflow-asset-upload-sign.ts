@@ -8,7 +8,11 @@ import {
 } from '@/lib/backend-rate-limit';
 import { canUserCreateDurableUpload } from '@/lib/account-deletion-guard';
 import { isAllowedStorageBucketMimeType } from '@/lib/storage-upload-mime-policy';
-import { releaseUploadBytes, reserveUploadBytes } from '@/lib/upload-byte-admission';
+import {
+  abortUploadBytesBeforeIssue,
+  markUploadBytesIssued,
+  reserveUploadBytes,
+} from '@/lib/upload-byte-admission';
 
 const SIGNED_UPLOAD_EXPIRES_IN_SECONDS = 2 * 60 * 60;
 
@@ -65,6 +69,7 @@ export type WorkflowAssetUploadIntentResult =
     ok: true;
     response: {
       success: true;
+      uploadId: string;
       bucket: WorkflowAssetUploadBucket;
       path: string;
       storagePath: string;
@@ -228,12 +233,16 @@ export async function createWorkflowAssetUploadIntent({
     };
   }
 
-  const uploadPath = `${userId}/workflow-input-${createUploadId()}-${metadata.fileName}`;
+  const uploadId = createUploadId();
+  const uploadPath = `${userId}/workflow-input-${uploadId}-${metadata.fileName}`;
   const byteReservation = await reserveUploadBytes(resolvedClient, {
+    uploadId,
     userId,
     bucket: metadata.bucket,
     storagePath: uploadPath,
     declaredBytes: metadata.sizeBytes,
+    reservedBytes: WORKFLOW_ASSET_BUCKETS[metadata.bucket].maxBytes,
+    expectedContentType: metadata.mimeType,
   });
   if (!byteReservation.ok) {
     return {
@@ -248,9 +257,9 @@ export async function createWorkflowAssetUploadIntent({
     .createSignedUploadUrl(uploadPath);
 
   if (error || !data?.token) {
-    await releaseUploadBytes(resolvedClient, {
-      bucket: metadata.bucket,
-      storagePath: uploadPath,
+    await abortUploadBytesBeforeIssue(resolvedClient, {
+      uploadId: byteReservation.uploadId,
+      userId,
     });
     return {
       ok: false,
@@ -259,10 +268,24 @@ export async function createWorkflowAssetUploadIntent({
     };
   }
 
+  const issued = await markUploadBytesIssued(resolvedClient, {
+    uploadId: byteReservation.uploadId,
+    userId,
+    tokenTtlSeconds: SIGNED_UPLOAD_EXPIRES_IN_SECONDS,
+  });
+  if (!issued.ok) {
+    return {
+      ok: false,
+      status: 500,
+      error: 'Failed to activate workflow asset upload.',
+    };
+  }
+
   return {
     ok: true,
     response: {
       success: true,
+      uploadId: byteReservation.uploadId,
       bucket: metadata.bucket,
       path: uploadPath,
       storagePath: `${metadata.bucket}/${uploadPath}`,

@@ -1,4 +1,4 @@
-import { resolveLinkedAccountIds } from '@/lib/account-identity';
+import { requireIdentity, resolveLinkedAccountIds } from '@/lib/account-identity';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -7,8 +7,12 @@ import {
   GENERATION_LIFECYCLE_MUTATION_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
-import { getStoredMediaLocation, type MediaBucket } from '@/lib/media-urls';
+import { isMediaBucket, type MediaBucket } from '@/lib/media-urls';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import {
+  getUserOwnedStoredMediaLocation,
+  parseCanonicalStorageObjectPath,
+} from '@/lib/storage-ownership';
 
 type RouteBody = Record<string, unknown>;
 type GenerationDeleteClient = SupabaseClient;
@@ -43,25 +47,22 @@ export interface GenerationDeleteRouteInput {
   createUserSupabase: () => unknown;
   generationId: string;
   invalidateFeedCache?: typeof invalidateShowcaseFeedCache;
+  requireIdentity?: typeof requireIdentity;
   request: Request;
 }
 
-async function getAuthenticatedUserId(supabase: GenerationDeleteClient) {
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
-
-  return authError || !user ? null : user.id;
-}
-
-function addStoredMediaPath(paths: RemovablePath[], value: string | null | undefined) {
-  if (!value) {
+function addUserOwnedStoredMediaPath(
+  paths: RemovablePath[],
+  value: string | null | undefined,
+  ownerUserId: string,
+  allowedBuckets: readonly MediaBucket[],
+) {
+  if (!value || !ownerUserId) {
     return;
   }
 
-  const location = getStoredMediaLocation(value);
-  if (!location) {
+  const location = getUserOwnedStoredMediaLocation(value, ownerUserId, { allowedBuckets });
+  if (!location || !isMediaBucket(location.bucket)) {
     return;
   }
 
@@ -69,6 +70,19 @@ function addStoredMediaPath(paths: RemovablePath[], value: string | null | undef
     bucket: location.bucket,
     path: location.filePath,
   });
+}
+
+function addShowcaseMediaPath(
+  paths: RemovablePath[],
+  value: string | null | undefined,
+  generationId: string,
+) {
+  if (!value) return;
+  const canonicalPath = parseCanonicalStorageObjectPath(value, { minimumSegments: 3 });
+  if (!canonicalPath) return;
+  const [namespace, scopedGenerationId] = canonicalPath.split('/');
+  if (namespace !== 'showcase' || scopedGenerationId !== generationId) return;
+  paths.push({ bucket: 'showcase_media', path: canonicalPath });
 }
 
 async function removeStoragePaths(adminSupabase: GenerationDeleteClient, removablePaths: RemovablePath[]) {
@@ -82,20 +96,27 @@ export async function deleteOwnerGenerationForRoute({
   createUserSupabase,
   generationId,
   invalidateFeedCache = invalidateShowcaseFeedCache,
+  requireIdentity: requireIdentityForRequest = requireIdentity,
 }: GenerationDeleteRouteInput): Promise<GenerationDeleteRouteResult> {
   const supabase = createUserSupabase() as GenerationDeleteClient;
-  const userId = await getAuthenticatedUserId(supabase);
+  let adminSupabase: GenerationDeleteClient | null = null;
+  const getAdminSupabase = () => {
+    adminSupabase ??= createAdminSupabase() as GenerationDeleteClient;
+    return adminSupabase;
+  };
+  const identity = await requireIdentityForRequest(supabase, getAdminSupabase);
 
-  if (!userId) {
+  if (!identity.ok) {
     return {
       ok: false,
-      body: { error: 'Unauthorized' },
-      status: 401,
+      body: { error: identity.error, code: identity.code },
+      status: identity.status,
     };
   }
+  const userId = identity.identity.userId;
 
   try {
-    const adminSupabase = createAdminSupabase() as GenerationDeleteClient;
+    const adminSupabase = getAdminSupabase();
     try {
       await enforceBackendRateLimit(adminSupabase, {
         ...GENERATION_LIFECYCLE_MUTATION_RATE_LIMIT,
@@ -115,11 +136,12 @@ export async function deleteOwnerGenerationForRoute({
       return { ok: false, body: { error: 'Failed to delete creation.' }, status: 500 };
     }
 
+    const ownerUserIds = await resolveLinkedAccountIds(adminSupabase, userId);
     const { data: generationData, error: generationError } = await adminSupabase
       .from('generations')
       .select('id, user_id, output_url, showcase_asset_path')
       .eq('id', generationId)
-      .in('user_id', await resolveLinkedAccountIds(adminSupabase, userId))
+      .in('user_id', ownerUserIds)
       .is('template_run_id', null)
       .is('template_run_step_id', null)
       .maybeSingle();
@@ -138,7 +160,7 @@ export async function deleteOwnerGenerationForRoute({
       .from('posts')
       .select('id')
       .eq('generation_id', generationId)
-      .eq('user_id', userId);
+      .in('user_id', ownerUserIds);
 
     if (linkedPostsError) {
       logBackendError('failed_to_load_linked_posts_before_generation_delete', { error: linkedPostsError });
@@ -150,34 +172,39 @@ export async function deleteOwnerGenerationForRoute({
 
     const { data: inputMediaRows, error: inputMediaError } = await adminSupabase
       .from('generation_input_media')
-      .select('storage_path')
+      .select('user_id, storage_path')
       .eq('generation_id', generationId)
-      .eq('user_id', userId);
+      .in('user_id', ownerUserIds);
 
     if (inputMediaError) {
       logBackendError('failed_to_load_generation_input_media_before_delete', { error: inputMediaError });
     } else {
-      for (const row of (inputMediaRows ?? []) as Array<{ storage_path: string | null }>) {
-        addStoredMediaPath(removablePaths, row.storage_path);
+      for (const row of (inputMediaRows ?? []) as Array<{ user_id: string; storage_path: string | null }>) {
+        if (!ownerUserIds.includes(row.user_id)) continue;
+        addUserOwnedStoredMediaPath(
+          removablePaths,
+          row.storage_path,
+          row.user_id,
+          ['generation_inputs'],
+        );
       }
     }
 
     if (!hasLinkedPosts) {
-      addStoredMediaPath(removablePaths, generation.output_url);
-
-      if (generation.showcase_asset_path) {
-        removablePaths.push({
-          bucket: 'showcase_media',
-          path: generation.showcase_asset_path,
-        });
-      }
+      addUserOwnedStoredMediaPath(
+        removablePaths,
+        generation.output_url,
+        generation.user_id,
+        ['generated_images', 'generated_videos', 'generated_audio'],
+      );
+      addShowcaseMediaPath(removablePaths, generation.showcase_asset_path, generation.id);
     }
 
     const { error: deleteError } = await adminSupabase
       .from('generations')
       .delete()
       .eq('id', generationId)
-      .eq('user_id', userId)
+      .in('user_id', ownerUserIds)
       .is('template_run_id', null)
       .is('template_run_step_id', null);
 

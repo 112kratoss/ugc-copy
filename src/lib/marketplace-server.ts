@@ -281,7 +281,7 @@ async function loadPostMap(
   const adminSupabase = createServiceClient();
   let resultQuery = adminSupabase
     .from('posts')
-    .select('id, title, body, category, post_format, visibility, showcase_asset_path, output_url, source_kind, source_tool')
+    .select('id, user_id, title, body, category, post_format, visibility, showcase_asset_path, output_url, source_kind, source_tool')
     .in('id', uniquePostIds);
   if (scope === 'public') {
     resultQuery = resultQuery.eq('visibility', 'public');
@@ -293,7 +293,7 @@ async function loadPostMap(
   if (isMissingPostTextColumnsError(result.error)) {
     let legacyResultQuery = adminSupabase
       .from('posts')
-      .select('id, title, category, visibility, showcase_asset_path, output_url, source_kind, source_tool')
+      .select('id, user_id, title, category, visibility, showcase_asset_path, output_url, source_kind, source_tool')
       .in('id', uniquePostIds);
     if (scope === 'public') {
       legacyResultQuery = legacyResultQuery.eq('visibility', 'public');

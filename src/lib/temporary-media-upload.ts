@@ -4,9 +4,11 @@ import {
   uploadFileToSignedUrl,
   type SignedUrlUploadProgress,
 } from '@/lib/signed-url-upload';
+import { finalizeSignedUpload } from '@/lib/upload-finalize-client';
 
 type TemporaryMediaUploadIntent = {
   success: boolean;
+  uploadId: string;
   bucket: 'uploads';
   path: string;
   storagePath: string;
@@ -71,6 +73,7 @@ export async function uploadMediaToTemporaryStorage(
     uploadIntent.bucket !== 'uploads'
     || !uploadIntent.path
     || !uploadIntent.storagePath
+    || !uploadIntent.uploadId
     || !uploadIntent.token
   ) {
     throw new Error('Media upload response was invalid.');
@@ -89,6 +92,15 @@ export async function uploadMediaToTemporaryStorage(
     { mimeType, onProgress: options.onProgress, signal: options.signal },
   );
 
+  const finalized = await finalizeSignedUpload(
+    session.access_token,
+    uploadIntent.uploadId,
+    options.signal,
+  );
+  if (finalized.bucket !== uploadIntent.bucket || finalized.path !== uploadIntent.path) {
+    throw new Error('Finalized media upload did not match its signed target.');
+  }
+
   const readUrlResponse = await fetch('/api/uploads/media/read-url', {
     method: 'POST',
     headers: {
@@ -96,7 +108,7 @@ export async function uploadMediaToTemporaryStorage(
       Authorization: `Bearer ${session.access_token}`,
     },
     body: JSON.stringify({
-      storagePath: uploadIntent.storagePath,
+      storagePath: finalized.storagePath,
     }),
   });
 
@@ -107,6 +119,6 @@ export async function uploadMediaToTemporaryStorage(
 
   return {
     signedUrl: readUrl.signedUrl,
-    storagePath: uploadIntent.storagePath,
+    storagePath: finalized.storagePath,
   };
 }

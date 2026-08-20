@@ -190,7 +190,7 @@ describe('startWorkflowRunForRoute', () => {
       },
     });
     expect(executeRun).toHaveBeenCalledWith({
-      supabase: canvas.client,
+      supabase: admin.client,
       userId: 'user-1',
       canvasId: 'canvas-1',
       graph,

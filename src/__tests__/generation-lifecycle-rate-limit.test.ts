@@ -55,6 +55,12 @@ function createAdminSupabaseMock() {
       return {
         select() {
           selectCalls.push(table);
+          if (table === 'profiles') {
+            return createQuery({
+              data: { identity_state: 'active' },
+              error: null,
+            });
+          }
           if (table === 'generations') {
             return createQuery({
               data: {
@@ -202,7 +208,7 @@ describe('generation lifecycle route rate limits', () => {
       p_limit: 60,
       p_window_seconds: 600,
     });
-    expect(selectCalls).toEqual([]);
+    expect(selectCalls).toEqual(['profiles']);
     expect(deleteCalls).toEqual([]);
     expect(storageRemoveCalls).toEqual([]);
   });

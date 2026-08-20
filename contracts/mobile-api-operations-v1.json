@@ -297,6 +297,11 @@
       "path": "/api/uploads/media/sign",
       "auth": "required"
     },
+    "finalizeUpload": {
+      "method": "POST",
+      "path": "/api/uploads/finalize",
+      "auth": "required"
+    },
     "createMediaReadUrl": {
       "method": "POST",
       "path": "/api/uploads/media/read-url",

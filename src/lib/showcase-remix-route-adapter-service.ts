@@ -1,4 +1,5 @@
 import 'server-only';
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
@@ -37,7 +38,7 @@ async function handleShowcaseRemixPOST(
 ) {
   try {
     const supabase = dependencies.createUserClient(request);
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    const { data: { user }, error: authError } = await getVerifiedAuthUserResult(supabase);
     if (authError || !user) {
       return NextResponse.json({ error: 'Unauthorized: Please log in to remix creations' }, { status: 401 });
     }

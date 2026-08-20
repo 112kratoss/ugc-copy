@@ -1,4 +1,4 @@
-import { isGuestUser } from '@/lib/account-identity';
+import { requireRegisteredUser } from '@/lib/account-identity';
 import 'server-only';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
@@ -28,6 +28,7 @@ type AccountDeletionDependencies = {
   invalidateShowcaseFeedCache?: typeof invalidateShowcaseFeedCache;
   logError?: typeof logBackendRouteError;
   now?: () => Date;
+  requireRegisteredUser?: typeof requireRegisteredUser;
 };
 
 function hasRecentAuthentication(lastSignInAt: string | undefined, now: Date) {
@@ -68,19 +69,27 @@ export async function deleteAccountRouteResponse({
     invalidateShowcaseFeedCache: dependencies?.invalidateShowcaseFeedCache ?? invalidateShowcaseFeedCache,
     logError: dependencies?.logError ?? logBackendRouteError,
     now: dependencies?.now ?? (() => new Date()),
+    requireRegisteredUser: dependencies?.requireRegisteredUser ?? requireRegisteredUser,
   };
   const userClient = resolved.createUserClient(request);
-  const { data: { user }, error: authError } = await userClient.auth.getUser();
+  let adminClient: ReturnType<typeof resolved.createServiceClient> | null = null;
+  const getAdmin = () => {
+    adminClient ??= resolved.createServiceClient();
+    return adminClient;
+  };
+  const identity = await resolved.requireRegisteredUser(userClient, getAdmin);
 
-  // Registered-only per route-identity-policy.ts. A guest holds a valid
-    // JWT, so `!user` alone stopped meaning "not registered" the moment
-    // anonymous sessions existed.
-    if (authError || !user || isGuestUser(user)) {
+  if (!identity.ok) {
     return applyPrivateNoStoreApiResponseHeaders(
-      NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+      NextResponse.json(
+        { error: identity.error, code: identity.code },
+        { status: identity.status },
+      ),
       request,
     );
   }
+  const { user } = identity.identity;
+  const admin = getAdmin();
 
   if (!await parseConfirmation(request)) {
     return applyPrivateNoStoreApiResponseHeaders(
@@ -100,7 +109,6 @@ export async function deleteAccountRouteResponse({
     );
   }
 
-  const admin = resolved.createServiceClient();
   try {
     await resolved.enforceBackendRateLimit(admin, {
       ...ACCOUNT_DELETION_RATE_LIMIT,

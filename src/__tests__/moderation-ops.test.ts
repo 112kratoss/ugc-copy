@@ -2,7 +2,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  getCanonicalOwnedModerationMediaPath,
   listOpenModerationReports,
+  normalizeShowcaseMediaPath,
+  revokePostPublicMedia,
   resolvePostReport,
   resolveSubjectReport,
 } from '@/lib/moderation-ops';
@@ -28,6 +31,31 @@ function queryResult(data: unknown, error: unknown = null) {
 }
 
 describe('moderation operations', () => {
+  it('canonicalizes showcase paths and binds them to the reported post or generation', () => {
+    const generationId = '80000000-0000-4000-8000-000000000008';
+    expect(normalizeShowcaseMediaPath(
+      `showcase_media/posts/${POST_ID}/0/proof.webp`,
+    )).toBe(`posts/${POST_ID}/0/proof.webp`);
+    expect(normalizeShowcaseMediaPath(
+      `https://project.supabase.co/storage/v1/object/public/showcase_media/posts/${POST_ID}/0/proof.webp`,
+    )).toBe(`posts/${POST_ID}/0/proof.webp`);
+    expect(getCanonicalOwnedModerationMediaPath(
+      `showcase/${generationId}/output.webp`,
+      POST_ID,
+      generationId,
+    )).toBe(`showcase/${generationId}/output.webp`);
+
+    for (const storagePath of [
+      'posts/another-post/private.webp',
+      'posts/20000000-0000-4000-8000-000000000002/../another-post/private.webp',
+      `posts/${POST_ID}/%252fanother-post/private.webp`,
+      `posts/${POST_ID}/%255canother-post/private.webp`,
+      `https://project.supabase.co/storage/v1/object/public/showcase_media/posts/${POST_ID}/../another-post/private.webp`,
+    ]) {
+      expect(getCanonicalOwnedModerationMediaPath(storagePath, POST_ID, generationId)).toBeNull();
+    }
+  });
+
   it('lists oldest open post and subject reports with reported-post context', async () => {
     const postReports = queryResult([{
       id: REPORT_ID,
@@ -110,6 +138,7 @@ describe('moderation operations', () => {
     }));
     const post = queryResult({
       id: POST_ID,
+      user_id: '70000000-0000-4000-8000-000000000007',
       generation_id: '80000000-0000-4000-8000-000000000008',
       showcase_asset_path: `showcase/80000000-0000-4000-8000-000000000008/output.webp`,
       output_url: 'https://provider.example/original-output',
@@ -123,6 +152,9 @@ describe('moderation operations', () => {
     const from = vi.fn((table: string) => {
       if (table === 'posts') return post;
       if (table === 'post_media') return postMedia;
+      if (table === 'generations') return queryResult({
+        id: '80000000-0000-4000-8000-000000000008',
+      });
       throw new Error(`Unexpected table ${table}`);
     });
     const remove = vi.fn(async () => ({ data: [], error: null }));
@@ -231,6 +263,7 @@ describe('moderation operations', () => {
     const from = vi.fn((table: string) => table === 'posts'
       ? queryResult({
           id: POST_ID,
+          user_id: '70000000-0000-4000-8000-000000000007',
           generation_id: null,
           showcase_asset_path: `posts/${POST_ID}/0/proof.webp`,
           output_url: null,
@@ -248,6 +281,31 @@ describe('moderation operations', () => {
       reviewerId: REVIEWER_ID,
       action: 'take_down',
     })).rejects.toThrow('still exists after Storage revocation');
+  });
+
+  it('does not authorize a foreign generation prefix from a post reference alone', async () => {
+    const foreignGenerationId = '80000000-0000-4000-8000-000000000009';
+    const from = vi.fn((table: string) => {
+      if (table === 'posts') return queryResult({
+        id: POST_ID,
+        user_id: '70000000-0000-4000-8000-000000000007',
+        generation_id: foreignGenerationId,
+        showcase_asset_path: `showcase/${foreignGenerationId}/private.webp`,
+        output_url: null,
+      });
+      if (table === 'post_media') return queryResult([]);
+      if (table === 'generations') return queryResult(null);
+      throw new Error(`Unexpected table ${table}`);
+    });
+    const remove = vi.fn();
+
+    await expect(revokePostPublicMedia({
+      from,
+      storage: { from: vi.fn(() => ({ remove, exists: vi.fn() })) },
+    } as unknown as SupabaseClient, POST_ID)).rejects.toThrow(
+      'outside the reported post scope',
+    );
+    expect(remove).not.toHaveBeenCalled();
   });
 
   it('rejects malformed identifiers before touching the privileged client', async () => {

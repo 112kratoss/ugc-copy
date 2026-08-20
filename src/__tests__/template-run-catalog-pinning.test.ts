@@ -37,6 +37,9 @@ vi.mock('@/lib/server-helpers', () => ({
   resolveStoredMediaUrl: (...args: unknown[]) => (
     mocks.resolveStoredMediaUrl(...(args as [unknown, string]))
   ),
+  resolveOwnedStoredMediaUrl: (...args: unknown[]) => (
+    mocks.resolveStoredMediaUrl(...(args as [unknown, string]))
+  ),
 }));
 
 vi.mock('@/lib/generation-services', () => ({}));

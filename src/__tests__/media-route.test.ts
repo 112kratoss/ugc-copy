@@ -14,6 +14,16 @@ const mocks = vi.hoisted(() => {
     },
     error: null,
   }));
+  const profileMaybeSingle = vi.fn(async () => ({
+    data: { identity_state: 'active' },
+    error: null,
+  }));
+  const profileEq = vi.fn(() => ({ maybeSingle: profileMaybeSingle }));
+  const profileSelect = vi.fn(() => ({ eq: profileEq }));
+  const serviceFrom = vi.fn((table: string) => {
+    if (table !== 'profiles') throw new Error(`Unexpected table: ${table}`);
+    return { select: profileSelect };
+  });
   const download = vi.fn();
   const storageFrom = vi.fn(() => ({
     createSignedUrl,
@@ -26,7 +36,7 @@ const mocks = vi.hoisted(() => {
       storage: { from: storageFrom },
     };
   });
-  const serviceClient = { rpc };
+  const serviceClient = { from: serviceFrom, rpc };
   const createServiceClient = vi.fn(() => serviceClient);
 
   return {
@@ -35,8 +45,12 @@ const mocks = vi.hoisted(() => {
     createUserClient,
     download,
     getUser,
+    profileEq,
+    profileMaybeSingle,
+    profileSelect,
     rpc,
     serviceClient,
+    serviceFrom,
     storageFrom,
   };
 });
@@ -64,6 +78,13 @@ describe('/api/media route', () => {
     mocks.createUserClient.mockClear();
     mocks.download.mockReset();
     mocks.getUser.mockReset();
+    mocks.profileEq.mockClear();
+    mocks.profileMaybeSingle.mockReset();
+    mocks.profileMaybeSingle.mockResolvedValue({
+      data: { identity_state: 'active' },
+      error: null,
+    });
+    mocks.profileSelect.mockClear();
     mocks.rpc.mockReset();
     mocks.rpc.mockResolvedValue({
       data: {
@@ -76,6 +97,7 @@ describe('/api/media route', () => {
       error: null,
     });
     mocks.storageFrom.mockClear();
+    mocks.serviceFrom.mockClear();
     mocks.getUser.mockResolvedValue({
       data: { user: { id: 'user-1' } },
       error: null,
@@ -110,7 +132,7 @@ describe('/api/media route', () => {
     const response = await GET(mediaRequest('bucket=generated_images&path=user%2Ffile.jpg'));
 
     expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({ error: 'Unauthorized' });
+    expect(await response.json()).toEqual({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
     expect(mocks.createServiceClient).not.toHaveBeenCalled();
     expect(mocks.createSignedUrl).not.toHaveBeenCalled();
     expect(mocks.download).not.toHaveBeenCalled();

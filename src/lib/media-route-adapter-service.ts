@@ -5,6 +5,7 @@ import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 
+import { requireIdentity } from '@/lib/account-identity';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
 import {
   createMediaReadSignedUrlForRoute,
@@ -45,6 +46,7 @@ type MediaRouteAdapterDependencies = {
   createServiceClient?: typeof createServiceClient;
   parseMediaReadRoutePayload?: typeof parseMediaReadRoutePayload;
   logError?: typeof logBackendRouteError;
+  requireIdentity?: typeof requireIdentity;
 };
 
 function resolveDependencies(dependencies: MediaRouteAdapterDependencies | undefined) {
@@ -55,6 +57,7 @@ function resolveDependencies(dependencies: MediaRouteAdapterDependencies | undef
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     parseMediaReadRoutePayload: dependencies?.parseMediaReadRoutePayload ?? parseMediaReadRoutePayload,
     logError: dependencies?.logError ?? logBackendRouteError,
+    requireIdentity: dependencies?.requireIdentity ?? requireIdentity,
   };
 }
 
@@ -80,20 +83,28 @@ export async function getMediaRouteResponse({
 
   try {
     const supabase = await resolvedDependencies.createMediaSupabaseClient(request);
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
+    let serviceClient: ReturnType<typeof resolvedDependencies.createServiceClient> | null = null;
+    const getServiceClient = () => {
+      serviceClient ??= resolvedDependencies.createServiceClient();
+      return serviceClient;
+    };
+    const identity = await resolvedDependencies.requireIdentity(supabase, getServiceClient);
 
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    if (!identity.ok) {
+      return NextResponse.json(
+        { error: identity.error, code: identity.code },
+        {
+          status: identity.status,
+          headers: { 'Cache-Control': 'private, no-store' },
+        },
+      );
     }
 
     const result = await resolvedDependencies.createMediaReadSignedUrlForRoute({
       payload: payloadResult.payload,
-      rateLimitClient: resolvedDependencies.createServiceClient(),
+      rateLimitClient: getServiceClient(),
       userClient: supabase,
-      userId: user.id,
+      userId: identity.identity.userId,
     });
 
     if (!result.ok) {

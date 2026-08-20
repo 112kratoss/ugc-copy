@@ -9,12 +9,14 @@ const cacheMocks = vi.hoisted(() => ({
 vi.mock('@/lib/showcase-feed-cache', () => cacheMocks);
 
 import {
+  getCanonicalPostMediaStoragePath,
   updateOwnerPostForRoute,
   type PostUpdateDependencies,
 } from '@/lib/post-update-service';
 import type { SourceToolOption } from '@/lib/source-tools';
 import { TITLE_MAX_LENGTH } from '@/lib/posts-server';
 import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
+import { DefinitiveSupabaseMutationRejection } from '@/lib/upload-byte-admission';
 
 const sourceToolCatalog: SourceToolOption[] = [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
@@ -840,7 +842,7 @@ describe('updateOwnerPostForRoute', () => {
     expect(updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
   });
 
-  it('rolls back promoted storage when the atomic post, bundle, and media commit fails', async () => {
+  it('rolls back promoted storage when the atomic media commit is definitively rejected', async () => {
     const oldStoragePath = 'posts/post-1/old.jpg';
     const { client, copied, removals } = createSupabaseMock({
       bundle: null,
@@ -860,7 +862,10 @@ describe('updateOwnerPostForRoute', () => {
       }],
     });
     const updatePostWithResourceBundleAtomically = vi.fn(async () => {
-      throw new Error('replace_post_media rejected the write');
+      throw new DefinitiveSupabaseMutationRejection(
+        { code: '23514', message: 'replace_post_media rejected the write' },
+        409,
+      );
     });
 
     const result = await updateOwnerPostForRoute({
@@ -980,6 +985,68 @@ describe('updateOwnerPostForRoute', () => {
       'posts/post-1/a/clip.preview.webp',
       'posts/post-1/a/clip.feed.mp4',
     ]);
+  });
+
+  it('never passes foreign or encoded post media paths to service-role removal', async () => {
+    const unsafePaths = [
+      'posts/post-2/private.mp4',
+      'posts/post-1/%252e%252e/post-2/private.preview.webp',
+      'posts%252fpost-1%252fprivate.feed.mp4',
+      'posts\\post-1\\private.teaser.mp4',
+    ];
+    const { client, removals } = createSupabaseMock({
+      bundle: null,
+      stagedInfo: { size: 13 * 1024 * 1024, contentType: 'video/mp4' },
+      postMedia: [{
+        id: 'media-unsafe',
+        media_key: 'proof-unsafe',
+        storage_path: unsafePaths[0],
+        preview_storage_path: unsafePaths[1],
+        rendition_storage_path: unsafePaths[2],
+        teaser_storage_path: unsafePaths[3],
+        external_url: null,
+        media_kind: 'video',
+        content_type: 'video/mp4',
+        original_name: 'private.mp4',
+        width: null,
+        height: null,
+        duration_seconds: null,
+        sort_order: 0,
+      }],
+    });
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        mediaItems: [{
+          mediaKey: 'proof-new',
+          storagePath: 'uploads/user-1/new.mp4',
+          contentType: 'video/mp4',
+          originalName: 'new.mp4',
+        }],
+        resourceBundle: { accessMode: 'none' },
+      },
+      dependencies: {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'private' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    for (const unsafePath of unsafePaths) {
+      expect(removals.flat()).not.toContain(unsafePath);
+    }
   });
 
   it('keeps original, preview, and rendition objects pinned by a purchased revision', async () => {
@@ -1549,5 +1616,24 @@ describe('updateOwnerPostForRoute', () => {
       expect(result).toMatchObject({ ok: false, status: 400, body: { field: 'title' } });
       expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('getCanonicalPostMediaStoragePath', () => {
+  it('returns only a canonical object path under the exact post scope', () => {
+    expect(getCanonicalPostMediaStoragePath(
+      'posts/post-1/assets/clip.mp4',
+      'post-1',
+    )).toBe('posts/post-1/assets/clip.mp4');
+
+    for (const unsafePath of [
+      'posts/post-2/assets/clip.mp4',
+      'posts/post-1/%252e%252e/post-2/clip.mp4',
+      'posts%252fpost-1%252fassets%252fclip.mp4',
+      'posts\\post-1\\assets\\clip.mp4',
+      'posts/post-1//clip.mp4',
+    ]) {
+      expect(getCanonicalPostMediaStoragePath(unsafePath, 'post-1')).toBeNull();
+    }
   });
 });

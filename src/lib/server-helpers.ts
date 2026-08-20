@@ -20,10 +20,20 @@ import 'server-only';
 import { NextResponse } from 'next/server';
 import { logBackendError } from '@/lib/backend-logger';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { buildMediaProxyUrl, getStoredMediaLocation } from '@/lib/media-urls';
-import { isStorageObjectOwnedByUser } from '@/lib/storage-ownership';
+import { buildMediaProxyUrl, isMediaBucket } from '@/lib/media-urls';
+import {
+    getCanonicalStoredMediaLocation,
+    getUserOwnedStoredMediaLocation,
+} from '@/lib/storage-ownership';
+import { requireIdentity } from '@/lib/account-identity';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
+const GENERIC_SIGNABLE_MEDIA_BUCKETS = [
+    'generated_images',
+    'generated_videos',
+    'generated_audio',
+    'generation_inputs',
+] as const;
 let cachedServiceClient: SupabaseClient | null = null;
 
 // ─── Supabase Client Factories ────────────────────────────────────────────────
@@ -72,7 +82,9 @@ async function signStoredMediaUrl(
     adminSupabase: SupabaseClient,
     outputUrl: string
 ): Promise<string> {
-    const location = getStoredMediaLocation(outputUrl);
+    const location = getCanonicalStoredMediaLocation(outputUrl, {
+        allowedBuckets: GENERIC_SIGNABLE_MEDIA_BUCKETS,
+    });
 
     if (!location) {
         return outputUrl;
@@ -104,27 +116,9 @@ export async function resolveStoredMediaUrl(
     adminSupabase: SupabaseClient,
     outputUrl: string
 ): Promise<string> {
-    const location = getStoredMediaLocation(outputUrl);
-    const privateTemplateLocation = outputUrl.startsWith('template_inputs/')
-        ? { bucket: 'template_inputs', filePath: outputUrl.slice('template_inputs/'.length) }
-        : outputUrl.startsWith('template_assets/')
-            ? { bucket: 'template_assets', filePath: outputUrl.slice('template_assets/'.length) }
-            : null;
-
-    // Template inputs and fixed assets intentionally are not accepted by the
-    // generic /api/media proxy. Server-only template execution and catalog
-    // routes may still resolve them with the service client.
-    if (!location && privateTemplateLocation?.filePath) {
-        try {
-            const { data, error } = await adminSupabase.storage
-                .from(privateTemplateLocation.bucket)
-                .createSignedUrl(privateTemplateLocation.filePath, 3600);
-            if (!error && data?.signedUrl) return data.signedUrl;
-        } catch (error) {
-            logBackendError('resolvestoredmediaurl_private_template_signing_failed', { error: error });
-        }
-        return outputUrl;
-    }
+    const location = getCanonicalStoredMediaLocation(outputUrl, {
+        allowedBuckets: GENERIC_SIGNABLE_MEDIA_BUCKETS,
+    });
 
     if (!location) {
         return outputUrl;
@@ -139,7 +133,9 @@ export async function resolveStoredMediaUrl(
         logBackendError('resolvestoredmediaurl_signing_failed_falling_back_to_proxy', { error: err });
     }
 
-    return buildMediaProxyUrl(location.bucket, location.filePath);
+    return isMediaBucket(location.bucket)
+        ? buildMediaProxyUrl(location.bucket, location.filePath)
+        : outputUrl;
 }
 
 /**
@@ -151,17 +147,25 @@ export async function resolveOwnedStoredMediaUrl(
     outputUrl: string,
     ownerUserId: string
 ): Promise<string | null> {
-    const location = getStoredMediaLocation(outputUrl);
+    const location = getUserOwnedStoredMediaLocation(outputUrl, ownerUserId);
     if (location) {
-        if (!isStorageObjectOwnedByUser(location.filePath, ownerUserId)) {
-            logBackendError('refused_to_sign_media_outside_owner_prefix', { message: `Refused to sign media outside owner prefix: ${location.bucket}/${location.filePath}` });
-            return null;
+        try {
+            const { data, error } = await adminSupabase.storage
+                .from(location.bucket)
+                .createSignedUrl(location.filePath, 3600);
+            if (!error && data?.signedUrl) return data.signedUrl;
+            if (isMediaBucket(location.bucket)) {
+                return buildMediaProxyUrl(location.bucket, location.filePath);
+            }
+        } catch (error) {
+            logBackendError('resolveownedstoredmediaurl_signing_failed', { error: error });
         }
-        return resolveStoredMediaUrl(adminSupabase, outputUrl);
+        return null;
     }
 
     try {
         const url = new URL(outputUrl);
+        if (url.pathname.includes('/storage/v1/object/')) return null;
         return url.protocol === 'https:' && !url.username && !url.password ? outputUrl : null;
     } catch {
         return null;
@@ -175,21 +179,34 @@ export interface AuthResult {
     supabase: SupabaseClient;
 }
 
+type AuthenticateRequestDependencies = {
+    createServiceClient?: typeof createServiceClient;
+    createUserClient?: typeof createUserClient;
+    requireIdentity?: typeof requireIdentity;
+};
+
 /**
  * Authenticates the request and returns the userId + scoped Supabase client.
  * Returns a NextResponse error if authentication fails.
  */
 export async function authenticateRequest(
-    request: Request
+    request: Request,
+    dependencies: AuthenticateRequestDependencies = {},
 ): Promise<AuthResult | NextResponse> {
-    const supabase = createUserClient(request);
-    const { data: { user }, error } = await supabase.auth.getUser();
+    const createScopedClient = dependencies.createUserClient ?? createUserClient;
+    const createAdminClient = dependencies.createServiceClient ?? createServiceClient;
+    const admitIdentity = dependencies.requireIdentity ?? requireIdentity;
+    const supabase = createScopedClient(request);
+    const result = await admitIdentity(supabase, createAdminClient);
 
-    if (error || !user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    if (!result.ok) {
+        return NextResponse.json(
+            { error: result.error, code: result.code },
+            { status: result.status },
+        );
     }
 
-    return { userId: user.id, supabase };
+    return { userId: result.identity.userId, supabase };
 }
 
 // ─── Credits ──────────────────────────────────────────────────────────────────

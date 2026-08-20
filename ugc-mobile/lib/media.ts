@@ -251,7 +251,7 @@ export async function pickResourceDocument(mode: ResourceDocumentPickerMode = 'r
 export async function uploadPickedMedia(
   uri: string,
   options: {
-    api?: Pick<MagicbookletApiClient, 'createMediaUpload' | 'createMediaReadUrl'>;
+    api?: Pick<MagicbookletApiClient, 'createMediaUpload' | 'finalizeUpload' | 'createMediaReadUrl'>;
     bucket?: string;
     fileName?: string | null;
     mimeType?: string | null;
@@ -298,25 +298,30 @@ export async function uploadPickedMedia(
     sizeBytes: upload.sizeBytes,
   });
 
+  const finalized = await options.api.finalizeUpload({ uploadId: uploadIntent.uploadId }, options.signal);
+  if (finalized.bucket !== uploadIntent.bucket || finalized.path !== uploadIntent.path) {
+    throw new Error('Finalized media upload did not match its signed target.');
+  }
+
   const readUrl = await options.api.createMediaReadUrl({
-    storagePath: uploadIntent.storagePath,
+    storagePath: finalized.storagePath,
   });
 
   return {
     signedUrl: readUrl.signedUrl,
-    storagePath: uploadIntent.storagePath,
-    mimeType,
+    storagePath: finalized.storagePath,
+    mimeType: finalized.contentType,
     fileName,
     kind,
     durationSeconds: options.durationSeconds ?? null,
-    sizeBytes: upload.sizeBytes,
+    sizeBytes: finalized.sizeBytes,
   };
 }
 
 export async function uploadTemplateRunInput(
   uri: string,
   options: {
-    api: Pick<MagicbookletApiClient, 'signTemplateRunInput' | 'finalizeTemplateRunInput'>;
+    api: Pick<MagicbookletApiClient, 'signTemplateRunInput' | 'finalizeUpload' | 'finalizeTemplateRunInput'>;
     runId: string;
     slotKey: string;
     kind?: 'image' | 'video';
@@ -365,8 +370,13 @@ export async function uploadTemplateRunInput(
     sizeBytes: upload.sizeBytes,
   });
 
+  const finalized = await options.api.finalizeUpload({ uploadId: uploadIntent.uploadId }, options.signal);
+  if (finalized.bucket !== uploadIntent.bucket || finalized.path !== uploadIntent.path) {
+    throw new Error('Finalized template input did not match its signed target.');
+  }
+
   return options.api.finalizeTemplateRunInput(options.runId, {
-    inputs: [{ slotKey: options.slotKey, storagePath: uploadIntent.storagePath }],
+    inputs: [{ slotKey: options.slotKey, storagePath: finalized.storagePath }],
   });
 }
 
@@ -379,7 +389,7 @@ export async function uploadTemplateRunInput(
 export async function uploadResourceDocument(
   uri: string,
   options: {
-    api: Pick<MagicbookletApiClient, 'signPostResourceFileUpload' | 'finalizePostResourceFileUpload'>;
+    api: Pick<MagicbookletApiClient, 'signPostResourceFileUpload' | 'finalizeUpload'>;
     fileName?: string | null;
     mimeType?: string | null;
     sizeBytes?: number | null;
@@ -437,22 +447,27 @@ export async function uploadResourceDocument(
   throwIfUploadCancelled(options.signal);
   const finalized = await awaitAbortAware(
     options.signal,
-    options.api.finalizePostResourceFileUpload({
-      path: uploadIntent.path,
-      fileName,
-      contentType: uploadIntent.expected.contentType,
-      sizeBytes: upload.sizeBytes,
-    }, options.signal),
+    options.api.finalizeUpload({ uploadId: uploadIntent.uploadId }, options.signal),
   );
   throwIfUploadCancelled(options.signal);
 
-  return finalized.attachment;
+  if (finalized.bucket !== uploadIntent.bucket || finalized.path !== uploadIntent.path) {
+    throw new Error('Finalized resource upload did not match its signed target.');
+  }
+
+  return {
+    label: fileName,
+    kind: 'file' as const,
+    storagePath: finalized.path,
+    contentType: finalized.contentType,
+    sizeBytes: finalized.sizeBytes,
+  };
 }
 
 export async function uploadProfileImage(
   uri: string,
   options: {
-    api?: Pick<MagicbookletApiClient, 'createProfileMediaUpload'>;
+    api?: Pick<MagicbookletApiClient, 'createProfileMediaUpload' | 'finalizeUpload'>;
     role: 'avatar' | 'cover';
     fileName?: string | null;
     mimeType?: string | null;
@@ -506,6 +521,11 @@ export async function uploadProfileImage(
     signal: options.signal,
     sizeBytes,
   });
+
+  const finalized = await options.api.finalizeUpload({ uploadId: uploadIntent.uploadId }, options.signal);
+  if (finalized.bucket !== uploadIntent.bucket || finalized.path !== uploadIntent.path) {
+    throw new Error('Finalized profile media did not match its signed target.');
+  }
 
   if (!uploadIntent.publicUrl) {
     throw new Error('Could not create profile image URL.');

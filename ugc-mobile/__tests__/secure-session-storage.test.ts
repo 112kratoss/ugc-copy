@@ -18,6 +18,7 @@ import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import {
+  createMemorySessionStorage,
   createSecureSessionStorage,
   secureSessionStorage,
   splitValueIntoChunks,
@@ -61,8 +62,14 @@ function createHarness() {
   const secureStore = memorySecureStore();
   const asyncStorage = memoryAsyncStorage();
   const warn = vi.fn();
-  const storage = createSecureSessionStorage({ secureStore, asyncStorage, warn });
-  return { secureStore, asyncStorage, warn, storage };
+  const invalidateSession = vi.fn();
+  const storage = createSecureSessionStorage({
+    secureStore,
+    asyncStorage,
+    warn,
+    invalidateSession,
+  });
+  return { secureStore, asyncStorage, warn, invalidateSession, storage };
 }
 
 function fakeSessionJson(byteLength: number) {
@@ -167,19 +174,20 @@ describe('secure session storage', () => {
     await expect(storage.getItem(KEY)).resolves.toBeNull();
   });
 
-  it('keeps the legacy AsyncStorage copy when migration writes fail', async () => {
-    const { storage, secureStore, asyncStorage, warn } = createHarness();
+  it('wipes the legacy plaintext session and signs out when migration writes fail', async () => {
+    const { storage, secureStore, asyncStorage, warn, invalidateSession } = createHarness();
     const legacySession = fakeSessionJson(4300);
     asyncStorage.values.set(KEY, legacySession);
     secureStore.setItemAsync.mockRejectedValue(new Error('keystore unavailable'));
 
-    // The user still gets their session and is NOT signed out.
-    await expect(storage.getItem(KEY)).resolves.toBe(legacySession);
-    expect(asyncStorage.values.get(KEY)).toBe(legacySession);
-    expect(warn).toHaveBeenCalledTimes(1);
-
-    // Next launch path (fallback active): still readable.
-    await expect(storage.getItem(KEY)).resolves.toBe(legacySession);
+    await expect(storage.getItem(KEY)).resolves.toBeNull();
+    expect(asyncStorage.values.has(KEY)).toBe(false);
+    expect(asyncStorage.setItem).not.toHaveBeenCalled();
+    expect(invalidateSession).toHaveBeenCalledWith('secure-store-unavailable');
+    expect(warn).toHaveBeenCalledWith(
+      'SecureStore is unavailable; signing out.',
+      expect.any(Error),
+    );
   });
 
   it('removes every chunk, the meta entry, and the legacy copy on removeItem', async () => {
@@ -221,53 +229,121 @@ describe('secure session storage', () => {
     await expect(storage.getItem(KEY)).resolves.toBe('tiny');
   });
 
-  it('falls back to AsyncStorage with a warning when SecureStore reads throw', async () => {
-    const { storage, secureStore, asyncStorage, warn } = createHarness();
+  it('invalidates the commit marker before rewriting any live chunk', async () => {
+    const { storage, secureStore } = createHarness();
+    await storage.setItem(KEY, fakeSessionJson(8200));
+    const operations: string[] = [];
+
+    secureStore.setItemAsync.mockImplementation(async (key, value) => {
+      operations.push(`set:${key}`);
+      secureStore.values.set(key, value);
+    });
+    secureStore.deleteItemAsync.mockImplementation(async (key) => {
+      operations.push(`delete:${key}`);
+      secureStore.values.delete(key);
+    });
+
+    await storage.setItem(KEY, fakeSessionJson(4300));
+
+    const markerDelete = operations.indexOf(`delete:${KEY}.meta`);
+    const firstChunkWrite = operations.indexOf(`set:${KEY}.0`);
+    const markerCommit = operations.indexOf(`set:${KEY}.meta`);
+    const lastChunkWrite = Math.max(
+      ...operations
+        .map((operation, index) => operation.startsWith(`set:${KEY}.`) && operation !== `set:${KEY}.meta`
+          ? index
+          : -1),
+    );
+    expect(markerDelete).toBeGreaterThanOrEqual(0);
+    expect(markerDelete).toBeLessThan(firstChunkWrite);
+    expect(markerCommit).toBeGreaterThan(lastChunkWrite);
+  });
+
+  it('wipes plaintext and signs out instead of falling back when SecureStore reads throw', async () => {
+    const { storage, secureStore, asyncStorage, warn, invalidateSession } = createHarness();
     asyncStorage.values.set(KEY, 'plaintext-session');
     secureStore.getItemAsync.mockRejectedValue(new Error('SecureStore is not available'));
 
-    await expect(storage.getItem(KEY)).resolves.toBe('plaintext-session');
-    expect(warn).toHaveBeenCalledTimes(1);
-
-    // The fallback is sticky: later writes skip SecureStore entirely.
-    secureStore.setItemAsync.mockClear();
-    await storage.setItem(KEY, 'updated-session');
-    expect(secureStore.setItemAsync).not.toHaveBeenCalled();
-    expect(asyncStorage.values.get(KEY)).toBe('updated-session');
-    await expect(storage.getItem(KEY)).resolves.toBe('updated-session');
-    expect(warn).toHaveBeenCalledTimes(1);
+    await expect(storage.getItem(KEY)).resolves.toBeNull();
+    expect(asyncStorage.values.has(KEY)).toBe(false);
+    expect(asyncStorage.setItem).not.toHaveBeenCalled();
+    expect(invalidateSession).toHaveBeenCalledWith('secure-store-unavailable');
+    expect(warn).toHaveBeenCalledWith(
+      'SecureStore is unavailable; signing out.',
+      expect.any(Error),
+    );
   });
 
-  it('keeps login working when SecureStore writes throw', async () => {
-    const { storage, secureStore, asyncStorage, warn } = createHarness();
+  it('rejects login, wipes plaintext, and signs out when SecureStore writes throw', async () => {
+    const { storage, secureStore, asyncStorage, warn, invalidateSession } = createHarness();
     secureStore.setItemAsync.mockRejectedValue(new Error('keystore write failed'));
     const session = fakeSessionJson(4300);
 
-    await expect(storage.setItem(KEY, session)).resolves.toBeUndefined();
-
-    expect(asyncStorage.values.get(KEY)).toBe(session);
-    expect(warn).toHaveBeenCalledTimes(1);
-    await expect(storage.getItem(KEY)).resolves.toBe(session);
-
-    // Sign-out still clears the fallback copy.
-    await storage.removeItem(KEY);
-    await expect(storage.getItem(KEY)).resolves.toBeNull();
+    await expect(storage.setItem(KEY, session)).rejects.toMatchObject({
+      code: 'SECURE_SESSION_STORAGE_UNAVAILABLE',
+      reason: 'secure-store-unavailable',
+    });
+    expect(asyncStorage.values.has(KEY)).toBe(false);
+    expect(asyncStorage.setItem).not.toHaveBeenCalled();
+    expect(invalidateSession).toHaveBeenCalledWith('secure-store-unavailable');
+    expect(warn).toHaveBeenCalledWith(
+      'SecureStore is unavailable; signing out.',
+      expect.any(Error),
+    );
   });
 
-  it('treats corrupted metadata as a miss instead of returning garbage', async () => {
-    const { storage, secureStore } = createHarness();
+  it('erases corrupted metadata and plaintext before signing out', async () => {
+    const { storage, secureStore, asyncStorage, invalidateSession } = createHarness();
     secureStore.values.set(`${KEY}.meta`, 'not-a-number');
     secureStore.values.set(`${KEY}.0`, 'chunk');
+    asyncStorage.values.set(KEY, 'stale-plaintext');
 
     await expect(storage.getItem(KEY)).resolves.toBeNull();
+    expect(secureStore.values.size).toBe(0);
+    expect(asyncStorage.values.has(KEY)).toBe(false);
+    expect(invalidateSession).toHaveBeenCalledWith('corrupt-secure-value');
   });
 
-  it('treats a missing chunk as a miss instead of returning a truncated session', async () => {
-    const { storage, secureStore } = createHarness();
+  it('signs out after an interrupted rewrite instead of joining new and old chunks', async () => {
+    const { storage, secureStore, asyncStorage, invalidateSession } = createHarness();
     await storage.setItem(KEY, fakeSessionJson(8200));
-    secureStore.values.delete(`${KEY}.2`);
+    // The writer removes the old commit marker before touching chunks. Model a
+    // process death after it overwrote only chunk zero, leaving the old tail.
+    secureStore.values.delete(`${KEY}.meta`);
+    secureStore.values.set(`${KEY}.0`, 'partial-new-session');
+    asyncStorage.values.set(KEY, 'stale-plaintext');
 
     await expect(storage.getItem(KEY)).resolves.toBeNull();
+    expect(secureStore.values.size).toBe(0);
+    expect(asyncStorage.values.has(KEY)).toBe(false);
+    expect(invalidateSession).toHaveBeenCalledWith('corrupt-secure-value');
+  });
+
+  it('erases incomplete chunks and signs out instead of returning a truncated session', async () => {
+    const { storage, secureStore, asyncStorage, invalidateSession } = createHarness();
+    await storage.setItem(KEY, fakeSessionJson(8200));
+    secureStore.values.delete(`${KEY}.2`);
+    asyncStorage.values.set(KEY, 'stale-plaintext');
+
+    await expect(storage.getItem(KEY)).resolves.toBeNull();
+    expect(secureStore.values.size).toBe(0);
+    expect(asyncStorage.values.has(KEY)).toBe(false);
+    expect(invalidateSession).toHaveBeenCalledWith('corrupt-secure-value');
+  });
+
+  it('rejects oversized sessions without ever persisting them to AsyncStorage', async () => {
+    const { storage, secureStore, asyncStorage, invalidateSession } = createHarness();
+    const oversizedSession = fakeSessionJson((1900 * 256) + 1);
+
+    await expect(storage.setItem(KEY, oversizedSession)).rejects.toMatchObject({
+      code: 'SECURE_SESSION_STORAGE_UNAVAILABLE',
+      reason: 'secure-value-too-large',
+    });
+
+    expect(secureStore.values.size).toBe(0);
+    expect(asyncStorage.values.has(KEY)).toBe(false);
+    expect(asyncStorage.setItem).not.toHaveBeenCalled();
+    expect(invalidateSession).toHaveBeenCalledWith('secure-value-too-large');
   });
 
   it('serializes concurrent writes so the last value wins intact', async () => {
@@ -303,8 +379,22 @@ describe('secure session storage', () => {
     expect(secureValues.get(`${KEY}.meta`)).toBe('1');
     expect(secureValues.get(`${KEY}.0`)).toBe('default-wiring');
     expect(AsyncStorage.removeItem).toHaveBeenCalledWith(KEY);
+    expect(AsyncStorage.setItem).not.toHaveBeenCalled();
     await expect(secureSessionStorage.getItem(KEY)).resolves.toBe('default-wiring');
     await secureSessionStorage.removeItem(KEY);
     expect(secureValues.size).toBe(0);
+  });
+});
+
+describe('memory-only web session storage', () => {
+  it('round-trips only inside the current adapter instance', async () => {
+    const firstRuntime = createMemorySessionStorage();
+    const nextRuntime = createMemorySessionStorage();
+
+    await firstRuntime.setItem(KEY, 'web-session');
+
+    await expect(firstRuntime.getItem(KEY)).resolves.toBe('web-session');
+    await expect(nextRuntime.getItem(KEY)).resolves.toBeNull();
+    expect(AsyncStorage.setItem).not.toHaveBeenCalled();
   });
 });

@@ -597,6 +597,11 @@ function createServiceClientMock() {
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => createServiceClientMock(),
+  resolveOwnedStoredMediaUrl: vi.fn(async (_client, outputUrl: string, ownerId: string) => (
+    outputUrl.split('/')[1] === ownerId
+      ? `https://proxy.example.com/${outputUrl}`
+      : null
+  )),
   resolveStoredMediaUrl: vi.fn(async (_client, outputUrl: string) => `https://proxy.example.com/${outputUrl}`),
 }));
 
@@ -923,6 +928,7 @@ describe('showcase feed', () => {
       model: 'kling-3.0-video',
       preview_url: 'generated_videos/user-1/generated-video.preview.webp',
       category: 'video',
+      user_id: 'user-1',
     }];
     resourceBundlesState = [];
 

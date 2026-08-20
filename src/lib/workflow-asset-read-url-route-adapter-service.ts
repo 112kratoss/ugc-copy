@@ -2,6 +2,7 @@ import 'server-only';
 
 import { NextResponse } from 'next/server';
 
+import { requireIdentity } from '@/lib/account-identity';
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import {
@@ -13,6 +14,7 @@ type WorkflowAssetReadUrlRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   createWorkflowAssetReadUrl?: typeof createWorkflowAssetReadUrl;
+  requireIdentity?: typeof requireIdentity;
 };
 
 function resolveDependencies(dependencies: WorkflowAssetReadUrlRouteDependencies | undefined) {
@@ -20,20 +22,8 @@ function resolveDependencies(dependencies: WorkflowAssetReadUrlRouteDependencies
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     createWorkflowAssetReadUrl: dependencies?.createWorkflowAssetReadUrl ?? createWorkflowAssetReadUrl,
+    requireIdentity: dependencies?.requireIdentity ?? requireIdentity,
   };
-}
-
-async function getAuthenticatedUserId(
-  request: Request,
-  dependencies: ReturnType<typeof resolveDependencies>,
-) {
-  const supabase = dependencies.createUserClient(request);
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
-
-  return authError || !user ? null : user.id;
 }
 
 function createWorkflowAssetReadUrlErrorResponse(
@@ -66,9 +56,18 @@ async function handleWorkflowAssetReadUrlPOST(
   request: Request,
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
-  const userId = await getAuthenticatedUserId(request, dependencies);
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const userClient = dependencies.createUserClient(request);
+  let serviceClient: ReturnType<typeof dependencies.createServiceClient> | null = null;
+  const getServiceClient = () => {
+    serviceClient ??= dependencies.createServiceClient();
+    return serviceClient;
+  };
+  const identity = await dependencies.requireIdentity(userClient, getServiceClient);
+  if (!identity.ok) {
+    return NextResponse.json(
+      { error: identity.error, code: identity.code },
+      { status: identity.status },
+    );
   }
 
   let body;
@@ -83,8 +82,8 @@ async function handleWorkflowAssetReadUrlPOST(
 
   const result = await dependencies.createWorkflowAssetReadUrl({
     body,
-    userId,
-    client: dependencies.createServiceClient,
+    userId: identity.identity.userId,
+    client: getServiceClient,
   });
 
   if (!result.ok) {

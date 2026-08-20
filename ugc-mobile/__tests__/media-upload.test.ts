@@ -108,11 +108,11 @@ describe('mobile media uploads', () => {
   it('rejects a non-media file before signing a reference-media upload', async () => {
     uploadState.inspectUriUpload.mockResolvedValueOnce({ mimeType: 'application/pdf', sizeBytes: 3 });
     const signPostResourceFileUpload = vi.fn();
-    const finalizePostResourceFileUpload = vi.fn();
+    const finalizeUpload = vi.fn();
     const { uploadResourceDocument } = await import('../lib/media');
 
     await expect(uploadResourceDocument('file:///reference.pdf', {
-      api: { signPostResourceFileUpload, finalizePostResourceFileUpload },
+      api: { signPostResourceFileUpload, finalizeUpload },
       fileName: 'reference.pdf',
       mimeType: 'application/pdf',
       mediaOnly: true,
@@ -125,11 +125,11 @@ describe('mobile media uploads', () => {
 
   it('rejects reference-media extension and MIME-family mismatches before signing', async () => {
     const signPostResourceFileUpload = vi.fn();
-    const finalizePostResourceFileUpload = vi.fn();
+    const finalizeUpload = vi.fn();
     const { uploadResourceDocument } = await import('../lib/media');
 
     await expect(uploadResourceDocument('file:///reference.pdf', {
-      api: { signPostResourceFileUpload, finalizePostResourceFileUpload },
+      api: { signPostResourceFileUpload, finalizeUpload },
       fileName: 'reference.pdf',
       mimeType: 'image/png',
       mediaOnly: true,
@@ -138,7 +138,7 @@ describe('mobile media uploads', () => {
 
     uploadState.inspectUriUpload.mockResolvedValueOnce({ mimeType: 'video/mp4', sizeBytes: 3 });
     await expect(uploadResourceDocument('file:///reference.png', {
-      api: { signPostResourceFileUpload, finalizePostResourceFileUpload },
+      api: { signPostResourceFileUpload, finalizeUpload },
       fileName: 'reference.png',
       mimeType: 'video/mp4',
       mediaOnly: true,
@@ -153,6 +153,7 @@ describe('mobile media uploads', () => {
     uploadState.inspectUriUpload.mockResolvedValueOnce({ mimeType: 'application/octet-stream', sizeBytes: 3 });
     const signPostResourceFileUpload = vi.fn(async () => ({
       success: true,
+      uploadId: '11111111-1111-4111-8111-111111111111',
       bucket: 'post_resource_files' as const,
       path: 'user-1/server-issued-reference.png',
       token: 'upload-token',
@@ -164,21 +165,18 @@ describe('mobile media uploads', () => {
         sizeBytes: 3,
       },
     }));
-    const finalizePostResourceFileUpload = vi.fn(async () => ({
-      success: true,
-      attachment: {
-        kind: 'file' as const,
-        label: 'reference.png',
-        storagePath: 'user-1/server-issued-reference.png',
-        contentType: 'image/png',
-        sizeBytes: 3,
-      },
+    const finalizeUpload = vi.fn(async () => ({
+      bucket: 'post_resource_files',
+      path: 'user-1/server-issued-reference.png',
+      storagePath: 'post_resource_files/user-1/server-issued-reference.png',
+      contentType: 'image/png',
+      sizeBytes: 3,
     }));
     const controller = new AbortController();
     const { uploadResourceDocument } = await import('../lib/media');
 
     await expect(uploadResourceDocument('file:///reference.png', {
-      api: { signPostResourceFileUpload, finalizePostResourceFileUpload },
+      api: { signPostResourceFileUpload, finalizeUpload },
       fileName: 'reference.png',
       mimeType: 'application/octet-stream',
       mediaOnly: true,
@@ -191,23 +189,20 @@ describe('mobile media uploads', () => {
       contentType: 'application/octet-stream',
       sizeBytes: 3,
     }, controller.signal);
-    expect(finalizePostResourceFileUpload).toHaveBeenCalledWith({
-      path: 'user-1/server-issued-reference.png',
-      fileName: 'reference.png',
-      contentType: 'image/png',
-      sizeBytes: 3,
+    expect(finalizeUpload).toHaveBeenCalledWith({
+      uploadId: '11111111-1111-4111-8111-111111111111',
     }, controller.signal);
   });
 
   it('does not sign a resource upload that was already cancelled', async () => {
     const signPostResourceFileUpload = vi.fn();
-    const finalizePostResourceFileUpload = vi.fn();
+    const finalizeUpload = vi.fn();
     const controller = new AbortController();
     controller.abort();
     const { uploadResourceDocument } = await import('../lib/media');
 
     await expect(uploadResourceDocument('file:///reference.png', {
-      api: { signPostResourceFileUpload, finalizePostResourceFileUpload },
+      api: { signPostResourceFileUpload, finalizeUpload },
       fileName: 'reference.png',
       mimeType: 'image/png',
       mediaOnly: true,
@@ -224,11 +219,11 @@ describe('mobile media uploads', () => {
       controller.abort();
       return Promise.reject(new Error('fetch aborted'));
     });
-    const finalizePostResourceFileUpload = vi.fn();
+    const finalizeUpload = vi.fn();
     const { uploadResourceDocument } = await import('../lib/media');
 
     await expect(uploadResourceDocument('file:///reference.png', {
-      api: { signPostResourceFileUpload, finalizePostResourceFileUpload },
+      api: { signPostResourceFileUpload, finalizeUpload },
       fileName: 'reference.png',
       mimeType: 'image/png',
       mediaOnly: true,
@@ -237,12 +232,13 @@ describe('mobile media uploads', () => {
     })).rejects.toMatchObject({ name: 'UploadCancelledError' });
 
     expect(uploadState.uploadUriToSignedUrl).not.toHaveBeenCalled();
-    expect(finalizePostResourceFileUpload).not.toHaveBeenCalled();
+    expect(finalizeUpload).not.toHaveBeenCalled();
   });
 
   it('streams picked media to an exact server-issued signed upload target', async () => {
     const createMediaUpload = vi.fn(async () => ({
       success: true,
+      uploadId: '22222222-2222-4222-8222-222222222222',
       bucket: 'uploads' as const,
       path: 'user-1/server-issued-reference.png',
       storagePath: 'uploads/user-1/server-issued-reference.png',
@@ -255,12 +251,19 @@ describe('mobile media uploads', () => {
       signedUrl: 'https://storage.example.com/uploads/user-1/signed.png',
       expiresInSeconds: 3600,
     }));
+    const finalizeUpload = vi.fn(async () => ({
+      bucket: 'uploads',
+      path: 'user-1/server-issued-reference.png',
+      storagePath: 'uploads/user-1/server-issued-reference.png',
+      contentType: 'image/png',
+      sizeBytes: 3,
+    }));
     const onProgress = vi.fn();
     const controller = new AbortController();
     const { uploadPickedMedia } = await import('../lib/media');
 
     await expect(uploadPickedMedia('file:///image.png', {
-      api: { createMediaUpload, createMediaReadUrl },
+      api: { createMediaUpload, finalizeUpload, createMediaReadUrl },
       fileName: '../reference image?.png',
       mimeType: 'image/png',
       kind: 'image',
@@ -280,6 +283,9 @@ describe('mobile media uploads', () => {
       kind: 'image',
       sizeBytes: 3,
     });
+    expect(finalizeUpload).toHaveBeenCalledWith({
+      uploadId: '22222222-2222-4222-8222-222222222222',
+    }, controller.signal);
     expect(uploadState.uploadUriToSignedUrl).toHaveBeenCalledWith(
       'file:///image.png',
       'https://storage.example.com/storage/v1/object/upload/sign/uploads/user-1/server-issued-reference.png?token=upload-token',
@@ -298,6 +304,7 @@ describe('mobile media uploads', () => {
   it('constructs a scoped signed target when an older API omits its redundant URL', async () => {
     const createMediaUpload = vi.fn(async () => ({
       success: true,
+      uploadId: '33333333-3333-4333-8333-333333333333',
       bucket: 'uploads' as const,
       path: 'user-1/server-issued.png',
       storagePath: 'uploads/user-1/server-issued.png',
@@ -310,10 +317,17 @@ describe('mobile media uploads', () => {
       signedUrl: 'https://storage.example.com/read',
       expiresInSeconds: 3600,
     }));
+    const finalizeUpload = vi.fn(async () => ({
+      bucket: 'uploads',
+      path: 'user-1/server-issued.png',
+      storagePath: 'uploads/user-1/server-issued.png',
+      contentType: 'image/png',
+      sizeBytes: 3,
+    }));
     const { uploadPickedMedia } = await import('../lib/media');
 
     await uploadPickedMedia('file:///image.png', {
-      api: { createMediaUpload, createMediaReadUrl },
+      api: { createMediaUpload, finalizeUpload, createMediaReadUrl },
       fileName: 'image.png',
       mimeType: 'image/png',
       sizeBytes: 3,
@@ -333,6 +347,7 @@ describe('mobile media uploads', () => {
       api: {
         createMediaUpload: vi.fn(async () => ({
           success: true,
+          uploadId: '44444444-4444-4444-8444-444444444444',
           bucket: 'uploads' as const,
           path: 'user-1/file.png',
           storagePath: 'uploads/user-1/file.png',
@@ -340,6 +355,7 @@ describe('mobile media uploads', () => {
           signedUploadUrl: 'https://evil.example/storage/v1/object/upload/sign/uploads/user-1/file.png?token=upload-token',
           expiresInSeconds: 7200,
         })),
+        finalizeUpload: vi.fn(),
         createMediaReadUrl: vi.fn(),
       },
       fileName: 'file.png',
@@ -354,6 +370,7 @@ describe('mobile media uploads', () => {
     uploadState.inspectUriUpload.mockResolvedValueOnce({ mimeType: 'video/mp4', sizeBytes: 3 });
     const signTemplateRunInput = vi.fn(async () => ({
       success: true,
+      uploadId: '55555555-5555-4555-8555-555555555555',
       bucket: 'template_inputs' as const,
       path: 'user-1/run-1/reference/server-issued.mp4',
       storagePath: 'template_inputs/user-1/run-1/reference/server-issued.mp4',
@@ -361,11 +378,18 @@ describe('mobile media uploads', () => {
       signedUploadUrl: 'https://storage.example.com/storage/v1/object/upload/sign/template_inputs/user-1/run-1/reference/server-issued.mp4?token=template-upload-token',
       expiresInSeconds: 900,
     }));
+    const finalizeUpload = vi.fn(async () => ({
+      bucket: 'template_inputs',
+      path: 'user-1/run-1/reference/server-issued.mp4',
+      storagePath: 'template_inputs/user-1/run-1/reference/server-issued.mp4',
+      contentType: 'video/mp4',
+      sizeBytes: 3,
+    }));
     const finalizeTemplateRunInput = vi.fn(async () => ({ success: true, run: {} }));
     const { uploadTemplateRunInput } = await import('../lib/media');
 
     await uploadTemplateRunInput('file:///reference.mp4', {
-      api: { signTemplateRunInput, finalizeTemplateRunInput } as never,
+      api: { signTemplateRunInput, finalizeUpload, finalizeTemplateRunInput } as never,
       runId: 'run-1',
       slotKey: 'reference',
       kind: 'video',
@@ -385,6 +409,9 @@ describe('mobile media uploads', () => {
       expect.stringContaining('/storage/v1/object/upload/sign/template_inputs/'),
       expect.objectContaining({ mimeType: 'video/mp4', sizeBytes: 3 })
     );
+    expect(finalizeUpload).toHaveBeenCalledWith({
+      uploadId: '55555555-5555-4555-8555-555555555555',
+    }, undefined);
     expect(finalizeTemplateRunInput).toHaveBeenCalledWith('run-1', {
       inputs: [{ slotKey: 'reference', storagePath: 'template_inputs/user-1/run-1/reference/server-issued.mp4' }],
     });
@@ -393,6 +420,7 @@ describe('mobile media uploads', () => {
   it('streams sanitized profile images to a profile-scoped signed target', async () => {
     const createProfileMediaUpload = vi.fn(async () => ({
       success: true,
+      uploadId: '66666666-6666-4666-8666-666666666666',
       bucket: 'profiles' as const,
       path: 'user-1/avatar-server-issued-avatar-image-.png',
       token: 'profile-upload-token',
@@ -400,10 +428,17 @@ describe('mobile media uploads', () => {
       publicUrl: 'https://storage.example.com/profiles/user-1/avatar.png',
       expiresInSeconds: 7200,
     }));
+    const finalizeUpload = vi.fn(async () => ({
+      bucket: 'profiles',
+      path: 'user-1/avatar-server-issued-avatar-image-.png',
+      storagePath: 'profiles/user-1/avatar-server-issued-avatar-image-.png',
+      contentType: 'image/png',
+      sizeBytes: 3,
+    }));
     const { uploadProfileImage } = await import('../lib/media');
 
     await expect(uploadProfileImage('file:///avatar.png', {
-      api: { createProfileMediaUpload },
+      api: { createProfileMediaUpload, finalizeUpload },
       role: 'avatar',
       fileName: '../avatar image?.png',
       mimeType: 'image/png',
@@ -421,5 +456,8 @@ describe('mobile media uploads', () => {
       expect.stringContaining('/storage/v1/object/upload/sign/profiles/'),
       expect.objectContaining({ mimeType: 'image/png', sizeBytes: 3 })
     );
+    expect(finalizeUpload).toHaveBeenCalledWith({
+      uploadId: '66666666-6666-4666-8666-666666666666',
+    }, undefined);
   });
 });

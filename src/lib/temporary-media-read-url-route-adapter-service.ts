@@ -2,6 +2,7 @@ import 'server-only';
 
 import { NextResponse } from 'next/server';
 
+import { requireIdentity } from '@/lib/account-identity';
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import {
@@ -13,6 +14,7 @@ type TemporaryMediaReadUrlRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createTemporaryMediaReadUrl?: typeof createTemporaryMediaReadUrl;
   createUserClient?: typeof createUserClient;
+  requireIdentity?: typeof requireIdentity;
 };
 
 function resolveDependencies(dependencies: TemporaryMediaReadUrlRouteDependencies | undefined) {
@@ -20,20 +22,8 @@ function resolveDependencies(dependencies: TemporaryMediaReadUrlRouteDependencie
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createTemporaryMediaReadUrl: dependencies?.createTemporaryMediaReadUrl ?? createTemporaryMediaReadUrl,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
+    requireIdentity: dependencies?.requireIdentity ?? requireIdentity,
   };
-}
-
-async function getAuthenticatedUserId(
-  request: Request,
-  dependencies: ReturnType<typeof resolveDependencies>,
-) {
-  const supabase = dependencies.createUserClient(request);
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
-
-  return authError || !user ? null : user.id;
 }
 
 function createTemporaryMediaReadUrlErrorResponse(
@@ -66,9 +56,18 @@ async function handleTemporaryMediaReadUrlPOST(
   request: Request,
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
-  const userId = await getAuthenticatedUserId(request, dependencies);
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const userClient = dependencies.createUserClient(request);
+  let serviceClient: ReturnType<typeof dependencies.createServiceClient> | null = null;
+  const getServiceClient = () => {
+    serviceClient ??= dependencies.createServiceClient();
+    return serviceClient;
+  };
+  const identity = await dependencies.requireIdentity(userClient, getServiceClient);
+  if (!identity.ok) {
+    return NextResponse.json(
+      { error: identity.error, code: identity.code },
+      { status: identity.status },
+    );
   }
 
   let body;
@@ -80,8 +79,8 @@ async function handleTemporaryMediaReadUrlPOST(
 
   const result = await dependencies.createTemporaryMediaReadUrl({
     body,
-    userId,
-    client: dependencies.createServiceClient,
+    userId: identity.identity.userId,
+    client: getServiceClient,
   });
 
   if (!result.ok) {

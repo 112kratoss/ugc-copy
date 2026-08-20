@@ -27,6 +27,12 @@ import {
   WORKFLOW_CANVAS_SELECT,
   WORKFLOW_CANVAS_SELECT_LEGACY,
 } from '@/lib/workflow-canvas-route-compat';
+import {
+  abortPreparedWorkflowUploads,
+  consumePersistedWorkflowUploads,
+  prepareWorkflowUploadsForPersistence,
+} from '@/lib/workflow-upload-consumption';
+import { isDefinitiveSupabaseMutationRejection } from '@/lib/upload-byte-admission';
 
 type WorkflowCanvasListRow = {
   id: string;
@@ -52,7 +58,7 @@ export type WorkflowCanvasCollectionRouteResult =
     }
   | {
       ok: false;
-      status: 429 | 500;
+      status: 400 | 409 | 429 | 500;
       body: Record<string, unknown>;
       rateLimitError?: BackendRateLimitError;
     };
@@ -135,11 +141,13 @@ export async function listWorkflowCanvasesForRoute({
 
 export async function createWorkflowCanvasForRoute({
   supabase,
+  uploadClient = supabase,
   rateLimitClient,
   userId,
   readBody,
 }: {
   supabase: SupabaseClient;
+  uploadClient?: SupabaseClient;
   rateLimitClient: WorkflowCanvasCollectionServiceClient;
   userId: string;
   readBody: () => Promise<Record<string, unknown>>;
@@ -161,6 +169,14 @@ export async function createWorkflowCanvasForRoute({
   const body = await readBody();
   const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : 'New workflow canvas';
   const graph = normalizeWorkflowGraph(body.graph || createStarterGraph());
+  const preparedUploads = await prepareWorkflowUploadsForPersistence(uploadClient, graph, userId);
+  if (!preparedUploads.ok) {
+    return {
+      ok: false,
+      status: preparedUploads.status,
+      body: { error: preparedUploads.error },
+    };
+  }
 
   const insertCanvas = async (useLifecycleColumns: boolean) => {
     const insertQuery = supabase
@@ -175,27 +191,47 @@ export async function createWorkflowCanvasForRoute({
     const selectedQuery = useLifecycleColumns
       ? insertQuery.select(WORKFLOW_CANVAS_SELECT)
       : insertQuery.select(WORKFLOW_CANVAS_SELECT_LEGACY);
-    const { data, error } = await selectedQuery.single();
+    const { data, error, status } = await selectedQuery.single();
 
     return {
       data: (data as WorkflowCanvasRouteRow | null) ?? null,
       error,
+      status,
     };
   };
 
   let data: WorkflowCanvasRouteRow | null = null;
   let error: unknown = null;
-  ({ data, error } = await insertCanvas(true));
+  let mutationStatus: number | undefined;
+  try {
+    ({ data, error, status: mutationStatus } = await insertCanvas(true));
 
-  if (error && isMissingWorkflowLifecycleColumnsError(error)) {
-    const legacyInsert = await insertCanvas(false);
-    data = legacyInsert.data;
-    error = legacyInsert.error;
+    if (error && isMissingWorkflowLifecycleColumnsError(error)) {
+      const legacyInsert = await insertCanvas(false);
+      data = legacyInsert.data;
+      error = legacyInsert.error;
+      mutationStatus = legacyInsert.status;
+    }
+  } catch (insertError) {
+    logBackendError('failed_to_create_workflow_canvas', { error: insertError });
+    return { ok: false, status: 500, body: { error: 'Failed to create workflow canvas.' } };
   }
 
   if (error || !data) {
+    if (isDefinitiveSupabaseMutationRejection({ error, status: mutationStatus })) {
+      await abortPreparedWorkflowUploads(uploadClient, preparedUploads.locations);
+    }
     logBackendError('failed_to_create_workflow_canvas', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to create workflow canvas.' } };
+  }
+
+  const completedUploads = await consumePersistedWorkflowUploads(
+    uploadClient,
+    preparedUploads.locations,
+    userId,
+  );
+  if (!completedUploads.ok) {
+    return { ok: false, status: 500, body: { error: completedUploads.error } };
   }
 
   const normalizedGraph = normalizeWorkflowGraph(data.graph);

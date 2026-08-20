@@ -1,4 +1,5 @@
 import 'server-only';
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
@@ -36,7 +37,7 @@ async function handleViewerUnlocksGET(
   const {
     data: { user },
     error: authError,
-  } = await supabase.auth.getUser();
+  } = await getVerifiedAuthUserResult(supabase);
 
   if (authError || !user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

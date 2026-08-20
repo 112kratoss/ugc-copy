@@ -1,3 +1,4 @@
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -52,7 +53,7 @@ async function getAuthenticatedUserId(supabase: MotionRouteSupabaseClient) {
   const {
     data: { user },
     error: authError,
-  } = await supabase.auth.getUser();
+  } = await getVerifiedAuthUserResult(supabase);
 
   return authError || !user ? null : user.id;
 }

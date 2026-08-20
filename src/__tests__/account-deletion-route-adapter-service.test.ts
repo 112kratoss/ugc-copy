@@ -16,26 +16,43 @@ function request(body: unknown, authorization = 'Bearer token') {
 
 const RECENT_SIGN_IN = '2026-07-14T12:00:00.000Z';
 const NOW = new Date('2026-07-14T12:05:00.000Z');
+const USER_ID = '87c4b811-7a50-4e1a-9c38-7ab2693c1182';
 
 function authenticatedUser(lastSignInAt = RECENT_SIGN_IN) {
-  return { id: 'user-1', last_sign_in_at: lastSignInAt };
+  return { id: USER_ID, last_sign_in_at: lastSignInAt };
+}
+
+async function requireRegisteredUserForRouteTest(userClient: {
+  auth: { getUser: () => Promise<{ data: { user: { id: string; last_sign_in_at?: string } | null }; error: unknown }> };
+}) {
+  const { data: { user }, error } = await userClient.auth.getUser();
+  if (error || !user) {
+    return { ok: false as const, status: 401, code: 'UNAUTHORIZED' as const, error: 'Unauthorized' };
+  }
+  return {
+    ok: true as const,
+    identity: { user, userId: user.id, kind: 'registered' as const, isGuest: false },
+  };
 }
 
 describe('account deletion route', () => {
   it('requires an authenticated user', async () => {
     const deleteUser = vi.fn();
+    const createServiceClient = vi.fn(() => ({ auth: { admin: { deleteUser } } }));
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
+        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
         createUserClient: (() => ({
           auth: { getUser: vi.fn(async () => ({ data: { user: null }, error: new Error('invalid') })) },
         })) as never,
-        createServiceClient: (() => ({ auth: { admin: { deleteUser } } })) as never,
+        createServiceClient: createServiceClient as never,
       },
     });
 
     expect(response.status).toBe(401);
     expect(deleteUser).not.toHaveBeenCalled();
+    expect(createServiceClient).not.toHaveBeenCalled();
   });
 
   it('requires an explicit permanent deletion confirmation', async () => {
@@ -43,6 +60,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'delete' }),
       dependencies: {
+        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
         createUserClient: (() => ({
           auth: { getUser: vi.fn(async () => ({ data: { user: { id: 'user-1' } }, error: null })) },
         })) as never,
@@ -66,6 +84,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
+        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
         createUserClient: (() => ({
           auth: { getUser: vi.fn(async () => ({ data: { user: authenticatedUser() }, error: null })) },
         })) as never,
@@ -78,6 +97,7 @@ describe('account deletion route', () => {
                 data: {
                   status: 'prepared',
                   storage_manifest: {
+                    owner_user_ids: [USER_ID],
                     user_prefix_buckets: [
                       'profiles',
                       'uploads',
@@ -88,7 +108,7 @@ describe('account deletion route', () => {
                       'post_resource_files',
                       'template_inputs',
                     ],
-                    showcase_media_paths: ['showcase/gen-1/output.webp'],
+                    showcase_media_paths: ['showcase/80000000-0000-4000-8000-000000000008/output.webp'],
                     template_asset_prefixes: ['2b2f4bb5-6ea8-4c44-a394-14cc777dcf52'],
                   },
                 },
@@ -97,6 +117,9 @@ describe('account deletion route', () => {
             }
             if (name === 'list_creator_purchased_revisions_for_retention') {
               return { data: [], error: null };
+            }
+            if (name === 'mark_account_deleted_upload_reservations') {
+              return { data: { status: 'ok', marked: 1 }, error: null };
             }
             return { data: { status: args.p_status }, error: null };
           }),
@@ -132,8 +155,8 @@ describe('account deletion route', () => {
       deleted: true,
       cleanupPending: true,
     });
-    expect(calls.indexOf('delete:user-1')).toBeLessThan(calls.indexOf('rpc:mark_account_deletion_stage:completed'));
-    expect(deleteUser).toHaveBeenCalledWith('user-1');
+    expect(calls.indexOf(`delete:${USER_ID}`)).toBeLessThan(calls.indexOf('rpc:mark_account_deletion_stage:completed'));
+    expect(deleteUser).toHaveBeenCalledWith(USER_ID);
     expect(signOut).toHaveBeenCalledWith('token', 'global');
     expect(calls.filter((call) => call.startsWith('rpc:mark_account_deletion_stage:'))).toEqual([
       'rpc:mark_account_deletion_stage:storage_deleting',
@@ -143,7 +166,7 @@ describe('account deletion route', () => {
     ]);
     expect(removed).toContainEqual({
       bucket: 'showcase_media',
-      paths: ['showcase/gen-1/output.webp'],
+      paths: ['showcase/80000000-0000-4000-8000-000000000008/output.webp'],
     });
     expect(calls).toContain('list:template_assets:2b2f4bb5-6ea8-4c44-a394-14cc777dcf52');
     expect(invalidateShowcaseFeedCache).toHaveBeenCalledOnce();
@@ -154,6 +177,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
+        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
         createUserClient: (() => ({
           auth: {
             getUser: vi.fn(async () => ({
@@ -181,6 +205,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
+        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
         createUserClient: (() => ({
           auth: { getUser: vi.fn(async () => ({ data: { user: authenticatedUser() }, error: null })) },
         })) as never,
@@ -224,6 +249,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
+        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
         createUserClient: (() => ({
           auth: { getUser: vi.fn(async () => ({ data: { user: authenticatedUser() }, error: null })) },
         })) as never,
@@ -235,6 +261,7 @@ describe('account deletion route', () => {
                 data: {
                   status: 'prepared',
                   storage_manifest: {
+                    owner_user_ids: [USER_ID],
                     user_prefix_buckets: [
                       'profiles',
                       'uploads',
@@ -254,6 +281,9 @@ describe('account deletion route', () => {
             }
             if (name === 'list_creator_purchased_revisions_for_retention') {
               return { data: [], error: null };
+            }
+            if (name === 'mark_account_deleted_upload_reservations') {
+              return { data: { status: 'ok', marked: 1 }, error: null };
             }
             return { data: { status: args.p_status }, error: null };
           }),
@@ -282,7 +312,7 @@ describe('account deletion route', () => {
       deleted: true,
       cleanupPending: true,
     });
-    expect(deleteUser).toHaveBeenCalledWith('user-1');
+    expect(deleteUser).toHaveBeenCalledWith(USER_ID);
     expect(invalidateShowcaseFeedCache).toHaveBeenCalledOnce();
   });
 
@@ -292,6 +322,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
+        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
         createUserClient: (() => ({
           auth: { getUser: vi.fn(async () => ({ data: { user: authenticatedUser() }, error: null })) },
         })) as never,
@@ -311,6 +342,7 @@ describe('account deletion route', () => {
                 data: {
                   status: 'prepared',
                   storage_manifest: {
+                    owner_user_ids: [USER_ID],
                     user_prefix_buckets: [
                       'profiles',
                       'uploads',
@@ -355,6 +387,7 @@ describe('account deletion route', () => {
     const response = await deleteAccountRouteResponse({
       request: request({ confirmation: 'DELETE' }),
       dependencies: {
+        requireRegisteredUser: requireRegisteredUserForRouteTest as never,
         createUserClient: (() => ({
           auth: { getUser: vi.fn(async () => ({ data: { user: authenticatedUser() }, error: null })) },
         })) as never,

@@ -14,6 +14,7 @@ vi.mock('@/lib/backend-logger', () => ({
 }));
 
 import {
+  getCanonicalGenerationShowcaseAssetPath,
   publishGenerationToShowcaseForRoute,
   type ShowcasePublishServiceDependencies,
 } from '@/lib/showcase-publish-service';
@@ -137,6 +138,21 @@ describe('publishGenerationToShowcaseForRoute', () => {
   beforeEach(() => {
     cacheMocks.invalidateShowcaseFeedCache.mockClear();
     logBackendErrorMock.mockClear();
+  });
+
+  it('canonicalizes only the selected generation showcase prefix before removal', () => {
+    expect(getCanonicalGenerationShowcaseAssetPath(
+      'showcase/gen-1/output.webp',
+      'gen-1',
+    )).toBe('showcase/gen-1/output.webp');
+    for (const storagePath of [
+      'showcase/gen-2/private.webp',
+      'showcase/gen-1/../gen-2/private.webp',
+      'showcase/gen-1/%252fgen-2/private.webp',
+      'showcase/gen-1/%255cgen-2/private.webp',
+    ]) {
+      expect(getCanonicalGenerationShowcaseAssetPath(storagePath, 'gen-1')).toBeNull();
+    }
   });
 
   it('logs a failed generation load instead of silently reporting not found', async () => {

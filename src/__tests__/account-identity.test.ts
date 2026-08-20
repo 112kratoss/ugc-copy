@@ -2,6 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  ACCOUNT_DELETING,
+  IDENTITY_CHECK_UNAVAILABLE,
   isGuestUser,
   requireIdentity,
   requireRegisteredUser,
@@ -12,11 +14,16 @@ import {
 
 function adminFor(options: {
   linkedIds?: string[];
-  mergedInto?: string | null;
+  identityState?: 'active' | 'merged' | 'deleting';
   profilesError?: unknown;
   throwOnProfiles?: boolean;
 } = {}) {
-  const { linkedIds = [], mergedInto = null, profilesError = null, throwOnProfiles = false } = options;
+  const {
+    linkedIds = [],
+    identityState = 'active',
+    profilesError = null,
+    throwOnProfiles = false,
+  } = options;
 
   return {
     from: vi.fn(() => {
@@ -25,7 +32,7 @@ function adminFor(options: {
         select: vi.fn(() => query),
         eq: vi.fn(() => query),
         maybeSingle: vi.fn(async () => ({
-          data: { merged_into_user_id: mergedInto },
+          data: { identity_state: identityState },
           error: profilesError,
         })),
         then: (resolve: (value: unknown) => void) => Promise.resolve({
@@ -107,12 +114,53 @@ describe('account identity', () => {
       // A linked guest session is spent: its credits and the right to act for
       // its data now belong to the registered account. Serving it would let two
       // sessions act for one balance.
-      const result = await requireIdentity(userClientFor(guest), adminFor({ mergedInto: 'user-1' }));
+      const result = await requireIdentity(userClientFor(guest), adminFor({ identityState: 'merged' }));
 
       expect(result.ok).toBe(false);
       expect(!result.ok && result.code).toBe(SESSION_MERGED);
       // 409, not 401: the token is genuine and refreshing it will not help.
       expect(!result.ok && result.status).toBe(409);
+    });
+
+    it('rejects a deleting identity before it can reach application work', async () => {
+      const result = await requireIdentity(
+        userClientFor(registered),
+        adminFor({ identityState: 'deleting' }),
+      );
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.code).toBe(ACCOUNT_DELETING);
+      expect(!result.ok && result.status).toBe(409);
+    });
+
+    it('fails closed with 503 when profile state cannot be loaded', async () => {
+      const failed = await requireIdentity(
+        userClientFor(registered),
+        adminFor({ profilesError: new Error('database unavailable') }),
+      );
+      const thrown = await requireIdentity(
+        userClientFor(registered),
+        adminFor({ throwOnProfiles: true }),
+      );
+      const authLookupThrown = await requireIdentity({
+        auth: {
+          getUser: vi.fn(async () => {
+            throw new Error('auth service unavailable');
+          }),
+        },
+      } as unknown as SupabaseClient, adminFor());
+      const adminFactoryThrown = await requireIdentity(
+        userClientFor(registered),
+        () => {
+          throw new Error('service client unavailable');
+        },
+      );
+
+      for (const result of [failed, thrown, authLookupThrown, adminFactoryThrown]) {
+        expect(result.ok).toBe(false);
+        expect(!result.ok && result.code).toBe(IDENTITY_CHECK_UNAVAILABLE);
+        expect(!result.ok && result.status).toBe(503);
+      }
     });
 
     it('rejects an unauthenticated caller', async () => {

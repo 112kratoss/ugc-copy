@@ -113,10 +113,12 @@ async function handleWorkflowCanvasCollectionPOST({
 }) {
   const auth = await authenticateWorkflowCanvasCollectionRoute(request, dependencies);
   if (auth.type === 'response') return auth.response;
+  const serviceClient = dependencies.createServiceClient();
 
   return toJsonResponse(await dependencies.createWorkflowCanvasForRoute({
     supabase: auth.auth.supabase,
-    rateLimitClient: dependencies.createServiceClient(),
+    uploadClient: serviceClient,
+    rateLimitClient: serviceClient,
     userId: auth.auth.userId,
     readBody: () => readWorkflowCanvasCreateBody(request),
   }));

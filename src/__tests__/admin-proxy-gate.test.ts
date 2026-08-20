@@ -5,6 +5,8 @@ import { createAdminSessionToken, ADMIN_SESSION_COOKIE } from '@/lib/admin-sessi
 import { isAdminPath, isPublicAdminPath, proxy } from '@/proxy';
 
 const SECRET = 'c'.repeat(48);
+const SESSION_ID = '6f1b7c2e-6d4a-4f8b-9c1d-2a5e7b9f0c33';
+const CREDENTIAL_VERSION = 'C'.repeat(43);
 const ORIGINAL_SECRET = process.env.ADMIN_SESSION_SECRET;
 
 function adminRequest(pathname: string, token?: string) {
@@ -16,7 +18,13 @@ function adminRequest(pathname: string, token?: string) {
 }
 
 async function validToken(ttlSeconds = 3600) {
-  return createAdminSessionToken({ secret: SECRET, issuedAt: new Date(), ttlSeconds });
+  return createAdminSessionToken({
+    secret: SECRET,
+    sessionId: SESSION_ID,
+    credentialVersion: CREDENTIAL_VERSION,
+    issuedAt: new Date(),
+    ttlSeconds,
+  });
 }
 
 beforeEach(() => {
@@ -83,6 +91,8 @@ describe('admin middleware gate', () => {
   it('rejects an expired session', async () => {
     const expired = await createAdminSessionToken({
       secret: SECRET,
+      sessionId: SESSION_ID,
+      credentialVersion: CREDENTIAL_VERSION,
       issuedAt: new Date(Date.now() - 7200_000),
       ttlSeconds: 60,
     });
@@ -95,12 +105,21 @@ describe('admin middleware gate', () => {
   it('rejects a session signed with a foreign secret', async () => {
     const foreign = await createAdminSessionToken({
       secret: 'd'.repeat(48),
+      sessionId: SESSION_ID,
+      credentialVersion: CREDENTIAL_VERSION,
       issuedAt: new Date(),
       ttlSeconds: 3600,
     });
     const response = await proxy(adminRequest('/admin', foreign));
 
     expect(response.status).toBe(307);
+  });
+
+  it('rejects legacy v1 sessions so operators reauthenticate once', async () => {
+    const response = await proxy(adminRequest('/admin', 'v1.legacy-payload.legacy-signature'));
+
+    expect(response.status).toBe(307);
+    expect(new URL(response.headers.get('location') ?? '').pathname).toBe('/admin/login');
   });
 
   it('fails closed when no admin session secret is configured', async () => {

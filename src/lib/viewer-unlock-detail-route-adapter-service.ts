@@ -1,4 +1,5 @@
 import 'server-only';
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 
 import { NextResponse } from 'next/server';
 
@@ -40,7 +41,7 @@ function isUuid(value: string): boolean {
 
 async function authenticate(request: Request, dependencies: ReturnType<typeof resolveDependencies>) {
   const client = dependencies.createUserClient(request);
-  const { data: { user }, error } = await client.auth.getUser();
+  const { data: { user }, error } = await getVerifiedAuthUserResult(client);
   return error ? null : user;
 }
 

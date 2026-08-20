@@ -1,3 +1,4 @@
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 import { logBackendRouteError } from '@/lib/backend-logger';
@@ -56,7 +57,7 @@ async function getAuthenticatedUserId(
   const {
     data: { user },
     error: authError,
-  } = await supabase.auth.getUser();
+  } = await getVerifiedAuthUserResult(supabase);
 
   return authError || !user || isGuestUser(user)
     ? { ok: false as const }

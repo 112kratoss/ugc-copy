@@ -1,3 +1,4 @@
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { isGuestUser } from '@/lib/account-identity';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
@@ -50,7 +51,7 @@ async function getAuthenticatedMobileUserId(userSupabase: UserSupabaseClient) {
   const {
     data: { user },
     error: authError,
-  } = await userSupabase.auth.getUser();
+  } = await getVerifiedAuthUserResult(userSupabase);
 
   // Registered-only. A guest has no follows, comments or marketplace activity
   // to be notified about, and a push token registered against a guest row is

@@ -17,6 +17,7 @@ function agedIso(hours: number) {
 
 type FakeRow = {
   id: string;
+  user_id?: string;
   storage_path: string;
   kind: 'image' | 'video' | 'audio';
   declared_bytes: number | null;
@@ -48,7 +49,13 @@ function clientDouble({
     return query;
   });
   query.then = (resolve: (r: { data: FakeRow[]; error: null }) => unknown) =>
-    Promise.resolve(resolve({ data: rows, error: null }));
+    Promise.resolve(resolve({
+      data: rows.map((row) => ({
+        ...row,
+        user_id: row.user_id ?? row.storage_path.split('/')[0] ?? 'user-1',
+      })),
+      error: null,
+    }));
 
   const updateChain: Record<string, unknown> = {
     in: vi.fn(() => updateChain),
@@ -228,6 +235,30 @@ describe('reclaimAbandonedMediaUploads', () => {
     });
 
     expect(summary).toMatchObject({ reclaimed: 0, bytesReclaimed: 0 });
+    expect(sweep.updates).toHaveLength(0);
+  });
+
+  it('keeps a non-canonical owner-changing row away from privileged storage calls', async () => {
+    const sweep = clientDouble({
+      rows: [{
+        id: 'intent-1',
+        user_id: 'user-1',
+        storage_path: 'user-1%252fuser-2/private.mp4',
+        kind: 'video',
+        declared_bytes: 2048,
+        created_at: agedIso(RECLAIM_AFTER_HOURS + 1),
+        consumed_by: 'generation_input',
+      }],
+    });
+
+    const summary = await reclaimAbandonedMediaUploads(sweep.client, {
+      now: NOW,
+      includeAbandoned: true,
+      protectedPaths: new Set(),
+    });
+
+    expect(summary).toMatchObject({ scanned: 1, reclaimed: 0, rowsDropped: 0, kept: 1 });
+    expect(sweep.removed).toEqual([]);
     expect(sweep.updates).toHaveLength(0);
   });
 

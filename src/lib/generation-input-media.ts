@@ -2,13 +2,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
 import {
-  getUploadsBucketPath,
-  isUploadsStoragePath,
   normalizeSubmittedElementDescriptors,
   type ImageElementDescriptor,
 } from '@/lib/image-elements';
 import { markMediaUploadIntentsConsumed } from '@/lib/media-upload-intents';
-import { buildMediaProxyUrl, getStoredMediaLocation, isMediaBucket } from '@/lib/media-urls';
+import { buildMediaProxyUrl, isMediaBucket } from '@/lib/media-urls';
 import {
   downloadAllowlistedRemoteMedia,
   isAllowlistedRemoteMediaUrl,
@@ -16,7 +14,20 @@ import {
 } from '@/lib/remote-media-security';
 import { normalizeRemixMediaAssetDescriptor, type RemixMediaAssetDescriptor } from '@/lib/remix-source';
 import type { SeedanceAssetCollections, SeedanceAssetMetadata } from '@/lib/seedance-assets';
-import { isStorageObjectOwnedByUser } from '@/lib/storage-ownership';
+import {
+  getCanonicalStoredMediaLocation,
+  isStorageObjectOwnedByUser,
+} from '@/lib/storage-ownership';
+import {
+  abortNullableUploadByteConsumption,
+  completeNullableUploadByteConsumption,
+  isDefinitiveSupabaseMutationRejection,
+  type UploadConsumptionClaim,
+} from '@/lib/upload-byte-admission';
+import {
+  deleteReservedObjectAndConfirm,
+  finalizeUploadForConsumption,
+} from '@/lib/upload-finalization';
 
 const GENERATION_INPUTS_BUCKET = 'generation_inputs';
 
@@ -98,6 +109,12 @@ const STORAGE_BUCKETS = new Set([
   'generated_audio',
   'generation_inputs',
 ]);
+const SIGNED_UPLOAD_BUCKETS = new Set([
+  'uploads',
+  'generated_images',
+  'generated_videos',
+  'generated_audio',
+]);
 
 function normalizeLabel(value: string | null | undefined, fallback: string): string {
   const trimmed = value?.trim();
@@ -144,30 +161,17 @@ function inferExtension(source: string | null | undefined, contentType: string |
   return 'mp4';
 }
 
-function normalizeStoragePath(value: string | null | undefined): { bucket: string; filePath: string } | null {
+function normalizeStoragePath(
+  value: string | null | undefined,
+  ownerUserId?: string,
+): { bucket: string; filePath: string } | null {
   if (!value) {
     return null;
   }
-
-  const mediaLocation = getStoredMediaLocation(value);
-  if (mediaLocation) {
-    return mediaLocation;
-  }
-
-  if (isUploadsStoragePath(value)) {
-    return {
-      bucket: 'uploads',
-      filePath: getUploadsBucketPath(value),
-    };
-  }
-
-  const [bucket, ...pathParts] = value.split('/');
-  const filePath = pathParts.join('/');
-  if (bucket && filePath && STORAGE_BUCKETS.has(bucket)) {
-    return { bucket, filePath };
-  }
-
-  return null;
+  return getCanonicalStoredMediaLocation(value, {
+    allowedBuckets: STORAGE_BUCKETS,
+    ownerUserId,
+  });
 }
 
 function isFetchableUrl(value: string | null | undefined): value is string {
@@ -203,11 +207,23 @@ async function loadCandidateMedia(
   body: Blob | ReadableStream<Uint8Array>;
   contentType: string;
   sourceName: string | null;
+  consumptionClaim: UploadConsumptionClaim | null;
 } | null> {
-  const storageLocation = normalizeStoragePath(candidate.sourceStoragePath);
+  const storageLocation = normalizeStoragePath(candidate.sourceStoragePath, userId);
 
   if (storageLocation && isStorageObjectOwnedByUser(storageLocation.filePath, userId)) {
+    let consumptionClaim: UploadConsumptionClaim | null = null;
     try {
+      if (SIGNED_UPLOAD_BUCKETS.has(storageLocation.bucket)) {
+        const finalization = await finalizeUploadForConsumption(supabase, {
+          bucket: storageLocation.bucket,
+          storagePath: storageLocation.filePath,
+          userId,
+          disposition: storageLocation.bucket === 'uploads' ? 'draft' : 'preserve',
+        });
+        if (!finalization.ok) return null;
+        consumptionClaim = finalization.consumptionClaim;
+      }
       const builder = supabase.storage
         .from(storageLocation.bucket)
         .download(storageLocation.filePath);
@@ -225,6 +241,7 @@ async function loadCandidateMedia(
             body: data,
             contentType: inferCandidateContentType(storageLocation.filePath, candidate.mediaType),
             sourceName: storageLocation.filePath,
+            consumptionClaim,
           };
         }
       } else {
@@ -235,12 +252,14 @@ async function loadCandidateMedia(
             body: data,
             contentType: data.type || inferCandidateContentType(storageLocation.filePath, candidate.mediaType),
             sourceName: storageLocation.filePath,
+            consumptionClaim,
           };
         }
       }
     } catch (error) {
       logBackendWarning('failed_to_download_generation_input_from_storage_falling_back_to_url', { error: error });
     }
+    await abortNullableUploadByteConsumption(supabase, consumptionClaim);
   }
 
   if (!isFetchableUrl(candidate.sourceUrl)) {
@@ -256,6 +275,7 @@ async function loadCandidateMedia(
       body: downloaded.blob,
       contentType: downloaded.blob.type || inferCandidateContentType(downloaded.sourceName, candidate.mediaType),
       sourceName: downloaded.sourceName,
+      consumptionClaim: null,
     };
   }
 
@@ -267,6 +287,7 @@ async function loadCandidateMedia(
     body: media.body,
     contentType: media.contentType,
     sourceName: media.sourceName,
+    consumptionClaim: null,
   };
 }
 
@@ -287,7 +308,12 @@ export async function persistGenerationInputMedia(params: {
   }
 
   for (const [index, candidate] of candidates.entries()) {
+    let consumptionClaim: UploadConsumptionClaim | null = null;
+    let createdInputPath: string | null = null;
+    let durableInputPersisted = false;
+    let durableMutationOutcomeUnknown = false;
     try {
+      const sourceStorageLocation = normalizeStoragePath(candidate.sourceStoragePath, userId);
       const downloaded = await loadCandidateMedia(
         supabase,
         candidate,
@@ -297,6 +323,7 @@ export async function persistGenerationInputMedia(params: {
       if (!downloaded) {
         continue;
       }
+      consumptionClaim = downloaded.consumptionClaim;
 
       const sortOrder = candidate.sortOrder ?? index;
       const extension = inferExtension(
@@ -311,12 +338,16 @@ export async function persistGenerationInputMedia(params: {
         .from(GENERATION_INPUTS_BUCKET)
         .upload(filePath, downloaded.body, {
           contentType: downloaded.contentType || undefined,
-          upsert: true,
+          // A retry must not overwrite bytes already referenced by an earlier
+          // generation_input_media row. This also makes catch-path cleanup safe:
+          // after a successful upload this invocation created the object.
+          upsert: false,
         });
 
       if (uploadError) {
         throw uploadError;
       }
+      createdInputPath = filePath;
 
       const storagePath = `${GENERATION_INPUTS_BUCKET}/${filePath}`;
       const metadata = {
@@ -325,7 +356,8 @@ export async function persistGenerationInputMedia(params: {
         sourceUrl: candidate.sourceUrl ?? null,
       };
 
-      const { error: insertError } = await supabase
+      durableMutationOutcomeUnknown = true;
+      const insertResult = await supabase
         .from('generation_input_media')
         .insert({
           generation_id: generationId,
@@ -339,23 +371,45 @@ export async function persistGenerationInputMedia(params: {
           metadata,
         });
 
-      if (insertError) {
-        throw insertError;
+      if (insertResult.error) {
+        durableMutationOutcomeUnknown = !isDefinitiveSupabaseMutationRejection(insertResult);
+        throw insertResult.error;
       }
+      durableMutationOutcomeUnknown = false;
+      durableInputPersisted = true;
+
+      const completed = await completeNullableUploadByteConsumption(supabase, {
+        claim: consumptionClaim,
+        disposition: consumptionClaim?.disposition
+          ?? (sourceStorageLocation?.bucket === 'uploads' ? 'draft' : 'preserve'),
+      });
+      if (!completed.ok) throw new Error(completed.error);
 
       // The bytes now live in generation_inputs, but the staging object stays:
       // an unchanged picker selection can be submitted again, and the second
       // run re-sends this same path. Recording the claim lets the reclaim sweep
       // collect it once it is past the window, which is what stopped every
       // generation input from leaving a permanent duplicate behind.
-      if (isUploadsStoragePath(candidate.sourceStoragePath)) {
+      if (sourceStorageLocation?.bucket === 'uploads') {
         await markMediaUploadIntentsConsumed(supabase, {
-          storagePaths: [candidate.sourceStoragePath as string],
+          storagePaths: [sourceStorageLocation.filePath],
+          userId,
           consumedBy: 'generation_input',
           storageCleared: false,
         });
       }
+
     } catch (error) {
+      if (!durableInputPersisted && !durableMutationOutcomeUnknown) {
+        await abortNullableUploadByteConsumption(supabase, consumptionClaim);
+        if (createdInputPath) {
+          await deleteReservedObjectAndConfirm(
+            supabase,
+            GENERATION_INPUTS_BUCKET,
+            createdInputPath,
+          );
+        }
+      }
       logBackendError('failed_to_persist_generation_input_media', { error: error });
     }
   }
@@ -385,7 +439,7 @@ function prepareGenerationInputMediaRow(
   row: GenerationInputMediaRow,
   reportOwnershipFailure: boolean,
 ): PreparedGenerationInputMediaRow {
-  const location = normalizeStoragePath(row.storage_path);
+  const location = normalizeStoragePath(row.storage_path, row.user_id);
   if (!location) {
     return {
       row,
@@ -533,7 +587,7 @@ async function resolveLegacyStorageUrl(
   storagePath: string,
   ownerUserId: string | null,
 ): Promise<string | null> {
-  const location = normalizeStoragePath(storagePath);
+  const location = normalizeStoragePath(storagePath, ownerUserId ?? undefined);
   if (!location) {
     return isAllowlistedRemoteMediaUrl(storagePath) ? storagePath : null;
   }

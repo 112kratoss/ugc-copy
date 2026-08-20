@@ -186,6 +186,19 @@ function createSupabaseMock(
       };
     }
 
+    if (fn === 'admit_provider_submission' || fn === 'reserve_provider_submission') {
+      return {
+        data: {
+          allowed: true,
+          reason: 'admitted',
+          state: 'closed',
+          retryAfterSeconds: 0,
+          inFlight: 0,
+        },
+        error: null,
+      };
+    }
+
     return { data: null, error: null };
   });
 
@@ -309,6 +322,7 @@ vi.mock('@/lib/server-helpers', () => ({
   createUserClient: (request: Request) => createUserClientMock(request),
   createServiceClient: vi.fn(() => currentSupabaseMock.client),
   resolveStoredMediaUrl: vi.fn(),
+  resolveOwnedStoredMediaUrl: vi.fn(async (_supabase: unknown, value: string) => value),
 }));
 
 function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
@@ -330,8 +344,16 @@ describe('/api/generate-image route', () => {
     createUserClientMock.mockImplementation(() => currentSupabaseMock.client);
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        if (init?.method === 'GET') {
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const inputUrl = typeof input === 'string'
+          ? input
+          : input instanceof Request
+            ? input.url
+            : String(input);
+        if (
+          init?.method === 'GET'
+          || inputUrl.includes('/storage/v1/object/')
+        ) {
           return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
             status: 200,
             headers: { 'Content-Type': 'image/jpeg' },
@@ -576,7 +598,7 @@ describe('/api/generate-image route', () => {
         },
       ],
     });
-  });
+  }, 15_000);
 
   it('returns provider-backed timing for waiting image generations', async () => {
     const timeoutSignal = AbortSignal.abort();

@@ -1,9 +1,11 @@
 import { supabase } from '@/lib/supabase';
+import { finalizeSignedUpload } from '@/lib/upload-finalize-client';
 
 type ProfileMediaRole = 'avatar' | 'cover';
 
 type ProfileMediaUploadIntent = {
   success: boolean;
+  uploadId: string;
   bucket: 'profiles';
   path: string;
   token: string;
@@ -43,6 +45,7 @@ export async function uploadProfileMediaWithSignedIntent({
   if (
     uploadIntent.bucket !== 'profiles'
     || !uploadIntent.path
+    || !uploadIntent.uploadId
     || !uploadIntent.token
     || !uploadIntent.publicUrl
   ) {
@@ -59,8 +62,13 @@ export async function uploadProfileMediaWithSignedIntent({
     throw new Error(`Profile media upload failed: ${error.message}`);
   }
 
+  const finalized = await finalizeSignedUpload(accessToken, uploadIntent.uploadId);
+  if (finalized.bucket !== uploadIntent.bucket || finalized.path !== uploadIntent.path) {
+    throw new Error('Finalized profile media did not match its signed target.');
+  }
+
   return {
     publicUrl: uploadIntent.publicUrl,
-    storagePath: uploadIntent.path,
+    storagePath: finalized.path,
   };
 }

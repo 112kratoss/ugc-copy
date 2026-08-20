@@ -11,11 +11,15 @@ import {
 } from '@/lib/backend-rate-limit';
 import { canUserCreateDurableUpload } from '@/lib/account-deletion-guard';
 import { isAllowedStorageBucketMimeType } from '@/lib/storage-upload-mime-policy';
-import { releaseUploadBytes, reserveUploadBytes } from '@/lib/upload-byte-admission';
+import {
+  abortUploadBytesBeforeIssue,
+  markUploadBytesIssued,
+  reserveUploadBytes,
+} from '@/lib/upload-byte-admission';
 
 const PROFILE_MEDIA_BUCKET = 'profiles';
 const SIGNED_UPLOAD_EXPIRES_IN_SECONDS = 2 * 60 * 60;
-const MAX_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024;
+export const MAX_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024;
 const BLOCKED_PROFILE_IMAGE_EXTENSIONS = new Set(['.svg', '.html', '.htm', '.js', '.mjs']);
 
 type ProfileMediaRole = 'avatar' | 'cover';
@@ -43,6 +47,7 @@ export type ProfileMediaUploadIntentResult =
       ok: true;
       body: {
         success: true;
+        uploadId: string;
         bucket: typeof PROFILE_MEDIA_BUCKET;
         path: string;
         token: string;
@@ -209,12 +214,16 @@ export async function createProfileMediaUploadIntent({
     return { ok: false, status: 500, body: { error: 'Failed to check profile media upload limits.' } };
   }
 
-  const uploadPath = `${userId}/${metadata.role}-${createUploadId()}-${metadata.fileName}`;
+  const uploadId = createUploadId();
+  const uploadPath = `${userId}/${metadata.role}-${uploadId}-${metadata.fileName}`;
   const byteReservation = await reserveUploadBytes(resolvedClient, {
+    uploadId,
     userId,
     bucket: PROFILE_MEDIA_BUCKET,
     storagePath: uploadPath,
     declaredBytes: metadata.sizeBytes,
+    reservedBytes: MAX_PROFILE_IMAGE_BYTES,
+    expectedContentType: metadata.mimeType,
   });
   if (!byteReservation.ok) {
     return {
@@ -224,33 +233,46 @@ export async function createProfileMediaUploadIntent({
     };
   }
   const profileStorage = resolvedClient.storage.from(PROFILE_MEDIA_BUCKET);
+  const {
+    data: { publicUrl },
+  } = profileStorage.getPublicUrl(uploadPath);
+
+  // Resolve every fallible response field before asking Storage to mint a
+  // bearer token. A token is returned only after the database durably records
+  // its post-sign expiry below.
+  if (!publicUrl) {
+    await abortUploadBytesBeforeIssue(resolvedClient, {
+      uploadId: byteReservation.uploadId,
+      userId,
+    });
+    return { ok: false, status: 500, body: { error: 'Failed to prepare profile media URL.' } };
+  }
+
   const { data, error } = await profileStorage.createSignedUploadUrl(uploadPath);
 
   if (error || !data?.token) {
-    await releaseUploadBytes(resolvedClient, {
-      bucket: PROFILE_MEDIA_BUCKET,
-      storagePath: uploadPath,
+    await abortUploadBytesBeforeIssue(resolvedClient, {
+      uploadId: byteReservation.uploadId,
+      userId,
     });
     logBackendError('failed_to_create_profile_media_signed_upload_url', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to prepare profile media upload.' } };
   }
 
-  const {
-    data: { publicUrl },
-  } = profileStorage.getPublicUrl(uploadPath);
-
-  if (!publicUrl) {
-    await releaseUploadBytes(resolvedClient, {
-      bucket: PROFILE_MEDIA_BUCKET,
-      storagePath: uploadPath,
-    });
-    return { ok: false, status: 500, body: { error: 'Failed to prepare profile media URL.' } };
+  const issued = await markUploadBytesIssued(resolvedClient, {
+    uploadId: byteReservation.uploadId,
+    userId,
+    tokenTtlSeconds: SIGNED_UPLOAD_EXPIRES_IN_SECONDS,
+  });
+  if (!issued.ok) {
+    return { ok: false, status: 500, body: { error: 'Failed to activate profile media upload.' } };
   }
 
   return {
     ok: true,
     body: {
       success: true,
+      uploadId: byteReservation.uploadId,
       bucket: PROFILE_MEDIA_BUCKET,
       path: uploadPath,
       token: data.token,

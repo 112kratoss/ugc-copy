@@ -5,17 +5,22 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
   buildMediaProxyUrl,
-  getStoredMediaLocation,
+  isMediaBucket,
   type MediaBucket,
 } from '@/lib/media-urls';
-import { isStorageObjectOwnedByUser } from '@/lib/storage-ownership';
+import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 
 type BucketPathGroup = Map<string, string[]>;
 
 function getSafeRemoteUrl(value: string): string | null {
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' && !url.username && !url.password ? value : null;
+    return url.protocol === 'https:'
+      && !url.username
+      && !url.password
+      && !url.pathname.includes('/storage/v1/object/')
+      ? value
+      : null;
   } catch {
     return null;
   }
@@ -29,23 +34,39 @@ function getSafeRemoteUrl(value: string): string | null {
 export async function resolveOwnedStoredMediaUrlMap(params: {
   supabase: SupabaseClient;
   outputUrls: Iterable<string | null | undefined>;
-  ownerUserId: string;
+  ownerUserIds: Iterable<string>;
   expiresIn?: number;
 }): Promise<Map<string, string | null>> {
   const resolvedUrls = new Map<string, string | null>();
   const pathsByBucket = new Map<MediaBucket, BucketPathGroup>();
+  const ownerUserIds = Array.from(new Set(
+    Array.from(params.ownerUserIds).filter((value) => typeof value === 'string' && value.length > 0),
+  ));
 
   for (const outputUrl of new Set(Array.from(params.outputUrls).filter(
     (value): value is string => typeof value === 'string' && value.length > 0,
   ))) {
-    const location = getStoredMediaLocation(outputUrl);
+    const location = ownerUserIds
+      .map((ownerUserId) => getUserOwnedStoredMediaLocation(outputUrl, ownerUserId, {
+        allowedBuckets: [
+          'generated_images',
+          'generated_videos',
+          'generated_audio',
+          'generation_inputs',
+        ],
+      }))
+      .find((candidate) => candidate !== null) ?? null;
     if (!location) {
-      resolvedUrls.set(outputUrl, getSafeRemoteUrl(outputUrl));
+      const remoteUrl = getSafeRemoteUrl(outputUrl);
+      if (!remoteUrl) {
+        logBackendError('refused_to_sign_media_outside_owner_prefix', {
+          message: `Refused to sign media outside owner prefix: ${outputUrl}`,
+        });
+      }
+      resolvedUrls.set(outputUrl, remoteUrl);
       continue;
     }
-
-    if (!isStorageObjectOwnedByUser(location.filePath, params.ownerUserId)) {
-      logBackendError('refused_to_sign_media_outside_owner_prefix', { message: `Refused to sign media outside owner prefix: ${location.bucket}/${location.filePath}` });
+    if (!isMediaBucket(location.bucket)) {
       resolvedUrls.set(outputUrl, null);
       continue;
     }

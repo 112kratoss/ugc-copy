@@ -60,6 +60,14 @@ export const CONTACT_SUBMISSION_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+// Browsers can emit several violations during one page load, so this is high
+// enough for diagnostics while still bounding a public unauthenticated sink.
+export const CSP_REPORT_RATE_LIMIT = {
+  scope: 'security:csp-report',
+  limit: 120,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const ADMIN_CONTENT_MODERATION_RATE_LIMIT = {
   scope: 'admin-content-moderation',
   limit: 60,
@@ -317,6 +325,16 @@ export const SHOWCASE_FEED_EVENT_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+// Public admission happens before body parsing or authentication, so this key
+// is necessarily network-scoped. Keep it deliberately coarser than the
+// per-actor budget above: many legitimate signed-in viewers can share one NAT,
+// while a single source still cannot make JSON parsing unbounded work.
+export const SHOWCASE_FEED_EVENT_NETWORK_ADMISSION_RATE_LIMIT = {
+  scope: 'showcase-feed:event-network-admission',
+  limit: 3_000,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const SHOWCASE_FOR_YOU_FEED_READ_RATE_LIMIT = {
   scope: 'showcase-feed:for-you-read',
   limit: 60,
@@ -393,6 +411,14 @@ export const GENERATION_MODEL_QUOTE_RATE_LIMIT = {
 export const TEMPORARY_MEDIA_UPLOAD_SIGN_RATE_LIMIT = {
   scope: 'temporary-media-upload:sign',
   limit: 60,
+  windowSeconds: 10 * 60,
+} as const;
+
+// One finalization is expected per signed upload, with enough headroom for
+// idempotent client retries across every upload surface.
+export const UPLOAD_FINALIZE_RATE_LIMIT = {
+  scope: 'upload:finalize',
+  limit: 120,
   windowSeconds: 10 * 60,
 } as const;
 

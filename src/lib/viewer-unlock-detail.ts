@@ -85,6 +85,8 @@ export interface ViewerUnlockDetail {
   salesCount: number | null;
   purchasedAt: string;
   creatorDisplayName: string;
+  /** Present while the live bundle exists; detached revisions rely on retained-file mappings. */
+  creatorUserId: string | null;
   resourceKinds: PostResourceKind[];
   currentResources: PostResourceBundleResources | null;
   purchasedRevision: ViewerUnlockRevision;
@@ -260,6 +262,7 @@ export async function getViewerUnlockDetail({
     creatorDisplayName: liveDetail?.seller.name
       ?? normalizeOptionalText(projection.seller_display_name)
       ?? 'Deleted creator',
+    creatorUserId: liveDetail?.seller.id ?? null,
     resourceKinds: getPostResourceKinds(resourcesForKinds),
     currentResources,
     purchasedRevision,

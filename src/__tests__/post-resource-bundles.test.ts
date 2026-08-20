@@ -450,6 +450,22 @@ describe('post resource bundle validation', () => {
         }],
       },
     }, { ownerUserId: 'user-1' })).toMatch(/belong to the creator/i);
+
+    for (const storagePath of [
+      'user-1/%252e%252e/other-user/workflow.json',
+      'user-1%252fother-user/workflow.json',
+      'user-1/%255cother-user/workflow.json',
+      'user-1//workflow.json',
+    ]) {
+      expect(validatePostResourceBundleInput({
+        accessMode: 'paid',
+        priceUsdCents: 500,
+        resources: {
+          attachments: [{ label: 'Workflow file', kind: 'file', storagePath }],
+          allowRemix: false,
+        },
+      }, { ownerUserId: 'user-1' })).toMatch(/belong to the creator/i);
+    }
   });
 
   it('resolves smart remix capability from post and resource context', () => {

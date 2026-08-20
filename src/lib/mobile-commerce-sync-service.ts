@@ -1,3 +1,4 @@
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -43,7 +44,7 @@ async function getAuthenticatedMobileUserId(userSupabase: UserSupabaseClient) {
   const {
     data: { user },
     error: authError,
-  } = await userSupabase.auth.getUser();
+  } = await getVerifiedAuthUserResult(userSupabase);
 
   return authError || !user ? null : user.id;
 }

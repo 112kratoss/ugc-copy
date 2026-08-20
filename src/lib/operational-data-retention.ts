@@ -7,6 +7,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { reclaimExpiredUploadReservations } from '@/lib/upload-finalization';
 
 export type OperationalRetentionSummary = {
   jobRunsDeleted: number;
@@ -20,6 +21,9 @@ export type OperationalRetentionSummary = {
   profileShareEventsDeleted: number;
   abandonedFreeUnlockOrdersDeleted: number;
   uploadByteReservationsDeleted: number;
+  expiredUploadReservationsScanned: number;
+  expiredUploadObjectsDeleted: number;
+  expiredUploadReservationFailures: number;
 };
 
 function toCount(value: unknown): number {
@@ -27,7 +31,7 @@ function toCount(value: unknown): number {
 }
 
 export async function pruneOperationalBackendData(
-  client: Pick<SupabaseClient, 'rpc'>,
+  client: SupabaseClient,
   options: { now?: Date; maxDeletesPerTable?: number } = {},
 ): Promise<OperationalRetentionSummary> {
   const { data, error } = await client.rpc('prune_operational_backend_data', {
@@ -65,6 +69,13 @@ export async function pruneOperationalBackendData(
     abandonedFreeUnlockOrdersDeleted = toCount(freeUnlockResult.data);
   }
 
+  // Expiry is not proof of absence. Delete/prove each unfinalized object first;
+  // only rows this worker releases are eligible for the bookkeeping prune.
+  const uploadReclaim = await reclaimExpiredUploadReservations(client, {
+    now: options.now,
+    limit: options.maxDeletesPerTable ?? 500,
+  });
+
   const uploadReservationResult = await client.rpc('prune_upload_byte_reservations', {
     p_limit: options.maxDeletesPerTable ?? 5000,
   });
@@ -77,6 +88,9 @@ export async function pruneOperationalBackendData(
     profileShareEventsDeleted,
     abandonedFreeUnlockOrdersDeleted,
     uploadByteReservationsDeleted,
+    expiredUploadReservationsScanned: uploadReclaim.scanned,
+    expiredUploadObjectsDeleted: uploadReclaim.objectsDeleted,
+    expiredUploadReservationFailures: uploadReclaim.failed,
     jobRunsDeleted: toCount(summary.job_runs_deleted),
     rateLimitsDeleted: toCount(summary.rate_limits_deleted),
     completionJobsDeleted: toCount(summary.completion_jobs_deleted),

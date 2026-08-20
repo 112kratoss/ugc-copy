@@ -9,7 +9,11 @@ import {
 import { canUserCreateDurableUpload } from '@/lib/account-deletion-guard';
 import { recordMediaUploadIntent } from '@/lib/media-upload-intents';
 import { isAllowedStorageMediaMimeType } from '@/lib/storage-upload-mime-policy';
-import { releaseUploadBytes, reserveUploadBytes } from '@/lib/upload-byte-admission';
+import {
+  abortUploadBytesBeforeIssue,
+  markUploadBytesIssued,
+  reserveUploadBytes,
+} from '@/lib/upload-byte-admission';
 
 export type TemporaryMediaUploadSignClient = Parameters<typeof enforceBackendRateLimit>[0] & {
   // Widened for media_upload_intents. The staging bucket has no other record
@@ -35,6 +39,7 @@ export type TemporaryMediaUploadIntentResult =
     ok: true;
     response: {
       success: true;
+      uploadId: string;
       bucket: 'uploads';
       path: string;
       storagePath: string;
@@ -68,6 +73,7 @@ export const MAX_UPLOAD_BYTES_BY_KIND = {
   video: 250 * 1024 * 1024,
   audio: 50 * 1024 * 1024,
 } as const;
+export const MAX_TEMPORARY_UPLOAD_SURFACE_BYTES = MAX_UPLOAD_BYTES_BY_KIND.video;
 
 /**
  * The sign step can only validate the size the client *claims*, because the
@@ -242,13 +248,20 @@ export async function createTemporaryMediaUploadIntent({
     };
   }
 
-  const uploadPath = `${userId}/${createUploadId()}-${metadata.fileName}`;
+  const uploadId = createUploadId();
+  const uploadPath = `${userId}/${uploadId}-${metadata.fileName}`;
 
   const byteReservation = await reserveUploadBytes(resolvedClient, {
+    uploadId,
     userId,
     bucket: TEMPORARY_UPLOADS_BUCKET,
     storagePath: uploadPath,
     declaredBytes: metadata.sizeBytes,
+    // All kinds share the 250 MB uploads bucket. A signed URL is not MIME- or
+    // kind-bound at Storage, so reserve the bucket's worst case even for a
+    // client that declares a one-byte image.
+    reservedBytes: MAX_TEMPORARY_UPLOAD_SURFACE_BYTES,
+    expectedContentType: metadata.mimeType,
   });
   if (!byteReservation.ok) {
     return {
@@ -271,9 +284,9 @@ export async function createTemporaryMediaUploadIntent({
     declaredBytes: metadata.sizeBytes,
   });
   if (!intent.ok) {
-    await releaseUploadBytes(resolvedClient, {
-      bucket: TEMPORARY_UPLOADS_BUCKET,
-      storagePath: uploadPath,
+    await abortUploadBytesBeforeIssue(resolvedClient, {
+      uploadId: byteReservation.uploadId,
+      userId,
     });
     return {
       ok: false,
@@ -287,9 +300,9 @@ export async function createTemporaryMediaUploadIntent({
     .createSignedUploadUrl(uploadPath);
 
   if (error || !data?.token) {
-    await releaseUploadBytes(resolvedClient, {
-      bucket: TEMPORARY_UPLOADS_BUCKET,
-      storagePath: uploadPath,
+    await abortUploadBytesBeforeIssue(resolvedClient, {
+      uploadId: byteReservation.uploadId,
+      userId,
     });
     return {
       ok: false,
@@ -298,10 +311,24 @@ export async function createTemporaryMediaUploadIntent({
     };
   }
 
+  const issued = await markUploadBytesIssued(resolvedClient, {
+    uploadId: byteReservation.uploadId,
+    userId,
+    tokenTtlSeconds: SIGNED_UPLOAD_EXPIRES_IN_SECONDS,
+  });
+  if (!issued.ok) {
+    return {
+      ok: false,
+      status: 500,
+      error: 'Failed to activate media upload.',
+    };
+  }
+
   return {
     ok: true,
     response: {
       success: true,
+      uploadId: byteReservation.uploadId,
       bucket: TEMPORARY_UPLOADS_BUCKET,
       path: uploadPath,
       storagePath: `${TEMPORARY_UPLOADS_BUCKET}/${uploadPath}`,

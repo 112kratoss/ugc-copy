@@ -5,21 +5,11 @@ import { useState, type FormEvent } from 'react';
 import { LogIn } from 'lucide-react';
 
 import { Surface, Text } from '@/app/components/DesignSystem';
+import { resolveSafeAdminRedirect } from '@/lib/admin-redirect';
 
 const INPUT_CLASSES = 'ui-focus-ring w-full rounded-xl border border-[var(--ui-border-default)] '
   + 'bg-[var(--ui-surface-inset)] px-3.5 py-2.5 text-base text-[var(--ui-text-primary)] '
   + 'placeholder:text-[var(--ui-text-faint)]';
-
-/**
- * Only same-origin absolute paths are honoured, so a crafted `?next=` cannot
- * bounce the operator to an external origin after a successful login.
- */
-function resolveSafeRedirect(value: string | null): string {
-  if (!value || !value.startsWith('/') || value.startsWith('//')) {
-    return '/admin';
-  }
-  return value;
-}
 
 export function AdminLoginForm() {
   const router = useRouter();
@@ -48,7 +38,7 @@ export function AdminLoginForm() {
         return;
       }
 
-      router.replace(resolveSafeRedirect(searchParams.get('next')));
+      router.replace(resolveSafeAdminRedirect(searchParams.get('next'), window.location.origin));
       router.refresh();
     } catch {
       setError('Sign in failed. Check your connection and try again.');

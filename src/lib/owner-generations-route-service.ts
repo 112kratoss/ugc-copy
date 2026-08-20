@@ -12,13 +12,14 @@ import {
 import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { classifyVisualMedia } from '@/lib/media-contract';
 import { buildVisualMediaDescriptor, type MediaPreviewStatus } from '@/lib/media-descriptor';
-import { getStoredMediaLocation } from '@/lib/media-urls';
+import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 import { resolveOwnedStoredMediaUrlMap } from '@/lib/owned-media-url-batch';
 
 export type OwnerGenerationsRouteClient = SupabaseClient;
 
 type GenerationRow = {
   id: string;
+  user_id?: string;
   output_url: string | null;
   preview_url?: string | null;
   preview_thumbhash?: string | null;
@@ -85,6 +86,7 @@ export function projectGenerationForStudio(
   delete projected.template_run_id;
   delete projected.template_run_step_id;
   delete projected.studio_visible;
+  delete projected.user_id;
   if (isTemplateResult) {
     delete projected.prompt;
     projected.model = 'template-workflow';
@@ -207,7 +209,7 @@ function collectOwnerMediaUrlCandidates(
 async function loadLinkedPostMap(params: {
   supabase: OwnerGenerationsRouteClient;
   generationIds: string[];
-  userId: string;
+  ownerUserIds: string[];
   includeArchived: boolean;
 }): Promise<Map<string, LinkedPostRow>> {
   const linkedPostMap = new Map<string, LinkedPostRow>();
@@ -219,7 +221,7 @@ async function loadLinkedPostMap(params: {
     .from('posts')
     .select('id, generation_id, title, visibility, archived_at')
     .in('generation_id', params.generationIds)
-    .eq('user_id', params.userId);
+    .in('user_id', params.ownerUserIds);
 
   if (!params.includeArchived) {
     postsQuery = postsQuery.is('archived_at', null);
@@ -266,7 +268,7 @@ function parseRequestedGenerationIds(value: string | null) {
 
 async function fetchOwnerGenerations({
   supabase,
-  userId,
+  ownerUserIds,
   includeArchived,
   requestedGenerationId,
   requestedGenerationIds,
@@ -275,7 +277,7 @@ async function fetchOwnerGenerations({
   pageLimit,
 }: {
   supabase: OwnerGenerationsRouteClient;
-  userId: string;
+  ownerUserIds: string[];
   includeArchived: boolean;
   requestedGenerationId: string | null;
   requestedGenerationIds: string[] | null;
@@ -285,7 +287,7 @@ async function fetchOwnerGenerations({
 }): Promise<{ rows: GenerationRow[]; hasMore: boolean }> {
   const projectionColumns = 'template_run_id, template_run_step_id, studio_visible';
   const statusColumns = `id, status, created_at, completed_at, model, category, archived_at, ${projectionColumns}`;
-  const baseColumns = `id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at, ${projectionColumns}`;
+  const baseColumns = `id, user_id, output_url, showcase_asset_path, status, created_at, completed_at, duration, cost, model, category, is_public, title, description, prompt, workflow_settings, archived_at, ${projectionColumns}`;
   const columns = statusOnly
     ? statusColumns
     : `${baseColumns}, preview_url, preview_thumbhash, preview_status, creation_mode`;
@@ -299,8 +301,6 @@ async function fetchOwnerGenerations({
   // For everyone who was never a guest this resolves to `[userId]`, i.e. exactly
   // the previous behaviour, at the cost of one indexed lookup against the
   // partial index on profiles.merged_into_user_id.
-  const ownerUserIds = await resolveLinkedAccountIds(supabase, userId);
-
   let query = supabase
     .from('generations')
     .select(columns)
@@ -337,11 +337,11 @@ async function fetchOwnerGenerations({
 async function authorizeOwnerStudioProjection({
   adminSupabase,
   generations,
-  userId,
+  ownerUserIds,
 }: {
   adminSupabase: OwnerGenerationsRouteClient;
   generations: GenerationRow[];
-  userId: string;
+  ownerUserIds: string[];
 }): Promise<{
   generations: GenerationRow[];
   templateMetadata: Map<string, TemplateStudioMetadata>;
@@ -357,7 +357,7 @@ async function authorizeOwnerStudioProjection({
       .select('id, template_id, result_generation_id')
       .in('id', candidateRunIds)
       // Guests run templates too, so the same linked-owner rule applies.
-      .in('user_id', await resolveLinkedAccountIds(adminSupabase, userId))
+      .in('user_id', ownerUserIds)
       .eq('status', 'succeeded')
       .eq('is_test', false);
     if (runError) throw runError;
@@ -439,9 +439,10 @@ export async function listOwnerGenerationsForRoute({
     };
   }
   const adminSupabase = getAdminSupabase();
+  const ownerUserIds = await resolveLinkedAccountIds(adminSupabase, userId);
   const { rows: candidateGenerations, hasMore } = await fetchOwnerGenerations({
     supabase: adminSupabase,
-    userId,
+    ownerUserIds,
     includeArchived,
     requestedGenerationId,
     requestedGenerationIds,
@@ -455,7 +456,7 @@ export async function listOwnerGenerationsForRoute({
   } = await authorizeOwnerStudioProjection({
     adminSupabase,
     generations: candidateGenerations,
-    userId,
+    ownerUserIds,
   });
 
   if (statusOnly) {
@@ -483,7 +484,7 @@ export async function listOwnerGenerationsForRoute({
     loadLinkedPostMap({
       supabase: adminSupabase,
       generationIds,
-      userId,
+      ownerUserIds,
       includeArchived,
     }),
     summaryOnly
@@ -496,7 +497,7 @@ export async function listOwnerGenerationsForRoute({
     resolveOwnedStoredMediaUrlMap({
       supabase: adminSupabase,
       outputUrls: collectOwnerMediaUrlCandidates(generations, summaryOnly),
-      ownerUserId: userId,
+      ownerUserIds,
     }),
   ]);
 
@@ -513,7 +514,7 @@ export async function listOwnerGenerationsForRoute({
         : await buildLegacyGenerationInputMedia({
           supabase: adminSupabase,
           generationId: generation.id,
-          ownerUserId: userId,
+          ownerUserId: generation.user_id ?? userId,
           category: generation.category ?? null,
           workflowSettings: workflowSettings ?? {},
         });
@@ -536,7 +537,10 @@ export async function listOwnerGenerationsForRoute({
     const previewSource = generation.preview_url || null;
     const previewStatus: MediaPreviewStatus = generation.preview_status
       ?? (previewSource ? 'ready' : 'pending');
-    const expiresAt = getStoredMediaLocation(generation.output_url ?? '')
+    const expiresAt = getUserOwnedStoredMediaLocation(
+      generation.output_url ?? '',
+      generation.user_id ?? userId,
+    )
       ? new Date(Date.now() + 55 * 60 * 1000).toISOString()
       : null;
     const media = outputUrl && classification?.kind

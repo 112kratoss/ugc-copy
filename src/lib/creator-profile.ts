@@ -16,7 +16,7 @@ import { getCreatorDisplayName, normalizeUsername } from '@/lib/profile';
 import {
   getPostResourceBundlePriceQuote,
 } from '@/lib/post-resource-bundles-server';
-import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { createServiceClient, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   sanitizeShowcaseFeedItem,
@@ -30,6 +30,7 @@ import { slugifySourceTool } from '@/lib/source-tools';
 
 interface LegacyCreatorGenerationRow {
   id: string;
+  user_id: string | null;
   output_url: string | null;
   showcase_asset_path?: string | null;
   prompt: string | null;
@@ -292,6 +293,7 @@ async function loadAllCreatorPostMetricRows(
 function normalizeLegacyGenerationRow(row: Record<string, unknown>): LegacyCreatorGenerationRow {
   return {
     id: String(row.id),
+    user_id: asNullableString(row.user_id),
     output_url: asNullableString(row.output_url),
     showcase_asset_path: asNullableString(row.showcase_asset_path),
     prompt: asNullableString(row.prompt),
@@ -317,8 +319,8 @@ async function fetchLegacyGenerationRows({
   profileId: string;
   take: number;
 }): Promise<LegacyCreatorGenerationRow[]> {
-  const fullSelect = 'id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, model';
-  const legacySelect = 'id, output_url, prompt, title, category, save_count, remix_count, created_at, model';
+  const fullSelect = 'id, user_id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, model';
+  const legacySelect = 'id, user_id, output_url, prompt, title, category, save_count, remix_count, created_at, model';
   const statsSelect = 'id, save_count, remix_count, created_at';
   const runQuery = (columns: string) => adminSupabase
     .from('generations')
@@ -545,8 +547,8 @@ export const getCreatorProfilePageData = cache(async (
       legacyPageRows.slice(0, limit).map(async (generation) => {
         const mediaUrl = generation.showcase_asset_path
           ? adminSupabase.storage.from('showcase_media').getPublicUrl(generation.showcase_asset_path).data.publicUrl
-          : generation.output_url
-            ? await resolveStoredMediaUrl(adminSupabase, generation.output_url)
+          : generation.output_url && generation.user_id
+            ? await resolveOwnedStoredMediaUrl(adminSupabase, generation.output_url, generation.user_id)
             : null;
         if (!mediaUrl) return null;
 

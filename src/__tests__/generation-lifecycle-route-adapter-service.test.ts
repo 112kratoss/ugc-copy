@@ -21,6 +21,40 @@ function createUserClient(userId: string | null = 'user-1') {
   } as unknown as SupabaseClient;
 }
 
+async function requireIdentityForTest(userClient: SupabaseClient) {
+  const { data: { user }, error } = await userClient.auth.getUser();
+  if (error || !user) {
+    return { ok: false as const, status: 401, code: 'UNAUTHORIZED' as const, error: 'Unauthorized' };
+  }
+
+  return {
+    ok: true as const,
+    identity: { user, userId: user.id, kind: 'registered' as const, isGuest: false },
+  };
+}
+
+function createIdentityAdminClient({
+  error = null,
+  state,
+}: {
+  error?: Error | null;
+  state: 'active' | 'merged' | 'deleting';
+}) {
+  return {
+    from: vi.fn((table: string) => {
+      if (table !== 'profiles') throw new Error(`Unexpected table: ${table}`);
+      const query = {
+        eq: vi.fn(() => query),
+        maybeSingle: vi.fn(async () => ({
+          data: { identity_state: state },
+          error,
+        })),
+      };
+      return { select: vi.fn(() => query) };
+    }),
+  } as unknown as SupabaseClient;
+}
+
 describe('generation lifecycle route adapter service', () => {
   it('rejects unauthenticated archive requests before privileged clients or lifecycle work', async () => {
     const archiveOwnerGenerationForRoute = vi.fn();
@@ -36,13 +70,14 @@ describe('generation lifecycle route adapter service', () => {
         archiveOwnerGenerationForRoute,
         createServiceClient,
         createUserClient: () => createUserClient(null),
+        requireIdentity: requireIdentityForTest,
       },
     });
 
     expect(response.status).toBe(401);
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(response.headers.get('x-request-id')).toBe('generation-archive-adapter-auth-1');
-    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
     expect(createServiceClient).not.toHaveBeenCalled();
     expect(archiveOwnerGenerationForRoute).not.toHaveBeenCalled();
   });
@@ -66,6 +101,7 @@ describe('generation lifecycle route adapter service', () => {
         archiveOwnerGenerationForRoute,
         createServiceClient: vi.fn(() => adminSupabase),
         createUserClient: () => createUserClient('user-1'),
+        requireIdentity: requireIdentityForTest,
       },
     });
 
@@ -104,6 +140,7 @@ describe('generation lifecycle route adapter service', () => {
       dependencies: {
         createServiceClient: vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient),
         createUserClient: () => createUserClient('user-1'),
+        requireIdentity: requireIdentityForTest,
         restoreOwnerGenerationForRoute,
       },
     });
@@ -135,6 +172,7 @@ describe('generation lifecycle route adapter service', () => {
         createServiceClient: vi.fn(() => ({ kind: 'admin' }) as unknown as SupabaseClient),
         createUserClient: () => createUserClient('user-1'),
         logError,
+        requireIdentity: requireIdentityForTest,
         restoreOwnerGenerationForRoute,
       },
     });
@@ -171,6 +209,7 @@ describe('generation lifecycle route adapter service', () => {
         createServiceClient,
         createUserClient: createUserClientDependency,
         deleteOwnerGenerationForRoute,
+        requireIdentity: requireIdentityForTest,
       },
     });
 
@@ -215,6 +254,7 @@ describe('generation lifecycle route adapter service', () => {
             rateLimitError,
           }),
         ),
+        requireIdentity: requireIdentityForTest,
       },
     });
 
@@ -227,5 +267,79 @@ describe('generation lifecycle route adapter service', () => {
       retryAfterSeconds: 28,
       limit: 60,
     });
+  });
+
+  it.each([
+    {
+      action: 'archive' as const,
+      identityLookupError: null,
+      identityState: 'merged' as const,
+      failure: {
+        ok: false as const,
+        status: 409,
+        code: 'SESSION_MERGED' as const,
+        error: 'This guest session has been linked to an account. Sign in to continue.',
+      },
+    },
+    {
+      action: 'restore' as const,
+      identityLookupError: null,
+      identityState: 'deleting' as const,
+      failure: {
+        ok: false as const,
+        status: 409,
+        code: 'ACCOUNT_DELETING' as const,
+        error: 'This account is being permanently deleted.',
+      },
+    },
+    {
+      action: 'restore' as const,
+      identityLookupError: new Error('database unavailable'),
+      identityState: 'active' as const,
+      failure: {
+        ok: false as const,
+        status: 503,
+        code: 'IDENTITY_CHECK_UNAVAILABLE' as const,
+        error: 'Identity verification is temporarily unavailable. Please try again.',
+      },
+    },
+  ])('rejects $failure.code identities before $action mutation work', async ({
+    action,
+    failure,
+    identityLookupError,
+    identityState,
+  }) => {
+    const archiveOwnerGenerationForRoute = vi.fn();
+    const restoreOwnerGenerationForRoute = vi.fn();
+    const adminSupabase = createIdentityAdminClient({
+      error: identityLookupError,
+      state: identityState,
+    });
+    const createServiceClient = vi.fn(() => adminSupabase);
+    const input = {
+      generationId: 'generation-1',
+      request: new Request(`http://localhost/api/generations/generation-1/${action}`, {
+        method: 'POST',
+      }),
+      dependencies: {
+        archiveOwnerGenerationForRoute,
+        createServiceClient,
+        createUserClient: () => createUserClient('user-1'),
+        restoreOwnerGenerationForRoute,
+      },
+    };
+
+    const response = action === 'archive'
+      ? await generationArchiveRouteResponse(input)
+      : await generationRestoreRouteResponse(input);
+
+    expect(response.status).toBe(failure.status);
+    await expect(response.json()).resolves.toEqual({
+      error: failure.error,
+      code: failure.code,
+    });
+    expect(createServiceClient).toHaveBeenCalledOnce();
+    expect(archiveOwnerGenerationForRoute).not.toHaveBeenCalled();
+    expect(restoreOwnerGenerationForRoute).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,4 @@
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 import { logBackendError } from '@/lib/backend-logger';
@@ -60,7 +61,7 @@ function referralJsonResponse(request: Request, body: unknown, status = 200) {
 
 async function authenticatedUserId(request: Request) {
   const userClient = createUserClient(request);
-  const { data: { user }, error } = await userClient.auth.getUser();
+  const { data: { user }, error } = await getVerifiedAuthUserResult(userClient);
   // Registered-only. A referral reward is for signing up, so crediting one to a
   // guest identity would burn the invite on an account that does not exist yet.
   return error || !user || isGuestUser(user) ? null : user.id;

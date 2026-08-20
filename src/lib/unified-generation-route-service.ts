@@ -1,3 +1,4 @@
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -151,7 +152,7 @@ export async function postUnifiedGenerationForRoute(
   const {
     data: { user },
     error: authError,
-  } = await supabase.auth.getUser();
+  } = await getVerifiedAuthUserResult(supabase);
   if (authError || !user) {
     return {
       ok: false,

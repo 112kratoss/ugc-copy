@@ -326,6 +326,7 @@ export async function getTemplateRun(runId: string, token: string): Promise<Temp
 }
 
 export type TemplateInputUploadIntent = {
+  uploadId: string;
   bucket: 'template_inputs';
   path: string;
   storagePath: string;

@@ -10,6 +10,8 @@ type GenerationRow = {
   showcase_asset_path: string | null;
 };
 
+type IdentityState = 'active' | 'merged' | 'deleting';
+
 function createUserSupabaseMock(user: { id: string } | null = { id: 'user-1' }) {
   return {
     auth: {
@@ -26,20 +28,27 @@ function createAdminSupabaseMock({
     id: 'gen-1',
     user_id: 'user-1',
     output_url: 'generated_images/user-1/output.png',
-    showcase_asset_path: 'user-1/showcase.webp',
+    showcase_asset_path: 'showcase/gen-1/showcase.webp',
   },
   inputMediaRows = [
-    { storage_path: 'generation_inputs/user-1/input-1.png' },
+    { user_id: 'user-1', storage_path: 'generation_inputs/user-1/input-1.png' },
   ],
+  identityLookupError = null,
+  identityState = 'active',
+  linkedGuestIds = [],
   linkedPosts = [],
   rateLimitAllowed = true,
 }: {
   generation?: GenerationRow | null;
-  inputMediaRows?: Array<{ storage_path: string | null }>;
+  inputMediaRows?: Array<{ user_id: string; storage_path: string | null }>;
+  identityLookupError?: Error | null;
+  identityState?: IdentityState | null;
+  linkedGuestIds?: string[];
   linkedPosts?: Array<{ id: string }>;
   rateLimitAllowed?: boolean;
 } = {}) {
   const deletes: string[] = [];
+  const ownerFilters: Array<{ operation: 'delete' | 'select'; table: string; values: unknown[] }> = [];
   const selects: string[] = [];
   const storageRemovals: Array<{ bucket: string; paths: string[] }> = [];
   const rpc = vi.fn(async (fn: string) => {
@@ -61,6 +70,7 @@ function createAdminSupabaseMock({
 
   return {
     deletes,
+    ownerFilters,
     rpc,
     selects,
     storageRemovals,
@@ -78,6 +88,9 @@ function createAdminSupabaseMock({
               },
               in(column: string, values: unknown[]) {
                 filters[column] = values;
+                if (column === 'user_id') {
+                  ownerFilters.push({ operation: 'select', table, values: [...values] });
+                }
                 return query;
               },
               is(column: string, value: unknown) {
@@ -85,6 +98,13 @@ function createAdminSupabaseMock({
                 return query;
               },
               maybeSingle: vi.fn(async () => {
+                if (table === 'profiles' && columns === 'identity_state') {
+                  return {
+                    data: identityState ? { identity_state: identityState } : null,
+                    error: identityLookupError,
+                  };
+                }
+
                 if (
                   generation
                   && table === 'generations'
@@ -109,6 +129,13 @@ function createAdminSupabaseMock({
                   return Promise.resolve({ data: inputMediaRows, error: null }).then(resolve);
                 }
 
+                if (table === 'profiles' && columns === 'id') {
+                  return Promise.resolve({
+                    data: linkedGuestIds.map((id) => ({ id })),
+                    error: null,
+                  }).then(resolve);
+                }
+
                 return Promise.resolve({ data: null, error: null }).then(resolve);
               },
             };
@@ -121,7 +148,10 @@ function createAdminSupabaseMock({
               eq() {
                 return query;
               },
-              in() {
+              in(column: string, values: unknown[]) {
+                if (column === 'user_id') {
+                  ownerFilters.push({ operation: 'delete', table, values: [...values] });
+                }
                 return query;
               },
               is() {
@@ -172,7 +202,7 @@ describe('generation delete service', () => {
 
     expect(result).toEqual({
       ok: false,
-      body: { error: 'Unauthorized' },
+      body: { error: 'Unauthorized', code: 'UNAUTHORIZED' },
       status: 401,
     });
     expect(createAdminSupabase).not.toHaveBeenCalled();
@@ -197,7 +227,7 @@ describe('generation delete service', () => {
       status: 429,
       rateLimitError: expect.any(BackendRateLimitError),
     });
-    expect(admin.selects).toEqual([]);
+    expect(admin.selects).toEqual(['profiles:identity_state']);
     expect(admin.deletes).toEqual([]);
     expect(admin.storageRemovals).toEqual([]);
     expect(invalidateFeedCache).not.toHaveBeenCalled();
@@ -207,8 +237,8 @@ describe('generation delete service', () => {
     const admin = createAdminSupabaseMock({
       linkedPosts: [{ id: 'post-1' }],
       inputMediaRows: [
-        { storage_path: 'generation_inputs/user-1/input-1.png' },
-        { storage_path: 'generation_inputs/user-1/input-2.png' },
+        { user_id: 'user-1', storage_path: 'generation_inputs/user-1/input-1.png' },
+        { user_id: 'user-1', storage_path: 'generation_inputs/user-1/input-2.png' },
       ],
     });
     const invalidateFeedCache = vi.fn();
@@ -244,7 +274,7 @@ describe('generation delete service', () => {
     const admin = createAdminSupabaseMock({
       linkedPosts: [],
       inputMediaRows: [
-        { storage_path: 'generation_inputs/user-1/input-1.png' },
+        { user_id: 'user-1', storage_path: 'generation_inputs/user-1/input-1.png' },
       ],
     });
     const invalidateFeedCache = vi.fn();
@@ -271,8 +301,117 @@ describe('generation delete service', () => {
     expect(admin.storageRemovals).toEqual([
       { bucket: 'generation_inputs', paths: ['user-1/input-1.png'] },
       { bucket: 'generated_images', paths: ['user-1/output.png'] },
-      { bucket: 'showcase_media', paths: ['user-1/showcase.webp'] },
+      { bucket: 'showcase_media', paths: ['showcase/gen-1/showcase.webp'] },
     ]);
     expect(invalidateFeedCache).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      identityState: 'merged' as const,
+      identityLookupError: null,
+      status: 409,
+      code: 'SESSION_MERGED',
+    },
+    {
+      identityState: 'deleting' as const,
+      identityLookupError: null,
+      status: 409,
+      code: 'ACCOUNT_DELETING',
+    },
+    {
+      identityState: 'active' as const,
+      identityLookupError: new Error('database unavailable'),
+      status: 503,
+      code: 'IDENTITY_CHECK_UNAVAILABLE',
+    },
+  ])('rejects $code before delete rate limits or privileged mutation', async ({
+    code,
+    identityLookupError,
+    identityState,
+    status,
+  }) => {
+    const admin = createAdminSupabaseMock({ identityLookupError, identityState });
+    createAdminSupabase.mockReturnValueOnce(admin.client);
+    const { deleteOwnerGenerationForRoute } = await import('@/lib/generation-delete-service');
+
+    const result = await deleteOwnerGenerationForRoute({
+      createAdminSupabase,
+      createUserSupabase,
+      generationId: 'gen-1',
+      request: new Request('http://localhost/api/generations/gen-1'),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status,
+      body: { code },
+    });
+    expect(admin.rpc).not.toHaveBeenCalled();
+    expect(admin.deletes).toEqual([]);
+    expect(admin.storageRemovals).toEqual([]);
+  });
+
+  it('keeps every owner filter linked-account scoped when a registered user deletes a guest generation', async () => {
+    const admin = createAdminSupabaseMock({
+      generation: {
+        id: 'gen-1',
+        user_id: 'guest-1',
+        output_url: 'generated_images/guest-1/output.png',
+        showcase_asset_path: 'showcase/gen-1/showcase.webp',
+      },
+      inputMediaRows: [
+        { user_id: 'guest-1', storage_path: 'generation_inputs/guest-1/input-1.png' },
+      ],
+      linkedGuestIds: ['guest-1'],
+    });
+    createAdminSupabase.mockReturnValueOnce(admin.client);
+    const { deleteOwnerGenerationForRoute } = await import('@/lib/generation-delete-service');
+
+    const result = await deleteOwnerGenerationForRoute({
+      createAdminSupabase,
+      createUserSupabase,
+      generationId: 'gen-1',
+      request: new Request('http://localhost/api/generations/gen-1'),
+    });
+
+    expect(result).toMatchObject({ ok: true, body: { success: true, deleted: true } });
+    expect(admin.ownerFilters).toEqual([
+      { operation: 'select', table: 'generations', values: ['user-1', 'guest-1'] },
+      { operation: 'select', table: 'posts', values: ['user-1', 'guest-1'] },
+      { operation: 'select', table: 'generation_input_media', values: ['user-1', 'guest-1'] },
+      { operation: 'delete', table: 'generations', values: ['user-1', 'guest-1'] },
+    ]);
+    expect(admin.storageRemovals).toEqual([
+      { bucket: 'generation_inputs', paths: ['guest-1/input-1.png'] },
+      { bucket: 'generated_images', paths: ['guest-1/output.png'] },
+      { bucket: 'showcase_media', paths: ['showcase/gen-1/showcase.webp'] },
+    ]);
+  });
+
+  it('never removes paths outside the exact row owner or generation showcase scope', async () => {
+    const admin = createAdminSupabaseMock({
+      generation: {
+        id: 'gen-1',
+        user_id: 'user-1',
+        output_url: 'generated_images/user-2/private.png',
+        showcase_asset_path: 'showcase/gen-2/private.webp',
+      },
+      inputMediaRows: [
+        { user_id: 'user-1', storage_path: 'generation_inputs/user-2/private.png' },
+        { user_id: 'user-1', storage_path: 'generation_inputs/user-1%252f..%252fuser-2/private.png' },
+      ],
+    });
+    createAdminSupabase.mockReturnValueOnce(admin.client);
+    const { deleteOwnerGenerationForRoute } = await import('@/lib/generation-delete-service');
+
+    await expect(deleteOwnerGenerationForRoute({
+      createAdminSupabase,
+      createUserSupabase,
+      generationId: 'gen-1',
+      request: new Request('http://localhost/api/generations/gen-1'),
+    })).resolves.toMatchObject({ ok: true });
+
+    expect(admin.storageRemovals).toEqual([]);
   });
 });

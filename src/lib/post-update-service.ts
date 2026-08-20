@@ -12,6 +12,8 @@ import {
 } from '@/lib/backend-rate-limit';
 import {
   isPostResourceBundleAccessMode,
+  normalizePostResourceAttachments,
+  normalizePostResourceItems,
   validatePostResourceBundleInput,
   type PostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
@@ -57,9 +59,45 @@ import {
   type RawShowcaseSourceKind,
   type ShowcaseVisibility,
 } from '@/lib/showcase';
+import { finalizeUploadForConsumption } from '@/lib/upload-finalization';
+import {
+  abortNullableUploadByteConsumption,
+  completeUploadByteConsumptions,
+  DefinitiveSupabaseMutationRejection,
+  type UploadConsumptionClaim,
+} from '@/lib/upload-byte-admission';
+import {
+  parseCanonicalStorageLocation,
+  parseCanonicalStorageObjectPath,
+} from '@/lib/storage-ownership';
+
+const POST_RESOURCE_FILES_BUCKET = 'post_resource_files';
 
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 const UPLOADS_BUCKET = 'uploads';
+
+export function getCanonicalPostMediaStoragePath(
+  value: string | null | undefined,
+  postId: string,
+): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const canonicalPath = parseCanonicalStorageObjectPath(value, { minimumSegments: 3 });
+  return canonicalPath?.startsWith(`posts/${postId}/`) ? canonicalPath : null;
+}
+
+function canonicalizeExistingPostMediaPath(
+  value: string | null | undefined,
+  postId: string,
+): string | null {
+  const canonicalPath = getCanonicalPostMediaStoragePath(value, postId);
+  if (value != null && !canonicalPath) {
+    throw new Error('Existing post media has an invalid storage path.');
+  }
+  return canonicalPath;
+}
 
 /**
  * Raised when the bytes actually received exceed the limit for their media
@@ -535,11 +573,14 @@ async function parseSubmittedEditMediaItems(params: {
     }
     submittedMediaKeys.add(mediaKey);
 
-    const storagePath = typeof descriptor.storagePath === 'string'
-      ? descriptor.storagePath.trim().replace(/^\/+/, '')
+    const submittedStoragePath = typeof descriptor.storagePath === 'string'
+      ? descriptor.storagePath.trim()
       : '';
-    const expectedPrefix = `${UPLOADS_BUCKET}/${params.ownerUserId}/`;
-    if (!storagePath.startsWith(expectedPrefix)) {
+    const location = parseCanonicalStorageLocation(submittedStoragePath, {
+      allowedBuckets: [UPLOADS_BUCKET],
+      ownerUserId: params.ownerUserId,
+    });
+    if (!location) {
       return { items: null, error: 'Uploaded media must belong to the authenticated user.' };
     }
 
@@ -551,7 +592,7 @@ async function parseSubmittedEditMediaItems(params: {
 
     const originalName = typeof descriptor.originalName === 'string' && descriptor.originalName.trim()
       ? descriptor.originalName.trim()
-      : path.basename(storagePath);
+      : path.basename(location.filePath);
     const reportedDurationSeconds = typeof descriptor.durationSeconds === 'number'
       && Number.isFinite(descriptor.durationSeconds)
       && descriptor.durationSeconds >= 0
@@ -566,7 +607,7 @@ async function parseSubmittedEditMediaItems(params: {
       return { items: null, error: POST_VIDEO_DURATION_LIMIT_MESSAGE };
     }
 
-    const filePath = storagePath.slice(`${UPLOADS_BUCKET}/`.length);
+    const filePath = location.filePath;
     submitted.push({
       source: 'uploaded',
       mediaKey,
@@ -602,12 +643,16 @@ type PreparedEditedPostMedia = {
   newStoragePaths: string[];
   removedStoragePaths: string[];
   temporaryStoragePaths: string[];
+  consumptionClaims: UploadConsumptionClaim[];
 };
 
 async function rollbackPreparedEditedPostMedia(
   adminSupabase: SupabaseClient,
   prepared: PreparedEditedPostMedia,
 ): Promise<void> {
+  await Promise.all(prepared.consumptionClaims.map((claim) => (
+    abortNullableUploadByteConsumption(adminSupabase, claim)
+  )));
   if (prepared.newStoragePaths.length === 0) {
     return;
   }
@@ -627,6 +672,8 @@ async function rollbackPreparedEditedPostMedia(
 async function finalizePreparedEditedPostMedia(
   adminSupabase: SupabaseClient,
   prepared: PreparedEditedPostMedia,
+  postId: string,
+  ownerUserId: string,
   bundleId: string | null = null,
 ): Promise<void> {
   if (prepared.temporaryStoragePaths.length > 0) {
@@ -644,6 +691,7 @@ async function finalizePreparedEditedPostMedia(
       if (removal.confirmed.length > 0) {
         await markMediaUploadIntentsConsumed(adminSupabase, {
           storagePaths: removal.confirmed,
+          userId: ownerUserId,
           consumedBy: 'post_update',
           storageCleared: true,
         });
@@ -657,6 +705,7 @@ async function finalizePreparedEditedPostMedia(
         }
         await markMediaUploadIntentsConsumed(adminSupabase, {
           storagePaths: removal.unconfirmed,
+          userId: ownerUserId,
           consumedBy: 'post_update',
           storageCleared: false,
         });
@@ -670,17 +719,28 @@ async function finalizePreparedEditedPostMedia(
 
   if (prepared.removedStoragePaths.length > 0) {
     try {
+      const canonicalRemovedStoragePaths = prepared.removedStoragePaths.flatMap((storagePath) => {
+        const canonicalPath = getCanonicalPostMediaStoragePath(storagePath, postId);
+        return canonicalPath ? [canonicalPath] : [];
+      });
+      if (canonicalRemovedStoragePaths.length === 0) {
+        return;
+      }
       const removableStoragePaths = await excludePurchasedProofMediaPaths(
         adminSupabase,
-        prepared.removedStoragePaths,
+        canonicalRemovedStoragePaths,
         { bundleId },
       );
-      if (removableStoragePaths.length === 0) {
+      const canonicalRemovableStoragePaths = removableStoragePaths.flatMap((storagePath) => {
+        const canonicalPath = getCanonicalPostMediaStoragePath(storagePath, postId);
+        return canonicalPath ? [canonicalPath] : [];
+      });
+      if (canonicalRemovableStoragePaths.length === 0) {
         return;
       }
       const removedMediaCleanup = await adminSupabase.storage
         .from(SHOWCASE_MEDIA_BUCKET)
-        .remove(removableStoragePaths);
+        .remove(canonicalRemovableStoragePaths);
       if (removedMediaCleanup.error) {
         logBackendWarning('failed_to_remove_deleted_post_media', { error: removedMediaCleanup.error });
       }
@@ -704,30 +764,48 @@ async function prepareEditedPostMedia(params: {
   const persistedMediaItems: PostMediaPersistInput[] = [];
   const newStoragePaths: string[] = [];
   const temporaryStoragePaths: string[] = [];
+  const consumptionClaims: UploadConsumptionClaim[] = [];
+  const finalizedUploadedMedia = new Map<string, {
+    canonicalPath: string;
+    descriptor: { sizeBytes: number; contentType: string } | null;
+  }>();
 
   try {
     for (const [index, item] of params.submittedMediaItems.entries()) {
       if (item.source === 'existing') {
+        const storagePath = canonicalizeExistingPostMediaPath(item.row.storage_path, params.postId);
+        const previewStoragePath = canonicalizeExistingPostMediaPath(
+          item.row.preview_storage_path,
+          params.postId,
+        );
+        const renditionStoragePath = canonicalizeExistingPostMediaPath(
+          item.row.rendition_storage_path,
+          params.postId,
+        );
+        const teaserStoragePath = canonicalizeExistingPostMediaPath(
+          item.row.teaser_storage_path,
+          params.postId,
+        );
         persistedMediaItems.push({
           mediaKey: item.mediaKey,
-          storagePath: item.row.storage_path,
-          previewStoragePath: item.row.preview_storage_path ?? null,
+          storagePath,
+          previewStoragePath,
           previewThumbhash: item.row.preview_thumbhash ?? null,
-          previewStatus: item.row.preview_status ?? (item.row.preview_storage_path ? 'ready' : 'pending'),
+          previewStatus: item.row.preview_status ?? (previewStoragePath ? 'ready' : 'pending'),
           previewAttemptCount: item.row.preview_attempt_count ?? 0,
           previewError: item.row.preview_error ?? null,
           previewGeneratedAt: item.row.preview_generated_at ?? null,
           // replace_post_media deletes and re-inserts, so an untouched item has
           // to carry its rendition across or every edit would discard it and
           // force a needless re-encode. The teaser rides for the same reason.
-          renditionStoragePath: item.row.rendition_storage_path ?? null,
+          renditionStoragePath,
           renditionStatus: item.row.rendition_status
             ?? (item.row.media_kind === 'video' ? 'pending' : 'skipped'),
           renditionAttemptCount: item.row.rendition_attempt_count ?? 0,
           renditionError: item.row.rendition_error ?? null,
           renditionGeneratedAt: item.row.rendition_generated_at ?? null,
           renditionBytes: item.row.rendition_bytes ?? null,
-          teaserStoragePath: item.row.teaser_storage_path ?? null,
+          teaserStoragePath,
           teaserBytes: item.row.teaser_bytes ?? null,
           teaserGeneratedAt: item.row.teaser_generated_at ?? null,
           teaserError: item.row.teaser_error ?? null,
@@ -752,16 +830,47 @@ async function prepareEditedPostMedia(params: {
       // authoritative check here an oversized object reaches the public bucket
       // through edit even though create would have rejected it -- the uploads
       // bucket's own ceiling is 250 MB for every media kind.
-      const info = await params.adminSupabase.storage.from(UPLOADS_BUCKET).info(item.filePath);
+      let finalizedSource = finalizedUploadedMedia.get(item.filePath);
+      if (!finalizedSource) {
+        const finalization = await finalizeUploadForConsumption(params.adminSupabase, {
+          bucket: UPLOADS_BUCKET,
+          storagePath: item.filePath,
+          userId: params.ownerUserId,
+          disposition: 'delete',
+        });
+        if (!finalization.ok) {
+          throw new PostMediaTooLargeError(finalization.error);
+        }
+        if (finalization.consumptionClaim) {
+          consumptionClaims.push(finalization.consumptionClaim);
+        }
+        finalizedSource = {
+          canonicalPath: finalization.canonicalPath,
+          descriptor: finalization.descriptor,
+        };
+        finalizedUploadedMedia.set(item.filePath, finalizedSource);
+        finalizedUploadedMedia.set(finalization.canonicalPath, finalizedSource);
+      }
+      const canonicalSourcePath = finalizedSource.canonicalPath;
+      const info = finalizedSource.descriptor
+        ? {
+            data: {
+              size: finalizedSource.descriptor.sizeBytes,
+              contentType: finalizedSource.descriptor.contentType,
+            },
+            error: null,
+          }
+        : await params.adminSupabase.storage.from(UPLOADS_BUCKET).info(canonicalSourcePath);
       const storedSize = (info.data as { size?: unknown } | null | undefined)?.size;
       if (info.error || typeof storedSize !== 'number') {
         throw info.error ?? new Error('Uploaded media metadata was unavailable.');
       }
 
       const infoContentType = (info.data as { contentType?: unknown } | null | undefined)?.contentType;
-      const resolvedContentType = item.contentType
-        || (typeof infoContentType === 'string' ? infoContentType : '')
+      const resolvedContentType = (typeof infoContentType === 'string' ? infoContentType : '')
+        || item.contentType
         || null;
+      const resolvedMediaKind = getMediaKindFromContentType(resolvedContentType) ?? item.mediaKind;
       const maxBytes = getMaxUploadBytesForContentType(resolvedContentType);
       if (maxBytes !== null && storedSize > maxBytes) {
         throw new PostMediaTooLargeError(
@@ -775,12 +884,14 @@ async function prepareEditedPostMedia(params: {
       // exist, and a copy that materializes its destination then fails to
       // answer would otherwise leak an object no cleanup knows about. Removing
       // a path that was never written is a no-op.
-      temporaryStoragePaths.push(item.temporaryStoragePath);
+      if (!temporaryStoragePaths.includes(canonicalSourcePath)) {
+        temporaryStoragePaths.push(canonicalSourcePath);
+      }
       newStoragePaths.push(storagePath);
 
       const copyResult = await params.adminSupabase.storage
         .from(UPLOADS_BUCKET)
-        .copy(item.filePath, storagePath, { destinationBucket: SHOWCASE_MEDIA_BUCKET });
+        .copy(canonicalSourcePath, storagePath, { destinationBucket: SHOWCASE_MEDIA_BUCKET });
       if (copyResult.error) {
         throw copyResult.error;
       }
@@ -789,11 +900,11 @@ async function prepareEditedPostMedia(params: {
       // response. Images keep an inline preview: the thumbhash placeholder is
       // what renders first, and an image is capped at 25 MB.
       let preview: Awaited<ReturnType<typeof createPostMediaPreview>> = null;
-      if (item.mediaKind === 'image') {
+      if (resolvedMediaKind === 'image') {
         try {
           const downloadedMedia = await params.adminSupabase.storage
             .from(UPLOADS_BUCKET)
-            .download(item.filePath);
+            .download(canonicalSourcePath);
           if (downloadedMedia.error || !downloadedMedia.data) {
             throw downloadedMedia.error ?? new Error('Failed to load uploaded media.');
           }
@@ -830,13 +941,13 @@ async function prepareEditedPostMedia(params: {
           }
           : {}),
         externalUrl: null,
-        mediaKind: item.mediaKind,
+        mediaKind: resolvedMediaKind,
         contentType: resolvedContentType,
         originalName: item.originalName,
         width: preview?.width ?? null,
         height: preview?.height ?? null,
         // Client-reported seed; the rendition sweep's probe overwrites it.
-        durationSeconds: item.mediaKind === 'video' ? item.durationSeconds ?? null : null,
+        durationSeconds: resolvedMediaKind === 'video' ? item.durationSeconds ?? null : null,
         sortOrder: index,
       });
     }
@@ -852,9 +963,10 @@ async function prepareEditedPostMedia(params: {
     // revocation had.
     const removedStoragePaths = existingMediaRows
       .flatMap((row) => [row.storage_path, row.preview_storage_path, row.rendition_storage_path, row.teaser_storage_path])
-      .filter((storagePath): storagePath is string =>
-        Boolean(storagePath) && !retainedStoragePaths.has(storagePath as string),
-      );
+      .flatMap((storagePath) => {
+        const canonicalPath = getCanonicalPostMediaStoragePath(storagePath, params.postId);
+        return canonicalPath && !retainedStoragePaths.has(canonicalPath) ? [canonicalPath] : [];
+      });
 
     return {
       prepared: {
@@ -862,10 +974,14 @@ async function prepareEditedPostMedia(params: {
         newStoragePaths,
         removedStoragePaths,
         temporaryStoragePaths,
+        consumptionClaims,
       },
       error: null,
     };
   } catch (mediaError) {
+    await Promise.all(consumptionClaims.map((claim) => (
+      abortNullableUploadByteConsumption(params.adminSupabase, claim)
+    )));
     if (newStoragePaths.length > 0) {
       await params.adminSupabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove(newStoragePaths);
     }
@@ -1028,6 +1144,33 @@ export async function updateOwnerPostForRoute({
     );
     if (resourceBundleError) {
       return { ok: false, status: 400, body: { error: resourceBundleError } };
+    }
+
+    const canonicalResourceFilePaths: string[] = [];
+    const resourceConsumptionClaims: UploadConsumptionClaim[] = [];
+    if (hasResourceBundlePayload && resourceBundle) {
+      const resourceFilePaths = Array.from(new Set([
+        ...normalizePostResourceAttachments(resourceBundle.resources?.attachments)
+          .filter((attachment) => attachment.kind === 'file' && attachment.storagePath)
+          .map((attachment) => attachment.storagePath as string),
+        ...normalizePostResourceItems(resourceBundle.resources?.items, resourceBundle.resources)
+          .filter((item) => item.storagePath)
+          .map((item) => item.storagePath as string),
+      ]));
+
+      for (const submittedPath of resourceFilePaths) {
+        const canonicalPath = parseCanonicalStorageObjectPath(submittedPath, {
+          ownerUserId,
+        });
+        if (!canonicalPath) {
+          return {
+            ok: false,
+            status: 400,
+            body: { error: 'Resource files must belong to the authenticated user.' },
+          };
+        }
+        canonicalResourceFilePaths.push(canonicalPath);
+      }
     }
 
     const nextBody = Object.prototype.hasOwnProperty.call(body, 'body') ? normalizeBody(body.body) : post.body;
@@ -1228,6 +1371,43 @@ export async function updateOwnerPostForRoute({
       preparedMedia = preparedResult.prepared;
     }
 
+    try {
+      for (const canonicalPath of canonicalResourceFilePaths) {
+        const finalization = await finalizeUploadForConsumption(adminSupabase, {
+          bucket: POST_RESOURCE_FILES_BUCKET,
+          storagePath: canonicalPath,
+          userId: ownerUserId,
+          disposition: 'preserve',
+        });
+        if (!finalization.ok) {
+          await Promise.all(resourceConsumptionClaims.map((claim) => (
+            abortNullableUploadByteConsumption(adminSupabase, claim)
+          )));
+          if (preparedMedia) {
+            await rollbackPreparedEditedPostMedia(adminSupabase, preparedMedia);
+          }
+          return {
+            ok: false,
+            status: finalization.status,
+            body: { error: finalization.error },
+          };
+        }
+        if (finalization.consumptionClaim) {
+          resourceConsumptionClaims.push(finalization.consumptionClaim);
+        }
+      }
+    } catch (error) {
+      if (error instanceof DefinitiveSupabaseMutationRejection) {
+        await Promise.all(resourceConsumptionClaims.map((claim) => (
+          abortNullableUploadByteConsumption(adminSupabase, claim)
+        )));
+        if (preparedMedia) {
+          await rollbackPreparedEditedPostMedia(adminSupabase, preparedMedia);
+        }
+      }
+      throw error;
+    }
+
     let updatedPost: Awaited<ReturnType<typeof updatePostWithResourceBundleAtomically>>;
     try {
       updatedPost = await resolvedDependencies.updatePostWithResourceBundleAtomically({
@@ -1241,14 +1421,33 @@ export async function updateOwnerPostForRoute({
       });
       didMutate = true;
     } catch (error) {
-      if (preparedMedia) {
-        await rollbackPreparedEditedPostMedia(adminSupabase, preparedMedia);
+      if (error instanceof DefinitiveSupabaseMutationRejection) {
+        await Promise.all(resourceConsumptionClaims.map((claim) => (
+          abortNullableUploadByteConsumption(adminSupabase, claim)
+        )));
+        if (preparedMedia) {
+          await rollbackPreparedEditedPostMedia(adminSupabase, preparedMedia);
+        }
       }
       throw error;
     }
 
+    const completedClaims = await completeUploadByteConsumptions(adminSupabase, [
+      ...resourceConsumptionClaims,
+      ...(preparedMedia?.consumptionClaims ?? []),
+    ]);
+    if (!completedClaims.ok) {
+      return { ok: false, status: 500, body: { error: completedClaims.error } };
+    }
+
     if (preparedMedia) {
-      await finalizePreparedEditedPostMedia(adminSupabase, preparedMedia, existingBundle?.id ?? null);
+      await finalizePreparedEditedPostMedia(
+        adminSupabase,
+        preparedMedia,
+        postId,
+        ownerUserId,
+        existingBundle?.id ?? null,
+      );
     }
 
     if (hasSourceToolsPayload) {

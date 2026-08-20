@@ -19,7 +19,7 @@ import {
 } from '@/lib/post-media';
 import {
   createServiceClient,
-  resolveStoredMediaUrl,
+  resolveOwnedStoredMediaUrl,
 } from '@/lib/server-helpers';
 import {
   getPostResourceBundlePriceQuote,
@@ -123,12 +123,12 @@ function resolveItemCategory(category: string | null): ShowcaseItemCategory {
 
 async function resolveLegacyGenerationPreviewUrl(
   adminSupabase: ReturnType<typeof createServiceClient>,
-  generation: Pick<LegacyGenerationRow, 'preview_url' | 'category'>,
+  generation: Pick<LegacyGenerationRow, 'user_id' | 'preview_url' | 'category'>,
   mediaUrl: string
 ) {
   const previewSource = generation.preview_url || null;
-  if (previewSource) {
-    return resolveStoredMediaUrl(adminSupabase, previewSource);
+  if (previewSource && generation.user_id) {
+    return resolveOwnedStoredMediaUrl(adminSupabase, previewSource, generation.user_id);
   }
 
   return resolveItemCategory(generation.category) === 'image' ? mediaUrl : null;
@@ -551,6 +551,7 @@ export async function resolvePostRowsToFeedItems(
 
     type GenerationInfoRow = {
       id: string;
+      user_id: string | null;
       model: string;
       preview_url?: string | null;
       category?: string | null;
@@ -558,7 +559,7 @@ export async function resolvePostRowsToFeedItems(
 
     const modelsWithPreviewResult = await adminSupabase
       .from('generations')
-      .select('id, model, preview_url, category')
+      .select('id, user_id, model, preview_url, category')
       .in('id', generationIds);
     const models = modelsWithPreviewResult.data as GenerationInfoRow[] | null;
     const modelsError = modelsWithPreviewResult.error;
@@ -572,7 +573,9 @@ export async function resolvePostRowsToFeedItems(
           typeof generation.preview_url === 'string' && generation.preview_url
             ? generation.preview_url
             : null;
-        return [Promise.resolve(previewSource ? resolveStoredMediaUrl(adminSupabase, previewSource) : null)
+        return [Promise.resolve(previewSource && generation.user_id
+          ? resolveOwnedStoredMediaUrl(adminSupabase, previewSource, generation.user_id)
+          : null)
           .then((previewUrl) => [generation.id, { model: generation.model, previewUrl }] as const)];
       }));
       for (const [generationId, generationInfo] of entries) {
@@ -992,8 +995,8 @@ async function getLegacyShowcaseFeedPageBase(
       .map(async (generation): Promise<ShowcaseFeedItem | null> => {
         const mediaUrl = generation.showcase_asset_path
           ? adminSupabase.storage.from('showcase_media').getPublicUrl(generation.showcase_asset_path).data.publicUrl
-          : generation.output_url
-            ? await resolveStoredMediaUrl(adminSupabase, generation.output_url)
+          : generation.output_url && generation.user_id
+            ? await resolveOwnedStoredMediaUrl(adminSupabase, generation.output_url, generation.user_id)
             : null;
 
         if (!mediaUrl) {

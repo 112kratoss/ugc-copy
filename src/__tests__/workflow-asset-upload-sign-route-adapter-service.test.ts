@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import type { IdentityResult } from '@/lib/account-identity';
 import { postWorkflowAssetUploadSignRouteResponse } from '@/lib/workflow-asset-upload-sign-route-adapter-service';
 
 function createUserClient(userId: string | null = 'user-1') {
@@ -12,6 +13,20 @@ function createUserClient(userId: string | null = 'user-1') {
       })),
     },
   } as unknown as SupabaseClient;
+}
+
+function createRequireIdentity(userId: string | null) {
+  return vi.fn(async (): Promise<IdentityResult> => userId
+    ? {
+        ok: true,
+        identity: {
+          user: { id: userId, is_anonymous: false } as never,
+          userId,
+          kind: 'registered',
+          isGuest: false,
+        },
+      }
+    : { ok: false, status: 401, code: 'UNAUTHORIZED', error: 'Unauthorized' });
 }
 
 describe('workflow asset upload-sign route adapter service', () => {
@@ -36,13 +51,17 @@ describe('workflow asset upload-sign route adapter service', () => {
         createServiceClient,
         createUserClient: () => createUserClient(null),
         createWorkflowAssetUploadIntent,
+        requireIdentity: createRequireIdentity(null),
       },
     });
 
     expect(response.status).toBe(401);
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(response.headers.get('x-request-id')).toBe('workflow-upload-sign-auth-1');
-    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+    await expect(response.json()).resolves.toEqual({
+      error: 'Unauthorized',
+      code: 'UNAUTHORIZED',
+    });
     expect(jsonSpy).not.toHaveBeenCalled();
     expect(createServiceClient).not.toHaveBeenCalled();
     expect(createWorkflowAssetUploadIntent).not.toHaveBeenCalled();
@@ -56,6 +75,7 @@ describe('workflow asset upload-sign route adapter service', () => {
       ok: true as const,
       response: {
         success: true as const,
+        uploadId: 'upload-id-1',
         bucket: 'generated_images' as const,
         path: 'user-1/workflow-input-upload-id-1-reference.png',
         storagePath: 'generated_images/user-1/workflow-input-upload-id-1-reference.png',
@@ -85,6 +105,7 @@ describe('workflow asset upload-sign route adapter service', () => {
         createUploadId,
         createUserClient: () => createUserClient('user-1'),
         createWorkflowAssetUploadIntent,
+        requireIdentity: createRequireIdentity('user-1'),
       },
     });
 
@@ -93,6 +114,7 @@ describe('workflow asset upload-sign route adapter service', () => {
     expect(response.headers.get('x-request-id')).toBe('workflow-upload-sign-success-1');
     await expect(response.json()).resolves.toMatchObject({
       success: true,
+      uploadId: 'upload-id-1',
       bucket: 'generated_images',
       token: 'workflow-upload-token',
     });
@@ -100,7 +122,7 @@ describe('workflow asset upload-sign route adapter service', () => {
     expect(createWorkflowAssetUploadIntent).toHaveBeenCalledWith({
       body,
       userId: 'user-1',
-      client: createServiceClient,
+      client: expect.any(Function),
       createUploadId,
     });
   });
@@ -120,6 +142,7 @@ describe('workflow asset upload-sign route adapter service', () => {
       dependencies: {
         createServiceClient: vi.fn(),
         createUserClient: () => createUserClient('user-1'),
+        requireIdentity: createRequireIdentity('user-1'),
         createWorkflowAssetUploadIntent: vi.fn(async () => ({
           ok: false as const,
           status: 429,

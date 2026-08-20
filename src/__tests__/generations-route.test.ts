@@ -71,6 +71,10 @@ function createSupabaseClientMock() {
         const query = {
           select() { return query; },
           eq() { return query; },
+          maybeSingle: vi.fn(async () => ({
+            data: { identity_state: 'active' },
+            error: null,
+          })),
           then(resolve: (value: { data: never[]; error: null }) => void) {
             return Promise.resolve({ data: [] as never[], error: null }).then(resolve);
           },
@@ -575,7 +579,7 @@ describe('/api/generations route', () => {
     // `profiles` is the linked-account lookup, not media work: the point of this
     // assertion is that a status-only page does no media signing, and that still
     // holds.
-    expect(serviceTableCalls).toEqual(['profiles', 'generations']);
+    expect(serviceTableCalls).toEqual(['profiles', 'profiles', 'generations']);
   });
 
   it('supports owner-scoped exact generation lookup without loading the whole history', async () => {

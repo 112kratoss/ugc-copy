@@ -1,4 +1,5 @@
 import 'server-only';
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
@@ -16,7 +17,7 @@ import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
 export async function getTemplateApiAuth(request: Request, required = true) {
   const userClient = createUserClient(request);
-  const { data: { user }, error } = await userClient.auth.getUser();
+  const { data: { user }, error } = await getVerifiedAuthUserResult(userClient);
   if ((error || !user) && required) {
     throw new MediaTemplateError('Unauthorized', 401, 'UNAUTHORIZED');
   }

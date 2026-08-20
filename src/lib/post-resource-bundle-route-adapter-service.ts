@@ -1,4 +1,5 @@
 import 'server-only';
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 
 import { NextResponse } from 'next/server';
 
@@ -44,7 +45,7 @@ async function handleResourceBundleGET(
   const supabase = dependencies.createUserClient(request);
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await getVerifiedAuthUserResult(supabase);
 
   return toJsonResponse(await dependencies.getPostResourceBundleForRoute({
     postId,

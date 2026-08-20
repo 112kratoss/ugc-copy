@@ -287,6 +287,7 @@ vi.mock('@/lib/server-helpers', () => ({
   createUserClient: (request: Request) => createUserClientMock(request),
   createServiceClient: vi.fn(() => currentSupabaseMock.client),
   resolveStoredMediaUrl: vi.fn(),
+  resolveOwnedStoredMediaUrl: vi.fn(async (_supabase: unknown, value: string) => value),
 }));
 
 function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {

@@ -61,10 +61,12 @@ const GUEST_ROUTES = [
   '/api/generations/[id]/restore',
   '/api/generations/[id]/restore-media',
   '/api/uploads/media/sign',
+  '/api/uploads/finalize',
   '/api/uploads/media/read-url',
   '/api/uploads/workflow-asset/sign',
   '/api/uploads/workflow-asset/read-url',
   '/api/media',
+  '/api/showcase/preview',
 ] as const;
 
 /**
@@ -191,7 +193,6 @@ const PUBLIC_ROUTES = [
   '/api/showcase/feed',
   '/api/showcase/feed/events',
   '/api/showcase/posts/[postId]',
-  '/api/showcase/preview',
   '/api/marketplace/resources',
   '/api/marketplace/resources/[resourceId]',
   '/api/security/csp-report',
@@ -239,4 +240,26 @@ export const ROUTE_IDENTITY_POLICY: Readonly<Record<string, RouteIdentityPolicy>
 
 export function routeIdentityPolicy(route: string): RouteIdentityPolicy | null {
   return ROUTE_IDENTITY_POLICY[route] ?? null;
+}
+
+function routeSegmentsMatch(template: string, pathname: string) {
+  const templateSegments = template.split('/').filter(Boolean);
+  const pathnameSegments = pathname.split('/').filter(Boolean);
+  return templateSegments.length === pathnameSegments.length
+    && templateSegments.every((segment, index) => (
+      /^\[[A-Za-z0-9_]+\]$/.test(segment)
+      || segment === pathnameSegments[index]
+    ));
+}
+
+/** Resolves a concrete request pathname against the registry's dynamic routes. */
+export function routeIdentityPolicyForPathname(pathname: string): RouteIdentityPolicy | null {
+  const exact = routeIdentityPolicy(pathname);
+  if (exact) return exact;
+
+  for (const [template, policy] of Object.entries(ROUTE_IDENTITY_POLICY)) {
+    if (routeSegmentsMatch(template, pathname)) return policy;
+  }
+
+  return null;
 }

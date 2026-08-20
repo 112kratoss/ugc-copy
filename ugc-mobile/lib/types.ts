@@ -283,6 +283,7 @@ export interface MediaUploadIntentRequest {
 
 export interface MediaUploadIntentResponse {
   success: boolean;
+  uploadId: string;
   bucket: 'uploads';
   path: string;
   storagePath: string;
@@ -429,6 +430,7 @@ export interface TemplateRunInputSignRequest {
 
 export interface TemplateRunInputSignResponse {
   success: boolean;
+  uploadId: string;
   bucket: 'template_inputs';
   path: string;
   storagePath: string;
@@ -455,6 +457,7 @@ export interface ProfileMediaUploadIntentRequest {
 
 export interface ProfileMediaUploadIntentResponse {
   success: boolean;
+  uploadId: string;
   bucket: 'profiles';
   path: string;
   token: string;
@@ -1024,12 +1027,25 @@ export interface PostResourceFileSignRequest extends PostResourceFileUploadMetad
 
 export interface PostResourceFileSignResponse {
   success: boolean;
+  uploadId: string;
   bucket: 'post_resource_files';
   path: string;
   token: string;
   signedUploadUrl: string | null;
   expiresInSeconds: number;
   expected: PostResourceFileUploadMetadata;
+}
+
+export interface UploadFinalizeRequest {
+  uploadId: string;
+}
+
+export interface UploadFinalizeResponse {
+  bucket: string;
+  path: string;
+  storagePath: string;
+  contentType: string;
+  sizeBytes: number;
 }
 
 export interface PostResourceFileFinalizeRequest extends PostResourceFileUploadMetadata {

@@ -19,9 +19,11 @@ import { markHeldProviderSubmission } from '@/lib/generation-public-failure';
 // tables as the user client. Capture the latest built mock and hand it out.
 const lastSupabaseMockRef: { current: unknown } = { current: null };
 const createServiceClientMock = vi.fn(() => lastSupabaseMockRef.current ?? { role: 'service' });
-const resolveStoredMediaUrlMock = vi.fn(
-  async (_adminClient: unknown, outputUrl: string) =>
-    `https://signed.example.com/${encodeURIComponent(outputUrl)}`
+const resolveOwnedStoredMediaUrlMock = vi.fn(
+  async (_adminClient: unknown, outputUrl: string, ownerUserId: string) =>
+    outputUrl.split('/')[1] === ownerUserId
+      ? `https://signed.example.com/${encodeURIComponent(outputUrl)}`
+      : null
 );
 const quoteGenerationModelMock = vi.fn((input: { modelId: string; catalogRevision?: string | null }) => ({
   modelId: input.modelId,
@@ -53,8 +55,8 @@ const enqueueWorkflowRunStepJobMock = vi.fn(async (..._args: unknown[]) => {
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => createServiceClientMock(),
-  resolveStoredMediaUrl: (...args: Parameters<typeof resolveStoredMediaUrlMock>) =>
-    resolveStoredMediaUrlMock(...args),
+  resolveOwnedStoredMediaUrl: (...args: Parameters<typeof resolveOwnedStoredMediaUrlMock>) =>
+    resolveOwnedStoredMediaUrlMock(...args),
 }));
 
 vi.mock('@/lib/generation-status-sync', () => ({
@@ -97,6 +99,7 @@ type RunnerTestState = {
   steps: WorkflowCanvasRunStepRecord[];
   generations: Array<{
     id: string;
+    user_id: string;
     status: string;
     output_url: string | null;
   }>;
@@ -177,6 +180,7 @@ function createQueuedWorkflowState(): RunnerTestState & {
     generations: [
       {
         id: 'gen-image',
+        user_id: 'user-1',
         status: 'succeeded',
         output_url: 'generated_images/user-1/hero-frame.png',
       },
@@ -297,7 +301,8 @@ function createSupabaseMock(state: RunnerTestState) {
               async single() {
                 const matchesRun =
                   filters.get('id') === state.run.id &&
-                  filters.get('canvas_id') === state.run.canvas_id;
+                  filters.get('canvas_id') === state.run.canvas_id &&
+                  (!filters.has('user_id') || filters.get('user_id') === state.run.user_id);
 
                 return matchesRun
                   ? { data: { ...state.run }, error: null }
@@ -396,7 +401,12 @@ function createSupabaseMock(state: RunnerTestState) {
       if (table === 'generations') {
         return {
           select() {
-            return {
+            const filters = new Map<string, unknown>();
+            const query = {
+              eq(column: string, value: unknown) {
+                filters.set(column, value);
+                return query;
+              },
               async in(column: string, values: string[]) {
                 if (column !== 'id') {
                   throw new Error(`Unexpected generations lookup column: ${column}`);
@@ -406,11 +416,16 @@ function createSupabaseMock(state: RunnerTestState) {
                   data: values
                     .map((id) => state.generations.find((generation) => generation.id === id))
                     .filter((generation): generation is RunnerTestState['generations'][number] => Boolean(generation))
+                    .filter((generation) => (
+                      !filters.has('user_id') || filters.get('user_id') === generation.user_id
+                    ))
                     .map((generation) => ({ ...generation })),
                   error: null,
                 };
               },
             };
+
+            return query;
           },
         };
       }
@@ -706,6 +721,7 @@ describe('workflow-runner recovery', () => {
     const { getWorkflowRunDetails } = await import('@/lib/workflow-runner');
     const run = await getWorkflowRunDetails({
       supabase: supabase as never,
+      userId: state.run.user_id,
       canvasId: state.run.canvas_id,
       runId: state.run.id,
     });
@@ -724,13 +740,95 @@ describe('workflow-runner recovery', () => {
     });
   });
 
+  it('never hydrates or signs a generation owned by someone other than the run owner', async () => {
+    const state = createQueuedWorkflowState();
+    state.generations[0].user_id = 'user-2';
+    state.generations[0].output_url = 'generated_images/user-2/private-frame.png';
+    const supabase = createSupabaseMock(state);
+
+    const { getWorkflowRunDetails } = await import('@/lib/workflow-runner');
+    const run = await getWorkflowRunDetails({
+      supabase: supabase as never,
+      userId: state.run.user_id,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+
+    expect(resolveOwnedStoredMediaUrlMock).not.toHaveBeenCalled();
+    expect(syncGenerationStatusesMock).not.toHaveBeenCalled();
+    expect(run.steps.find((step) => step.id === 'step-image')).toMatchObject({
+      status: 'processing',
+      generation_id: 'gen-image',
+      output_snapshot: { predictionId: 'pred-image' },
+    });
+  });
+
+  it('never sends a foreign step generation through privileged provider synchronization', async () => {
+    const state = createQueuedWorkflowState();
+    state.generations[0].user_id = 'user-2';
+    state.generations[0].output_url = 'generated_images/user-2/private-frame.png';
+    const supabase = createSupabaseMock(state);
+
+    const { advanceWorkflowRunOnce } = await import('@/lib/workflow-runner');
+    const run = await advanceWorkflowRunOnce({
+      supabase: supabase as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+
+    expect(syncGenerationStatusesMock).not.toHaveBeenCalled();
+    expect(resolveOwnedStoredMediaUrlMock).not.toHaveBeenCalled();
+    expect(startVideoGenerationMock).not.toHaveBeenCalled();
+    expect(run.status).toBe('processing');
+  });
+
+  it('does not sign a corrupted owned generation path under another owner prefix', async () => {
+    const state = createQueuedWorkflowState();
+    state.generations[0].output_url = 'generated_images/user-2/private-frame.png';
+    const supabase = createSupabaseMock(state);
+
+    const { getWorkflowRunDetails } = await import('@/lib/workflow-runner');
+    const run = await getWorkflowRunDetails({
+      supabase: supabase as never,
+      userId: state.run.user_id,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+
+    expect(resolveOwnedStoredMediaUrlMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'generated_images/user-2/private-frame.png',
+      'user-1',
+    );
+    expect(run.steps.find((step) => step.id === 'step-image')?.output_snapshot).toMatchObject({
+      outputUrl: null,
+    });
+  });
+
+  it('fails closed before hydration when the owner-scoped run lookup does not match', async () => {
+    const state = createQueuedWorkflowState();
+    const supabase = createSupabaseMock(state);
+
+    const { getWorkflowRunDetails } = await import('@/lib/workflow-runner');
+    await expect(getWorkflowRunDetails({
+      supabase: supabase as never,
+      userId: 'user-2',
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    })).rejects.toThrow('Workflow run not found.');
+
+    expect(resolveOwnedStoredMediaUrlMock).not.toHaveBeenCalled();
+  });
+
   it('approves a checkpoint and durably queues its downstream branch', async () => {
     const state = createAwaitingApprovalState();
     const supabase = createSupabaseMock(state);
 
     const { approveWorkflowRunStep } = await import('@/lib/workflow-runner');
     const run = await approveWorkflowRunStep({
-      supabase: supabase as never,
+      ownerSupabase: supabase as never,
+      mutationSupabase: supabase as never,
+      userId: state.run.user_id,
       canvasId: state.run.canvas_id,
       runId: state.run.id,
       stepId: 'step-approval',
@@ -750,6 +848,25 @@ describe('workflow-runner recovery', () => {
     expect(run.steps?.find((step) => step.node_id === state.videoNodeId)).toMatchObject({
       status: 'queued',
     });
+  });
+
+  it('does not cross the service mutation boundary when the run owner check fails', async () => {
+    const state = createAwaitingApprovalState();
+    const supabase = createSupabaseMock(state);
+    const stepBefore = structuredClone(state.steps.find((step) => step.id === 'step-approval'));
+
+    const { approveWorkflowRunStep } = await import('@/lib/workflow-runner');
+    await expect(approveWorkflowRunStep({
+      ownerSupabase: supabase as never,
+      mutationSupabase: supabase as never,
+      userId: 'user-2',
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+      stepId: 'step-approval',
+    })).rejects.toThrow('Workflow run not found.');
+
+    expect(state.steps.find((step) => step.id === 'step-approval')).toEqual(stepBefore);
+    expect(enqueueWorkflowRunStepJobMock).not.toHaveBeenCalled();
   });
 
   it('dedupes concurrent recovery polls for the same run', async () => {

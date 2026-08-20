@@ -258,6 +258,14 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
       return { data: null, error: null };
     }),
     from: vi.fn((table: string) => {
+      if (table === 'upload_byte_reservations') {
+        const query = {
+          eq: vi.fn(() => query),
+          maybeSingle: vi.fn(async () => ({ data: null, error: null })),
+        };
+        return { select: vi.fn(() => query) };
+      }
+
       if (table === 'generation_input_media') {
         return {
           async insert(record: Record<string, unknown>) {
@@ -1913,6 +1921,71 @@ describe('generation services', () => {
     });
     expect(textClient.rpcCalls[0]).toMatchObject({ fn: 'start_generation', args: { p_cost: 7 } });
     expect(editClient.rpcCalls[0]).toMatchObject({ fn: 'start_generation', args: { p_cost: 5 } });
+  });
+
+  it('rejects foreign-owner and recursively encoded storage references before provider or credit work', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+
+    for (const storagePath of [
+      'generated_images/user-2/private.png',
+      'generated_images/user-1%252fuser-2/private.png',
+    ]) {
+      const client = createSupabaseMock();
+      await expect(startImageGeneration({
+        supabase: client.supabase,
+        creditSupabase: client.supabase,
+        userId: 'user-1',
+        prompt: 'Use this reference.',
+        model: 'flux-2-pro',
+        imageUrls: [storagePath],
+        aspectRatio: '1:1',
+        resolution: '1K',
+      })).rejects.toThrow(/Media references/);
+      expect(client.rpcCalls).toHaveLength(0);
+    }
+
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('allows a canonical catalog asset only inside an authorized template run', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const client = createSupabaseMock();
+    const createSignedUrl = vi.fn(async () => ({
+      data: { signedUrl: 'https://project.supabase.co/signed/template-reference.png' },
+      error: null,
+    }));
+    (client.supabase as unknown as { storage: { from: (bucket: string) => unknown } }).storage.from = vi.fn(() => ({
+      createSignedUrl,
+    }));
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: { taskId: 'task-template-reference-1' } }),
+    } as Response);
+
+    await startImageGeneration({
+      supabase: client.supabase,
+      creditSupabase: client.supabase,
+      userId: 'user-1',
+      prompt: 'Use the catalog reference.',
+      model: 'flux-2-pro',
+      imageUrls: ['template_assets/template-1/version-1/catalog/reference.png'],
+      aspectRatio: '1:1',
+      resolution: '1K',
+      persistInputMedia: false,
+      privateRecipe: true,
+      templateContext: {
+        runId: 'run-1',
+        stepId: 'step-1',
+        templateId: 'template-1',
+        templateVersionId: 'version-1',
+      },
+    });
+
+    expect(createSignedUrl).toHaveBeenCalledWith(
+      'template-1/version-1/catalog/reference.png',
+      3600,
+    );
+    expect(client.rpcCalls[0]).toMatchObject({ fn: 'start_template_generation' });
   });
 
   it('uses the prompt-only Z-Image contract and enforces its zero-reference limit', async () => {

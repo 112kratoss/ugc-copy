@@ -3,6 +3,7 @@ import {
   TEMPORARY_MEDIA_UPLOAD_READ_URL_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { parseCanonicalStorageLocation } from '@/lib/storage-ownership';
 
 export type TemporaryMediaReadUrlClient = Parameters<typeof enforceBackendRateLimit>[0] & {
   storage: {
@@ -66,29 +67,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-function hasUnsafePathSegment(value: string) {
-  return value.startsWith('/')
-    || value.includes('://')
-    || value.split('/').some((segment) => segment === '..' || segment === '');
-}
-
 function parseOwnedTemporaryMediaPath(body: unknown, userId: string): { path: string } | { error: string; status: number } {
   if (!isRecord(body) || typeof body.storagePath !== 'string') {
     return { error: 'Media path is required.', status: 400 };
   }
 
-  const storagePath = body.storagePath.trim();
-  const ownedPrefix = `${TEMPORARY_UPLOADS_BUCKET}/${userId}/`;
-  if (!storagePath.startsWith(ownedPrefix) || hasUnsafePathSegment(storagePath)) {
+  const location = parseCanonicalStorageLocation(body.storagePath, {
+    allowedBuckets: [TEMPORARY_UPLOADS_BUCKET],
+    ownerUserId: userId,
+  });
+  if (!location) {
     return { error: 'Media path is not available.', status: 403 };
   }
 
-  const path = storagePath.slice(`${TEMPORARY_UPLOADS_BUCKET}/`.length);
-  if (!path.startsWith(`${userId}/`) || path.length <= `${userId}/`.length) {
-    return { error: 'Media path is not available.', status: 403 };
-  }
-
-  return { path };
+  return { path: location.filePath };
 }
 
 function resolveClient(client: CreateTemporaryMediaReadUrlInput['client']) {

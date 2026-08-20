@@ -10,10 +10,13 @@ const downloadMock = vi.fn();
 const copyMock = vi.fn(async () => ({ data: { path: 'copied' }, error: null }));
 // Staged objects move bucket-to-bucket, so publish reads their size from
 // storage metadata rather than from bytes it downloaded. Well under every cap.
-const infoMock = vi.fn(async () => ({
-  data: { size: 1024, contentType: 'image/png' },
-  error: null,
-}));
+const infoMock = vi.fn(async (_storagePath?: string) => {
+  void _storagePath;
+  return {
+    data: { size: 1024, contentType: 'image/png' },
+    error: null,
+  };
+});
 const insertPayloads: Array<Record<string, unknown>> = [];
 const promoteRpcCalls: Array<{ args: Record<string, unknown> }> = [];
 const postMediaRows: Array<Record<string, unknown>> = [];
@@ -39,6 +42,7 @@ function createServiceClientTestDouble() {
     from(table: string) {
       if (table === 'profiles') {
         const profile = {
+          identity_state: 'active',
           username: 'creator-one',
           display_name: 'Creator One',
           avatar_url: 'https://cdn.example.com/avatar.jpg',
@@ -68,6 +72,17 @@ function createServiceClientTestDouble() {
             return Promise.resolve({ error: sourceToolInsertError });
           },
         };
+      }
+
+      if (table === 'upload_byte_reservations') {
+        const query = {
+          select() { return query; },
+          eq() { return query; },
+          async maybeSingle() {
+            return { data: null, error: null };
+          },
+        };
+        return query;
       }
 
       if (table === 'post_media') {
@@ -162,6 +177,7 @@ function createServiceClientTestDouble() {
             bundle_status: hasBundle ? (visibility === 'public' ? 'published' : 'draft') : null,
           }],
           error: null,
+          status: 200,
         });
       }
       if (name !== 'upsert_post_with_resource_bundle') {
@@ -185,6 +201,7 @@ function createServiceClientTestDouble() {
                 : null,
             }],
         error: bundleUpsertError,
+        status: bundleUpsertError ? 400 : 200,
       });
     },
     storage: {
@@ -313,7 +330,13 @@ describe('/api/posts route', () => {
     copyMock.mockReset();
     copyMock.mockResolvedValue({ data: { path: 'copied' }, error: null });
     infoMock.mockReset();
-    infoMock.mockResolvedValue({ data: { size: 1024, contentType: 'image/png' }, error: null });
+    infoMock.mockImplementation(async (storagePath?: string) => ({
+      data: {
+        size: 1024,
+        contentType: storagePath?.endsWith('.mp4') ? 'video/mp4' : 'image/png',
+      },
+      error: null,
+    }));
     insertPayloads.length = 0;
     promoteRpcCalls.length = 0;
     postMediaRows.length = 0;
@@ -582,7 +605,10 @@ describe('/api/posts route', () => {
 
     expect(response.status).toBe(500);
     expect(payload.error).toMatch(/source tool/i);
-    expect(removeMock).toHaveBeenCalledWith([expect.stringContaining('posts/')]);
+    // The post+media reference committed before source-tool enrichment failed.
+    // Keep the object rather than risking a dangling reference if compensating
+    // post deletion is lost or rejected.
+    expect(removeMock).not.toHaveBeenCalled();
   });
 
   it('creates mixed posts from an uploaded storage reference without raw multipart media', async () => {
@@ -748,11 +774,10 @@ describe('/api/posts route', () => {
 
     expect(response.status).toBe(500);
     expect(payload.error).toMatch(/post media gallery migration/i);
-    expect(removeMock).toHaveBeenCalledWith([
-      expect.stringMatching(/^posts\/.+\/cover\.png$/),
-      expect.stringMatching(/^posts\/.+\/detail\.png$/),
-    ]);
-    expect(removeMock).toHaveBeenCalledWith(['user-1/cover.png', 'user-1/detail.png']);
+    // The atomic post mutation committed before post-media enrichment failed.
+    // Preserve the objects because compensating row deletion is not an atomic
+    // proof that no durable reference survived.
+    expect(removeMock).not.toHaveBeenCalled();
   });
 
   it('rejects manual posts with more than five media items', async () => {

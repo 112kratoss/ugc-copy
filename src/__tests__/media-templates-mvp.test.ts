@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 import {
   normalizeTemplateInputSlots,
   normalizeTemplateSlug,
+  resolveOwnedTemplateAssetSource,
+  resolveTemplateCatalogMediaUrl,
 } from '@/lib/media-template-service';
 import {
   getTemplateStepDefinitions,
@@ -120,6 +122,65 @@ describe('graph media template MVP', () => {
       { key: 'clip', kind: 'video', label: 'Your clip', required: true },
     ]);
     expect(normalizeTemplateSlug('  My Viral Format!  ')).toBe('my-viral-format');
+  });
+
+  it('canonicalizes fixed template sources and rejects traversal, separators, and owner changes', () => {
+    expect(resolveOwnedTemplateAssetSource(
+      'generated_images/user-1/fixed/reference.png',
+      'user-1',
+      'image',
+    )).toEqual({
+      bucket: 'generated_images',
+      objectPath: 'user-1/fixed/reference.png',
+    });
+
+    for (const maliciousPath of [
+      'generated_images/user-1/../user-2/private.png',
+      'generated_images/user-1/%252fuser-2/private.png',
+      'generated_images/user-1/%255cuser-2/private.png',
+      'generated_images/user-2/private.png',
+      'generated_videos/user-1/private.mp4',
+    ]) {
+      expect(resolveOwnedTemplateAssetSource(maliciousPath, 'user-1', 'image')).toBeNull();
+    }
+  });
+
+  it('signs catalog media only within the creator or active template-version boundary', async () => {
+    const createSignedUrl = vi.fn(async (objectPath: string) => ({
+      data: { signedUrl: `https://signed.example.test/${objectPath}` },
+      error: null,
+    }));
+    const from = vi.fn(() => ({ createSignedUrl }));
+    const client = { storage: { from } } as never;
+    const options = {
+      creatorUserId: 'creator-1',
+      templateId: 'template-1',
+      activeVersionId: 'version-1',
+    };
+
+    await expect(resolveTemplateCatalogMediaUrl(
+      client,
+      'template_assets/template-1/version-1/demo/output.mp4',
+      options,
+    )).resolves.toBe('https://signed.example.test/template-1/version-1/demo/output.mp4');
+    expect(from).toHaveBeenCalledWith('template_assets');
+    expect(createSignedUrl).toHaveBeenCalledWith(
+      'template-1/version-1/demo/output.mp4',
+      3600,
+    );
+
+    for (const storagePath of [
+      'template_assets/template-2/version-1/private.mp4',
+      'template_assets/template-1/version-2/private.mp4',
+      'template_assets/template-1/version-1/%252fprivate.mp4',
+      'generated_images/creator-2/private.png',
+    ]) {
+      from.mockClear();
+      createSignedUrl.mockClear();
+      await expect(resolveTemplateCatalogMediaUrl(client, storagePath, options)).resolves.toBeNull();
+      expect(from).not.toHaveBeenCalled();
+      expect(createSignedUrl).not.toHaveBeenCalled();
+    }
   });
 
   it('ships immutable versions, atomic activation, private inputs, and private template generations', () => {

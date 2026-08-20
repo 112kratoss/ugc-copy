@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
 const createUserClientMock = vi.fn();
+const requireIdentityMock = vi.hoisted(() => vi.fn());
 const rpcMock = vi.fn(async () => ({
   data: {
     allowed: true,
@@ -35,9 +36,20 @@ vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => createServiceClientFactory(),
 }));
 
+vi.mock('@/lib/account-identity', () => ({
+  requireIdentity: (...args: unknown[]) => requireIdentityMock(...args),
+}));
+
 describe('/api/uploads/media/read-url route', () => {
   beforeEach(() => {
     vi.resetModules();
+    requireIdentityMock.mockReset();
+    requireIdentityMock.mockResolvedValue({
+      ok: false,
+      status: 401,
+      code: 'UNAUTHORIZED',
+      error: 'Unauthorized',
+    });
     createUserClientMock.mockReset();
     createServiceClientFactory.mockClear();
     rpcMock.mockReset();
@@ -90,6 +102,15 @@ describe('/api/uploads/media/read-url route', () => {
   });
 
   it('creates a rate-limited read URL for an owned temporary media path', async () => {
+    requireIdentityMock.mockResolvedValueOnce({
+      ok: true,
+      identity: {
+        user: { id: 'user-1', is_anonymous: false },
+        userId: 'user-1',
+        kind: 'registered',
+        isGuest: false,
+      },
+    });
     createUserClientMock.mockReturnValueOnce({
       auth: {
         getUser: vi.fn(async () => ({
@@ -128,6 +149,15 @@ describe('/api/uploads/media/read-url route', () => {
   });
 
   it('rejects unowned or malformed paths before storage signing work', async () => {
+    requireIdentityMock.mockResolvedValueOnce({
+      ok: true,
+      identity: {
+        user: { id: 'user-1', is_anonymous: false },
+        userId: 'user-1',
+        kind: 'registered',
+        isGuest: false,
+      },
+    });
     createUserClientMock.mockReturnValueOnce({
       auth: {
         getUser: vi.fn(async () => ({
@@ -162,6 +192,15 @@ describe('/api/uploads/media/read-url route', () => {
   });
 
   it('rate limits read URL creation before storage signing work', async () => {
+    requireIdentityMock.mockResolvedValueOnce({
+      ok: true,
+      identity: {
+        user: { id: 'user-1', is_anonymous: false },
+        userId: 'user-1',
+        kind: 'registered',
+        isGuest: false,
+      },
+    });
     createUserClientMock.mockReturnValueOnce({
       auth: {
         getUser: vi.fn(async () => ({

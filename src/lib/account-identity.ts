@@ -1,5 +1,7 @@
 import type { SupabaseClient, User } from '@supabase/supabase-js';
 
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
+
 /**
  * Who is calling, and what they are allowed to be.
  *
@@ -13,6 +15,8 @@ import type { SupabaseClient, User } from '@supabase/supabase-js';
 
 /** Stable code for a session whose guest identity has already been linked. */
 export const SESSION_MERGED = 'SESSION_MERGED' as const;
+export const ACCOUNT_DELETING = 'ACCOUNT_DELETING' as const;
+export const IDENTITY_CHECK_UNAVAILABLE = 'IDENTITY_CHECK_UNAVAILABLE' as const;
 
 export type IdentityKind = 'guest' | 'registered';
 
@@ -26,13 +30,20 @@ export interface AccountIdentity {
 export type IdentityFailure = {
   ok: false;
   status: number;
-  code: 'UNAUTHORIZED' | 'REGISTRATION_REQUIRED' | typeof SESSION_MERGED;
+  code:
+    | 'UNAUTHORIZED'
+    | 'REGISTRATION_REQUIRED'
+    | typeof SESSION_MERGED
+    | typeof ACCOUNT_DELETING
+    | typeof IDENTITY_CHECK_UNAVAILABLE;
   error: string;
 };
 
 export type IdentityResult =
   | { ok: true; identity: AccountIdentity }
   | IdentityFailure;
+
+type IdentityAdmin = SupabaseClient | (() => SupabaseClient);
 
 export function isGuestUser(user: Pick<User, 'is_anonymous'> | null | undefined) {
   return user?.is_anonymous === true;
@@ -68,22 +79,53 @@ const sessionMerged: IdentityFailure = {
   error: 'This guest session has been linked to an account. Sign in to continue.',
 };
 
+const accountDeleting: IdentityFailure = {
+  ok: false,
+  status: 409,
+  code: ACCOUNT_DELETING,
+  error: 'This account is being permanently deleted.',
+};
+
+const identityCheckUnavailable: IdentityFailure = {
+  ok: false,
+  status: 503,
+  code: IDENTITY_CHECK_UNAVAILABLE,
+  error: 'Identity verification is temporarily unavailable. Please try again.',
+};
+
 async function resolveUser(userSupabase: SupabaseClient) {
-  const { data: { user }, error } = await userSupabase.auth.getUser();
-  return error || !user ? null : user;
+  try {
+    const { data: { user }, error } = await getVerifiedAuthUserResult(userSupabase);
+    return error || !user ? null : user;
+  } catch {
+    // A rejected Auth lookup is an availability failure, not evidence that the
+    // caller's otherwise-present session is invalid. Keep it distinct from the
+    // normal error/null result so lifecycle admission fails closed with 503.
+    return undefined;
+  }
 }
 
-async function isLinkedGuest(admin: SupabaseClient, userId: string) {
-  const { data, error } = await admin
-    .from('profiles')
-    .select('merged_into_user_id')
-    .eq('id', userId)
-    .maybeSingle();
+type ProfileIdentityState = 'active' | 'merged' | 'deleting';
 
-  // Fail closed only on a definite answer. A read error here would otherwise
-  // reject every guest request during a transient database blip.
-  if (error) return false;
-  return Boolean((data as { merged_into_user_id?: string | null } | null)?.merged_into_user_id);
+async function loadProfileIdentityState(
+  admin: SupabaseClient,
+  userId: string,
+): Promise<ProfileIdentityState | null> {
+  try {
+    const { data, error } = await admin
+      .from('profiles')
+      .select('identity_state')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    const state = (data as { identity_state?: unknown }).identity_state;
+    return state === 'active' || state === 'merged' || state === 'deleting'
+      ? state
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -97,15 +139,25 @@ async function isLinkedGuest(admin: SupabaseClient, userId: string) {
  */
 export async function requireIdentity(
   userSupabase: SupabaseClient,
-  admin: SupabaseClient,
+  admin: IdentityAdmin,
 ): Promise<IdentityResult> {
   const user = await resolveUser(userSupabase);
+  if (user === undefined) return identityCheckUnavailable;
   if (!user) return unauthorized;
 
-  const guest = isGuestUser(user);
-  if (guest && await isLinkedGuest(admin, user.id)) {
-    return sessionMerged;
+  let identityAdmin: SupabaseClient;
+  try {
+    identityAdmin = typeof admin === 'function' ? admin() : admin;
+  } catch {
+    return identityCheckUnavailable;
   }
+
+  const state = await loadProfileIdentityState(identityAdmin, user.id);
+  if (!state) return identityCheckUnavailable;
+  if (state === 'merged') return sessionMerged;
+  if (state === 'deleting') return accountDeleting;
+
+  const guest = isGuestUser(user);
 
   return {
     ok: true,
@@ -129,7 +181,7 @@ export async function requireIdentity(
  */
 export async function requireRegisteredUser(
   userSupabase: SupabaseClient,
-  admin: SupabaseClient,
+  admin: IdentityAdmin,
 ): Promise<IdentityResult> {
   const result = await requireIdentity(userSupabase, admin);
   if (!result.ok) return result;

@@ -71,7 +71,11 @@ describe('createSeedanceAssetForRoute', () => {
         p_subject_key: 'user-1',
       },
     });
-    expect(resolveStoredMediaUrl).toHaveBeenCalledWith(admin.client, 'uploads/user-1/reference.mp4');
+    expect(resolveStoredMediaUrl).toHaveBeenCalledWith(
+      admin.client,
+      'uploads/user-1/reference.mp4',
+      'user-1',
+    );
     expect(fetcher).toHaveBeenCalledWith(
       'https://api.kie.ai/api/v1/playground/createAsset',
       expect.objectContaining({
@@ -85,5 +89,30 @@ describe('createSeedanceAssetForRoute', () => {
         }),
       })
     );
+  });
+
+  it.each([
+    'uploads/user-2/private.mp4',
+    'uploads/user-1%252fuser-2/private.mp4',
+  ])('rejects a foreign or non-canonical storage target before resolving or calling the provider: %s', async (url) => {
+    const admin = createAdminSupabaseMock();
+    const resolveStoredMediaUrl = vi.fn();
+    const fetcher = vi.fn();
+
+    await expect(createSeedanceAssetForRoute({
+      adminSupabase: admin.client,
+      apiKey: 'test-key',
+      body: { url, assetType: 'Video' },
+      fetcher,
+      resolveStoredMediaUrl,
+      userId: 'user-1',
+    })).resolves.toMatchObject({
+      ok: false,
+      status: 400,
+      body: { error: 'Asset media must belong to the authenticated user.' },
+    });
+
+    expect(resolveStoredMediaUrl).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });

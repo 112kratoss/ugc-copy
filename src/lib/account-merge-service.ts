@@ -125,11 +125,16 @@ async function rateLimit(admin: AdminSupabaseClient, key: string) {
 export async function prepareAccountMergeTicketForRoute(
   input: AccountMergeRouteInput,
 ): Promise<AccountMergeRouteResult<AccountMergeTicketResult>> {
-  const admin = input.getAdminSupabase() as AdminSupabaseClient;
   const userSupabase = input.userSupabase as SupabaseClient;
+  let admin: AdminSupabaseClient | null = null;
+  const getAdmin = () => {
+    admin ??= input.getAdminSupabase() as AdminSupabaseClient;
+    return admin;
+  };
 
-  const identity = await requireIdentity(userSupabase, admin);
+  const identity = await requireIdentity(userSupabase, getAdmin);
   if (!identity.ok) return failure(identity);
+  const resolvedAdmin = getAdmin();
 
   // Only a guest has anything to hand over. A registered caller asking for one
   // is a client bug, and minting it would create a ticket that can only ever
@@ -142,7 +147,7 @@ export async function prepareAccountMergeTicketForRoute(
     };
   }
 
-  const limited = await rateLimit(admin, identity.identity.userId);
+  const limited = await rateLimit(resolvedAdmin, identity.identity.userId);
   if (limited) return limited;
 
   const ticket = randomBytes(32).toString('hex');
@@ -150,7 +155,7 @@ export async function prepareAccountMergeTicketForRoute(
     Date.now() + ACCOUNT_MERGE_TICKET_TTL_DAYS * 24 * 60 * 60 * 1000,
   ).toISOString();
 
-  const { error } = await admin.from('account_merge_tickets').insert({
+  const { error } = await resolvedAdmin.from('account_merge_tickets').insert({
     ticket_hash: hashAccountMergeTicket(ticket),
     guest_user_id: identity.identity.userId,
     expires_at: expiresAt,
@@ -182,13 +187,18 @@ export async function prepareAccountMergeTicketForRoute(
 export async function mergeGuestAccountForRoute(
   input: AccountMergeRouteInput,
 ): Promise<AccountMergeRouteResult<AccountMergeResult>> {
-  const admin = input.getAdminSupabase() as AdminSupabaseClient;
   const userSupabase = input.userSupabase as SupabaseClient;
+  let admin: AdminSupabaseClient | null = null;
+  const getAdmin = () => {
+    admin ??= input.getAdminSupabase() as AdminSupabaseClient;
+    return admin;
+  };
 
-  const identity = await requireRegisteredUser(userSupabase, admin);
+  const identity = await requireRegisteredUser(userSupabase, getAdmin);
   if (!identity.ok) return failure(identity);
+  const resolvedAdmin = getAdmin();
 
-  const limited = await rateLimit(admin, identity.identity.userId);
+  const limited = await rateLimit(resolvedAdmin, identity.identity.userId);
   if (limited) return limited;
 
   const body = await readRequestBody(input);
@@ -201,7 +211,7 @@ export async function mergeGuestAccountForRoute(
     };
   }
 
-  const { data, error } = await admin.rpc('redeem_account_merge_ticket', {
+  const { data, error } = await resolvedAdmin.rpc('redeem_account_merge_ticket', {
     p_ticket_hash: hashAccountMergeTicket(ticket),
     p_target_user_id: identity.identity.userId,
     p_source_surface: 'mobile',

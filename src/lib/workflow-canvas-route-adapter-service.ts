@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server';
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import {
   authenticateRequest,
+  createServiceClient,
   type AuthResult,
 } from '@/lib/server-helpers';
 import {
@@ -32,6 +33,7 @@ type WorkflowCanvasRouteContext = {
 
 type WorkflowCanvasRouteAdapterDependencies = {
   authenticateRequest?: typeof authenticateRequest;
+  createServiceClient?: typeof createServiceClient;
   enforceWorkflowCanvasMutationRateLimit?: typeof enforceWorkflowCanvasMutationRateLimit;
   getWorkflowCanvasForRoute?: typeof getWorkflowCanvasForRoute;
   patchWorkflowCanvasForRoute?: typeof patchWorkflowCanvasForRoute;
@@ -41,6 +43,7 @@ type WorkflowCanvasRouteAdapterDependencies = {
 function resolveDependencies(dependencies: WorkflowCanvasRouteAdapterDependencies | undefined) {
   return {
     authenticateRequest: dependencies?.authenticateRequest ?? authenticateRequest,
+    createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     enforceWorkflowCanvasMutationRateLimit: dependencies?.enforceWorkflowCanvasMutationRateLimit
       ?? enforceWorkflowCanvasMutationRateLimit,
     getWorkflowCanvasForRoute: dependencies?.getWorkflowCanvasForRoute ?? getWorkflowCanvasForRoute,
@@ -137,6 +140,7 @@ export async function patchWorkflowCanvasRouteResponse({
       body,
       canvasId,
       supabase: auth.auth.supabase,
+      uploadClient: resolvedDependencies.createServiceClient(),
       userId: auth.auth.userId,
     })),
     request,

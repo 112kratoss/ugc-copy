@@ -7,7 +7,10 @@ const cacheMocks = vi.hoisted(() => ({
 
 vi.mock('@/lib/showcase-feed-cache', () => cacheMocks);
 
-import { deleteOwnerPostForRoute } from '@/lib/post-delete-service';
+import {
+  deleteOwnerPostForRoute,
+  getCanonicalPostShowcaseAssetPath,
+} from '@/lib/post-delete-service';
 
 type QueryOperation = 'select' | 'insert' | 'update' | 'delete';
 
@@ -48,7 +51,7 @@ function createSupabaseMock({
 }: {
   post: MockPost | null;
   bundle: MockBundle | null;
-  generation?: { id: string; showcase_asset_path: string | null } | null;
+  generation?: { id: string; user_id?: string; showcase_asset_path: string | null } | null;
   bundleError?: { message: string } | null;
   purchases?: Array<{ bundle_id: string }>;
   pendingOrders?: Array<{ id: string }>;
@@ -111,7 +114,10 @@ function createSupabaseMock({
         }
 
         if (table === 'generations') {
-          return Promise.resolve({ data: generation ?? null, error: null });
+          const matchesOwner = !filters.user_id
+            || !generation?.user_id
+            || generation.user_id === filters.user_id;
+          return Promise.resolve({ data: matchesOwner ? generation ?? null : null, error: null });
         }
 
         return Promise.resolve({ data: null, error: null });
@@ -171,6 +177,33 @@ function createSupabaseMock({
 describe('deleteOwnerPostForRoute', () => {
   beforeEach(() => {
     cacheMocks.invalidateShowcaseFeedCache.mockClear();
+  });
+
+  it('canonicalizes only the selected post or linked-generation showcase path', () => {
+    expect(getCanonicalPostShowcaseAssetPath(
+      'posts/post-1/cover.webp',
+      'post-1',
+      'generation-1',
+    )).toBe('posts/post-1/cover.webp');
+    expect(getCanonicalPostShowcaseAssetPath(
+      'showcase/generation-1/output.webp',
+      'post-1',
+      'generation-1',
+    )).toBe('showcase/generation-1/output.webp');
+
+    for (const storagePath of [
+      'posts/post-2/private.webp',
+      'showcase/generation-2/private.webp',
+      'posts/post-1/../post-2/private.webp',
+      'posts/post-1/%252fpost-2/private.webp',
+      'posts/post-1/%255cpost-2/private.webp',
+    ]) {
+      expect(getCanonicalPostShowcaseAssetPath(
+        storagePath,
+        'post-1',
+        'generation-1',
+      )).toBeNull();
+    }
   });
 
   it('blocks posts with unlocks unless force delete is explicitly requested', async () => {
@@ -432,6 +465,37 @@ describe('deleteOwnerPostForRoute', () => {
         paths: ['posts/post-1/cover.jpg'],
       },
     ]);
+  });
+
+  it('does not remove a foreign generation showcase path referenced by an owned post', async () => {
+    const foreignGenerationId = 'generation-2';
+    const { client, calls } = createSupabaseMock({
+      purchases: [],
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: foreignGenerationId,
+        visibility: 'public',
+        title: 'Tampered link',
+        source_kind: 'generation',
+        showcase_asset_path: `showcase/${foreignGenerationId}/private.jpg`,
+      },
+      bundle: null,
+      generation: {
+        id: foreignGenerationId,
+        user_id: 'user-2',
+        showcase_asset_path: `showcase/${foreignGenerationId}/private.jpg`,
+      },
+    });
+
+    await expect(deleteOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+    })).resolves.toMatchObject({ ok: true });
+
+    expect(calls.removals).toEqual([]);
+    expect(calls.updates.some((update) => update.table === 'generations')).toBe(false);
   });
 
   it('does not delete the post when bundle state cannot be loaded for the audit decision', async () => {

@@ -17,6 +17,13 @@ import {
   WORKFLOW_CANVAS_SELECT,
   WORKFLOW_CANVAS_SELECT_LEGACY,
 } from '@/lib/workflow-canvas-route-compat';
+import {
+  abortPreparedWorkflowUploads,
+  consumePersistedWorkflowUploads,
+  prepareWorkflowUploadsForPersistence,
+  type PreparedWorkflowUploadLocation,
+} from '@/lib/workflow-upload-consumption';
+import { isDefinitiveSupabaseMutationRejection } from '@/lib/upload-byte-admission';
 
 type WorkflowCanvasRouteRow = {
   id: string;
@@ -66,7 +73,7 @@ export type WorkflowCanvasPatchRouteResult =
     }
   | {
       ok: false;
-      status: 404 | 409 | 500;
+      status: 400 | 404 | 409 | 500;
       body: {
         error: string;
         canvas?: WorkflowCanvasRouteCanvas;
@@ -179,11 +186,13 @@ export async function patchWorkflowCanvasForRoute({
   body,
   canvasId,
   supabase,
+  uploadClient = supabase,
   userId,
 }: {
   body: WorkflowCanvasPatchBody;
   canvasId: string;
   supabase: SupabaseClient;
+  uploadClient?: SupabaseClient;
   userId: string;
 }): Promise<WorkflowCanvasPatchRouteResult> {
   const { data: currentCanvas, error: currentCanvasError } = await loadWorkflowCanvasForRoute(
@@ -208,8 +217,22 @@ export async function patchWorkflowCanvasForRoute({
   const nextGraphHash = createWorkflowGraphHash(nextGraph, { mode: 'client-save' });
   const baseRevision = typeof body.baseRevision === 'number' ? body.baseRevision : null;
   const requestGraphHash = typeof body.graphHash === 'string' ? body.graphHash : null;
+  let submittedUploadLocations: PreparedWorkflowUploadLocation[] = [];
+
+  if (body.graph) {
+    const preparedUploads = await prepareWorkflowUploadsForPersistence(uploadClient, nextGraph, userId);
+    if (!preparedUploads.ok) {
+      return {
+        ok: false,
+        status: preparedUploads.status,
+        body: { error: preparedUploads.error },
+      };
+    }
+    submittedUploadLocations = preparedUploads.locations;
+  }
 
   if (baseRevision !== null && normalizedCurrentCanvas.revision > baseRevision) {
+    await abortPreparedWorkflowUploads(uploadClient, submittedUploadLocations);
     return {
       ok: false,
       status: 409,
@@ -228,6 +251,14 @@ export async function patchWorkflowCanvasForRoute({
     nextGraphHash === currentGraphHash &&
     (!requestGraphHash || requestGraphHash === currentGraphHash)
   ) {
+    const completed = await consumePersistedWorkflowUploads(
+      uploadClient,
+      submittedUploadLocations,
+      userId,
+    );
+    if (!completed.ok) {
+      return { ok: false, status: 500, body: { error: completed.error } };
+    }
     return {
       ok: true,
       body: {
@@ -267,30 +298,44 @@ export async function patchWorkflowCanvasForRoute({
 
   let data: WorkflowCanvasRouteRow | null = null;
   let error: unknown = null;
-  {
+  let mutationStatus: number | undefined;
+  try {
     const result = await buildUpdateQuery(true);
     data = (result.data as WorkflowCanvasRouteRow | null) ?? null;
     error = result.error;
-  }
+    mutationStatus = result.status;
 
-  if (error && isMissingWorkflowLifecycleColumnsError(error)) {
-    const legacyUpdate = await buildUpdateQuery(false);
-    data = (legacyUpdate.data as WorkflowCanvasRouteRow | null) ?? null;
-    error = legacyUpdate.error;
+    if (error && isMissingWorkflowLifecycleColumnsError(error)) {
+      const legacyUpdate = await buildUpdateQuery(false);
+      data = (legacyUpdate.data as WorkflowCanvasRouteRow | null) ?? null;
+      error = legacyUpdate.error;
+      mutationStatus = legacyUpdate.status;
+    }
+  } catch (updateError) {
+    logBackendError('failed_to_update_workflow_canvas', { error: updateError });
+    return { ok: false, status: 500, body: { error: 'Failed to update workflow canvas.' } };
   }
 
   if (!data && !error && baseRevision !== null) {
-    const { data: latestCanvas, error: latestCanvasError } = await loadWorkflowCanvasForRoute(
-      supabase,
-      canvasId,
-      userId,
-    );
+    let latestCanvas: WorkflowCanvasRouteRow | null = null;
+    let latestCanvasError: unknown = null;
+    try {
+      const latest = await loadWorkflowCanvasForRoute(supabase, canvasId, userId);
+      latestCanvas = latest.data;
+      latestCanvasError = latest.error;
+    } catch (reloadError) {
+      await abortPreparedWorkflowUploads(uploadClient, submittedUploadLocations);
+      logBackendError('failed_to_reload_workflow_canvas_after_revision_conflict', { error: reloadError });
+      return { ok: false, status: 500, body: { error: 'Failed to update workflow canvas.' } };
+    }
 
     if (latestCanvasError || !latestCanvas) {
+      await abortPreparedWorkflowUploads(uploadClient, submittedUploadLocations);
       logBackendError('failed_to_reload_workflow_canvas_after_revision_conflict', { error: latestCanvasError });
       return { ok: false, status: 500, body: { error: 'Failed to update workflow canvas.' } };
     }
 
+    await abortPreparedWorkflowUploads(uploadClient, submittedUploadLocations);
     return {
       ok: false,
       status: 409,
@@ -302,8 +347,23 @@ export async function patchWorkflowCanvasForRoute({
   }
 
   if (error || !data) {
+    if (
+      !error
+      || isDefinitiveSupabaseMutationRejection({ error, status: mutationStatus })
+    ) {
+      await abortPreparedWorkflowUploads(uploadClient, submittedUploadLocations);
+    }
     logBackendError('failed_to_update_workflow_canvas', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to update workflow canvas.' } };
+  }
+
+  const completedUploads = await consumePersistedWorkflowUploads(
+    uploadClient,
+    submittedUploadLocations,
+    userId,
+  );
+  if (!completedUploads.ok) {
+    return { ok: false, status: 500, body: { error: completedUploads.error } };
   }
 
   const canvas = normalizeCanvasResponse(data);

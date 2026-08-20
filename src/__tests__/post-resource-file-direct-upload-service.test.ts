@@ -31,6 +31,15 @@ function createClient(options: {
     if (fn === 'is_account_deletion_requested') {
       return { data: Boolean(options.deletionStatus), error: null };
     }
+    if (fn === 'reserve_upload_bytes_v2') {
+      return { data: { allowed: true }, error: null };
+    }
+    if (
+      fn === 'mark_upload_byte_reservation_issued'
+      || fn === 'abort_upload_byte_reservation_before_issue'
+    ) {
+      return { data: true, error: null };
+    }
     return {
       data: {
         allowed: !options.rateLimited,
@@ -42,8 +51,13 @@ function createClient(options: {
       error: null,
     };
   });
+  const reservationQuery = {
+    eq: vi.fn(() => reservationQuery),
+    maybeSingle: vi.fn(async () => ({ data: null, error: null })),
+  };
   const client = {
     rpc,
+    from: vi.fn(() => ({ select: vi.fn(() => reservationQuery) })),
     storage: {
       from: vi.fn(() => ({ createSignedUploadUrl, info })),
     },
@@ -92,6 +106,7 @@ describe('post resource direct uploads', () => {
       ok: true,
       body: {
         success: true,
+        uploadId: '11111111-1111-4111-8111-111111111111',
         bucket: 'post_resource_files',
         path: 'user-1/11111111-1111-4111-8111-111111111111-launch-guide.pdf',
         token: 'signed-upload-token',
@@ -109,6 +124,11 @@ describe('post resource direct uploads', () => {
     expect(mock.createSignedUploadUrl).toHaveBeenCalledWith(
       'user-1/11111111-1111-4111-8111-111111111111-launch-guide.pdf',
     );
+    expect(mock.rpc).toHaveBeenCalledWith('mark_upload_byte_reservation_issued', {
+      p_upload_id: '11111111-1111-4111-8111-111111111111',
+      p_user_id: 'user-1',
+      p_token_ttl_seconds: 7200,
+    });
   });
 
   it('will not finalize a path owned by another user', async () => {

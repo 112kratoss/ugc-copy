@@ -4,13 +4,18 @@ import { resolveAdminConfig, resolveAdminIdentity } from '@/lib/admin-identity';
 import { hashAdminPassword, parseAdminPasswordHash, verifyAdminPassword } from '@/lib/admin-password';
 import {
   ADMIN_SESSION_COOKIE,
+  ADMIN_SESSION_TOKEN_VERSION,
+  createAdminSessionId,
   createAdminSessionToken,
+  deriveAdminCredentialVersion,
   resolveAdminSessionSecret,
   verifyAdminSessionToken,
 } from '@/lib/admin-session-token';
 
 const SECRET = 'a'.repeat(48);
 const REVIEWER_ID = '3f1b7c2e-6d4a-4f8b-9c1d-2a5e7b9f0c31';
+const SESSION_ID = '5f1b7c2e-6d4a-4f8b-9c1d-2a5e7b9f0c32';
+const CREDENTIAL_VERSION = 'A'.repeat(43);
 
 function environment(overrides: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
   return {
@@ -71,25 +76,47 @@ describe('admin session tokens', () => {
   const issuedAt = new Date('2026-07-28T10:00:00.000Z');
 
   it('verifies a token it just signed', async () => {
-    const token = await createAdminSessionToken({ secret: SECRET, issuedAt, ttlSeconds: 3600 });
+    const token = await createAdminSessionToken({
+      secret: SECRET,
+      sessionId: SESSION_ID,
+      credentialVersion: CREDENTIAL_VERSION,
+      issuedAt,
+      ttlSeconds: 3600,
+    });
     const result = await verifyAdminSessionToken(token, { secret: SECRET, now: issuedAt });
 
     expect(result.valid).toBe(true);
     if (result.valid) {
       expect(result.payload.sub).toBe('master');
+      expect(result.payload.sid).toBe(SESSION_ID);
+      expect(result.payload.cv).toBe(CREDENTIAL_VERSION);
       expect(result.payload.exp).toBe(result.payload.iat + 3600);
     }
+    expect(token.startsWith('v2.')).toBe(true);
+    expect(ADMIN_SESSION_TOKEN_VERSION).toBe('v2');
   });
 
   it('rejects a token signed with a different secret', async () => {
-    const token = await createAdminSessionToken({ secret: SECRET, issuedAt, ttlSeconds: 3600 });
+    const token = await createAdminSessionToken({
+      secret: SECRET,
+      sessionId: SESSION_ID,
+      credentialVersion: CREDENTIAL_VERSION,
+      issuedAt,
+      ttlSeconds: 3600,
+    });
     const result = await verifyAdminSessionToken(token, { secret: 'b'.repeat(48), now: issuedAt });
 
     expect(result).toEqual({ valid: false, reason: 'bad-signature' });
   });
 
   it('rejects a token whose payload was tampered with', async () => {
-    const token = await createAdminSessionToken({ secret: SECRET, issuedAt, ttlSeconds: 3600 });
+    const token = await createAdminSessionToken({
+      secret: SECRET,
+      sessionId: SESSION_ID,
+      credentialVersion: CREDENTIAL_VERSION,
+      issuedAt,
+      ttlSeconds: 3600,
+    });
     const [version, , signature] = token.split('.');
     const forgedPayload = Buffer.from(
       JSON.stringify({ sub: 'master', iat: 0, exp: 99999999999 }),
@@ -103,7 +130,13 @@ describe('admin session tokens', () => {
   });
 
   it('rejects an expired token', async () => {
-    const token = await createAdminSessionToken({ secret: SECRET, issuedAt, ttlSeconds: 60 });
+    const token = await createAdminSessionToken({
+      secret: SECRET,
+      sessionId: SESSION_ID,
+      credentialVersion: CREDENTIAL_VERSION,
+      issuedAt,
+      ttlSeconds: 60,
+    });
     const result = await verifyAdminSessionToken(token, {
       secret: SECRET,
       now: new Date(issuedAt.getTime() + 61_000),
@@ -115,12 +148,32 @@ describe('admin session tokens', () => {
   it('rejects malformed input and an unconfigured secret', async () => {
     await expect(verifyAdminSessionToken(null, { secret: SECRET, now: issuedAt }))
       .resolves.toEqual({ valid: false, reason: 'malformed' });
-    await expect(verifyAdminSessionToken('v1.only-two-parts', { secret: SECRET, now: issuedAt }))
+    await expect(verifyAdminSessionToken('v2.only-two-parts', { secret: SECRET, now: issuedAt }))
       .resolves.toEqual({ valid: false, reason: 'malformed' });
-    await expect(verifyAdminSessionToken('v2.a.b', { secret: SECRET, now: issuedAt }))
+    // Version 1 is intentionally not accepted during the v2 cutover.
+    await expect(verifyAdminSessionToken('v1.a.b', { secret: SECRET, now: issuedAt }))
       .resolves.toEqual({ valid: false, reason: 'malformed' });
-    await expect(verifyAdminSessionToken('v1.a.b', { secret: null, now: issuedAt }))
+    await expect(verifyAdminSessionToken('v2.a.b', { secret: null, now: issuedAt }))
       .resolves.toEqual({ valid: false, reason: 'unconfigured' });
+  });
+
+  it('derives a keyed credential version that changes on password-hash rotation', async () => {
+    const first = await deriveAdminCredentialVersion({ secret: SECRET, passwordHash: 'hash-one' });
+    const repeat = await deriveAdminCredentialVersion({ secret: SECRET, passwordHash: 'hash-one' });
+    const rotated = await deriveAdminCredentialVersion({ secret: SECRET, passwordHash: 'hash-two' });
+
+    expect(first).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(repeat).toBe(first);
+    expect(rotated).not.toBe(first);
+  });
+
+  it('generates a fresh UUID for every session', () => {
+    const first = createAdminSessionId();
+    const second = createAdminSessionId();
+
+    expect(first).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(second).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(second).not.toBe(first);
   });
 
   it('treats a short secret as unconfigured rather than weak-but-accepted', () => {

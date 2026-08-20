@@ -224,6 +224,7 @@ describe('workflow run route adapter service', () => {
     });
     expect(getWorkflowRunDetails).toHaveBeenCalledWith({
       supabase,
+      userId: 'user-1',
       canvasId: 'canvas-1',
       runId: 'run-1',
     });
@@ -321,7 +322,9 @@ describe('workflow run route adapter service', () => {
       key: 'user-1',
     }));
     expect(approveWorkflowRunStep).toHaveBeenCalledWith({
-      supabase,
+      ownerSupabase: supabase,
+      mutationSupabase: adminSupabase,
+      userId: 'user-1',
       canvasId: 'canvas-1',
       runId: 'run-1',
       stepId: 'step-1',

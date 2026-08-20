@@ -71,11 +71,11 @@ describe('getConfirmedRemovedPaths', () => {
     });
   });
 
-  it('trusts a clean result that omits per-path outcomes', () => {
-    // Older clients and test doubles return only { error: null }; error is the
-    // sole signal available there.
+  it('confirms nothing when Storage omits per-path outcomes', () => {
+    // An empty/omitted data array is ambiguous: the request may have been a
+    // no-op. Only a named deletion or an authoritative follow-up 404 is proof.
     expect(getConfirmedRemovedPaths(requested, { error: null }))
-      .toEqual({ confirmed: requested, unconfirmed: [] });
+      .toEqual({ confirmed: [], unconfirmed: requested });
   });
 });
 
@@ -121,6 +121,7 @@ describe('markMediaUploadIntentsConsumed', () => {
     const cleared = updateClientDouble();
     await markMediaUploadIntentsConsumed(cleared.client, {
       storagePaths: ['user-1/a.jpg'],
+      userId: 'user-1',
       consumedBy: 'post_publish',
       storageCleared: true,
     });
@@ -132,21 +133,20 @@ describe('markMediaUploadIntentsConsumed', () => {
     const retained = updateClientDouble();
     await markMediaUploadIntentsConsumed(retained.client, {
       storagePaths: ['user-1/a.jpg'],
+      userId: 'user-1',
       consumedBy: 'generation_input',
       storageCleared: false,
     });
     expect(retained.values[0]).not.toHaveProperty('storage_cleared_at');
     expect(retained.values[0].consumed_by).toBe('generation_input');
-    expect(retained.rpc).toHaveBeenCalledWith('release_upload_byte_reservation', {
-      p_bucket_id: 'uploads',
-      p_storage_path: 'user-1/a.jpg',
-    });
+    expect(retained.rpc).not.toHaveBeenCalled();
   });
 
   it('never overwrites an earlier claim', async () => {
     const client = updateClientDouble();
     await markMediaUploadIntentsConsumed(client.client, {
       storagePaths: ['user-1/a.jpg'],
+      userId: 'user-1',
       consumedBy: 'generation_input',
       storageCleared: false,
     });
@@ -157,6 +157,7 @@ describe('markMediaUploadIntentsConsumed', () => {
     const client = updateClientDouble();
     await markMediaUploadIntentsConsumed(client.client, {
       storagePaths: ['uploads/user-1/a.jpg', 'user-1/a.jpg', 'user-1/b.jpg'],
+      userId: 'user-1',
       consumedBy: 'post_update',
       storageCleared: true,
     });
@@ -171,6 +172,7 @@ describe('markMediaUploadIntentsConsumed', () => {
     const client = updateClientDouble();
     await markMediaUploadIntentsConsumed(client.client, {
       storagePaths: [],
+      userId: 'user-1',
       consumedBy: 'post_publish',
       storageCleared: true,
     });
@@ -181,6 +183,7 @@ describe('markMediaUploadIntentsConsumed', () => {
     const client = updateClientDouble({ message: 'update failed' });
     await expect(markMediaUploadIntentsConsumed(client.client, {
       storagePaths: ['user-1/a.jpg'],
+      userId: 'user-1',
       consumedBy: 'post_publish',
       storageCleared: true,
     })).resolves.toBeUndefined();
@@ -199,9 +202,6 @@ describe('markMediaUploadIntentsCleared', () => {
     expect(client.values[0]).not.toHaveProperty('consumed_at');
     expect(client.values[0]).not.toHaveProperty('consumed_by');
     expect(client.filters).toContainEqual({ method: 'is', column: 'storage_cleared_at', value: null });
-    expect(client.rpc).toHaveBeenCalledWith('release_upload_byte_reservation', {
-      p_bucket_id: 'uploads',
-      p_storage_path: 'user-1/a.jpg',
-    });
+    expect(client.rpc).not.toHaveBeenCalled();
   });
 });

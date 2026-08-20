@@ -2,7 +2,6 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { resolveStoredMediaUrl } from '@/lib/server-helpers';
 import { buildVisualMediaDescriptor, type VisualMediaDescriptor } from '@/lib/media-descriptor';
 import type { PostMediaRenditionStatus } from '@/lib/post-media-rendition';
 import { resolvePostVideoFeedStreamUrl } from '@/lib/post-video-limits';
@@ -96,6 +95,7 @@ interface PostMediaDbRow {
   height: number | null;
   duration_seconds: number | null;
   sort_order: number;
+  posts?: { user_id: string | null } | Array<{ user_id: string | null }> | null;
 }
 
 type SupabaseSchemaError = {
@@ -183,11 +183,13 @@ async function resolvePostMediaDbRowUrl(
     return null;
   }
 
-  if (row.external_url.startsWith('http')) {
-    return row.external_url;
-  }
+  const relatedPost = Array.isArray(row.posts) ? row.posts[0] : row.posts;
 
-  return resolveStoredMediaUrl(supabase, row.external_url);
+  return resolvePostMediaUrl(supabase, {
+    showcase_asset_path: null,
+    output_url: row.external_url,
+    user_id: relatedPost?.user_id ?? null,
+  });
 }
 
 async function resolvePostMediaDbRows(
@@ -285,7 +287,7 @@ export async function loadPostMediaItemsMap(
 
   // Widest column set first, then shed one migration's worth of columns per
   // retry so the app keeps serving against an older database.
-  const BASE_COLUMNS = 'id, post_id, storage_path, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order';
+  const BASE_COLUMNS = 'id, post_id, storage_path, external_url, media_kind, content_type, original_name, width, height, duration_seconds, sort_order, posts!inner(user_id)';
   const PREVIEW_COLUMNS = 'preview_storage_path, preview_thumbhash, preview_status, preview_attempt_count, preview_error, preview_generated_at';
   const RENDITION_COLUMNS = 'rendition_storage_path, rendition_status, rendition_attempt_count, rendition_error, rendition_generated_at, rendition_bytes';
   const TEASER_COLUMNS = 'teaser_storage_path, teaser_bytes, teaser_generated_at, teaser_error';

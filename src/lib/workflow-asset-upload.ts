@@ -1,9 +1,11 @@
 import { supabase } from '@/lib/supabase';
+import { finalizeSignedUpload } from '@/lib/upload-finalize-client';
 
 export type WorkflowAssetUploadBucket = 'generated_images' | 'generated_videos' | 'generated_audio';
 
 type WorkflowAssetUploadIntent = {
   success: boolean;
+  uploadId: string;
   bucket: WorkflowAssetUploadBucket;
   path: string;
   storagePath: string;
@@ -51,6 +53,7 @@ export async function uploadWorkflowAssetWithSignedIntent(
     uploadIntent.bucket !== bucket
     || !uploadIntent.path
     || !uploadIntent.storagePath
+    || !uploadIntent.uploadId
     || !uploadIntent.token
   ) {
     throw new Error('Workflow asset upload response was invalid.');
@@ -67,6 +70,11 @@ export async function uploadWorkflowAssetWithSignedIntent(
     throw new Error(`Workflow asset upload failed: ${uploadError.message}`);
   }
 
+  const finalized = await finalizeSignedUpload(session.access_token, uploadIntent.uploadId);
+  if (finalized.bucket !== uploadIntent.bucket || finalized.path !== uploadIntent.path) {
+    throw new Error('Finalized workflow asset did not match its signed target.');
+  }
+
   const readUrlResponse = await fetch('/api/uploads/workflow-asset/read-url', {
     method: 'POST',
     headers: {
@@ -74,7 +82,7 @@ export async function uploadWorkflowAssetWithSignedIntent(
       Authorization: `Bearer ${session.access_token}`,
     },
     body: JSON.stringify({
-      storagePath: uploadIntent.storagePath,
+      storagePath: finalized.storagePath,
     }),
   });
 
@@ -85,6 +93,6 @@ export async function uploadWorkflowAssetWithSignedIntent(
 
   return {
     signedUrl: readUrl.signedUrl,
-    storagePath: uploadIntent.storagePath,
+    storagePath: finalized.storagePath,
   };
 }

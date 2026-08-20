@@ -62,6 +62,19 @@ describe('createWorkflowAssetReadUrl', () => {
       error: 'Workflow asset path is not available.',
     });
 
+    for (const storagePath of [
+      'generated_images/user-1/%252e%252e/reference.png',
+      'generated_images/user-1%252fuser-2/reference.png',
+      'generated_images/user-1%5cuser-2/reference.png',
+      'generated_images/user-1//reference.png',
+    ]) {
+      await expect(createWorkflowAssetReadUrl({
+        body: { storagePath },
+        userId: 'user-1',
+        client: clientFactory,
+      })).resolves.toMatchObject({ ok: false, status: 403 });
+    }
+
     await expect(createWorkflowAssetReadUrl({
       body: { storagePath: 'uploads/user-1/reference.png' },
       userId: 'user-1',

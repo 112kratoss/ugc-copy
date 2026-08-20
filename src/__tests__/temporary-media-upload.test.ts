@@ -97,12 +97,27 @@ describe('uploadMediaToTemporaryStorage', () => {
           ok: true,
           json: async () => ({
             success: true,
+            uploadId: '11111111-1111-4111-8111-111111111111',
             bucket: 'uploads',
             path: 'user-1/reference.png',
             storagePath: 'uploads/user-1/reference.png',
             token: 'upload-token',
             signedUploadUrl: 'https://storage.example.test/upload',
             expiresInSeconds: 7200,
+          }),
+        };
+      }
+
+      if (url === '/api/uploads/finalize') {
+        return {
+          ok: true,
+          json: async () => ({
+            success: true,
+            bucket: 'uploads',
+            path: 'user-1/reference.png',
+            storagePath: 'uploads/user-1/reference.png',
+            contentType: 'image/png',
+            sizeBytes: 11,
           }),
         };
       }

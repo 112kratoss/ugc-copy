@@ -1,4 +1,5 @@
 import 'server-only';
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
@@ -51,7 +52,7 @@ async function handleShowcasePreviewGET(
   const {
     data: { user },
     error: authError,
-  } = await supabase.auth.getUser();
+  } = await getVerifiedAuthUserResult(supabase);
 
   if (authError || !user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

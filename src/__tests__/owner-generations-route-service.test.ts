@@ -201,6 +201,103 @@ describe('listOwnerGenerationsForRoute', () => {
     expect(payload.pagination.hasMore).toBe(false);
   });
 
+  it('hydrates linked guest generations, posts, and media without exposing the guest owner id', async () => {
+    const inFilters: Array<{ table: string; column: string; values: unknown[] }> = [];
+    const rows: Record<string, unknown[]> = {
+      profiles: [{ id: 'guest-1' }],
+      generations: [{
+        id: 'gen-guest-1',
+        user_id: 'guest-1',
+        output_url: 'generated_images/guest-1/output.png',
+        showcase_asset_path: null,
+        status: 'succeeded',
+        created_at: '2026-08-19T10:00:00.000Z',
+        completed_at: '2026-08-19T10:01:00.000Z',
+        duration: null,
+        cost: 1,
+        model: 'nano-banana-2',
+        category: 'image',
+        is_public: false,
+        title: 'Linked guest creation',
+        description: null,
+        prompt: 'private prompt',
+        workflow_settings: {},
+        archived_at: null,
+        template_run_id: null,
+        template_run_step_id: null,
+        studio_visible: true,
+        preview_url: null,
+        preview_thumbhash: null,
+        preview_status: 'pending',
+        creation_mode: null,
+      }],
+      posts: [{
+        id: 'post-guest-1',
+        generation_id: 'gen-guest-1',
+        title: 'Linked guest post',
+        visibility: 'private',
+        archived_at: null,
+      }],
+      generation_input_media: [],
+    };
+    const from = vi.fn((table: string) => ({
+      select: vi.fn(() => {
+        const query = {
+          eq: vi.fn(() => query),
+          in: vi.fn((column: string, values: unknown[]) => {
+            inFilters.push({ table, column, values });
+            return query;
+          }),
+          is: vi.fn(() => query),
+          or: vi.fn(() => query),
+          order: vi.fn(() => query),
+          range: vi.fn(() => query),
+          then: (resolve: (result: { data: unknown[]; error: null }) => unknown) => (
+            Promise.resolve({ data: rows[table] ?? [], error: null }).then(resolve)
+          ),
+        };
+        return query;
+      }),
+    }));
+    const createSignedUrls = vi.fn(async (paths: string[]) => ({
+      data: paths.map((path) => ({
+        path,
+        signedUrl: `https://signed.example/${path}`,
+        error: null,
+      })),
+      error: null,
+    }));
+    const client = {
+      from,
+      storage: { from: vi.fn(() => ({ createSignedUrls })) },
+    } as unknown as OwnerGenerationsRouteClient;
+
+    const payload = await listOwnerGenerationsForRoute({
+      userId: 'user-1',
+      supabase: client,
+      getAdminSupabase: () => client,
+      searchParams: new URLSearchParams('limit=10'),
+    });
+
+    expect(inFilters).toContainEqual({
+      table: 'generations',
+      column: 'user_id',
+      values: ['user-1', 'guest-1'],
+    });
+    expect(inFilters).toContainEqual({
+      table: 'posts',
+      column: 'user_id',
+      values: ['user-1', 'guest-1'],
+    });
+    expect(createSignedUrls).toHaveBeenCalledWith(['guest-1/output.png'], 3600);
+    expect(payload.generations[0]).toMatchObject({
+      id: 'gen-guest-1',
+      output_url: 'https://signed.example/guest-1/output.png',
+      linked_post_id: 'post-guest-1',
+    });
+    expect(payload.generations[0]).not.toHaveProperty('user_id');
+  });
+
   it('rejects an ids filter with no valid identifiers before querying', async () => {
     const database = createStatusClient([]);
     const getAdminSupabase = vi.fn(() => database.client);

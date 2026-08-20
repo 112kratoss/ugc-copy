@@ -1,4 +1,5 @@
 import 'server-only';
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -92,7 +93,7 @@ async function authenticateProfileRequest(
   const {
     data: { user },
     error: authError,
-  } = await supabase.auth.getUser();
+  } = await getVerifiedAuthUserResult(supabase);
 
   if (authError || !user) {
     return null;

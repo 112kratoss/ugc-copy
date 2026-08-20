@@ -1,4 +1,5 @@
 import 'server-only';
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
@@ -7,9 +8,11 @@ import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import {
   BackendRateLimitError,
   SHOWCASE_FEED_EVENT_RATE_LIMIT,
+  SHOWCASE_FEED_EVENT_NETWORK_ADMISSION_RATE_LIMIT,
   createBackendRateLimitResponse,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { readBoundedJsonBody } from '@/lib/bounded-json-request';
 import {
   getFeedAnonymousKeyHash,
   parseShowcaseFeedEventBatchPayload,
@@ -33,10 +36,15 @@ type ShowcaseFeedEventsRouteDependencies = {
   getFeedNetworkKeyHash?: typeof getFeedNetworkKeyHash;
   resolveFeedAnonymousIdentity?: typeof resolveFeedAnonymousIdentity;
   parseShowcaseFeedEventBatchPayload?: typeof parseShowcaseFeedEventBatchPayload;
+  readBoundedJsonBody?: typeof readBoundedJsonBody;
   recordShowcaseFeedEvent?: typeof recordShowcaseFeedEvent;
   recordShowcaseFeedEvents?: typeof recordShowcaseFeedEvents;
   logError?: typeof logBackendRouteError;
 };
+
+// A full 25-event batch with valid 4 KiB metadata fits comfortably while
+// oversized ignored fields and malformed telemetry remain bounded.
+export const SHOWCASE_FEED_EVENT_REQUEST_BODY_MAX_BYTES = 128 * 1024;
 
 function resolveDependencies(dependencies: ShowcaseFeedEventsRouteDependencies | undefined) {
   return {
@@ -48,6 +56,7 @@ function resolveDependencies(dependencies: ShowcaseFeedEventsRouteDependencies |
     resolveFeedAnonymousIdentity: dependencies?.resolveFeedAnonymousIdentity ?? resolveFeedAnonymousIdentity,
     parseShowcaseFeedEventBatchPayload:
       dependencies?.parseShowcaseFeedEventBatchPayload ?? parseShowcaseFeedEventBatchPayload,
+    readBoundedJsonBody: dependencies?.readBoundedJsonBody ?? readBoundedJsonBody,
     recordShowcaseFeedEvent: dependencies?.recordShowcaseFeedEvent ?? recordShowcaseFeedEvent,
     recordShowcaseFeedEvents: dependencies?.recordShowcaseFeedEvents ?? recordShowcaseFeedEvents,
     logError: dependencies?.logError ?? logBackendRouteError,
@@ -77,7 +86,7 @@ async function getOptionalActorUserId(
   }
 
   try {
-    const { data: { user }, error } = await dependencies.createUserClient(request).auth.getUser();
+    const { data: { user }, error } = await getVerifiedAuthUserResult(dependencies.createUserClient(request));
     if (error || !user?.id) {
       return { ok: false as const };
     }
@@ -92,7 +101,40 @@ async function handleShowcaseFeedEventPOST(
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
   try {
-    const parsed = dependencies.parseShowcaseFeedEventBatchPayload(await request.json());
+    const admissionAnonymousIdentity = request.headers.get('Authorization')
+      ? null
+      : dependencies.resolveFeedAnonymousIdentity(request);
+    const serviceClient = dependencies.createServiceClient();
+
+    try {
+      await dependencies.enforceBackendRateLimit(serviceClient, {
+        ...SHOWCASE_FEED_EVENT_NETWORK_ADMISSION_RATE_LIMIT,
+        key: dependencies.getFeedNetworkKeyHash(request),
+      });
+    } catch (error) {
+      if (error instanceof BackendRateLimitError) {
+        return attachAnonymousFeedCookie(
+          createBackendRateLimitResponse(error),
+          admissionAnonymousIdentity,
+        );
+      }
+      dependencies.logError('Showcase feed event rate limit failed:', error);
+      return NextResponse.json({ error: 'Failed to check feed event limits.' }, { status: 500 });
+    }
+
+    const boundedBody = await dependencies.readBoundedJsonBody(
+      request,
+      SHOWCASE_FEED_EVENT_REQUEST_BODY_MAX_BYTES,
+    );
+    if (!boundedBody.ok) {
+      return NextResponse.json({
+        error: boundedBody.reason === 'too_large'
+          ? 'Feed event payload is too large.'
+          : 'Invalid JSON payload.',
+      }, { status: boundedBody.reason === 'too_large' ? 413 : 400 });
+    }
+
+    const parsed = dependencies.parseShowcaseFeedEventBatchPayload(boundedBody.value);
     if (!parsed.ok) return NextResponse.json(parsed.body, { status: parsed.status });
 
     const actor = await getOptionalActorUserId(request, dependencies);
@@ -101,22 +143,28 @@ async function handleShowcaseFeedEventPOST(
     }
 
     const actorUserId = actor.actorUserId;
-    const anonymousIdentity = actorUserId ? null : dependencies.resolveFeedAnonymousIdentity(request);
+    const anonymousIdentity = actorUserId ? null : admissionAnonymousIdentity;
     const anonymousKeyHash = anonymousIdentity?.anonymousKeyHash
       ?? dependencies.getFeedAnonymousKeyHash(request);
-    const serviceClient = dependencies.createServiceClient();
 
-    try {
-      await dependencies.enforceBackendRateLimit(serviceClient, {
-        ...SHOWCASE_FEED_EVENT_RATE_LIMIT,
-        key: actorUserId ?? dependencies.getFeedNetworkKeyHash(request),
-      });
-    } catch (error) {
-      if (error instanceof BackendRateLimitError) {
-        return attachAnonymousFeedCookie(createBackendRateLimitResponse(error), anonymousIdentity);
+    // Restore the original per-account budget for authenticated viewers. The
+    // coarse network check above protects parsing, but must not merge unrelated
+    // accounts behind a carrier or office NAT into one ordinary-use budget.
+    // Anonymous traffic is already network-scoped, so charging it again here
+    // would spend two counters for one request without adding isolation.
+    if (actorUserId) {
+      try {
+        await dependencies.enforceBackendRateLimit(serviceClient, {
+          ...SHOWCASE_FEED_EVENT_RATE_LIMIT,
+          key: actorUserId,
+        });
+      } catch (error) {
+        if (error instanceof BackendRateLimitError) {
+          return createBackendRateLimitResponse(error);
+        }
+        dependencies.logError('Showcase feed actor event rate limit failed:', error);
+        return NextResponse.json({ error: 'Failed to check feed event limits.' }, { status: 500 });
       }
-      dependencies.logError('Showcase feed event rate limit failed:', error);
-      return NextResponse.json({ error: 'Failed to check feed event limits.' }, { status: 500 });
     }
 
     if (!parsed.batched) {

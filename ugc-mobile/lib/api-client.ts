@@ -60,6 +60,8 @@ import type {
   TemplateRunInputSignRequest,
   TemplateRunInputSignResponse,
   TemplateRunResponse,
+  UploadFinalizeRequest,
+  UploadFinalizeResponse,
   VideoGenerationRequest,
   ViewerUnlocksResponse,
   ViewerUnlockDetailResponse,
@@ -842,6 +844,12 @@ export function createApiClient({
       request<MediaUploadIntentResponse>('/api/uploads/media/sign', {
         method: 'POST',
         body: JSON.stringify(body),
+      }),
+    finalizeUpload: (body: UploadFinalizeRequest, signal?: AbortSignal) =>
+      request<UploadFinalizeResponse>('/api/uploads/finalize', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        signal,
       }),
     createMediaReadUrl: (body: MediaReadUrlRequest) =>
       request<MediaReadUrlResponse>('/api/uploads/media/read-url', {

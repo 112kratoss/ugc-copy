@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 
 import {
   ADMIN_SESSION_COOKIE,
@@ -17,6 +18,7 @@ import {
   isE2EAuthBypassEnabled,
 } from '@/lib/e2e-auth';
 import { hasSupabaseAuthCookie } from '@/lib/supabase-auth-cookie';
+import { routeIdentityPolicyForPathname } from '@/lib/route-identity-policy';
 import mobileApiOperationsV1 from '../contracts/mobile-api-operations-v1.json';
 
 /**
@@ -221,7 +223,112 @@ function applyMobileCompatibilityHeaders(response: NextResponse) {
   return response;
 }
 
-export function proxy(request: NextRequest): NextResponse | Promise<NextResponse> {
+type ProxyIdentityClient = {
+  auth: {
+    getUser: () => Promise<{
+      data: { user: { is_anonymous?: boolean } | null };
+      error: unknown;
+    }>;
+  };
+  rpc: (name: string) => Promise<{ data: unknown; error: unknown }>;
+};
+
+type ProxyIdentityDependencies = {
+  createUserClient?: (authorization: string) => ProxyIdentityClient;
+};
+
+function createProxyIdentityClient(authorization: string): ProxyIdentityClient {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      auth: {
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+        persistSession: false,
+      },
+      global: { headers: { Authorization: authorization } },
+    },
+  ) as unknown as ProxyIdentityClient;
+}
+
+/**
+ * Central admission for every policy-listed authenticated API route.
+ *
+ * The proxy uses only the caller's JWT and anon key. The zero-argument RPC can
+ * inspect only auth.uid(), so this is an authoritative lifecycle check without
+ * putting the service-role credential at the edge. Route adapters still verify
+ * Auth independently before doing work.
+ */
+export async function guardUserFacingRouteIdentity(
+  request: NextRequest,
+  dependencies: ProxyIdentityDependencies = {},
+): Promise<NextResponse | null> {
+  const policy = routeIdentityPolicyForPathname(request.nextUrl.pathname);
+  if (!policy || policy === 'service') return null;
+
+  // Public routes stay public when no token is supplied. If a caller does send
+  // a bearer token, however, it must still be a live identity: otherwise an
+  // optional-auth endpoint can turn a spent guest token into a service-role
+  // mutation or signing capability.
+  const authorization = request.headers.get('authorization')?.trim();
+  if (!authorization) return null;
+
+  try {
+    const client = (dependencies.createUserClient ?? createProxyIdentityClient)(authorization);
+    const { data: { user }, error: authError } = await client.auth.getUser();
+    if (authError || !user) {
+      return NextResponse.json(
+        { error: 'Unauthorized', code: 'UNAUTHORIZED' },
+        { status: 401, headers: { 'Cache-Control': 'private, no-store' } },
+      );
+    }
+
+    const { data: state, error: stateError } = await client.rpc('current_identity_state');
+    if (
+      stateError
+      || (state !== 'active' && state !== 'merged' && state !== 'deleting')
+    ) {
+      return NextResponse.json({
+        error: 'Identity verification is temporarily unavailable. Please try again.',
+        code: 'IDENTITY_CHECK_UNAVAILABLE',
+      }, { status: 503, headers: { 'Cache-Control': 'private, no-store' } });
+    }
+
+    if (state === 'merged') {
+      return NextResponse.json({
+        error: 'This guest session has been linked to an account. Sign in to continue.',
+        code: 'SESSION_MERGED',
+      }, { status: 409, headers: { 'Cache-Control': 'private, no-store' } });
+    }
+
+    if (state === 'deleting') {
+      return NextResponse.json({
+        error: 'This account is being permanently deleted.',
+        code: 'ACCOUNT_DELETING',
+      }, { status: 409, headers: { 'Cache-Control': 'private, no-store' } });
+    }
+
+    if (policy === 'registered' && user.is_anonymous === true) {
+      return NextResponse.json({
+        error: 'Create an account to use this feature.',
+        code: 'REGISTRATION_REQUIRED',
+      }, { status: 403, headers: { 'Cache-Control': 'private, no-store' } });
+    }
+
+    return null;
+  } catch {
+    return NextResponse.json({
+      error: 'Identity verification is temporarily unavailable. Please try again.',
+      code: 'IDENTITY_CHECK_UNAVAILABLE',
+    }, { status: 503, headers: { 'Cache-Control': 'private, no-store' } });
+  }
+}
+
+export async function proxy(
+  request: NextRequest,
+  identityDependencies: ProxyIdentityDependencies = {},
+): Promise<NextResponse> {
   // Admin traffic is resolved before the mobile compatibility gate: the admin
   // console is a browser-only surface and must never be version-gated or
   // CORS-exposed alongside the mobile API.
@@ -260,15 +367,30 @@ export function proxy(request: NextRequest): NextResponse | Promise<NextResponse
     return homeRouting;
   }
 
-  if (!isMobilePath && !isIdentifiedMobileClient(request.headers)) {
-    return NextResponse.next();
+  if (request.method === 'OPTIONS') {
+    return isMobilePath || isIdentifiedMobileClient(request.headers)
+      ? new NextResponse(null, {
+        headers: buildMobileCorsHeaders(request),
+        status: 204,
+      })
+      : NextResponse.next();
   }
 
-  if (request.method === 'OPTIONS') {
-    return new NextResponse(null, {
-      headers: buildMobileCorsHeaders(request),
-      status: 204,
-    });
+  // Identity lifecycle admission applies to ordinary web requests as well as
+  // identified mobile traffic. Keep it ahead of the mobile-only early return
+  // so a stale merged/deleting JWT cannot reach a route adapter on the web.
+  const identityRejection = await guardUserFacingRouteIdentity(
+    request,
+    identityDependencies,
+  );
+  if (identityRejection) {
+    return isMobilePath
+      ? applyMobileCorsHeaders(request, identityRejection)
+      : applyMobileCompatibilityHeaders(identityRejection);
+  }
+
+  if (!isMobilePath && !isIdentifiedMobileClient(request.headers)) {
+    return NextResponse.next();
   }
 
   return isMobilePath

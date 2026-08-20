@@ -21,7 +21,6 @@ import {
   isMissingPostsSchemaError,
   isMissingPostResourceBundlesSchemaError,
 } from '@/lib/posts-server';
-import { getStoredMediaLocation } from '@/lib/server-helpers';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import { normalizeSourceToolInputWithCatalog } from '@/lib/source-tools';
 import { MAGICBOOKLET_SOURCE_KIND, type ShowcaseItemCategory } from '@/lib/showcase';
@@ -29,7 +28,10 @@ import {
   fetchWithProviderTimeout,
 } from '@/lib/provider-fetch';
 import { openAllowlistedRemoteMedia } from '@/lib/remote-media-security';
-import { isStorageObjectOwnedByUser } from '@/lib/storage-ownership';
+import {
+  getUserOwnedStoredMediaLocation,
+  parseCanonicalStorageObjectPath,
+} from '@/lib/storage-ownership';
 import {
   validatePostResourceBundleInput,
   type PostResourceBundleInput,
@@ -56,6 +58,15 @@ const GENERATION_SELECT_WITH_SHOWCASE_ASSET = 'id, user_id, status, model, categ
 // also predate the template system — so it omits the template columns too and
 // such rows publish as ordinary generations.
 const GENERATION_SELECT_WITHOUT_SHOWCASE_ASSET = 'id, user_id, status, model, category, output_url, title, description, prompt';
+
+export function getCanonicalGenerationShowcaseAssetPath(
+  storagePath: string | null | undefined,
+  generationId: string,
+): string | null {
+  if (!storagePath) return null;
+  const canonicalPath = parseCanonicalStorageObjectPath(storagePath, { minimumSegments: 3 });
+  return canonicalPath?.startsWith(`showcase/${generationId}/`) ? canonicalPath : null;
+}
 
 function isExistingStorageObjectError(error: { message?: string; statusCode?: string } | null) {
   return error?.statusCode === '409'
@@ -114,7 +125,6 @@ export type ShowcasePublishServiceDependencies = {
   ensureDurableGenerationMedia: typeof ensureDurableGenerationMedia;
   fetchWithProviderTimeout: typeof fetchWithProviderTimeout;
   openAllowlistedRemoteMedia: typeof openAllowlistedRemoteMedia;
-  getStoredMediaLocation: typeof getStoredMediaLocation;
   buildGenerationReferenceResourceItems: typeof buildGenerationReferenceResourceItems;
   mergeGenerationReferenceItemsIntoBundle: typeof mergeGenerationReferenceItemsIntoBundle;
   validatePostResourceBundleInput: typeof validatePostResourceBundleInput;
@@ -162,7 +172,6 @@ function resolveDependencies(
     fetchWithProviderTimeout: dependencies?.fetchWithProviderTimeout ?? fetchWithProviderTimeout,
     openAllowlistedRemoteMedia:
       dependencies?.openAllowlistedRemoteMedia ?? openAllowlistedRemoteMedia,
-    getStoredMediaLocation: dependencies?.getStoredMediaLocation ?? getStoredMediaLocation,
     buildGenerationReferenceResourceItems:
       dependencies?.buildGenerationReferenceResourceItems ?? buildGenerationReferenceResourceItems,
     mergeGenerationReferenceItemsIntoBundle:
@@ -282,15 +291,12 @@ async function createShowcaseDerivative({
   ownerUserId: string;
   outputUrl: string;
 }) {
-  const storedLocation = dependencies.getStoredMediaLocation(outputUrl);
+  const storedLocation = getUserOwnedStoredMediaLocation(outputUrl, ownerUserId);
   let fileBody: Blob | ReadableStream<Uint8Array>;
   let sourceName: string;
   let contentType: string | null = null;
 
   if (storedLocation) {
-    if (!isStorageObjectOwnedByUser(storedLocation.filePath, ownerUserId)) {
-      throw new Error('Generation media path does not belong to its owner.');
-    }
     sourceName = storedLocation.filePath.split('/').pop() || `${generationId}.${inferExtension(outputUrl, category)}`;
     const source = await downloadStoredShowcaseSource(
       adminSupabase,
@@ -815,12 +821,18 @@ export async function publishGenerationToShowcaseForRoute({
     resourceBundleStatus = publishResult.bundleStatus;
   } catch (postError) {
     if (hasShowcaseAssetColumn && nextShowcaseAssetPath && nextShowcaseAssetPath !== generation.showcase_asset_path) {
-      void adminSupabase.storage
-        .from(SHOWCASE_MEDIA_BUCKET)
-        .remove([nextShowcaseAssetPath])
-        .catch((storageError) => {
-          logBackendError('failed_to_delete_showcase_derivative_after_publish_failure', { error: storageError });
-        });
+      const removableDerivativePath = getCanonicalGenerationShowcaseAssetPath(
+        nextShowcaseAssetPath,
+        generation.id,
+      );
+      if (removableDerivativePath) {
+        void adminSupabase.storage
+          .from(SHOWCASE_MEDIA_BUCKET)
+          .remove([removableDerivativePath])
+          .catch((storageError) => {
+            logBackendError('failed_to_delete_showcase_derivative_after_publish_failure', { error: storageError });
+          });
+      }
     }
 
     if (createdPrivateMediaLocation) {
@@ -861,11 +873,17 @@ export async function publishGenerationToShowcaseForRoute({
   invalidateShowcaseFeedCache();
 
   if (effectiveVisibility === 'private' && hasShowcaseAssetColumn && generation.showcase_asset_path) {
-    const removalResult = await adminSupabase.storage
-      .from(SHOWCASE_MEDIA_BUCKET)
-      .remove([generation.showcase_asset_path]);
-    if (removalResult.error) {
-      logBackendError('failed_to_delete_showcase_derivative_after_unpublish', { error: removalResult.error });
+    const removableShowcasePath = getCanonicalGenerationShowcaseAssetPath(
+      generation.showcase_asset_path,
+      generation.id,
+    );
+    if (removableShowcasePath) {
+      const removalResult = await adminSupabase.storage
+        .from(SHOWCASE_MEDIA_BUCKET)
+        .remove([removableShowcasePath]);
+      if (removalResult.error) {
+        logBackendError('failed_to_delete_showcase_derivative_after_unpublish', { error: removalResult.error });
+      }
     }
   }
 

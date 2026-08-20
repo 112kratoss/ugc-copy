@@ -4,10 +4,14 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { getStoredMediaLocation, type MediaBucket } from '@/lib/media-urls';
+import { isMediaBucket, type MediaBucket } from '@/lib/media-urls';
 import { isAudioModel, isImageModel } from '@/lib/models';
 import { openAllowlistedRemoteMedia } from '@/lib/remote-media-security';
-import { isStorageObjectOwnedByUser } from '@/lib/storage-ownership';
+import {
+  getCanonicalStoredMediaLocation,
+  getUserOwnedStoredMediaLocation,
+  parseCanonicalStorageObjectPath,
+} from '@/lib/storage-ownership';
 
 export type GeneratedMediaBucket = Extract<MediaBucket, 'generated_images' | 'generated_videos' | 'generated_audio'>;
 export type GenerationMediaKind = 'image' | 'video' | 'audio';
@@ -167,12 +171,15 @@ async function loadShowcaseDerivative(
   generationId: string,
   kind: GenerationMediaKind,
 ): Promise<{ body: ReadableStream<Uint8Array>; contentType: string; sourceName: string } | null> {
-  if (!showcaseAssetPath.startsWith(`showcase/${generationId}/`)) {
+  const canonicalPath = parseCanonicalStorageObjectPath(showcaseAssetPath, { minimumSegments: 3 });
+  if (!canonicalPath) {
     return null;
   }
+  const [namespace, scopedGenerationId] = canonicalPath.split('/');
+  if (namespace !== 'showcase' || scopedGenerationId !== generationId) return null;
   const { data, error } = await supabase.storage
     .from('showcase_media')
-    .download(showcaseAssetPath)
+    .download(canonicalPath)
     .asStream();
 
   if (error || !data) {
@@ -181,8 +188,8 @@ async function loadShowcaseDerivative(
 
   return {
     body: data,
-    contentType: inferContentType(showcaseAssetPath, kind),
-    sourceName: path.basename(showcaseAssetPath),
+    contentType: inferContentType(canonicalPath, kind),
+    sourceName: path.basename(canonicalPath),
   };
 }
 
@@ -193,11 +200,16 @@ async function loadOutputSource(
   kind: GenerationMediaKind,
 ): Promise<{ body: ReadableStream<Uint8Array>; contentType: string; sourceName: string } | null> {
   const sourceName = path.basename(outputUrl);
-  const storedLocation = getStoredMediaLocation(outputUrl);
+  const storedLocation = getUserOwnedStoredMediaLocation(outputUrl, userId, {
+    allowedBuckets: [
+      'generated_images',
+      'generated_videos',
+      'generated_audio',
+      'generation_inputs',
+    ],
+  });
   if (storedLocation) {
-    if (!isStorageObjectOwnedByUser(storedLocation.filePath, userId)) {
-      return null;
-    }
+    if (!isMediaBucket(storedLocation.bucket)) return null;
     const { data, error } = await supabase.storage
       .from(storedLocation.bucket)
       .download(storedLocation.filePath)
@@ -213,6 +225,17 @@ async function loadOutputSource(
       sourceName: path.basename(storedLocation.filePath),
     };
   }
+
+  // Do not reinterpret another user's canonical Storage URL as a provider
+  // source after the exact-owner check failed.
+  if (getCanonicalStoredMediaLocation(outputUrl, {
+    allowedBuckets: [
+      'generated_images',
+      'generated_videos',
+      'generated_audio',
+      'generation_inputs',
+    ],
+  })) return null;
 
   if (!outputUrl.startsWith('http')) {
     return null;
@@ -238,16 +261,18 @@ export async function ensureDurableGenerationMedia(params: {
   createdLocation: CreatedGenerationMediaLocation | null;
 }> {
   const existingLocation = params.generation.outputUrl
-    ? getStoredMediaLocation(params.generation.outputUrl)
+    ? getUserOwnedStoredMediaLocation(params.generation.outputUrl, params.generation.userId, {
+        allowedBuckets: ['generated_images', 'generated_videos', 'generated_audio'],
+      })
     : null;
 
   if (
     existingLocation
+    && isMediaBucket(existingLocation.bucket)
     && isGeneratedMediaBucket(existingLocation.bucket)
-    && isStorageObjectOwnedByUser(existingLocation.filePath, params.generation.userId)
   ) {
     return {
-      outputUrl: params.generation.outputUrl!,
+      outputUrl: `${existingLocation.bucket}/${existingLocation.filePath}`,
       createdLocation: null,
     };
   }

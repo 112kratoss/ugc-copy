@@ -13,6 +13,17 @@ function createUserClient(userId: string | null = 'user-1') {
   };
 }
 
+async function requireIdentityForTest(userClient: ReturnType<typeof createUserClient>) {
+  const { data: { user }, error } = await userClient.auth.getUser();
+  if (error || !user) {
+    return { ok: false as const, status: 401, code: 'UNAUTHORIZED' as const, error: 'Unauthorized' };
+  }
+  return {
+    ok: true as const,
+    identity: { user, userId: user.id, kind: 'registered' as const, isGuest: false },
+  };
+}
+
 describe('owner generations route adapter service', () => {
   it('authenticates and delegates owner generation listing with private trace headers', async () => {
     const userSupabase = createUserClient('user-1');
@@ -31,6 +42,7 @@ describe('owner generations route adapter service', () => {
         createUserClient: vi.fn(() => userSupabase as never),
         enforceBackendRateLimit: vi.fn(),
         listOwnerGenerationsForRoute,
+        requireIdentity: requireIdentityForTest as never,
       },
     });
 
@@ -44,7 +56,7 @@ describe('owner generations route adapter service', () => {
     expect(listOwnerGenerationsForRoute).toHaveBeenCalledWith({
       userId: 'user-1',
       supabase: userSupabase,
-      getAdminSupabase: createServiceClient,
+      getAdminSupabase: expect.any(Function),
       searchParams: new URLSearchParams('limit=2&detail=summary'),
     });
     // Exactly one, for the read limiter. Rate-limit state is service-role only,
@@ -69,6 +81,7 @@ describe('owner generations route adapter service', () => {
         createServiceClient,
         createUserClient: vi.fn(() => createUserClient(null) as never),
         listOwnerGenerationsForRoute,
+        requireIdentity: requireIdentityForTest as never,
       },
     });
 
@@ -77,7 +90,7 @@ describe('owner generations route adapter service', () => {
     expect(response.headers.get('x-request-id')).toBe('owner-generations-auth-1');
     expect(response.headers.has('authorization')).toBe(false);
     expect(Array.from(response.headers.entries()).join('\n')).not.toContain('private-token');
-    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
     expect(listOwnerGenerationsForRoute).not.toHaveBeenCalled();
     expect(createServiceClient).not.toHaveBeenCalled();
   });
@@ -97,6 +110,7 @@ describe('owner generations route adapter service', () => {
           throw new Error('database tired');
         }),
         logError,
+        requireIdentity: requireIdentityForTest as never,
       },
     });
 
@@ -105,5 +119,30 @@ describe('owner generations route adapter service', () => {
     expect(response.headers.get('x-request-id')).toBe('owner-generations-error-1');
     await expect(response.json()).resolves.toEqual({ error: 'Internal server error' });
     expect(logError).toHaveBeenCalledWith('Error fetching generations:', expect.any(Error));
+  });
+
+  it('rejects a merged session before privileged owner hydration', async () => {
+    const listOwnerGenerationsForRoute = vi.fn();
+    const enforceBackendRateLimit = vi.fn();
+    const response = await getOwnerGenerationsRouteResponse({
+      request: new Request('http://localhost/api/generations'),
+      dependencies: {
+        createServiceClient: vi.fn(),
+        createUserClient: vi.fn(() => createUserClient('guest-1') as never),
+        enforceBackendRateLimit,
+        listOwnerGenerationsForRoute,
+        requireIdentity: vi.fn(async () => ({
+          ok: false as const,
+          status: 409 as const,
+          code: 'SESSION_MERGED' as const,
+          error: 'This guest session has been linked to an account. Sign in to continue.',
+        })),
+      },
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: 'SESSION_MERGED' });
+    expect(enforceBackendRateLimit).not.toHaveBeenCalled();
+    expect(listOwnerGenerationsForRoute).not.toHaveBeenCalled();
   });
 });

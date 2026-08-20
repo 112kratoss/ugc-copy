@@ -4,6 +4,7 @@ import { logBackendRouteError } from '@/lib/backend-logger';
 import { NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
+import { requireIdentity } from '@/lib/account-identity';
 import {
   BackendRateLimitError,
   OWNER_GENERATIONS_READ_RATE_LIMIT,
@@ -22,6 +23,7 @@ type OwnerGenerationsRouteDependencies = {
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
   listOwnerGenerationsForRoute?: typeof listOwnerGenerationsForRoute;
   logError?: typeof logBackendRouteError;
+  requireIdentity?: typeof requireIdentity;
 };
 
 function resolveDependencies(dependencies: OwnerGenerationsRouteDependencies | undefined) {
@@ -32,6 +34,7 @@ function resolveDependencies(dependencies: OwnerGenerationsRouteDependencies | u
     listOwnerGenerationsForRoute:
       dependencies?.listOwnerGenerationsForRoute ?? listOwnerGenerationsForRoute,
     logError: dependencies?.logError ?? logBackendRouteError,
+    requireIdentity: dependencies?.requireIdentity ?? requireIdentity,
   };
 }
 
@@ -50,18 +53,26 @@ async function handleOwnerGenerationsGET(
 ): Promise<Response> {
   try {
     const supabase = dependencies.createUserClient(request);
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    let admin: ReturnType<typeof dependencies.createServiceClient> | null = null;
+    const getAdmin = () => {
+      admin ??= dependencies.createServiceClient();
+      return admin;
+    };
+    const identity = await dependencies.requireIdentity(supabase, getAdmin);
+    if (!identity.ok) {
+      return NextResponse.json(
+        { error: identity.error, code: identity.code },
+        { status: identity.status },
+      );
     }
 
     // The studio polls this every 30 seconds while a generation runs, so the
     // budget is sized for several open tabs rather than for one. It exists to
     // stop a runaway client, not to interrupt normal polling.
     try {
-      await dependencies.enforceBackendRateLimit(dependencies.createServiceClient(), {
+      await dependencies.enforceBackendRateLimit(getAdmin(), {
         ...OWNER_GENERATIONS_READ_RATE_LIMIT,
-        key: user.id,
+        key: identity.identity.userId,
       });
     } catch (error) {
       if (error instanceof BackendRateLimitError) {
@@ -73,9 +84,9 @@ async function handleOwnerGenerationsGET(
     }
 
     const payload: OwnerGenerationsRoutePayload = await dependencies.listOwnerGenerationsForRoute({
-      userId: user.id,
+      userId: identity.identity.userId,
       supabase,
-      getAdminSupabase: dependencies.createServiceClient,
+      getAdminSupabase: getAdmin,
       searchParams: getRequestSearchParams(request),
     });
 
