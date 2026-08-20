@@ -3,16 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
 const createUserClientMock = vi.fn();
-const rpcMock = vi.fn(async (): Promise<{ data: unknown; error: unknown }> => ({
-  data: {
-    allowed: true,
-    limit: 60,
-    remaining: 59,
-    retryAfterSeconds: 0,
-    resetAt: '2026-06-21T06:30:00.000Z',
-  },
-  error: null,
-}));
+const requireIdentityMock = vi.hoisted(() => vi.fn());
+const rpcMock = vi.fn();
+let mediaSignRateAllowed = true;
 const createSignedUploadUrlMock = vi.fn(async () => ({
   data: {
     path: 'user-1/upload.png',
@@ -40,22 +33,41 @@ vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => createServiceClientFactory(),
 }));
 
+vi.mock('@/lib/account-identity', () => ({
+  requireIdentity: (...args: unknown[]) => requireIdentityMock(...args),
+}));
+
 describe('/api/uploads/media/sign route', () => {
   beforeEach(() => {
     vi.resetModules();
+    requireIdentityMock.mockReset();
+    requireIdentityMock.mockResolvedValue({
+      ok: false,
+      status: 401,
+      code: 'UNAUTHORIZED',
+      error: 'Unauthorized',
+    });
+    mediaSignRateAllowed = true;
     createUserClientMock.mockReset();
     createServiceClientFactory.mockClear();
     rpcMock.mockReset();
-    rpcMock.mockResolvedValueOnce({ data: false, error: null });
-    rpcMock.mockResolvedValue({
-      data: {
-        allowed: true,
-        limit: 60,
-        remaining: 59,
-        retryAfterSeconds: 0,
-        resetAt: '2026-06-21T06:30:00.000Z',
-      },
-      error: null,
+    rpcMock.mockImplementation(async (fn: string) => {
+      if (fn === 'is_account_deletion_requested') return { data: false, error: null };
+      if (fn === 'reserve_upload_bytes_v2') return { data: { allowed: true }, error: null };
+      if (
+        fn === 'mark_upload_byte_reservation_issued'
+        || fn === 'abort_upload_byte_reservation_before_issue'
+      ) return { data: true, error: null };
+      return {
+        data: {
+          allowed: mediaSignRateAllowed,
+          limit: 60,
+          remaining: mediaSignRateAllowed ? 59 : 0,
+          retryAfterSeconds: mediaSignRateAllowed ? 0 : 44,
+          resetAt: '2026-06-21T06:30:00.000Z',
+        },
+        error: null,
+      };
     });
     storageFromMock.mockClear();
     tableFromMock.mockClear();
@@ -101,6 +113,15 @@ describe('/api/uploads/media/sign route', () => {
   });
 
   it('creates a rate-limited signed upload token for owned temporary media paths', async () => {
+    requireIdentityMock.mockResolvedValueOnce({
+      ok: true,
+      identity: {
+        user: { id: 'user-1', is_anonymous: false },
+        userId: 'user-1',
+        kind: 'registered',
+        isGuest: false,
+      },
+    });
     createUserClientMock.mockReturnValueOnce({
       auth: {
         getUser: vi.fn(async () => ({
@@ -153,6 +174,15 @@ describe('/api/uploads/media/sign route', () => {
   });
 
   it('rate limits upload token creation before storage signing work', async () => {
+    requireIdentityMock.mockResolvedValueOnce({
+      ok: true,
+      identity: {
+        user: { id: 'user-1', is_anonymous: false },
+        userId: 'user-1',
+        kind: 'registered',
+        isGuest: false,
+      },
+    });
     createUserClientMock.mockReturnValueOnce({
       auth: {
         getUser: vi.fn(async () => ({
@@ -161,16 +191,7 @@ describe('/api/uploads/media/sign route', () => {
         })),
       },
     });
-    rpcMock.mockResolvedValueOnce({
-      data: {
-        allowed: false,
-        limit: 60,
-        remaining: 0,
-        retryAfterSeconds: 44,
-        resetAt: '2026-06-21T06:30:00.000Z',
-      },
-      error: null,
-    });
+    mediaSignRateAllowed = false;
 
     const { POST } = await import('@/app/api/uploads/media/sign/route');
     const response = await POST(

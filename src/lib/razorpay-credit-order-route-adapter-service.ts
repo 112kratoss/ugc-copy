@@ -1,3 +1,4 @@
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 import { logBackendRouteError } from '@/lib/backend-logger';
@@ -67,7 +68,7 @@ async function handleRazorpayCreditOrderPOST(
     }
 
     const supabase = dependencies.createUserClient(request);
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    const { data: { user }, error: authError } = await getVerifiedAuthUserResult(supabase);
     // Registered-only per route-identity-policy.ts. A guest holds a valid
     // JWT, so `!user` alone stopped meaning "not registered" the moment
     // anonymous sessions existed.

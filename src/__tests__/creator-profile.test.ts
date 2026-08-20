@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const resolveOwnedStoredMediaUrlMock = vi.hoisted(() => vi.fn());
+
 type ProfileRow = {
   id: string;
   username: string | null;
@@ -87,6 +89,7 @@ let postsState: PostRow[] = [];
 let postMediaState: PostMediaRow[] = [];
 let resourceBundlesState: ResourceBundleRow[] = [];
 let postsMissingSourceToolSlugColumn = false;
+let postsSchemaMissing = false;
 let creatorStatsRpcState: Record<string, unknown> | null = null;
 let tableAccesses: string[] = [];
 let bundleSummaryRpcCalls = 0;
@@ -268,6 +271,12 @@ function createServiceClientMock() {
                 return this;
               },
               async range(from: number, to: number) {
+                if (postsSchemaMissing) {
+                  return {
+                    data: null,
+                    error: { code: 'PGRST205', message: "Could not find the table 'public.posts'" },
+                  };
+                }
                 if (postsMissingSourceToolSlugColumn && fields?.includes('source_tool_slug')) {
                   return {
                     data: null,
@@ -293,6 +302,12 @@ function createServiceClientMock() {
                 return { data: rows, error: null };
               },
               async limit(limit: number) {
+                if (postsSchemaMissing) {
+                  return {
+                    data: null,
+                    error: { code: 'PGRST205', message: "Could not find the table 'public.posts'" },
+                  };
+                }
                 if (postsMissingSourceToolSlugColumn && fields?.includes('source_tool_slug')) {
                   return {
                     data: null,
@@ -373,7 +388,7 @@ function createServiceClientMock() {
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => createServiceClientMock(),
-  resolveStoredMediaUrl: vi.fn(async (_client, outputUrl: string) => `https://proxy.example.com/${outputUrl}`),
+  resolveOwnedStoredMediaUrl: resolveOwnedStoredMediaUrlMock,
 }));
 
 describe('creator profile data loader', () => {
@@ -461,9 +476,16 @@ describe('creator profile data loader', () => {
     ];
     resourceBundlesState = [];
     postsMissingSourceToolSlugColumn = false;
+    postsSchemaMissing = false;
     creatorStatsRpcState = null;
     tableAccesses = [];
     bundleSummaryRpcCalls = 0;
+    resolveOwnedStoredMediaUrlMock.mockReset();
+    resolveOwnedStoredMediaUrlMock.mockImplementation(async (_client, outputUrl: string, ownerUserId: string) => (
+      outputUrl.startsWith(`generated_images/${ownerUserId}/`)
+        ? `https://proxy.example.com/${outputUrl}`
+        : null
+    ));
   });
 
   afterEach(() => {
@@ -586,6 +608,21 @@ describe('creator profile data loader', () => {
     expect(secondPage?.pageInfo).toMatchObject({ hasMore: true, nextOffset: 4, limit: 2, offset: 2 });
     expect(firstPage?.stats).toMatchObject({ publicCreations: 5, totalSaves: 15 });
     expect(secondPage?.stats).toMatchObject({ publicCreations: 5, totalSaves: 15 });
+  });
+
+  it('binds legacy generation signing to the persisted generation owner', async () => {
+    postsSchemaMissing = true;
+    generationsState[0].output_url = 'generated_images/foreign-user/private.jpg';
+
+    const { getCreatorProfilePageData } = await import('@/lib/creator-profile');
+    const data = await getCreatorProfilePageData('Creator-Name');
+
+    expect(data?.items).toEqual([]);
+    expect(resolveOwnedStoredMediaUrlMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'generated_images/foreign-user/private.jpg',
+      'user-1',
+    );
   });
 
   it.each(['flagged', 'hidden'] as const)('hides posts that moderation has marked %s', async (reviewStatus) => {

@@ -215,6 +215,11 @@ function createSupabaseMock(
                 eqs.push({ column, value });
                 return query;
               },
+              in(column: string, values: unknown[]) {
+                filters[column] = values;
+                eqs.push({ column, value: values });
+                return query;
+              },
               or() {
                 return query;
               },
@@ -230,7 +235,10 @@ function createSupabaseMock(
                   filters.prediction_id
                   && localGeneration
                   && localGeneration.prediction_id === filters.prediction_id
-                  && (!filters.user_id || localGeneration.user_id === filters.user_id)
+                  && (!filters.user_id
+                    || (Array.isArray(filters.user_id)
+                      ? filters.user_id.includes(localGeneration.user_id)
+                      : localGeneration.user_id === filters.user_id))
                 ) {
                   return { data: localGeneration, error: null };
                 }
@@ -287,6 +295,7 @@ vi.mock('@/lib/server-helpers', () => ({
   createUserClient: (request: Request) => createUserClientMock(request),
   createServiceClient: vi.fn(() => currentSupabaseMock.client),
   resolveStoredMediaUrl: vi.fn(async (_supabase: unknown, value: string) => value),
+  resolveOwnedStoredMediaUrl: vi.fn(async (_supabase: unknown, value: string) => value),
 }));
 
 function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
@@ -827,7 +836,7 @@ describe('/api/generate-video route', () => {
     expect(currentSupabaseMock.selects).not.toContain('*');
     expect(currentSupabaseMock.eqs).toEqual(expect.arrayContaining([
       { column: 'prediction_id', value: 'task-video-status-1' },
-      { column: 'user_id', value: 'user-1' },
+      { column: 'user_id', value: ['user-1'] },
     ]));
     expect(currentSupabaseMock.updates).toHaveLength(0);
   });

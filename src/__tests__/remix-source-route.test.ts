@@ -54,8 +54,12 @@ let inputMediaRows: Array<{
   metadata: Record<string, unknown> | null;
 }> = [];
 
-const resolveStoredMediaUrlMock = vi.fn(
-  async (_adminClient: unknown, outputUrl: string) => `https://signed.example.com/${encodeURIComponent(outputUrl)}`
+const resolveOwnedStoredMediaUrlMock = vi.fn(
+  async (_adminClient: unknown, outputUrl: string, ownerUserId: string) => {
+    const [, path = ''] = outputUrl.split('/', 2);
+    if (outputUrl.startsWith('generated_') && path !== ownerUserId) return null;
+    return `https://signed.example.com/${encodeURIComponent(outputUrl)}`;
+  }
 );
 
 function createRouteRequest(url: string) {
@@ -247,8 +251,8 @@ vi.mock('@/lib/server-helpers', () => ({
     },
   })),
   createServiceClient: vi.fn(() => createAdminClientMock()),
-  resolveStoredMediaUrl: (...args: Parameters<typeof resolveStoredMediaUrlMock>) =>
-    resolveStoredMediaUrlMock(...args),
+  resolveOwnedStoredMediaUrl: (...args: Parameters<typeof resolveOwnedStoredMediaUrlMock>) =>
+    resolveOwnedStoredMediaUrlMock(...args),
 }));
 
 describe('/api/remix-source route', () => {
@@ -557,6 +561,79 @@ describe('/api/remix-source route', () => {
       url: 'https://signed.example.com/uploads/creator-1/end.png',
     });
     expect(data.restoreIssues).toContain('video-start-frame');
+  });
+
+  it('does not service-sign a result path whose canonical owner differs from the generation owner', async () => {
+    generationRows.set('owner-mismatch-1', {
+      id: 'owner-mismatch-1',
+      user_id: 'user-1',
+      is_public: false,
+      share_input_media_for_remix: false,
+      output_url: 'generated_images/user-2/private.png',
+      showcase_asset_path: null,
+      category: 'image',
+      model: 'nano-banana-2',
+      prompt: 'Owner mismatch',
+      title: 'Owner mismatch',
+      workflow_settings: {},
+    });
+
+    const { GET } = await import('@/app/api/remix-source/route');
+    const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=owner-mismatch-1'));
+
+    const data = await response.json();
+    expect(response.status).toBe(200);
+    expect(data.result.url).toBeNull();
+    expect(data.restoreIssues).toContain('result');
+    expect(resolveOwnedStoredMediaUrlMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'generated_images/user-2/private.png',
+      'user-1',
+    );
+  });
+
+  it('uses only the canonical showcase prefix for the selected generation', async () => {
+    generationRows.set('showcase-valid', {
+      id: 'showcase-valid',
+      user_id: 'user-1',
+      is_public: false,
+      share_input_media_for_remix: false,
+      output_url: null,
+      showcase_asset_path: 'showcase/showcase-valid/output.webp',
+      category: 'image',
+      model: 'nano-banana-2',
+      prompt: 'Valid showcase',
+      title: 'Valid showcase',
+      workflow_settings: {},
+    });
+    generationRows.set('showcase-invalid', {
+      id: 'showcase-invalid',
+      user_id: 'user-1',
+      is_public: false,
+      share_input_media_for_remix: false,
+      output_url: null,
+      showcase_asset_path: 'showcase/another-generation/private.webp',
+      category: 'image',
+      model: 'nano-banana-2',
+      prompt: 'Invalid showcase',
+      title: 'Invalid showcase',
+      workflow_settings: {},
+    });
+
+    const { GET } = await import('@/app/api/remix-source/route');
+    const validResponse = await GET(createRouteRequest(
+      'http://localhost/api/remix-source?id=showcase-valid',
+    ));
+    const invalidResponse = await GET(createRouteRequest(
+      'http://localhost/api/remix-source?id=showcase-invalid',
+    ));
+
+    expect((await validResponse.json()).result.url).toBe(
+      'https://public.example.com/showcase/showcase-valid/output.webp',
+    );
+    const invalidData = await invalidResponse.json();
+    expect(invalidData.result.url).toBeNull();
+    expect(invalidData.restoreIssues).toContain('result');
   });
 
   it('hides private remix sources from non-owners', async () => {

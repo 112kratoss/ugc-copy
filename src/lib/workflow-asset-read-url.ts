@@ -3,6 +3,7 @@ import {
   WORKFLOW_ASSET_UPLOAD_READ_URL_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { parseCanonicalStorageLocation } from '@/lib/storage-ownership';
 
 export type WorkflowAssetReadUrlClient = Parameters<typeof enforceBackendRateLimit>[0] & {
   storage: {
@@ -51,12 +52,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-function hasUnsafePathSegment(value: string) {
-  return value.startsWith('/')
-    || value.includes('://')
-    || value.split('/').some((segment) => segment === '..' || segment === '');
-}
-
 function parseOwnedWorkflowAssetPath(body: unknown, userId: string): {
   bucket: string;
   path: string;
@@ -65,19 +60,15 @@ function parseOwnedWorkflowAssetPath(body: unknown, userId: string): {
     return { error: 'Workflow asset path is required.', status: 400 };
   }
 
-  const storagePath = body.storagePath.trim();
-  const separatorIndex = storagePath.indexOf('/');
-  if (separatorIndex < 1 || hasUnsafePathSegment(storagePath)) {
+  const location = parseCanonicalStorageLocation(body.storagePath, {
+    allowedBuckets: WORKFLOW_ASSET_BUCKETS,
+    ownerUserId: userId,
+  });
+  if (!location) {
     return { error: 'Workflow asset path is not available.', status: 403 };
   }
 
-  const bucket = storagePath.slice(0, separatorIndex);
-  const path = storagePath.slice(separatorIndex + 1);
-  if (!WORKFLOW_ASSET_BUCKETS.has(bucket) || !path.startsWith(`${userId}/`) || path.length <= `${userId}/`.length) {
-    return { error: 'Workflow asset path is not available.', status: 403 };
-  }
-
-  return { bucket, path };
+  return { bucket: location.bucket, path: location.filePath };
 }
 
 function resolveClient(client: CreateWorkflowAssetReadUrlInput['client']) {

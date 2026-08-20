@@ -3,6 +3,7 @@ import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
+import { requireIdentity } from '@/lib/account-identity';
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
 import {
@@ -24,6 +25,7 @@ type GenerationLifecycleRouteDependencies = {
   createUserClient?: typeof createUserClient;
   deleteOwnerGenerationForRoute?: typeof deleteOwnerGenerationForRoute;
   logError?: typeof logBackendRouteError;
+  requireIdentity?: typeof requireIdentity;
   restoreOwnerGenerationForRoute?: typeof restoreOwnerGenerationForRoute;
 };
 
@@ -36,6 +38,7 @@ function resolveDependencies(dependencies: GenerationLifecycleRouteDependencies 
     deleteOwnerGenerationForRoute:
       dependencies?.deleteOwnerGenerationForRoute ?? deleteOwnerGenerationForRoute,
     logError: dependencies?.logError ?? logBackendRouteError,
+    requireIdentity: dependencies?.requireIdentity ?? requireIdentity,
     restoreOwnerGenerationForRoute:
       dependencies?.restoreOwnerGenerationForRoute ?? restoreOwnerGenerationForRoute,
   };
@@ -79,20 +82,25 @@ async function handleGenerationLifecyclePOST({
   request: Request;
 }) {
   const supabase = dependencies.createUserClient(request);
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
+  let admin: ReturnType<typeof dependencies.createServiceClient> | null = null;
+  const getAdmin = () => {
+    admin ??= dependencies.createServiceClient();
+    return admin;
+  };
+  const identity = await dependencies.requireIdentity(supabase, getAdmin);
 
-  if (authError || !user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!identity.ok) {
+    return NextResponse.json(
+      { error: identity.error, code: identity.code },
+      { status: identity.status },
+    );
   }
 
   try {
     const serviceInput = {
-      adminSupabase: dependencies.createServiceClient(),
+      adminSupabase: getAdmin(),
       generationId,
-      ownerUserId: user.id,
+      ownerUserId: identity.identity.userId,
     };
     const result = action === 'archive'
       ? await dependencies.archiveOwnerGenerationForRoute(serviceInput)
@@ -178,6 +186,7 @@ export async function generationDeleteRouteResponse({
       generationId,
       createUserSupabase: () => resolvedDependencies.createUserClient(request),
       createAdminSupabase: resolvedDependencies.createServiceClient,
+      requireIdentity: resolvedDependencies.requireIdentity,
     })),
     request,
   );

@@ -1,4 +1,5 @@
 import 'server-only';
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -107,7 +108,7 @@ export async function verifyCreditRazorpayPaymentForRoute({
   const {
     data: { user },
     error: authError,
-  } = await userSupabase.auth.getUser();
+  } = await getVerifiedAuthUserResult(userSupabase);
 
   if (authError || !user || user.id !== requestedUserId) {
     return { ok: false, status: 401, body: { error: 'Unauthorized' } };

@@ -1,4 +1,5 @@
 import 'server-only';
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
 import type { SupabaseClient, User } from '@supabase/supabase-js';
@@ -91,7 +92,7 @@ async function authenticate(request: Request, dependencies: ReturnType<typeof re
   const {
     data: { user },
     error,
-  } = await client.auth.getUser();
+  } = await getVerifiedAuthUserResult(client);
   return error || !user ? null : user;
 }
 

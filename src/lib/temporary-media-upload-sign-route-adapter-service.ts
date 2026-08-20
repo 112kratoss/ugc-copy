@@ -3,6 +3,7 @@ import 'server-only';
 import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
+import { requireIdentity } from '@/lib/account-identity';
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import {
@@ -15,6 +16,7 @@ type TemporaryMediaUploadSignRouteDependencies = {
   createTemporaryMediaUploadIntent?: typeof createTemporaryMediaUploadIntent;
   createUploadId?: () => string;
   createUserClient?: typeof createUserClient;
+  requireIdentity?: typeof requireIdentity;
 };
 
 function resolveDependencies(dependencies: TemporaryMediaUploadSignRouteDependencies | undefined) {
@@ -24,20 +26,8 @@ function resolveDependencies(dependencies: TemporaryMediaUploadSignRouteDependen
       dependencies?.createTemporaryMediaUploadIntent ?? createTemporaryMediaUploadIntent,
     createUploadId: dependencies?.createUploadId ?? randomUUID,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
+    requireIdentity: dependencies?.requireIdentity ?? requireIdentity,
   };
-}
-
-async function getAuthenticatedUserId(
-  request: Request,
-  dependencies: ReturnType<typeof resolveDependencies>,
-) {
-  const supabase = dependencies.createUserClient(request);
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
-
-  return authError || !user ? null : user.id;
 }
 
 function createTemporaryMediaUploadSignErrorResponse(
@@ -70,9 +60,18 @@ async function handleTemporaryMediaUploadSignPOST(
   request: Request,
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
-  const userId = await getAuthenticatedUserId(request, dependencies);
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const userClient = dependencies.createUserClient(request);
+  let serviceClient: ReturnType<typeof dependencies.createServiceClient> | null = null;
+  const getServiceClient = () => {
+    serviceClient ??= dependencies.createServiceClient();
+    return serviceClient;
+  };
+  const identity = await dependencies.requireIdentity(userClient, getServiceClient);
+  if (!identity.ok) {
+    return NextResponse.json(
+      { error: identity.error, code: identity.code },
+      { status: identity.status },
+    );
   }
 
   let body;
@@ -84,8 +83,8 @@ async function handleTemporaryMediaUploadSignPOST(
 
   const result = await dependencies.createTemporaryMediaUploadIntent({
     body,
-    userId,
-    client: dependencies.createServiceClient,
+    userId: identity.identity.userId,
+    client: getServiceClient,
     createUploadId: dependencies.createUploadId,
   });
 

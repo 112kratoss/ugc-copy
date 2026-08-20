@@ -1,3 +1,4 @@
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 
@@ -42,7 +43,7 @@ async function getAuthenticatedUserId(
   const {
     data: { user },
     error,
-  } = await supabase.auth.getUser();
+  } = await getVerifiedAuthUserResult(supabase);
 
   // Guests hold a valid JWT but are not registered. Before anonymous
   // sessions existed these two were the same thing, so this check read

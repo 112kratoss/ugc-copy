@@ -62,6 +62,7 @@ describe('route identity policy', () => {
       '/api/enhance-prompt',
       '/api/generations',
       '/api/uploads/media/sign',
+      '/api/showcase/preview',
     ]) {
       expect(routeIdentityPolicy(route)).toBe('guest');
     }

@@ -6,6 +6,7 @@ import {
   PROFILE_MEDIA_UPLOAD_CLEANUP_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 
 const PROFILE_MEDIA_BUCKET = 'profiles';
 const MAX_CLEANUP_PATHS = 4;
@@ -52,18 +53,9 @@ function readCleanupPaths(value: unknown): string[] | null {
 
   const normalized = paths
     .filter((path): path is string => typeof path === 'string')
-    .map((path) => path.trim())
     .filter(Boolean);
 
   return normalized.length === paths.length ? normalized : null;
-}
-
-function isOwnedProfilePath(path: string, userId: string) {
-  if (path.includes('..') || path.startsWith('/') || path.includes('://')) {
-    return false;
-  }
-
-  return path.startsWith(`${userId}/`) && path.length > userId.length + 1;
 }
 
 function resolveClient(client: CleanupProfileMediaInput['client']) {
@@ -99,7 +91,10 @@ export async function cleanupProfileMedia({
   client,
 }: CleanupProfileMediaInput): Promise<ProfileMediaCleanupResult> {
   const paths = readCleanupPaths(body);
-  if (!paths || !paths.every((path) => isOwnedProfilePath(path, userId))) {
+  const canonicalPaths = paths?.map((path) => parseCanonicalStorageObjectPath(path, {
+    ownerUserId: userId,
+  })) ?? null;
+  if (!canonicalPaths || canonicalPaths.some((path) => !path)) {
     return invalidCleanupRequest();
   }
 
@@ -118,7 +113,9 @@ export async function cleanupProfileMedia({
     return { ok: false, status: 500, body: { error: 'Failed to check profile media cleanup limits.' } };
   }
 
-  const { error } = await resolvedClient.storage.from(PROFILE_MEDIA_BUCKET).remove(paths);
+  const { error } = await resolvedClient.storage
+    .from(PROFILE_MEDIA_BUCKET)
+    .remove(canonicalPaths as string[]);
   if (error) {
     logBackendError('failed_to_clean_up_profile_media', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to clean up profile media.' } };

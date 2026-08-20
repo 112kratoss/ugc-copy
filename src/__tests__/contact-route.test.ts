@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { CONTACT_REQUEST_BODY_MAX_BYTES } from '@/lib/contact-route-adapter-service';
+
 const mocks = vi.hoisted(() => {
   const insert = vi.fn(async () => ({ error: null }));
   const from = vi.fn(() => ({ insert }));
@@ -77,7 +79,7 @@ describe('/api/contact route', () => {
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key';
   });
 
-  it('rejects invalid contact payloads before creating a privileged Supabase client', async () => {
+  it('charges invalid contact payloads before validation', async () => {
     const { POST } = await import('@/app/api/contact/route');
     const response = await POST(buildContactRequest({
       name: 'Athul',
@@ -92,7 +94,48 @@ describe('/api/contact route', () => {
       error: 'Name, email, and message are required',
     });
     expect(mocks.createClient).not.toHaveBeenCalled();
-    expect(mocks.createServiceClient).not.toHaveBeenCalled();
+    expect(mocks.createServiceClient).toHaveBeenCalledTimes(1);
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  it('rejects a chunked oversized body with 413 after rate admission', async () => {
+    const { POST } = await import('@/app/api/contact/route');
+    const request = new Request('http://localhost/api/contact', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-request-id': 'contact-oversized-1',
+      },
+      body: JSON.stringify({ message: 'x'.repeat(CONTACT_REQUEST_BODY_MAX_BYTES) }),
+    });
+    expect(request.headers.has('content-length')).toBe(false);
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(413);
+    expectPrivateNoStoreTraceHeaders(response, 'contact-oversized-1');
+    await expect(response.json()).resolves.toEqual({ error: 'Contact submission is too large.' });
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+
+  it('charges malformed JSON before returning a validation error', async () => {
+    const { POST } = await import('@/app/api/contact/route');
+    const response = await POST(new Request('http://localhost/api/contact', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-request-id': 'contact-malformed-1',
+      },
+      body: '{invalid',
+    }));
+
+    expect(response.status).toBe(400);
+    expectPrivateNoStoreTraceHeaders(response, 'contact-malformed-1');
+    await expect(response.json()).resolves.toEqual({ error: 'Invalid JSON payload.' });
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);
+    expect(mocks.insert).not.toHaveBeenCalled();
   });
 
   it('stores valid contact messages through the shared service client helper', async () => {

@@ -1,4 +1,5 @@
 import 'server-only';
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
@@ -53,7 +54,7 @@ async function getOptionalActorUserId(
     const supabase = dependencies.createUserClient(request);
     const {
       data: { user },
-    } = await supabase.auth.getUser();
+    } = await getVerifiedAuthUserResult(supabase);
 
     return user?.id ?? null;
   } catch {

@@ -3,12 +3,14 @@ import {
   POST_RESOURCE_FILE_READ_URL_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
-import { getUploadsBucketPath, isUploadsStoragePath } from '@/lib/image-elements';
-import { getStoredMediaLocation } from '@/lib/media-urls';
 import {
   getPostResourceBundleDetailByPostId,
   type PostResourceBundleDetail,
 } from '@/lib/post-resource-bundles-server';
+import {
+  getCanonicalStoredMediaLocation,
+  parseCanonicalStorageObjectPath,
+} from '@/lib/storage-ownership';
 
 export type PostResourceFileReadUrlClient = Parameters<typeof enforceBackendRateLimit>[0] & {
   storage: {
@@ -56,6 +58,14 @@ type CreatePostResourceFileReadUrlParams = {
 };
 
 const RESOURCE_FILES_BUCKET = 'post_resource_files';
+const RESOURCE_SOURCE_BUCKETS = [
+  RESOURCE_FILES_BUCKET,
+  'uploads',
+  'generation_inputs',
+  'generated_images',
+  'generated_videos',
+  'generated_audio',
+] as const;
 const SIGNED_READ_EXPIRES_IN_SECONDS = 600;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -67,7 +77,7 @@ function parseRequestedPath(body: unknown) {
     return '';
   }
 
-  return body.storagePath.trim().replace(/^\/+/, '');
+  return body.storagePath === body.storagePath.trim() ? body.storagePath : '';
 }
 
 function resolveClient(client: CreatePostResourceFileReadUrlParams['client']) {
@@ -99,16 +109,15 @@ function findRequestedResource(detail: PostResourceBundleDetail, requestedPath: 
   return { attachment: null, resourceItem: null };
 }
 
-function resolveStorageLocation(requestedPath: string) {
-  const storedLocation = getStoredMediaLocation(requestedPath);
-  const isUploadReference = isUploadsStoragePath(requestedPath);
+function resolveStorageLocation(requestedPath: string, ownerUserId: string) {
+  const storedLocation = getCanonicalStoredMediaLocation(requestedPath, {
+    allowedBuckets: RESOURCE_SOURCE_BUCKETS,
+    ownerUserId,
+  });
+  if (storedLocation) return storedLocation;
 
-  return {
-    bucket: isUploadReference ? 'uploads' : storedLocation?.bucket ?? RESOURCE_FILES_BUCKET,
-    filePath: isUploadReference
-      ? getUploadsBucketPath(requestedPath)
-      : storedLocation?.filePath ?? requestedPath,
-  };
+  const filePath = parseCanonicalStorageObjectPath(requestedPath, { ownerUserId });
+  return filePath ? { bucket: RESOURCE_FILES_BUCKET, filePath } : null;
 }
 
 export async function createPostResourceFileReadUrlForRoute({
@@ -151,6 +160,23 @@ export async function createPostResourceFileReadUrlForRoute({
     };
   }
 
+  const resourceOwnerUserId = detail.seller?.id;
+  if (!resourceOwnerUserId) {
+    return {
+      ok: false,
+      status: 404,
+      body: { error: 'Resource file not found on this unlock.' },
+    };
+  }
+  const storageLocation = resolveStorageLocation(requestedPath, resourceOwnerUserId);
+  if (!storageLocation) {
+    return {
+      ok: false,
+      status: 404,
+      body: { error: 'Resource file not found on this unlock.' },
+    };
+  }
+
   const resolvedClient = resolveClient(client);
   try {
     await enforceBackendRateLimit(resolvedClient, {
@@ -172,10 +198,9 @@ export async function createPostResourceFileReadUrlForRoute({
     };
   }
 
-  const { bucket, filePath } = resolveStorageLocation(requestedPath);
   const { data, error } = await resolvedClient.storage
-    .from(bucket)
-    .createSignedUrl(filePath, SIGNED_READ_EXPIRES_IN_SECONDS, {
+    .from(storageLocation.bucket)
+    .createSignedUrl(storageLocation.filePath, SIGNED_READ_EXPIRES_IN_SECONDS, {
       download: attachment?.label ?? resourceItem?.title ?? 'Resource file',
     });
 

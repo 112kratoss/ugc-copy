@@ -72,13 +72,17 @@ describe('getContactRateLimitKey', () => {
 });
 
 describe('submitContactMessageForRoute', () => {
-  it('rejects invalid payloads before creating an admin client', async () => {
-    const createAdminSupabase = vi.fn();
+  it('charges invalid payloads to the network rate limit before validation', async () => {
+    const admin = createContactClientMock();
+    const createAdminSupabase = vi.fn(() => admin.client);
 
     const result = await submitContactMessageForRoute({
       readBody: vi.fn(async () => ({
-        name: 'Athul',
-        email: 'athul@example.com',
+        ok: true as const,
+        value: {
+          name: 'Athul',
+          email: 'athul@example.com',
+        },
       })),
       rateLimitKey: '203.0.113.10',
       createAdminSupabase,
@@ -89,7 +93,9 @@ describe('submitContactMessageForRoute', () => {
       status: 400,
       body: { error: 'Name, email, and message are required' },
     });
-    expect(createAdminSupabase).not.toHaveBeenCalled();
+    expect(createAdminSupabase).toHaveBeenCalledTimes(1);
+    expect(admin.calls.rpc).toHaveLength(1);
+    expect(admin.calls.inserts).toEqual([]);
   });
 
   it('normalizes valid contact messages after rate limiting', async () => {
@@ -97,10 +103,13 @@ describe('submitContactMessageForRoute', () => {
 
     const result = await submitContactMessageForRoute({
       readBody: vi.fn(async () => ({
-        name: ' Athul ',
-        email: ' ATHUL@EXAMPLE.COM ',
-        subject: '',
-        message: ' Hello ',
+        ok: true as const,
+        value: {
+          name: ' Athul ',
+          email: ' ATHUL@EXAMPLE.COM ',
+          subject: '',
+          message: ' Hello ',
+        },
       })),
       rateLimitKey: '203.0.113.10',
       createAdminSupabase: vi.fn(() => admin.client),
@@ -131,12 +140,16 @@ describe('submitContactMessageForRoute', () => {
   it('returns a route-ready rate limit result before inserting messages', async () => {
     const admin = createContactClientMock({ rateLimited: true });
 
-    const result = await submitContactMessageForRoute({
-      readBody: vi.fn(async () => ({
+    const readBody = vi.fn(async () => ({
+      ok: true as const,
+      value: {
         name: 'Athul',
         email: 'athul@example.com',
         message: 'Hello',
-      })),
+      },
+    }));
+    const result = await submitContactMessageForRoute({
+      readBody,
       rateLimitKey: '203.0.113.10',
       createAdminSupabase: vi.fn(() => admin.client),
     });
@@ -152,6 +165,25 @@ describe('submitContactMessageForRoute', () => {
       resetAt: '2026-06-23T06:30:00.000Z',
     });
     expect(admin.calls.inserts).toEqual([]);
+    expect(readBody).not.toHaveBeenCalled();
+  });
+
+  it('returns 413 after admission when the bounded reader rejects the body', async () => {
+    const admin = createContactClientMock();
+
+    const result = await submitContactMessageForRoute({
+      readBody: vi.fn(async () => ({ ok: false as const, reason: 'too_large' as const })),
+      rateLimitKey: '203.0.113.10',
+      createAdminSupabase: vi.fn(() => admin.client),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 413,
+      body: { error: 'Contact submission is too large.' },
+    });
+    expect(admin.calls.rpc).toHaveLength(1);
+    expect(admin.calls.inserts).toEqual([]);
   });
 
   it('maps Supabase insert failures to stable route errors', async () => {
@@ -159,9 +191,12 @@ describe('submitContactMessageForRoute', () => {
 
     const result = await submitContactMessageForRoute({
       readBody: vi.fn(async () => ({
-        name: 'Athul',
-        email: 'athul@example.com',
-        message: 'Hello',
+        ok: true as const,
+        value: {
+          name: 'Athul',
+          email: 'athul@example.com',
+          message: 'Hello',
+        },
       })),
       rateLimitKey: '203.0.113.10',
       createAdminSupabase: vi.fn(() => admin.client),

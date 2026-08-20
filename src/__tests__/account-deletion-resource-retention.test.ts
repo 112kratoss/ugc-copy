@@ -5,7 +5,11 @@ import { retainPurchasedUnlockFiles } from '@/lib/account-deletion-resource-rete
 const CREATOR_ID = '11111111-1111-4111-8111-111111111111';
 const REVISION_ID = '22222222-2222-4222-8222-222222222222';
 
-function createAdmin(options: { copyError?: unknown; destinationExists?: boolean } = {}) {
+function createAdmin(options: {
+  copyError?: unknown;
+  destinationExists?: boolean;
+  revisionOverrides?: Record<string, unknown>;
+} = {}) {
   const mappings: Array<Record<string, unknown>> = [];
   const supplements: Array<Record<string, unknown>> = [];
   const copies: Array<{ bucket: string; source: string; destination: string; destinationBucket?: string }> = [];
@@ -63,6 +67,7 @@ function createAdmin(options: { copyError?: unknown; destinationExists?: boolean
         allow_remix: true,
         attachments: [{ kind: 'file', storagePath: `${CREATOR_ID}/guide.pdf` }],
         resource_items: [{ storagePath: `uploads/${CREATOR_ID}/source.psd` }],
+        ...options.revisionOverrides,
       }],
       error: null,
     })),
@@ -109,5 +114,29 @@ describe('purchased unlock file retention', () => {
       'Could not retain purchased resource',
     );
     expect(mappings).toHaveLength(0);
+  });
+
+  it('rejects a persisted owner-changing or encoded source before service-role copy', async () => {
+    for (const storagePath of [
+      `uploads/${CREATOR_ID}/../another-user/private.psd`,
+      `uploads/${CREATOR_ID}/%252fanother-user/private.psd`,
+      'uploads/another-user/private.psd',
+      ` uploads/${CREATOR_ID}/private.psd`,
+    ]) {
+      const { admin, copies, mappings } = createAdmin({
+        revisionOverrides: {
+          generation_id: null,
+          allow_remix: false,
+          attachments: [],
+          resource_items: [{ storagePath }],
+        },
+      });
+
+      await expect(retainPurchasedUnlockFiles(admin as never, CREATOR_ID)).rejects.toThrow(
+        'invalid storage path',
+      );
+      expect(copies).toEqual([]);
+      expect(mappings).toEqual([]);
+    }
   });
 });

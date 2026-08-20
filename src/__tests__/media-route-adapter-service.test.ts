@@ -15,6 +15,17 @@ function createUserClient(userId: string | null = 'user-1') {
   } as unknown as SupabaseClient;
 }
 
+async function requireIdentityForTest(userClient: SupabaseClient) {
+  const { data: { user }, error } = await userClient.auth.getUser();
+  if (error || !user) {
+    return { ok: false as const, status: 401, code: 'UNAUTHORIZED' as const, error: 'Unauthorized' };
+  }
+  return {
+    ok: true as const,
+    identity: { user, userId: user.id, kind: 'registered' as const, isGuest: false },
+  };
+}
+
 describe('getMediaRouteResponse', () => {
   it('rejects invalid media paths before creating auth or service clients', async () => {
     const createMediaSupabaseClient = vi.fn();
@@ -27,6 +38,7 @@ describe('getMediaRouteResponse', () => {
         createMediaSupabaseClient,
         createServiceClient,
         createMediaReadSignedUrlForRoute,
+        requireIdentity: requireIdentityForTest,
       },
     });
 
@@ -47,11 +59,15 @@ describe('getMediaRouteResponse', () => {
         createMediaSupabaseClient: vi.fn(async () => createUserClient(null)),
         createServiceClient,
         createMediaReadSignedUrlForRoute,
+        requireIdentity: requireIdentityForTest,
       },
     });
 
     expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+    await expect(response.json()).resolves.toEqual({
+      error: 'Unauthorized',
+      code: 'UNAUTHORIZED',
+    });
     expect(createServiceClient).not.toHaveBeenCalled();
     expect(createMediaReadSignedUrlForRoute).not.toHaveBeenCalled();
   });
@@ -70,6 +86,7 @@ describe('getMediaRouteResponse', () => {
         createMediaSupabaseClient: vi.fn(async () => userClient),
         createServiceClient: vi.fn(() => rateLimitClient),
         createMediaReadSignedUrlForRoute,
+        requireIdentity: requireIdentityForTest,
       },
     });
 
@@ -108,6 +125,7 @@ describe('getMediaRouteResponse', () => {
           ok: false as const,
           rateLimitError,
         })),
+        requireIdentity: requireIdentityForTest,
       },
     });
 
@@ -118,5 +136,53 @@ describe('getMediaRouteResponse', () => {
       retryAfterSeconds: 25,
       limit: 300,
     });
+  });
+
+  it.each([
+    {
+      status: 409,
+      code: 'SESSION_MERGED' as const,
+      error: 'This guest session has been linked to an account. Sign in to continue.',
+    },
+    {
+      status: 409,
+      code: 'ACCOUNT_DELETING' as const,
+      error: 'This account is being permanently deleted.',
+    },
+  ])('returns stable $code admission for cookie-authenticated sessions', async (failure) => {
+    const createMediaReadSignedUrlForRoute = vi.fn();
+    const profileQuery = {
+      eq: vi.fn(),
+      maybeSingle: vi.fn(async () => ({
+        data: {
+          identity_state: failure.code === 'SESSION_MERGED' ? 'merged' : 'deleting',
+        },
+        error: null,
+      })),
+    };
+    profileQuery.eq.mockReturnValue(profileQuery);
+    const createServiceClient = vi.fn(() => ({
+      from: vi.fn(() => ({ select: vi.fn(() => profileQuery) })),
+    }) as unknown as SupabaseClient);
+    const response = await getMediaRouteResponse({
+      request: new Request(
+        'http://localhost/api/media?bucket=generated_images&path=user%2Ffile.jpg',
+        { headers: { Cookie: 'sb-auth-token=browser-session' } },
+      ),
+      dependencies: {
+        createMediaSupabaseClient: vi.fn(async () => createUserClient('user-1')),
+        createServiceClient,
+        createMediaReadSignedUrlForRoute,
+      },
+    });
+
+    expect(response.status).toBe(failure.status);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    await expect(response.json()).resolves.toEqual({
+      error: failure.error,
+      code: failure.code,
+    });
+    expect(createServiceClient).toHaveBeenCalledOnce();
+    expect(createMediaReadSignedUrlForRoute).not.toHaveBeenCalled();
   });
 });

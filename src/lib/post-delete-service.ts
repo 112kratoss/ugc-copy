@@ -25,8 +25,23 @@ import {
   type ShowcaseVisibility,
 } from '@/lib/showcase';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
+
+export function getCanonicalPostShowcaseAssetPath(
+  storagePath: string | null | undefined,
+  postId: string,
+  generationId: string | null,
+): string | null {
+  if (!storagePath) return null;
+  const canonicalPath = parseCanonicalStorageObjectPath(storagePath, { minimumSegments: 3 });
+  if (!canonicalPath) return null;
+  if (canonicalPath.startsWith(`posts/${postId}/`)) return canonicalPath;
+  return generationId && canonicalPath.startsWith(`showcase/${generationId}/`)
+    ? canonicalPath
+    : null;
+}
 
 type DeletablePostRow = {
   id: string;
@@ -307,27 +322,35 @@ export async function deleteOwnerPostForRoute({
     return { ok: false, status: 500, body: { error: 'Failed to delete post.' } };
   }
 
-  const removableShowcasePath = post.showcase_asset_path;
-
+  let verifiedLinkedGenerationId: string | null = null;
   if (post.generation_id) {
     const { data: generation, error: generationError } = await adminSupabase
       .from('generations')
       .select('id, showcase_asset_path')
       .eq('id', post.generation_id)
+      .eq('user_id', ownerUserId)
       .maybeSingle();
 
     if (generationError) {
       logBackendError('failed_to_load_linked_generation_before_post_delete', { error: generationError });
     } else if (generation) {
+      verifiedLinkedGenerationId = post.generation_id;
       await adminSupabase
         .from('generations')
         .update({
           is_public: false,
           showcase_asset_path: null,
         })
-        .eq('id', post.generation_id);
+        .eq('id', post.generation_id)
+        .eq('user_id', ownerUserId);
     }
   }
+
+  const removableShowcasePath = getCanonicalPostShowcaseAssetPath(
+    post.showcase_asset_path,
+    post.id,
+    verifiedLinkedGenerationId,
+  );
 
   // A post with buyers or a still-payable cash order is tombstoned, never
   // removed. The row keeps the quoted checkout fulfillable, while private +

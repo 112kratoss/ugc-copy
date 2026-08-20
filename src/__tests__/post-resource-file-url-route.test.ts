@@ -105,6 +105,7 @@ describe('/api/posts/[postId]/resource-bundle/file-url route', () => {
     authState.user = null;
     getPostResourceBundleDetailByPostIdMock.mockResolvedValue({
       viewerCanAccess: true,
+      seller: { id: 'user-1' },
       resources: {
         attachments: [],
         items: [{
@@ -140,6 +141,7 @@ describe('/api/posts/[postId]/resource-bundle/file-url route', () => {
     authState.user = null;
     getPostResourceBundleDetailByPostIdMock.mockResolvedValue({
       viewerCanAccess: true,
+      seller: { id: 'user-1' },
       resources: {
         attachments: [],
         items: [{
@@ -170,6 +172,7 @@ describe('/api/posts/[postId]/resource-bundle/file-url route', () => {
     authState.user = null;
     getPostResourceBundleDetailByPostIdMock.mockResolvedValue({
       viewerCanAccess: true,
+      seller: { id: 'user-1' },
       resources: {
         attachments: [],
         items: [{
@@ -218,6 +221,7 @@ describe('/api/posts/[postId]/resource-bundle/file-url route', () => {
   it('signs copied reference files after the buyer has access', async () => {
     getPostResourceBundleDetailByPostIdMock.mockResolvedValue({
       viewerCanAccess: true,
+      seller: { id: 'user-1' },
       resources: {
         attachments: [],
         items: [{
@@ -267,6 +271,7 @@ describe('/api/posts/[postId]/resource-bundle/file-url route', () => {
     });
     getPostResourceBundleDetailByPostIdMock.mockResolvedValue({
       viewerCanAccess: true,
+      seller: { id: 'user-1' },
       resources: {
         attachments: [],
         items: [{

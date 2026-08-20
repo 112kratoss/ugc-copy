@@ -6,7 +6,10 @@ import {
   type ImageGenerationStatusDependencies,
 } from '@/lib/image-generation-status-service';
 
-function createStatusClientMock() {
+function createStatusClientMock(
+  overrides: Record<string, unknown> = {},
+  linkedGuestIds: string[] = [],
+) {
   const selects: string[] = [];
   // `value` for eq(), `values` for the linked-owner in() filter.
   const eqs: Array<{ column: string; value?: unknown; values?: unknown[] }> = [];
@@ -26,10 +29,28 @@ function createStatusClientMock() {
         { storagePath: 'generated_images/user-1/output-2.png' },
       ],
     },
+    ...overrides,
   };
+  const createSignedUrl = vi.fn(async (path: string) => ({
+    data: { signedUrl: `signed:${path}` },
+    error: null,
+  }));
+  const storageFrom = vi.fn(() => ({ createSignedUrl }));
 
   const client = {
     from(table: string) {
+      if (table === 'profiles') {
+        return {
+          select() {
+            return {
+              eq: vi.fn(async () => ({
+                data: linkedGuestIds.map((id) => ({ id })),
+                error: null,
+              })),
+            };
+          },
+        };
+      }
       if (table !== 'generations') {
         throw new Error(`Unexpected table access: ${table}`);
       }
@@ -70,12 +91,15 @@ function createStatusClientMock() {
         },
       };
     },
+    storage: { from: storageFrom },
   };
 
   return {
     client: client as unknown as SupabaseClient,
     selects,
     eqs,
+    createSignedUrl,
+    storageFrom,
   };
 }
 
@@ -129,6 +153,50 @@ describe('getImageGenerationStatusForRoute', () => {
     ]);
     expect(createAdminSupabase).toHaveBeenCalledTimes(1);
     expect(dependencies.resolveStoredMediaUrl).toHaveBeenCalledTimes(3);
+    expect(dependencies.resolveStoredMediaUrl).toHaveBeenNthCalledWith(
+      1,
+      adminClient.client,
+      'generated_images/user-1/output-1.png',
+      'user-1',
+    );
+    expect(dependencies.resolveStoredMediaUrl).toHaveBeenNthCalledWith(
+      3,
+      adminClient.client,
+      'generated_images/user-1/generated_task-image-1.png',
+      'user-1',
+    );
     expect(dependencies.fetchWithProviderTimeout).not.toHaveBeenCalled();
+  });
+
+  it('authorizes a linked guest row but refuses its encoded foreign-owner paths', async () => {
+    const adminClient = createStatusClientMock({
+      user_id: 'guest-1',
+      output_url: 'generated_images/guest-1%252f..%252fvictim/private.png',
+      workflow_settings: {
+        outputs: [{ storagePath: 'generated_images/victim/private-2.png' }],
+      },
+    }, ['guest-1']);
+
+    const result = await getImageGenerationStatusForRoute({
+      request: new Request('http://localhost/api/generate-image?id=task-image-1'),
+      predictionId: 'task-image-1',
+      userId: 'user-1',
+      createAdminSupabase: () => adminClient.client,
+      kieApiKey: 'test-key',
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      body: {
+        status: 'succeeded',
+        output: null,
+        timing: expect.objectContaining({ appStatus: 'succeeded' }),
+      },
+    });
+    expect(adminClient.eqs).toContainEqual({
+      column: 'user_id',
+      values: ['user-1', 'guest-1'],
+    });
+    expect(adminClient.storageFrom).not.toHaveBeenCalled();
   });
 });

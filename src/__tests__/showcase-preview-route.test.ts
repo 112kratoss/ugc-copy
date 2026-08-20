@@ -82,6 +82,7 @@ describe('/api/showcase/preview route', () => {
     });
     mocks.single.mockResolvedValue({
       data: {
+        user_id: 'user-1',
         output_url: 'generated_images/user-1/preview.png',
         showcase_asset_path: null,
         is_public: true,
@@ -154,7 +155,7 @@ describe('/api/showcase/preview route', () => {
       p_window_seconds: 600,
     });
     expect(mocks.serviceFrom).toHaveBeenCalledWith('generations');
-    expect(mocks.select).toHaveBeenCalledWith('output_url, showcase_asset_path, is_public');
+    expect(mocks.select).toHaveBeenCalledWith('user_id, output_url, showcase_asset_path, is_public');
     expect(mocks.eq).toHaveBeenCalledWith('id', 'generation-1');
     expect(mocks.storageFrom).toHaveBeenCalledWith('generated_images');
     expect(mocks.createSignedUrl).toHaveBeenCalledWith('user-1/preview.png', 3600);

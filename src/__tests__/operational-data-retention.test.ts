@@ -1,7 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { pruneOperationalBackendData } from '@/lib/operational-data-retention';
+
+const reclaimExpiredUploadReservationsMock = vi.hoisted(() => vi.fn(async () => ({
+  scanned: 0,
+  objectsDeleted: 0,
+  absentObjectsReleased: 0,
+  failed: 0,
+  bytesDeleted: 0,
+})));
+
+vi.mock('@/lib/upload-finalization', () => ({
+  reclaimExpiredUploadReservations: reclaimExpiredUploadReservationsMock,
+}));
 
 type RpcCall = { fn: string; args: Record<string, unknown> };
 
@@ -41,11 +53,15 @@ function createClient(result: {
         }
         return { data: result.data ?? null, error: result.error ?? null };
       },
-    } as unknown as Pick<SupabaseClient, 'rpc'>,
+    } as unknown as SupabaseClient,
   };
 }
 
 describe('operational data retention', () => {
+  beforeEach(() => {
+    reclaimExpiredUploadReservationsMock.mockClear();
+  });
+
   it('calls the bounded retention RPC and maps its summary', async () => {
     const { client, calls } = createClient({
       data: {
@@ -78,6 +94,9 @@ describe('operational data retention', () => {
       profileShareEventsDeleted: 6,
       abandonedFreeUnlockOrdersDeleted: 2,
       uploadByteReservationsDeleted: 0,
+      expiredUploadReservationsScanned: 0,
+      expiredUploadObjectsDeleted: 0,
+      expiredUploadReservationFailures: 0,
     });
   });
 
@@ -103,6 +122,7 @@ describe('operational data retention', () => {
     expect(summary.shareEventsDeleted).toBe(40);
     expect(summary.profileShareEventsDeleted).toBe(11);
     expect(summary.abandonedFreeUnlockOrdersDeleted).toBe(5);
+    expect(reclaimExpiredUploadReservationsMock).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the main sweep result when a supplementary prune fails', async () => {

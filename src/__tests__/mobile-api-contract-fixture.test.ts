@@ -71,6 +71,7 @@ const expectedEndpointKeys = [
   'signPostResourceFileUpload',
   'finalizePostResourceFileUpload',
   'mediaUploadIntent',
+  'finalizeUpload',
   'mediaReadUrl',
   'createProfileMediaUpload',
   'listPosts',

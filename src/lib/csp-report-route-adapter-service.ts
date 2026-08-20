@@ -1,8 +1,19 @@
 import 'server-only';
 
-import { logBackendWarning } from '@/lib/backend-logger';
+import { logBackendRouteError, logBackendWarning } from '@/lib/backend-logger';
 
-const MAX_CSP_REPORT_BYTES = 16 * 1024;
+import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
+import {
+  BackendRateLimitError,
+  CSP_REPORT_RATE_LIMIT,
+  createBackendRateLimitResponse,
+  enforceBackendRateLimit,
+} from '@/lib/backend-rate-limit';
+import { readBoundedJsonBody } from '@/lib/bounded-json-request';
+import { getClientNetworkKey } from '@/lib/client-network-key';
+import { createServiceClient } from '@/lib/server-helpers';
+
+export const MAX_CSP_REPORT_BYTES = 16 * 1024;
 const CSP_REPORT_CONTENT_TYPES = [
   'application/csp-report',
   'application/json',
@@ -10,8 +21,24 @@ const CSP_REPORT_CONTENT_TYPES = [
 ];
 
 type CspReportRouteDependencies = {
+  createServiceClient?: typeof createServiceClient;
+  enforceBackendRateLimit?: typeof enforceBackendRateLimit;
+  getRateLimitKey?: (headers: Headers) => string;
+  logError?: typeof logBackendRouteError;
   logWarning?: typeof logBackendWarning;
+  readBoundedJsonBody?: typeof readBoundedJsonBody;
 };
+
+function resolveDependencies(dependencies: CspReportRouteDependencies | undefined) {
+  return {
+    createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
+    enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
+    getRateLimitKey: dependencies?.getRateLimitKey ?? getClientNetworkKey,
+    logError: dependencies?.logError ?? logBackendRouteError,
+    logWarning: dependencies?.logWarning ?? logBackendWarning,
+    readBoundedJsonBody: dependencies?.readBoundedJsonBody ?? readBoundedJsonBody,
+  };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -72,6 +99,61 @@ function reportFields(report: Record<string, unknown>) {
   };
 }
 
+async function handleCspReportPost(
+  request: Request,
+  dependencies: ReturnType<typeof resolveDependencies>,
+) {
+  try {
+    const serviceClient = dependencies.createServiceClient();
+    await dependencies.enforceBackendRateLimit(serviceClient, {
+      ...CSP_REPORT_RATE_LIMIT,
+      key: dependencies.getRateLimitKey(request.headers),
+    });
+  } catch (error) {
+    if (error instanceof BackendRateLimitError) {
+      return createBackendRateLimitResponse(error);
+    }
+
+    dependencies.logError('CSP report rate limit failed:', error);
+    return Response.json({ error: 'Failed to check CSP report limits.' }, { status: 500 });
+  }
+
+  const contentType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
+  if (!contentType || !CSP_REPORT_CONTENT_TYPES.includes(contentType)) {
+    return Response.json({ error: 'Unsupported CSP report content type.' }, { status: 415 });
+  }
+
+  let boundedBody;
+  try {
+    boundedBody = await dependencies.readBoundedJsonBody(request, MAX_CSP_REPORT_BYTES);
+  } catch (error) {
+    dependencies.logError('CSP report body read failed:', error);
+    return Response.json({ error: 'Failed to read CSP report.' }, { status: 500 });
+  }
+
+  if (!boundedBody.ok) {
+    return Response.json({
+      error: boundedBody.reason === 'too_large'
+        ? 'CSP report is too large.'
+        : 'Invalid CSP report.',
+    }, { status: boundedBody.reason === 'too_large' ? 413 : 400 });
+  }
+
+  const report = normalizeReportTo(boundedBody.value) ?? normalizeLegacyReport(boundedBody.value);
+  if (!report) {
+    return Response.json({ error: 'Invalid CSP report.' }, { status: 400 });
+  }
+
+  dependencies.logWarning('content_security_policy_violation', {
+    ...reportFields(report),
+    userAgent: boundedString(request.headers.get('user-agent'), 240),
+  });
+
+  return new Response(null, {
+    status: 204,
+  });
+}
+
 export async function postCspReportRouteResponse({
   dependencies,
   request,
@@ -79,55 +161,8 @@ export async function postCspReportRouteResponse({
   dependencies?: CspReportRouteDependencies;
   request: Request;
 }) {
-  const contentType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
-  if (!contentType || !CSP_REPORT_CONTENT_TYPES.includes(contentType)) {
-    return Response.json({ error: 'Unsupported CSP report content type.' }, {
-      status: 415,
-      headers: { 'Cache-Control': 'private, no-store' },
-    });
-  }
-
-  const contentLength = Number(request.headers.get('content-length'));
-  if (Number.isFinite(contentLength) && contentLength > MAX_CSP_REPORT_BYTES) {
-    return Response.json({ error: 'CSP report is too large.' }, {
-      status: 413,
-      headers: { 'Cache-Control': 'private, no-store' },
-    });
-  }
-
-  const rawBody = await request.text();
-  if (Buffer.byteLength(rawBody, 'utf8') > MAX_CSP_REPORT_BYTES) {
-    return Response.json({ error: 'CSP report is too large.' }, {
-      status: 413,
-      headers: { 'Cache-Control': 'private, no-store' },
-    });
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawBody);
-  } catch {
-    return Response.json({ error: 'Invalid CSP report.' }, {
-      status: 400,
-      headers: { 'Cache-Control': 'private, no-store' },
-    });
-  }
-
-  const report = normalizeReportTo(parsed) ?? normalizeLegacyReport(parsed);
-  if (!report) {
-    return Response.json({ error: 'Invalid CSP report.' }, {
-      status: 400,
-      headers: { 'Cache-Control': 'private, no-store' },
-    });
-  }
-
-  (dependencies?.logWarning ?? logBackendWarning)('content_security_policy_violation', {
-    ...reportFields(report),
-    userAgent: boundedString(request.headers.get('user-agent'), 240),
-  });
-
-  return new Response(null, {
-    status: 204,
-    headers: { 'Cache-Control': 'private, no-store' },
-  });
+  return applyPrivateNoStoreApiResponseHeaders(
+    await handleCspReportPost(request, resolveDependencies(dependencies)),
+    request,
+  );
 }

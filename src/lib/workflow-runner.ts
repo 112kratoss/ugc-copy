@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
-import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { createServiceClient, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { logBackendError } from '@/lib/backend-logger';
 import { enqueueWorkflowRunStepJob } from '@/lib/workflow-run-jobs';
 import {
@@ -334,13 +334,36 @@ function applyStepToGraph(graph: WorkflowCanvasGraph, step: HydratedRunStep): Wo
 
 async function updateRunStep(
   supabase: SupabaseClient,
+  runId: string,
   stepId: string,
   updates: Record<string, unknown>
 ) {
-  await supabase
+  const { error } = await supabase
     .from('workflow_canvas_run_steps')
     .update(updates)
-    .eq('id', stepId);
+    .eq('id', stepId)
+    .eq('run_id', runId);
+
+  if (error) {
+    throw error;
+  }
+}
+
+async function updateWorkflowRun(
+  supabase: SupabaseClient,
+  run: Pick<WorkflowRunRow, 'id' | 'canvas_id' | 'user_id'>,
+  updates: Record<string, unknown>
+) {
+  const { error } = await supabase
+    .from('workflow_canvas_runs')
+    .update(updates)
+    .eq('id', run.id)
+    .eq('canvas_id', run.canvas_id)
+    .eq('user_id', run.user_id);
+
+  if (error) {
+    throw error;
+  }
 }
 
 function getWorkflowRunMonitorKey(canvasId: string, runId: string) {
@@ -466,14 +489,20 @@ async function loadWorkflowRunState(params: {
   supabase: SupabaseClient;
   canvasId: string;
   runId: string;
+  userId?: string;
 }) {
-  const { supabase, canvasId, runId } = params;
-  const { data: run, error } = await supabase
+  const { supabase, canvasId, runId, userId } = params;
+  let runQuery = supabase
     .from('workflow_canvas_runs')
     .select('id, canvas_id, user_id, start_node_id, mode, status, created_at, finished_at, catalog_revision, graph_snapshot')
     .eq('canvas_id', canvasId)
-    .eq('id', runId)
-    .single();
+    .eq('id', runId);
+
+  if (userId) {
+    runQuery = runQuery.eq('user_id', userId);
+  }
+
+  const { data: run, error } = await runQuery.single();
 
   if (error || !run) {
     throw new Error('Workflow run not found.');
@@ -482,11 +511,14 @@ async function loadWorkflowRunState(params: {
   const typedRun = run as WorkflowRunRow;
   let runGraph = typedRun.graph_snapshot;
   if (!runGraph) {
-    const { data: canvas } = await supabase
+    let canvasQuery = supabase
       .from('workflow_canvases')
       .select('graph')
-      .eq('id', canvasId)
-      .single();
+      .eq('id', canvasId);
+    if (userId) {
+      canvasQuery = canvasQuery.eq('user_id', userId);
+    }
+    const { data: canvas } = await canvasQuery.single();
     runGraph = (canvas?.graph as WorkflowCanvasGraph | null | undefined) ?? null;
   }
 
@@ -505,40 +537,53 @@ async function loadWorkflowRunState(params: {
 
 async function hydrateRunSteps(params: {
   steps: HydratedRunStep[];
+  userId: string;
   syncGenerationState?: boolean;
 }) {
-  const { steps, syncGenerationState = false } = params;
+  const { steps, userId, syncGenerationState = false } = params;
   const generationIds = steps.map((step) => step.generation_id).filter(Boolean) as string[];
 
   if (generationIds.length === 0) {
     return steps;
   }
 
-  // The ids come from run steps the caller already loaded through the
-  // user-scoped client, so ownership is established. The reads below need
-  // columns (output_url, workflow_settings) that authenticated clients hold no
-  // grant for, so they must run service-role.
+  // Run-step generation ids are historical user-writable references. They are
+  // selectors, not proof of ownership. Bind every service-role read to the
+  // immutable run owner before syncing provider state or resolving a storage
+  // URL, otherwise a forged step can disclose another user's generation.
   const adminSupabase = createServiceClient();
+  const loadOwnedGenerations = async (ids: string[]) => {
+    const { data, error } = await adminSupabase
+      .from('generations')
+      .select('id, status, output_url')
+      .eq('user_id', userId)
+      .in('id', ids);
 
-  if (syncGenerationState) {
+    if (error) {
+      throw error;
+    }
+
+    return data || [];
+  };
+
+  let generations = await loadOwnedGenerations(generationIds);
+  const ownedGenerationIds = generations.map((generation) => generation.id);
+
+  if (syncGenerationState && ownedGenerationIds.length > 0) {
     await syncGenerationStatuses({
       supabase: adminSupabase,
       creditSupabase: adminSupabase,
-      generationIds,
+      generationIds: ownedGenerationIds,
     });
+    generations = await loadOwnedGenerations(ownedGenerationIds);
   }
 
   const generationMap = new Map<string, GenerationStatusSnapshot>();
-  const { data: generations } = await adminSupabase
-    .from('generations')
-    .select('id, status, output_url')
-    .in('id', generationIds);
-
-  const resolvedGenerations = await Promise.all((generations || []).map(async (generation) => ({
+  const resolvedGenerations = await Promise.all(generations.map(async (generation) => ({
     id: generation.id,
     status: mapGenerationStatus(generation.status),
     output_url: generation.output_url
-      ? await resolveStoredMediaUrl(adminSupabase, generation.output_url)
+      ? await resolveOwnedStoredMediaUrl(adminSupabase, generation.output_url, userId)
       : null,
   })));
 
@@ -574,6 +619,7 @@ async function hydrateRunSteps(params: {
 
 async function persistHydratedStepUpdates(
   supabase: SupabaseClient,
+  runId: string,
   originalSteps: HydratedRunStep[],
   hydratedSteps: HydratedRunStep[]
 ) {
@@ -585,7 +631,7 @@ async function persistHydratedStepUpdates(
       continue;
     }
 
-    await updateRunStep(supabase, step.id, {
+    await updateRunStep(supabase, runId, step.id, {
       status: step.status,
       output_snapshot: step.output_snapshot,
       error_message: step.error_message,
@@ -993,10 +1039,11 @@ async function advanceWorkflowRunProgress(params: {
   });
   const hydratedSteps = await hydrateRunSteps({
     steps: originalSteps,
+    userId: run.user_id,
     syncGenerationState: true,
   });
 
-  await persistHydratedStepUpdates(supabase, originalSteps, hydratedSteps);
+  await persistHydratedStepUpdates(supabase, run.id, originalSteps, hydratedSteps);
 
   let workingGraph = graph;
   for (const step of hydratedSteps) {
@@ -1023,7 +1070,7 @@ async function advanceWorkflowRunProgress(params: {
         finished_at: finishedAt,
       };
       hydratedSteps[stepIndex] = failedStep;
-      await updateRunStep(supabase, queuedStep.id, {
+      await updateRunStep(supabase, run.id, queuedStep.id, {
         status: failedStep.status,
         error_message: failedStep.error_message,
         started_at: failedStep.started_at,
@@ -1045,7 +1092,7 @@ async function advanceWorkflowRunProgress(params: {
       };
       hydratedSteps[stepIndex] = staticStep;
       workingGraph = applyStepToGraph(workingGraph, staticStep);
-      await updateRunStep(supabase, queuedStep.id, {
+      await updateRunStep(supabase, run.id, queuedStep.id, {
         status: staticStep.status,
         input_snapshot: staticStep.input_snapshot,
         output_snapshot: staticStep.output_snapshot,
@@ -1063,7 +1110,7 @@ async function advanceWorkflowRunProgress(params: {
           ...queuedStep,
           error_message: dependencyState.message,
         };
-        await updateRunStep(supabase, queuedStep.id, {
+        await updateRunStep(supabase, run.id, queuedStep.id, {
           error_message: dependencyState.message,
         });
       }
@@ -1086,7 +1133,7 @@ async function advanceWorkflowRunProgress(params: {
       };
       hydratedSteps[stepIndex] = blockedStep;
       workingGraph = applyStepToGraph(workingGraph, blockedStep);
-      await updateRunStep(supabase, queuedStep.id, {
+      await updateRunStep(supabase, run.id, queuedStep.id, {
         status: blockedStep.status,
         error_message: blockedStep.error_message,
         started_at: blockedStep.started_at,
@@ -1121,7 +1168,7 @@ async function advanceWorkflowRunProgress(params: {
       hydratedSteps[stepIndex] = resumedStep;
       workingGraph = applyStepToGraph(workingGraph, resumedStep);
 
-      await updateRunStep(supabase, queuedStep.id, {
+      await updateRunStep(supabase, run.id, queuedStep.id, {
         status: resumedStep.status,
         generation_id: resumedStep.generation_id,
         input_snapshot: resumedStep.input_snapshot,
@@ -1146,7 +1193,7 @@ async function advanceWorkflowRunProgress(params: {
           status: 'queued',
           error: failure.message,
         });
-        await updateRunStep(supabase, queuedStep.id, {
+        await updateRunStep(supabase, run.id, queuedStep.id, {
           error_message: failure.message,
         });
         continue;
@@ -1169,7 +1216,7 @@ async function advanceWorkflowRunProgress(params: {
         };
         hydratedSteps[stepIndex] = processingStep;
         workingGraph = applyStepToGraph(workingGraph, processingStep);
-        await updateRunStep(supabase, queuedStep.id, {
+        await updateRunStep(supabase, run.id, queuedStep.id, {
           status: processingStep.status,
           generation_id: processingStep.generation_id,
           output_snapshot: processingStep.output_snapshot,
@@ -1192,7 +1239,7 @@ async function advanceWorkflowRunProgress(params: {
       };
       hydratedSteps[stepIndex] = failedStep;
       workingGraph = applyStepToGraph(workingGraph, failedStep);
-      await updateRunStep(supabase, queuedStep.id, {
+      await updateRunStep(supabase, run.id, queuedStep.id, {
         status: failedStep.status,
         error_message: failedStep.error_message,
         started_at: failedStep.started_at,
@@ -1204,13 +1251,10 @@ async function advanceWorkflowRunProgress(params: {
   const nextRunStatus = deriveWorkflowRunStatus(hydratedSteps);
   const nextFinishedAt = getDerivedRunFinishedAt(run, nextRunStatus, hydratedSteps);
   if (run.status !== nextRunStatus || run.finished_at !== nextFinishedAt) {
-    await supabase
-      .from('workflow_canvas_runs')
-      .update({
-        status: nextRunStatus,
-        finished_at: nextFinishedAt,
-      })
-      .eq('id', runId);
+    await updateWorkflowRun(supabase, run, {
+      status: nextRunStatus,
+      finished_at: nextFinishedAt,
+    });
   }
 
   return buildWorkflowRunResponse({
@@ -1221,13 +1265,30 @@ async function advanceWorkflowRunProgress(params: {
 }
 
 export async function approveWorkflowRunStep(params: {
-  supabase: SupabaseClient;
+  ownerSupabase: SupabaseClient;
+  mutationSupabase: SupabaseClient;
+  userId: string;
   canvasId: string;
   runId: string;
   stepId: string;
 }) {
-  const { supabase, canvasId, runId, stepId } = params;
-  const { graph, steps } = await loadWorkflowRunState({ supabase, canvasId, runId });
+  const {
+    ownerSupabase,
+    mutationSupabase,
+    userId,
+    canvasId,
+    runId,
+    stepId,
+  } = params;
+  // Authorize with the request-scoped client before crossing into the
+  // service-role mutation boundary. The service client is never used to
+  // discover which run a caller owns.
+  const { run, graph, steps } = await loadWorkflowRunState({
+    supabase: ownerSupabase,
+    canvasId,
+    runId,
+    userId,
+  });
   const step = steps.find((candidate) => candidate.id === stepId);
   if (!step) {
     throw new WorkflowRunApprovalError('Approval step not found.', 404);
@@ -1250,7 +1311,7 @@ export async function approveWorkflowRunStep(params: {
   }
 
   const approvedAt = new Date().toISOString();
-  await updateRunStep(supabase, step.id, {
+  await updateRunStep(mutationSupabase, run.id, step.id, {
     status: 'succeeded',
     output_snapshot: {
       ...outputSnapshot,
@@ -1260,13 +1321,13 @@ export async function approveWorkflowRunStep(params: {
     error_message: null,
     finished_at: approvedAt,
   });
-  await supabase
-    .from('workflow_canvas_runs')
-    .update({ status: 'processing', finished_at: null })
-    .eq('id', runId);
+  await updateWorkflowRun(mutationSupabase, run, {
+    status: 'processing',
+    finished_at: null,
+  });
 
   try {
-    await enqueueWorkflowRunStepJob(createServiceClient(), {
+    await enqueueWorkflowRunStepJob(mutationSupabase, {
       runId,
       // This is a run ticket, not an execution selector. Namespacing prevents
       // collision if the approval gate itself was the original start node.
@@ -1278,17 +1339,24 @@ export async function approveWorkflowRunStep(params: {
     logBackendError('workflow_approval_enqueue_failed', { error, runId, stepId });
   }
 
-  return getWorkflowRunDetails({ supabase, canvasId, runId });
+  return getWorkflowRunDetails({
+    supabase: ownerSupabase,
+    userId,
+    canvasId,
+    runId,
+  });
 }
 
 export async function getWorkflowRunDetails(params: {
   supabase: SupabaseClient;
+  userId: string;
   canvasId: string;
   runId: string;
 }) {
-  const { supabase, canvasId, runId } = params;
+  const { supabase, userId, canvasId, runId } = params;
   const { run, steps } = await loadWorkflowRunState({
     supabase,
+    userId,
     canvasId,
     runId,
   });
@@ -1305,6 +1373,7 @@ export async function getWorkflowRunDetails(params: {
   // worker, not in every client refresh.
   const hydratedSteps = await hydrateRunSteps({
     steps,
+    userId: run.user_id,
     syncGenerationState: false,
   });
 

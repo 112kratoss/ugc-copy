@@ -1,5 +1,6 @@
 import type { SerializedWorkflowCanvasGraph } from '@/lib/workflow-canvas';
 import { normalizePostMediaKey } from '@/lib/post-media-key';
+import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 
 export const POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS = 10;
 export const POST_RESOURCE_PRICE_INCREMENT_USD_CENTS = 10;
@@ -875,17 +876,10 @@ function isSafePostResourceUrl(value: string | null | undefined): boolean {
 }
 
 function isSafePostResourceStoragePath(value: string | null | undefined, ownerUserId?: string | null): boolean {
-  const normalizedPath = value?.trim().replace(/^\/+/, '');
-  if (!normalizedPath || normalizedPath.includes('\\')) {
-    return false;
-  }
-
-  const segments = normalizedPath.split('/');
-  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
-    return false;
-  }
-
-  return ownerUserId ? normalizedPath.startsWith(`${ownerUserId}/`) : true;
+  if (!value) return false;
+  return parseCanonicalStorageObjectPath(value, {
+    ...(ownerUserId ? { ownerUserId } : {}),
+  }) !== null;
 }
 
 function validateResourceItemIdentityAndScope(

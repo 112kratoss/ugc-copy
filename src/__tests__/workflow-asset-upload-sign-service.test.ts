@@ -11,10 +11,20 @@ function createClient({
   signedUrl = 'https://storage.example.test/workflow-upload',
   storageError = null as Error | null,
 } = {}) {
-  const rpc = vi.fn(async (fn: string) => (
-    fn === 'is_account_deletion_requested'
-      ? { data: false, error: null }
-      : {
+  const rpc = vi.fn(async (fn: string) => {
+    if (fn === 'is_account_deletion_requested') {
+      return { data: false, error: null };
+    }
+    if (fn === 'reserve_upload_bytes_v2') {
+      return { data: { allowed: true }, error: null };
+    }
+    if (
+      fn === 'mark_upload_byte_reservation_issued'
+      || fn === 'abort_upload_byte_reservation_before_issue'
+    ) {
+      return { data: true, error: null };
+    }
+    return {
           data: {
             allowed,
             limit: 40,
@@ -23,8 +33,8 @@ function createClient({
             resetAt: '2026-06-22T06:30:00.000Z',
           },
           error: null,
-        }
-  ));
+        };
+  });
   const createSignedUploadUrl = vi.fn(async () => ({
     data: storageError ? null : { token, signedUrl },
     error: storageError,
@@ -118,12 +128,30 @@ describe('createWorkflowAssetUploadIntent', () => {
       p_limit: 40,
       p_window_seconds: 600,
     });
+    expect(client.rpc).toHaveBeenCalledWith('reserve_upload_bytes_v2', {
+      p_upload_id: 'upload-id-1',
+      p_user_id: 'user-1',
+      p_bucket_id: 'generated_images',
+      p_storage_path: 'user-1/workflow-input-upload-id-1-workflow-reference.png',
+      p_declared_bytes: 1234,
+      p_reserved_bytes: 25 * 1024 * 1024,
+      p_expected_content_type: 'image/png',
+      p_user_limit_bytes: 1024 * 1024 * 1024,
+      p_global_limit_bytes: 100 * 1024 * 1024 * 1024,
+      p_ttl_seconds: 2 * 60 * 60,
+    });
     expect(client.from).toHaveBeenCalledWith('generated_images');
     expect(client.createSignedUploadUrl).toHaveBeenCalledWith('user-1/workflow-input-upload-id-1-workflow-reference.png');
+    expect(client.rpc).toHaveBeenCalledWith('mark_upload_byte_reservation_issued', {
+      p_upload_id: 'upload-id-1',
+      p_user_id: 'user-1',
+      p_token_ttl_seconds: 7200,
+    });
     expect(result).toEqual({
       ok: true,
       response: {
         success: true,
+        uploadId: 'upload-id-1',
         bucket: 'generated_images',
         path: 'user-1/workflow-input-upload-id-1-workflow-reference.png',
         storagePath: 'generated_images/user-1/workflow-input-upload-id-1-workflow-reference.png',

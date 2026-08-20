@@ -44,7 +44,7 @@ function jsonArray(value: unknown): Record<string, unknown>[] {
 
 function storagePathsFromJson(value: unknown): string[] {
   return jsonArray(value)
-    .map((item) => typeof item.storagePath === 'string' ? item.storagePath.trim().replace(/^\/+/, '') : '')
+    .map((item) => typeof item.storagePath === 'string' ? item.storagePath : '')
     .filter(Boolean);
 }
 
@@ -220,7 +220,10 @@ export async function retainPurchasedUnlockFiles(
     ])];
 
     for (const resourcePath of resourcePaths) {
-      const source = resolvePostResourceStorageLocation(resourcePath);
+      const source = resolvePostResourceStorageLocation(resourcePath, creatorUserId);
+      if (!source) {
+        throw new Error('Could not retain purchased resource with an invalid storage path.');
+      }
       const mappingIdentity = `${revision.revision_id}:${source.bucket}:${source.filePath}`;
       if (existingMappings.has(mappingIdentity)) continue;
 

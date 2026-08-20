@@ -1,9 +1,10 @@
 import 'server-only';
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendError } from '@/lib/backend-logger';
 
 import type { NextRequest } from 'next/server';
 
-import { getUploadsBucketPath, isUploadsStoragePath, normalizeSubmittedElementDescriptors } from '@/lib/image-elements';
+import { normalizeSubmittedElementDescriptors } from '@/lib/image-elements';
 import {
   buildLegacyGenerationInputMedia,
   loadGenerationInputMediaMap,
@@ -22,7 +23,11 @@ import {
   type RemixSourceResult,
 } from '@/lib/remix-source';
 import { loadGenerationRecipeRemixInputMediaByPostId } from '@/lib/post-resource-bundles-server';
-import { createServiceClient, createUserClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { createServiceClient, createUserClient, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
+import {
+  getUserOwnedStoredMediaLocation,
+  parseCanonicalStorageObjectPath,
+} from '@/lib/storage-ownership';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
 
 type RemixSourceGenerationRow = {
@@ -86,9 +91,12 @@ function toResultMediaType(category: ShowcaseItemCategory): RemixSourceResult['m
 
 function getShowcaseAssetUrl(
   adminSupabase: ReturnType<typeof createServiceClient>,
+  generationId: string,
   showcaseAssetPath: string
-): string {
-  const { data } = adminSupabase.storage.from('showcase_media').getPublicUrl(showcaseAssetPath);
+): string | null {
+  const canonicalPath = parseCanonicalStorageObjectPath(showcaseAssetPath, { minimumSegments: 3 });
+  if (!canonicalPath || !canonicalPath.startsWith(`showcase/${generationId}/`)) return null;
+  const { data } = adminSupabase.storage.from('showcase_media').getPublicUrl(canonicalPath);
   return data.publicUrl;
 }
 
@@ -97,14 +105,23 @@ async function resolveGenerationResultUrl(
   generation: ResultGenerationRow
 ): Promise<string | null> {
   if (generation.showcase_asset_path) {
-    return getShowcaseAssetUrl(adminSupabase, generation.showcase_asset_path);
+    return getShowcaseAssetUrl(
+      adminSupabase,
+      generation.id,
+      generation.showcase_asset_path,
+    );
   }
 
   if (!generation.output_url) {
     return null;
   }
 
-  return resolveStoredMediaUrl(adminSupabase, generation.output_url);
+  if (!generation.user_id) return null;
+  return resolveOwnedStoredMediaUrl(
+    adminSupabase,
+    generation.output_url,
+    generation.user_id,
+  );
 }
 
 async function resolveUploadsStoragePathUrl(
@@ -112,17 +129,18 @@ async function resolveUploadsStoragePathUrl(
   storagePath: string,
   allowedOwnerUserId: string | null
 ): Promise<string | null> {
-  if (!isUploadsStoragePath(storagePath)) {
+  if (!allowedOwnerUserId) {
     return null;
   }
 
-  const filePath = getUploadsBucketPath(storagePath);
-  const storageOwnerId = filePath.split('/')[0]?.trim();
-  if (!storageOwnerId || storageOwnerId !== allowedOwnerUserId) {
-    return null;
-  }
+  const location = getUserOwnedStoredMediaLocation(storagePath, allowedOwnerUserId, {
+    allowedBuckets: ['uploads'],
+  });
+  if (!location) return null;
 
-  const { data, error } = await adminSupabase.storage.from('uploads').createSignedUrl(filePath, 3600);
+  const { data, error } = await adminSupabase.storage
+    .from(location.bucket)
+    .createSignedUrl(location.filePath, 3600);
 
   if (error || !data?.signedUrl) {
     logBackendError('failed_to_sign_remix_source_upload_asset', { error: error });
@@ -176,7 +194,7 @@ export async function loadRemixSourceBundle(
   const {
     data: { user },
     error: authError,
-  } = await userSupabase.auth.getUser();
+  } = await getVerifiedAuthUserResult(userSupabase);
 
   if (authError || !user) {
     throw new RemixSourceError('Unauthorized', 401);

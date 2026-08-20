@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import type { IdentityResult } from '@/lib/account-identity';
 import { postTemporaryMediaUploadSignRouteResponse } from '@/lib/temporary-media-upload-sign-route-adapter-service';
 
 function createUserClient(userId: string | null = 'user-1') {
@@ -12,6 +13,20 @@ function createUserClient(userId: string | null = 'user-1') {
       })),
     },
   } as unknown as SupabaseClient;
+}
+
+function createRequireIdentity(userId: string | null) {
+  return vi.fn(async (): Promise<IdentityResult> => userId
+    ? {
+        ok: true,
+        identity: {
+          user: { id: userId, is_anonymous: false } as never,
+          userId,
+          kind: 'registered',
+          isGuest: false,
+        },
+      }
+    : { ok: false, status: 401, code: 'UNAUTHORIZED', error: 'Unauthorized' });
 }
 
 describe('temporary media upload-sign route adapter service', () => {
@@ -36,13 +51,14 @@ describe('temporary media upload-sign route adapter service', () => {
         createServiceClient,
         createTemporaryMediaUploadIntent,
         createUserClient: () => createUserClient(null),
+        requireIdentity: createRequireIdentity(null),
       },
     });
 
     expect(response.status).toBe(401);
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(response.headers.get('x-request-id')).toBe('media-upload-sign-auth-1');
-    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
     expect(jsonSpy).not.toHaveBeenCalled();
     expect(createServiceClient).not.toHaveBeenCalled();
     expect(createTemporaryMediaUploadIntent).not.toHaveBeenCalled();
@@ -56,6 +72,7 @@ describe('temporary media upload-sign route adapter service', () => {
       ok: true as const,
       response: {
         success: true as const,
+        uploadId: 'upload-id-1',
         bucket: 'uploads' as const,
         path: 'user-1/upload-id-1-reference.png',
         storagePath: 'uploads/user-1/upload-id-1-reference.png',
@@ -85,6 +102,7 @@ describe('temporary media upload-sign route adapter service', () => {
         createTemporaryMediaUploadIntent,
         createUploadId,
         createUserClient: () => createUserClient('user-1'),
+        requireIdentity: createRequireIdentity('user-1'),
       },
     });
 
@@ -100,7 +118,7 @@ describe('temporary media upload-sign route adapter service', () => {
     expect(createTemporaryMediaUploadIntent).toHaveBeenCalledWith({
       body,
       userId: 'user-1',
-      client: createServiceClient,
+      client: expect.any(Function),
       createUploadId,
     });
   });
@@ -130,6 +148,7 @@ describe('temporary media upload-sign route adapter service', () => {
           resetAt: '2026-06-23T13:00:00.000Z',
         })),
         createUserClient: () => createUserClient('user-1'),
+        requireIdentity: createRequireIdentity('user-1'),
       },
     });
 

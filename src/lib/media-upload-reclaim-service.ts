@@ -10,6 +10,7 @@ import {
   type UploadIntentConsumer,
 } from '@/lib/media-upload-reclaim';
 import { getMediaUploadReclaimPolicy } from '@/lib/media-upload-reclaim-policy';
+import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 
 const UPLOADS_BUCKET = 'uploads';
 
@@ -47,6 +48,7 @@ export function isAbandonedIntentReclaimEnabled(
 
 type IntentRow = {
   id: string;
+  user_id: string;
   storage_path: string;
   kind: UnclearedUploadIntent['kind'];
   declared_bytes: number | null;
@@ -97,7 +99,7 @@ export async function selectReclaimableIntents(
 
   let query = client
     .from(MEDIA_UPLOAD_INTENTS_TABLE)
-    .select('id, storage_path, kind, declared_bytes, created_at, consumed_by')
+    .select('id, user_id, storage_path, kind, declared_bytes, created_at, consumed_by')
     .is('storage_cleared_at', null)
     .lt('created_at', cutoff)
     .order('created_at', { ascending: true })
@@ -183,11 +185,25 @@ export async function reclaimAbandonedMediaUploads(
     return summary;
   }
 
-  const existingPaths = await listExistingObjectPaths(client, rows);
+  const canonicalRows: IntentRow[] = [];
+  for (const row of rows) {
+    const storagePath = parseCanonicalStorageObjectPath(row.storage_path, {
+      ownerUserId: row.user_id,
+    });
+    if (!storagePath) {
+      // A malformed or owner-changing database value is never safe input to a
+      // service-role list/remove call. Keep it charged for operator repair.
+      summary.kept += 1;
+      continue;
+    }
+    canonicalRows.push({ ...row, storage_path: storagePath });
+  }
+
+  const existingPaths = await listExistingObjectPaths(client, canonicalRows);
   const toReclaim: IntentRow[] = [];
   const toDropRow: IntentRow[] = [];
 
-  for (const row of rows) {
+  for (const row of canonicalRows) {
     const intent = toUnclearedIntent(row, existingPaths.has(row.storage_path));
     const decision = resolveUploadIntentReclaim(intent, now);
 
@@ -229,9 +245,10 @@ export async function reclaimAbandonedMediaUploads(
           .map((object) => object?.name)
           .filter((name): name is string => Boolean(name)),
       );
-      const confirmed = removedPaths.size > 0
-        ? toReclaim.filter((row) => removedPaths.has(row.storage_path))
-        : toReclaim;
+      // An empty per-object result is ambiguous, not proof of deletion. Leave
+      // every unconfirmed row open so a later pass can list/attempt removal
+      // again instead of permanently orphaning a surviving object.
+      const confirmed = toReclaim.filter((row) => removedPaths.has(row.storage_path));
 
       if (confirmed.length < toReclaim.length) {
         logBackendWarning('partially_removed_reclaimed_media_uploads', {

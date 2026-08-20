@@ -1,6 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { runPagedQuery } from '@/lib/admin-paged-query';
+import {
+  getCanonicalStoredMediaLocation,
+  parseCanonicalStorageObjectPath,
+} from '@/lib/storage-ownership';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const DEFAULT_QUEUE_LIMIT = 50;
@@ -8,7 +12,6 @@ const MAX_QUEUE_LIMIT = 200;
 const RESOLVED_POST_REPORT_STATUSES = ['reviewed', 'dismissed'];
 const RESOLVED_SUBJECT_REPORT_STATUSES = ['resolved', 'dismissed'];
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
-const SHOWCASE_PUBLIC_URL_MARKER = '/storage/v1/object/public/showcase_media/';
 
 export type PostModerationQueueItem = {
   id: string;
@@ -159,6 +162,7 @@ type PostRow = {
 
 type PostModerationMediaRow = {
   id: string;
+  user_id: string;
   generation_id: string | null;
   showcase_asset_path: string | null;
   output_url: string | null;
@@ -245,32 +249,37 @@ function databaseError(operation: string, error: unknown) {
   return new Error(`${operation}: ${message}`);
 }
 
-function normalizeShowcaseMediaPath(value: string | null | undefined) {
-  const trimmed = value?.trim();
-  if (!trimmed) return null;
-
-  let path = trimmed.replace(/^\/+/, '');
-  if (/^https?:\/\//i.test(trimmed)) {
-    try {
-      const url = new URL(trimmed);
-      const markerIndex = url.pathname.indexOf(SHOWCASE_PUBLIC_URL_MARKER);
-      if (markerIndex < 0) return null;
-      path = decodeURIComponent(url.pathname.slice(markerIndex + SHOWCASE_PUBLIC_URL_MARKER.length));
-    } catch {
-      return null;
-    }
-  }
-
-  if (path.startsWith(`${SHOWCASE_MEDIA_BUCKET}/`)) {
-    path = path.slice(SHOWCASE_MEDIA_BUCKET.length + 1);
-  }
-
-  return path && !path.includes('..') && !path.includes('\\') ? path : null;
+export function normalizeShowcaseMediaPath(value: string | null | undefined) {
+  if (!value || value !== value.trim()) return null;
+  const storedLocation = getCanonicalStoredMediaLocation(value, {
+    allowedBuckets: [SHOWCASE_MEDIA_BUCKET],
+  });
+  if (storedLocation) return storedLocation.filePath;
+  return parseCanonicalStorageObjectPath(value);
 }
 
 function isOwnedModerationMediaPath(path: string, postId: string, generationId: string | null) {
   return path.startsWith(`posts/${postId}/`)
     || Boolean(generationId && path.startsWith(`showcase/${generationId}/`));
+}
+
+export function getCanonicalOwnedModerationMediaPath(
+  value: string | null | undefined,
+  postId: string,
+  generationId: string | null,
+): string | null {
+  const path = normalizeShowcaseMediaPath(value);
+  return path && isOwnedModerationMediaPath(path, postId, generationId) ? path : null;
+}
+
+function isExternalHttpMediaUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'https:' || url.protocol === 'http:')
+      && !url.pathname.includes('/storage/v1/object/');
+  } catch {
+    return false;
+  }
 }
 
 export async function revokePostPublicMedia(
@@ -284,7 +293,7 @@ export async function revokePostPublicMedia(
   const [postResult, mediaResult] = await Promise.all([
     supabase
       .from('posts')
-      .select('id, generation_id, showcase_asset_path, output_url')
+      .select('id, user_id, generation_id, showcase_asset_path, output_url')
       .eq('id', postId)
       .maybeSingle(),
     supabase
@@ -305,6 +314,20 @@ export async function revokePostPublicMedia(
     throw new Error('Taken-down post could not be loaded for media revocation.');
   }
 
+  let verifiedGenerationId: string | null = null;
+  if (post.generation_id) {
+    const generationResult = await supabase
+      .from('generations')
+      .select('id')
+      .eq('id', post.generation_id)
+      .eq('user_id', post.user_id)
+      .maybeSingle();
+    if (generationResult.error) {
+      throw databaseError('Failed to verify taken-down generation ownership', generationResult.error);
+    }
+    if (generationResult.data) verifiedGenerationId = post.generation_id;
+  }
+
   const mediaRows = (mediaResult.data ?? []) as PostMediaModerationRow[];
   // The feed rendition and teaser are separate public objects, not variants of
   // storage_path -- omitting them left a taken-down video still fetchable at
@@ -319,41 +342,45 @@ export async function revokePostPublicMedia(
       row.teaser_storage_path,
     ]),
   ];
-  const storagePaths = [...new Set(rawStorageValues
-    .map(normalizeShowcaseMediaPath)
-    .filter((path): path is string => Boolean(path)))];
-
-  const unsafePaths = storagePaths.filter(
-    (path) => !isOwnedModerationMediaPath(path, postId, post.generation_id),
-  );
-  if (unsafePaths.length > 0) {
-    throw new Error('Refusing to revoke a taken-down media path outside the reported post scope.');
+  const storagePaths = new Set<string>();
+  let hasExternalReference = false;
+  for (const rawValue of rawStorageValues) {
+    if (!rawValue) continue;
+    const path = normalizeShowcaseMediaPath(rawValue);
+    if (!path) {
+      if (isExternalHttpMediaUrl(rawValue)) {
+        hasExternalReference = true;
+        continue;
+      }
+      throw new Error('Refusing to revoke a non-canonical taken-down media path.');
+    }
+    if (!isOwnedModerationMediaPath(path, postId, verifiedGenerationId)) {
+      throw new Error('Refusing to revoke a taken-down media path outside the reported post scope.');
+    }
+    storagePaths.add(path);
+  }
+  for (const row of mediaRows) {
+    if (row.external_url?.trim()) hasExternalReference = true;
   }
 
-  if (storagePaths.length > 0) {
-    const removal = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove(storagePaths);
+  const canonicalStoragePaths = [...storagePaths];
+
+  if (canonicalStoragePaths.length > 0) {
+    const removal = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).remove(canonicalStoragePaths);
     if (removal.error) {
       throw databaseError('Failed to revoke taken-down public media', removal.error);
     }
 
     const verification = await Promise.all(
-      storagePaths.map((path) => supabase.storage.from(SHOWCASE_MEDIA_BUCKET).exists(path)),
+      canonicalStoragePaths.map((path) => supabase.storage.from(SHOWCASE_MEDIA_BUCKET).exists(path)),
     );
     if (verification.some((result) => result.data === true)) {
       throw new Error('Taken-down public media still exists after Storage revocation.');
     }
   }
 
-  const hasExternalReference = [
-    post.output_url,
-    ...mediaRows.map((row) => row.external_url),
-  ].some((value) => Boolean(
-    value?.trim()
-    && normalizeShowcaseMediaPath(value) === null,
-  ));
-
   return {
-    revokedMediaCount: storagePaths.length,
+    revokedMediaCount: canonicalStoragePaths.length,
     mediaRevocationVerified: true,
     externalMediaRevocationRequired: hasExternalReference,
   };

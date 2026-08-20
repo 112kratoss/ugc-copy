@@ -10,6 +10,18 @@ import {
   persistGenerationMediaBlob,
   type CreatedGenerationMediaLocation,
 } from '@/lib/durable-generation-media';
+import { markMediaUploadIntentsConsumed } from '@/lib/media-upload-intents';
+import { parseCanonicalStorageLocation } from '@/lib/storage-ownership';
+import {
+  abortNullableUploadByteConsumption,
+  completeNullableUploadByteConsumption,
+  isDefinitiveSupabaseMutationRejection,
+  type UploadConsumptionClaim,
+} from '@/lib/upload-byte-admission';
+import {
+  deleteReservedObjectAndConfirm,
+  finalizeUploadForConsumption,
+} from '@/lib/upload-finalization';
 
 const UPLOADS_BUCKET = 'uploads';
 
@@ -74,19 +86,24 @@ function parseOwnerUploadPath(value: unknown, userId: string): string | null {
     return null;
   }
 
-  const normalized = value.trim().replace(/^\/+/, '');
-  if (!normalized.startsWith(`${UPLOADS_BUCKET}/${userId}/`)) {
-    return null;
-  }
-
-  return normalized.slice(`${UPLOADS_BUCKET}/`.length);
+  return parseCanonicalStorageLocation(value, {
+    allowedBuckets: [UPLOADS_BUCKET],
+    ownerUserId: userId,
+  })?.filePath ?? null;
 }
 
 async function cleanupTemporaryUpload(adminSupabase: SupabaseClient, uploadFilePath: string) {
-  const result = await adminSupabase.storage.from(UPLOADS_BUCKET).remove([uploadFilePath]);
-  if (result.error) {
-    logBackendWarning('failed_to_remove_temporary_generation_restore_upload', { error: result.error });
+  const deleted = await deleteReservedObjectAndConfirm(
+    adminSupabase,
+    UPLOADS_BUCKET,
+    uploadFilePath,
+  );
+  if (!deleted) {
+    logBackendWarning('failed_to_remove_temporary_generation_restore_upload', {
+      storagePath: uploadFilePath,
+    });
   }
+  return deleted;
 }
 
 async function cleanupCreatedMedia(
@@ -97,9 +114,13 @@ async function cleanupCreatedMedia(
     return;
   }
 
-  const result = await adminSupabase.storage.from(location.bucket).remove([location.filePath]);
-  if (result.error) {
-    logBackendWarning('failed_to_remove_restored_generation_media_after_failure', { error: result.error });
+  try {
+    const result = await adminSupabase.storage.from(location.bucket).remove([location.filePath]);
+    if (result.error) {
+      logBackendWarning('failed_to_remove_restored_generation_media_after_failure', { error: result.error });
+    }
+  } catch (error) {
+    logBackendWarning('failed_to_remove_restored_generation_media_after_failure', { error });
   }
 }
 
@@ -127,6 +148,9 @@ export async function restoreGenerationMediaForRoute({
   }
 
   let createdMediaLocation: CreatedGenerationMediaLocation | null = null;
+  let consumptionClaim: UploadConsumptionClaim | null = null;
+  let durableGenerationMutation = false;
+  let durableMutationOutcomeUnknown = false;
 
   try {
     const { data: generation, error: generationError } = await adminSupabase
@@ -141,17 +165,14 @@ export async function restoreGenerationMediaForRoute({
 
     if (generationError) {
       logBackendError('failed_to_load_generation_for_media_restore', { error: generationError });
-      await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
       return { ok: false, status: 500, body: { error: 'Failed to restore preview.' } };
     }
 
     if (!ownedGeneration) {
-      await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
       return { ok: false, status: 404, body: { error: 'Creation not found.' } };
     }
 
     if (ownedGeneration.status !== 'succeeded') {
-      await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
       return { ok: false, status: 400, body: { error: 'Only completed creations can restore their preview.' } };
     }
 
@@ -159,18 +180,16 @@ export async function restoreGenerationMediaForRoute({
       .from('posts')
       .select('id, visibility, output_url, showcase_asset_path')
       .eq('generation_id', generationId)
-      .eq('user_id', userId)
+      .eq('user_id', ownedGeneration.user_id)
       .maybeSingle();
     const linkedPost = linkedPostData as LinkedPostRow | null;
 
     if (linkedPostError) {
       logBackendError('failed_to_load_linked_post_for_media_restore', { error: linkedPostError });
-      await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
       return { ok: false, status: 500, body: { error: 'Failed to restore preview.' } };
     }
 
     if (ownedGeneration.is_public || (linkedPost && linkedPost.visibility !== 'private')) {
-      await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
       return {
         ok: false,
         status: 409,
@@ -178,13 +197,28 @@ export async function restoreGenerationMediaForRoute({
       };
     }
 
+    const finalizedUpload = await finalizeUploadForConsumption(adminSupabase, {
+      bucket: UPLOADS_BUCKET,
+      storagePath: uploadFilePath,
+      userId,
+      disposition: 'delete',
+    });
+    if (!finalizedUpload.ok) {
+      return {
+        ok: false,
+        status: finalizedUpload.status === 404 ? 400 : finalizedUpload.status,
+        body: { error: finalizedUpload.error },
+      };
+    }
+    consumptionClaim = finalizedUpload.consumptionClaim;
+
     const downloadedUpload = await adminSupabase.storage
       .from(UPLOADS_BUCKET)
       .download(uploadFilePath);
 
     if (downloadedUpload.error || !downloadedUpload.data) {
       logBackendError('failed_to_download_generation_restore_upload', { error: downloadedUpload.error });
-      await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
+      await abortNullableUploadByteConsumption(adminSupabase, consumptionClaim);
       return { ok: false, status: 500, body: { error: 'Failed to load replacement media.' } };
     }
 
@@ -200,7 +234,7 @@ export async function restoreGenerationMediaForRoute({
         contentType,
       )
     ) {
-      await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
+      await abortNullableUploadByteConsumption(adminSupabase, consumptionClaim);
       return {
         ok: false,
         status: 400,
@@ -225,7 +259,8 @@ export async function restoreGenerationMediaForRoute({
     });
     createdMediaLocation = persistedMedia.createdLocation;
 
-    const { error: generationUpdateError } = await adminSupabase
+    durableMutationOutcomeUnknown = true;
+    const generationUpdate = await adminSupabase
       .from('generations')
       .update({
         output_url: persistedMedia.outputUrl,
@@ -233,32 +268,56 @@ export async function restoreGenerationMediaForRoute({
         is_public: false,
       })
       .eq('id', ownedGeneration.id)
-      .eq('user_id', userId)
+      .eq('user_id', ownedGeneration.user_id)
       .is('template_run_id', null)
-      .is('template_run_step_id', null);
+      .is('template_run_step_id', null)
+      .select('id')
+      .maybeSingle();
+    const updatedGeneration = generationUpdate.data;
+    const generationUpdateError = generationUpdate.error;
 
-    if (generationUpdateError) {
+    if (generationUpdateError || !updatedGeneration) {
+      durableMutationOutcomeUnknown = Boolean(
+        generationUpdateError
+        && !isDefinitiveSupabaseMutationRejection(generationUpdate),
+      );
       logBackendError('failed_to_update_restored_generation_preview', { error: generationUpdateError });
-      await cleanupCreatedMedia(adminSupabase, persistedMedia.createdLocation);
-      createdMediaLocation = null;
-      await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
+      if (!durableMutationOutcomeUnknown) {
+        await abortNullableUploadByteConsumption(adminSupabase, consumptionClaim);
+        await cleanupCreatedMedia(adminSupabase, persistedMedia.createdLocation);
+        createdMediaLocation = null;
+      }
       return { ok: false, status: 500, body: { error: 'Failed to restore preview.' } };
     }
+    durableMutationOutcomeUnknown = false;
+    durableGenerationMutation = true;
 
     if (linkedPost) {
-      const { error: postUpdateError } = await adminSupabase
+      const postUpdate = await adminSupabase
         .from('posts')
         .update({
           output_url: persistedMedia.outputUrl,
           showcase_asset_path: null,
         })
         .eq('id', linkedPost.id)
-        .eq('user_id', userId)
-        .eq('visibility', 'private');
+        .eq('user_id', ownedGeneration.user_id)
+        .eq('visibility', 'private')
+        .select('id')
+        .maybeSingle();
+      const updatedPost = postUpdate.data;
+      const postUpdateError = postUpdate.error;
 
-      if (postUpdateError) {
+      if (postUpdateError || !updatedPost) {
         logBackendError('failed_to_update_linked_post_restored_preview', { error: postUpdateError });
-        const { error: rollbackError } = await adminSupabase
+        if (
+          postUpdateError
+          && !isDefinitiveSupabaseMutationRejection(postUpdate)
+        ) {
+          // The post update may have committed. Keep the generated object and
+          // lease quarantined; deleting either could leave the post dangling.
+          return { ok: false, status: 500, body: { error: 'Failed to restore preview.' } };
+        }
+        const { data: rolledBackGeneration, error: rollbackError } = await adminSupabase
           .from('generations')
           .update({
             output_url: ownedGeneration.output_url,
@@ -266,21 +325,53 @@ export async function restoreGenerationMediaForRoute({
             is_public: ownedGeneration.is_public,
           })
           .eq('id', ownedGeneration.id)
-          .eq('user_id', userId)
+          .eq('user_id', ownedGeneration.user_id)
           .is('template_run_id', null)
-          .is('template_run_step_id', null);
-        if (rollbackError) {
+          .is('template_run_step_id', null)
+          .select('id')
+          .maybeSingle();
+        if (rollbackError || !rolledBackGeneration) {
           logBackendError('failed_to_roll_back_generation_preview_after_linked_post_update_failur', { error: rollbackError });
+          const storageCleared = await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
+          await markMediaUploadIntentsConsumed(adminSupabase, {
+            storagePaths: [uploadFilePath],
+            userId,
+            consumedBy: 'generation_restore',
+            storageCleared,
+          });
+          const completed = await completeNullableUploadByteConsumption(adminSupabase, {
+            claim: consumptionClaim,
+            disposition: 'delete',
+          });
+          if (!completed.ok) {
+            logBackendError('failed_to_complete_generation_restore_upload_consumption', {
+              error: completed.error,
+            });
+          }
         } else {
+          durableGenerationMutation = false;
+          await abortNullableUploadByteConsumption(adminSupabase, consumptionClaim);
           await cleanupCreatedMedia(adminSupabase, persistedMedia.createdLocation);
           createdMediaLocation = null;
         }
-        await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
         return { ok: false, status: 500, body: { error: 'Failed to restore preview.' } };
       }
     }
 
-    await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
+    const storageCleared = await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
+    await markMediaUploadIntentsConsumed(adminSupabase, {
+      storagePaths: [uploadFilePath],
+      userId,
+      consumedBy: 'generation_restore',
+      storageCleared,
+    });
+    const completed = await completeNullableUploadByteConsumption(adminSupabase, {
+      claim: consumptionClaim,
+      disposition: 'delete',
+    });
+    if (!completed.ok) {
+      return { ok: false, status: 500, body: { error: completed.error } };
+    }
     createdMediaLocation = null;
     return {
       ok: true,
@@ -291,8 +382,20 @@ export async function restoreGenerationMediaForRoute({
     };
   } catch (error) {
     logBackendError('failed_to_restore_generation_media', { error: error });
-    await cleanupCreatedMedia(adminSupabase, createdMediaLocation);
-    await cleanupTemporaryUpload(adminSupabase, uploadFilePath);
+    if (durableGenerationMutation) {
+      const completed = await completeNullableUploadByteConsumption(adminSupabase, {
+        claim: consumptionClaim,
+        disposition: 'delete',
+      });
+      if (!completed.ok) {
+        logBackendError('failed_to_complete_generation_restore_upload_consumption', {
+          error: completed.error,
+        });
+      }
+    } else if (!durableMutationOutcomeUnknown) {
+      await abortNullableUploadByteConsumption(adminSupabase, consumptionClaim);
+      await cleanupCreatedMedia(adminSupabase, createdMediaLocation);
+    }
     return { ok: false, status: 500, body: { error: 'Failed to restore preview.' } };
   }
 }

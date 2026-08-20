@@ -144,6 +144,26 @@ describe('repairTemplateDemoPosters', () => {
     );
   });
 
+  it.each([
+    'template_assets/template-other/version-1/demo/private.mp4',
+    'template_assets/template-1%252f..%252ftemplate-other/version-1/demo/private.mp4',
+  ])('does not download a demo outside the exact template scope: %s', async (videoUrl) => {
+    const fake = createFakeSupabase({
+      templates: [{ id: 'template-1', video_url: videoUrl }],
+    });
+
+    const { repairTemplateDemoPosters } = await import('@/lib/media-preview-repair');
+    await expect(repairTemplateDemoPosters(fake.client)).resolves.toEqual({
+      attempted: 1,
+      completed: 0,
+      failed: 1,
+    });
+
+    expect(fake.calls.downloads).toEqual([]);
+    expect(fake.calls.uploads).toEqual([]);
+    expect(fake.calls.updates).toEqual([]);
+  });
+
   it('does nothing when every video template already has a thumbnail', async () => {
     const fake = createFakeSupabase({ templates: [] });
     const { repairTemplateDemoPosters, hasRepairableTemplateDemoPosters } = await import('@/lib/media-preview-repair');

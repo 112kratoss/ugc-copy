@@ -35,7 +35,7 @@ import {
   PROVIDER_STATUS_POLL_TIMEOUT_MS,
   withProviderModel,
 } from '@/lib/provider-fetch';
-import { resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 
 const IMAGE_STATUS_GENERATION_SELECT = 'id, user_id, prediction_id, status, output_url, created_at, completed_at, model, category, workflow_settings';
 
@@ -53,7 +53,7 @@ type ImageStatusGenerationRow = {
 };
 
 export type ImageGenerationStatusDependencies = {
-  resolveStoredMediaUrl: typeof resolveStoredMediaUrl;
+  resolveStoredMediaUrl: typeof resolveOwnedStoredMediaUrl;
   fetchWithProviderTimeout: typeof fetchWithProviderTimeout;
   enqueueGenerationOutputImportJob: typeof enqueueGenerationOutputImportJob;
   settleGenerationFailed: typeof settleGenerationFailed;
@@ -81,7 +81,7 @@ function resolveDependencies(
   dependencies: Partial<ImageGenerationStatusDependencies> | undefined,
 ): ImageGenerationStatusDependencies {
   return {
-    resolveStoredMediaUrl: dependencies?.resolveStoredMediaUrl ?? resolveStoredMediaUrl,
+    resolveStoredMediaUrl: dependencies?.resolveStoredMediaUrl ?? resolveOwnedStoredMediaUrl,
     fetchWithProviderTimeout: dependencies?.fetchWithProviderTimeout ?? fetchStatusPollWithRetry,
     enqueueGenerationOutputImportJob:
       dependencies?.enqueueGenerationOutputImportJob ?? enqueueGenerationOutputImportJob,
@@ -118,9 +118,12 @@ function getPersistedOutputPaths(workflowSettings: Record<string, unknown> | nul
 async function resolveOutputPaths(
   adminSupabase: SupabaseClient,
   outputPaths: string[],
+  ownerUserId: string,
   dependencies: ImageGenerationStatusDependencies,
 ): Promise<string[]> {
-  return Promise.all(outputPaths.map((outputPath) => dependencies.resolveStoredMediaUrl(adminSupabase, outputPath)));
+  const resolved = await Promise.all(outputPaths.map((outputPath) =>
+    dependencies.resolveStoredMediaUrl(adminSupabase, outputPath, ownerUserId)));
+  return resolved.filter((value): value is string => Boolean(value));
 }
 
 function estimateImageTotalMs(localGeneration: ImageStatusGenerationRow, workflowSettings: Record<string, unknown> | null): number | null {
@@ -162,11 +165,12 @@ export async function getImageGenerationStatusForRoute({
   // completed_at or workflow_settings, so running this as the user denies the
   // whole row and the miss surfaces as a phantom "Generation not found". The
   // user_id filter plus the ownership check below are the access boundary here.
+  const ownerUserIds = await resolveLinkedAccountIds(getAdminSupabase(), userId);
   const { data: generationData, error: generationLookupError } = await getAdminSupabase()
     .from('generations')
     .select(IMAGE_STATUS_GENERATION_SELECT)
     .eq('prediction_id', predictionId)
-    .in('user_id', await resolveLinkedAccountIds(getAdminSupabase(), userId))
+    .in('user_id', ownerUserIds)
     .single();
   if (generationLookupError && generationLookupError.code !== 'PGRST116') {
     logBackendError('generation_status_lookup_failed', {
@@ -176,7 +180,7 @@ export async function getImageGenerationStatusForRoute({
   }
   const localGeneration = generationData as ImageStatusGenerationRow | null;
 
-  if (!localGeneration || localGeneration.user_id !== userId) {
+  if (!localGeneration || !ownerUserIds.includes(localGeneration.user_id)) {
     return { ok: false, status: 404, body: { error: 'Generation not found' } };
   }
 
@@ -193,14 +197,18 @@ export async function getImageGenerationStatusForRoute({
     const admin = getAdminSupabase();
     const outputPaths = getPersistedOutputPaths(workflowSettings);
     const outputs = outputPaths.length > 0
-      ? await resolveOutputPaths(admin, outputPaths, resolvedDependencies)
+      ? await resolveOutputPaths(admin, outputPaths, localGeneration.user_id, resolvedDependencies)
       : [];
 
     return {
       ok: true,
       body: {
         status: 'succeeded',
-        output: await resolvedDependencies.resolveStoredMediaUrl(admin, localGeneration.output_url),
+        output: await resolvedDependencies.resolveStoredMediaUrl(
+          admin,
+          localGeneration.output_url,
+          localGeneration.user_id,
+        ),
         ...(outputs.length > 0 ? { outputs } : {}),
         timing: normalizeStoredGenerationTiming({
           kind: getGenerationKind({

@@ -7,14 +7,24 @@ import {
   POST_RESOURCE_FILE_READ_URL_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
-import { getUploadsBucketPath, isUploadsStoragePath } from '@/lib/image-elements';
-import { getStoredMediaLocation } from '@/lib/media-urls';
 import {
   getViewerUnlockDetail,
   listViewerUnlockStoragePaths,
 } from '@/lib/viewer-unlock-detail';
+import {
+  getCanonicalStoredMediaLocation,
+  parseCanonicalStorageObjectPath,
+} from '@/lib/storage-ownership';
 
 const RESOURCE_FILES_BUCKET = 'post_resource_files';
+const RESOURCE_SOURCE_BUCKETS = [
+  RESOURCE_FILES_BUCKET,
+  'uploads',
+  'generation_inputs',
+  'generated_images',
+  'generated_videos',
+  'generated_audio',
+] as const;
 const SIGNED_READ_EXPIRES_IN_SECONDS = 600;
 
 export type ViewerUnlockFileUrlClient = SupabaseClient & Parameters<typeof enforceBackendRateLimit>[0];
@@ -27,19 +37,34 @@ export type ViewerUnlockFileUrlResult =
 function parseRequestedPath(body: unknown): string {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return '';
   const value = (body as Record<string, unknown>).storagePath;
-  return typeof value === 'string' ? value.trim().replace(/^\/+/, '') : '';
+  return typeof value === 'string' && value === value.trim() ? value : '';
 }
 
-export function resolvePostResourceStorageLocation(storagePath: string) {
-  const storedLocation = getStoredMediaLocation(storagePath);
-  if (isUploadsStoragePath(storagePath)) {
-    return { bucket: 'uploads', filePath: getUploadsBucketPath(storagePath) };
-  }
+export function resolvePostResourceStorageLocation(
+  storagePath: string,
+  ownerUserId?: string | null,
+) {
+  const storedLocation = getCanonicalStoredMediaLocation(storagePath, {
+    allowedBuckets: RESOURCE_SOURCE_BUCKETS,
+    ...(ownerUserId ? { ownerUserId } : {}),
+  });
+  if (storedLocation) return storedLocation;
 
-  return {
-    bucket: storedLocation?.bucket ?? RESOURCE_FILES_BUCKET,
-    filePath: storedLocation?.filePath ?? storagePath,
-  };
+  const filePath = parseCanonicalStorageObjectPath(storagePath, {
+    ...(ownerUserId ? { ownerUserId } : {}),
+  });
+  return filePath ? { bucket: RESOURCE_FILES_BUCKET, filePath } : null;
+}
+
+function resolveRetainedStorageLocation(
+  revisionId: string,
+  bucket: unknown,
+  filePath: unknown,
+) {
+  if (bucket !== RESOURCE_FILES_BUCKET || typeof filePath !== 'string') return null;
+  const canonicalPath = parseCanonicalStorageObjectPath(filePath, { minimumSegments: 3 });
+  if (!canonicalPath || !canonicalPath.startsWith(`retained/${revisionId}/`)) return null;
+  return { bucket: RESOURCE_FILES_BUCKET, filePath: canonicalPath };
 }
 
 export async function createViewerUnlockFileUrl({
@@ -78,6 +103,17 @@ export async function createViewerUnlockFileUrl({
     return { ok: false, status: 404, body: { error: 'Resource file not found on this unlock.' } };
   }
 
+  if (!detail.detached && !detail.creatorUserId) {
+    return { ok: false, status: 404, body: { error: 'Resource file not found on this unlock.' } };
+  }
+  const source = resolvePostResourceStorageLocation(
+    requestedPath,
+    detail.detached ? null : detail.creatorUserId,
+  );
+  if (!source) {
+    return { ok: false, status: 404, body: { error: 'Resource file not found on this unlock.' } };
+  }
+
   try {
     await enforceBackendRateLimit(adminSupabase, {
       ...POST_RESOURCE_FILE_READ_URL_RATE_LIMIT,
@@ -88,7 +124,6 @@ export async function createViewerUnlockFileUrl({
     return { ok: false, status: 500, body: { error: 'Failed to check resource file limits.' } };
   }
 
-  const source = resolvePostResourceStorageLocation(requestedPath);
   let storageLocation = source;
 
   if (detail.detached) {
@@ -107,10 +142,15 @@ export async function createViewerUnlockFileUrl({
       return { ok: false, status: 404, body: { error: 'Retained resource file not found.' } };
     }
 
-    storageLocation = {
-      bucket: String(mapping.retained_bucket),
-      filePath: String(mapping.retained_path),
-    };
+    const retainedLocation = resolveRetainedStorageLocation(
+      detail.purchasedRevision.revisionId,
+      mapping.retained_bucket,
+      mapping.retained_path,
+    );
+    if (!retainedLocation) {
+      return { ok: false, status: 404, body: { error: 'Retained resource file not found.' } };
+    }
+    storageLocation = retainedLocation;
   }
 
   const { data, error } = await adminSupabase.storage

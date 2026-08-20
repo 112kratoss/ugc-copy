@@ -2,10 +2,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 
 // Supabase auth sessions previously persisted to plaintext AsyncStorage. This
-// adapter keeps the refresh token in the device keychain/keystore instead,
-// while transparently migrating existing sessions so signed-in users stay
-// signed in, and falling back to AsyncStorage on devices where SecureStore is
-// broken so login never hard-breaks.
+// adapter keeps refresh tokens in the device keychain/keystore and performs a
+// one-way migration of legacy sessions. AsyncStorage is never an auth-session
+// fallback: if secure persistence is unavailable or corrupt, the legacy copy
+// is erased and the session is invalidated.
 //
 // SecureStore soft-limits values to 2048 bytes and Supabase session JSON can
 // exceed that, so values are split into <= CHUNK_MAX_BYTES UTF-8 chunks stored
@@ -28,11 +28,47 @@ export type SecureSessionStorageDependencies = {
   };
   asyncStorage: {
     getItem: (key: string) => Promise<string | null>;
-    setItem: (key: string, value: string) => Promise<void>;
     removeItem: (key: string) => Promise<void>;
   };
   warn: (message: string, error?: unknown) => void;
+  invalidateSession: (reason: SecureSessionInvalidationReason) => void;
 };
+
+export type SecureSessionInvalidationReason =
+  | 'corrupt-secure-value'
+  | 'legacy-migration-failed'
+  | 'secure-store-unavailable'
+  | 'secure-value-too-large';
+
+export class SecureSessionStorageError extends Error {
+  readonly code = 'SECURE_SESSION_STORAGE_UNAVAILABLE';
+
+  constructor(
+    message: string,
+    readonly reason: SecureSessionInvalidationReason,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = 'SecureSessionStorageError';
+  }
+}
+
+let secureSessionInvalidationHandler: ((reason: SecureSessionInvalidationReason) => void) | null = null;
+
+/**
+ * Connects storage fail-closed events to the auth client's local sign-out.
+ * The returned disposer is mainly useful for tests and hot reload cleanup.
+ */
+export function configureSecureSessionInvalidationHandler(
+  handler: ((reason: SecureSessionInvalidationReason) => void) | null,
+) {
+  secureSessionInvalidationHandler = handler;
+  return () => {
+    if (secureSessionInvalidationHandler === handler) {
+      secureSessionInvalidationHandler = null;
+    }
+  };
+}
 
 const defaultDependencies: SecureSessionStorageDependencies = {
   secureStore: {
@@ -42,11 +78,13 @@ const defaultDependencies: SecureSessionStorageDependencies = {
   },
   asyncStorage: {
     getItem: (key) => AsyncStorage.getItem(key),
-    setItem: (key, value) => AsyncStorage.setItem(key, value),
     removeItem: (key) => AsyncStorage.removeItem(key),
   },
   warn: (message, error) => {
     console.warn(message, error);
+  },
+  invalidateSession: (reason) => {
+    secureSessionInvalidationHandler?.(reason);
   },
 };
 
@@ -97,8 +135,7 @@ export function splitValueIntoChunks(value: string, maxBytes = CHUNK_MAX_BYTES):
   return chunks;
 }
 
-function parseChunkCount(rawMeta: string | null): number | null {
-  if (rawMeta === null) return null;
+function parseChunkCount(rawMeta: string): number | null {
   const count = Number.parseInt(rawMeta, 10);
   if (!Number.isInteger(count) || String(count) !== rawMeta.trim() || count < 1 || count > MAX_CHUNKS) {
     return null;
@@ -106,25 +143,21 @@ function parseChunkCount(rawMeta: string | null): number | null {
   return count;
 }
 
+class CorruptSecureValueError extends Error {
+  constructor() {
+    super('Secure session chunks are incomplete or have invalid metadata.');
+    this.name = 'CorruptSecureValueError';
+  }
+}
+
 export function createSecureSessionStorage(
   overrides: Partial<SecureSessionStorageDependencies> = {}
 ): SecureSessionStorage {
-  const { secureStore, asyncStorage, warn } = { ...defaultDependencies, ...overrides };
-
-  // Once SecureStore throws (some Android keystores are broken, and web has no
-  // SecureStore at all) we stop touching it for the rest of the app session so
-  // reads and writes stay consistent against a single backing store.
-  let secureStoreUnavailable = false;
+  const { secureStore, asyncStorage, warn, invalidateSession } = {
+    ...defaultDependencies,
+    ...overrides,
+  };
   const keyQueues = new Map<string, Promise<unknown>>();
-
-  function markSecureStoreUnavailable(operation: string, error: unknown) {
-    if (secureStoreUnavailable) return;
-    secureStoreUnavailable = true;
-    warn(
-      `SecureStore ${operation} failed; falling back to AsyncStorage for auth session storage.`,
-      error
-    );
-  }
 
   /** Serializes operations per key so chunked writes never interleave. */
   function withKeyQueue<T>(key: string, operation: () => Promise<T>): Promise<T> {
@@ -134,17 +167,28 @@ export function createSecureSessionStorage(
     return next;
   }
 
-  async function readChunkCount(key: string) {
-    return parseChunkCount(await secureStore.getItemAsync(metaKey(key)));
+  async function readChunkCount(key: string): Promise<number | null> {
+    const rawMeta = await secureStore.getItemAsync(metaKey(key));
+    if (rawMeta === null) return null;
+    const chunkCount = parseChunkCount(rawMeta);
+    if (chunkCount === null) throw new CorruptSecureValueError();
+    return chunkCount;
   }
 
   async function readSecureValue(key: string): Promise<string | null> {
     const chunkCount = await readChunkCount(key);
-    if (chunkCount === null) return null;
+    if (chunkCount === null) {
+      // A chunk without its commit marker is an interrupted/corrupt write, not
+      // an empty storage slot. Never revive a plaintext fallback over it.
+      if (await secureStore.getItemAsync(chunkKey(key, 0)) !== null) {
+        throw new CorruptSecureValueError();
+      }
+      return null;
+    }
     const chunks = await Promise.all(
       Array.from({ length: chunkCount }, (_, index) => secureStore.getItemAsync(chunkKey(key, index)))
     );
-    if (chunks.some((chunk) => chunk === null)) return null;
+    if (chunks.some((chunk) => chunk === null)) throw new CorruptSecureValueError();
     return chunks.join('');
   }
 
@@ -153,9 +197,15 @@ export function createSecureSessionStorage(
     const chunks = splitValueIntoChunks(value);
     if (chunks.length > MAX_CHUNKS) return false;
     const previousCount = await readChunkCount(key);
+    // Invalidate the old value before overwriting any live chunk. If the app is
+    // terminated during the rewrite, a later read sees orphaned chunks without
+    // a commit marker and fails closed instead of joining new and old chunks.
+    await secureStore.deleteItemAsync(metaKey(key));
     for (let index = 0; index < chunks.length; index += 1) {
       await secureStore.setItemAsync(chunkKey(key, index), chunks[index]);
     }
+    // The metadata entry is the commit marker and must always be published
+    // after every chunk is durable.
     await secureStore.setItemAsync(metaKey(key), String(chunks.length));
     if (previousCount !== null) {
       for (let index = chunks.length; index < previousCount; index += 1) {
@@ -166,7 +216,8 @@ export function createSecureSessionStorage(
   }
 
   async function removeSecureValue(key: string) {
-    const knownCount = (await readChunkCount(key)) ?? 0;
+    const rawMeta = await secureStore.getItemAsync(metaKey(key));
+    const knownCount = rawMeta === null ? 0 : (parseChunkCount(rawMeta) ?? 0);
     await secureStore.deleteItemAsync(metaKey(key));
     // Delete every chunk the meta entry claims, then keep scanning so orphaned
     // chunks from an interrupted larger write are cleaned up as well.
@@ -181,81 +232,174 @@ export function createSecureSessionStorage(
     }
   }
 
-  async function migrateLegacyValue(key: string): Promise<string | null> {
-    const legacyValue = await asyncStorage.getItem(key);
-    if (legacyValue === null) return null;
+  function reasonForReadFailure(error: unknown): SecureSessionInvalidationReason {
+    return error instanceof CorruptSecureValueError
+      ? 'corrupt-secure-value'
+      : 'secure-store-unavailable';
+  }
+
+  async function invalidateUnsafeValue(
+    key: string,
+    reason: SecureSessionInvalidationReason,
+    error?: unknown,
+  ) {
+    // Plaintext cleanup is attempted first. Even if SecureStore itself is
+    // broken, a legacy bearer token must not remain available to backups or
+    // other code paths.
     try {
-      const stored = await writeSecureValue(key, legacyValue);
-      if (stored && (await readSecureValue(key)) === legacyValue) {
-        // Only drop the plaintext copy after verifying the secure copy reads
-        // back intact — an interrupted migration must never sign the user out.
-        await asyncStorage.removeItem(key).catch(() => undefined);
-      } else if (stored) {
-        await removeSecureValue(key);
+      await asyncStorage.removeItem(key);
+    } catch (cleanupError) {
+      warn('Failed to erase a legacy plaintext auth session.', cleanupError);
+    }
+
+    try {
+      await removeSecureValue(key);
+    } catch (cleanupError) {
+      warn('Failed to erase an invalid secure auth session.', cleanupError);
+    }
+
+    const messages: Record<SecureSessionInvalidationReason, string> = {
+      'corrupt-secure-value': 'Secure session data is corrupt; signing out.',
+      'legacy-migration-failed': 'Legacy auth session migration failed; signing out.',
+      'secure-store-unavailable': 'SecureStore is unavailable; signing out.',
+      'secure-value-too-large': 'Auth session exceeds secure storage capacity; signing out.',
+    };
+    warn(messages[reason], error);
+    try {
+      invalidateSession(reason);
+    } catch (invalidationError) {
+      warn('Failed to notify the auth client about invalid secure session state.', invalidationError);
+    }
+  }
+
+  async function migrateLegacyValue(key: string, legacyValue: string): Promise<string | null> {
+    let stored = false;
+    try {
+      stored = await writeSecureValue(key, legacyValue);
+      if (!stored) {
+        await invalidateUnsafeValue(key, 'secure-value-too-large');
+        return null;
+      }
+      if ((await readSecureValue(key)) !== legacyValue) {
+        await invalidateUnsafeValue(key, 'corrupt-secure-value');
+        return null;
       }
     } catch (error) {
-      markSecureStoreUnavailable('migration', error);
+      await invalidateUnsafeValue(key, reasonForReadFailure(error), error);
+      return null;
+    }
+
+    try {
+      await asyncStorage.removeItem(key);
+    } catch (error) {
+      await invalidateUnsafeValue(key, 'legacy-migration-failed', error);
+      return null;
     }
     return legacyValue;
   }
 
   async function getItem(key: string): Promise<string | null> {
     return withKeyQueue(key, async () => {
-      if (secureStoreUnavailable) {
-        return asyncStorage.getItem(key);
-      }
+      let secureValue: string | null;
       try {
-        const secureValue = await readSecureValue(key);
-        if (secureValue !== null) return secureValue;
+        secureValue = await readSecureValue(key);
       } catch (error) {
-        markSecureStoreUnavailable('read', error);
-        return asyncStorage.getItem(key);
+        await invalidateUnsafeValue(key, reasonForReadFailure(error), error);
+        return null;
       }
-      return migrateLegacyValue(key);
+
+      if (secureValue !== null) {
+        // A successful secure read also self-heals any leftover plaintext copy.
+        // Failure to erase that copy is unsafe, so fail closed rather than
+        // returning a refresh token while plaintext persistence remains.
+        try {
+          await asyncStorage.removeItem(key);
+        } catch (error) {
+          await invalidateUnsafeValue(key, 'legacy-migration-failed', error);
+          return null;
+        }
+        return secureValue;
+      }
+
+      let legacyValue: string | null;
+      try {
+        legacyValue = await asyncStorage.getItem(key);
+      } catch (error) {
+        await invalidateUnsafeValue(key, 'legacy-migration-failed', error);
+        return null;
+      }
+      if (legacyValue === null) return null;
+      return migrateLegacyValue(key, legacyValue);
     });
   }
 
   async function setItem(key: string, value: string): Promise<void> {
     return withKeyQueue(key, async () => {
-      if (secureStoreUnavailable) {
-        await asyncStorage.setItem(key, value);
-        return;
-      }
       let stored = false;
       try {
         stored = await writeSecureValue(key, value);
       } catch (error) {
-        markSecureStoreUnavailable('write', error);
+        const reason = reasonForReadFailure(error);
+        await invalidateUnsafeValue(key, reason, error);
+        throw new SecureSessionStorageError(
+          'Secure session storage is unavailable. Sign in again after secure storage recovers.',
+          reason,
+          { cause: error },
+        );
       }
-      if (stored) {
+      if (!stored) {
+        await invalidateUnsafeValue(key, 'secure-value-too-large');
+        throw new SecureSessionStorageError(
+          'Auth session is too large for secure storage.',
+          'secure-value-too-large',
+        );
+      }
+
+      try {
         // Self-heal any lingering plaintext copy from the pre-SecureStore era.
-        await asyncStorage.removeItem(key).catch(() => undefined);
-        return;
+        await asyncStorage.removeItem(key);
+      } catch (error) {
+        await invalidateUnsafeValue(key, 'legacy-migration-failed', error);
+        throw new SecureSessionStorageError(
+          'Could not erase the legacy plaintext auth session.',
+          'legacy-migration-failed',
+          { cause: error },
+        );
       }
-      if (!secureStoreUnavailable) {
-        warn(`Auth session value for "${key}" exceeds secure storage capacity; storing in AsyncStorage.`);
-        await removeSecureValue(key).catch(() => undefined);
-      }
-      await asyncStorage.setItem(key, value);
     });
   }
 
   async function removeItem(key: string): Promise<void> {
     return withKeyQueue(key, async () => {
-      if (!secureStoreUnavailable) {
-        try {
-          await removeSecureValue(key);
-        } catch (error) {
-          markSecureStoreUnavailable('remove', error);
-        }
+      try {
+        await removeSecureValue(key);
+      } catch (error) {
+        // Sign-out must still complete in memory when the keystore is broken.
+        warn('Failed to erase a secure auth session during sign-out.', error);
       }
-      // Always clear the AsyncStorage copy too: legacy sessions and fallback
-      // writes both live there.
-      await asyncStorage.removeItem(key);
+      try {
+        await asyncStorage.removeItem(key);
+      } catch (error) {
+        warn('Failed to erase a legacy plaintext auth session during sign-out.', error);
+      }
     });
   }
 
   return { getItem, setItem, removeItem };
+}
+
+/** A deliberately process-local storage adapter for the Expo web target. */
+export function createMemorySessionStorage(): SecureSessionStorage {
+  const values = new Map<string, string>();
+  return {
+    getItem: async (key) => values.get(key) ?? null,
+    setItem: async (key, value) => {
+      values.set(key, value);
+    },
+    removeItem: async (key) => {
+      values.delete(key);
+    },
+  };
 }
 
 export const secureSessionStorage = createSecureSessionStorage();

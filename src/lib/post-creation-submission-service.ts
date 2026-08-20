@@ -24,6 +24,7 @@ import {
   type ShowcaseSourceKind,
   type ShowcaseVisibility,
 } from '@/lib/showcase';
+import { parseCanonicalStorageLocation } from '@/lib/storage-ownership';
 
 const UPLOADS_BUCKET = 'uploads';
 const BODY_MAX_LENGTH = 2000;
@@ -109,15 +110,6 @@ export function getSubmittedMediaKind(item: SubmittedPostMediaItem): ShowcaseMed
   return getMediaKindFromContentType(item.contentType) ?? 'image';
 }
 
-function normalizeStoragePath(value: FormDataEntryValue | null): string | null {
-  if (typeof value !== 'string') {
-    return null;
-  }
-
-  const trimmed = value.trim().replace(/^\/+/, '');
-  return trimmed || null;
-}
-
 function parseUploadedMediaLocation(params: {
   storagePath: FormDataEntryValue | null;
   userId: string;
@@ -131,28 +123,37 @@ function parseUploadedMediaLocation(params: {
   } | null;
   error: string | null;
 } {
-  const normalizedStoragePath = normalizeStoragePath(params.storagePath);
-  if (!normalizedStoragePath) {
+  const submittedStoragePath = typeof params.storagePath === 'string'
+    ? params.storagePath.trim()
+    : '';
+  if (!submittedStoragePath) {
     return {
       location: null,
       error: null,
     };
   }
 
-  if (!normalizedStoragePath.startsWith(`${UPLOADS_BUCKET}/`)) {
+  const bucketLocation = parseCanonicalStorageLocation(submittedStoragePath, {
+    allowedBuckets: [UPLOADS_BUCKET],
+  });
+  if (!bucketLocation) {
     return {
       location: null,
       error: 'Uploaded media must come from the uploads bucket.',
     };
   }
 
-  const filePath = normalizedStoragePath.slice(`${UPLOADS_BUCKET}/`.length);
-  if (!filePath.startsWith(`${params.userId}/`)) {
+  const ownedLocation = parseCanonicalStorageLocation(submittedStoragePath, {
+    allowedBuckets: [UPLOADS_BUCKET],
+    ownerUserId: params.userId,
+  });
+  if (!ownedLocation) {
     return {
       location: null,
       error: 'Uploaded media must belong to the authenticated user.',
     };
   }
+  const filePath = ownedLocation.filePath;
 
   const originalName =
     typeof params.originalName === 'string' && params.originalName.trim()

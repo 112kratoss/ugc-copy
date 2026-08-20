@@ -13,10 +13,19 @@ const cacheMocks = vi.hoisted(() => ({
  * inline cast at each of the six call sites.
  */
 function adminSupabaseDouble(overrides: Record<string, unknown> = {}): SupabaseClient {
+  const overrideFrom = typeof overrides.from === 'function'
+    ? overrides.from as (table: string) => unknown
+    : null;
+  const legacyReservationQuery = {
+    eq: vi.fn(() => legacyReservationQuery),
+    maybeSingle: vi.fn(async () => ({ data: null, error: null })),
+  };
   return {
     storage: { from: vi.fn() },
-    from: vi.fn(),
     ...overrides,
+    from: vi.fn((table: string) => table === 'upload_byte_reservations'
+      ? { select: vi.fn(() => legacyReservationQuery) }
+      : overrideFrom?.(table)),
   } as unknown as SupabaseClient;
 }
 
@@ -522,15 +531,13 @@ describe('publishPreparedPost', () => {
     // promoted into the public bucket.
     expect(download).not.toHaveBeenCalled();
     expect(copy).not.toHaveBeenCalled();
-    // The rejection is permanent, so the staged object is rolled back rather
-    // than left to leak in the staging bucket until the sweep. The destination
-    // was registered pessimistically but never written, so its remove is a
-    // harmless no-op.
+    // Only the newly allocated destination is safe to remove. The staging
+    // source may be shared by another draft/retry and remains under its
+    // reservation + reclaim policy.
     expect(removedBatches).toEqual([
       ['posts/post-1/0/oversized.png'],
-      ['user-1/oversized.png'],
     ]);
-    expect(clearedIntents).toHaveBeenCalled();
+    expect(clearedIntents).not.toHaveBeenCalled();
   });
 
   it('fails closed when staged media metadata carries no size', async () => {
@@ -767,7 +774,7 @@ describe('publishPreparedPost', () => {
     expect(mediaItems[0]).not.toHaveProperty('previewAttemptCount');
   });
 
-  it('cleans up both the copy and the staged source when the copy fails', async () => {
+  it('cleans up only its destination when a copy fails ambiguously', async () => {
     const prepared = await prepareStagedMediaSubmission({ fileName: 'shot.png', contentType: 'image/png' });
     const removedBatches: string[][] = [];
     const remove = vi.fn(async (paths: string[]) => {
@@ -810,9 +817,8 @@ describe('publishPreparedPost', () => {
     // failure still cleans up whatever may have materialized.
     expect(removedBatches).toEqual([
       ['posts/post-1/0/shot.png'],
-      ['user-1/shot.png'],
     ]);
-    // Rolled back, so the staged bytes are marked cleared rather than consumed.
-    expect(clearedIntents).toHaveBeenCalled();
+    // The source remains available for a retry and is not falsely marked gone.
+    expect(clearedIntents).not.toHaveBeenCalled();
   });
 });

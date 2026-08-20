@@ -5,7 +5,6 @@ import {
   compileImagePromptWithElements,
   compilePromptWithElements,
   findUnknownPromptHandles,
-  isUploadsStoragePath,
   isValidElementHandle,
   normalizeElementDisplayName,
   normalizeSubmittedElementDescriptors,
@@ -52,7 +51,8 @@ import {
   persistGenerationInputMedia,
   type PersistGenerationInputCandidate,
 } from '@/lib/generation-input-media';
-import { getStoredMediaLocation, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
+import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
 import { buildKieWebhookCallbackUrl } from '@/lib/kie-webhook';
 import type { GenerationStartResult } from '@/lib/generation-start-idempotency';
 import {
@@ -143,6 +143,9 @@ export interface KlingVideoElementInput {
 export type TemplateGenerationContext = Readonly<{
   runId: string;
   stepId: string;
+  /** Server-persisted catalog scope for fixed assets embedded in the snapshot. */
+  templateId?: string;
+  templateVersionId?: string | null;
 }>;
 
 
@@ -890,10 +893,6 @@ function normalizeKlingVideoElementInputs(value: KlingVideoElementInput[] | unde
     } => Boolean(element));
 }
 
-// Storage prefixes the generation pipeline resolves through the app's own
-// Supabase project (see resolveStoredMediaUrl's private template handling).
-const PRIVATE_TEMPLATE_STORAGE_PREFIXES = ['template_inputs/', 'template_assets/'] as const;
-
 // Seedance/Kling reference slots accept provider-issued asset handles instead
 // of URLs. These opaque tokens contain no scheme or path separators, so they
 // cannot address a network host.
@@ -923,9 +922,10 @@ function isAllowedGenerationMediaSource(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed) return false;
 
-  if (getStoredMediaLocation(trimmed)) return true;
-  if (isUploadsStoragePath(trimmed)) return true;
-  if (PRIVATE_TEMPLATE_STORAGE_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) return true;
+  if (getCanonicalStoredMediaLocation(trimmed)) return true;
+  if (getCanonicalStoredMediaLocation(trimmed, {
+    allowedBuckets: ['template_inputs', 'template_assets'],
+  })) return true;
 
   if (/^https?:\/\//i.test(trimmed)) {
     try {
@@ -952,16 +952,87 @@ function assertAllowedGenerationMediaSource(value: string): string {
 
 async function resolveGenerationMediaSource(
   supabase: SupabaseClient,
-  url: string
+  url: string,
+  userId: string,
+  options: {
+    templateAssetScope?: {
+      templateId: string;
+      templateVersionId: string | null;
+    };
+  } = {},
 ): Promise<string> {
-  return resolveStoredMediaUrl(supabase, assertAllowedGenerationMediaSource(url));
+  const source = assertAllowedGenerationMediaSource(url);
+
+  // Provider asset handles are opaque identifiers, not storage paths or URLs.
+  if (PROVIDER_ASSET_HANDLE_PATTERN.test(source)) return source;
+
+  const templateAsset = getCanonicalStoredMediaLocation(source, {
+    allowedBuckets: ['template_assets'],
+  });
+  if (templateAsset) {
+    const scope = options.templateAssetScope;
+    if (!scope) {
+      throw new GenerationServiceError(
+        'Template catalog assets can only be used by a template run.',
+        400,
+      );
+    }
+    const requiredPrefix = scope.templateVersionId
+      ? `${scope.templateId}/${scope.templateVersionId}/`
+      : `${scope.templateId}/`;
+    if (!templateAsset.filePath.startsWith(requiredPrefix)) {
+      throw new GenerationServiceError(
+        'Template media references must belong to the active template version.',
+        400,
+      );
+    }
+    const { data, error } = await supabase.storage
+      .from(templateAsset.bucket)
+      .createSignedUrl(templateAsset.filePath, 3600);
+    if (error || !data?.signedUrl) {
+      throw new GenerationServiceError('Failed to resolve the template media reference.', 500);
+    }
+    return data.signedUrl;
+  }
+
+  const resolved = await resolveOwnedStoredMediaUrl(supabase, source, userId);
+  if (!resolved) {
+    throw new GenerationServiceError(
+      'Media references must belong to the authenticated user.',
+      400,
+    );
+  }
+  return resolved;
 }
 
 async function resolveMediaUrls(
   supabase: SupabaseClient,
-  urls: string[]
+  urls: string[],
+  userId: string,
+  options: {
+    templateAssetScope?: {
+      templateId: string;
+      templateVersionId: string | null;
+    };
+  } = {},
 ): Promise<string[]> {
-  return Promise.all(urls.map((url) => resolveGenerationMediaSource(supabase, url)));
+  return Promise.all(urls.map((url) => resolveGenerationMediaSource(
+    supabase,
+    url,
+    userId,
+    options,
+  )));
+}
+
+function templateAssetScope(
+  context: TemplateGenerationContext | undefined,
+): { templateId: string; templateVersionId: string | null } | undefined {
+  return context?.templateId
+    ? {
+        templateId: context.templateId,
+        templateVersionId: context.templateVersionId ?? null,
+      }
+    : undefined;
 }
 
 function normalizeDialogueTurns(dialogueTurns: DialogueTurnInput[] | undefined): DialogueTurnInput[] {
@@ -1494,7 +1565,9 @@ export async function startImageGeneration(params: {
     supabase,
     normalizedReferences.length > 0
       ? normalizedReferences.map((reference) => reference.url)
-      : normalizeMediaUrlList(imageUrls)
+      : normalizeMediaUrlList(imageUrls),
+    userId,
+    { templateAssetScope: templateAssetScope(templateContext) },
   );
 
   assertGenerationRequest(
@@ -1990,15 +2063,35 @@ export async function startVideoGeneration(params: {
     || model === 'gemini-omni-video'
     || model === 'minimax-h3';
   const resolvedReferenceImageUrls = normalizedReferences.length > 0
-    ? await resolveMediaUrls(supabase, normalizedReferences.map((reference) => reference.url))
+    ? await resolveMediaUrls(
+        supabase,
+        normalizedReferences.map((reference) => reference.url),
+        userId,
+        { templateAssetScope: templateAssetScope(templateContext) },
+      )
     : useLegacyFrameUrls
       ? []
-      : await resolveMediaUrls(supabase, normalizeMediaUrlList(imageUrls));
+      : await resolveMediaUrls(
+          supabase,
+          normalizeMediaUrlList(imageUrls),
+          userId,
+          { templateAssetScope: templateAssetScope(templateContext) },
+        );
   const resolvedReferenceVideoUrls = supportsMultimodalReferences
-    ? await resolveMediaUrls(supabase, normalizeMediaUrlList(referenceVideoUrls))
+    ? await resolveMediaUrls(
+        supabase,
+        normalizeMediaUrlList(referenceVideoUrls),
+        userId,
+        { templateAssetScope: templateAssetScope(templateContext) },
+      )
     : [];
   const resolvedReferenceAudioUrls = supportsMultimodalReferences
-    ? await resolveMediaUrls(supabase, normalizeMediaUrlList(referenceAudioUrls))
+    ? await resolveMediaUrls(
+        supabase,
+        normalizeMediaUrlList(referenceAudioUrls),
+        userId,
+        { templateAssetScope: templateAssetScope(templateContext) },
+      )
     : [];
   const normalizedPreparedAudioIds = model === 'gemini-omni-video'
     ? Array.from(new Set(preparedAudioIds.map((value) => value.trim()).filter(Boolean)))
@@ -2009,16 +2102,31 @@ export async function startVideoGeneration(params: {
   const resolvedKlingVideoElements = model === 'kling-3.0-video'
     ? await Promise.all(normalizedKlingVideoElements.map(async (element) => ({
         ...element,
-        url: await resolveGenerationMediaSource(supabase, element.url),
+        url: await resolveGenerationMediaSource(
+          supabase,
+          element.url,
+          userId,
+          { templateAssetScope: templateAssetScope(templateContext) },
+        ),
       })))
     : [];
   const resolvedElementImageUrls = normalizedReferences.length > 0
     ? resolvedReferenceImageUrls.filter((_url, index) => Boolean(normalizedReferences[index]?.handle))
-    : await resolveMediaUrls(supabase, normalizeMediaUrlList(elementImageUrls));
+    : await resolveMediaUrls(
+        supabase,
+        normalizeMediaUrlList(elementImageUrls),
+        userId,
+        { templateAssetScope: templateAssetScope(templateContext) },
+      );
   const resolvedLegacyImageUrls = normalizedReferences.length > 0
     ? []
     : useLegacyFrameUrls
-      ? await resolveMediaUrls(supabase, normalizeMediaUrlList(imageUrls))
+      ? await resolveMediaUrls(
+          supabase,
+          normalizeMediaUrlList(imageUrls),
+          userId,
+          { templateAssetScope: templateAssetScope(templateContext) },
+        )
       : [];
   const totalReferenceImageCount = resolvedReferenceImageUrls.length;
 
@@ -2096,8 +2204,22 @@ export async function startVideoGeneration(params: {
     );
   }
 
-  const resolvedStartImageUrl = startImageUrl ? await resolveGenerationMediaSource(supabase, startImageUrl) : null;
-  const resolvedEndImageUrl = endImageUrl ? await resolveGenerationMediaSource(supabase, endImageUrl) : null;
+  const resolvedStartImageUrl = startImageUrl
+    ? await resolveGenerationMediaSource(
+        supabase,
+        startImageUrl,
+        userId,
+        { templateAssetScope: templateAssetScope(templateContext) },
+      )
+    : null;
+  const resolvedEndImageUrl = endImageUrl
+    ? await resolveGenerationMediaSource(
+        supabase,
+        endImageUrl,
+        userId,
+        { templateAssetScope: templateAssetScope(templateContext) },
+      )
+    : null;
 
   const frameImageUrls = [
     resolvedStartImageUrl || resolvedLegacyImageUrls[0] || null,
@@ -3036,7 +3158,12 @@ export async function startCatalogGeneration(params: {
       : await Promise.all(inputs.map(async (asset) => ({
           ...asset,
           url: typeof asset.url === 'string' && asset.url.trim()
-            ? await resolveGenerationMediaSource(supabase, asset.url)
+            ? await resolveGenerationMediaSource(
+                supabase,
+                asset.url,
+                userId,
+                { templateAssetScope: templateAssetScope(templateContext) },
+              )
             : null,
         })));
     const providerRequest = buildGenerationProviderRequest({

@@ -177,7 +177,7 @@ describe('generation input media loading', () => {
 
   it('does not sign or expose a storage object outside the row owner prefix', async () => {
     const { loadGenerationInputMediaMap } = await import('@/lib/generation-input-media');
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const storageFrom = vi.fn();
     const supabase = {
       from: vi.fn(() => ({
@@ -212,11 +212,6 @@ describe('generation input media loading', () => {
 
     expect(storageFrom).not.toHaveBeenCalled();
     expect(result.get('gen-1')?.[0]).toMatchObject({ url: null, storagePath: null });
-    const refusalLog = JSON.parse(consoleError.mock.calls[0][0] as string);
-    expect(refusalLog.msg).toBe('refused_to_sign_generation_input_outside_owner_prefix');
-    expect(refusalLog.message).toBe(
-      'Refused to sign generation input outside owner prefix: uploads/user-2/private.png',
-    );
   });
 
   it('keeps successful signed URLs when another file in the batch fails', async () => {

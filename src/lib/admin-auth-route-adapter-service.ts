@@ -1,5 +1,6 @@
 import 'server-only';
 
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
 
 import { API_CACHE_CONTROL, createApiResponseHeaders, getApiRequestId } from '@/lib/api-cache';
@@ -8,8 +9,13 @@ import { verifyAdminPassword } from '@/lib/admin-password';
 import {
   ADMIN_MASTER_SUBJECT,
   ADMIN_SESSION_COOKIE,
+  createAdminSessionId,
   createAdminSessionToken,
+  deriveAdminCredentialVersion,
+  resolveAdminSessionSecret,
+  verifyAdminSessionToken,
 } from '@/lib/admin-session-token';
+import { insertAdminSession, revokeAdminSession } from '@/lib/admin-session-store';
 import { logBackendRouteError } from '@/lib/backend-logger';
 import {
   ADMIN_LOGIN_RATE_LIMIT,
@@ -25,6 +31,26 @@ type LoginBody = {
   password?: unknown;
 };
 
+type AdminSessionRouteDependencies = {
+  createServiceClient?: () => SupabaseClient;
+  enforceBackendRateLimit?: typeof enforceBackendRateLimit;
+  verifyAdminPassword?: typeof verifyAdminPassword;
+  createSessionId?: typeof createAdminSessionId;
+  environment?: NodeJS.ProcessEnv;
+  now?: () => Date;
+};
+
+function resolveDependencies(dependencies: AdminSessionRouteDependencies | undefined) {
+  return {
+    createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
+    enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
+    verifyAdminPassword: dependencies?.verifyAdminPassword ?? verifyAdminPassword,
+    createSessionId: dependencies?.createSessionId ?? createAdminSessionId,
+    environment: dependencies?.environment ?? process.env,
+    now: dependencies?.now ?? (() => new Date()),
+  };
+}
+
 /**
  * Every failure path returns this one message. Distinguishing "no such user"
  * from "wrong password" would confirm the admin username to an attacker, and
@@ -32,7 +58,7 @@ type LoginBody = {
  */
 const GENERIC_LOGIN_FAILURE = 'Incorrect username or password.';
 
-function buildSessionCookieOptions(maxAgeSeconds: number) {
+function buildSessionCookieOptions(maxAgeSeconds: number, environment: NodeJS.ProcessEnv) {
   return {
     name: ADMIN_SESSION_COOKIE,
     httpOnly: true,
@@ -40,7 +66,7 @@ function buildSessionCookieOptions(maxAgeSeconds: number) {
     // `lax` rather than `strict` so following an /admin link from an external
     // tab still arrives authenticated; the admin surface performs no
     // cross-site state change on GET.
-    secure: process.env.NODE_ENV === 'production',
+    secure: environment.NODE_ENV === 'production',
     path: '/',
     maxAge: maxAgeSeconds,
   };
@@ -74,10 +100,14 @@ function constantTimeStringEquals(left: string, right: string): boolean {
   return difference === 0;
 }
 
-export async function postAdminSessionResponse(request: Request): Promise<NextResponse> {
+export async function postAdminSessionResponse(
+  request: Request,
+  dependencies?: AdminSessionRouteDependencies,
+): Promise<NextResponse> {
+  const resolved = resolveDependencies(dependencies);
   const headers = createApiResponseHeaders(request, API_CACHE_CONTROL.privateNoStore);
   const requestId = getApiRequestId(request);
-  const config = resolveAdminConfig();
+  const config = resolveAdminConfig(resolved.environment);
 
   if (!config.configured) {
     logBackendRouteError(JSON.stringify({
@@ -93,7 +123,7 @@ export async function postAdminSessionResponse(request: Request): Promise<NextRe
   }
 
   try {
-    await enforceBackendRateLimit(createServiceClient(), {
+    await resolved.enforceBackendRateLimit(resolved.createServiceClient(), {
       ...ADMIN_LOGIN_RATE_LIMIT,
       key: getClientNetworkKey(request.headers),
     });
@@ -110,7 +140,7 @@ export async function postAdminSessionResponse(request: Request): Promise<NextRe
   }
 
   const usernameMatches = constantTimeStringEquals(credentials.username, config.username ?? '');
-  const passwordMatches = await verifyAdminPassword(credentials.password, config.passwordHash);
+  const passwordMatches = await resolved.verifyAdminPassword(credentials.password, config.passwordHash);
 
   if (!usernameMatches || !passwordMatches) {
     logBackendRouteError(JSON.stringify({
@@ -121,38 +151,121 @@ export async function postAdminSessionResponse(request: Request): Promise<NextRe
     return NextResponse.json({ error: GENERIC_LOGIN_FAILURE }, { status: 401, headers });
   }
 
+  const issuedAt = resolved.now();
+  const sessionId = resolved.createSessionId();
+  const credentialVersion = await deriveAdminCredentialVersion({
+    secret: config.sessionSecret as string,
+    passwordHash: config.passwordHash as string,
+  });
   const token = await createAdminSessionToken({
     secret: config.sessionSecret as string,
     subject: ADMIN_MASTER_SUBJECT,
-    issuedAt: new Date(),
+    sessionId,
+    credentialVersion,
+    issuedAt,
     ttlSeconds: config.sessionTtlSeconds,
   });
+
+  try {
+    await insertAdminSession(resolved.createServiceClient(), {
+      sessionId,
+      subject: ADMIN_MASTER_SUBJECT,
+      credentialVersion,
+      createdAt: issuedAt,
+      expiresAt: new Date(issuedAt.getTime() + config.sessionTtlSeconds * 1000),
+    });
+  } catch (error) {
+    logBackendRouteError(JSON.stringify({
+      level: 'error',
+      msg: 'admin_session_create_failed',
+      requestId,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    }));
+    return NextResponse.json(
+      { error: 'Admin session storage is unavailable.' },
+      { status: 503, headers },
+    );
+  }
 
   const response = NextResponse.json(
     { ok: true, expiresInSeconds: config.sessionTtlSeconds },
     { status: 200, headers },
   );
   response.cookies.set({
-    ...buildSessionCookieOptions(config.sessionTtlSeconds),
+    ...buildSessionCookieOptions(config.sessionTtlSeconds, resolved.environment),
     value: token,
   });
   return response;
 }
 
-export function deleteAdminSessionResponse(request: Request): NextResponse {
+export async function deleteAdminSessionResponse(
+  request: Request,
+  dependencies?: AdminSessionRouteDependencies,
+): Promise<NextResponse> {
+  const resolved = resolveDependencies(dependencies);
   const headers = createApiResponseHeaders(request, API_CACHE_CONTROL.privateNoStore);
+  const requestId = getApiRequestId(request);
+  const verification = await verifyAdminSessionToken(
+    readCookieFromRequest(request, ADMIN_SESSION_COOKIE),
+    {
+      secret: resolveAdminSessionSecret(resolved.environment),
+      now: resolved.now(),
+    },
+  );
+
+  if (verification.valid) {
+    try {
+      await revokeAdminSession(
+        resolved.createServiceClient(),
+        verification.payload.sid,
+        resolved.now(),
+      );
+    } catch (error) {
+      // Do not clear a still-authoritative cookie when revocation could not be
+      // confirmed. The operator can retry once the database recovers.
+      logBackendRouteError(JSON.stringify({
+        level: 'error',
+        msg: 'admin_session_revoke_failed',
+        requestId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }));
+      return NextResponse.json(
+        { error: 'Sign out could not be completed.' },
+        { status: 503, headers },
+      );
+    }
+  }
+
   const response = NextResponse.json({ ok: true }, { status: 200, headers });
-  response.cookies.set({ ...buildSessionCookieOptions(0), value: '' });
+  response.cookies.set({ ...buildSessionCookieOptions(0, resolved.environment), value: '' });
   return response;
 }
 
-export function createAdminSessionRouteHandlers() {
+function readCookieFromRequest(request: Request, name: string): string | null {
+  const header = request.headers.get('cookie');
+  if (!header) return null;
+
+  for (const part of header.split(';')) {
+    const separatorIndex = part.indexOf('=');
+    if (separatorIndex < 0) continue;
+    if (part.slice(0, separatorIndex).trim() === name) {
+      try {
+        return decodeURIComponent(part.slice(separatorIndex + 1).trim());
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+export function createAdminSessionRouteHandlers(dependencies?: AdminSessionRouteDependencies) {
   return {
     POST(request: Request) {
-      return postAdminSessionResponse(request);
+      return postAdminSessionResponse(request, dependencies);
     },
     DELETE(request: Request) {
-      return Promise.resolve(deleteAdminSessionResponse(request));
+      return deleteAdminSessionResponse(request, dependencies);
     },
   };
 }

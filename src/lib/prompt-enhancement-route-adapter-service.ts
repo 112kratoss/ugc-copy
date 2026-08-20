@@ -1,4 +1,5 @@
 import 'server-only';
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
@@ -87,7 +88,7 @@ export async function postPromptEnhancementRouteResponse({
 
   try {
     const supabase = resolvedDependencies.createUserClient(request);
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    const { data: { user }, error: authError } = await getVerifiedAuthUserResult(supabase);
     if (authError || !user) {
       return createJsonResponse(request, { error: 'Unauthorized' }, 401);
     }

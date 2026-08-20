@@ -1,3 +1,4 @@
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 
@@ -33,7 +34,7 @@ async function getAuthenticatedUserId(
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
   const supabase = dependencies.createUserClient(request);
-  const { data: { user }, error } = await supabase.auth.getUser();
+  const { data: { user }, error } = await getVerifiedAuthUserResult(supabase);
   // Guests hold a valid JWT but are not registered. Before anonymous
   // sessions existed these two were the same thing, so this check read
   // `!user` alone; it now has to say which it means. Registered-only per

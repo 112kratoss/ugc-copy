@@ -21,6 +21,14 @@ import {
   type ProfileUpdatePayload,
 } from '@/lib/profile';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
+import {
+  abortNullableUploadByteConsumption,
+  completeUploadByteConsumptions,
+  isDefinitiveSupabaseMutationRejection,
+  type UploadConsumptionClaim,
+} from '@/lib/upload-byte-admission';
+import { finalizeUploadForConsumption } from '@/lib/upload-finalization';
 
 export type ProfileRouteClient =
   Parameters<typeof enforceBackendRateLimit>[0]
@@ -191,15 +199,74 @@ export async function updateProfileForRoute({
     location: validation.payload.data.location,
   };
 
-  const { data: updatedProfile, error: updateError } = await resolvedClient
-    .from('profiles')
-    .upsert(profileValues, {
-      onConflict: 'id',
-    })
-    .select(PROFILE_SELECT_FIELDS)
-    .single();
+  const submittedProfileMedia = [profileValues.avatar_url, profileValues.cover_url]
+    .flatMap((value) => typeof value === 'string'
+      ? [getUserOwnedStoredMediaLocation(value, userId)]
+      : [])
+    .filter((location): location is { bucket: string; filePath: string } => (
+      location?.bucket === 'profiles'
+    ))
+    .filter((location, index, entries) => entries.findIndex((candidate) => (
+      candidate.bucket === location.bucket && candidate.filePath === location.filePath
+    )) === index);
+  const consumptionClaims: UploadConsumptionClaim[] = [];
+  try {
+    for (const location of submittedProfileMedia) {
+      const finalization = await finalizeUploadForConsumption(resolvedClient, {
+        userId,
+        bucket: location.bucket,
+        storagePath: location.filePath,
+        disposition: 'preserve',
+      });
+      if (!finalization.ok) {
+        await Promise.all(consumptionClaims.map((claim) => (
+          abortNullableUploadByteConsumption(resolvedClient, claim)
+        )));
+        return {
+          ok: false,
+          status: finalization.status,
+          error: finalization.error,
+          code: finalization.code,
+        };
+      }
+      if (finalization.consumptionClaim) consumptionClaims.push(finalization.consumptionClaim);
+    }
+  } catch (error) {
+    await Promise.all(consumptionClaims.map((claim) => (
+      abortNullableUploadByteConsumption(resolvedClient, claim)
+    )));
+    logBackendError('failed_to_prepare_profile_upload_consumption', { error });
+    return { ok: false, status: 500, error: 'Failed to verify profile media.' };
+  }
+
+  let updatedProfile: unknown = null;
+  let updateError: { code?: string } | null = null;
+  let updateStatus: number | undefined;
+  try {
+    const update = await resolvedClient
+      .from('profiles')
+      .upsert(profileValues, {
+        onConflict: 'id',
+      })
+      .select(PROFILE_SELECT_FIELDS)
+      .single();
+    updatedProfile = update.data;
+    updateError = update.error;
+    updateStatus = update.status;
+  } catch (error) {
+    // A thrown PostgREST request may have committed before its response was
+    // lost. Keep the leases active so expiry reconciliation preserves the
+    // exact finalized objects instead of making a committed profile dangle.
+    logBackendError('failed_to_update_profile', { error });
+    return { ok: false, status: 500, error: 'Failed to update profile' };
+  }
 
   if (updateError) {
+    if (isDefinitiveSupabaseMutationRejection({ error: updateError, status: updateStatus })) {
+      await Promise.all(consumptionClaims.map((claim) => (
+        abortNullableUploadByteConsumption(resolvedClient, claim)
+      )));
+    }
     if (updateError.code === '23505') {
       return {
         ok: false,
@@ -215,6 +282,11 @@ export async function updateProfileForRoute({
       status: 500,
       error: 'Failed to update profile',
     };
+  }
+
+  const completed = await completeUploadByteConsumptions(resolvedClient, consumptionClaims);
+  if (!completed.ok) {
+    return { ok: false, status: 500, error: completed.error };
   }
 
   invalidateFeedCache();

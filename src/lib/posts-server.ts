@@ -3,7 +3,7 @@ import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { createServiceClient, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import {
   buildPostResourceBundleLockedPreview,
   getPostResourceKinds,
@@ -42,6 +42,7 @@ export interface PostReferenceRow {
 export interface PostMediaRow {
   showcase_asset_path: string | null;
   output_url: string | null;
+  user_id: string | null;
 }
 
 interface LegacyGenerationReferenceRow {
@@ -283,11 +284,22 @@ export async function resolvePostMediaUrl(
     return null;
   }
 
-  if (row.output_url.startsWith('http')) {
-    return row.output_url;
+  if (row.user_id) {
+    return resolveOwnedStoredMediaUrl(adminSupabase, row.output_url, row.user_id);
   }
 
-  return resolveStoredMediaUrl(adminSupabase, row.output_url);
+  // Some legacy provider-backed posts have no durable owner. Preserve only a
+  // plain HTTPS provider URL in that case; a storage path cannot be signed
+  // safely without an owner to bind its first segment to.
+  try {
+    const url = new URL(row.output_url);
+    if (url.pathname.includes('/storage/v1/object/')) return null;
+    return url.protocol === 'https:' && !url.username && !url.password
+      ? row.output_url
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 async function findPostReferenceByColumn(

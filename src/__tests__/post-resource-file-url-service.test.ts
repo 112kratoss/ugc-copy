@@ -44,6 +44,7 @@ function createAccessibleDetail(
 ): PostResourceBundleDetail {
   return {
     viewerCanAccess: true,
+    seller: { id: 'user-1' },
     resources: {
       attachments: [],
       items: [{
@@ -155,7 +156,7 @@ describe('createPostResourceFileReadUrlForRoute', () => {
       createAccessibleDetail('uploads/user-1/legacy-reference.jpeg', 'Element 1'));
 
     await createPostResourceFileReadUrlForRoute({
-      body: { storagePath: '/uploads/user-1/legacy-reference.jpeg' },
+      body: { storagePath: 'uploads/user-1/legacy-reference.jpeg' },
       client: uploadClient.client,
       countryCode: null,
       getDetailByPostId: getUploadDetail,
@@ -169,6 +170,36 @@ describe('createPostResourceFileReadUrlForRoute', () => {
       600,
       { download: 'Element 1' },
     );
+  });
+
+  it('rejects non-canonical entitled paths before service-role signing', async () => {
+    for (const storagePath of [
+      'uploads/user-1/../user-2/private.pdf',
+      'uploads/user-1/%252fuser-2/private.pdf',
+      'uploads/user-1/%255cuser-2/private.pdf',
+      'uploads/user-2/private.pdf',
+      'uploads//user-1/private.pdf',
+    ]) {
+      const client = createClient();
+      const clientFactory = vi.fn(() => client.client);
+      const result = await createPostResourceFileReadUrlForRoute({
+        body: { storagePath },
+        client: clientFactory,
+        countryCode: null,
+        getDetailByPostId: vi.fn(async () => createAccessibleDetail(storagePath)),
+        postId: 'post-1',
+        rateLimitKey: 'buyer-1',
+        viewerUserId: 'buyer-1',
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        status: 404,
+        body: { error: 'Resource file not found on this unlock.' },
+      });
+      expect(clientFactory).not.toHaveBeenCalled();
+      expect(client.createSignedUrl).not.toHaveBeenCalled();
+    }
   });
 
   it('rate limits before storage signing and returns stable storage failures', async () => {

@@ -3,6 +3,7 @@ import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
 
+import { requireIdentity } from '@/lib/account-identity';
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import {
   BackendRateLimitError,
@@ -22,6 +23,7 @@ type GenerationRestoreMediaRouteDependencies = {
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
   logError?: typeof logBackendRouteError;
+  requireIdentity?: typeof requireIdentity;
   restoreGenerationMediaForRoute?: typeof restoreGenerationMediaForRoute;
 };
 
@@ -31,22 +33,10 @@ function resolveDependencies(dependencies: GenerationRestoreMediaRouteDependenci
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
     logError: dependencies?.logError ?? logBackendRouteError,
+    requireIdentity: dependencies?.requireIdentity ?? requireIdentity,
     restoreGenerationMediaForRoute:
       dependencies?.restoreGenerationMediaForRoute ?? restoreGenerationMediaForRoute,
   };
-}
-
-async function getAuthenticatedUserId(
-  request: Request,
-  dependencies: ReturnType<typeof resolveDependencies>,
-) {
-  const supabase = dependencies.createUserClient(request);
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
-
-  return authError || !user ? null : user.id;
 }
 
 async function handleGenerationRestoreMediaPOST(
@@ -55,10 +45,20 @@ async function handleGenerationRestoreMediaPOST(
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
   const { id } = await context.params;
-  const userId = await getAuthenticatedUserId(request, dependencies);
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const userSupabase = dependencies.createUserClient(request);
+  let adminSupabase: ReturnType<typeof dependencies.createServiceClient> | null = null;
+  const getAdminSupabase = () => {
+    adminSupabase ??= dependencies.createServiceClient();
+    return adminSupabase;
+  };
+  const identity = await dependencies.requireIdentity(userSupabase, getAdminSupabase);
+  if (!identity.ok) {
+    return NextResponse.json(
+      { error: identity.error, code: identity.code },
+      { status: identity.status },
+    );
   }
+  const userId = identity.identity.userId;
 
   let requestBody: {
     storagePath?: unknown;
@@ -71,9 +71,9 @@ async function handleGenerationRestoreMediaPOST(
     return NextResponse.json({ error: 'Invalid restore request.' }, { status: 400 });
   }
 
-  const adminSupabase = dependencies.createServiceClient();
+  const admin = getAdminSupabase();
   try {
-    await dependencies.enforceBackendRateLimit(adminSupabase, {
+    await dependencies.enforceBackendRateLimit(admin, {
       ...GENERATION_LIFECYCLE_MUTATION_RATE_LIMIT,
       key: userId,
     });
@@ -87,7 +87,7 @@ async function handleGenerationRestoreMediaPOST(
   }
 
   const result = await dependencies.restoreGenerationMediaForRoute({
-    adminSupabase,
+    adminSupabase: admin,
     body: requestBody,
     generationId: id,
     userId,

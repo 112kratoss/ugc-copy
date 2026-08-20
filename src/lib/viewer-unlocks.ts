@@ -153,6 +153,7 @@ export async function listViewerUnlocks({
       ? await resolvePostMediaUrl(adminSupabase, {
           showcase_asset_path: row.post_showcase_asset_path,
           output_url: row.post_output_url,
+          user_id: row.owner_user_id,
         })
       : null;
 

@@ -68,6 +68,17 @@ function makeUpdateQuery(error: () => { message: string } | null) {
     is() {
       return query;
     },
+    select() {
+      return query;
+    },
+    async maybeSingle() {
+      const updateError = error();
+      return {
+        data: updateError ? null : { id: 'updated-row' },
+        error: updateError,
+        status: updateError ? 400 : 200,
+      };
+    },
     then(resolve: (result: { error: { message: string } | null }) => void) {
       resolve({ error: error() });
     },
@@ -87,6 +98,30 @@ vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({
     rpc: rateLimitRpcMock,
     from(table: string) {
+      if (table === 'profiles') {
+        return {
+          select() {
+            return makeMaybeSingleQuery(() => ({ identity_state: 'active' }));
+          },
+        };
+      }
+
+      if (table === 'upload_byte_reservations') {
+        return {
+          select() {
+            return makeMaybeSingleQuery(() => null);
+          },
+        };
+      }
+
+      if (table === 'media_upload_intents') {
+        return {
+          update() {
+            return makeUpdateQuery(() => null);
+          },
+        };
+      }
+
       if (table === 'generations') {
         return {
           select() {
@@ -119,7 +154,7 @@ vi.mock('@/lib/server-helpers', () => ({
           download: downloadMock,
           async remove(paths: string[]) {
             storageRemoveCalls.push({ bucket, paths });
-            return { data: null, error: null };
+            return { data: paths.map((name) => ({ name })), error: null };
           },
         };
       },
@@ -305,10 +340,7 @@ describe('/api/generations/[id]/restore-media route', () => {
     expectPrivateNoStoreTraceHeaders(response, 'generation-restore-media-1');
     expect(data.error).toMatch(/does not match/i);
     expect(persistGenerationMediaBlobMock).not.toHaveBeenCalled();
-    expect(storageRemoveCalls).toContainEqual({
-      bucket: 'uploads',
-      paths: ['user-1/replacement.mp4'],
-    });
+    expect(storageRemoveCalls).toEqual([]);
   });
 
   it('rolls back the generation and removes the new object when the linked post update fails', async () => {

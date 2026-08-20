@@ -18,7 +18,14 @@ import {
   resolveResourceFileContentType,
   sanitizePostResourceFileName,
 } from '@/lib/post-resource-file-upload-service';
-import { releaseUploadBytes, reserveUploadBytes } from '@/lib/upload-byte-admission';
+import {
+  abortUploadBytesBeforeIssue,
+  markUploadBytesIssued,
+  reserveUploadBytes,
+} from '@/lib/upload-byte-admission';
+import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
+import { finalizeUploadAtPath } from '@/lib/upload-finalization';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 const RESOURCE_FILES_BUCKET = 'post_resource_files';
 const SIGNED_UPLOAD_EXPIRES_IN_SECONDS = 2 * 60 * 60;
@@ -181,12 +188,16 @@ export async function createPostResourceFileUploadIntent({
   }
 
   const safeName = sanitizePostResourceFileName(metadata.fileName);
-  const storagePath = `${userId}/${createUploadId()}-${safeName}`;
+  const uploadId = createUploadId();
+  const storagePath = `${userId}/${uploadId}-${safeName}`;
   const byteReservation = await reserveUploadBytes(client, {
+    uploadId,
     userId,
     bucket: RESOURCE_FILES_BUCKET,
     storagePath,
     declaredBytes: metadata.sizeBytes,
+    reservedBytes: MAX_POST_RESOURCE_FILE_SIZE_BYTES,
+    expectedContentType: metadata.contentType,
   });
   if (!byteReservation.ok) {
     return {
@@ -200,15 +211,28 @@ export async function createPostResourceFileUploadIntent({
     .createSignedUploadUrl(storagePath);
 
   if (error || !data?.token) {
-    await releaseUploadBytes(client, { bucket: RESOURCE_FILES_BUCKET, storagePath });
+    await abortUploadBytesBeforeIssue(client, {
+      uploadId: byteReservation.uploadId,
+      userId,
+    });
     logBackendError('failed_to_create_post_resource_file_upload_url', { error });
     return { ok: false, status: 500, body: { error: 'Failed to prepare resource upload.' } };
+  }
+
+  const issued = await markUploadBytesIssued(client, {
+    uploadId: byteReservation.uploadId,
+    userId,
+    tokenTtlSeconds: SIGNED_UPLOAD_EXPIRES_IN_SECONDS,
+  });
+  if (!issued.ok) {
+    return { ok: false, status: 500, body: { error: 'Failed to activate resource upload.' } };
   }
 
   return {
     ok: true,
     body: {
       success: true,
+      uploadId: byteReservation.uploadId,
       bucket: RESOURCE_FILES_BUCKET,
       path: storagePath,
       token: data.token,
@@ -237,10 +261,10 @@ export async function finalizePostResourceFileUpload({
     return { ok: false, status: 400, body: { error: metadata.error } };
   }
 
-  const storagePath = typeof body.path === 'string' ? body.path.trim() : '';
-  const relativePath = storagePath.startsWith(`${userId}/`)
-    ? storagePath.slice(userId.length + 1)
+  const storagePath = typeof body.path === 'string'
+    ? parseCanonicalStorageObjectPath(body.path, { ownerUserId: userId }) ?? ''
     : '';
+  const relativePath = storagePath ? storagePath.slice(userId.length + 1) : '';
   if (!relativePath || !RESOURCE_PATH_PATTERN.test(relativePath)) {
     return { ok: false, status: 400, body: { error: 'Invalid resource upload path.' } };
   }
@@ -250,7 +274,33 @@ export async function finalizePostResourceFileUpload({
     return { ok: false, status: 400, body: { error: 'Resource upload metadata does not match its path.' } };
   }
 
-  const { data, error } = await client.storage.from(RESOURCE_FILES_BUCKET).info(storagePath);
+  const finalization = await finalizeUploadAtPath(
+    client as unknown as SupabaseClient,
+    {
+      bucket: RESOURCE_FILES_BUCKET,
+      storagePath,
+      userId,
+      explicitClientFinalization: true,
+    },
+  );
+  if (!finalization.ok) {
+    return {
+      ok: false,
+      status: finalization.status === 404 ? 400 : finalization.status,
+      body: { error: finalization.error, code: finalization.code },
+    };
+  }
+
+  const { data, error } = finalization.descriptor
+    ? {
+        data: {
+          bucketId: finalization.descriptor.bucket,
+          contentType: finalization.descriptor.contentType,
+          size: finalization.descriptor.sizeBytes,
+        },
+        error: null,
+      }
+    : await client.storage.from(RESOURCE_FILES_BUCKET).info(storagePath);
   if (error || !data) {
     return { ok: false, status: 400, body: { error: 'Resource upload was not found.' } };
   }
@@ -271,8 +321,6 @@ export async function finalizePostResourceFileUpload({
     contentType: metadata.contentType,
     sizeBytes: metadata.sizeBytes,
   };
-
-  await releaseUploadBytes(client, { bucket: RESOURCE_FILES_BUCKET, storagePath });
 
   return {
     ok: true,

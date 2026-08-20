@@ -125,6 +125,12 @@ const successCases: Array<{
     }),
   },
   {
+    key: 'finalizeUpload',
+    call: (api) => api.finalizeUpload({
+      uploadId: '11111111-1111-4111-8111-111111111111',
+    }),
+  },
+  {
     key: 'mediaReadUrl',
     call: (api) => api.createMediaReadUrl({
       storagePath: 'uploads/user-1/reference.png',

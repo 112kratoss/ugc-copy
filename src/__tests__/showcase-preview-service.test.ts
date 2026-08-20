@@ -6,6 +6,7 @@ import { createShowcasePreviewForRoute } from '@/lib/showcase-preview-service';
 function createClient({
   allowed = true,
   generation = {
+    user_id: 'user-1',
     output_url: 'generated_images/user-1/preview.png',
     showcase_asset_path: null as string | null,
     is_public: true,
@@ -86,7 +87,7 @@ describe('createShowcasePreviewForRoute', () => {
       p_window_seconds: 600,
     });
     expect(client.from).toHaveBeenCalledWith('generations');
-    expect(client.select).toHaveBeenCalledWith('output_url, showcase_asset_path, is_public');
+    expect(client.select).toHaveBeenCalledWith('user_id, output_url, showcase_asset_path, is_public');
     expect(client.eq).toHaveBeenCalledWith('id', 'generation-1');
     expect(client.storageFrom).toHaveBeenCalledWith('generated_images');
     expect(client.createSignedUrl).toHaveBeenCalledWith('user-1/preview.png', 3600);
@@ -99,8 +100,9 @@ describe('createShowcasePreviewForRoute', () => {
   it('uses durable public showcase assets without creating signed URLs', async () => {
     const client = createClient({
       generation: {
+        user_id: 'user-1',
         output_url: 'generated_images/user-1/original.png',
-        showcase_asset_path: 'user-1/showcase/post-1.png',
+        showcase_asset_path: 'showcase/generation-1/post-1.png',
         is_public: true,
       },
     });
@@ -112,17 +114,18 @@ describe('createShowcasePreviewForRoute', () => {
     });
 
     expect(client.storageFrom).toHaveBeenCalledWith('showcase_media');
-    expect(client.getPublicUrl).toHaveBeenCalledWith('user-1/showcase/post-1.png');
+    expect(client.getPublicUrl).toHaveBeenCalledWith('showcase/generation-1/post-1.png');
     expect(client.createSignedUrl).not.toHaveBeenCalled();
     expect(result).toEqual({
       ok: true,
-      body: { url: 'https://public.example.com/user-1/showcase/post-1.png' },
+      body: { url: 'https://public.example.com/showcase/generation-1/post-1.png' },
     });
   });
 
   it('returns provider HTTP media without Storage signing', async () => {
     const client = createClient({
       generation: {
+        user_id: 'user-1',
         output_url: 'https://provider.example.com/output.png',
         showcase_asset_path: null,
         is_public: true,
@@ -144,9 +147,9 @@ describe('createShowcasePreviewForRoute', () => {
 
   it.each([
     [null, 404, 'Generation not found'],
-    [{ output_url: 'generated_images/user-1/preview.png', showcase_asset_path: null, is_public: false }, 403, 'Generation is private'],
-    [{ output_url: null, showcase_asset_path: null, is_public: true }, 404, 'No media available'],
-    [{ output_url: 'not-a-stored-path', showcase_asset_path: null, is_public: true }, 400, 'Invalid media path'],
+    [{ user_id: 'user-1', output_url: 'generated_images/user-1/preview.png', showcase_asset_path: null, is_public: false }, 403, 'Generation is private'],
+    [{ user_id: 'user-1', output_url: null, showcase_asset_path: null, is_public: true }, 404, 'No media available'],
+    [{ user_id: 'user-1', output_url: 'not-a-stored-path', showcase_asset_path: null, is_public: true }, 400, 'Invalid media path'],
   ])('returns stable validation failures for unavailable preview media', async (generation, status, error) => {
     const client = createClient({ generation });
 
@@ -173,5 +176,53 @@ describe('createShowcasePreviewForRoute', () => {
       status: 500,
       body: { error: 'Failed to generate preview URL' },
     });
+  });
+
+  it.each([
+    'generated_images/user-2/private.png',
+    'generated_images/user-1%252f..%252fuser-2/private.png',
+    'https://project.supabase.co/storage/v1/object/sign/generated_images/user-2/private.png?token=stolen',
+  ])('refuses to sign or return storage outside the generation owner scope: %s', async (outputUrl) => {
+    const client = createClient({
+      generation: {
+        user_id: 'user-1',
+        output_url: outputUrl,
+        showcase_asset_path: null,
+        is_public: true,
+      },
+    });
+
+    await expect(createShowcasePreviewForRoute({
+      generationId: 'generation-1',
+      serviceClient: client.client,
+      viewerUserId: 'viewer-1',
+    })).resolves.toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'Invalid media path' },
+    });
+    expect(client.storageFrom).not.toHaveBeenCalled();
+  });
+
+  it('rejects a public derivative outside the exact generation prefix', async () => {
+    const client = createClient({
+      generation: {
+        user_id: 'user-1',
+        output_url: 'generated_images/user-1/original.png',
+        showcase_asset_path: 'showcase/generation-2/private.png',
+        is_public: true,
+      },
+    });
+
+    await expect(createShowcasePreviewForRoute({
+      generationId: 'generation-1',
+      serviceClient: client.client,
+      viewerUserId: 'viewer-1',
+    })).resolves.toEqual({
+      ok: false,
+      status: 400,
+      body: { error: 'Invalid media path' },
+    });
+    expect(client.storageFrom).not.toHaveBeenCalled();
   });
 });

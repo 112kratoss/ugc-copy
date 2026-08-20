@@ -1,4 +1,5 @@
 import 'server-only';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
 
 import {
@@ -33,7 +34,7 @@ type WorkflowRunRateLimitClient = Parameters<typeof enforceBackendRateLimit>[0];
 type WorkflowRunRateLimitInput = WorkflowRunRateLimitClient | (() => WorkflowRunRateLimitClient);
 
 type ExecuteWorkflowRunForRoute = (params: {
-  supabase: WorkflowRunRouteSupabaseClient;
+  supabase: SupabaseClient;
   userId: string;
   canvasId: string;
   graph: WorkflowCanvasGraph;
@@ -71,7 +72,7 @@ type StartWorkflowRunForRouteInput = {
 };
 
 const defaultExecuteWorkflowRunForRoute: ExecuteWorkflowRunForRoute = async (params) =>
-  executeWorkflowRun(params as unknown as Parameters<typeof executeWorkflowRun>[0]);
+  executeWorkflowRun(params);
 
 function resolveAdminClient(adminSupabase: WorkflowRunRateLimitInput) {
   return typeof adminSupabase === 'function' ? adminSupabase() : adminSupabase;
@@ -173,8 +174,10 @@ export async function startWorkflowRunForRoute({
     };
   }
 
+  let mutationSupabase: WorkflowRunRateLimitClient;
   try {
-    await enforceBackendRateLimit(resolveAdminClient(adminSupabase), {
+    mutationSupabase = resolveAdminClient(adminSupabase);
+    await enforceBackendRateLimit(mutationSupabase, {
       ...WORKFLOW_RUN_RATE_LIMIT,
       key: userId,
     });
@@ -194,7 +197,10 @@ export async function startWorkflowRunForRoute({
 
   try {
     const result = await executeRun({
-      supabase,
+      // All run/step writes cross the service-only initializer. The request
+      // client above remains the ownership authority and is never reused for
+      // privileged mutation.
+      supabase: mutationSupabase as unknown as SupabaseClient,
       userId,
       canvasId: canvas.id,
       graph: normalizeWorkflowGraph(canvas.graph),

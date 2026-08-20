@@ -41,6 +41,7 @@ vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: vi.fn(() => createServiceClientMock()),
   requireKieApiKey: vi.fn(() => 'test-key'),
   resolveStoredMediaUrl: resolveStoredMediaUrlMock,
+  resolveOwnedStoredMediaUrl: resolveStoredMediaUrlMock,
 }));
 
 function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {

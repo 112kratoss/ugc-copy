@@ -2,7 +2,8 @@ import 'server-only';
 import { logBackendError } from '@/lib/backend-logger';
 
 import { getCreatorDisplayName } from '@/lib/profile';
-import { createServiceClient, resolveStoredMediaUrl } from '@/lib/server-helpers';
+import { createServiceClient, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
+import { parseCanonicalStorageLocation } from '@/lib/storage-ownership';
 import type { ShowcaseCreator, ShowcaseItemCategory } from '@/lib/showcase';
 
 type PublicGenerationRow = {
@@ -55,38 +56,39 @@ function resolveItemCategory(category: string | null): ShowcaseItemCategory {
 
 function resolvePublicShowcaseUrl(
   adminSupabase: ReturnType<typeof createServiceClient>,
-  showcaseAssetPath: string
-): string {
-  const { data } = adminSupabase.storage.from('showcase_media').getPublicUrl(showcaseAssetPath);
+  generationId: string,
+  showcaseAssetPath: string,
+): string | null {
+  const location = parseCanonicalStorageLocation(`showcase_media/${showcaseAssetPath}`, {
+    allowedBuckets: ['showcase_media'],
+  });
+  if (!location?.filePath.startsWith(`showcase/${generationId}/`)) return null;
+  const { data } = adminSupabase.storage.from(location.bucket).getPublicUrl(location.filePath);
   return data.publicUrl;
 }
 
 async function resolvePublicGenerationUrl(
   adminSupabase: ReturnType<typeof createServiceClient>,
-  generation: Pick<PublicGenerationRow, 'showcase_asset_path' | 'output_url'>
+  generation: Pick<PublicGenerationRow, 'id' | 'user_id' | 'showcase_asset_path' | 'output_url'>,
 ): Promise<string | null> {
   if (generation.showcase_asset_path) {
-    return resolvePublicShowcaseUrl(adminSupabase, generation.showcase_asset_path);
+    return resolvePublicShowcaseUrl(adminSupabase, generation.id, generation.showcase_asset_path);
   }
 
-  if (!generation.output_url) {
+  if (!generation.output_url || !generation.user_id) {
     return null;
   }
 
-  if (generation.output_url.startsWith('http')) {
-    return generation.output_url;
-  }
-
-  return resolveStoredMediaUrl(adminSupabase, generation.output_url);
+  return resolveOwnedStoredMediaUrl(adminSupabase, generation.output_url, generation.user_id);
 }
 
 async function resolvePublicGenerationPreviewUrl(
   adminSupabase: ReturnType<typeof createServiceClient>,
-  generation: Pick<PublicGenerationRow, 'preview_url' | 'category'>,
+  generation: Pick<PublicGenerationRow, 'user_id' | 'preview_url' | 'category'>,
   outputUrl: string
 ) {
-  if (generation.preview_url) {
-    return resolveStoredMediaUrl(adminSupabase, generation.preview_url);
+  if (generation.preview_url && generation.user_id) {
+    return resolveOwnedStoredMediaUrl(adminSupabase, generation.preview_url, generation.user_id);
   }
 
   return resolveItemCategory(generation.category) === 'image' ? outputUrl : null;

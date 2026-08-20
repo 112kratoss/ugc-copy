@@ -60,6 +60,19 @@ describe('createTemporaryMediaReadUrl', () => {
       status: 403,
     });
 
+    for (const storagePath of [
+      'uploads/user-1/%252e%252e/reference.png',
+      'uploads/user-1%2fuser-2/reference.png',
+      'uploads/user-1%255cuser-2/reference.png',
+      'uploads/user-1//reference.png',
+    ]) {
+      await expect(createTemporaryMediaReadUrl({
+        body: { storagePath },
+        userId: 'user-1',
+        client: client.client,
+      })).resolves.toMatchObject({ ok: false, status: 403 });
+    }
+
     await expect(createTemporaryMediaReadUrl({
       body: {},
       userId: 'user-1',

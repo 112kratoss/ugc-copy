@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextResponse } from 'next/server';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
   createWorkflowCanvasRouteHandlers,
@@ -18,6 +19,8 @@ describe('workflow canvas route adapter service', () => {
   const patchWorkflowCanvasForRoute = vi.fn();
   const deleteWorkflowCanvasForRoute = vi.fn();
   const supabase = { service: 'user-scoped-supabase' };
+  const uploadClient = { service: 'service-role-supabase' } as unknown as SupabaseClient;
+  const createServiceClient = vi.fn(() => uploadClient);
 
   beforeEach(() => {
     authenticateRequest.mockReset();
@@ -64,6 +67,7 @@ describe('workflow canvas route adapter service', () => {
       ok: true,
       body: { success: true },
     });
+    createServiceClient.mockClear();
   });
 
   it('authenticates and loads an owned workflow canvas', async () => {
@@ -132,6 +136,7 @@ describe('workflow canvas route adapter service', () => {
       canvasId: 'canvas-1',
       dependencies: {
         authenticateRequest,
+        createServiceClient,
         enforceWorkflowCanvasMutationRateLimit,
         patchWorkflowCanvasForRoute,
       },
@@ -158,6 +163,7 @@ describe('workflow canvas route adapter service', () => {
       canvasId: 'canvas-1',
       dependencies: {
         authenticateRequest,
+        createServiceClient,
         enforceWorkflowCanvasMutationRateLimit,
         patchWorkflowCanvasForRoute,
       },
@@ -168,6 +174,7 @@ describe('workflow canvas route adapter service', () => {
       body: { title: 'Updated workflow' },
       canvasId: 'canvas-1',
       supabase,
+      uploadClient,
       userId: 'user-1',
     });
   });
@@ -183,6 +190,7 @@ describe('workflow canvas route adapter service', () => {
       options: { skipRateLimit: true },
       dependencies: {
         authenticateRequest,
+        createServiceClient,
         enforceWorkflowCanvasMutationRateLimit,
         patchWorkflowCanvasForRoute,
       },
@@ -205,6 +213,7 @@ describe('workflow canvas route adapter service', () => {
       options: { skipRateLimit: true },
       dependencies: {
         authenticateRequest,
+        createServiceClient,
         enforceWorkflowCanvasMutationRateLimit,
         patchWorkflowCanvasForRoute,
       },
@@ -215,6 +224,7 @@ describe('workflow canvas route adapter service', () => {
       body: { title: 'Context update' },
       canvasId: 'canvas-from-context',
       supabase,
+      uploadClient,
       userId: 'user-1',
     });
   });
@@ -271,6 +281,7 @@ describe('workflow canvas route adapter service', () => {
     const { DELETE, GET, PATCH } = createWorkflowCanvasRouteHandlers({
       dependencies: {
         authenticateRequest,
+        createServiceClient,
         deleteWorkflowCanvasForRoute,
         enforceWorkflowCanvasMutationRateLimit,
         getWorkflowCanvasForRoute,
@@ -312,6 +323,7 @@ describe('workflow canvas route adapter service', () => {
       body: { title: 'Factory update' },
       canvasId: 'canvas-from-factory',
       supabase,
+      uploadClient,
       userId: 'user-1',
     });
     expect(deleteWorkflowCanvasForRoute).toHaveBeenCalledWith({

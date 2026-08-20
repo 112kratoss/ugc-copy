@@ -2,7 +2,6 @@ import 'server-only';
 import { logBackendWarning } from '@/lib/backend-logger';
 
 import type { UploadIntentConsumer, UploadIntentKind } from '@/lib/media-upload-reclaim';
-import { releaseUploadBytes } from '@/lib/upload-byte-admission';
 
 // Re-exported so the request path keeps a single import for intent work; the
 // definitions live in a dependency-free module the ops backfill can also load.
@@ -25,9 +24,11 @@ import {
  * on that basis makes the sweep permanently ignore objects that still exist --
  * the exact leak the intents table was built to end.
  *
- * When `error` is null and `data` reports nothing, the whole batch is treated
- * as removed: older client versions and test doubles omit per-path outcomes,
- * and `error` is then the only signal there is.
+ * An empty result is not proof that Storage removed anything. Older clients
+ * and test doubles may omit per-path outcomes, but treating that ambiguity as
+ * success can release a reservation while its signed URL is still replayable.
+ * Callers keep those rows uncleared so a later metadata/list observation can
+ * prove absence before capacity is returned.
  */
 export function getConfirmedRemovedPaths(
   requestedPaths: string[],
@@ -47,7 +48,7 @@ export function getConfirmedRemovedPaths(
   );
 
   if (removed.size === 0) {
-    return { confirmed: [...requestedPaths], unconfirmed: [] };
+    return { confirmed: [], unconfirmed: [...requestedPaths] };
   }
 
   return {
@@ -129,6 +130,7 @@ export async function markMediaUploadIntentsConsumed(
   client: IntentUpdateClient,
   params: {
     storagePaths: string[];
+    userId: string;
     consumedBy: UploadIntentConsumer;
     storageCleared: boolean;
   },
@@ -162,14 +164,6 @@ export async function markMediaUploadIntentsConsumed(
     });
   }
 
-  // Once a staged object has a durable consumer it is no longer an outstanding
-  // upload, even when the generation-input path deliberately leaves staging in
-  // place for short-term reuse. The reclaim intent remains the storage-lifecycle
-  // record; byte admission should not keep charging the user for two hours.
-  await Promise.all(storagePaths.map((storagePath) => releaseUploadBytes(client, {
-    bucket: 'uploads',
-    storagePath,
-  })));
 }
 
 /**
@@ -203,10 +197,4 @@ export async function markMediaUploadIntentsCleared(
       count: normalized.length,
     });
   }
-
-
-  await Promise.all(normalized.map((storagePath) => releaseUploadBytes(client, {
-    bucket: 'uploads',
-    storagePath,
-  })));
 }

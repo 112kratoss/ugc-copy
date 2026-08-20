@@ -526,11 +526,25 @@ describe('CreatorProfileCard', () => {
           json: async () => ({
             success: true,
             bucket: 'profiles',
+            uploadId: 'profile-upload-1',
             path: 'test-user-id/avatar-server-issued.png',
             token: 'profile-upload-token',
             signedUploadUrl: 'https://storage.example.test/profile-upload-token',
             publicUrl: 'https://cdn.example.com/test-user-id/avatar-server-issued.png',
             expiresInSeconds: 7200,
+          }),
+        } as Response;
+      }
+
+      if (url.endsWith('/api/uploads/finalize')) {
+        return {
+          ok: true,
+          json: async () => ({
+            bucket: 'profiles',
+            path: 'test-user-id/avatar-server-issued.png',
+            storagePath: 'profiles/test-user-id/avatar-server-issued.png',
+            contentType: 'image/png',
+            sizeBytes: file.size,
           }),
         } as Response;
       }

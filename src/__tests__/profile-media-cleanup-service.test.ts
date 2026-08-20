@@ -79,6 +79,26 @@ describe('cleanupProfileMedia', () => {
     expect(createAdminClient).not.toHaveBeenCalled();
   });
 
+  it('rejects recursively encoded separators, traversal, backslashes, and empty segments', async () => {
+    for (const path of [
+      'user-1/%252e%252e/user-2/private.png',
+      'user-1%252fuser-2/private.png',
+      'user-1/%255cuser-2/private.png',
+      'user-1\\user-2/private.png',
+      'user-1//private.png',
+    ]) {
+      const createAdminClient = vi.fn(() => createClient().client);
+      const result = await cleanupProfileMedia({
+        body: { paths: [path] },
+        userId: 'user-1',
+        client: createAdminClient,
+      });
+
+      expect(result).toMatchObject({ ok: false, status: 400 });
+      expect(createAdminClient).not.toHaveBeenCalled();
+    }
+  });
+
   it('removes validated profile media paths after enforcing the cleanup rate limit', async () => {
     const { client, rpc, from, remove } = createClient();
 
@@ -87,6 +107,7 @@ describe('cleanupProfileMedia', () => {
         paths: [
           'user-1/avatar-server-issued.png',
           'user-1/cover-server-issued.png',
+          'user-1/avatar%20server-issued.png',
         ],
       },
       userId: 'user-1',
@@ -107,6 +128,7 @@ describe('cleanupProfileMedia', () => {
     expect(remove).toHaveBeenCalledWith([
       'user-1/avatar-server-issued.png',
       'user-1/cover-server-issued.png',
+      'user-1/avatar server-issued.png',
     ]);
   });
 

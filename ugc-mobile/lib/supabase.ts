@@ -1,9 +1,14 @@
 import 'react-native-url-polyfill/auto';
 
 import { createClient } from '@supabase/supabase-js';
+import { Platform } from 'react-native';
 
 import { env, isMobileEnvConfigured } from './env';
-import { secureSessionStorage } from './secure-session-storage';
+import {
+  configureSecureSessionInvalidationHandler,
+  createMemorySessionStorage,
+  secureSessionStorage,
+} from './secure-session-storage';
 import { withSuppressedInvalidRefreshTokenConsoleError } from './supabase-auth-recovery';
 
 export const isSupabaseConfigured = isMobileEnvConfigured();
@@ -15,14 +20,25 @@ const serverAuthStorage = {
   removeItem: async () => undefined,
 };
 
+// Expo web sessions intentionally survive only for the lifetime of this JS
+// runtime. A page refresh requires reauthentication and no refresh token is
+// written to localStorage, IndexedDB, or another browser-persistent store.
+export const webMemoryAuthStorage = createMemorySessionStorage();
+
+export const supabaseAuthStorage = Platform.OS === 'web'
+  ? typeof window === 'undefined'
+    ? serverAuthStorage
+    : webMemoryAuthStorage
+  : secureSessionStorage;
+
 export const supabase = createClient(
   isSupabaseConfigured ? env.supabaseUrl : 'https://missing-mobile-env.supabase.co',
   isSupabaseConfigured ? env.supabasePublishableKey : 'missing-mobile-env',
   {
     auth: {
-      // Session (refresh token) persistence goes through SecureStore-backed
-      // storage with transparent AsyncStorage migration and fallback.
-      storage: typeof window === 'undefined' ? serverAuthStorage : secureSessionStorage,
+      // Native refresh tokens are SecureStore-only. Expo web uses the
+      // process-local adapter above and never browser-persistent storage.
+      storage: supabaseAuthStorage,
       storageKey: supabaseAuthStorageKey,
       autoRefreshToken: true,
       persistSession: true,
@@ -32,6 +48,30 @@ export const supabase = createClient(
     },
   },
 );
+
+let secureStorageSignOutPromise: Promise<void> | null = null;
+
+if (Platform.OS !== 'web') {
+  configureSecureSessionInvalidationHandler((reason) => {
+    if (secureStorageSignOutPromise) return;
+    // Defer until the storage operation that detected the failure releases its
+    // per-key queue. Supabase's local sign-out then clears its in-memory
+    // session and emits SIGNED_OUT without creating a storage deadlock.
+    secureStorageSignOutPromise = Promise.resolve()
+      .then(async () => {
+        const { error } = await supabase.auth.signOut({ scope: 'local' });
+        if (error) {
+          console.warn(`Could not complete local sign-out after ${reason}.`, error);
+        }
+      })
+      .catch((error) => {
+        console.warn(`Could not complete local sign-out after ${reason}.`, error);
+      })
+      .finally(() => {
+        secureStorageSignOutPromise = null;
+      });
+  });
+}
 
 let supabaseAuthInitializePromise: Promise<void> | null = null;
 
@@ -53,17 +93,17 @@ export function initializeSupabaseAuth() {
 }
 
 export async function clearPersistedSupabaseAuthSession() {
-  if (!isSupabaseConfigured || typeof window === 'undefined') {
+  if (!isSupabaseConfigured || (Platform.OS === 'web' && typeof window === 'undefined')) {
     return;
   }
 
-  // removeItem clears both the SecureStore chunks and any legacy plaintext
-  // AsyncStorage copy for each key.
+  // Native removeItem clears SecureStore chunks plus legacy plaintext copies;
+  // web removes the corresponding process-local entries.
   await Promise.all([
     supabaseAuthStorageKey,
     `${supabaseAuthStorageKey}-code-verifier`,
     `${supabaseAuthStorageKey}-user`,
-  ].map((key) => secureSessionStorage.removeItem(key)));
+  ].map((key) => supabaseAuthStorage.removeItem(key)));
 }
 
 function getSupabaseAuthStorageKey() {

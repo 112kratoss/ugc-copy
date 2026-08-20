@@ -1,16 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const createUserClientMock = vi.fn();
-const rpcMock = vi.fn(async (): Promise<{ data: unknown; error: unknown }> => ({
-  data: {
-    allowed: true,
-    limit: 30,
-    remaining: 29,
-    retryAfterSeconds: 0,
-    resetAt: '2026-06-21T06:30:00.000Z',
-  },
-  error: null,
-}));
+const rpcMock = vi.fn(async (_fn?: string): Promise<{ data: unknown; error: unknown }> => {
+  void _fn;
+  return {
+    data: {
+      allowed: true,
+      limit: 30,
+      remaining: 29,
+      retryAfterSeconds: 0,
+      resetAt: '2026-06-21T06:30:00.000Z',
+    },
+    error: null,
+  };
+});
 const createSignedUploadUrlMock = vi.fn(async () => ({
   data: {
     token: 'profile-upload-token',
@@ -29,6 +32,17 @@ const storageFromMock = vi.fn(() => ({
 }));
 const adminClient = {
   rpc: rpcMock,
+  from(table: string) {
+    if (table !== 'profiles') throw new Error(`Unexpected table: ${table}`);
+    const query = {
+      select() { return query; },
+      eq() { return query; },
+      async maybeSingle() {
+        return { data: { identity_state: 'active' }, error: null };
+      },
+    };
+    return query;
+  },
   storage: {
     from: storageFromMock,
   },
@@ -51,16 +65,20 @@ describe('/api/profile/media/sign route', () => {
     createUserClientMock.mockReset();
     createServiceClientFactory.mockClear();
     rpcMock.mockReset();
-    rpcMock.mockResolvedValueOnce({ data: false, error: null });
-    rpcMock.mockResolvedValue({
-      data: {
-        allowed: true,
-        limit: 30,
-        remaining: 29,
-        retryAfterSeconds: 0,
-        resetAt: '2026-06-21T06:30:00.000Z',
-      },
-      error: null,
+    rpcMock.mockImplementation(async (fn?: string) => {
+      if (fn === 'is_account_deletion_requested') return { data: false, error: null };
+      if (fn === 'reserve_upload_bytes_v2') return { data: { allowed: true }, error: null };
+      if (fn === 'mark_upload_byte_reservation_issued') return { data: true, error: null };
+      return {
+        data: {
+          allowed: true,
+          limit: 30,
+          remaining: 29,
+          retryAfterSeconds: 0,
+          resetAt: '2026-06-21T06:30:00.000Z',
+        },
+        error: null,
+      };
     });
     storageFromMock.mockClear();
     createSignedUploadUrlMock.mockReset();
@@ -160,15 +178,18 @@ describe('/api/profile/media/sign route', () => {
         })),
       },
     });
-    rpcMock.mockResolvedValueOnce({
-      data: {
-        allowed: false,
-        limit: 30,
-        remaining: 0,
-        retryAfterSeconds: 45,
-        resetAt: '2026-06-21T06:30:00.000Z',
-      },
-      error: null,
+    rpcMock.mockImplementation(async (fn?: string) => {
+      if (fn === 'is_account_deletion_requested') return { data: false, error: null };
+      return {
+        data: {
+          allowed: false,
+          limit: 30,
+          remaining: 0,
+          retryAfterSeconds: 45,
+          resetAt: '2026-06-21T06:30:00.000Z',
+        },
+        error: null,
+      };
     });
 
     const { POST } = await import('@/app/api/profile/media/sign/route');

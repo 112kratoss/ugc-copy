@@ -68,6 +68,13 @@ function createSelectChain(result: { data: unknown[] | null; error: Error | null
     not: vi.fn(() => chain),
     order: vi.fn(() => chain),
     limit: vi.fn(async () => resolve()),
+    maybeSingle: vi.fn(async () => {
+      const resolved = resolve();
+      return {
+        ...resolved,
+        data: resolved.data?.[0] ?? null,
+      };
+    }),
     // Thenable so a query that ends at `.order()` resolves too: the per-post
     // repair is bounded by one post's media and takes no limit.
     then: (
@@ -249,6 +256,7 @@ describe('media preview repair retries', () => {
           data: table === 'post_media'
             ? [{
                 id: 'media-1',
+                post_id: 'user',
                 storage_path: 'posts/user/source.png',
                 media_kind: 'image',
                 content_type: 'image/png',
@@ -312,6 +320,7 @@ describe('media preview repair retries', () => {
           data: table === 'generations'
             ? [{
                 id: 'gen-1',
+                user_id: 'user-1',
                 output_url: 'https://provider.example.com/output.png',
                 category: 'image',
                 preview_attempt_count: 0,
@@ -346,6 +355,69 @@ describe('media preview repair retries', () => {
       }),
     ]));
     expect(invalidateFeedCache).toHaveBeenCalledOnce();
+  });
+
+  it('fails a generation repair before Storage when its path is outside the exact owner prefix', async () => {
+    const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+    const { createGenerationOutputPreview } = await import('@/lib/generation-output-preview');
+    vi.mocked(createGenerationOutputPreview).mockClear();
+    const storageFrom = vi.fn();
+    const supabase = {
+      from: vi.fn((table: string) => ({
+        select: vi.fn(() => createSelectChain({
+          data: table === 'generations'
+            ? [{
+                id: 'gen-1',
+                user_id: 'user-1',
+                output_url: 'generated_images/user-2/private.png',
+                category: 'image',
+                preview_attempt_count: 0,
+              }]
+            : [],
+          error: null,
+        })),
+        update: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+      })),
+      storage: { from: storageFrom },
+    };
+
+    await expect(repairMediaPreviews(withAdmissionFallback(supabase) as never, {
+      batchSize: 10,
+    })).resolves.toEqual({ attempted: 1, completed: 0, failed: 1 });
+
+    expect(storageFrom).not.toHaveBeenCalled();
+    expect(createGenerationOutputPreview).not.toHaveBeenCalled();
+  });
+
+  it('fails post preview repair before Storage when its path changes post scope', async () => {
+    const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+    const storageFrom = vi.fn();
+    const supabase = {
+      from: vi.fn((table: string) => ({
+        select: vi.fn(() => createSelectChain({
+          data: table === 'post_media'
+            ? [{
+                id: 'media-1',
+                post_id: 'post-1',
+                storage_path: 'posts/post-1%252f..%252fpost-2/private.png',
+                media_kind: 'image',
+                content_type: 'image/png',
+                preview_attempt_count: 0,
+              }]
+            : [],
+          error: null,
+        })),
+        update: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+      })),
+      storage: { from: storageFrom },
+    };
+
+    await expect(repairMediaPreviews(withAdmissionFallback(supabase) as never, {
+      batchSize: 10,
+    })).resolves.toEqual({ attempted: 1, completed: 0, failed: 1 });
+
+    expect(storageFrom).not.toHaveBeenCalled();
+    expect(previewMocks.createPostMediaPreview).not.toHaveBeenCalled();
   });
 
   it('keeps the feed cache intact when no preview repair completes', async () => {
@@ -397,6 +469,7 @@ describe('showcase feed rendition repair', () => {
 
   const pendingVideoRow = {
     id: 'media-video-1',
+    post_id: 'user',
     storage_path: 'posts/user/clip.mp4',
     media_kind: 'video',
     content_type: 'video/mp4',

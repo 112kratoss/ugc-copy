@@ -7,13 +7,18 @@ import { createVideoPosterBuffer } from '@/lib/video-poster';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
 import { createPostMediaRendition, type PostMediaTeaserOutcome } from '@/lib/post-media-rendition';
 import type { VideoProbeResult } from '@/lib/video-rendition';
-import { getStoredMediaLocation } from '@/lib/server-helpers';
 import {
   fetchWithProviderRetry,
   PROVIDER_MEDIA_DOWNLOAD_RETRY_POLICY,
   PROVIDER_MEDIA_DOWNLOAD_TIMEOUT_MS,
 } from '@/lib/provider-fetch';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import {
+  getCanonicalStoredMediaLocation,
+  getUserOwnedStoredMediaLocation,
+  parseCanonicalStorageLocation,
+  parseCanonicalStorageObjectPath,
+} from '@/lib/storage-ownership';
 import { toStorageUploadBody } from '@/lib/storage-upload-body';
 
 const MAX_PREVIEW_ATTEMPTS = 3;
@@ -64,6 +69,7 @@ type RepairSummary = {
 
 type GenerationRepairRow = {
   id: string;
+  user_id?: string;
   output_url: string;
   category: string | null;
   preview_attempt_count: number | null;
@@ -71,6 +77,7 @@ type GenerationRepairRow = {
 
 type PostMediaRepairRow = {
   id: string;
+  post_id?: string;
   storage_path: string;
   media_kind: 'image' | 'video';
   content_type: string | null;
@@ -79,6 +86,7 @@ type PostMediaRepairRow = {
 
 type PostMediaRenditionRepairRow = {
   id: string;
+  post_id?: string;
   storage_path: string;
   content_type: string | null;
   rendition_attempt_count: number | null;
@@ -187,12 +195,101 @@ function previewFailure(error: unknown, attemptCount: number) {
   };
 }
 
-async function downloadMedia(supabase: SupabaseClient, source: string): Promise<Blob> {
-  const location = getStoredMediaLocation(source);
+const GENERATION_MEDIA_BUCKETS = [
+  'generated_images',
+  'generated_videos',
+  'generated_audio',
+  'generation_inputs',
+] as const;
+
+async function resolveGenerationRepairSource(
+  supabase: SupabaseClient,
+  row: GenerationRepairRow,
+): Promise<{ outputUrl: string; ownerUserId: string }> {
+  if (typeof row.user_id === 'string' && row.user_id.length > 0) {
+    return { outputUrl: row.output_url, ownerUserId: row.user_id };
+  }
+
+  // Older claim RPCs do not return user_id. Reload the current row through the
+  // service client so the object path is bound to the durable owner before a
+  // privileged download.
+  const { data, error } = await supabase
+    .from('generations')
+    .select('user_id, output_url')
+    .eq('id', row.id)
+    .maybeSingle();
+  const current = data as { user_id?: unknown; output_url?: unknown } | null;
+  if (
+    error
+    || !current
+    || typeof current.user_id !== 'string'
+    || current.user_id.length === 0
+    || typeof current.output_url !== 'string'
+    || current.output_url.length === 0
+  ) {
+    throw error ?? new Error('Generation repair source could not be owner-scoped.');
+  }
+  return { outputUrl: current.output_url, ownerUserId: current.user_id };
+}
+
+function getCanonicalPostMediaPath(storagePath: string, postId: string): string | null {
+  if (!postId) return null;
+  const canonicalPath = parseCanonicalStorageObjectPath(storagePath, { minimumSegments: 3 });
+  if (!canonicalPath) return null;
+  const [namespace, scopedPostId] = canonicalPath.split('/');
+  return namespace === 'posts' && scopedPostId === postId ? canonicalPath : null;
+}
+
+async function resolvePostMediaRepairPath(
+  supabase: SupabaseClient,
+  row: Pick<PostMediaRepairRow, 'id' | 'post_id' | 'storage_path'>,
+): Promise<string> {
+  let postId = row.post_id;
+  let storagePath = row.storage_path;
+  if (typeof postId !== 'string' || postId.length === 0) {
+    // Older claim RPCs omit post_id. Reload both values together so a stale or
+    // attacker-controlled path cannot be paired with an inferred scope.
+    const { data, error } = await supabase
+      .from('post_media')
+      .select('post_id, storage_path')
+      .eq('id', row.id)
+      .maybeSingle();
+    const current = data as { post_id?: unknown; storage_path?: unknown } | null;
+    if (
+      error
+      || !current
+      || typeof current.post_id !== 'string'
+      || current.post_id.length === 0
+      || typeof current.storage_path !== 'string'
+      || current.storage_path.length === 0
+    ) {
+      throw error ?? new Error('Post media repair source could not be post-scoped.');
+    }
+    postId = current.post_id;
+    storagePath = current.storage_path;
+  }
+
+  const canonicalPath = getCanonicalPostMediaPath(storagePath, postId);
+  if (!canonicalPath) throw new Error('Post media repair source is outside the owning post prefix.');
+  return canonicalPath;
+}
+
+async function downloadMedia(
+  supabase: SupabaseClient,
+  source: string,
+  ownerUserId: string,
+): Promise<Blob> {
+  const location = getUserOwnedStoredMediaLocation(source, ownerUserId, {
+    allowedBuckets: GENERATION_MEDIA_BUCKETS,
+  });
   if (location) {
     const result = await supabase.storage.from(location.bucket).download(location.filePath);
     if (result.error || !result.data) throw result.error ?? new Error('Stored media could not be downloaded.');
     return result.data;
+  }
+
+  if (getCanonicalStoredMediaLocation(source, { allowedBuckets: GENERATION_MEDIA_BUCKETS })) {
+    throw new Error('Stored media is outside the generation owner prefix.');
   }
 
   const response = await fetchWithProviderRetry(
@@ -217,12 +314,13 @@ async function repairGeneration(
     if (!leaseOwner) {
       await supabase.from('generations').update({ preview_status: 'processing' }).eq('id', row.id);
     }
-    const body = await downloadMedia(supabase, row.output_url);
+    const source = await resolveGenerationRepairSource(supabase, row);
+    const body = await downloadMedia(supabase, source.outputUrl, source.ownerUserId);
     const preview = await createGenerationOutputPreview({
       body,
       category: row.category,
       contentType: body.type,
-      storagePath: row.output_url,
+      storagePath: source.outputUrl,
       supabase,
     });
     if (!preview) throw new Error('Media type does not support a visual preview.');
@@ -263,7 +361,8 @@ async function repairPostMedia(
     if (!leaseOwner) {
       await supabase.from('post_media').update({ preview_status: 'processing' }).eq('id', row.id);
     }
-    const download = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).download(row.storage_path);
+    const storagePath = await resolvePostMediaRepairPath(supabase, row);
+    const download = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).download(storagePath);
     if (download.error || !download.data) {
       throw download.error ?? new Error('Stored post media could not be downloaded.');
     }
@@ -272,7 +371,7 @@ async function repairPostMedia(
     const preview = await createPostMediaPreview({
       body,
       contentType: row.content_type || body.type,
-      storagePath: row.storage_path,
+      storagePath,
       supabase,
     });
     if (!preview) throw new Error('Media type does not support a visual preview.');
@@ -336,7 +435,8 @@ async function repairPostMediaRendition(
     if (!leaseOwner) {
       await supabase.from('post_media').update({ rendition_status: 'processing' }).eq('id', row.id);
     }
-    const download = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).download(row.storage_path);
+    const storagePath = await resolvePostMediaRepairPath(supabase, row);
+    const download = await supabase.storage.from(SHOWCASE_MEDIA_BUCKET).download(storagePath);
     if (download.error || !download.data) {
       throw download.error ?? new Error('Stored post media could not be downloaded.');
     }
@@ -345,7 +445,7 @@ async function repairPostMediaRendition(
     const rendition = await createPostMediaRendition({
       body,
       contentType: row.content_type || body.type,
-      storagePath: row.storage_path,
+      storagePath,
       supabase,
       // Content-hashed teasers never go stale, so an existing one is final. A
       // truthy sentinel also stands in when the columns are unavailable —
@@ -467,10 +567,10 @@ async function claimRenditionRepairRows(
     .limit(batchSize);
 
   let { data, error } = await selectRenditionRows(
-    'id, storage_path, content_type, rendition_attempt_count, teaser_storage_path, duration_seconds',
+    'id, post_id, storage_path, content_type, rendition_attempt_count, teaser_storage_path, duration_seconds',
   );
   if (error && isMissingTeaserColumnError(error)) {
-    ({ data, error } = await selectRenditionRows('id, storage_path, content_type, rendition_attempt_count'));
+    ({ data, error } = await selectRenditionRows('id, post_id, storage_path, content_type, rendition_attempt_count'));
   }
 
   if (error) {
@@ -547,7 +647,7 @@ export async function repairMediaForPost(
 ): Promise<RepairSummary> {
   const previewResult = await supabase
     .from('post_media')
-    .select('id, storage_path, media_kind, content_type, preview_attempt_count')
+    .select('id, post_id, storage_path, media_kind, content_type, preview_attempt_count')
     .eq('post_id', postId)
     .in('preview_status', ['pending', 'failed', 'processing'])
     .lt('preview_attempt_count', MAX_PREVIEW_ATTEMPTS)
@@ -564,7 +664,7 @@ export async function repairMediaForPost(
 
   const renditionResult = await supabase
     .from('post_media')
-    .select('id, storage_path, content_type, rendition_attempt_count')
+    .select('id, post_id, storage_path, content_type, rendition_attempt_count')
     .eq('post_id', postId)
     .eq('media_kind', 'video')
     .in('rendition_status', UNRESOLVED_STATUSES)
@@ -627,7 +727,7 @@ async function claimGenerationPreviewRows(
 
   const fallback = await supabase
     .from('generations')
-    .select('id, output_url, category, preview_attempt_count')
+    .select('id, user_id, output_url, category, preview_attempt_count')
     .eq('status', 'succeeded')
     .in('category', ['image', 'video'])
     .in('preview_status', ['pending', 'failed', 'processing'])
@@ -657,7 +757,7 @@ async function claimPostMediaPreviewRows(
 
   const fallback = await supabase
     .from('post_media')
-    .select('id, storage_path, media_kind, content_type, preview_attempt_count')
+    .select('id, post_id, storage_path, media_kind, content_type, preview_attempt_count')
     .in('preview_status', ['pending', 'failed', 'processing'])
     .lt('preview_attempt_count', MAX_PREVIEW_ATTEMPTS)
     .not('storage_path', 'is', null)
@@ -730,9 +830,20 @@ export async function repairTemplateDemoPosters(
   let completed = 0;
   for (const row of rows) {
     try {
-      const demoObjectPath = row.video_url.slice('template_assets/'.length);
-      const demoDirectory = demoObjectPath.split('/').slice(0, -1).join('/');
-      if (!demoDirectory) throw new Error('Template demo path has no version directory.');
+      const demoLocation = parseCanonicalStorageLocation(row.video_url, {
+        allowedBuckets: ['template_assets'],
+      });
+      if (!demoLocation) throw new Error('Template demo path is not canonical.');
+      const demoSegments = demoLocation.filePath.split('/');
+      if (
+        demoSegments.length < 4
+        || demoSegments[0] !== row.id
+        || demoSegments[2] !== 'demo'
+      ) {
+        throw new Error('Template demo path is outside the template version scope.');
+      }
+      const demoObjectPath = demoLocation.filePath;
+      const demoDirectory = demoSegments.slice(0, -1).join('/');
       const download = await supabase.storage.from('template_assets').download(demoObjectPath);
       if (download.error || !download.data) {
         throw download.error ?? new Error('Template demo could not be downloaded.');

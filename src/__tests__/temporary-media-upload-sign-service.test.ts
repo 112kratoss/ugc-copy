@@ -12,10 +12,14 @@ function createClient({
   storageError = null as Error | null,
   intentError = null as { message?: string } | null,
 } = {}) {
-  const rpc = vi.fn(async (fn: string) => (
-    fn === 'is_account_deletion_requested'
-      ? { data: false, error: null }
-      : {
+  const rpc = vi.fn(async (fn: string) => {
+    if (fn === 'is_account_deletion_requested') return { data: false, error: null };
+    if (fn === 'reserve_upload_bytes_v2') return { data: { allowed: true }, error: null };
+    if (
+      fn === 'mark_upload_byte_reservation_issued'
+      || fn === 'abort_upload_byte_reservation_before_issue'
+    ) return { data: true, error: null };
+    return {
           data: {
             allowed,
             limit: 60,
@@ -24,8 +28,8 @@ function createClient({
             resetAt: '2026-06-22T06:30:00.000Z',
           },
           error: null,
-        }
-  ));
+        };
+  });
   const createSignedUploadUrl = vi.fn(async () => ({
     data: storageError ? null : { token, signedUrl },
     error: storageError,
@@ -120,10 +124,19 @@ describe('createTemporaryMediaUploadIntent', () => {
       declared_bytes: 1234,
     });
     expect(client.createSignedUploadUrl).toHaveBeenCalledWith('user-1/upload-id-1-launch-reference.png');
+    expect(client.insert.mock.invocationCallOrder[0]).toBeLessThan(
+      client.createSignedUploadUrl.mock.invocationCallOrder[0] as number,
+    );
+    expect(client.rpc).toHaveBeenCalledWith('mark_upload_byte_reservation_issued', {
+      p_upload_id: 'upload-id-1',
+      p_user_id: 'user-1',
+      p_token_ttl_seconds: 7200,
+    });
     expect(result).toEqual({
       ok: true,
       response: {
         success: true,
+        uploadId: 'upload-id-1',
         bucket: 'uploads',
         path: 'user-1/upload-id-1-launch-reference.png',
         storagePath: 'uploads/user-1/upload-id-1-launch-reference.png',

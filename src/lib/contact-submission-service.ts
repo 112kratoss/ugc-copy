@@ -8,6 +8,7 @@ import {
   CONTACT_SUBMISSION_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import type { BoundedJsonBodyResult } from '@/lib/bounded-json-request';
 import { getClientNetworkKey } from '@/lib/client-network-key';
 
 type ContactSubmissionBody = {
@@ -24,7 +25,7 @@ export type ContactSubmissionRouteResult =
     }
   | {
       ok: false;
-      status: 400 | 429 | 500;
+      status: 400 | 413 | 429 | 500;
       body: {
         error: string;
         code?: 'RATE_LIMITED';
@@ -96,43 +97,10 @@ export async function submitContactMessageForRoute({
   rateLimitKey,
   createAdminSupabase,
 }: {
-  readBody: () => Promise<unknown>;
+  readBody: () => Promise<BoundedJsonBodyResult>;
   rateLimitKey: string;
   createAdminSupabase: () => SupabaseClient;
 }): Promise<ContactSubmissionRouteResult> {
-  let body: ContactSubmissionBody;
-  try {
-    body = normalizeBody(await readBody());
-  } catch (error) {
-    logBackendError('contact_api_error', { error: error });
-    return createInternalErrorResult();
-  }
-
-  const name = normalizeRequiredText(body.name);
-  const email = normalizeRequiredText(body.email);
-  const message = normalizeRequiredText(body.message);
-  const subject = normalizeSubject(body.subject);
-
-  if (!name || !email || !message) {
-    return createValidationErrorResult('Name, email, and message are required');
-  }
-
-  if (name.length > CONTACT_FIELD_MAX_LENGTH) {
-    return createValidationErrorResult(`Name must be ${CONTACT_FIELD_MAX_LENGTH} characters or fewer.`);
-  }
-
-  if (email.length > CONTACT_FIELD_MAX_LENGTH || !CONTACT_EMAIL_PATTERN.test(email)) {
-    return createValidationErrorResult('Invalid email address');
-  }
-
-  if (subject.length > CONTACT_FIELD_MAX_LENGTH) {
-    return createValidationErrorResult(`Subject must be ${CONTACT_FIELD_MAX_LENGTH} characters or fewer.`);
-  }
-
-  if (message.length > CONTACT_MESSAGE_MAX_LENGTH) {
-    return createValidationErrorResult(`Message must be ${CONTACT_MESSAGE_MAX_LENGTH} characters or fewer.`);
-  }
-
   let adminSupabase: SupabaseClient;
   try {
     adminSupabase = createAdminSupabase();
@@ -157,6 +125,50 @@ export async function submitContactMessageForRoute({
       status: 500,
       body: { error: 'Failed to check contact submission limits.' },
     };
+  }
+
+  let boundedBody: BoundedJsonBodyResult;
+  try {
+    boundedBody = await readBody();
+  } catch (error) {
+    logBackendError('contact_api_error', { error: error });
+    return createInternalErrorResult();
+  }
+
+  if (!boundedBody.ok) {
+    return boundedBody.reason === 'too_large'
+      ? {
+          ok: false,
+          status: 413,
+          body: { error: 'Contact submission is too large.' },
+        }
+      : createValidationErrorResult('Invalid JSON payload.');
+  }
+
+  const body = normalizeBody(boundedBody.value);
+  const name = normalizeRequiredText(body.name);
+  const email = normalizeRequiredText(body.email);
+  const message = normalizeRequiredText(body.message);
+  const subject = normalizeSubject(body.subject);
+
+  if (!name || !email || !message) {
+    return createValidationErrorResult('Name, email, and message are required');
+  }
+
+  if (name.length > CONTACT_FIELD_MAX_LENGTH) {
+    return createValidationErrorResult(`Name must be ${CONTACT_FIELD_MAX_LENGTH} characters or fewer.`);
+  }
+
+  if (email.length > CONTACT_FIELD_MAX_LENGTH || !CONTACT_EMAIL_PATTERN.test(email)) {
+    return createValidationErrorResult('Invalid email address');
+  }
+
+  if (subject.length > CONTACT_FIELD_MAX_LENGTH) {
+    return createValidationErrorResult(`Subject must be ${CONTACT_FIELD_MAX_LENGTH} characters or fewer.`);
+  }
+
+  if (message.length > CONTACT_MESSAGE_MAX_LENGTH) {
+    return createValidationErrorResult(`Message must be ${CONTACT_MESSAGE_MAX_LENGTH} characters or fewer.`);
   }
 
   const { error } = await adminSupabase

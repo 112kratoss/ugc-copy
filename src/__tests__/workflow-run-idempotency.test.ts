@@ -10,7 +10,7 @@ const enqueueWorkflowRunStepJobMock = vi.fn(async () => 'job-1');
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({ role: 'service' }),
-  resolveStoredMediaUrl: async (_client: unknown, url: string) => url,
+  resolveOwnedStoredMediaUrl: async (_client: unknown, url: string) => url,
 }));
 
 vi.mock('@/lib/generation-status-sync', () => ({

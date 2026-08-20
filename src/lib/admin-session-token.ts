@@ -9,13 +9,17 @@
  */
 
 export const ADMIN_SESSION_COOKIE = 'mb_admin_session';
-export const ADMIN_SESSION_TOKEN_VERSION = 'v1';
+export const ADMIN_SESSION_TOKEN_VERSION = 'v2';
 
 /** Subject of the single master admin. A per-person model would vary this. */
 export const ADMIN_MASTER_SUBJECT = 'master';
 
 export type AdminSessionPayload = {
   sub: string;
+  /** Random identifier backed by the authoritative admin_sessions row. */
+  sid: string;
+  /** Keyed fingerprint of the credential record used for this login. */
+  cv: string;
   iat: number;
   exp: number;
 };
@@ -61,6 +65,30 @@ async function importSigningKey(secret: string): Promise<CryptoKey> {
   );
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+const CREDENTIAL_VERSION_CONTEXT = 'magicbooklet.admin-credential-version.v1\0';
+
+/**
+ * Returns a value that changes whenever the configured password hash changes,
+ * without exposing a reusable, unkeyed fingerprint of that hash in the token.
+ */
+export async function deriveAdminCredentialVersion(options: {
+  secret: string;
+  passwordHash: string;
+}): Promise<string> {
+  const key = await importSigningKey(options.secret);
+  const signature = await crypto.subtle.sign(
+    'HMAC',
+    key,
+    encodeUtf8(`${CREDENTIAL_VERSION_CONTEXT}${options.passwordHash}`) as unknown as BufferSource,
+  );
+  return base64UrlEncode(new Uint8Array(signature));
+}
+
+export function createAdminSessionId(): string {
+  return crypto.randomUUID();
+}
+
 export function resolveAdminSessionSecret(
   environment: NodeJS.ProcessEnv = process.env,
 ): string | null {
@@ -73,12 +101,16 @@ export function resolveAdminSessionSecret(
 export async function createAdminSessionToken(options: {
   secret: string;
   subject?: string;
+  sessionId: string;
+  credentialVersion: string;
   issuedAt: Date;
   ttlSeconds: number;
 }): Promise<string> {
   const issuedAtSeconds = Math.floor(options.issuedAt.getTime() / 1000);
   const payload: AdminSessionPayload = {
     sub: options.subject ?? ADMIN_MASTER_SUBJECT,
+    sid: options.sessionId,
+    cv: options.credentialVersion,
     iat: issuedAtSeconds,
     exp: issuedAtSeconds + options.ttlSeconds,
   };
@@ -140,8 +172,15 @@ export async function verifyAdminSessionToken(
   if (
     typeof payload?.sub !== 'string'
     || !payload.sub
+    || typeof payload?.sid !== 'string'
+    || !UUID_PATTERN.test(payload.sid)
+    || typeof payload?.cv !== 'string'
+    || !/^[A-Za-z0-9_-]{43}$/.test(payload.cv)
     || !Number.isFinite(payload?.iat)
     || !Number.isFinite(payload?.exp)
+    || !Number.isInteger(payload.iat)
+    || !Number.isInteger(payload.exp)
+    || payload.exp <= payload.iat
   ) {
     return { valid: false, reason: 'malformed' };
   }

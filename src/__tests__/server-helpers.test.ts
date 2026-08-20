@@ -39,4 +39,35 @@ describe('server helpers', () => {
       }
     );
   });
+
+  it('keeps generic signing restricted to legacy generated-media buckets', async () => {
+    const { resolveStoredMediaUrl } = await import('@/lib/server-helpers');
+    const createSignedUrl = vi.fn(async (filePath: string) => ({
+      data: { signedUrl: `https://signed.example.test/${filePath}` },
+      error: null,
+    }));
+    const from = vi.fn(() => ({ createSignedUrl }));
+    const admin = { storage: { from } } as never;
+
+    await expect(resolveStoredMediaUrl(
+      admin,
+      'generated_images/user-1/output.png',
+    )).resolves.toBe('https://signed.example.test/user-1/output.png');
+    expect(from).toHaveBeenCalledWith('generated_images');
+    expect(createSignedUrl).toHaveBeenCalledWith('user-1/output.png', 3600);
+
+    for (const path of [
+      'uploads/user-1/private.png',
+      'profiles/user-1/avatar.png',
+      'post_resource_files/user-1/private.zip',
+      'template_inputs/user-1/private.png',
+      'template_assets/template-1/version-1/private.png',
+    ]) {
+      from.mockClear();
+      createSignedUrl.mockClear();
+      await expect(resolveStoredMediaUrl(admin, path)).resolves.toBe(path);
+      expect(from).not.toHaveBeenCalled();
+      expect(createSignedUrl).not.toHaveBeenCalled();
+    }
+  });
 });

@@ -21,6 +21,7 @@ import {
 
 import { useAuth } from '@/app/components/AuthProvider';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
+import { finalizeSignedUpload } from '@/lib/upload-finalize-client';
 import {
   Button,
   Kicker,
@@ -339,7 +340,11 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
           .from(intent.bucket)
           .uploadToSignedUrl(intent.path, intent.token, file, { contentType: file.type || 'application/octet-stream' });
         if (uploadError) throw new Error(`Could not upload ${slot.label}: ${uploadError.message}`);
-        return { slotKey: slot.key, storagePath: intent.storagePath };
+        const finalized = await finalizeSignedUpload(session.access_token, intent.uploadId);
+        if (finalized.bucket !== intent.bucket || finalized.path !== intent.path) {
+          throw new Error(`Could not verify ${slot.label}: the upload location changed unexpectedly.`);
+        }
+        return { slotKey: slot.key, storagePath: finalized.storagePath };
       }));
       if (uploadedInputs.length > 0) {
         const finalizedRun = await finalizeTemplateInputs({

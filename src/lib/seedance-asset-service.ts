@@ -16,7 +16,8 @@ import {
   fetchWithProviderTimeout,
   PROVIDER_INTERACTIVE_REQUEST_TIMEOUT_MS,
 } from '@/lib/provider-fetch';
-import { resolveStoredMediaUrl as defaultResolveStoredMediaUrl } from '@/lib/server-helpers';
+import { resolveOwnedStoredMediaUrl as defaultResolveStoredMediaUrl } from '@/lib/server-helpers';
+import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 
 type SeedanceAssetRouteBody = {
   url?: unknown;
@@ -231,7 +232,21 @@ export async function createSeedanceAssetForRoute({
   }
 
   try {
-    const resolvedUrl = await resolveStoredMediaUrl(adminSupabase, normalizedUrl);
+    if (!getUserOwnedStoredMediaLocation(normalizedUrl, userId)) {
+      return {
+        ok: false,
+        status: 400,
+        body: { error: 'Asset media must belong to the authenticated user.' },
+      };
+    }
+    const resolvedUrl = await resolveStoredMediaUrl(adminSupabase, normalizedUrl, userId);
+    if (!resolvedUrl) {
+      return {
+        ok: false,
+        status: 400,
+        body: { error: 'Asset media must belong to the authenticated user.' },
+      };
+    }
     const response = await fetchWithProviderTimeout('https://api.kie.ai/api/v1/playground/createAsset', {
       method: 'POST',
       headers: {

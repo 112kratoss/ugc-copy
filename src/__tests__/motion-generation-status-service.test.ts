@@ -6,7 +6,10 @@ import {
   type MotionGenerationStatusDependencies,
 } from '@/lib/motion-generation-status-service';
 
-function createStatusClientMock(overrides: Record<string, unknown> = {}) {
+function createStatusClientMock(
+  overrides: Record<string, unknown> = {},
+  linkedGuestIds: string[] = [],
+) {
   const selects: string[] = [];
   // `value` for eq(), `values` for the linked-owner in() filter.
   const eqs: Array<{ column: string; value?: unknown; values?: unknown[] }> = [];
@@ -28,9 +31,26 @@ function createStatusClientMock(overrides: Record<string, unknown> = {}) {
     },
     ...overrides,
   };
+  const createSignedUrl = vi.fn(async (path: string) => ({
+    data: { signedUrl: `signed:${path}` },
+    error: null,
+  }));
+  const storageFrom = vi.fn(() => ({ createSignedUrl }));
 
   const client = {
     from(table: string) {
+      if (table === 'profiles') {
+        return {
+          select() {
+            return {
+              eq: vi.fn(async () => ({
+                data: linkedGuestIds.map((id) => ({ id })),
+                error: null,
+              })),
+            };
+          },
+        };
+      }
       if (table !== 'generations') {
         throw new Error(`Unexpected table access: ${table}`);
       }
@@ -71,12 +91,15 @@ function createStatusClientMock(overrides: Record<string, unknown> = {}) {
         },
       };
     },
+    storage: { from: storageFrom },
   };
 
   return {
     client: client as unknown as SupabaseClient,
     selects,
     eqs,
+    createSignedUrl,
+    storageFrom,
   };
 }
 
@@ -127,7 +150,43 @@ describe('getMotionGenerationStatusForRoute', () => {
     expect(userClient.selects).toEqual([]);
     expect(createAdminSupabase).toHaveBeenCalledTimes(1);
     expect(dependencies.resolveStoredMediaUrl).toHaveBeenCalledTimes(1);
+    expect(dependencies.resolveStoredMediaUrl).toHaveBeenCalledWith(
+      adminClient.client,
+      'generated_videos/user-1/generated_task-motion-1.mp4',
+      'user-1',
+    );
     expect(dependencies.fetchWithProviderTimeout).not.toHaveBeenCalled();
+  });
+
+  it('authorizes a linked guest row but refuses an encoded foreign-owner path', async () => {
+    const userClient = createStatusClientMock();
+    const adminClient = createStatusClientMock({
+      user_id: 'guest-1',
+      output_url: 'generated_videos/guest-1%252f..%252fvictim/private.mp4',
+    }, ['guest-1']);
+
+    const result = await getMotionGenerationStatusForRoute({
+      request: new Request('http://localhost/api/generate?id=task-motion-1'),
+      predictionId: 'task-motion-1',
+      userId: 'user-1',
+      supabase: userClient.client,
+      createAdminSupabase: () => adminClient.client,
+      kieApiKey: 'test-key',
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      body: {
+        status: 'succeeded',
+        output: null,
+        timing: expect.objectContaining({ appStatus: 'succeeded' }),
+      },
+    });
+    expect(adminClient.eqs).toContainEqual({
+      column: 'user_id',
+      values: ['user-1', 'guest-1'],
+    });
+    expect(adminClient.storageFrom).not.toHaveBeenCalled();
   });
 
   it('rejects a plain video generation before reading output or polling the provider', async () => {

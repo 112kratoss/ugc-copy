@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { postShowcaseFeedEventRouteResponse } from '@/lib/showcase-feed-events-route-adapter-service';
+import { BackendRateLimitError } from '@/lib/backend-rate-limit';
+import {
+  SHOWCASE_FEED_EVENT_REQUEST_BODY_MAX_BYTES,
+  postShowcaseFeedEventRouteResponse,
+} from '@/lib/showcase-feed-events-route-adapter-service';
 import {
   parseShowcaseFeedEventPayload,
   type ShowcaseFeedEventBatchRecordResult,
@@ -60,7 +64,11 @@ describe('showcase feed events route adapter', () => {
     expect(response.headers.get('set-cookie')).toBeNull();
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(response.headers.get('x-request-id')).toBe('feed-event-1');
-    expect(enforceBackendRateLimit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+    expect(enforceBackendRateLimit).toHaveBeenNthCalledWith(1, expect.anything(), expect.objectContaining({
+      scope: 'showcase-feed:event-network-admission',
+      key: 'network-hash',
+    }));
+    expect(enforceBackendRateLimit).toHaveBeenNthCalledWith(2, expect.anything(), expect.objectContaining({
       scope: 'showcase-feed:event',
       key: 'viewer-1',
     }));
@@ -109,7 +117,11 @@ describe('showcase feed events route adapter', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('set-cookie')).toContain('__Host-magicbooklet-feed-id=fid_');
     expect(response.headers.get('set-cookie')).toContain('HttpOnly');
-    expect(enforceBackendRateLimit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ key: 'network-hash' }));
+    expect(enforceBackendRateLimit).toHaveBeenCalledTimes(1);
+    expect(enforceBackendRateLimit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      scope: 'showcase-feed:event-network-admission',
+      key: 'network-hash',
+    }));
     expect(recordShowcaseFeedEvent).toHaveBeenCalledWith(expect.objectContaining({
       actorUserId: null,
       anonymousKeyHash: 'anon-hash',
@@ -118,7 +130,13 @@ describe('showcase feed events route adapter', () => {
 
   it('rejects an invalid supplied authorization header instead of treating it as anonymous', async () => {
     const recordShowcaseFeedEvent = vi.fn();
-    const enforceBackendRateLimit = vi.fn();
+    const enforceBackendRateLimit = vi.fn(async () => ({
+      allowed: true,
+      limit: 300,
+      remaining: 299,
+      retryAfterSeconds: 0,
+      resetAt: new Date().toISOString(),
+    }));
     const response = await postShowcaseFeedEventRouteResponse({
       request: new Request('http://localhost/api/showcase/feed/events', {
         method: 'POST',
@@ -138,6 +156,7 @@ describe('showcase feed events route adapter', () => {
         createServiceClient: vi.fn(() => ({}) as SupabaseClient),
         enforceBackendRateLimit,
         getFeedAnonymousKeyHash: vi.fn(() => 'anon-hash'),
+        getFeedNetworkKeyHash: vi.fn(() => 'network-hash'),
         recordShowcaseFeedEvent,
       },
     });
@@ -145,7 +164,7 @@ describe('showcase feed events route adapter', () => {
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: 'Authentication required.' });
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
-    expect(enforceBackendRateLimit).not.toHaveBeenCalled();
+    expect(enforceBackendRateLimit).toHaveBeenCalledTimes(1);
     expect(recordShowcaseFeedEvent).not.toHaveBeenCalled();
   });
 
@@ -164,6 +183,82 @@ describe('showcase feed events route adapter', () => {
       sourceSurface: 'showcase',
       durationMs: -1,
     })).toMatchObject({ ok: false, status: 400 });
+  });
+
+  it('keeps authenticated actor budgets separate for viewers sharing one network', async () => {
+    const recordShowcaseFeedEvent = vi.fn(async () => ({
+      ok: true as const,
+      body: { success: true as const },
+    }));
+    const limitedActor = new BackendRateLimitError({
+      allowed: false,
+      limit: 300,
+      remaining: 0,
+      retryAfterSeconds: 30,
+      resetAt: '2026-08-19T12:00:00.000Z',
+    });
+    const enforceBackendRateLimit = vi.fn(async (
+      _client: unknown,
+      options: { scope: string; key: string },
+    ) => {
+      if (options.scope === 'showcase-feed:event' && options.key === 'viewer-1') {
+        throw limitedActor;
+      }
+      return {
+        allowed: true,
+        limit: options.scope === 'showcase-feed:event' ? 300 : 3_000,
+        remaining: 299,
+        retryAfterSeconds: 0,
+        resetAt: '2026-08-19T12:00:00.000Z',
+      };
+    });
+
+    const requestFor = (clientEventId: string) => new Request(
+      'http://localhost/api/showcase/feed/events',
+      {
+        method: 'POST',
+        headers: { Authorization: 'Bearer token', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientEventId,
+          postId: POST_ID,
+          eventType: 'open',
+          sourceSurface: 'showcase',
+        }),
+      },
+    );
+    const dependenciesFor = (userId: string) => ({
+      createUserClient: vi.fn(() => createUserClient(userId)),
+      createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+      enforceBackendRateLimit,
+      getFeedAnonymousKeyHash: vi.fn(() => 'anon-hash'),
+      getFeedNetworkKeyHash: vi.fn(() => 'shared-network-hash'),
+      recordShowcaseFeedEvent,
+    });
+
+    const limited = await postShowcaseFeedEventRouteResponse({
+      request: requestFor('event-shared-network-1'),
+      dependencies: dependenciesFor('viewer-1'),
+    });
+    const allowed = await postShowcaseFeedEventRouteResponse({
+      request: requestFor('event-shared-network-2'),
+      dependencies: dependenciesFor('viewer-2'),
+    });
+
+    expect(limited.status).toBe(429);
+    expect(allowed.status).toBe(200);
+    expect(enforceBackendRateLimit.mock.calls.map(([, options]) => options)).toEqual([
+      expect.objectContaining({
+        scope: 'showcase-feed:event-network-admission',
+        key: 'shared-network-hash',
+      }),
+      expect.objectContaining({ scope: 'showcase-feed:event', key: 'viewer-1' }),
+      expect.objectContaining({
+        scope: 'showcase-feed:event-network-admission',
+        key: 'shared-network-hash',
+      }),
+      expect.objectContaining({ scope: 'showcase-feed:event', key: 'viewer-2' }),
+    ]);
+    expect(recordShowcaseFeedEvent).toHaveBeenCalledTimes(1);
   });
 
   it('accepts only database-safe UUID and bigint identifier shapes', () => {
@@ -229,7 +324,7 @@ describe('showcase feed events route adapter', () => {
     });
   }
 
-  it('charges one auth and one rate-limit write for a whole batch', async () => {
+  it('charges one auth plus one network and actor admission for a whole batch', async () => {
     // A fully-watched reel produced ~7 requests, each re-running auth and a
     // rate-limit write transaction. That per-request overhead, not the inserts,
     // is what batching removes.
@@ -256,7 +351,7 @@ describe('showcase feed events route adapter', () => {
         expect.objectContaining({ clientEventId: 'event-6' }),
       ]),
     }));
-    expect(enforceBackendRateLimit).toHaveBeenCalledTimes(1);
+    expect(enforceBackendRateLimit).toHaveBeenCalledTimes(2);
     expect(dependencies.createUserClient).toHaveBeenCalledTimes(1);
   });
 
@@ -308,8 +403,52 @@ describe('showcase feed events route adapter', () => {
     });
 
     expect(response.status).toBe(400);
-    // Rejected before auth or any privileged work.
-    expect(enforceBackendRateLimit).not.toHaveBeenCalled();
+    // Invalid requests still consume network admission before parsing.
+    expect(enforceBackendRateLimit).toHaveBeenCalledTimes(1);
+    expect(recordShowcaseFeedEvent).not.toHaveBeenCalled();
+  });
+
+  it('returns 413 for an undeclared oversized stream after network admission', async () => {
+    const recordShowcaseFeedEvent = vi.fn();
+    const enforceBackendRateLimit = vi.fn(async () => ({
+      allowed: true, limit: 300, remaining: 299, retryAfterSeconds: 0, resetAt: new Date().toISOString(),
+    }));
+    const request = new Request('http://localhost/api/showcase/feed/events', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer token', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ padding: 'x'.repeat(SHOWCASE_FEED_EVENT_REQUEST_BODY_MAX_BYTES) }),
+    });
+    expect(request.headers.has('content-length')).toBe(false);
+
+    const response = await postShowcaseFeedEventRouteResponse({
+      request,
+      dependencies: batchDependencies(recordShowcaseFeedEvent, enforceBackendRateLimit),
+    });
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({ error: 'Feed event payload is too large.' });
+    expect(enforceBackendRateLimit).toHaveBeenCalledTimes(1);
+    expect(recordShowcaseFeedEvent).not.toHaveBeenCalled();
+  });
+
+  it('charges malformed JSON to the network limit before returning 400', async () => {
+    const recordShowcaseFeedEvent = vi.fn();
+    const enforceBackendRateLimit = vi.fn(async () => ({
+      allowed: true, limit: 300, remaining: 299, retryAfterSeconds: 0, resetAt: new Date().toISOString(),
+    }));
+
+    const response = await postShowcaseFeedEventRouteResponse({
+      request: new Request('http://localhost/api/showcase/feed/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{invalid',
+      }),
+      dependencies: batchDependencies(recordShowcaseFeedEvent, enforceBackendRateLimit),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: 'Invalid JSON payload.' });
+    expect(enforceBackendRateLimit).toHaveBeenCalledTimes(1);
     expect(recordShowcaseFeedEvent).not.toHaveBeenCalled();
   });
 

@@ -146,6 +146,7 @@ async function handleWorkflowRunDetailsGET(
   try {
     const run = await dependencies.getWorkflowRunDetails({
       supabase: workflowRunSupabase,
+      userId: auth.userId,
       canvasId: id,
       runId,
     });
@@ -182,8 +183,9 @@ async function handleWorkflowRunApprovalPOST(
   const auth = await dependencies.authenticateRequest(request);
   if (auth instanceof Response) return auth;
 
+  const mutationSupabase = dependencies.createServiceClient();
   try {
-    await dependencies.enforceBackendRateLimit(dependencies.createServiceClient(), {
+    await dependencies.enforceBackendRateLimit(mutationSupabase, {
       ...WORKFLOW_RUN_RATE_LIMIT,
       key: auth.userId,
     });
@@ -197,7 +199,9 @@ async function handleWorkflowRunApprovalPOST(
   const { id, runId, stepId } = await context.params;
   try {
     const run = await dependencies.approveWorkflowRunStep({
-      supabase: auth.supabase as unknown as WorkflowRunDetailsSupabaseClient,
+      ownerSupabase: auth.supabase as unknown as WorkflowRunDetailsSupabaseClient,
+      mutationSupabase,
+      userId: auth.userId,
       canvasId: id,
       runId,
       stepId,

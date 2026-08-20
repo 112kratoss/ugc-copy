@@ -55,7 +55,9 @@ describe('mobile backend boundary', () => {
     // Resource attachments go through the same server-signed path as every
     // other mobile upload rather than posting bytes through the API.
     expect(mediaSource).toContain('signPostResourceFileUpload');
-    expect(mediaSource).toContain('finalizePostResourceFileUpload');
+    expect(mediaSource).toContain('finalizeUpload');
+    expect(mediaSource).toContain('finalized.bucket !== uploadIntent.bucket');
+    expect(mediaSource).toContain('finalized.path !== uploadIntent.path');
     expect(mediaSource.match(/await uploadUriToSignedUrl/g)).toHaveLength(4);
     expect(uploadSource).toContain("httpMethod: 'PUT'");
     expect(uploadSource).not.toContain('.arrayBuffer()');

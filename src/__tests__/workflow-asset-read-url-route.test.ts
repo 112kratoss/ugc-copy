@@ -22,6 +22,17 @@ const storageFromMock = vi.fn(() => ({
 }));
 const adminClient = {
   rpc: rpcMock,
+  from(table: string) {
+    if (table !== 'profiles') throw new Error(`Unexpected table: ${table}`);
+    const query = {
+      select() { return query; },
+      eq() { return query; },
+      async maybeSingle() {
+        return { data: { identity_state: 'active' }, error: null };
+      },
+    };
+    return query;
+  },
   storage: {
     from: storageFromMock,
   },

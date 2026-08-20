@@ -132,4 +132,55 @@ describe('durable generation media', () => {
     expect(timeoutSpy).toHaveBeenCalledWith(60_000);
     expect(requestInit?.signal).toBe(timeoutSignal);
   });
+
+  it('canonicalizes an owned existing path before returning it', async () => {
+    const storageFrom = vi.fn();
+    const { ensureDurableGenerationMedia } = await import('@/lib/durable-generation-media');
+
+    await expect(ensureDurableGenerationMedia({
+      supabase: { storage: { from: storageFrom } } as never,
+      generation: {
+        id: 'gen-1',
+        userId: 'user-1',
+        model: 'nano-banana-2',
+        category: 'image',
+        outputUrl: 'generated_images/user-1/%65xisting.jpg',
+        showcaseAssetPath: null,
+      },
+    })).resolves.toEqual({
+      outputUrl: 'generated_images/user-1/existing.jpg',
+      createdLocation: null,
+    });
+    expect(storageFrom).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      outputUrl: 'generated_images/user-2/private.jpg',
+      showcaseAssetPath: 'showcase/gen-2/private.jpg',
+    },
+    {
+      outputUrl: 'generated_images/user-1%252f..%252fuser-2/private.jpg',
+      showcaseAssetPath: 'showcase/gen-1%252f..%252fgen-2/private.jpg',
+    },
+  ])('does not download storage outside the exact owner or generation scope', async ({
+    outputUrl,
+    showcaseAssetPath,
+  }) => {
+    const storageFrom = vi.fn();
+    const { ensureDurableGenerationMedia } = await import('@/lib/durable-generation-media');
+
+    await expect(ensureDurableGenerationMedia({
+      supabase: { storage: { from: storageFrom } } as never,
+      generation: {
+        id: 'gen-1',
+        userId: 'user-1',
+        model: 'nano-banana-2',
+        category: 'image',
+        outputUrl,
+        showcaseAssetPath,
+      },
+    })).rejects.toThrow(/could not be loaded/i);
+    expect(storageFrom).not.toHaveBeenCalled();
+  });
 });

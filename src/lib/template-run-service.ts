@@ -20,6 +20,7 @@ import {
 import {
   loadCompiledDraftForTemplate,
   loadMediaTemplateRow,
+  resolveTemplateCatalogMediaUrl,
 } from '@/lib/media-template-service';
 import {
   isRecord,
@@ -37,10 +38,25 @@ import {
 import { enqueueTemplateRunJob } from '@/lib/template-run-jobs';
 import {
   getTemplateInputExtensions,
+  getTemplateInputMaxBytes,
   validateTemplateInputBlob,
   validateTemplateInputDescriptor,
 } from '@/lib/template-input-preflight';
-import { resolveStoredMediaUrl } from '@/lib/server-helpers';
+import {
+  abortNullableUploadByteConsumption,
+  abortUploadBytesBeforeIssue,
+  completeUploadByteConsumptions,
+  isDefinitiveSupabaseMutationRejection,
+  markUploadBytesIssued,
+  reserveUploadBytes,
+  type UploadConsumptionClaim,
+} from '@/lib/upload-byte-admission';
+import { parseCanonicalStorageLocation } from '@/lib/storage-ownership';
+import {
+  deleteReservedObjectAndConfirm,
+  finalizeUploadForConsumption,
+} from '@/lib/upload-finalization';
+import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import {
   getIncomingEdges,
   getNodeById,
@@ -302,14 +318,16 @@ async function toRunDto(client: SupabaseClient, state: RunState): Promise<Templa
     mediaKind: step.media_kind,
     status: step.status,
     label: step.label,
-    outputUrl: step.output_url ? await resolveStoredMediaUrl(client, step.output_url) : null,
+    outputUrl: step.output_url
+      ? await resolveOwnedStoredMediaUrl(client, step.output_url, state.run.user_id)
+      : null,
     errorMessage: step.error_message,
     failureCode: stepFailureCode(step),
     canRetry: step.can_retry && (step.status === 'failed' || step.status === 'awaiting_approval'),
     estimatedRetryCredits: Math.max(0, step.estimated_credits),
   })));
   const resultUrl = state.run.result_url
-    ? await resolveStoredMediaUrl(client, state.run.result_url)
+    ? await resolveOwnedStoredMediaUrl(client, state.run.result_url, state.run.user_id)
     : null;
   return {
     id: state.run.id,
@@ -631,13 +649,49 @@ export async function createTemplateInputUploadIntent(params: {
     );
   }
   const fileName = sanitizeUploadFileName(input.fileName, slot.kind, mimeType);
-  const objectPath = `${params.userId}/${run.id}/staging/${slot.key}/${randomUUID()}-${fileName}`;
+  const uploadId = randomUUID();
+  const objectPath = `${params.userId}/${run.id}/staging/${slot.key}/${uploadId}-${fileName}`;
+  const byteReservation = await reserveUploadBytes(params.client, {
+    uploadId,
+    userId: params.userId,
+    bucket: TEMPLATE_INPUT_BUCKET,
+    storagePath: objectPath,
+    declaredBytes: sizeBytes,
+    // Image and video slots share one 100 MB bucket. The signed PUT can ignore
+    // the declared kind, so admission must reserve the surface maximum.
+    reservedBytes: getTemplateInputMaxBytes('video'),
+    expectedContentType: mimeType,
+  });
+  if (!byteReservation.ok) {
+    throw new MediaTemplateError(
+      byteReservation.error,
+      byteReservation.status,
+      byteReservation.code,
+    );
+  }
   const { data, error } = await params.client.storage.from(TEMPLATE_INPUT_BUCKET).createSignedUploadUrl(objectPath);
   if (error || !data?.token) {
+    await abortUploadBytesBeforeIssue(params.client, {
+      uploadId: byteReservation.uploadId,
+      userId: params.userId,
+    });
     throw new MediaTemplateError('Failed to prepare the template input upload.', 500, 'UPLOAD_SIGN_FAILED');
+  }
+  const issued = await markUploadBytesIssued(params.client, {
+    uploadId: byteReservation.uploadId,
+    userId: params.userId,
+    tokenTtlSeconds: 2 * 60 * 60,
+  });
+  if (!issued.ok) {
+    throw new MediaTemplateError(
+      'Failed to activate the template input upload.',
+      500,
+      'UPLOAD_SIGN_FAILED',
+    );
   }
   return {
     success: true,
+    uploadId: byteReservation.uploadId,
     bucket: TEMPLATE_INPUT_BUCKET,
     path: objectPath,
     storagePath: `${TEMPLATE_INPUT_BUCKET}/${objectPath}`,
@@ -647,10 +701,11 @@ export async function createTemplateInputUploadIntent(params: {
   };
 }
 
-function templateInputObjectPath(value: string) {
-  return value.startsWith(`${TEMPLATE_INPUT_BUCKET}/`)
-    ? value.slice(`${TEMPLATE_INPUT_BUCKET}/`.length)
-    : '';
+function templateInputObjectPath(value: string, ownerUserId?: string) {
+  return parseCanonicalStorageLocation(value, {
+    allowedBuckets: [TEMPLATE_INPUT_BUCKET],
+    ownerUserId,
+  })?.filePath ?? '';
 }
 
 export async function finalizeTemplateRunInputs(params: {
@@ -675,7 +730,12 @@ export async function finalizeTemplateRunInputs(params: {
   const finalized = { ...existing };
   const newFinalPaths: string[] = [];
   const stagingPaths: string[] = [];
+  const consumptionClaims: Array<{
+    claim: UploadConsumptionClaim | null;
+    storagePath: string;
+  }> = [];
   const replacedFinalPaths: string[] = [];
+  let durableUpdateOutcomeUnknown = false;
   try {
     for (const slot of slots) {
       const submittedPath = submitted.get(slot.key);
@@ -685,11 +745,28 @@ export async function finalizeTemplateRunInputs(params: {
         }
         continue;
       }
-      const objectPath = templateInputObjectPath(submittedPath);
+      const objectPath = templateInputObjectPath(submittedPath, params.userId);
       const expectedPrefix = `${params.userId}/${state.run.id}/staging/${slot.key}/`;
-      if (!objectPath.startsWith(expectedPrefix) || objectPath.includes('..') || objectPath.includes('\\')) {
+      if (!objectPath.startsWith(expectedPrefix)) {
         throw new MediaTemplateError(`Upload ${slot.label} before continuing.`, 400, 'INVALID_TEMPLATE_INPUT_PATH');
       }
+      const finalization = await finalizeUploadForConsumption(params.client, {
+        bucket: TEMPLATE_INPUT_BUCKET,
+        storagePath: objectPath,
+        userId: params.userId,
+        disposition: 'delete',
+      });
+      if (!finalization.ok) {
+        throw new MediaTemplateError(
+          `${slot.label} could not be verified.`,
+          finalization.status,
+          finalization.code,
+        );
+      }
+      consumptionClaims.push({
+        claim: finalization.consumptionClaim,
+        storagePath: objectPath,
+      });
       const { data: blob, error: downloadError } = await params.client.storage.from(TEMPLATE_INPUT_BUCKET).download(objectPath);
       if (downloadError || !blob) {
         throw new MediaTemplateError(`${slot.label} could not be verified.`, 400, 'INVALID_INPUT_FILE');
@@ -702,7 +779,9 @@ export async function finalizeTemplateRunInputs(params: {
       if (uploadError) throw new MediaTemplateError('Failed to finalize a template input.', 500, 'INPUT_FINALIZE_FAILED');
       newFinalPaths.push(finalObjectPath);
       stagingPaths.push(objectPath);
-      if (finalized[slot.key]) replacedFinalPaths.push(templateInputObjectPath(finalized[slot.key]));
+      if (finalized[slot.key]) {
+        replacedFinalPaths.push(templateInputObjectPath(finalized[slot.key], params.userId));
+      }
       finalized[slot.key] = `${TEMPLATE_INPUT_BUCKET}/${finalObjectPath}`;
     }
     for (const key of submitted.keys()) {
@@ -710,17 +789,56 @@ export async function finalizeTemplateRunInputs(params: {
         throw new MediaTemplateError('Unknown template input.', 400, 'INVALID_INPUT_SLOT');
       }
     }
-    const { error: updateError } = await params.client.from('template_runs')
+    durableUpdateOutcomeUnknown = true;
+    const updateResult = await params.client.from('template_runs')
       .update({ input_storage_paths: finalized, error_message: null })
-      .eq('id', state.run.id).eq('user_id', params.userId).eq('status', 'collecting_inputs');
-    if (updateError) throw updateError;
+      .eq('id', state.run.id)
+      .eq('user_id', params.userId)
+      .eq('status', 'collecting_inputs')
+      .select('id')
+      .maybeSingle();
+    const updatedRun = updateResult.data;
+    const updateError = updateResult.error;
+    if (updateError || !updatedRun) {
+      durableUpdateOutcomeUnknown = Boolean(
+        updateError && !isDefinitiveSupabaseMutationRejection(updateResult),
+      );
+      throw updateError ?? new Error('Template input state changed before it could be committed.');
+    }
+    durableUpdateOutcomeUnknown = false;
   } catch (error) {
-    if (newFinalPaths.length) await params.client.storage.from(TEMPLATE_INPUT_BUCKET).remove(newFinalPaths);
+    if (!durableUpdateOutcomeUnknown) {
+      await Promise.all(consumptionClaims.map(({ claim }) => (
+        abortNullableUploadByteConsumption(params.client, claim)
+      )));
+      await Promise.all(newFinalPaths.map((storagePath) => (
+        deleteReservedObjectAndConfirm(params.client, TEMPLATE_INPUT_BUCKET, storagePath)
+      )));
+    }
     throw error;
   }
-  const removePaths = [...stagingPaths, ...replacedFinalPaths.filter(Boolean)];
-  if (removePaths.length) {
-    const { error } = await params.client.storage.from(TEMPLATE_INPUT_BUCKET).remove(removePaths);
+  const completed = await completeUploadByteConsumptions(
+    params.client,
+    consumptionClaims.map(({ claim }) => claim),
+  );
+  if (!completed.ok) {
+    throw new MediaTemplateError(completed.error, 500, 'INPUT_FINALIZE_FAILED');
+  }
+  for (const stagingPath of stagingPaths) {
+    const deleted = await deleteReservedObjectAndConfirm(
+      params.client,
+      TEMPLATE_INPUT_BUCKET,
+      stagingPath,
+    );
+    if (!deleted) {
+      logBackendError('failed_to_remove_finalized_template_input_staging_object', {
+        storagePath: stagingPath,
+      });
+    }
+  }
+  const replacedPaths = replacedFinalPaths.filter(Boolean);
+  if (replacedPaths.length) {
+    const { error } = await params.client.storage.from(TEMPLATE_INPUT_BUCKET).remove(replacedPaths);
     if (error) logBackendError('failed_to_remove_replaced_template_input_objects', { error: error });
   }
   return toRunDto(params.client, await loadRunState(params.client, state.run.id, params.userId));
@@ -752,21 +870,57 @@ function topologicalNodes(graph: WorkflowCanvasGraph): WorkflowCanvasNode[] {
 async function hydrateRunGraph(client: SupabaseClient, state: RunState) {
   let graph = normalizeWorkflowGraph(state.snapshot.graph as Partial<WorkflowCanvasGraph>);
   const inputs = asStoragePaths(state.run.input_storage_paths);
-  const signedCache = new Map<string, string>();
-  const sign = async (value: string | null) => {
+  const signedCache = new Map<string, string | null>();
+  const signOwnedOutput = async (value: string | null) => {
     if (!value) return null;
-    if (!signedCache.has(value)) signedCache.set(value, await resolveStoredMediaUrl(client, value));
-    return signedCache.get(value)!;
+    const cacheKey = `owned:${value}`;
+    if (!signedCache.has(cacheKey)) {
+      signedCache.set(
+        cacheKey,
+        await resolveOwnedStoredMediaUrl(client, value, state.run.user_id),
+      );
+    }
+    return signedCache.get(cacheKey) ?? null;
+  };
+  const signConsumerInput = async (value: string | null, slotKey: string) => {
+    if (!value) return null;
+    const objectPath = templateInputObjectPath(value, state.run.user_id);
+    const requiredPrefix = `${state.run.user_id}/${state.run.id}/final/${slotKey}/`;
+    if (!objectPath.startsWith(requiredPrefix)) return null;
+    const canonicalValue = `${TEMPLATE_INPUT_BUCKET}/${objectPath}`;
+    const cacheKey = `consumer:${canonicalValue}`;
+    if (!signedCache.has(cacheKey)) {
+      signedCache.set(
+        cacheKey,
+        await resolveOwnedStoredMediaUrl(client, canonicalValue, state.run.user_id),
+      );
+    }
+    return signedCache.get(cacheKey) ?? null;
+  };
+  const signCatalogAsset = async (value: string | null) => {
+    if (!value) return null;
+    const cacheKey = `catalog:${value}`;
+    if (!signedCache.has(cacheKey)) {
+      signedCache.set(cacheKey, await resolveTemplateCatalogMediaUrl(client, value, {
+        creatorUserId: null,
+        templateId: state.snapshot.templateId,
+        activeVersionId: state.snapshot.templateVersionId,
+      }));
+    }
+    return signedCache.get(cacheKey) ?? null;
   };
   graph = {
     ...graph,
     nodes: await Promise.all(graph.nodes.map(async (node) => {
       if (node.type !== 'image-input' && node.type !== 'video-input') return node;
       const data = node.data as ImageInputNodeData | VideoInputNodeData;
-      const storagePath = data.templateInput.mode === 'consumer'
+      const isConsumerInput = data.templateInput.mode === 'consumer';
+      const storagePath = isConsumerInput
         ? inputs[data.templateInput.key] ?? null
         : data.storagePath;
-      const signedUrl = await sign(storagePath);
+      const signedUrl = isConsumerInput
+        ? await signConsumerInput(storagePath, data.templateInput.key)
+        : await signCatalogAsset(storagePath);
       if (node.type === 'image-input') {
         return { ...node, data: { ...data, storagePath, imageUrl: signedUrl } as ImageInputNodeData };
       }
@@ -774,7 +928,7 @@ async function hydrateRunGraph(client: SupabaseClient, state: RunState) {
     })),
   };
   for (const step of state.latestSteps.values()) {
-    const outputUrl = step.status === 'succeeded' ? await sign(step.output_url) : null;
+    const outputUrl = step.status === 'succeeded' ? await signOwnedOutput(step.output_url) : null;
     graph = updateNodeRunState(graph, step.node_id, {
       status: step.status === 'cancelled' ? 'failed' : step.status,
       generationId: step.generation_id,
@@ -981,7 +1135,12 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
         clientRequestKeyHash: generationIdempotencyHash(state.run.id, node.id, step.attempt),
         persistInputMedia: false,
         privateRecipe: true,
-        templateContext: { runId: state.run.id, stepId: step.id },
+        templateContext: {
+          runId: state.run.id,
+          stepId: step.id,
+          templateId: state.snapshot.templateId,
+          templateVersionId: state.snapshot.templateVersionId,
+        },
       });
       if (result.status === 'blocked') {
         await client.from('template_run_steps').update({
@@ -1047,7 +1206,7 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
 async function cleanupTemplateRunInputs(client: SupabaseClient, state: RunState) {
   if (state.run.inputs_deleted_at || !['succeeded', 'failed', 'cancelled'].includes(state.run.status)) return state;
   const paths = Object.values(asStoragePaths(state.run.input_storage_paths))
-    .map(templateInputObjectPath).filter(Boolean);
+    .map((value) => templateInputObjectPath(value, state.run.user_id)).filter(Boolean);
   if (paths.length) {
     const { error } = await client.storage.from(TEMPLATE_INPUT_BUCKET).remove(paths);
     if (error) {
@@ -1066,7 +1225,7 @@ async function preflightStoredTemplateRunInputs(client: SupabaseClient, state: R
   const inputs = asStoragePaths(state.run.input_storage_paths);
   for (const slot of asInputSlots(state.run.input_manifest)) {
     const storagePath = inputs[slot.key];
-    const objectPath = storagePath ? templateInputObjectPath(storagePath) : '';
+    const objectPath = storagePath ? templateInputObjectPath(storagePath, state.run.user_id) : '';
     const expectedPrefix = `${state.run.user_id}/${state.run.id}/final/${slot.key}/`;
     if (!objectPath.startsWith(expectedPrefix)) {
       throw new MediaTemplateError(`Upload ${slot.label} before starting.`, 400, 'MISSING_TEMPLATE_INPUT');

@@ -41,6 +41,44 @@ describe('viewer unlock file URLs', () => {
     expect(rpc).not.toHaveBeenCalled();
   });
 
+  it('rejects a non-canonical path even when a persisted revision lists it', async () => {
+    for (const storagePath of [
+      'uploads/creator-1/../another-user/private.psd',
+      'uploads/creator-1/%252fanother-user/private.psd',
+      'uploads/creator-1/%255canother-user/private.psd',
+      'uploads//creator-1/private.psd',
+    ]) {
+      const rpc = vi.fn();
+      const maliciousDetail = {
+        ...detail,
+        purchasedRevision: {
+          ...detail.purchasedRevision,
+          resources: {
+            ...detail.purchasedRevision.resources,
+            items: [{ storagePath }],
+          },
+        },
+      };
+
+      const result = await createViewerUnlockFileUrl({
+        adminSupabase: { rpc } as never,
+        body: { storagePath },
+        countryCode: null,
+        getDetail: vi.fn(async () => maliciousDetail as never),
+        rateLimitKey: 'buyer-1',
+        unlockId: detail.unlockId,
+        viewerUserId: 'buyer-1',
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        status: 404,
+        body: { error: 'Resource file not found on this unlock.' },
+      });
+      expect(rpc).not.toHaveBeenCalled();
+    }
+  });
+
   it('signs the neutral retained path for a detached purchase', async () => {
     const createSignedUrl = vi.fn(async () => ({
       data: { signedUrl: 'https://signed.example.test/retained' },
@@ -52,7 +90,7 @@ describe('viewer unlock file URLs', () => {
       maybeSingle: vi.fn(async () => ({
         data: {
           retained_bucket: 'post_resource_files',
-          retained_path: 'retained/revision/source.psd',
+          retained_path: `retained/${detail.purchasedRevision.revisionId}/source.psd`,
         },
         error: null,
       })),
@@ -81,9 +119,52 @@ describe('viewer unlock file URLs', () => {
     expect(result).toMatchObject({ ok: true, body: { signedUrl: 'https://signed.example.test/retained' } });
     expect(admin.storage.from).toHaveBeenCalledWith('post_resource_files');
     expect(createSignedUrl).toHaveBeenCalledWith(
-      'retained/revision/source.psd',
+      `retained/${detail.purchasedRevision.revisionId}/source.psd`,
       600,
       { download: 'source.psd' },
     );
+  });
+
+  it('rejects a non-canonical retained mapping before signing it', async () => {
+    const createSignedUrl = vi.fn();
+    const builder = {
+      select: vi.fn(),
+      eq: vi.fn(),
+      maybeSingle: vi.fn(async () => ({
+        data: {
+          retained_bucket: 'post_resource_files',
+          retained_path: `retained/${detail.purchasedRevision.revisionId}/%252fprivate.psd`,
+        },
+        error: null,
+      })),
+    };
+    builder.select.mockReturnValue(builder);
+    builder.eq.mockReturnValue(builder);
+    const admin = {
+      rpc: vi.fn(async () => ({
+        data: { allowed: true, limit: 120, remaining: 119, retryAfterSeconds: 0 },
+        error: null,
+      })),
+      from: vi.fn(() => builder),
+      storage: { from: vi.fn(() => ({ createSignedUrl })) },
+    };
+
+    const result = await createViewerUnlockFileUrl({
+      adminSupabase: admin as never,
+      body: { storagePath: 'uploads/creator-1/source.psd' },
+      countryCode: null,
+      getDetail: vi.fn(async () => detail as never),
+      rateLimitKey: 'buyer-1',
+      unlockId: detail.unlockId,
+      viewerUserId: 'buyer-1',
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 404,
+      body: { error: 'Retained resource file not found.' },
+    });
+    expect(admin.storage.from).not.toHaveBeenCalled();
+    expect(createSignedUrl).not.toHaveBeenCalled();
   });
 });

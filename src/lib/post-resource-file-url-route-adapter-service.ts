@@ -1,4 +1,5 @@
 import 'server-only';
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -44,7 +45,7 @@ async function getViewerUserId(request: Request, createClient: typeof createUser
   const supabase = createClient(request) as SupabaseClient;
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await getVerifiedAuthUserResult(supabase);
 
   return user?.id ?? null;
 }

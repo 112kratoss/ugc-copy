@@ -56,9 +56,12 @@ describe('contact route adapter service', () => {
     expect(serviceInput.rateLimitKey).toBe('203.0.113.10');
     expect(serviceInput.createAdminSupabase()).toBe(adminSupabase);
     await expect(serviceInput.readBody()).resolves.toEqual({
-      name: 'Athul',
-      email: 'athul@example.com',
-      message: 'Hello',
+      ok: true,
+      value: {
+        name: 'Athul',
+        email: 'athul@example.com',
+        message: 'Hello',
+      },
     });
     expect(createServiceClient).toHaveBeenCalledTimes(1);
   });

@@ -12,7 +12,9 @@ vi.mock('@/lib/backend-logger', () => ({
   logBackendError: (...args: unknown[]) => logBackendErrorMock(...args),
 }));
 
-const enforceBackendRateLimitMock = vi.fn(async (..._args: unknown[]) => undefined);
+const enforceBackendRateLimitMock = vi.fn(async (...args: unknown[]) => {
+  void args;
+});
 
 vi.mock('@/lib/backend-rate-limit', async () => {
   const actual = await vi.importActual<typeof import('@/lib/backend-rate-limit')>(
@@ -51,7 +53,10 @@ function createHarness(options: {
 
   // Typed argument, so `insert.mock.calls[0][0]` is a real record rather than
   // an empty tuple that typecheck:tests rejects.
-  const insert = vi.fn(async (_row: Record<string, unknown>) => ({ error: insertError }));
+  const insert = vi.fn(async (row: Record<string, unknown>) => {
+    void row;
+    return { error: insertError };
+  });
   const rpc = vi.fn(async () => rpcResult);
   const admin = {
     rpc,
@@ -61,7 +66,7 @@ function createHarness(options: {
           select: vi.fn(),
           eq: vi.fn(),
           maybeSingle: vi.fn(async () => ({
-            data: { merged_into_user_id: linkedGuest ? 'registered-9' : null },
+            data: { identity_state: linkedGuest ? 'merged' : 'active' },
             error: null,
           })),
         };
@@ -93,6 +98,27 @@ describe('guest account merge tickets', () => {
   });
 
   describe('preparing', () => {
+    it('fails closed when the identity-state client cannot be created', async () => {
+      const harness = createHarness({ callerUser: { id: 'guest-1', is_anonymous: true } });
+      const result = await prepareAccountMergeTicketForRoute({
+        getAdminSupabase: () => {
+          throw new Error('service configuration unavailable');
+        },
+        userSupabase: harness.userSupabase,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        status: 503,
+        body: {
+          error: 'Identity verification is temporarily unavailable. Please try again.',
+          code: 'IDENTITY_CHECK_UNAVAILABLE',
+        },
+      });
+      expect(harness.insert).not.toHaveBeenCalled();
+      expect(enforceBackendRateLimitMock).not.toHaveBeenCalled();
+    });
+
     it('mints a ticket for an active guest and stores only its hash', async () => {
       // The stored value must never be the ticket itself: a dump of the table
       // would otherwise let anyone attach that device's credits to their account.
@@ -178,6 +204,28 @@ describe('guest account merge tickets', () => {
         userSupabase: harness.userSupabase,
       });
     }
+
+    it('fails closed when the identity-state client cannot be created', async () => {
+      const harness = createHarness();
+      const result = await mergeGuestAccountForRoute({
+        getAdminSupabase: () => {
+          throw new Error('service configuration unavailable');
+        },
+        requestBody: { ticket: TICKET },
+        userSupabase: harness.userSupabase,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        status: 503,
+        body: {
+          error: 'Identity verification is temporarily unavailable. Please try again.',
+          code: 'IDENTITY_CHECK_UNAVAILABLE',
+        },
+      });
+      expect(harness.rpc).not.toHaveBeenCalled();
+      expect(enforceBackendRateLimitMock).not.toHaveBeenCalled();
+    });
 
     it('links the guest data to the registered caller', async () => {
       const harness = createHarness();

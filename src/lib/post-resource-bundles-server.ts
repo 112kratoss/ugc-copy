@@ -33,6 +33,7 @@ import { getCreatorDisplayName } from '@/lib/profile';
 import {
   createServiceClient,
 } from '@/lib/server-helpers';
+import { throwSupabaseMutationFailure } from '@/lib/upload-byte-admission';
 import {
   buildPostResourceBundleLockedPreview,
   normalizePostResourceAttachments,
@@ -78,7 +79,7 @@ import {
   type GenerationInputMediaItem,
 } from '@/lib/generation-input-media';
 import { slugifySourceTool } from '@/lib/source-tools';
-import { getStoredMediaLocation } from '@/lib/media-urls';
+import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 import { loadPostMediaItemsMap, type PostMediaPersistInput } from '@/lib/post-media';
 import { loadPurchasedProofMedia } from '@/lib/purchased-proof-media';
 import {
@@ -617,7 +618,7 @@ export async function buildGenerationReferenceResourceItems(params: {
   const items: PostResourceItem[] = [];
 
   for (const [index, row] of rows.entries()) {
-    const sourceLocation = getStoredMediaLocation(row.storage_path);
+    const sourceLocation = getUserOwnedStoredMediaLocation(row.storage_path, params.ownerUserId);
     if (!sourceLocation) {
       continue;
     }
@@ -970,6 +971,7 @@ async function loadLinkedPostMap(
       .select(
         [
           'id',
+          'user_id',
           'generation_id',
           'title',
           'body',
@@ -1020,6 +1022,7 @@ async function loadLinkedPostMap(
       .select(
         [
           'id',
+          'user_id',
           'generation_id',
           'title',
           'body',
@@ -1061,7 +1064,7 @@ async function loadLinkedPostMap(
   if (isMissingPostTextColumnsError(result.error)) {
     let legacyQuery = adminSupabase
       .from('posts')
-      .select('id, generation_id, title, category, visibility, archived_at, review_status, showcase_asset_path, output_url, source_kind, source_tool, source_tool_slug, save_count, remix_count, share_visit_count')
+      .select('id, user_id, generation_id, title, category, visibility, archived_at, review_status, showcase_asset_path, output_url, source_kind, source_tool, source_tool_slug, save_count, remix_count, share_visit_count')
       .in('id', uniquePostIds);
 
     if (scope === 'public') {
@@ -1081,6 +1084,7 @@ async function loadLinkedPostMap(
         .select(
           [
           'id',
+          'user_id',
           'generation_id',
             'title',
             'category',
@@ -1408,17 +1412,17 @@ export async function createPostWithResourceBundleAtomically(params: {
   bundle: PostResourceBundleInput | null | undefined;
 }): Promise<PostResourceBundleMutationResult> {
   const ownerUserId = typeof params.post.user_id === 'string' ? params.post.user_id : null;
-  const { data, error } = await params.supabase.rpc('upsert_post_with_resource_bundle', {
+  const result = await params.supabase.rpc('upsert_post_with_resource_bundle', {
     p_post: params.post,
     p_bundle: buildBundleMutationPayload(params.bundle, ownerUserId),
     p_has_bundle: true,
   });
 
-  if (error) {
-    throw error;
+  if (result.error) {
+    throwSupabaseMutationFailure(result);
   }
 
-  const row = Array.isArray(data) ? data[0] : data;
+  const row = Array.isArray(result.data) ? result.data[0] : result.data;
   return normalizeMutationResult(row);
 }
 
@@ -1447,13 +1451,13 @@ export async function updatePostWithResourceBundleAtomically(params: {
     p_bundle: params.hasBundlePayload ? buildBundleMutationPayload(params.bundle, params.ownerUserId) : null,
     ...(params.mediaItems === undefined ? {} : { p_media_items: params.mediaItems }),
   };
-  const { data, error } = await params.supabase.rpc(rpcName, rpcParams);
+  const result = await params.supabase.rpc(rpcName, rpcParams);
 
-  if (error) {
-    throw error;
+  if (result.error) {
+    throwSupabaseMutationFailure(result);
   }
 
-  const row = Array.isArray(data) ? data[0] : data;
+  const row = Array.isArray(result.data) ? result.data[0] : result.data;
   return normalizeMutationResult(row);
 }
 

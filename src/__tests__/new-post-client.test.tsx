@@ -324,6 +324,7 @@ describe('NewPostClient', () => {
       json: async () => ({
         success: true,
         bucket: 'post_resource_files',
+        uploadId: 'upload-workflow-json',
         path: 'user-1/abc-workflow.json',
         token: 'signed-token',
         expiresInSeconds: 7200,
@@ -333,14 +334,11 @@ describe('NewPostClient', () => {
     enqueueResponse({
       ok: true,
       json: async () => ({
-        success: true,
-        attachment: {
-          label: 'workflow.json',
-          kind: 'file',
-          storagePath: 'user-1/abc-workflow.json',
-          contentType: 'application/json',
-          sizeBytes: 9,
-        },
+        bucket: 'post_resource_files',
+        path: 'user-1/abc-workflow.json',
+        storagePath: 'post_resource_files/user-1/abc-workflow.json',
+        contentType: 'application/json',
+        sizeBytes: 9,
       }),
     });
 
@@ -367,11 +365,10 @@ describe('NewPostClient', () => {
     );
 
     const finalizeCall = fetchMock.mock.calls.find(
-      (call) => String(call[0]).includes('/api/posts/resource-files/finalize')
+      (call) => String(call[0]).includes('/api/uploads/finalize')
     );
-    expect(JSON.parse(String((finalizeCall?.[1] as { body: string }).body))).toMatchObject({
-      path: 'user-1/abc-workflow.json',
-      contentType: 'application/json',
+    expect(JSON.parse(String((finalizeCall?.[1] as { body: string }).body))).toEqual({
+      uploadId: 'upload-workflow-json',
     });
   });
 
@@ -381,6 +378,7 @@ describe('NewPostClient', () => {
       json: async () => ({
         success: true,
         bucket: 'post_resource_files',
+        uploadId: 'upload-good-json',
         path: 'user-1/good.json',
         token: 'good-token',
         expected: { fileName: 'good.json', contentType: 'application/json', sizeBytes: 4 },
@@ -389,14 +387,11 @@ describe('NewPostClient', () => {
     enqueueResponse({
       ok: true,
       json: async () => ({
-        success: true,
-        attachment: {
-          label: 'good.json',
-          kind: 'file',
-          storagePath: 'user-1/good.json',
-          contentType: 'application/json',
-          sizeBytes: 4,
-        },
+        bucket: 'post_resource_files',
+        path: 'user-1/good.json',
+        storagePath: 'post_resource_files/user-1/good.json',
+        contentType: 'application/json',
+        sizeBytes: 4,
       }),
     });
     enqueueResponse({
@@ -435,6 +430,7 @@ describe('NewPostClient', () => {
       json: async () => ({
         success: true,
         bucket: 'post_resource_files',
+        uploadId: 'upload-slow-png',
         path: 'user-1/slow.png',
         token: 'slow-token',
         expected: { fileName: 'slow.png', contentType: 'image/png', sizeBytes: 4 },
@@ -443,14 +439,11 @@ describe('NewPostClient', () => {
     enqueueResponse({
       ok: true,
       json: async () => ({
-        success: true,
-        attachment: {
-          label: 'slow.png',
-          kind: 'file',
-          storagePath: 'user-1/slow.png',
-          contentType: 'image/png',
-          sizeBytes: 4,
-        },
+        bucket: 'post_resource_files',
+        path: 'user-1/slow.png',
+        storagePath: 'post_resource_files/user-1/slow.png',
+        contentType: 'image/png',
+        sizeBytes: 4,
       }),
     });
 
@@ -494,6 +487,7 @@ describe('NewPostClient', () => {
       json: async () => ({
         success: true,
         bucket: 'post_resource_files',
+        uploadId: 'upload-first-stalled',
         path: 'user-1/first-stalled.png',
         token: 'first-token',
         expected: { fileName: 'stalled.png', contentType: 'image/png', sizeBytes: 7 },
@@ -504,6 +498,7 @@ describe('NewPostClient', () => {
       json: async () => ({
         success: true,
         bucket: 'post_resource_files',
+        uploadId: 'upload-retried',
         path: 'user-1/retried.png',
         token: 'retry-token',
         expected: { fileName: 'stalled.png', contentType: 'image/png', sizeBytes: 7 },
@@ -512,14 +507,11 @@ describe('NewPostClient', () => {
     enqueueResponse({
       ok: true,
       json: async () => ({
-        success: true,
-        attachment: {
-          label: 'stalled.png',
-          kind: 'file',
-          storagePath: 'user-1/retried.png',
-          contentType: 'image/png',
-          sizeBytes: 7,
-        },
+        bucket: 'post_resource_files',
+        path: 'user-1/retried.png',
+        storagePath: 'post_resource_files/user-1/retried.png',
+        contentType: 'image/png',
+        sizeBytes: 7,
       }),
     });
 
@@ -592,6 +584,7 @@ describe('NewPostClient', () => {
       json: async () => ({
         success: true,
         bucket: 'post_resource_files',
+        uploadId: 'upload-still-png',
         path: 'user-1/abc-still.png',
         token: 'signed-token',
         expiresInSeconds: 7200,
@@ -601,14 +594,11 @@ describe('NewPostClient', () => {
     enqueueResponse({
       ok: true,
       json: async () => ({
-        success: true,
-        attachment: {
-          label: 'still.png',
-          kind: 'file',
-          storagePath: 'user-1/abc-still.png',
-          contentType: 'image/png',
-          sizeBytes: 5,
-        },
+        bucket: 'post_resource_files',
+        path: 'user-1/abc-still.png',
+        storagePath: 'post_resource_files/user-1/abc-still.png',
+        contentType: 'image/png',
+        sizeBytes: 5,
       }),
     });
     enqueueResponse({

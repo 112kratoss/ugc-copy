@@ -1,4 +1,5 @@
 import 'server-only';
+import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
 import { NextResponse } from 'next/server';
@@ -75,7 +76,7 @@ async function getViewerUserId(
     const {
       data: { user },
       error,
-    } = await supabase.auth.getUser();
+    } = await getVerifiedAuthUserResult(supabase);
     if (error || !user?.id) return { ok: false as const };
     return { ok: true as const, viewerUserId: user.id };
   } catch {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import type { IdentityResult } from '@/lib/account-identity';
 import { postTemporaryMediaReadUrlRouteResponse } from '@/lib/temporary-media-read-url-route-adapter-service';
 
 function createUserClient(userId: string | null = 'user-1') {
@@ -12,6 +13,20 @@ function createUserClient(userId: string | null = 'user-1') {
       })),
     },
   } as unknown as SupabaseClient;
+}
+
+function createRequireIdentity(userId: string | null) {
+  return vi.fn(async (): Promise<IdentityResult> => userId
+    ? {
+        ok: true,
+        identity: {
+          user: { id: userId, is_anonymous: false } as never,
+          userId,
+          kind: 'registered',
+          isGuest: false,
+        },
+      }
+    : { ok: false, status: 401, code: 'UNAUTHORIZED', error: 'Unauthorized' });
 }
 
 describe('temporary media read-url route adapter service', () => {
@@ -33,13 +48,14 @@ describe('temporary media read-url route adapter service', () => {
         createServiceClient,
         createTemporaryMediaReadUrl,
         createUserClient: () => createUserClient(null),
+        requireIdentity: createRequireIdentity(null),
       },
     });
 
     expect(response.status).toBe(401);
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(response.headers.get('x-request-id')).toBe('media-read-url-auth-1');
-    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
     expect(jsonSpy).not.toHaveBeenCalled();
     expect(createServiceClient).not.toHaveBeenCalled();
     expect(createTemporaryMediaReadUrl).not.toHaveBeenCalled();
@@ -73,6 +89,7 @@ describe('temporary media read-url route adapter service', () => {
         createServiceClient,
         createTemporaryMediaReadUrl,
         createUserClient: () => createUserClient('user-1'),
+        requireIdentity: createRequireIdentity('user-1'),
       },
     });
 
@@ -88,7 +105,7 @@ describe('temporary media read-url route adapter service', () => {
     expect(createTemporaryMediaReadUrl).toHaveBeenCalledWith({
       body,
       userId: 'user-1',
-      client: createServiceClient,
+      client: expect.any(Function),
     });
   });
 
@@ -114,6 +131,7 @@ describe('temporary media read-url route adapter service', () => {
           resetAt: '2026-06-23T13:00:00.000Z',
         })),
         createUserClient: () => createUserClient('user-1'),
+        requireIdentity: createRequireIdentity('user-1'),
       },
     });
 
