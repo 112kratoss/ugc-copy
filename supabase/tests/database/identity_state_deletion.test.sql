@@ -329,8 +329,8 @@ select is(
         )
     )
   ),
-  array['contact_messages']::text[],
-  'only the intentionally service-only contact table lacks an authenticated permissive policy'
+  array[]::text[],
+  'every authenticated Data API grant has an authenticated permissive policy'
 );
 
 select ok(

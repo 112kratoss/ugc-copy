@@ -95,8 +95,8 @@ DECLARE
   v_reason text := btrim(coalesce(p_reason, ''));
   v_key text := btrim(coalesce(p_idempotency_key, ''));
   v_status_after text;
-  v_drafted uuid[] := '{}';
-  v_unlisted uuid[] := '{}';
+  v_drafted uuid[] := '{}'::uuid[];
+  v_unlisted uuid[] := '{}'::uuid[];
   v_resolved_count integer := 0;
   v_open_reports integer := 0;
   v_media_revoked boolean := false;
@@ -178,7 +178,7 @@ BEGIN
         AND status = 'published'
       RETURNING id
     )
-    SELECT coalesce(array_agg(id), '{}') INTO v_drafted FROM drafted;
+    SELECT coalesce(array_agg(id), '{}'::uuid[]) INTO v_drafted FROM drafted;
 
     WITH unlisted AS (
       UPDATE public.marketplace_assets
@@ -188,7 +188,7 @@ BEGIN
         AND status = 'active'
       RETURNING id
     )
-    SELECT coalesce(array_agg(id), '{}') INTO v_unlisted FROM unlisted;
+    SELECT coalesce(array_agg(id), '{}'::uuid[]) INTO v_unlisted FROM unlisted;
 
     -- Only a take-down closes open reports, and deliberately so.
     --
