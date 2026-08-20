@@ -231,6 +231,11 @@ const nextConfig: NextConfig = {
   },
   images: {
     minimumCacheTTL: SHOWCASE_PUBLIC_MEDIA_MINIMUM_CACHE_TTL_SECONDS,
+    // Stored-media helpers deliberately return this authenticated local proxy
+    // when a durable Storage path needs a fresh read URL. Omitting `search`
+    // allows the route's validated bucket/path query while keeping every other
+    // local path outside the image optimizer allowlist.
+    localPatterns: [{ pathname: "/api/media" }],
     remotePatterns: supabaseUrl
       ? [
           {

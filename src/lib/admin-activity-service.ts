@@ -11,7 +11,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * we do today?", which is the question asked after a mistake, during a
  * handover, or when reconciling a disputed decision.
  *
- * The four sources are separate tables with no shared key, so they are merged
+ * The sources are separate tables with no shared key, so they are merged
  * in memory and paged from the merged list, the same way the revenue rails are.
  * `PER_SOURCE_LIMIT` bounds each fetch; `truncated` reports when a source hit
  * it, because a quietly capped audit log is worse than none.
@@ -77,7 +77,16 @@ export async function collectAdminActivity(
   const pageSize = Math.min(Math.max(options.pageSize ?? 50, 1), 200);
   const requestedOffset = Math.max(options.offset ?? 0, 0);
 
-  const [credits, sanctions, postReports, subjectReports, payouts, generations, contact] = await Promise.all([
+  const [
+    credits,
+    sanctions,
+    postReports,
+    proactivePostActions,
+    subjectReports,
+    payouts,
+    generations,
+    contact,
+  ] = await Promise.all([
     client
       .from('admin_credit_adjustments')
       .select('id, user_id, reviewer_id, credits_delta, promotional_credits_delta, reason, created_at')
@@ -93,6 +102,11 @@ export async function collectAdminActivity(
       .select('id, post_id, reviewed_by, reviewed_at, resolution_action, resolution_note')
       .not('reviewed_at', 'is', null)
       .order('reviewed_at', { ascending: false })
+      .limit(PER_SOURCE_LIMIT),
+    client
+      .from('admin_post_moderation_actions')
+      .select('id, post_id, reviewer_id, action, reason, created_at')
+      .order('created_at', { ascending: false })
       .limit(PER_SOURCE_LIMIT),
     client
       .from('moderation_reports')
@@ -124,6 +138,7 @@ export async function collectAdminActivity(
   const creditRows = rows(credits);
   const sanctionRows = rows(sanctions);
   const postRows = rows(postReports);
+  const proactivePostRows = rows(proactivePostActions);
   const subjectRows = rows(subjectReports);
   const payoutRows = rows(payouts);
   const generationRows = rows(generations);
@@ -162,6 +177,21 @@ export async function collectAdminActivity(
       summary: `Post ${String(row.post_id ?? '').slice(0, 8)}…`,
       summaryUntil: null,
       rationale: (row.resolution_note as string | null) ?? null,
+    })),
+    ...proactivePostRows.map((row) => ({
+      id: `post-action-${row.id}`,
+      kind: 'post-moderation' as const,
+      at: String(row.created_at ?? ''),
+      reviewerId: (row.reviewer_id as string | null) ?? null,
+      action: row.action === 'restore'
+        ? 'restored a post'
+        : row.action === 'hide'
+          ? 'hid a post'
+          : 'took down a post',
+      subjectUserId: null,
+      summary: `Post ${String(row.post_id ?? '').slice(0, 8)}…`,
+      summaryUntil: null,
+      rationale: (row.reason as string | null) ?? null,
     })),
     ...subjectRows.map((row) => ({
       id: `subject-report-${row.id}`,
@@ -218,7 +248,16 @@ export async function collectAdminActivity(
     total: entries.length,
     offset,
     pageSize,
-    truncated: [creditRows, sanctionRows, postRows, subjectRows, payoutRows, generationRows, contactRows]
+    truncated: [
+      creditRows,
+      sanctionRows,
+      postRows,
+      proactivePostRows,
+      subjectRows,
+      payoutRows,
+      generationRows,
+      contactRows,
+    ]
       .some((source) => source.length >= PER_SOURCE_LIMIT),
   };
 }

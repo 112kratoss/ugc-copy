@@ -36,6 +36,10 @@ const SOURCES = {
     reviewed_at: '2026-08-18T11:00:00.000Z',
     resolution_action: 'take_down', resolution_note: 'Policy 2.1.',
   }],
+  admin_post_moderation_actions: [{
+    id: 'pa1', post_id: 'post-direct', reviewer_id: 'r1', action: 'hide',
+    reason: 'Pending legal review.', created_at: '2026-08-18T11:30:00.000Z',
+  }],
   moderation_reports: [{
     id: 'm1', reported_user_id: 'u2', reviewed_by: 'r1',
     reviewed_at: '2026-08-18T09:00:00.000Z', status: 'dismissed', resolution_note: null,
@@ -51,14 +55,27 @@ describe('collectAdminActivity', () => {
   it('merges every action type into one newest-first feed', async () => {
     const feed = await collectAdminActivity(client(SOURCES));
 
-    expect(feed.total).toBe(5);
+    expect(feed.total).toBe(6);
     expect(feed.entries.map((entry) => entry.kind)).toEqual([
       'user-sanction',
+      'post-moderation',
       'post-moderation',
       'credit-adjustment',
       'subject-moderation',
       'payout',
     ]);
+  });
+
+  it('includes proactive post actions that have no report row', async () => {
+    const feed = await collectAdminActivity(client(SOURCES));
+    const action = feed.entries.find((entry) => entry.id === 'post-action-pa1');
+
+    expect(action).toMatchObject({
+      kind: 'post-moderation',
+      action: 'hid a post',
+      reviewerId: 'r1',
+      rationale: 'Pending legal review.',
+    });
   });
 
   it('times each entry by when the operator acted, not when the record was created', async () => {
@@ -68,7 +85,7 @@ describe('collectAdminActivity', () => {
     // resolved_at, which is when a human made a decision.
     const payout = feed.entries.find((entry) => entry.kind === 'payout');
     expect(payout?.at).toBe('2026-08-18T08:00:00.000Z');
-    const postDecision = feed.entries.find((entry) => entry.kind === 'post-moderation');
+    const postDecision = feed.entries.find((entry) => entry.id === 'post-report-p1');
     expect(postDecision?.at).toBe('2026-08-18T11:00:00.000Z');
   });
 

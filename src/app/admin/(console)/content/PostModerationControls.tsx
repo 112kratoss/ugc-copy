@@ -159,9 +159,16 @@ export function PostModerationControls({
       const payload = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        // The server answered, so this attempt definitively did not apply.
-        setSubmissionId(crypto.randomUUID());
-        setError(typeof payload?.error === 'string' ? payload.error : 'Action failed.');
+        // Keep the key even when the server answered. A take-down first commits
+        // its database action and then revokes Storage objects, so a revocation
+        // failure can return an error after the audit row already exists. The
+        // same key makes a retry re-sweep Storage without recording a second
+        // action. Reusing it is also safe for validation failures because those
+        // never record the key.
+        const message = typeof payload?.error === 'string' ? payload.error : 'Action failed.';
+        setError(
+          `${message} Retrying keeps this submission id, so a partial action resumes safely.`,
+        );
         return;
       }
 
