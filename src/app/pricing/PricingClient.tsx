@@ -283,13 +283,13 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                             // to an order that may already become paid.
                             clearRazorpayCheckoutIntentKey(checkoutIntentScope);
                             alert("Payment received and waiting for capture. Your credits will appear automatically once Razorpay confirms it.");
-                            window.location.href = '/';
+                            router.push('/');
                             return;
                         }
 
                         clearRazorpayCheckoutIntentKey(checkoutIntentScope);
                         alert("Payment successful! Credits added to your account.");
-                        window.location.href = '/';
+                        router.push('/');
                     } catch (err) {
                         console.error("Verification error:", err);
                         alert(err instanceof Error ? err.message : "An error occurred while verifying the payment.");

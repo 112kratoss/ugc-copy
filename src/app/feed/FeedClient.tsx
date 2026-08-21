@@ -172,7 +172,7 @@ export default function FeedClient({
         initialItems: seedFeed.items,
         accessToken,
         isSignedIn: Boolean(user),
-        onAuthRequired: () => { window.location.href = '/login'; },
+        onAuthRequired: () => { router.push('/login'); },
         onError: (error) => {
             console.error('Failed to save feed post:', error);
             setLoadError('Could not update that save. Try again.');

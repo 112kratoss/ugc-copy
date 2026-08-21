@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Flag, Loader2 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 
 import { getCurrentInternalPath } from '@/lib/share';
 
@@ -21,6 +22,7 @@ interface ReportPostButtonProps {
 }
 
 export default function ReportPostButton({ postId, bundleId = null, accessToken = null }: ReportPostButtonProps) {
+  const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
   const [reason, setReason] = useState('misleading_unlock');
   const [details, setDetails] = useState('');
@@ -30,7 +32,7 @@ export default function ReportPostButton({ postId, bundleId = null, accessToken 
 
   const submitReport = async () => {
     if (!accessToken) {
-      window.location.href = `/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(`/showcase/${postId}`))}`;
+      router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(`/showcase/${postId}`))}`);
       return;
     }
 

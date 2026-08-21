@@ -80,19 +80,34 @@ describe('package security baseline', () => {
   });
 
   it('keeps the production Next.js runtime above audited vulnerable ranges', () => {
-    expect(versionAtLeast(packageJson.dependencies?.next, '16.2.9')).toBe(true);
-    expect(versionAtLeast(packageLockVersion('next'), '16.2.9')).toBe(true);
+    expect(versionAtLeast(packageJson.dependencies?.next, '16.3.1')).toBe(true);
+    expect(versionAtLeast(packageLockVersion('next'), '16.3.1')).toBe(true);
   });
 
-  it('keeps production PostCSS above the audited stringify XSS range', () => {
+  it('keeps production PostCSS above the audited source-map disclosure range', () => {
     expect(packageJson.overrides).toMatchObject({
       next: {
-        postcss: '^8.5.10',
+        postcss: '^8.5.23',
       },
     });
     const resolvedPostCss = packageLockPathVersion('node_modules/next/node_modules/postcss')
       ?? packageLockVersion('postcss');
-    expect(versionAtLeast(resolvedPostCss, '8.5.10')).toBe(true);
+    expect(versionAtLeast(resolvedPostCss, '8.5.23')).toBe(true);
+  });
+
+  it('keeps 2026 transitive dependency remediations in the lockfile', () => {
+    expect(packageJson.overrides).toMatchObject({
+      'brace-expansion': '5.0.9',
+    });
+    expect(versionAtLeast(packageLockVersion('brace-expansion'), '5.0.9')).toBe(true);
+    expect(versionAtLeast(packageLockVersion('nanoid'), '3.3.18')).toBe(true);
+    expect(versionAtLeast(packageLockVersion('undici'), '7.29.0')).toBe(true);
+    expect(versionAtLeast(packageLockVersion('ip-address'), '10.5.0')).toBe(true);
+    expect(versionAtLeast(packageLockVersion('js-yaml'), '4.3.1')).toBe(true);
+    expect(versionAtLeast(
+      packageLockPathVersion('node_modules/@lhci/utils/node_modules/js-yaml'),
+      '3.15.1',
+    )).toBe(true);
   });
 
   it('keeps React runtime packages on the patched React 19.2 line', () => {
@@ -103,8 +118,8 @@ describe('package security baseline', () => {
   });
 
   it('keeps Next.js lint/config tooling aligned with the runtime patch level', () => {
-    expect(versionAtLeast(packageJson.devDependencies?.['eslint-config-next'], '16.2.9')).toBe(true);
-    expect(versionAtLeast(packageLockVersion('eslint-config-next'), '16.2.9')).toBe(true);
+    expect(versionAtLeast(packageJson.devDependencies?.['eslint-config-next'], '16.3.1')).toBe(true);
+    expect(versionAtLeast(packageLockVersion('eslint-config-next'), '16.3.1')).toBe(true);
   });
 
   it('does not ship live-looking local service-role secrets in agent workflow docs', () => {
