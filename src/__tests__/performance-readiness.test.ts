@@ -276,4 +276,25 @@ describe('production performance readiness', () => {
       },
     )).toThrow();
   });
+
+  it('documents every performance harness environment variable', () => {
+    const environmentTemplate = readProjectFile('.env.example');
+    const performanceSources = [
+      readProjectFile('scripts/performance-load-test.mjs'),
+      readProjectFile('config/lighthouse.cjs'),
+      readProjectFile('.github/workflows/performance.yml'),
+    ].join('\n');
+    const referencedVariables = [
+      ...new Set(performanceSources.match(/\bPERF_[A-Z0-9_]+\b/g) ?? []),
+    ].sort();
+    const documentedVariables = new Set(
+      [...environmentTemplate.matchAll(/^#\s*(PERF_[A-Z0-9_]+)=/gm)]
+        .map((match) => match[1]),
+    );
+
+    expect(referencedVariables.filter((name) => !documentedVariables.has(name))).toEqual([]);
+    expect(environmentTemplate).toMatch(/^# PERF_AUTH_BOT_EMAIL=/m);
+    expect(environmentTemplate).toMatch(/^# PERF_AUTH_BOT_PASSWORD=/m);
+    expect(environmentTemplate).not.toMatch(/^PERF_AUTH_(?:BOT_EMAIL|BOT_PASSWORD)=/m);
+  });
 });

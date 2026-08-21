@@ -219,10 +219,14 @@ select throws_ok(
   'an anonymous client cannot query posts directly (service-layer only)'
 );
 
-select is(
-  (select count(*) from public.profiles),
-  0::bigint,
-  'an anonymous client cannot read profiles'
+-- Profiles also have no anonymous table grant. Pin the outer privilege
+-- boundary so a later permissive policy cannot turn a zero-row query into an
+-- accidental public projection.
+select throws_ok(
+  $$ select id from public.profiles limit 1 $$,
+  '42501',
+  null,
+  'an anonymous client cannot query profiles directly'
 );
 
 reset role;
