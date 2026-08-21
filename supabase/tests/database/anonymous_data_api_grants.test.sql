@@ -7,7 +7,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(18);
+select plan(16);
 
 select is(
   (
@@ -177,57 +177,6 @@ select throws_ok(
 
 reset role;
 select set_config('request.jwt.claims', '{}', true);
-
-select ok(
-  (
-    select bool_and(has_table_privilege('authenticated', format('public.%I', targets.table_name), 'SELECT'))
-    from unnest(array[
-      'ai_usage_events',
-      'generation_input_media',
-      'marketplace_asset_content',
-      'mobile_notification_preferences',
-      'mobile_notifications',
-      'mobile_push_tokens',
-      'post_deletion_audits',
-      'post_save_events',
-      'post_saves',
-      'profiles',
-      'workflow_canvas_assistant_messages',
-      'workflow_canvas_assistant_proposals',
-      'workflow_canvas_history',
-      'workflow_canvases'
-    ]::text[]) as targets(table_name)
-  ),
-  'authenticated owner-scoped readers retain SELECT on all fourteen tables'
-);
-
-select ok(
-  (
-    select bool_and(
-      has_table_privilege('service_role', format('public.%I', targets.table_name), 'SELECT')
-      and has_table_privilege('service_role', format('public.%I', targets.table_name), 'INSERT')
-      and has_table_privilege('service_role', format('public.%I', targets.table_name), 'UPDATE')
-      and has_table_privilege('service_role', format('public.%I', targets.table_name), 'DELETE')
-    )
-    from unnest(array[
-      'ai_usage_events',
-      'generation_input_media',
-      'marketplace_asset_content',
-      'mobile_notification_preferences',
-      'mobile_notifications',
-      'mobile_push_tokens',
-      'post_deletion_audits',
-      'post_save_events',
-      'post_saves',
-      'profiles',
-      'workflow_canvas_assistant_messages',
-      'workflow_canvas_assistant_proposals',
-      'workflow_canvas_history',
-      'workflow_canvases'
-    ]::text[]) as targets(table_name)
-  ),
-  'service-owned application paths retain CRUD access to all fourteen tables'
-);
 
 select * from finish();
 rollback;

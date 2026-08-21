@@ -61,8 +61,16 @@ END;
 $$;
 
 -- These four catalogs/social surfaces are deliberately anonymous-readable.
--- Preserve their existing table- or column-scoped SELECT contracts, while
--- removing PostgreSQL 17's unrelated MAINTAIN privilege from a web identity.
+-- The source catalogs historically inherited their read grants from the
+-- platform, so state that contract explicitly for clean migration replays as
+-- well as long-lived databases. Templates keeps its narrower column grants.
+GRANT SELECT ON TABLE
+  public.source_tool_models,
+  public.source_tools
+TO anon, authenticated;
+
+-- Preserve the public read contracts while removing PostgreSQL 17's
+-- unrelated MAINTAIN privilege from a web identity.
 REVOKE MAINTAIN ON TABLE
   public.follows,
   public.source_tool_models,
