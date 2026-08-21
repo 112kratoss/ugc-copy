@@ -283,13 +283,22 @@ export function PricingClient({ initialCountryCode = null }: PricingClientProps)
                             // to an order that may already become paid.
                             clearRazorpayCheckoutIntentKey(checkoutIntentScope);
                             alert("Payment received and waiting for capture. Your credits will appear automatically once Razorpay confirms it.");
-                            router.push('/');
+                            // Full navigation, not router.push. AuthProvider lives in the
+                            // root layout and reads `profiles.credits` once on mount, so a
+                            // client-side push keeps it mounted and lands on the home page
+                            // still showing the pre-purchase balance — directly after an
+                            // alert saying the credits arrived. A reload remounts every
+                            // credit surface at once, which is what this path wants.
+                            // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+                            window.location.href = '/';
                             return;
                         }
 
                         clearRazorpayCheckoutIntentKey(checkoutIntentScope);
                         alert("Payment successful! Credits added to your account.");
-                        router.push('/');
+                        // Full navigation for the same reason as the pending branch above.
+                        // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+                        window.location.href = '/';
                     } catch (err) {
                         console.error("Verification error:", err);
                         alert(err instanceof Error ? err.message : "An error occurred while verifying the payment.");
