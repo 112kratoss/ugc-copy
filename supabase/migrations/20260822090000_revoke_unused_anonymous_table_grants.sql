@@ -67,7 +67,7 @@ $$;
 GRANT SELECT ON TABLE
   public.source_tool_models,
   public.source_tools
-TO anon, authenticated;
+TO anon;
 
 -- Preserve the public read contracts while removing PostgreSQL 17's
 -- unrelated MAINTAIN privilege from a web identity.
