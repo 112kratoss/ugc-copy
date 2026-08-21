@@ -115,6 +115,36 @@ select is(
   'all six financial tables have the restrictive registered-identity policy'
 );
 
+-- `marketplace_orders` and `marketplace_purchases` carry the same restrictive
+-- policy, but no Data API session reaches them at all: `20260821110000`
+-- revokes every `anon`/`authenticated` privilege on both, so the grant is the
+-- outer boundary and the policy only starts mattering if a later migration
+-- opens one up. Asserting a row count here would raise `permission denied`
+-- rather than prove anything, so assert the boundary that is really in force.
+-- Keep these as privilege checks: a row count would also pass against a
+-- database still carrying the pre-`20260821110000` legacy grants, which is
+-- exactly the drift that migration exists to close.
+select is(
+  has_table_privilege('authenticated', 'public.marketplace_orders', 'SELECT'),
+  false,
+  'marketplace orders grant no authenticated read, so no guest session can reach them'
+);
+select is(
+  has_table_privilege('anon', 'public.marketplace_orders', 'SELECT'),
+  false,
+  'marketplace orders grant no anonymous read'
+);
+select is(
+  has_table_privilege('authenticated', 'public.marketplace_purchases', 'SELECT'),
+  false,
+  'marketplace purchases grant no authenticated read, so no guest session can reach them'
+);
+select is(
+  has_table_privilege('anon', 'public.marketplace_purchases', 'SELECT'),
+  false,
+  'marketplace purchases grant no anonymous read'
+);
+
 -- A guest has the authenticated database role and owns each fixture row, so
 -- the original owner policies would admit these reads without the new gate.
 set local role authenticated;
@@ -134,10 +164,6 @@ select is((select count(*) from public.creator_resource_wallet_entries), 0::bigi
   'a guest cannot read its creator wallet entries');
 select is((select count(*) from public.creator_payout_requests), 0::bigint,
   'a guest cannot read its payout requests');
-select is((select count(*) from public.marketplace_orders), 0::bigint,
-  'a guest cannot read its marketplace orders');
-select is((select count(*) from public.marketplace_purchases), 0::bigint,
-  'a guest cannot read its marketplace purchases');
 
 reset role;
 set local role authenticated;
@@ -157,10 +183,6 @@ select is((select count(*) from public.creator_resource_wallet_entries), 1::bigi
   'a registered user retains access to its creator wallet entries');
 select is((select count(*) from public.creator_payout_requests), 1::bigint,
   'a registered user retains access to its payout requests');
-select is((select count(*) from public.marketplace_orders), 1::bigint,
-  'a registered user retains access to its marketplace orders');
-select is((select count(*) from public.marketplace_purchases), 1::bigint,
-  'a registered user retains access to its marketplace purchases');
 
 reset role;
 set local role service_role;
