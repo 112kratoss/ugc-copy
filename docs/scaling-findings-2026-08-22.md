@@ -2,15 +2,15 @@
 
 Scope: initial static re-audit of
 `0345d786ffb86a44c5cc997414997a073f1ace6b`, remediation released as
-`1bf065bffda8899e9de3f4ba73ea66baf9cc181d`, full source/build/release
-verification, the stored historical certificate artifacts, and the latest
-available production performance workflow evidence.
+`277482e3a528d65ddea029db52a3fb5db0a5f4ce`, full source/build/release
+verification, the stored historical certificate artifacts, and exact-commit
+production performance workflow evidence.
 This is not a load certificate.
 
 ## S1 — Authenticated requests repeat network identity admission
 
 Severity: **High**
-Status: **DEPLOYED — SUSTAINED MEASUREMENT REQUIRED**
+Status: **DEPLOYED; PRODUCTION EDGE PASS — MIXED-WORKLOAD MEASUREMENT REQUIRED**
 Introduced after certified build: **Yes**
 
 ### Evidence
@@ -41,10 +41,20 @@ strips caller-supplied assertion/timing headers before forwarding it.
 `createUserClient()` registers the request assertion; `getVerifiedAuthUserResult`
 and `requireIdentity` verify and reuse it. A route invoked directly, through a
 rolling old proxy, or with an invalid assertion falls back to the existing
-GoTrue/profile checks and fails closed. Certification-only feed timing now
+GoTrue/profile checks and fails closed. Authenticated feed timing now
 includes the proxy identity phase. Unit/integration tests cover signature,
 expiry, token/method/path binding, lifecycle reuse, caller-header stripping and
-merged/deleting/guest rejection.
+merged/deleting/guest rejection. The production performance monitor may request
+the same timing only when it supplies bearer authentication and the bounded
+monitor header; ordinary public responses remain unchanged.
+
+The exact live remediation commit passed 40/40 authenticated For You reads at
+P95/P99 TTFB 1,671.6/1,746.4 ms. Phase telemetry measured route assertion reuse
+at P95 1.5 ms, session reuse/page at 28.1/216.7 ms and the single authoritative
+proxy identity boundary at 882.6 ms. This proves the duplicate route Auth work
+is gone on the monitored read, while also identifying the remaining proxy
+boundary as the largest signed-in phase. The full authenticated write/upload/
+workflow mix is still an acceptance gate.
 
 ### Scaling effect
 
@@ -197,23 +207,28 @@ and index plans remain deployment/load gates.
 ## S4 — No green current production performance baseline
 
 Severity: **High (evidence gate)**
-Status: **OPEN**
+Status: **CLOSED — EXACT-COMMIT REGRESSION BASELINE GREEN**
 
-The five latest `Production Performance` workflow runs available on 2026-08-22
-are failures. The newest, from 2026-08-17, successfully authenticated the bot and
-passed its one signed-in feed target, but the run failed because the generation
-catalog response exceeded its decoded-body budget and breached P99 latency.
-Mobile Lighthouse also breached home/showcase LCP and marketplace interactive
-budgets. [Run evidence](https://github.com/112kratoss/ugc-copy/actions/runs/31993250721)
+Earlier `Production Performance` runs were failures. The 2026-08-17 run
+successfully authenticated the bot but failed generation-catalog payload/P99 and
+mobile Lighthouse budgets. Successive exact-commit runs then exposed and fixed
+catalog payload, cache semantics, main-thread work, Showcase page TTFB, Home LCP
+and a final authenticated feed database tail rather than widening thresholds.
 
-That run predates the S1-S3 remediation. The weekly edge workflow is valuable regression
-monitoring, but it drives only one authenticated GET and cannot certify writes,
-uploads, provider callbacks, workflows, background drains or sustained origin
-capacity.
+The unchanged workflow is now fully green on live commit
+`277482e3a528d65ddea029db52a3fb5db0a5f4ce`: 1,068 requests, zero errors, all
+five signed-out targets, 40/40 authenticated For You requests, and mobile plus
+desktop Lighthouse. Authenticated P95/P99 TTFB was 1,671.6/1,746.4 ms against
+1,800/3,500 ms. [Run evidence](https://github.com/112kratoss/ugc-copy/actions/runs/32591925400)
 
-Acceptance: obtain a green run for the current paths, then execute the isolated
-mixed-workload certificate. Do not turn persistent failures green by widening
-budgets without explaining the payload/latency change and measuring its effect.
+This closes the missing-baseline finding. The weekly edge workflow remains
+regression monitoring: it drives only one authenticated GET and cannot certify
+writes, uploads, provider callbacks, workflows, background drains or sustained
+origin capacity.
+
+Baseline acceptance is met without widening budgets. The remaining capacity
+gate is the isolated mixed-workload certificate; keep the current workflow green
+while that broader evidence is gathered.
 
 ## S5 — Feed-fact pruning remains the known steady-state write ceiling
 
@@ -308,7 +323,7 @@ thresholds.
 ## S8 — Catalog payload and frontend budgets are failing
 
 Severity: **Medium**
-Status: **PARTIAL — CATALOG SOURCE DEPLOYED; PRODUCTION/FRONTEND REVALIDATION REQUIRED**
+Status: **CLOSED — PRODUCTION/FRONTEND REGRESSION MONITORED**
 
 The 2026-08-17 production run measured the generation-model catalog at 64,306
 decoded bytes P95 against a 57,344-byte budget, with 2,219.5 ms P99 TTFB against
@@ -333,8 +348,15 @@ v1/v2/v3 and mobile uses a separate v3 cache namespace.
 The current local web and mobile schema-v3 projections are both 56,106 decoded
 bytes, below the 57,344-byte budget. Schema v2 remains 64,497 bytes by design for
 backward compatibility. Route/client tests enforce the v3 budget and both v2/v3
-parsing. This closes the source payload defect, not the historical production
-P99 or mobile Lighthouse failures; those remain S4 evidence gates.
+parsing.
+
+The exact live remediation commit closes the production evidence gap. The
+catalog was a 100% CDN HIT at 55,915 decoded bytes and P95/P99 TTFB 78.6/128.2
+ms. Representative mobile Lighthouse LCP/TBT/CLS was 1,196.2 ms/127.4 ms/0 for
+Home, 2,221.9 ms/144.0 ms/0 for Showcase and 1,226.9 ms/117.5 ms/0 for
+Marketplace. Representative desktop LCP/TBT was 778.7 ms/0, 2,436.4 ms/0 and
+1,581.5 ms/0 respectively. All enforced budgets passed without threshold
+changes. [Run evidence](https://github.com/112kratoss/ugc-copy/actions/runs/32591925400)
 
 ## Controls revalidated in source
 
@@ -363,7 +385,7 @@ Verification performed after remediation:
 
 ```text
 performance load self-test: PASS
-web full suite:              694 files / 4,801 tests passed
+web full suite:              697 files / 4,811 tests passed
 mobile full suite:           114 files / 1,093 tests passed
 web production build:        PASS
 build artifact verification: PASS
@@ -381,6 +403,9 @@ linked migration connection: PASS (SSL + single-address /32 allow-list)
 linked migration parity:     PASS (211 aligned; zero pending migrations)
 production schema presence:  PASS (linked post-release schema dump)
 protected production release: PASS (exact commit + post-promotion health)
+production load budgets:     PASS (1,068 requests; signed-out + signed-in)
+mobile Lighthouse budgets:   PASS (Home + Showcase + Marketplace)
+desktop Lighthouse budgets:  PASS (Home + Showcase + Marketplace)
 production ledger replay:    PASS (211/211 versions/names/statements exact)
 Supabase performance advisor: 0 errors / 0 warnings
 Supabase security advisor:    0 errors / 41 warnings
@@ -391,6 +416,6 @@ scaling migrations and the Production-configured application, verified the exact
 commit after promotion, and passed production health. The post-release ledger
 workflow retained a backup and independently verified that all 211 production
 rows reproduce the repository exactly; the linked dry-run reports no pending
-migrations. A clean isolated-branch replay, a green current Production
-Performance run, and sustained load tests remain certificate gates. The live
-advisor scan is recorded above.
+migrations. The current Production Performance baseline is green. A clean
+isolated-branch mixed-workload run and sustained load tests remain capacity
+certificate gates. The live advisor scan is recorded above.
