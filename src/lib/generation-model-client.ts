@@ -15,7 +15,7 @@ import type {
   GenerationModelQuoteInput,
 } from '@/lib/generation-model-catalog';
 
-const WEB_CATALOG_SCHEMA_VERSION = 2;
+const WEB_CATALOG_SCHEMA_VERSION = 3;
 const WEB_CATALOG_CACHE_KEY = `generation-model-catalog:v${WEB_CATALOG_SCHEMA_VERSION}`;
 
 type Registry = Record<string, Record<string, unknown>>;
@@ -84,6 +84,74 @@ function parseReferenceLimit(value: unknown, includeNaming: boolean) {
     : { max: value.max as number };
 }
 
+function deriveLegacyInputsFromInputModes(
+  value: unknown,
+): GenerationModelDescriptor['inputs'] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  let imageMax = 0;
+  let imageSupportsNaming = false;
+  let videoMax = 0;
+  let audioMax = 0;
+  let preparedAudioMax = 0;
+  let characterMax = 0;
+  let startFrame = false;
+  let endFrame = false;
+  let combineFramesWithReferences = false;
+
+  for (const rawMode of value) {
+    if (!isRecord(rawMode) || !Array.isArray(rawMode.slots)) return undefined;
+    let modeHasFrame = false;
+    let modeHasImageReference = false;
+    for (const rawSlot of rawMode.slots) {
+      if (
+        !isRecord(rawSlot)
+        || !Number.isInteger(rawSlot.max)
+        || (rawSlot.max as number) < 0
+        || !isString(rawSlot.kind)
+        || !isString(rawSlot.role)
+      ) return undefined;
+      const max = rawSlot.max as number;
+      if (rawSlot.role === 'startFrame') {
+        startFrame ||= max > 0;
+        modeHasFrame ||= max > 0;
+      } else if (rawSlot.role === 'endFrame') {
+        endFrame ||= max > 0;
+        modeHasFrame ||= max > 0;
+      } else if (rawSlot.role === 'reference') {
+        if (rawSlot.kind === 'image') {
+          imageMax = Math.max(imageMax, max);
+          imageSupportsNaming ||= rawSlot.supportsNaming === true;
+          modeHasImageReference ||= max > 0;
+        } else if (rawSlot.kind === 'video') {
+          videoMax = Math.max(videoMax, max);
+        } else if (rawSlot.kind === 'audio') {
+          audioMax = Math.max(audioMax, max);
+        } else if (rawSlot.kind === 'preparedVoice') {
+          preparedAudioMax = Math.max(preparedAudioMax, max);
+        } else if (rawSlot.kind === 'character') {
+          characterMax = Math.max(characterMax, max);
+        } else {
+          return undefined;
+        }
+      } else {
+        return undefined;
+      }
+    }
+    combineFramesWithReferences ||= modeHasFrame && modeHasImageReference;
+  }
+
+  return {
+    imageReferences: imageMax > 0 ? { max: imageMax, supportsNaming: imageSupportsNaming } : null,
+    videoReferences: videoMax > 0 ? { max: videoMax } : null,
+    audioReferences: audioMax > 0 ? { max: audioMax } : null,
+    preparedAudioReferences: preparedAudioMax > 0 ? { max: preparedAudioMax } : null,
+    characterReferences: characterMax > 0 ? { max: characterMax } : null,
+    startFrame,
+    endFrame,
+    combineFramesWithReferences,
+  };
+}
+
 function isDescriptor(value: unknown): value is GenerationModelDescriptor {
   if (!isRecord(value) || !isString(value.id) || (value.kind !== 'image' && value.kind !== 'video' && value.kind !== 'motion')) return false;
   if (!isString(value.displayName) || typeof value.description !== 'string' || !isNullableString(value.badge)) return false;
@@ -123,15 +191,22 @@ function defaultMatchesCatalog(
 export function parseClientGenerationModelCatalog(value: unknown): GenerationModelCatalog {
   if (
     !isRecord(value)
-    || (value.schemaVersion !== 1 && value.schemaVersion !== 2)
+    || (value.schemaVersion !== 1 && value.schemaVersion !== 2 && value.schemaVersion !== 3)
     || typeof value.revision !== 'string'
     || !isRecord(value.defaults)
     || !Array.isArray(value.models)
   ) {
     throw new Error('Invalid generation model catalog.');
   }
-  if (!value.models.every(isDescriptor)) throw new Error('Invalid generation model catalog.');
-  const catalog = value as unknown as GenerationModelCatalog;
+  const models = value.schemaVersion === 3
+    ? value.models.map((model) => (
+        isRecord(model)
+          ? { ...model, inputs: deriveLegacyInputsFromInputModes(model.inputModes) }
+          : model
+      ))
+    : value.models;
+  if (!models.every(isDescriptor)) throw new Error('Invalid generation model catalog.');
+  const catalog = { ...value, models } as unknown as GenerationModelCatalog;
   if (
     !defaultMatchesCatalog(catalog.models, 'image', catalog.defaults.image)
     || !defaultMatchesCatalog(catalog.models, 'video', catalog.defaults.video)

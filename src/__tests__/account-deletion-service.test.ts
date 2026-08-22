@@ -31,6 +31,26 @@ const storageManifest = {
   template_asset_prefixes: ['2b2f4bb5-6ea8-4c44-a394-14cc777dcf52'],
 };
 
+function storageV2Page(
+  prefix: string,
+  entries: Array<{ id: string; name: string }>,
+) {
+  return {
+    data: {
+      hasNext: false,
+      folders: [],
+      objects: entries.map((entry) => ({
+        ...entry,
+        key: `${prefix}/${entry.name}`,
+        created_at: '2026-08-22T00:00:00.000Z',
+        updated_at: '2026-08-22T00:00:00.000Z',
+        metadata: {},
+      })),
+    },
+    error: null,
+  };
+}
+
 function storageMock(options: {
   listError?: unknown;
   listFiles?: Record<string, Array<{ id?: string; name: string; metadata?: unknown }>>;
@@ -43,12 +63,25 @@ function storageMock(options: {
     removed,
     storage: {
       from: (bucket: string) => ({
-        list: vi.fn(async (prefix: string) => {
+        listV2: vi.fn(async (listOptions: { prefix?: string }) => {
+          const prefix = (listOptions.prefix ?? '').replace(/\/$/u, '');
           options.onList?.(bucket, prefix);
+          const objects = (options.listFiles?.[`${bucket}:${prefix}`] ?? []).filter(
+            (entry) => !removedPaths.has(`${bucket}:${prefix}/${entry.name}`),
+          );
           return {
-            data: (options.listFiles?.[`${bucket}:${prefix}`] ?? []).filter(
-              (entry) => !removedPaths.has(`${bucket}:${prefix}/${entry.name}`),
-            ),
+            data: {
+              hasNext: false,
+              folders: [],
+              objects: objects.map((entry, index) => ({
+                id: entry.id ?? `object-${index}`,
+                key: `${prefix}/${entry.name}`,
+                name: entry.name,
+                created_at: '2026-08-22T00:00:00.000Z',
+                updated_at: '2026-08-22T00:00:00.000Z',
+                metadata: (entry.metadata ?? {}) as Record<string, unknown>,
+              })),
+            },
             error: options.listError ?? null,
           };
         }),
@@ -122,12 +155,15 @@ describe('account deletion cleanup service', () => {
     const admin = {
       storage: {
         from: vi.fn((bucket: string) => ({
-          list: vi.fn(async (prefix: string) => ({
-            data: bucket === 'uploads' && prefix === USER_ID
-              ? [{ id: 'unsafe', name: '%252fanother-user/private.webp' }]
-              : [],
-            error: null,
-          })),
+          listV2: vi.fn(async (options: { prefix?: string }) => {
+            const prefix = (options.prefix ?? '').replace(/\/$/u, '');
+            return storageV2Page(
+              prefix,
+              bucket === 'uploads' && prefix === USER_ID
+                ? [{ id: 'unsafe', name: '%252fanother-user/private.webp' }]
+                : [],
+            );
+          }),
           remove,
         })),
       },
@@ -314,12 +350,15 @@ describe('account deletion cleanup service', () => {
     const admin = {
       storage: {
         from: vi.fn((bucket: string) => ({
-          list: vi.fn(async (prefix: string) => ({
-            data: bucket === 'uploads' && prefix === USER_ID
-              ? [{ id: 'residual-file', name: 'residual.png' }]
-              : [],
-            error: null,
-          })),
+          listV2: vi.fn(async (options: { prefix?: string }) => {
+            const prefix = (options.prefix ?? '').replace(/\/$/u, '');
+            return storageV2Page(
+              prefix,
+              bucket === 'uploads' && prefix === USER_ID
+                ? [{ id: 'residual-file', name: 'residual.png' }]
+                : [],
+            );
+          }),
           remove: vi.fn(async (paths: string[]) => ({
             data: paths.map((name) => ({ name })),
             error: null,
@@ -678,12 +717,15 @@ describe('account deletion cleanup service', () => {
     const admin = {
       storage: {
         from: vi.fn((bucket: string) => ({
-          list: vi.fn(async (prefix: string) => ({
-            data: bucket === 'uploads' && prefix === USER_ID
-              ? [{ id: 'residual-file', name: 'late-upload.png' }]
-              : [],
-            error: null,
-          })),
+          listV2: vi.fn(async (options: { prefix?: string }) => {
+            const prefix = (options.prefix ?? '').replace(/\/$/u, '');
+            return storageV2Page(
+              prefix,
+              bucket === 'uploads' && prefix === USER_ID
+                ? [{ id: 'residual-file', name: 'late-upload.png' }]
+                : [],
+            );
+          }),
           remove: vi.fn(async (paths: string[]) => ({
             data: paths.map((name) => ({ name })),
             error: null,

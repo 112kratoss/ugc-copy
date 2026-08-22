@@ -38,6 +38,23 @@ select ok(
    where id = 'f1000000-0000-4000-8000-000000000001'),
   'a reservation remains pre-issue until Storage returns a signed token'
 );
+select is(
+  (select outstanding_bytes from public.upload_byte_global_counters
+   where singleton = true),
+  262144000::bigint,
+  'the singleton admission counter charges the trusted reservation maximum'
+);
+select is(
+  (select outstanding_bytes from public.upload_byte_user_counters
+   where user_id = 'e1000000-0000-4000-8000-000000000003'),
+  262144000::bigint,
+  'the per-user admission counter charges the trusted reservation maximum'
+);
+select is(
+  public.reconcile_upload_byte_admission_counters(false) ->> 'status',
+  'ok',
+  'the maintained upload counters reconcile with their authoritative rows'
+);
 
 select is(
   public.reserve_upload_bytes_v2(
@@ -126,6 +143,18 @@ select is((select count(*) from public.upload_path_tombstones
   where bucket_id = 'uploads'
     and storage_path = 'e1000000-0000-4000-8000-000000000003/one.png'),
   1::bigint, 'finalization permanently tombstones the signed path');
+select is(
+  (select outstanding_bytes from public.upload_byte_global_counters
+   where singleton = true),
+  1::bigint,
+  'finalization atomically replaces the worst-case charge with exact bytes'
+);
+select is(
+  (select outstanding_bytes
+   from public.get_upload_reclaim_health(now())),
+  1::bigint,
+  'bounded reclaim health reads the maintained admission total'
+);
 select throws_ok(
   $$update storage.objects set metadata = '{"size":2}'::jsonb
     where bucket_id = 'uploads'

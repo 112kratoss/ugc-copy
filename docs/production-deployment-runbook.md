@@ -36,6 +36,9 @@ The protected backend health endpoint reports only missing capability names, nev
 - Supabase URL: `NEXT_PUBLIC_SUPABASE_URL` or `SUPABASE_URL`.
 - Supabase client key: `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
 - Supabase privileged key: `SUPABASE_SERVICE_ROLE_KEY`.
+- Proxy-to-route identity assertion: `IDENTITY_ADMISSION_SECRET` (at least 32
+  random bytes, server-only, configured identically for the proxy and route
+  runtime).
 - Canonical origin: `NEXT_PUBLIC_SITE_URL`.
 - Scheduler authentication: `CRON_SECRET`. `CRON_SECRET_PREVIOUS` is a temporary rotation-only variable (see the rotation procedure below).
 - Protected ops dashboard authentication: `OPS_READ_SECRET`. `OPS_READ_SECRET_PREVIOUS` is a temporary rotation-only variable (see the rotation procedure below).

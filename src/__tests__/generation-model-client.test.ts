@@ -19,6 +19,47 @@ describe('web generation model catalog client', () => {
     expect(catalog.models[0]).toMatchObject({ id: 'fixture-image', kind: 'image' });
   });
 
+  it('reconstructs legacy inputs from the compact schema-v3 input modes', () => {
+    const model = contractFixture.models[0];
+    const compactModel = Object.fromEntries(
+      Object.entries(model).filter(([key]) => key !== 'inputs'),
+    );
+    const catalog = parseClientGenerationModelCatalog({
+      ...contractFixture,
+      schemaVersion: 3,
+      models: [{
+        ...compactModel,
+        availability: { web: true, mobile: true },
+        inputModes: [{
+          key: 'references',
+          label: 'References',
+          default: true,
+          slots: [{
+            key: 'imageReferences',
+            kind: 'image',
+            role: 'reference',
+            label: 'Reference images',
+            min: 0,
+            max: 2,
+            supportsNaming: true,
+          }],
+        }],
+        inputConstraints: [],
+      }],
+    });
+
+    expect(catalog.models[0].inputs).toEqual({
+      imageReferences: { max: 2, supportsNaming: true },
+      videoReferences: null,
+      audioReferences: null,
+      preparedAudioReferences: null,
+      characterReferences: null,
+      startFrame: false,
+      endFrame: false,
+      combineFramesWithReferences: false,
+    });
+  });
+
   it('rejects malformed web catalog controls and defaults', () => {
     expect(() => parseClientGenerationModelCatalog({
       ...contractFixture,
@@ -134,7 +175,7 @@ describe('web generation model catalog client', () => {
     });
 
     expect(fetcher).toHaveBeenCalledWith(
-      '/api/generation-models?platform=web&schemaVersion=2&refresh=1',
+      '/api/generation-models?platform=web&schemaVersion=3&refresh=1',
       { cache: 'no-store', headers: expect.any(Headers) }
     );
   });

@@ -17,7 +17,10 @@ import {
   type GenerationModelValidationRuleType,
 } from '@/lib/generation-model-runtime';
 
-export const GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 2;
+export const GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 3;
+// Stored releases still use schema-v2 descriptors. Schema v3 is a compact
+// wire projection, so changing transport shape must not churn release hashes.
+export const GENERATION_MODEL_CATALOG_DESCRIPTOR_SCHEMA_VERSION = 2;
 export const GENERATION_MODEL_CATALOG_V1_SCHEMA_VERSION = 1;
 
 export type GenerationModelKind = 'image' | 'video' | 'motion';
@@ -721,7 +724,7 @@ const PRIVATE_GENERATION_MODEL_ALIASES = [
 function buildRevision(models: GenerationModelDescriptor[]): string {
   return createHash('sha256')
     .update(JSON.stringify({
-      schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
+      schemaVersion: GENERATION_MODEL_CATALOG_DESCRIPTOR_SCHEMA_VERSION,
       models,
       status: MODEL_STATUS,
       operations: buildCodeGenerationModelOperations(),
@@ -761,7 +764,7 @@ export function buildGenerationModelCatalog({
   platform: CatalogPlatform;
   schemaVersion: number;
 }): GenerationModelCatalog {
-  const projectedSchemaVersion = schemaVersion >= 2 ? 2 : 1;
+  const projectedSchemaVersion = schemaVersion >= 3 ? 3 : schemaVersion >= 2 ? 2 : 1;
   const models = ALL_PUBLIC_MODELS
     .filter((model) => (
       MODEL_STATUS[model.id] === 'active'

@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_TTL_SECONDS } from '../src/lib/showcase-media-cache';
+import { iterateStorageObjectsV2 } from '../src/lib/storage-list-v2';
 import {
   logBackfillExecutionMode,
   parseBackfillExecutionMode,
@@ -85,7 +86,8 @@ const verifyOnly = process.argv.slice(2).includes('--verify');
  * ranged variant back verbatim, twice, on live objects. Takedowns still work —
  * deleted content stops serving and stays deleted — but nothing available to
  * this script resets a warm ranged entry's headers while the object lives.
- * The full account is in F3 of docs/scaling-audit-2026-08-08.md.
+ * The full historical account is in F3 of
+ * docs/archive/scaling-audit-2026-08-08.md.
  */
 
 type StorageEntry = {
@@ -95,48 +97,24 @@ type StorageEntry = {
   sizeBytes: number | null;
 };
 
-/**
- * Storage has no recursive listing, and the app's own tables would miss any
- * object they no longer reference, so this walks the tree. Supabase marks a
- * folder by returning it with a null id.
- */
 async function* listBucketObjects(
   client: SupabaseClient,
-  prefix = '',
 ): AsyncGenerator<StorageEntry> {
-  let offset = 0;
-
-  for (;;) {
-    const { data, error } = await client.storage.from(BUCKET).list(prefix, {
-      limit: LIST_PAGE_SIZE,
-      offset,
-      sortBy: { column: 'name', order: 'asc' },
-    });
-    if (error) throw error;
-
-    const entries = data ?? [];
-    for (const entry of entries) {
-      const path = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (entry.id === null) {
-        yield* listBucketObjects(client, path);
-        continue;
-      }
-
-      const metadata = (entry.metadata ?? {}) as {
+  for await (const object of iterateStorageObjectsV2(client, {
+    bucket: BUCKET,
+    pageSize: LIST_PAGE_SIZE,
+  })) {
+      const metadata = (object.metadata ?? {}) as {
         mimetype?: unknown;
         cacheControl?: unknown;
         size?: unknown;
       };
       yield {
-        path,
+        path: object.path,
         mimeType: typeof metadata.mimetype === 'string' ? metadata.mimetype : null,
         cacheControl: typeof metadata.cacheControl === 'string' ? metadata.cacheControl : null,
         sizeBytes: typeof metadata.size === 'number' ? metadata.size : null,
       };
-    }
-
-    if (entries.length < LIST_PAGE_SIZE) break;
-    offset += entries.length;
   }
 }
 

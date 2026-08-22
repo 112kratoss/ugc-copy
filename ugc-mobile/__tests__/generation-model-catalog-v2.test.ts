@@ -19,7 +19,7 @@ describe('generation model catalog v2', () => {
     });
     const parsed = parseGenerationModelCatalog(
       catalogV2([...catalogV2().models, hiddenModel]),
-      GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
+      2,
     );
     const model = parsed.models.find((candidate) => candidate.id === 'remote-video-v2');
     if (!model) throw new Error('Expected the remote model.');
@@ -126,6 +126,26 @@ describe('generation model catalog v2', () => {
       catalog: { schemaVersion: 2, revision: 'catalog-v2-revision' },
       etag: '"v2-etag"',
       fetchedAt: 42,
+    });
+  });
+
+  it('reconstructs legacy inputs from compact schema-v3 input modes', () => {
+    const v2 = catalogV2();
+    const compactModels = v2.models.map((model) => {
+      const { inputs: _legacyInputs, ...compact } = model;
+      return compact;
+    });
+    const parsed = parseGenerationModelCatalog({
+      ...v2,
+      schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
+      models: compactModels,
+    }, GENERATION_MODEL_CATALOG_SCHEMA_VERSION);
+
+    expect(parsed.schemaVersion).toBe(3);
+    expect(parsed.models[0].inputs).toMatchObject({
+      imageReferences: { max: 5, supportsNaming: true },
+      videoReferences: { max: 3 },
+      startFrame: true,
     });
   });
 

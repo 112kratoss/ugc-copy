@@ -1,6 +1,7 @@
 import type { SupabaseClient, User } from '@supabase/supabase-js';
 
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
+import { getVerifiedIdentityAdmission } from '@/lib/identity-admission-assertion';
 
 /**
  * Who is calling, and what they are allowed to be.
@@ -144,6 +145,24 @@ export async function requireIdentity(
   const user = await resolveUser(userSupabase);
   if (user === undefined) return identityCheckUnavailable;
   if (!user) return unauthorized;
+
+  // The route-policy proxy has already performed the authoritative lifecycle
+  // RPC. Its signed, request-bound assertion lets the route reuse that result
+  // without another profile read. Direct route calls and rolling deployments
+  // have no trusted assertion and retain the fail-closed database fallback.
+  const admitted = await getVerifiedIdentityAdmission(userSupabase);
+  if (admitted?.state === 'active' && admitted.user.id === user.id) {
+    const guest = isGuestUser(user);
+    return {
+      ok: true,
+      identity: {
+        user,
+        userId: user.id,
+        kind: guest ? 'guest' : 'registered',
+        isGuest: guest,
+      },
+    };
+  }
 
   let identityAdmin: SupabaseClient;
   try {

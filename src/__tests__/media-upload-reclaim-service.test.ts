@@ -71,14 +71,29 @@ function clientDouble({
   }));
 
   const storageFrom = vi.fn(() => ({
-    list: vi.fn(async (prefix: string) => ({
-      data: objects === null
+    listV2: vi.fn(async (options: { prefix?: string }) => {
+      const prefix = (options.prefix ?? '').replace(/\/$/u, '');
+      const names = objects === null
         ? rows
           .filter((row) => row.storage_path.startsWith(`${prefix}/`))
-          .map((row) => ({ name: row.storage_path.slice(prefix.length + 1) }))
-        : objects.map((name) => ({ name })),
+          .map((row) => row.storage_path.slice(prefix.length + 1))
+        : objects;
+      return {
+        data: {
+          hasNext: false,
+          folders: [],
+          objects: names.map((name, index) => ({
+            id: `object-${index}`,
+            key: `${prefix}/${name}`,
+            name,
+            created_at: NOW.toISOString(),
+            updated_at: NOW.toISOString(),
+            metadata: {},
+          })),
+        },
       error: null,
-    })),
+      };
+    }),
     remove: vi.fn(async (paths: string[]) => {
       removed.push(paths);
       // Storage reports per-path outcomes here, not in `error`.

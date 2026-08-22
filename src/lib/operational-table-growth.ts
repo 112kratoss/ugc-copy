@@ -1,9 +1,10 @@
 /**
  * Operational table growth reporting.
  *
- * Surfaces row counts and byte sizes for the churn-prone tables that
- * `prune_operational_backend_data` manages, so unbounded growth is visible in
- * the protected ops dashboard before it becomes a cost or latency problem.
+ * Surfaces row counts and byte sizes for churn-prone operational state,
+ * user-owned workflow history, and permanent security ledgers, so growth is
+ * visible in the protected ops dashboard before it becomes a cost or latency
+ * problem.
  *
  * Thresholds are per-table and deliberately generous: these tables are expected
  * to grow, and the signal that matters is growth the retention sweep is not
@@ -35,9 +36,9 @@ export type OperationalTableGrowthReport = {
 };
 
 /**
- * Row-count ceilings above which the retention sweep is presumed to be falling
- * behind. `backend_job_runs` is the highest because the scheduler writes a row
- * per job per tick, most of them skips.
+ * Policy-specific growth guardrails. Crossing one can mean retention lag for a
+ * pruned table or a capacity/planning threshold for user history and permanent
+ * ledgers; it is not itself proof of which cause applies.
  */
 export const OPERATIONAL_TABLE_ROW_BUDGETS: Record<string, { warning: number; degraded: number }> = {
   backend_job_runs: { warning: 40_000, degraded: 150_000 },
@@ -56,6 +57,14 @@ export const OPERATIONAL_TABLE_ROW_BUDGETS: Record<string, { warning: number; de
   // because lag reads 0 at any size while the sweep keeps up.
   feed_delivery_facts: { warning: 3_000_000, degraded: 8_000_000 },
   workflow_run_step_jobs: { warning: 10_000, degraded: 50_000 },
+  upload_byte_reservations: { warning: 50_000, degraded: 200_000 },
+  upload_byte_user_counters: { warning: 100_000, degraded: 500_000 },
+  upload_path_tombstones: { warning: 1_000_000, degraded: 5_000_000 },
+  account_merge_tickets: { warning: 100_000, degraded: 500_000 },
+  workflow_canvas_runs: { warning: 100_000, degraded: 500_000 },
+  workflow_canvas_run_steps: { warning: 500_000, degraded: 2_000_000 },
+  template_runs: { warning: 100_000, degraded: 500_000 },
+  template_run_steps: { warning: 500_000, degraded: 2_000_000 },
 };
 
 const DEFAULT_BUDGET = { warning: 100_000, degraded: 500_000 };
@@ -102,7 +111,7 @@ export function evaluateOperationalTableGrowth(
         severity: 'degraded',
         code: 'OPERATIONAL_TABLE_GROWTH_SPIKE',
         tableName: table.tableName,
-        message: `${table.tableName} holds ${table.liveRows} rows, at or above the ${budget.degraded} degraded budget. Retention is not keeping up.`,
+        message: `${table.tableName} holds ${table.liveRows} rows, at or above the ${budget.degraded} degraded growth budget. Inspect its retention or capacity policy.`,
       });
       continue;
     }

@@ -42,18 +42,26 @@ function CatalogProbe({
 
 describe('useGenerationModelCatalog', () => {
   it('hydrates stale cache before fetching so the conditional request reuses its ETag', async () => {
-    const catalog = catalogV2();
+    const v2 = catalogV2();
+    const catalog = {
+      ...v2,
+      schemaVersion: 3,
+      models: v2.models.map((model) => {
+        const { inputs: _legacyInputs, ...compact } = model;
+        return compact;
+      }),
+    };
     storage.getItem.mockReset();
     storage.setItem.mockReset();
     storage.getItem.mockResolvedValue(JSON.stringify({
       catalog,
-      etag: '"cached-v2"',
+      etag: '"cached-v3"',
       fetchedAt: 1,
     }));
     const api = {
       fetchGenerationModels: vi.fn().mockResolvedValue({
         catalog: null,
-        etag: '"cached-v2"',
+        etag: '"cached-v3"',
         notModified: true,
       }),
     };
@@ -78,7 +86,7 @@ describe('useGenerationModelCatalog', () => {
 
     expect(storage.getItem).toHaveBeenCalledWith(GENERATION_MODEL_CATALOG_CACHE_KEY);
     expect(api.fetchGenerationModels).toHaveBeenCalledWith({
-      etag: '"cached-v2"',
+      etag: '"cached-v3"',
       forceRefresh: false,
     });
     expect(tree!.root.find((node) => String(node.type) === 'catalog-state').props).toMatchObject({

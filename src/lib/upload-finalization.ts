@@ -45,9 +45,11 @@ const RESERVATION_SELECT = [
   'legacy_compatibility_mode',
   'status_updated_at',
   'reclaim_not_before',
+  'reclaim_after',
 ].join(', ');
 
 export const UPLOAD_RECLAIM_QUIESCENCE_MS = 10 * 60 * 1000;
+export const UPLOAD_RECLAIM_TIME_BUDGET_MS = 4 * 60 * 1000;
 
 export type UploadReservationRow = {
   id: string;
@@ -84,6 +86,7 @@ export type UploadReservationRow = {
   legacy_compatibility_mode: boolean;
   status_updated_at: string;
   reclaim_not_before: string | null;
+  reclaim_after: string | null;
 };
 
 export type CanonicalUploadDescriptor = {
@@ -776,10 +779,14 @@ export async function finalizeUploadForConsumption(
 
 export type ExpiredUploadReservationReclaimSummary = {
   scanned: number;
+  handled: number;
   objectsDeleted: number;
   absentObjectsReleased: number;
   failed: number;
   bytesDeleted: number;
+  scanLimitReached: boolean;
+  timeBudgetReached: boolean;
+  oldestCandidateExpiresAt: string | null;
 };
 
 type UploadIntentStateRow = {
@@ -870,6 +877,20 @@ async function loadProtectedMobileUploadKeys(
   return { keys, failed: false };
 }
 
+async function deferReservationReclaim(
+  client: SupabaseClient,
+  row: UploadReservationRow,
+  reclaimAfter: Date,
+  now: Date,
+): Promise<boolean> {
+  const current = row.reclaim_after ? Date.parse(row.reclaim_after) : Number.NaN;
+  if (Number.isFinite(current) && current > now.getTime()) return true;
+  const update = await transitionReservationState(client, row, {
+    reclaim_after: reclaimAfter.toISOString(),
+  }, now);
+  return !update.error && Boolean(update.row);
+}
+
 /**
  * Reclaim expired URLs without treating expiry as proof that their objects are
  * gone. Each row stays charged until Storage confirms deletion or an
@@ -877,26 +898,50 @@ async function loadProtectedMobileUploadKeys(
  */
 export async function reclaimExpiredUploadReservations(
   client: SupabaseClient,
-  options: { now?: Date; limit?: number } = {},
+  options: {
+    now?: Date;
+    limit?: number;
+    scanLimit?: number;
+    timeBudgetMs?: number;
+  } = {},
 ): Promise<ExpiredUploadReservationReclaimSummary> {
   const now = options.now ?? new Date();
   const limit = Math.max(1, Math.min(options.limit ?? 500, 5000));
+  const scanLimit = Math.max(
+    limit,
+    Math.min(options.scanLimit ?? Math.max(500, limit * 4), 20_000),
+  );
+  const timeBudgetMs = Math.max(
+    1_000,
+    Math.min(options.timeBudgetMs ?? UPLOAD_RECLAIM_TIME_BUDGET_MS, 290_000),
+  );
+  const deadline = performance.now() + timeBudgetMs;
+  const timeExpired = () => performance.now() >= deadline;
   const staleClaimBefore = new Date(now.getTime() - UPLOAD_RECLAIM_QUIESCENCE_MS).toISOString();
   const summary: ExpiredUploadReservationReclaimSummary = {
     scanned: 0,
+    handled: 0,
     objectsDeleted: 0,
     absentObjectsReleased: 0,
     failed: 0,
     bytesDeleted: 0,
+    scanLimitReached: false,
+    timeBudgetReached: false,
+    oldestCandidateExpiresAt: null,
   };
-  const pageSize = Math.max(100, Math.min(limit, 500));
+  const pageSize = Math.min(scanLimit, 500);
   const explicitAbandonCutoff = now.getTime() - RECLAIM_AFTER_HOURS * 60 * 60 * 1000;
   let handled = 0;
-  let cursor: string | null = null;
+  let cursor: { expiresAt: string; id: string } | null = null;
 
-  // Keyset pagination keeps protected legacy drafts from starving actionable
-  // rows that sort after the worker's ordinary batch limit.
-  while (handled < limit) {
+  // Three independent ceilings matter: rows read, state/storage actions, and
+  // wall-clock. A protected-row population can no longer turn an action limit
+  // into an unbounded scan or consume the full 300-second scheduler window.
+  while (handled < limit && summary.scanned < scanLimit) {
+    if (timeExpired()) {
+      summary.timeBudgetReached = true;
+      break;
+    }
     let query = client
       .from(UPLOAD_RESERVATIONS_TABLE)
       .select(RESERVATION_SELECT)
@@ -912,14 +957,22 @@ export async function reclaimExpiredUploadReservations(
         'reclaiming',
       ])
       .lte('expires_at', now.toISOString())
+      .or(`reclaim_after.is.null,reclaim_after.lte.${now.toISOString()}`)
+      .order('expires_at', { ascending: true })
       .order('id', { ascending: true });
-    if (cursor) query = query.gt('id', cursor);
-    const { data, error } = await query.limit(pageSize);
+    if (cursor) {
+      query = query.or(
+        `expires_at.gt.${cursor.expiresAt},and(expires_at.eq.${cursor.expiresAt},id.gt.${cursor.id})`,
+      );
+    }
+    const { data, error } = await query.limit(Math.min(pageSize, scanLimit - summary.scanned));
     if (error) throw error;
     const rows = (data ?? []) as unknown as UploadReservationRow[];
     if (rows.length === 0) break;
     summary.scanned += rows.length;
-    cursor = rows[rows.length - 1]?.id ?? cursor;
+    summary.oldestCandidateExpiresAt ??= rows[0]?.expires_at ?? null;
+    const lastRow = rows[rows.length - 1];
+    if (lastRow) cursor = { expiresAt: lastRow.expires_at, id: lastRow.id };
 
     const protectedUploads = await loadProtectedMobileUploadKeys(client, rows, now);
     if (protectedUploads.failed) {
@@ -930,6 +983,10 @@ export async function reclaimExpiredUploadReservations(
 
     for (const row of rows) {
       if (handled >= limit) break;
+      if (timeExpired()) {
+        summary.timeBudgetReached = true;
+        break;
+      }
       const location = parseCanonicalStorageLocation(`${row.bucket_id}/${row.storage_path}`, {
         allowedBuckets: USER_SCOPED_STORAGE_BUCKETS,
         ownerUserId: row.user_id,
@@ -950,6 +1007,14 @@ export async function reclaimExpiredUploadReservations(
       ) {
         // Explicitly finalized drafts get the same compatibility window as
         // staged mobile uploads; after it lapses they are ordinary abandonment.
+        const deferred = await deferReservationReclaim(
+          client,
+          row,
+          new Date(explicitlyFinalizedAt + RECLAIM_AFTER_HOURS * 60 * 60 * 1000),
+          now,
+        );
+        handled += 1;
+        if (!deferred) summary.failed += 1;
         continue;
       }
 
@@ -984,7 +1049,17 @@ export async function reclaimExpiredUploadReservations(
           handled += 1;
           continue;
         }
-        if (leaseExpiresAt > now.getTime()) continue;
+        if (leaseExpiresAt > now.getTime()) {
+          const deferred = await deferReservationReclaim(
+            client,
+            row,
+            new Date(leaseExpiresAt),
+            now,
+          );
+          handled += 1;
+          if (!deferred) summary.failed += 1;
+          continue;
+        }
 
         // A timed-out completion acknowledgement has an unknown outcome: the
         // caller's durable mutation may have committed before the response was
@@ -1122,6 +1197,14 @@ export async function reclaimExpiredUploadReservations(
         && row.actual_storage_version !== null
         && row.reclaim_not_before !== null
       ) {
+        const deferred = await deferReservationReclaim(
+          client,
+          row,
+          new Date(now.getTime() + 24 * 60 * 60 * 1000),
+          now,
+        );
+        handled += 1;
+        if (!deferred) summary.failed += 1;
         continue;
       }
       if (
@@ -1136,6 +1219,14 @@ export async function reclaimExpiredUploadReservations(
         // one referenced by a rolling old server. Retain the exact object but
         // keep charging its trusted actual bytes until reference reconciliation
         // or the compatibility contraction can classify it safely.
+        const deferred = await deferReservationReclaim(
+          client,
+          row,
+          new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+          now,
+        );
+        handled += 1;
+        if (!deferred) summary.failed += 1;
         continue;
       }
 
@@ -1165,9 +1256,27 @@ export async function reclaimExpiredUploadReservations(
           row.finalization_status === 'finalizing'
           && (!Number.isFinite(statusUpdatedAt) || statusUpdatedAt > Date.parse(staleClaimBefore))
         ) {
+          const deferred = await deferReservationReclaim(
+            client,
+            row,
+            new Date(Math.max(now.getTime() + 1_000, statusUpdatedAt + UPLOAD_RECLAIM_QUIESCENCE_MS)),
+            now,
+          );
+          handled += 1;
+          if (!deferred) summary.failed += 1;
           continue;
         }
-        if (row.finalization_status === 'reclaiming' && row.reclaim_not_before) continue;
+        if (row.finalization_status === 'reclaiming' && row.reclaim_not_before) {
+          const deferred = await deferReservationReclaim(
+            client,
+            row,
+            new Date(row.reclaim_not_before),
+            now,
+          );
+          handled += 1;
+          if (!deferred) summary.failed += 1;
+          continue;
+        }
 
         const expiresAt = Date.parse(row.expires_at);
         const notBefore = new Date(Math.max(
@@ -1263,5 +1372,7 @@ export async function reclaimExpiredUploadReservations(
 
     if (rows.length < pageSize) break;
   }
+  summary.handled = handled;
+  summary.scanLimitReached = summary.scanned >= scanLimit;
   return summary;
 }

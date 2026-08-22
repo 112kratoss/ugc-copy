@@ -125,9 +125,13 @@ describe('account deletion route', () => {
           }),
           storage: {
             from: (bucket: string) => ({
-              list: vi.fn(async (prefix: string) => {
+              listV2: vi.fn(async (options: { prefix?: string }) => {
+                const prefix = (options.prefix ?? '').replace(/\/$/u, '');
                 calls.push(`list:${bucket}:${prefix}`);
-                return { data: [], error: null };
+                return {
+                  data: { hasNext: false, folders: [], objects: [] },
+                  error: null,
+                };
               }),
               remove: vi.fn(async (paths: string[]) => {
                 calls.push(`remove:${bucket}`);
@@ -289,7 +293,10 @@ describe('account deletion route', () => {
           }),
           storage: {
             from: () => ({
-              list: vi.fn(async () => ({ data: [], error: null })),
+              listV2: vi.fn(async () => ({
+                data: { hasNext: false, folders: [], objects: [] },
+                error: null,
+              })),
               remove: vi.fn(async () => ({ data: [], error: null })),
             }),
           },

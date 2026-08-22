@@ -13,6 +13,7 @@ const COMPLETE_ENVIRONMENT = {
   NEXT_PUBLIC_SUPABASE_URL: 'https://project.supabase.co',
   NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon-key',
   SUPABASE_SERVICE_ROLE_KEY: 'service-role-key',
+  IDENTITY_ADMISSION_SECRET: 'identity-admission-secret-at-least-32-characters',
   NEXT_PUBLIC_SITE_URL: 'https://magicbooklet.com',
   CRON_SECRET: 'cron-secret',
   OPS_READ_SECRET: 'ops-read-secret',
@@ -123,11 +124,22 @@ describe('backend environment contract', () => {
     expect(health.invalid).toEqual([]);
   });
 
+  it('rejects a non-signing identity secret', () => {
+    const health = collectBackendEnvironmentHealth({
+      ...COMPLETE_ENVIRONMENT,
+      IDENTITY_ADMISSION_SECRET: 'too-short',
+    });
+
+    expect(health.status).toBe('degraded');
+    expect(health.invalid).toEqual(['identity-admission-secret-too-short']);
+  });
+
   it('documents every production-only secret in the environment template', () => {
     const template = fs.readFileSync(path.resolve(process.cwd(), '.env.example'), 'utf8');
     const gitignore = fs.readFileSync(path.resolve(process.cwd(), '.gitignore'), 'utf8');
 
     expect(template).toContain('CREATOR_PAYOUT_DETAILS_ENCRYPTION_KEY=');
+    expect(template).toContain('IDENTITY_ADMISSION_SECRET=');
     expect(template).toContain('CRON_SECRET=');
     expect(template).toContain('OPS_READ_SECRET=');
     expect(template).toContain('KIE_WEBHOOK_HMAC_KEY=');

@@ -25,9 +25,9 @@ const MAX_PREVIEW_ATTEMPTS = 3;
 export const MAX_RENDITION_ATTEMPTS = 3;
 const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
 /**
- * Transcoding is far heavier than a poster frame, and this job shares a 300s
- * invocation with every other due job, so renditions take a small bite and run
- * one at a time. Backfill may still span several hourly runs.
+ * Transcoding is far heavier than a poster frame. The repair has a dedicated
+ * invocation, but renditions still take a small bite and run one at a time so
+ * one sweep remains bounded. Backfill may span several hourly runs.
  *
  * The bite used to be a flat five rows. That capped recovery at five videos an
  * hour however short they were, and — because each transcode may run for the
@@ -36,15 +36,15 @@ const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
  * limit now, and the count is only a ceiling on how many rows to fetch.
  *
  * Still deliberately sequential. Concurrent ffmpeg would contend for the same
- * one or two cores, and memory is what genuinely bites — that is the shared-fate
- * cron risk owned by F14 in `docs/scaling-audit-2026-08-08.md`. Raising
- * concurrency is blocked on splitting those queues in Phase 1.
+ * one or two cores and increase peak memory. Isolation removed the historical
+ * shared-fate cron risk; concurrency should only change with measured worker
+ * headroom.
  */
 export const RENDITION_REPAIR_BATCH_SIZE = 12;
 /**
  * Checked before starting each row, so the true worst case is this plus one
- * full ffmpeg timeout. At 60s that leaves well over a third of the shared
- * invocation for the jobs queued behind this one.
+ * full ffmpeg timeout. At 60s that keeps the dedicated invocation comfortably
+ * below its platform duration limit in the normal case.
  */
 export const RENDITION_REPAIR_TIME_BUDGET_MS = 60_000;
 
@@ -606,7 +606,7 @@ export async function repairPostMediaRenditions(
   // same one or two cores and push the job past its duration budget.
   //
   // Stopping on elapsed time rather than a row count is what actually protects
-  // the shared invocation, since one 30 MB clip can cost as much as ten short
+  // the invocation budget, since one 30 MB clip can cost as much as ten short
   // ones. The first row always runs: otherwise a queue whose head is slow would
   // never drain, and rows are taken oldest-first.
   const startedAt = Date.now();

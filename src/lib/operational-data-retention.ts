@@ -20,10 +20,15 @@ export type OperationalRetentionSummary = {
   shareEventsDeleted: number;
   profileShareEventsDeleted: number;
   abandonedFreeUnlockOrdersDeleted: number;
+  accountMergeTicketsDeleted: number;
   uploadByteReservationsDeleted: number;
   expiredUploadReservationsScanned: number;
+  expiredUploadReservationsHandled: number;
   expiredUploadObjectsDeleted: number;
   expiredUploadReservationFailures: number;
+  uploadReclaimScanLimitReached: boolean;
+  uploadReclaimTimeBudgetReached: boolean;
+  oldestExpiredUploadCandidateAt: string | null;
 };
 
 function toCount(value: unknown): number {
@@ -52,6 +57,7 @@ export async function pruneOperationalBackendData(
   let shareEventsDeleted = 0;
   let profileShareEventsDeleted = 0;
   let abandonedFreeUnlockOrdersDeleted = 0;
+  let accountMergeTicketsDeleted = 0;
   let uploadByteReservationsDeleted = 0;
 
   const shareResult = await client.rpc('prune_post_share_events', {});
@@ -67,6 +73,13 @@ export async function pruneOperationalBackendData(
   const freeUnlockResult = await client.rpc('prune_abandoned_free_unlock_orders', {});
   if (!freeUnlockResult.error) {
     abandonedFreeUnlockOrdersDeleted = toCount(freeUnlockResult.data);
+  }
+
+  const mergeTicketResult = await client.rpc('prune_account_merge_tickets', {
+    p_limit: options.maxDeletesPerTable ?? 5000,
+  });
+  if (!mergeTicketResult.error) {
+    accountMergeTicketsDeleted = toCount(mergeTicketResult.data);
   }
 
   // Expiry is not proof of absence. Delete/prove each unfinalized object first;
@@ -87,10 +100,15 @@ export async function pruneOperationalBackendData(
     shareEventsDeleted,
     profileShareEventsDeleted,
     abandonedFreeUnlockOrdersDeleted,
+    accountMergeTicketsDeleted,
     uploadByteReservationsDeleted,
     expiredUploadReservationsScanned: uploadReclaim.scanned,
+    expiredUploadReservationsHandled: uploadReclaim.handled,
     expiredUploadObjectsDeleted: uploadReclaim.objectsDeleted,
     expiredUploadReservationFailures: uploadReclaim.failed,
+    uploadReclaimScanLimitReached: uploadReclaim.scanLimitReached,
+    uploadReclaimTimeBudgetReached: uploadReclaim.timeBudgetReached,
+    oldestExpiredUploadCandidateAt: uploadReclaim.oldestCandidateExpiresAt,
     jobRunsDeleted: toCount(summary.job_runs_deleted),
     rateLimitsDeleted: toCount(summary.rate_limits_deleted),
     completionJobsDeleted: toCount(summary.completion_jobs_deleted),

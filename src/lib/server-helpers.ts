@@ -26,6 +26,7 @@ import {
     getUserOwnedStoredMediaLocation,
 } from '@/lib/storage-ownership';
 import { requireIdentity } from '@/lib/account-identity';
+import { registerIdentityAdmissionContext } from '@/lib/identity-admission-assertion';
 
 const KIE_API_KEY = process.env.KIE_AI_API_KEY;
 const GENERIC_SIGNABLE_MEDIA_BUCKETS = [
@@ -42,7 +43,7 @@ let cachedServiceClient: SupabaseClient | null = null;
 export function createUserClient(request: Request): SupabaseClient {
     const authorization = request.headers.get('Authorization');
 
-    return createClient(
+    const client = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
         authorization
@@ -51,6 +52,8 @@ export function createUserClient(request: Request): SupabaseClient {
             }
             : undefined
     );
+    registerIdentityAdmissionContext(client, request);
+    return client;
 }
 
 /** Creates a privileged Supabase client for server-only operations (webhooks, service tasks). */

@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
   CatalogError,
+  GENERATION_MODEL_CATALOG_DESCRIPTOR_SCHEMA_VERSION,
   GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
   buildGenerationModelCatalog,
   projectGenerationModelDescriptor,
@@ -571,7 +572,9 @@ function projectDatabaseRelease(
       snapshot.release.schema_version,
     );
   }
-  const projectedSchemaVersion = requestedSchemaVersion >= 2 ? 2 : 1;
+  const projectedSchemaVersion = requestedSchemaVersion >= 3
+    ? 3
+    : requestedSchemaVersion >= 2 ? 2 : 1;
   const operations = new Map<string, GenerationModelOperationalConfig>();
   const allPlatformDescriptors = snapshot.entries
     .filter((row) => platform === 'mobile' ? row.mobile_enabled : row.web_enabled)
@@ -626,7 +629,7 @@ function codeSnapshot(platform: CatalogPlatform, schemaVersion: number): Publish
     operations: new Map(buildCodeGenerationModelOperations().map((entry) => [entry.modelId, entry])),
     source: 'code',
     releaseId: null,
-    releaseSchemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
+    releaseSchemaVersion: GENERATION_MODEL_CATALOG_DESCRIPTOR_SCHEMA_VERSION,
   };
 }
 

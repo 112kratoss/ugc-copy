@@ -1,10 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const LEGACY_GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 1;
-export const GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 2;
-export const GENERATION_MODEL_CATALOG_CACHE_KEY = 'generation-model-catalog:v2';
+export const GENERATION_MODEL_CATALOG_SCHEMA_VERSION = 3;
+export const GENERATION_MODEL_CATALOG_CACHE_KEY = 'generation-model-catalog:v3';
 
-export type GenerationModelCatalogSchemaVersion = 1 | 2;
+export type GenerationModelCatalogSchemaVersion = 1 | 2 | 3;
 export type GenerationModelKind = 'image' | 'video' | 'motion';
 export type CatalogPrimitive = string | number | boolean;
 
@@ -132,6 +132,10 @@ export interface GenerationModelCatalog {
 
 export interface GenerationModelCatalogV2 extends GenerationModelCatalog {
   schemaVersion: 2;
+}
+
+export interface GenerationModelCatalogV3 extends GenerationModelCatalog {
+  schemaVersion: 3;
 }
 
 export interface GenerationModelCatalogCacheEnvelope {
@@ -466,6 +470,58 @@ function parseLegacyInputs(value: Record<string, unknown>) {
   };
 }
 
+function deriveLegacyInputsFromInputModes(
+  inputModes: CatalogInputMode[],
+): GenerationModelDescriptor['inputs'] {
+  let imageMax = 0;
+  let imageSupportsNaming = false;
+  let videoMax = 0;
+  let audioMax = 0;
+  let preparedAudioMax = 0;
+  let characterMax = 0;
+  let startFrame = false;
+  let endFrame = false;
+  let combineFramesWithReferences = false;
+
+  for (const mode of inputModes) {
+    let modeHasFrame = false;
+    let modeHasImageReference = false;
+    for (const slot of mode.slots) {
+      if (slot.role === 'startFrame') {
+        startFrame ||= slot.max > 0;
+        modeHasFrame ||= slot.max > 0;
+      } else if (slot.role === 'endFrame') {
+        endFrame ||= slot.max > 0;
+        modeHasFrame ||= slot.max > 0;
+      } else if (slot.kind === 'image') {
+        imageMax = Math.max(imageMax, slot.max);
+        imageSupportsNaming ||= slot.supportsNaming === true;
+        modeHasImageReference ||= slot.max > 0;
+      } else if (slot.kind === 'video') {
+        videoMax = Math.max(videoMax, slot.max);
+      } else if (slot.kind === 'audio') {
+        audioMax = Math.max(audioMax, slot.max);
+      } else if (slot.kind === 'preparedVoice') {
+        preparedAudioMax = Math.max(preparedAudioMax, slot.max);
+      } else if (slot.kind === 'character') {
+        characterMax = Math.max(characterMax, slot.max);
+      }
+    }
+    combineFramesWithReferences ||= modeHasFrame && modeHasImageReference;
+  }
+
+  return {
+    imageReferences: imageMax > 0 ? { max: imageMax, supportsNaming: imageSupportsNaming } : null,
+    videoReferences: videoMax > 0 ? { max: videoMax } : null,
+    audioReferences: audioMax > 0 ? { max: audioMax } : null,
+    preparedAudioReferences: preparedAudioMax > 0 ? { max: preparedAudioMax } : null,
+    characterReferences: characterMax > 0 ? { max: characterMax } : null,
+    startFrame,
+    endFrame,
+    combineFramesWithReferences,
+  };
+}
+
 function parseModel(
   value: unknown,
   schemaVersion: GenerationModelCatalogSchemaVersion,
@@ -484,7 +540,6 @@ function parseModel(
     || !Number.isInteger(value.minClientSchemaVersion)
     || !Array.isArray(value.controls)
     || !isRecord(value.capabilities)
-    || !isRecord(value.inputs)
   ) return null;
   const controls = value.controls.map(parseControl);
   if (controls.some((control) => !control)) return null;
@@ -494,8 +549,8 @@ function parseModel(
   const capabilities = value.capabilities;
   const capabilityKeys = ['multiShot', 'sound', 'fixedLens', 'googleSearch', 'outputFormat'];
   if (capabilityKeys.some((key) => typeof capabilities[key] !== 'boolean')) return null;
-  const inputs = parseLegacyInputs(value.inputs);
-  if (!inputs) return null;
+  const inputs = isRecord(value.inputs) ? parseLegacyInputs(value.inputs) : null;
+  if (schemaVersion < 3 && !inputs) return null;
 
   const descriptor: GenerationModelDescriptor = {
     id: value.id,
@@ -514,7 +569,7 @@ function parseModel(
       googleSearch: capabilities.googleSearch as boolean,
       outputFormat: capabilities.outputFormat as boolean,
     },
-    inputs,
+    inputs: inputs ?? deriveLegacyInputsFromInputModes([]),
   };
 
   if (schemaVersion === 1) return descriptor;
@@ -562,6 +617,9 @@ function parseModel(
 
   return {
     ...descriptor,
+    inputs: schemaVersion >= 3
+      ? deriveLegacyInputsFromInputModes(parsedInputModes)
+      : descriptor.inputs,
     availability: {
       web: value.availability.web,
       mobile: value.availability.mobile,

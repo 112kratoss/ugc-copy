@@ -207,6 +207,7 @@ const COMPLETE_BACKEND_ENVIRONMENT = {
   NEXT_PUBLIC_SITE_URL: 'https://magicbooklet.com',
   CRON_SECRET: 'cron-secret',
   OPS_READ_SECRET: 'ops-read-secret',
+  IDENTITY_ADMISSION_SECRET: 'identity-admission-secret-at-least-32-characters',
   KIE_AI_API_KEY: 'kie-key',
   KIE_PROVIDER_WEBHOOK_SECRET: 'kie-provider-webhook-secret',
   KIE_WEBHOOK_HMAC_KEY: 'kie-webhook-key',
@@ -322,6 +323,7 @@ describe('collectBackendHealth', () => {
       abandonedReclaimEffective: false,
     });
     expect(health.catalog.activeModels).toBeGreaterThan(0);
+    // Stored descriptors remain schema v2; schema v3 is the compact wire projection.
     expect(health.catalog.schemaVersion).toBe(2);
     expect(health.scheduler).toMatchObject({
       status: 'ok',

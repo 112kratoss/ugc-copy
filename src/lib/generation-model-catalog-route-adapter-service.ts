@@ -9,6 +9,8 @@ import {
   GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
   buildGenerationModelCatalog,
   type CatalogPlatform,
+  type GenerationModelCatalog,
+  type GenerationModelDescriptor,
 } from '@/lib/generation-model-catalog';
 import { loadPublishedGenerationModelCatalog } from '@/lib/generation-model-catalog-store';
 
@@ -53,6 +55,26 @@ export function buildGenerationModelCatalogEtag(
   return `"generation-model-catalog-${digest}"`;
 }
 
+/**
+ * Schema v3 removes the schema-v1 compatibility object from the response. The
+ * same information is already represented by inputModes, and current clients
+ * reconstruct it after validation. Keeping this at the HTTP boundary means
+ * quoting and generation services can continue using one normalized shape.
+ */
+export function projectGenerationModelCatalogForWire(
+  catalog: GenerationModelCatalog,
+): unknown {
+  if (catalog.schemaVersion < 3) return catalog;
+  return {
+    ...catalog,
+    models: catalog.models.map((model) => {
+      const wireModel: Partial<GenerationModelDescriptor> = { ...model };
+      delete wireModel.inputs;
+      return wireModel;
+    }),
+  };
+}
+
 export async function getGenerationModelCatalogRouteResponse({
   dependencies,
   request,
@@ -72,7 +94,8 @@ export async function getGenerationModelCatalogRouteResponse({
         schemaVersion,
         forceRefresh,
       })).catalog;
-  const etag = buildGenerationModelCatalogEtag(catalog, platform);
+  const wireCatalog = projectGenerationModelCatalogForWire(catalog);
+  const etag = buildGenerationModelCatalogEtag(wireCatalog, platform);
   const headers = createApiResponseHeaders(
     request,
     forceRefresh ? API_CACHE_CONTROL.noStore : API_CACHE_CONTROL.publicCatalog,
@@ -83,5 +106,5 @@ export async function getGenerationModelCatalogRouteResponse({
     return new NextResponse(null, { status: 304, headers });
   }
 
-  return NextResponse.json(catalog, { headers });
+  return NextResponse.json(wireCatalog, { headers });
 }

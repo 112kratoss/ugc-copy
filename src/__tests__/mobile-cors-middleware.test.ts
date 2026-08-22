@@ -97,7 +97,7 @@ describe('mobile API CORS proxy', () => {
     expect(response.headers.get('x-magicbooklet-api-version')).toBe('1');
     expect(response.headers.get('x-magicbooklet-min-api-version')).toBe('1');
     expect(response.headers.get('x-magicbooklet-min-app-version')).toBe('0.0.1');
-    expect(response.headers.get('x-magicbooklet-catalog-schema-version')).toBe('2');
+    expect(response.headers.get('x-magicbooklet-catalog-schema-version')).toBe('3');
   });
 
   it('refuses a CORS grant to foreign browser origins', async () => {
@@ -162,7 +162,7 @@ describe('mobile API CORS proxy', () => {
         currentApiVersion: 1,
         minimumApiVersion: 1,
         minimumAppVersion: '0.0.1',
-        supportedCatalogSchemaVersions: [1, 2],
+        supportedCatalogSchemaVersions: [1, 2, 3],
       },
     });
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
@@ -179,7 +179,7 @@ describe('mobile API CORS proxy', () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('x-magicbooklet-catalog-schema-version')).toBe('2');
+    expect(response.headers.get('x-magicbooklet-catalog-schema-version')).toBe('3');
   });
 
   it('asks a future mobile client to retry after the backend catches up', async () => {

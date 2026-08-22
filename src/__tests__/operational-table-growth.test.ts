@@ -64,7 +64,7 @@ describe('operational table growth', () => {
 
     expect(report.status).toBe('degraded');
     expect(report.issues[0].code).toBe('OPERATIONAL_TABLE_GROWTH_SPIKE');
-    expect(report.issues[0].message).toContain('Retention is not keeping up');
+    expect(report.issues[0].message).toContain('Inspect its retention or capacity policy');
   });
 
   it('reports one issue per table and escalates to the worst severity', () => {

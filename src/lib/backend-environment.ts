@@ -23,6 +23,7 @@ export const BACKEND_ENVIRONMENT_REQUIREMENTS = [
   { id: 'supabase-url', keys: ['NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_URL'] },
   { id: 'supabase-anon-key', keys: ['NEXT_PUBLIC_SUPABASE_ANON_KEY'] },
   { id: 'supabase-service-role', keys: ['SUPABASE_SERVICE_ROLE_KEY'] },
+  { id: 'identity-admission', keys: ['IDENTITY_ADMISSION_SECRET'] },
   { id: 'production-site-url', keys: ['NEXT_PUBLIC_SITE_URL'] },
   { id: 'cron-auth', keys: ['CRON_SECRET'] },
   { id: 'ops-read-auth', keys: ['OPS_READ_SECRET'] },
@@ -79,6 +80,17 @@ export function collectInvalidProductionCommerceSettings(
   return invalid;
 }
 
+export function collectInvalidScalingSettings(
+  environment: NodeJS.ProcessEnv,
+): string[] {
+  const invalid: string[] = [];
+  const identitySecret = environment.IDENTITY_ADMISSION_SECRET?.trim();
+  if (identitySecret && new TextEncoder().encode(identitySecret).byteLength < 32) {
+    invalid.push('identity-admission-secret-too-short');
+  }
+  return invalid;
+}
+
 export function isProductionRazorpayKeyAllowed(
   keyId: string | null | undefined,
   environment: NodeJS.ProcessEnv = process.env,
@@ -93,7 +105,10 @@ export function collectBackendEnvironmentHealth(
   const missing = BACKEND_ENVIRONMENT_REQUIREMENTS
     .filter((requirement) => !isConfigured(environment, requirement.keys))
     .map((requirement) => requirement.id);
-  const invalid = collectInvalidProductionCommerceSettings(environment);
+  const invalid = [
+    ...collectInvalidProductionCommerceSettings(environment),
+    ...collectInvalidScalingSettings(environment),
+  ];
 
   return {
     status: missing.length === 0 && invalid.length === 0 ? 'ok' : 'degraded',

@@ -23,6 +23,8 @@
     "backfill:showcase-assets": "node scripts/backfill-showcase-assets.mjs",
     "backfill:showcase-media-cache": "tsx --env-file-if-exists=.env.local scripts/backfill-showcase-media-cache.ts",
     "db:migrations:check": "node scripts/check-supabase-migration-drift.mjs",
+    "db:inspect:performance": "node scripts/inspect-supabase-performance.mjs --local",
+    "db:benchmark:scaling": "node scripts/benchmark-local-scaling.mjs",
     "ops:external-gates": "node scripts/production-external-gates.mjs",
     "ops:generation-model-catalog": "tsx --env-file-if-exists=.env.local scripts/generation-model-catalog.ts",
     "ops:moderation": "tsx --env-file-if-exists=.env.local scripts/moderation-ops.ts",

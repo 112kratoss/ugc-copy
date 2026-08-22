@@ -346,9 +346,10 @@ export const SHOWCASE_FOR_YOU_FEED_READ_RATE_LIMIT = {
  * not to shape normal browsing. Every one of these endpoints was previously
  * unthrottled while the mutation paths beside them were covered.
  *
- * Each rejected request still costs a Postgres write transaction, which makes
- * the limiter its own load generator under sustained abuse. Moving coarse read
- * limiting to edge/KV is a Phase 2 item in `docs/scaling-audit-2026-08-08.md`.
+ * Each admitted or rejected request costs a PostgreSQL write transaction. The
+ * application deliberately accepts and measures that write budget instead of
+ * depending on a second external datastore. CDN and response caching should
+ * absorb cacheable traffic before it reaches these origin policies.
  */
 export const SHOWCASE_FEED_READ_RATE_LIMIT = {
   scope: 'showcase-feed:read',

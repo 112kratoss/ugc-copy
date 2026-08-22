@@ -11,6 +11,7 @@ import {
 } from '@/lib/media-upload-reclaim';
 import { getMediaUploadReclaimPolicy } from '@/lib/media-upload-reclaim-policy';
 import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
+import { iterateStorageObjectsV2 } from '@/lib/storage-list-v2';
 
 const UPLOADS_BUCKET = 'uploads';
 
@@ -321,25 +322,17 @@ async function listExistingObjectPaths(
     // missing, and "missing" means the row is dropped and the object becomes
     // permanently untracked -- disabling the sweep for exactly the heaviest
     // accounts.
-    for (let offset = 0; ; offset += pageSize) {
-      const { data, error } = await client.storage
-        .from(UPLOADS_BUCKET)
-        .list(prefix, { limit: pageSize, offset });
-
-      if (error) {
-        logBackendWarning('failed_to_list_uploads_prefix_during_reclaim', { error, prefix });
-        failed = true;
-        break;
+    try {
+      for await (const object of iterateStorageObjectsV2(client, {
+        bucket: UPLOADS_BUCKET,
+        prefix,
+        pageSize,
+      })) {
+        existing.add(object.path);
       }
-
-      const page = data ?? [];
-      for (const object of page) {
-        if (object?.name) {
-          existing.add(`${prefix}/${object.name}`);
-        }
-      }
-
-      if (page.length < pageSize) break;
+    } catch (error) {
+      logBackendWarning('failed_to_list_uploads_prefix_during_reclaim', { error, prefix });
+      failed = true;
     }
 
     if (failed) {

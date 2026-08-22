@@ -38,6 +38,7 @@ function reservation(overrides: Partial<UploadReservationRow> = {}): UploadReser
     legacy_compatibility_mode: false,
     status_updated_at: '2026-08-19T09:00:00.000Z',
     reclaim_not_before: null,
+    reclaim_after: null,
     ...overrides,
   } as UploadReservationRow;
 }
@@ -119,6 +120,7 @@ function createClient({
         }),
         lte: vi.fn(() => chain),
         gt: vi.fn(() => chain),
+        or: vi.fn(() => chain),
         order: vi.fn(() => chain),
         limit: vi.fn(() => chain),
         then: (resolve: (value: { data: UploadReservationRow[]; error: null }) => unknown) => (
@@ -324,10 +326,14 @@ describe('generic upload finalization', () => {
       now: new Date('2026-08-20T00:00:00.000Z'),
     })).resolves.toEqual({
       scanned: 1,
+      handled: 1,
       objectsDeleted: 0,
       absentObjectsReleased: 0,
       failed: 0,
       bytesDeleted: 0,
+      scanLimitReached: false,
+      timeBudgetReached: false,
+      oldestCandidateExpiresAt: '2026-08-18T00:00:00.000Z',
     });
 
     expect(fake.remove).not.toHaveBeenCalled();
@@ -337,10 +343,14 @@ describe('generic upload finalization', () => {
       now: new Date('2026-08-20T00:11:00.000Z'),
     })).resolves.toEqual({
       scanned: 1,
+      handled: 1,
       objectsDeleted: 0,
       absentObjectsReleased: 0,
       failed: 1,
       bytesDeleted: 0,
+      scanLimitReached: false,
+      timeBudgetReached: false,
+      oldestCandidateExpiresAt: '2026-08-18T00:00:00.000Z',
     });
 
     expect(fake.remove).toHaveBeenCalledWith(['user-1/reference.png']);
@@ -581,7 +591,10 @@ describe('generic upload finalization', () => {
     await reclaimExpiredUploadReservations(fake.client, {
       now: new Date('2026-08-20T01:00:00.000Z'),
     });
-    expect(fake.updates).toHaveLength(transitionsAfterBinding);
+    // One scheduling-only update keeps this permanent compatibility row out of
+    // every daily scan. It does not touch lifecycle or Storage state.
+    expect(fake.updates).toHaveLength(transitionsAfterBinding + 1);
+    expect(fake.row?.reclaim_after).toBe('2026-09-19T01:00:00.000Z');
     expect(fake.remove).not.toHaveBeenCalled();
   });
 

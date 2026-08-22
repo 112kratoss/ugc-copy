@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ACCOUNT_DELETING,
@@ -11,6 +11,11 @@ import {
   resolveViewerIdentity,
   SESSION_MERGED,
 } from '@/lib/account-identity';
+import {
+  IDENTITY_ADMISSION_HEADER,
+  registerIdentityAdmissionContext,
+  signIdentityAdmission,
+} from '@/lib/identity-admission-assertion';
 
 function adminFor(options: {
   linkedIds?: string[];
@@ -60,6 +65,10 @@ const guest = { id: 'guest-1', is_anonymous: true };
 const registered = { id: 'user-1', is_anonymous: false };
 
 describe('account identity', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   describe('resolveLinkedAccountIds', () => {
     it('returns the caller alone when nothing is linked', () => {
       // The overwhelmingly common case, and it must reproduce the pre-guest
@@ -97,6 +106,49 @@ describe('account identity', () => {
   });
 
   describe('requireIdentity', () => {
+    it('reuses the proxy lifecycle admission without another Auth or profile lookup', async () => {
+      const secret = 'identity-admission-test-secret-at-least-32-characters';
+      vi.stubEnv('IDENTITY_ADMISSION_SECRET', secret);
+      const admittedUser = {
+        id: 'user-1',
+        aud: 'authenticated',
+        role: 'authenticated',
+        email: 'creator@example.test',
+        phone: undefined,
+        is_anonymous: false,
+        app_metadata: {},
+        user_metadata: {},
+        created_at: '2026-08-22T00:00:00.000Z',
+      };
+      const assertion = await signIdentityAdmission({
+        authorization: 'Bearer verified-token',
+        method: 'POST',
+        pathname: '/api/generate',
+        state: 'active',
+        user: admittedUser,
+        secret,
+      });
+      const getUser = vi.fn(async () => {
+        throw new Error('route Auth must not run');
+      });
+      const client = { auth: { getUser } } as unknown as SupabaseClient;
+      registerIdentityAdmissionContext(client, new Request('https://magicbooklet.test/api/generate', {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer verified-token',
+          [IDENTITY_ADMISSION_HEADER]: assertion!,
+        },
+      }));
+      const admin = adminFor();
+
+      await expect(requireIdentity(client, admin)).resolves.toMatchObject({
+        ok: true,
+        identity: { userId: 'user-1', kind: 'registered' },
+      });
+      expect(getUser).not.toHaveBeenCalled();
+      expect(admin.from).not.toHaveBeenCalled();
+    });
+
     it('admits an active guest', async () => {
       const result = await requireIdentity(userClientFor(guest), adminFor());
 

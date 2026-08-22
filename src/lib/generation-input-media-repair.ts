@@ -19,6 +19,7 @@ import {
   type GenerationInputMediaItem,
   type PersistGenerationInputCandidate,
 } from '@/lib/generation-input-media';
+import { iterateStorageObjectsV2 } from '@/lib/storage-list-v2';
 
 /**
  * Heals generations whose durable input media never persisted.
@@ -337,14 +338,22 @@ async function rollbackPartialRepair(
   }
 
   const prefix = `${params.ownerUserId}/${params.generationId}`;
-  const listed = await client.storage.from(GENERATION_INPUTS_BUCKET).list(prefix);
-  if (listed.error || !listed.data?.length) {
+  const paths: string[] = [];
+  try {
+    for await (const object of iterateStorageObjectsV2(client, {
+      bucket: GENERATION_INPUTS_BUCKET,
+      prefix,
+    })) {
+      paths.push(object.path);
+    }
+  } catch {
     return { ok: true };
   }
+  if (paths.length === 0) return { ok: true };
 
   const removal = await client.storage
     .from(GENERATION_INPUTS_BUCKET)
-    .remove(listed.data.map((object) => `${prefix}/${object.name}`));
+    .remove(paths);
   if (removal.error) {
     // Harmless: persist uploads with upsert, so a retry overwrites these.
     logBackendWarning('failed_to_remove_rolled_back_generation_input_objects', {

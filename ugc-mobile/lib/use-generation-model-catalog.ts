@@ -7,7 +7,7 @@ import {
   GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
   loadCachedGenerationModelCatalogEnvelope,
   saveCachedGenerationModelCatalog,
-  type GenerationModelCatalogV2,
+  type GenerationModelCatalogV3,
   type GenerationModelCatalogCacheEnvelope,
 } from './generation-model-catalog';
 
@@ -18,7 +18,7 @@ type GenerationCatalogApi = Pick<ReturnType<typeof createApiClient>, 'fetchGener
 
 export function useGenerationModelCatalog(api: GenerationCatalogApi) {
   const queryClient = useQueryClient();
-  const [cachedCatalog, setCachedCatalog] = useState<GenerationModelCatalogV2 | null>(null);
+  const [cachedCatalog, setCachedCatalog] = useState<GenerationModelCatalogV3 | null>(null);
   const [hasNetworkCatalog, setHasNetworkCatalog] = useState(false);
   const [cacheReady, setCacheReady] = useState(false);
   const cacheEnvelopeRef = useRef<GenerationModelCatalogCacheEnvelope | null>(null);
@@ -32,7 +32,7 @@ export function useGenerationModelCatalog(api: GenerationCatalogApi) {
     ).then((envelope) => {
       if (!active || !envelope) return;
       cacheEnvelopeRef.current = envelope;
-      const catalog = envelope.catalog as GenerationModelCatalogV2;
+      const catalog = envelope.catalog as GenerationModelCatalogV3;
       setCachedCatalog(catalog);
       if (!queryClient.getQueryData(QUERY_KEY)) {
         queryClient.setQueryData(QUERY_KEY, envelope.catalog, {
@@ -56,7 +56,7 @@ export function useGenerationModelCatalog(api: GenerationCatalogApi) {
         etag: cacheEnvelopeRef.current?.etag ?? null,
         forceRefresh,
       });
-      const catalog = (response.catalog ?? cacheEnvelopeRef.current?.catalog) as GenerationModelCatalogV2 | undefined;
+      const catalog = (response.catalog ?? cacheEnvelopeRef.current?.catalog) as GenerationModelCatalogV3 | undefined;
       if (!catalog) throw new Error('The saved model catalog could not be restored.');
       const envelope = {
         catalog,
@@ -88,7 +88,7 @@ export function useGenerationModelCatalog(api: GenerationCatalogApi) {
     return refetch();
   }, [refetch]);
 
-  const catalog = (query.data ?? cachedCatalog) as GenerationModelCatalogV2 | null;
+  const catalog = (query.data ?? cachedCatalog) as GenerationModelCatalogV3 | null;
   const unavailableError = !catalog && query.error instanceof Error ? query.error : null;
   return {
     catalog,

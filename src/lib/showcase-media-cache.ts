@@ -5,7 +5,8 @@
  * long a viewer who already loaded a post can keep replaying it after a
  * takedown — it is not a freshness setting.
  *
- * One day, per open decision #5 of `docs/scaling-audit-2026-08-08.md`. The
+ * One day, per open decision #5 of
+ * `docs/archive/scaling-audit-2026-08-08.md`. The
  * previous value was 300s, a far more conservative answer to the same
  * question: at five minutes the CDN revalidated constantly and returning
  * visitors re-downloaded posters and clips they already held. A day cuts that

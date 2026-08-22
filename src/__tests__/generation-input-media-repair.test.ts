@@ -94,7 +94,21 @@ function repairClientDouble({
     }),
     storage: {
       from: vi.fn(() => ({
-        list: async () => ({ data: [{ name: '00-reference_image.png' }], error: null }),
+        listV2: async (options: { prefix?: string }) => ({
+          data: {
+            hasNext: false,
+            folders: [],
+            objects: [{
+              id: 'object-1',
+              key: `${options.prefix ?? ''}00-reference_image.png`,
+              name: '00-reference_image.png',
+              created_at: NOW.toISOString(),
+              updated_at: NOW.toISOString(),
+              metadata: {},
+            }],
+          },
+          error: null,
+        }),
         remove: async (paths: string[]) => {
           removedObjects.push(paths);
           return { error: null };

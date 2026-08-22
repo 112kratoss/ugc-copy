@@ -4,7 +4,10 @@ import {
   buildGenerationModelCatalogEtag,
   getGenerationModelCatalogRouteResponse,
 } from '@/lib/generation-model-catalog-route-adapter-service';
-import type { GenerationModelCatalog } from '@/lib/generation-model-catalog';
+import {
+  buildGenerationModelCatalog,
+  type GenerationModelCatalog,
+} from '@/lib/generation-model-catalog';
 
 function createCatalog(revision = 'catalog-revision-1'): GenerationModelCatalog {
   return {
@@ -68,5 +71,33 @@ describe('generation model catalog route adapter service', () => {
     expect(response.headers.get('ETag')).toBe(etag);
     expect(response.headers.get('x-request-id')).toBe('iad1::catalog-adapter-304');
     expect(await response.text()).toBe('');
+  });
+
+  it('keeps v2 intact and serves a compact v3 payload below the response budget', async () => {
+    const v3Catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 3 });
+    const v3Response = await getGenerationModelCatalogRouteResponse({
+      request: new Request(
+        'http://localhost/api/generation-models?platform=web&schemaVersion=3',
+      ),
+      dependencies: { buildGenerationModelCatalog },
+    });
+    const v3Body = await v3Response.text();
+    const v3 = JSON.parse(v3Body) as GenerationModelCatalog;
+
+    expect(v3.schemaVersion).toBe(3);
+    expect(v3Body.length).toBeLessThanOrEqual(57_344);
+    expect(v3.models.length).toBe(v3Catalog.models.length);
+    expect(v3.models.every((model) => !Object.hasOwn(model, 'inputs'))).toBe(true);
+    expect(v3.models.every((model) => Array.isArray(model.inputModes))).toBe(true);
+
+    const v2Response = await getGenerationModelCatalogRouteResponse({
+      request: new Request(
+        'http://localhost/api/generation-models?platform=web&schemaVersion=2',
+      ),
+      dependencies: { buildGenerationModelCatalog },
+    });
+    const v2 = await v2Response.json() as GenerationModelCatalog;
+    expect(v2.schemaVersion).toBe(2);
+    expect(v2.models.every((model) => Object.hasOwn(model, 'inputs'))).toBe(true);
   });
 });

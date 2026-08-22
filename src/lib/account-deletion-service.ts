@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { retainPurchasedUnlockFiles } from '@/lib/account-deletion-resource-retention';
 import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
+import { iterateStorageObjectsV2, StorageListV2Error } from '@/lib/storage-list-v2';
 
 const USER_PREFIX_BUCKETS = [
   'profiles',
@@ -29,12 +30,6 @@ export type AccountDeletionStorageManifest = {
   userPrefixBuckets: Array<(typeof USER_PREFIX_BUCKETS)[number]>;
   showcaseMediaPaths: string[];
   templateAssetPrefixes: string[];
-};
-
-type StorageEntry = {
-  id?: string | null;
-  name: string;
-  metadata?: unknown;
 };
 
 type StorageCleanupSummary = {
@@ -200,35 +195,27 @@ async function listUserFiles(
     throw new Error(`Could not inspect ${bucket} account files.`);
   }
   const files: string[] = [];
-  let offset = 0;
 
-  while (true) {
-    const { data, error } = await admin.storage.from(bucket).list(canonicalPrefix, {
-      limit: 1000,
-      offset,
-      sortBy: { column: 'name', order: 'asc' },
-    });
-
-    if (error) {
-      if (isMissingBucketError(error)) return files;
-      throw new Error(`Could not inspect ${bucket} account files.`);
-    }
-
-    const entries = (data ?? []) as StorageEntry[];
-    for (const entry of entries) {
-      const path = parseCanonicalStorageObjectPath(`${canonicalPrefix}/${entry.name}`, {
+  try {
+    for await (const entry of iterateStorageObjectsV2(admin, {
+      bucket,
+      prefix: canonicalPrefix,
+      pageSize: 1000,
+    })) {
+      const path = parseCanonicalStorageObjectPath(entry.path, {
         ownerUserId: expectedRootSegment,
       });
       if (!path) throw new Error(`Could not inspect ${bucket} account files.`);
-      if (entry.id || entry.metadata) {
-        files.push(path);
-      } else {
-        files.push(...await listUserFiles(admin, bucket, path, expectedRootSegment));
-      }
+      files.push(path);
     }
-
-    if (entries.length < 1000) break;
-    offset += entries.length;
+  } catch (error) {
+    if (error instanceof StorageListV2Error && isMissingBucketError(error.storageError)) {
+      return files;
+    }
+    if (error instanceof Error && error.message === `Could not inspect ${bucket} account files.`) {
+      throw error;
+    }
+    throw new Error(`Could not inspect ${bucket} account files.`);
   }
 
   return files;

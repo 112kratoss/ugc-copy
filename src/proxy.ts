@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type User } from '@supabase/supabase-js';
 
 import {
   ADMIN_SESSION_COOKIE,
@@ -19,6 +19,11 @@ import {
 } from '@/lib/e2e-auth';
 import { hasSupabaseAuthCookie } from '@/lib/supabase-auth-cookie';
 import { routeIdentityPolicyForPathname } from '@/lib/route-identity-policy';
+import {
+  IDENTITY_ADMISSION_HEADER,
+  IDENTITY_PROXY_TIMING_HEADER,
+  signIdentityAdmission,
+} from '@/lib/identity-admission-assertion';
 import mobileApiOperationsV1 from '../contracts/mobile-api-operations-v1.json';
 
 /**
@@ -226,7 +231,7 @@ function applyMobileCompatibilityHeaders(response: NextResponse) {
 type ProxyIdentityClient = {
   auth: {
     getUser: () => Promise<{
-      data: { user: { is_anonymous?: boolean } | null };
+      data: { user: User | null };
       error: unknown;
     }>;
   };
@@ -235,6 +240,7 @@ type ProxyIdentityClient = {
 
 type ProxyIdentityDependencies = {
   createUserClient?: (authorization: string) => ProxyIdentityClient;
+  signIdentityAdmission?: typeof signIdentityAdmission;
 };
 
 function createProxyIdentityClient(authorization: string): ProxyIdentityClient {
@@ -257,31 +263,46 @@ function createProxyIdentityClient(authorization: string): ProxyIdentityClient {
  *
  * The proxy uses only the caller's JWT and anon key. The zero-argument RPC can
  * inspect only auth.uid(), so this is an authoritative lifecycle check without
- * putting the service-role credential at the edge. Route adapters still verify
- * Auth independently before doing work.
+ * putting the service-role credential at the edge. Successful admission is
+ * passed to the route in a short-lived HMAC assertion bound to this exact
+ * bearer token, method and path. Route adapters verify that assertion and fall
+ * back to their own Auth/lifecycle checks when it is absent or invalid.
  */
-export async function guardUserFacingRouteIdentity(
+async function evaluateUserFacingRouteIdentity(
   request: NextRequest,
   dependencies: ProxyIdentityDependencies = {},
-): Promise<NextResponse | null> {
+): Promise<{
+  assertion: string | null;
+  durationMs: number;
+  rejection: NextResponse | null;
+}> {
+  const startedAt = performance.now();
+  const result = (
+    rejection: NextResponse | null,
+    assertion: string | null = null,
+  ) => ({
+    assertion,
+    durationMs: performance.now() - startedAt,
+    rejection,
+  });
   const policy = routeIdentityPolicyForPathname(request.nextUrl.pathname);
-  if (!policy || policy === 'service') return null;
+  if (!policy || policy === 'service') return result(null);
 
   // Public routes stay public when no token is supplied. If a caller does send
   // a bearer token, however, it must still be a live identity: otherwise an
   // optional-auth endpoint can turn a spent guest token into a service-role
   // mutation or signing capability.
   const authorization = request.headers.get('authorization')?.trim();
-  if (!authorization) return null;
+  if (!authorization) return result(null);
 
   try {
     const client = (dependencies.createUserClient ?? createProxyIdentityClient)(authorization);
     const { data: { user }, error: authError } = await client.auth.getUser();
     if (authError || !user) {
-      return NextResponse.json(
+      return result(NextResponse.json(
         { error: 'Unauthorized', code: 'UNAUTHORIZED' },
         { status: 401, headers: { 'Cache-Control': 'private, no-store' } },
-      );
+      ));
     }
 
     const { data: state, error: stateError } = await client.rpc('current_identity_state');
@@ -289,40 +310,86 @@ export async function guardUserFacingRouteIdentity(
       stateError
       || (state !== 'active' && state !== 'merged' && state !== 'deleting')
     ) {
-      return NextResponse.json({
+      return result(NextResponse.json({
         error: 'Identity verification is temporarily unavailable. Please try again.',
         code: 'IDENTITY_CHECK_UNAVAILABLE',
-      }, { status: 503, headers: { 'Cache-Control': 'private, no-store' } });
+      }, { status: 503, headers: { 'Cache-Control': 'private, no-store' } }));
     }
 
     if (state === 'merged') {
-      return NextResponse.json({
+      return result(NextResponse.json({
         error: 'This guest session has been linked to an account. Sign in to continue.',
         code: 'SESSION_MERGED',
-      }, { status: 409, headers: { 'Cache-Control': 'private, no-store' } });
+      }, { status: 409, headers: { 'Cache-Control': 'private, no-store' } }));
     }
 
     if (state === 'deleting') {
-      return NextResponse.json({
+      return result(NextResponse.json({
         error: 'This account is being permanently deleted.',
         code: 'ACCOUNT_DELETING',
-      }, { status: 409, headers: { 'Cache-Control': 'private, no-store' } });
+      }, { status: 409, headers: { 'Cache-Control': 'private, no-store' } }));
     }
 
     if (policy === 'registered' && user.is_anonymous === true) {
-      return NextResponse.json({
+      return result(NextResponse.json({
         error: 'Create an account to use this feature.',
         code: 'REGISTRATION_REQUIRED',
-      }, { status: 403, headers: { 'Cache-Control': 'private, no-store' } });
+      }, { status: 403, headers: { 'Cache-Control': 'private, no-store' } }));
     }
 
-    return null;
+    let assertion: string | null = null;
+    try {
+      assertion = await (dependencies.signIdentityAdmission ?? signIdentityAdmission)({
+        authorization,
+        method: request.method,
+        pathname: request.nextUrl.pathname,
+        state: 'active',
+        user,
+      });
+    } catch {
+      assertion = null;
+    }
+    if (!assertion) {
+      // Safe rolling/configuration fallback: the route receives no trusted
+      // assertion and therefore repeats its existing Auth/lifecycle boundary.
+      // Production health still degrades while the signing key is absent.
+      return result(null);
+    }
+    return result(null, assertion);
   } catch {
-    return NextResponse.json({
+    return result(NextResponse.json({
       error: 'Identity verification is temporarily unavailable. Please try again.',
       code: 'IDENTITY_CHECK_UNAVAILABLE',
-    }, { status: 503, headers: { 'Cache-Control': 'private, no-store' } });
+    }, { status: 503, headers: { 'Cache-Control': 'private, no-store' } }));
   }
+}
+
+export async function guardUserFacingRouteIdentity(
+  request: NextRequest,
+  dependencies: ProxyIdentityDependencies = {},
+): Promise<NextResponse | null> {
+  return (await evaluateUserFacingRouteIdentity(request, dependencies)).rejection;
+}
+
+function createAdmittedNextResponse(
+  request: NextRequest,
+  admission: { assertion: string | null; durationMs: number },
+): NextResponse {
+  const requestHeaders = new Headers(request.headers);
+  // Never let a caller supply an internal assertion or timing value. Only this
+  // proxy may add them to the request forwarded to a route.
+  requestHeaders.delete(IDENTITY_ADMISSION_HEADER);
+  requestHeaders.delete(IDENTITY_PROXY_TIMING_HEADER);
+  if (admission.assertion) {
+    requestHeaders.set(IDENTITY_ADMISSION_HEADER, admission.assertion);
+  }
+  if (process.env.SCALING_CERTIFICATION_TIMINGS === '1') {
+    requestHeaders.set(
+      IDENTITY_PROXY_TIMING_HEADER,
+      `proxy-identity;dur=${admission.durationMs.toFixed(2)}`,
+    );
+  }
+  return NextResponse.next({ request: { headers: requestHeaders } });
 }
 
 export async function proxy(
@@ -379,23 +446,28 @@ export async function proxy(
   // Identity lifecycle admission applies to ordinary web requests as well as
   // identified mobile traffic. Keep it ahead of the mobile-only early return
   // so a stale merged/deleting JWT cannot reach a route adapter on the web.
-  const identityRejection = await guardUserFacingRouteIdentity(
+  const identityAdmission = await evaluateUserFacingRouteIdentity(
     request,
     identityDependencies,
   );
-  if (identityRejection) {
+  if (identityAdmission.rejection) {
     return isMobilePath
-      ? applyMobileCorsHeaders(request, identityRejection)
-      : applyMobileCompatibilityHeaders(identityRejection);
+      ? applyMobileCorsHeaders(request, identityAdmission.rejection)
+      : applyMobileCompatibilityHeaders(identityAdmission.rejection);
   }
 
+  const admittedResponse = createAdmittedNextResponse(
+    request,
+    identityAdmission,
+  );
+
   if (!isMobilePath && !isIdentifiedMobileClient(request.headers)) {
-    return NextResponse.next();
+    return admittedResponse;
   }
 
   return isMobilePath
-    ? applyMobileCorsHeaders(request, NextResponse.next())
-    : applyMobileCompatibilityHeaders(NextResponse.next());
+    ? applyMobileCorsHeaders(request, admittedResponse)
+    : applyMobileCompatibilityHeaders(admittedResponse);
 }
 
 export const config = {

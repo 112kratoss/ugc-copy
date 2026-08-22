@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { NextRequest } from 'next/server';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { guardUserFacingRouteIdentity, proxy } from '@/proxy';
 import { routeIdentityPolicyForPathname } from '@/lib/route-identity-policy';
@@ -19,7 +19,15 @@ function identityClient(options: {
         data: {
           user: options.authError
             ? null
-            : { id: 'identity-1', is_anonymous: options.anonymous ?? false },
+            : {
+                id: 'identity-1',
+                aud: 'authenticated',
+                role: 'authenticated',
+                is_anonymous: options.anonymous ?? false,
+                app_metadata: {},
+                user_metadata: {},
+                created_at: '2026-08-22T00:00:00.000Z',
+              },
         },
         error: options.authError ?? null,
       })),
@@ -38,6 +46,14 @@ function authenticatedRequest(pathname: string) {
 }
 
 describe('central route identity admission', () => {
+  beforeEach(() => {
+    vi.stubEnv('IDENTITY_ADMISSION_SECRET', 'identity-admission-test-secret-at-least-32-characters');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('resolves concrete dynamic API paths through the identity registry', () => {
     expect(routeIdentityPolicyForPathname('/api/generations/abc/restore')).toBe('guest');
     expect(routeIdentityPolicyForPathname('/api/showcase/posts/post-1/comments')).toBe('registered');
@@ -100,6 +116,17 @@ describe('central route identity admission', () => {
         code: 'IDENTITY_CHECK_UNAVAILABLE',
       });
     }
+  });
+
+  it('falls back to route admission when the assertion key is unavailable', async () => {
+    vi.stubEnv('IDENTITY_ADMISSION_SECRET', '');
+    const response = await proxy(authenticatedRequest('/api/generations'), {
+      createUserClient: () => identityClient(),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-middleware-request-x-magicbooklet-identity-admission'))
+      .toBeNull();
   });
 
   it('admits active guests only on guest-enabled routes', async () => {

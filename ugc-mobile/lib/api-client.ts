@@ -387,8 +387,10 @@ export function createApiClient({
   requestTimeoutMs = DEFAULT_API_REQUEST_TIMEOUT_MS,
 }: ApiClientOptions) {
   const root = normalizeBaseUrl(baseUrl);
-  const catalogSchemaVersion = clientInfo?.catalogSchemaVersion === GENERATION_MODEL_CATALOG_SCHEMA_VERSION
-    ? GENERATION_MODEL_CATALOG_SCHEMA_VERSION
+  const requestedCatalogSchemaVersion = clientInfo?.catalogSchemaVersion;
+  const catalogSchemaVersion = requestedCatalogSchemaVersion === 2
+    || requestedCatalogSchemaVersion === GENERATION_MODEL_CATALOG_SCHEMA_VERSION
+    ? requestedCatalogSchemaVersion
     : 1;
   const responseCache = new Map<string, {
     expiresAt: number;
@@ -819,7 +821,7 @@ export function createApiClient({
         body: JSON.stringify(body),
         signal,
       }),
-    ...(catalogSchemaVersion === GENERATION_MODEL_CATALOG_SCHEMA_VERSION
+    ...(catalogSchemaVersion >= 2
       ? {
           startGeneration: (body: CatalogGenerationRequest, idempotencyKey?: string) =>
             request<GenerationStartResponse>(

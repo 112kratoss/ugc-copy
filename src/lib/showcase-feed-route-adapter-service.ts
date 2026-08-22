@@ -19,6 +19,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
+import { IDENTITY_PROXY_TIMING_HEADER } from '@/lib/identity-admission-assertion';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import {
   FEED_ANONYMOUS_COOKIE_MAX_AGE_SECONDS,
@@ -95,6 +96,11 @@ async function handleShowcaseFeedGET(
       if (!timingEnabled) return;
       phaseTimings.set(phase, (phaseTimings.get(phase) ?? 0) + Math.max(0, durationMs));
     };
+    if (timingEnabled) {
+      const proxyTiming = request.headers.get(IDENTITY_PROXY_TIMING_HEADER)
+        ?.match(/^proxy-identity;dur=(\d+(?:\.\d+)?)$/u);
+      if (proxyTiming) recordPhase('proxy_identity', Number(proxyTiming[1]));
+    }
     const searchParams = new URL(request.url).searchParams;
     const limit = Math.min(parsePositiveInt(searchParams.get('limit'), SHOWCASE_PAGE_SIZE), 24);
     const tool = searchParams.get('tool');

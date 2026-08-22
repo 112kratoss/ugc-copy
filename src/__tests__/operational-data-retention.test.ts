@@ -5,10 +5,14 @@ import { pruneOperationalBackendData } from '@/lib/operational-data-retention';
 
 const reclaimExpiredUploadReservationsMock = vi.hoisted(() => vi.fn(async () => ({
   scanned: 0,
+  handled: 0,
   objectsDeleted: 0,
   absentObjectsReleased: 0,
   failed: 0,
   bytesDeleted: 0,
+  scanLimitReached: false,
+  timeBudgetReached: false,
+  oldestCandidateExpiresAt: null,
 })));
 
 vi.mock('@/lib/upload-finalization', () => ({
@@ -50,6 +54,9 @@ function createClient(result: {
             data: result.freeUnlockOrders?.data ?? 0,
             error: result.freeUnlockOrders?.error ?? null,
           };
+        }
+        if (fn === 'prune_account_merge_tickets') {
+          return { data: 0, error: null };
         }
         return { data: result.data ?? null, error: result.error ?? null };
       },
@@ -93,10 +100,15 @@ describe('operational data retention', () => {
       shareEventsDeleted: 18,
       profileShareEventsDeleted: 6,
       abandonedFreeUnlockOrdersDeleted: 2,
+      accountMergeTicketsDeleted: 0,
       uploadByteReservationsDeleted: 0,
       expiredUploadReservationsScanned: 0,
+      expiredUploadReservationsHandled: 0,
       expiredUploadObjectsDeleted: 0,
       expiredUploadReservationFailures: 0,
+      uploadReclaimScanLimitReached: false,
+      uploadReclaimTimeBudgetReached: false,
+      oldestExpiredUploadCandidateAt: null,
     });
   });
 
@@ -117,6 +129,7 @@ describe('operational data retention', () => {
       'prune_post_share_events',
       'prune_profile_share_events',
       'prune_abandoned_free_unlock_orders',
+      'prune_account_merge_tickets',
       'prune_upload_byte_reservations',
     ]);
     expect(summary.shareEventsDeleted).toBe(40);

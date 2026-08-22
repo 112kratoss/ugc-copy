@@ -8,6 +8,7 @@ import {
   normalizeUploadIntentPath,
 } from '@/lib/media-upload-staging-paths';
 import type { UploadIntentKind } from '@/lib/media-upload-reclaim';
+import { iterateStorageObjectsV2 } from '@/lib/storage-list-v2';
 
 /**
  * Seeds `media_upload_intents` rows for staged objects that predate the table.
@@ -133,44 +134,18 @@ async function listBucketObjects(
   bucket: string,
 ): Promise<BacklogObject[]> {
   const objects: BacklogObject[] = [];
-
-  const listFolder = async (prefix: string) => {
-    for (let offset = 0; ; offset += STORAGE_PAGE_SIZE) {
-      const { data, error } = await client.storage
-        .from(bucket)
-        .list(prefix, { limit: STORAGE_PAGE_SIZE, offset });
-
-      if (error) {
-        throw new Error(`Failed to list ${bucket}/${prefix}: ${error.message}`);
-      }
-
-      const entries = data ?? [];
-      for (const entry of entries) {
-        const name = (entry as { name?: string }).name;
-        if (!name) continue;
-
-        const metadata = (entry as { metadata?: Record<string, unknown> | null }).metadata;
-        const childPath = prefix ? `${prefix}/${name}` : name;
-
-        // Supabase reports folders as rows with no metadata.
-        if (!metadata) {
-          await listFolder(childPath);
-          continue;
-        }
-
-        objects.push({
-          storagePath: childPath,
-          sizeBytes: typeof metadata.size === 'number' ? metadata.size : null,
-          mimeType: typeof metadata.mimetype === 'string' ? metadata.mimetype : null,
-          createdAt: (entry as { created_at?: string | null }).created_at ?? null,
-        });
-      }
-
-      if (entries.length < STORAGE_PAGE_SIZE) break;
-    }
-  };
-
-  await listFolder('');
+  for await (const entry of iterateStorageObjectsV2(client, {
+    bucket,
+    pageSize: STORAGE_PAGE_SIZE,
+  })) {
+    const metadata = entry.metadata;
+    objects.push({
+      storagePath: entry.path,
+      sizeBytes: typeof metadata?.size === 'number' ? metadata.size : null,
+      mimeType: typeof metadata?.mimetype === 'string' ? metadata.mimetype : null,
+      createdAt: entry.createdAt || null,
+    });
+  }
   return objects;
 }
 

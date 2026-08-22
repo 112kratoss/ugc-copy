@@ -1,4 +1,4 @@
-# Phase 1 scaling certificate runbook
+# Scaling certificate runbook
 
 This runbook turns the current scaling remediation into a reproducible release
 and capacity certificate. It is intentionally separate from the historical
@@ -6,14 +6,18 @@ audit journal. A green source build is necessary but does not certify MAU.
 
 ## 0. Product stop gate
 
-Do **not** provision the cloud certificate while any P0 item in the audit's
-`IR-3 — pre-certification implementation closure` is open. The product-side
-IR-2 blockers now have local implementations: durable template execution,
-retryable workflow admission and terminal wake, atomic provider-slot
-reservation, preserved completion leases, durable output import, leased media
-repair, and outstanding-byte admission/bounded cleanup. They are not considered
-released until a clean isolated replay, pgTAP, advisors and the deployed strict
-cases all pass. A source-only implementation is not a capacity result.
+Start with [`scaling-audit.md`](scaling-audit.md). Do **not** provision a cloud
+certificate while its priority board contains an unresolved correctness or
+unbounded-work stop gate. S1 through S3 now have source implementations and pass
+a clean local replay plus pgTAP, but the same replay must pass on the isolated
+certificate branch and their stated signed-in/upload fixture measurements must
+pass before a full-app certificate can be issued.
+
+The source contains durable workflow admission, provider-slot reservation,
+completion leases, output import, isolated media repair and bounded feed
+retention. Those controls are not considered released or capacity-proven until
+a clean isolated replay, pgTAP, advisors and the deployed strict cases all
+pass. A source-only implementation is not a capacity result.
 
 A deliberately narrower certificate may exclude a surface only if the workload,
 result title, RPS→MAU model and artifact all name the same exclusion. It must not
@@ -49,21 +53,11 @@ npm run build
 npm run build:verify
 ```
 
-The current certification migrations must be present:
-
-- `20260810100000_require_workflow_run_idempotency.sql`
-- `20260810101000_make_feed_retention_probe_constant_cost.sql`
-- `20260810102000_harden_workflow_stalled_adoption.sql`
-- `20260810103000_preserve_completion_job_leases.sql`
-- `20260810104000_count_only_submitted_provider_work.sql`
-- `20260810105000_wake_workflow_runs_on_generation_terminal.sql`
-- `20260810106000_durable_template_run_jobs.sql`
-- `20260810107000_durable_generation_output_imports.sql`
-- `20260810108000_lease_media_repairs.sql`
-- `20260810109000_atomically_reserve_provider_capacity.sql`
-- `20260810110000_bound_outstanding_upload_bytes.sql`
-- `20260810111000_bound_auxiliary_retention.sql`
-- `20260810112000_index_marketplace_search.sql`
+Every repository migration through the release-candidate commit must be
+present. Do not use the migration cutoff from an older certificate: upload,
+identity, workflow and retention behavior changed after the August 10 baseline.
+The migration wrapper and schema fingerprint below are the authoritative parity
+checks.
 
 ## 2. Provision and validate one isolated database
 
@@ -145,6 +139,12 @@ priming. Set `SCALING_CERTIFICATION_TIMINGS=1` on the preview; the ranked-feed
 driver fails if the route does not emit samples for auth, rate limit, candidate
 retrieval, hydration, persistence, cursor continuation, viewer state and total
 request/serialization phases.
+
+Also configure a unique `IDENTITY_ADMISSION_SECRET` (at least 32 bytes). Public
+feed/detail/comment reads intentionally use the PostgreSQL limiter, so the
+certificate must include its calls, rows, WAL, lock wait and latency in the
+origin write budget. Do not subtract rate-limit work from the result or claim a
+write-free public-read boundary.
 
 The stub must refuse to start if it cannot encode its real 1920×1080 JPEG and
 eight-second 1280×720 MP4. Confirm `/stub/stats` is reachable from the preview
@@ -330,5 +330,6 @@ The certificate fails unless all of these hold:
 Store commit SHA, schema fingerprint, tier manifest, SLO config, commands, raw
 JSON/JSONL, external metric exports and reconciliation queries together under
 `certification-artifacts/`. Remove the preview, stub tunnel and Supabase branch
-after artifacts are secured. Only then update the audit from **NOT CERTIFIED**
-to a dated, expiring capacity claim.
+after artifacts are secured. Only then add an immutable report under
+`docs/scaling-certificates/` and update `scaling-audit.md` from **NOT CERTIFIED**
+to a dated, expiring, exact-build capacity claim.

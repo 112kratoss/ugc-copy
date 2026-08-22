@@ -92,9 +92,11 @@ describe('generation model catalog schema v2', () => {
   it('uses projection-specific ETags even when release revisions are identical', () => {
     const mobileV1 = buildGenerationModelCatalog({ platform: 'mobile', schemaVersion: 1 });
     const mobileV2 = buildGenerationModelCatalog({ platform: 'mobile', schemaVersion: 2 });
+    const mobileV3 = buildGenerationModelCatalog({ platform: 'mobile', schemaVersion: 3 });
     const webV1 = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 1 });
 
     expect(mobileV1.revision).toBe(mobileV2.revision);
+    expect(mobileV2.revision).toBe(mobileV3.revision);
     expect(mobileV1.revision).toBe(webV1.revision);
     expect(buildGenerationModelCatalogEtag(mobileV1, 'mobile'))
       .not.toBe(buildGenerationModelCatalogEtag(mobileV2, 'mobile'));

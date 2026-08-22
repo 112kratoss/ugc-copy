@@ -9,6 +9,10 @@ import {
   collectOperationalTableGrowth,
   type OperationalTableGrowthReport,
 } from '@/lib/operational-table-growth';
+import {
+  collectUploadCapacityHealth,
+  type UploadCapacityHealth,
+} from '@/lib/upload-capacity-health';
 
 import {
   fetchBackendCostAggregates,
@@ -134,7 +138,7 @@ export type BackendCostReport = {
      * rate — it approaches 1 no matter how healthy the provider is.
      *
      * A real rate needs an attempt counter that does not write a row per call;
-     * see F15a in `docs/scaling-audit-2026-08-08.md`. Until then this field is
+     * see F15a in `docs/archive/scaling-audit-2026-08-08.md`. Until then this field is
      * a volume signal only, and `population` says so to anything consuming it.
      */
     recentEvents: number;
@@ -181,11 +185,13 @@ export type BackendCostReport = {
     objectsByBucket: Record<string, number>;
   };
   /**
-   * Row counts and byte sizes for the churn-prone operational tables managed by
-   * the retention sweep. Null when the reporting function is unavailable, for
-   * example against a database that has not applied the migration yet.
+   * Row counts and byte sizes for churn-prone operational state, user history,
+   * and permanent ledgers. Null when the reporting function is unavailable,
+   * for example against a database that has not applied the migration yet.
    */
   operationalTableGrowth: OperationalTableGrowthReport | null;
+  /** Admission-counter integrity and actionable/deferred upload reclaim age. */
+  uploadCapacityHealth: UploadCapacityHealth | null;
   /**
    * Which runner is actually settling generation completions. This is the
    * evidence the durable-queue decision rests on — see
@@ -1108,6 +1114,24 @@ export async function collectBackendCostReport(
     });
   }
 
+  let uploadCapacityHealth: UploadCapacityHealth | null = null;
+  try {
+    uploadCapacityHealth = await collectUploadCapacityHealth(client, now);
+    for (const issue of uploadCapacityHealth.issues) {
+      issues.push({
+        severity: issue.severity,
+        code: issue.code,
+        message: issue.message,
+      });
+    }
+  } catch {
+    issues.push({
+      severity: 'warning',
+      code: 'UPLOAD_CAPACITY_HEALTH_UNAVAILABLE',
+      message: 'Upload admission counter integrity and reclaim backlog could not be measured.',
+    });
+  }
+
   const generationCompletionSources = await collectGenerationCompletionSources(client, now);
 
   return {
@@ -1125,6 +1149,7 @@ export async function collectBackendCostReport(
     rateLimitPressure,
     storageGrowth,
     operationalTableGrowth,
+    uploadCapacityHealth,
     generationCompletionSources,
     issues,
   };
