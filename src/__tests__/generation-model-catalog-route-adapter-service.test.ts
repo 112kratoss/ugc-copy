@@ -41,6 +41,10 @@ describe('generation model catalog route adapter service', () => {
     expect(response.headers.get('Cache-Control')).toBe(
       'public, max-age=300, s-maxage=300, stale-while-revalidate=3600',
     );
+    expect(response.headers.get('Vercel-CDN-Cache-Control')).toBe(
+      'public, s-maxage=300, stale-while-revalidate=3600',
+    );
+    expect(response.headers.has('Vary')).toBe(false);
     expect(response.headers.get('ETag')).toBe(
       buildGenerationModelCatalogEtag(createCatalog('catalog-mobile-1'), 'mobile'),
     );

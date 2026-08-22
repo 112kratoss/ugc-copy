@@ -7,6 +7,8 @@ export const API_CACHE_CONTROL = {
   appVersionNoStore: 'no-store, no-cache, must-revalidate',
 } as const;
 
+const VERCEL_PUBLIC_CATALOG_CACHE_CONTROL = 'public, s-maxage=300, stale-while-revalidate=3600';
+
 type ApiCacheControl = (typeof API_CACHE_CONTROL)[keyof typeof API_CACHE_CONTROL];
 
 type ApiCacheHeaderOptions = {
@@ -67,6 +69,12 @@ export function createApiCacheHeaders(
   const headers: Record<string, string> = {
     'Cache-Control': cacheControl,
   };
+  if (cacheControl === API_CACHE_CONTROL.publicCatalog) {
+    // Next 15+ executes GET Route Handlers dynamically by default. Target the
+    // Vercel CDN explicitly so the browser TTL cannot leave these immutable,
+    // public catalogs origin-bound on every request.
+    headers['Vercel-CDN-Cache-Control'] = VERCEL_PUBLIC_CATALOG_CACHE_CONTROL;
+  }
 
   if (options.etag) {
     headers.ETag = options.etag;

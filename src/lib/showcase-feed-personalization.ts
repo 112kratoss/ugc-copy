@@ -322,14 +322,22 @@ async function resolveAlgorithmForViewer({
   serviceClient: SupabaseClient;
   viewerUserId: string | null;
 }) {
-  const assignment = await resolveFeedExperimentAssignment({
-    anonymousKeyHash,
-    serviceClient,
-    viewerUserId,
-  }).catch(() => null);
+  // The active algorithm and experiment definition are independent reads.
+  // Most requests have no running experiment, so serializing these added a
+  // complete PostgREST round trip to every personalized page.
+  const [assignment, active] = await Promise.all([
+    resolveFeedExperimentAssignment({
+      anonymousKeyHash,
+      serviceClient,
+      viewerUserId,
+    }).catch(() => null),
+    getAlgorithmVersion(serviceClient),
+  ]);
 
   if (assignment) {
-    const assigned = await getAlgorithmVersion(serviceClient, assignment.variant.algorithmVersionId);
+    const assigned = active?.id === assignment.variant.algorithmVersionId
+      ? active
+      : await getAlgorithmVersion(serviceClient, assignment.variant.algorithmVersionId);
     if (assigned) {
       return {
         algorithm: assigned,
@@ -340,7 +348,6 @@ async function resolveAlgorithmForViewer({
     }
   }
 
-  const active = await getAlgorithmVersion(serviceClient);
   return {
     algorithm: active,
     experimentAssignmentId: null,

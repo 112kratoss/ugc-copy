@@ -49,6 +49,17 @@ describe('API response headers', () => {
       .toBe('bom1::iad1::trace-456');
   });
 
+  it('targets the Vercel edge explicitly for public catalogs', () => {
+    const headers = createApiResponseHeaders(
+      new Request('http://localhost/api/generation-models'),
+      API_CACHE_CONTROL.publicCatalog,
+    );
+
+    expect(headers['Vercel-CDN-Cache-Control']).toBe(
+      'public, s-maxage=300, stale-while-revalidate=3600',
+    );
+  });
+
   it('creates and applies private no-store trace headers to existing responses', () => {
     const request = new Request('http://localhost/api/uploads/media/sign', {
       headers: { 'x-request-id': 'upload-trace-1' },

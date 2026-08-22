@@ -99,7 +99,7 @@ export async function getGenerationModelCatalogRouteResponse({
   const headers = createApiResponseHeaders(
     request,
     forceRefresh ? API_CACHE_CONTROL.noStore : API_CACHE_CONTROL.publicCatalog,
-    { etag, vary: ['x-magicbooklet-client', 'x-magicbooklet-catalog-schema-version'] },
+    { etag },
   );
 
   if (request.headers.get('if-none-match') === etag) {

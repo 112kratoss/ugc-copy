@@ -1276,12 +1276,29 @@ export async function getShowcaseFeedPage(options: {
     })
       ? await loadShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter)
       : await getShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter);
-  const priceStartedAt = performance.now();
-  const pricedFeed = await attachLocalizedAssetPrices(baseFeed, options.countryCode);
-  options.onPhaseTiming?.('pricing', performance.now() - priceStartedAt);
-  const viewerStartedAt = performance.now();
-  const hydratedFeed = await attachViewerStateToFeed(pricedFeed, viewerUserId, adminSupabase);
-  options.onPhaseTiming?.('viewer_state', performance.now() - viewerStartedAt);
+  const measurePhase = async <T>(phase: string, work: () => Promise<T>) => {
+    const startedAt = performance.now();
+    try {
+      return await work();
+    } finally {
+      options.onPhaseTiming?.(phase, performance.now() - startedAt);
+    }
+  };
+  // Localized pricing and viewer safety/state only read the neutral base feed;
+  // neither depends on the other's output. Merge their independent results
+  // after both finish instead of paying for their database calls in series.
+  const [pricedFeed, viewerFeed] = await Promise.all([
+    measurePhase('pricing', () => attachLocalizedAssetPrices(baseFeed, options.countryCode)),
+    measurePhase('viewer_state', () => attachViewerStateToFeed(baseFeed, viewerUserId, adminSupabase)),
+  ]);
+  const viewerItemById = new Map(viewerFeed.items.map((item) => [item.id, item]));
+  const hydratedFeed = {
+    ...pricedFeed,
+    items: pricedFeed.items.flatMap((pricedItem) => {
+      const viewerItem = viewerItemById.get(pricedItem.id);
+      return viewerItem ? [{ ...pricedItem, ...viewerItem, asset: pricedItem.asset }] : [];
+    }),
+  };
 
   return sanitizeShowcaseFeedPage(hydratedFeed);
 }

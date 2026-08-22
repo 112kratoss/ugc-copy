@@ -302,8 +302,9 @@ const nextConfig: NextConfig = {
  *
  * - `widenClientFileUpload: false` — uploading extra client bundles costs quota
  *   and buys nothing until traces are actually unreadable without it.
- * - `disableLogger: true` — strips Sentry's own debug logging from the bundle.
- * - `automaticVercelMonitors: false` — it would create Vercel Cron monitors in
+ * - webpack tree-shaking strips Sentry debug and tracing code when a Webpack
+ *   build is used; the bundler-neutral options below express the same policy.
+ * - `webpack.automaticVercelMonitors: false` — enabling it would create Vercel Cron monitors in
  *   Sentry. The cron already has `backend_job_runs` plus the external watchdog,
  *   and a second, quota-consuming monitor for the same thing is noise.
  * - `sourcemaps.deleteSourcemapsAfterUpload: true` — the maps go to Sentry, not
@@ -330,8 +331,21 @@ export default withSentryConfig(nextConfig, {
   authToken: process.env.SENTRY_AUTH_TOKEN,
   silent: !process.env.CI,
   widenClientFileUpload: false,
-  disableLogger: true,
-  automaticVercelMonitors: false,
+  // Error reporting is enabled, but performance tracing is deliberately
+  // sampled at zero (see src/lib/sentry-config.ts). Tell Sentry's build
+  // plugin the same thing so its browser tracing implementation is removed
+  // instead of shipping dead code on every route.
+  bundleSizeOptimizations: {
+    excludeDebugStatements: true,
+    excludeTracing: true,
+  },
+  webpack: {
+    automaticVercelMonitors: false,
+    treeshake: {
+      removeDebugLogging: true,
+      removeTracing: true,
+    },
+  },
   sourcemaps: {
     deleteSourcemapsAfterUpload: true,
   },
