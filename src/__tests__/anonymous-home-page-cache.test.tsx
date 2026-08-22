@@ -13,6 +13,7 @@ const cookiesMock = vi.fn();
 const getShowcaseFeedPageMock = vi.fn();
 const loadPublishedGenerationModelCatalogMock = vi.fn();
 const feedClientPropsMock = vi.fn();
+const getInlineShowcasePriorityPosterMock = vi.fn();
 
 vi.mock('@/lib/supabase-server', () => ({
   getServerAuthState: () => getServerAuthStateMock(),
@@ -35,6 +36,10 @@ vi.mock('@/lib/generation-model-catalog-store', () => ({
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({ from: vi.fn() }),
+}));
+
+vi.mock('@/lib/showcase-priority-poster', () => ({
+  getInlineShowcasePriorityPoster: (src: string) => getInlineShowcasePriorityPosterMock(src),
 }));
 
 vi.mock('@/app/feed/FeedClient', () => ({
@@ -111,6 +116,8 @@ describe('Anonymous home cacheability', () => {
     getShowcaseFeedPageMock.mockReset();
     loadPublishedGenerationModelCatalogMock.mockReset();
     feedClientPropsMock.mockReset();
+    getInlineShowcasePriorityPosterMock.mockReset();
+    getInlineShowcasePriorityPosterMock.mockResolvedValue(null);
     getServerAuthStateMock.mockImplementation(() => {
       throw new Error('Anonymous home must not read server auth — / must stay statically prerenderable');
     });
@@ -165,6 +172,38 @@ describe('Anonymous home cacheability', () => {
       variant: 'embedded',
       initialChipId: 'for-you',
       detailContext: { from: 'home', returnTo: '/' },
+    }));
+  });
+
+  it('passes one bounded server-inlined preview to the first home feed card', async () => {
+    const previewUrl = 'https://project.supabase.co/storage/v1/object/sign/generated_images/user-1/generation-1/cover.preview.abcdef0123456789.webp?token=signed-token';
+    const imageItem = {
+      ...buildFeedItem('image-post'),
+      postFormat: 'media',
+      category: 'image',
+      mediaItems: [{
+        id: 'media-1',
+        url: 'https://project.supabase.co/storage/v1/object/public/showcase_media/source.webp',
+        previewUrl,
+        mediaKind: 'image',
+        contentType: 'image/webp',
+        originalName: 'source.webp',
+        sortOrder: 0,
+      }],
+    } as unknown as ShowcaseFeedItem;
+    mockFeed([imageItem]);
+    getInlineShowcasePriorityPosterMock.mockResolvedValue('data:image/webp;base64,UklGRgAAAABXRUJQ');
+    const { default: Home } = await import('@/app/page');
+
+    await renderPageToHtml(<Home />);
+
+    expect(getInlineShowcasePriorityPosterMock).toHaveBeenCalledWith(previewUrl);
+    expect(feedClientPropsMock).toHaveBeenCalledWith(expect.objectContaining({
+      initialPriorityPreview: {
+        postId: 'image-post',
+        mediaId: 'media-1',
+        dataUrl: 'data:image/webp;base64,UklGRgAAAABXRUJQ',
+      },
     }));
   });
 

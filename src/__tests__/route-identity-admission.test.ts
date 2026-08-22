@@ -129,6 +129,25 @@ describe('central route identity admission', () => {
       .toBeNull();
   });
 
+  it('forwards trusted proxy timing to the authenticated production monitor', async () => {
+    const request = new NextRequest('https://magicbooklet.test/api/showcase/feed?sort=for-you', {
+      headers: {
+        Authorization: 'Bearer signed-user-token',
+        'x-performance-monitor': 'load',
+        'x-magicbooklet-proxy-timing': 'caller-value',
+      },
+    });
+    const response = await proxy(request, {
+      createUserClient: () => identityClient({ state: 'active' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-middleware-request-x-magicbooklet-proxy-timing'))
+      .toMatch(/^proxy-identity;dur=\d+(?:\.\d+)?$/);
+    expect(response.headers.get('x-middleware-request-x-magicbooklet-proxy-timing'))
+      .not.toContain('caller-value');
+  });
+
   it('admits active guests only on guest-enabled routes', async () => {
     const guest = identityClient({ anonymous: true });
     await expect(guardUserFacingRouteIdentity(

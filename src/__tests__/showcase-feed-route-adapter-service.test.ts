@@ -67,6 +67,32 @@ describe('showcase feed route adapter service', () => {
     }
   });
 
+  it('emits phase timings for the authenticated production performance monitor', async () => {
+    const response = await getShowcaseFeedRouteResponse({
+      request: new Request('http://localhost/api/showcase/feed?sort=for-you', {
+        headers: {
+          Authorization: 'Bearer performance-bot-token',
+          'x-performance-monitor': 'load',
+        },
+      }),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        createUserClient: vi.fn(() => createUserClient()),
+        enforceBackendRateLimit: vi.fn(),
+        getShowcaseFeedPage: vi.fn(async (options) => {
+          options.onPhaseTiming?.('session_page', 8.75);
+          return createFeedPage();
+        }) as unknown as typeof getShowcaseFeedPage,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Server-Timing')).toContain('session-page;dur=8.75');
+    expect(response.headers.get('x-scaling-certification-timing')).toBe(
+      response.headers.get('Server-Timing'),
+    );
+  });
+
   it('wraps anonymous feed requests in provider request context and keeps them publicly cacheable', async () => {
     const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
     const createUserClientDependency = vi.fn();

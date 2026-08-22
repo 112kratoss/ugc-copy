@@ -222,6 +222,8 @@ describe('production performance readiness', () => {
     expect(loadHarness).toContain("new URL('/auth/v1/token?grant_type=password', authUrl)");
     expect(loadHarness).toContain('Signed-in coverage is required');
     expect(loadHarness).toContain('P95_ENCODED_BODY_BYTES');
+    expect(loadHarness).toContain("response.headers, 'x-scaling-certification-timing'");
+    expect(loadHarness).toContain('serverTimings,');
     expect(loadHarness).not.toContain('transferredBytes');
     expect(loadHarness).not.toContain('totalTransferredBytes');
     expect(loadHarness).toContain('if (!await reserveRateSlot(warmupDeadline))');

@@ -383,7 +383,11 @@ function createAdmittedNextResponse(
   if (admission.assertion) {
     requestHeaders.set(IDENTITY_ADMISSION_HEADER, admission.assertion);
   }
-  if (process.env.SCALING_CERTIFICATION_TIMINGS === '1') {
+  const performanceMonitorMode = request.headers.get('x-performance-monitor');
+  const timingEnabled = process.env.SCALING_CERTIFICATION_TIMINGS === '1'
+    || Boolean(request.headers.get('Authorization'))
+      && (performanceMonitorMode === 'warmup' || performanceMonitorMode === 'load');
+  if (timingEnabled) {
     requestHeaders.set(
       IDENTITY_PROXY_TIMING_HEADER,
       `proxy-identity;dur=${admission.durationMs.toFixed(2)}`,

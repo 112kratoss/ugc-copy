@@ -265,6 +265,32 @@ describe('ShowcaseMediaCarousel', () => {
     expect(container.querySelector('video')).toHaveAttribute('poster', priorityPoster.dataUrl);
   });
 
+  it('uses the inlined priority preview as the first feed image source', () => {
+    const dataUrl = 'data:image/webp;base64,UklGRgAAAABXRUJQ';
+    const { container } = render(
+      <ShowcaseMediaCarousel
+        title="Campaign still"
+        priority
+        priorityPoster={{ mediaId: 'image-1', dataUrl }}
+        mediaItems={[{
+          id: 'image-1',
+          url: 'https://example.com/source.webp',
+          previewUrl: 'https://example.com/preview.webp',
+          mediaKind: 'image',
+          contentType: 'image/webp',
+          originalName: 'source.webp',
+          width: 1080,
+          height: 1350,
+          durationSeconds: null,
+          sortOrder: 0,
+        }]}
+      />
+    );
+
+    expect(container.querySelector('img')).toHaveAttribute('src', dataUrl);
+    expect(container.querySelector('img')).toHaveAttribute('fetchpriority', 'high');
+  });
+
   it('ignores a priority poster override for a different media item', () => {
     const { container } = render(
       <ShowcaseMediaCarousel

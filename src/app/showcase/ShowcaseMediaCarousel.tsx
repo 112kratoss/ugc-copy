@@ -471,7 +471,7 @@ export default function ShowcaseMediaCarousel({
           ) : mode === 'feed' ? (
             <OptimizedPreviewImage
               key={activeLoadKey}
-              previewSrc={previewUrl ?? renderedActiveItem.url}
+              previewSrc={posterUrl ?? renderedActiveItem.url}
               fallbackSrc={renderedActiveItem.url}
               alt={title}
               sizes={sizes ?? '(min-width: 1280px) 25vw, (min-width: 768px) 33vw, (min-width: 640px) 50vw, 100vw'}

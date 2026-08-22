@@ -90,7 +90,11 @@ async function handleShowcaseFeedGET(
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
   try {
-    const timingEnabled = process.env.SCALING_CERTIFICATION_TIMINGS === '1';
+    const hasAuthorizationHeader = Boolean(request.headers.get('Authorization'));
+    const performanceMonitorMode = request.headers.get('x-performance-monitor');
+    const timingEnabled = process.env.SCALING_CERTIFICATION_TIMINGS === '1'
+      || hasAuthorizationHeader
+        && (performanceMonitorMode === 'warmup' || performanceMonitorMode === 'load');
     const phaseTimings = new Map<string, number>();
     const recordPhase = (phase: string, durationMs: number) => {
       if (!timingEnabled) return;
@@ -105,7 +109,6 @@ async function handleShowcaseFeedGET(
     const limit = Math.min(parsePositiveInt(searchParams.get('limit'), SHOWCASE_PAGE_SIZE), 24);
     const tool = searchParams.get('tool');
     const cursor = searchParams.get('cursor');
-    const hasAuthorizationHeader = Boolean(request.headers.get('Authorization'));
     const authStartedAt = performance.now();
     const actor = await getViewerUserId(request, hasAuthorizationHeader, dependencies);
     recordPhase('auth', performance.now() - authStartedAt);
@@ -188,9 +191,8 @@ async function handleShowcaseFeedGET(
         .join(', ');
       response.headers.set('Server-Timing', renderedTimings);
       // Vercel preview protection may consume or strip Server-Timing. Keep a
-      // certification-only mirror so the external driver can still enforce
-      // phase coverage; the entire block remains disabled outside the isolated
-      // scaling environment.
+      // mirror for the authenticated production monitor so the external driver
+      // can diagnose a tail without exposing timings on ordinary public reads.
       response.headers.set('x-scaling-certification-timing', renderedTimings);
     }
     if (anonymousIdentity?.cookieValueToSet) {

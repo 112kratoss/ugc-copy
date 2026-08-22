@@ -466,30 +466,39 @@ async function loadPersistedPage({
     ? null
     : (pageRows.at(-1)?.row.position as number) + 1;
 
-  const servedAt = new Date().toISOString();
-  const telemetryWrites: Array<PromiseLike<unknown> | Promise<unknown>> = [
-    serviceClient
-      .from('feed_sessions')
-      .update({ last_accessed_at: servedAt })
-      .eq('id', session.id),
-  ];
-  if (pageRows.length > 0) {
-    telemetryWrites.push(serviceClient
-      .from('feed_session_items')
-      .update({ served_at: servedAt })
-      .in('id', pageRows.map(({ row }) => row.id)));
-    telemetryWrites.push(recordServedDeliveryFacts(
-      serviceClient,
-      session.id,
-      pageRows.map(({ item, row }) => ({
-        deliveryId: row.id,
-        postId: row.post_id,
-        creatorUserId: item.creator.id || null,
-        row,
-      })),
-    ));
+  // Page one was marked served atomically when this session was created. A
+  // short-lived session reuse is therefore a read of the same exposure, not a
+  // new exposure. Rewriting the session, its items, and duplicate delivery
+  // facts here added three database waits to the hottest authenticated path;
+  // the fact-template read alone reached 2.6s in production. Continuation
+  // pages still mint their own facts below because those positions have not
+  // previously been exposed.
+  if (cursor.position > 0) {
+    const servedAt = new Date().toISOString();
+    const telemetryWrites: Array<PromiseLike<unknown> | Promise<unknown>> = [
+      serviceClient
+        .from('feed_sessions')
+        .update({ last_accessed_at: servedAt })
+        .eq('id', session.id),
+    ];
+    if (pageRows.length > 0) {
+      telemetryWrites.push(serviceClient
+        .from('feed_session_items')
+        .update({ served_at: servedAt })
+        .in('id', pageRows.map(({ row }) => row.id)));
+      telemetryWrites.push(recordServedDeliveryFacts(
+        serviceClient,
+        session.id,
+        pageRows.map(({ item, row }) => ({
+          deliveryId: row.id,
+          postId: row.post_id,
+          creatorUserId: item.creator.id || null,
+          row,
+        })),
+      ));
+    }
+    await Promise.all(telemetryWrites);
   }
-  await Promise.all(telemetryWrites);
 
   return buildPage({
     algorithmVersion: algorithm.algorithmVersion,
@@ -560,6 +569,10 @@ async function persistRankedSession({
   if (sessionError || !sessionData?.id) return null;
 
   const sessionId = String(sessionData.id);
+  const servedPositions = new Set(
+    ranked.slice(offset, offset + limit).map((_, index) => offset + index),
+  );
+  const servedAt = now.toISOString();
   const rows = ranked.map((entry, position) => ({
     session_id: sessionId,
     post_id: entry.item.id,
@@ -568,6 +581,9 @@ async function persistRankedSession({
     final_score: entry.score,
     score_components: scoreComponents(entry.features),
     is_exploration: entry.features.candidateSource === 'exploration',
+    // This lets a reused first page remain entirely read-only. Continuation
+    // pages stamp their positions only when they are actually requested.
+    served_at: servedPositions.has(position) ? servedAt : null,
   }));
   const { data: itemData, error: itemError } = await serviceClient
     .from('feed_session_items')
@@ -589,9 +605,6 @@ async function persistRankedSession({
   //
   // served_at is set here rather than stamped afterwards: a fact now exists
   // because the delivery was served, so its creation IS the serve marker.
-  const servedPositions = new Set(
-    ranked.slice(offset, offset + limit).map((_, index) => offset + index),
-  );
   const factRows = ((itemData ?? []) as Array<{ id: string | number; position: number }>)
     .flatMap((row) => {
       const entry = ranked[row.position];
@@ -619,8 +632,8 @@ async function persistRankedSession({
         score_components: scoreComponents(entry.features),
         surface: 'showcase',
         mode: 'for-you',
-        ranked_at: now.toISOString(),
-        served_at: now.toISOString(),
+        ranked_at: servedAt,
+        served_at: servedAt,
       }];
     });
   const { error: factError } = await serviceClient

@@ -7,6 +7,7 @@ vi.mock('next/cache', () => ({
 }));
 
 const VALID_POSTER_URL = 'https://project.supabase.co/storage/v1/object/public/showcase_media/posts/post-1/0/cover.preview.abcdef0123456789.webp';
+const VALID_SIGNED_GENERATED_PREVIEW_URL = 'https://project.supabase.co/storage/v1/object/sign/generated_images/user-1/generation-1/cover.preview.abcdef0123456789.webp?token=signed-token';
 
 function createWebpBytes(payloadBytes = 8): Uint8Array {
   const bytes = new Uint8Array(12 + payloadBytes);
@@ -29,10 +30,11 @@ describe('showcase priority poster inlining', () => {
     vi.unstubAllGlobals();
   });
 
-  it('accepts only content-hashed generated previews in the public showcase bucket', async () => {
+  it('accepts only bounded public showcase or signed generated previews', async () => {
     const { isInlineableShowcasePriorityPoster } = await import('@/lib/showcase-priority-poster');
 
     expect(isInlineableShowcasePriorityPoster(VALID_POSTER_URL)).toBe(true);
+    expect(isInlineableShowcasePriorityPoster(VALID_SIGNED_GENERATED_PREVIEW_URL)).toBe(true);
     expect(isInlineableShowcasePriorityPoster(
       'https://other.example/storage/v1/object/public/showcase_media/posts/post-1/cover.preview.abcdef0123456789.webp'
     )).toBe(false);
@@ -41,6 +43,15 @@ describe('showcase priority poster inlining', () => {
     )).toBe(false);
     expect(isInlineableShowcasePriorityPoster(
       'https://project.supabase.co/storage/v1/object/sign/showcase_media/posts/post-1/cover.preview.abcdef0123456789.webp'
+    )).toBe(false);
+    expect(isInlineableShowcasePriorityPoster(
+      'https://project.supabase.co/storage/v1/object/sign/generated_images/user-1/generation-1/cover.preview.abcdef0123456789.webp'
+    )).toBe(false);
+    expect(isInlineableShowcasePriorityPoster(
+      `${VALID_SIGNED_GENERATED_PREVIEW_URL}&download=1`
+    )).toBe(false);
+    expect(isInlineableShowcasePriorityPoster(
+      `${VALID_SIGNED_GENERATED_PREVIEW_URL}&token=second-token`
     )).toBe(false);
     expect(isInlineableShowcasePriorityPoster(
       'https://project.supabase.co/storage/v1/object/public/profile_media/cover.preview.abcdef0123456789.webp'

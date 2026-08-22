@@ -55,6 +55,12 @@ interface FeedClientProps {
      */
     variant?: 'page' | 'embedded';
     detailContext?: FeedDetailContext;
+    /** One bounded server-inlined cover for the anonymous home LCP. */
+    initialPriorityPreview?: {
+        postId: string;
+        mediaId: string;
+        dataUrl: string;
+    } | null;
 }
 
 function toggleInSet(current: Set<string>, id: string) {
@@ -68,6 +74,7 @@ export default function FeedClient({
     initialChipId,
     variant = 'page',
     detailContext = PAGE_DETAIL_CONTEXT,
+    initialPriorityPreview = null,
 }: FeedClientProps) {
     const router = useRouter();
     const { session, user } = useAuth();
@@ -468,6 +475,12 @@ export default function FeedClient({
                             commentsOpen={commentsOpenIds.has(card.id)}
                             accessToken={accessToken}
                             priorityMedia={cardIndex === 0}
+                            priorityPoster={card.id === initialPriorityPreview?.postId
+                                ? {
+                                    mediaId: initialPriorityPreview.mediaId,
+                                    dataUrl: initialPriorityPreview.dataUrl,
+                                }
+                                : null}
                             detailContext={detailContext}
                             onToggleExpanded={() => toggleExpanded(card.id)}
                             onToggleComments={() => toggleComments(card.id)}

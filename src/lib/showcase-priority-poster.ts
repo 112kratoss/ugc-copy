@@ -9,6 +9,7 @@ export const SHOWCASE_PRIORITY_POSTER_TIMEOUT_MS = 1_500;
 
 const SHOWCASE_PRIORITY_POSTER_REVALIDATE_SECONDS = 24 * 60 * 60;
 const PUBLIC_SHOWCASE_MEDIA_PREFIX = '/storage/v1/object/public/showcase_media/';
+const SIGNED_GENERATED_MEDIA_PREFIX = '/storage/v1/object/sign/generated_images/';
 
 export function isInlineableShowcasePriorityPoster(src: string): boolean {
   if (!isGeneratedPreviewImage(src)) {
@@ -17,9 +18,24 @@ export function isInlineableShowcasePriorityPoster(src: string): boolean {
 
   try {
     const url = new URL(src);
-    return url.pathname.startsWith(PUBLIC_SHOWCASE_MEDIA_PREFIX)
-      && url.search === ''
-      && url.hash === '';
+    if (url.hash !== '') return false;
+
+    if (url.pathname.startsWith(PUBLIC_SHOWCASE_MEDIA_PREFIX)) {
+      return url.search === '';
+    }
+
+    if (!url.pathname.startsWith(SIGNED_GENERATED_MEDIA_PREFIX)) {
+      return false;
+    }
+
+    // Home hydration already emits a short-lived signed URL for private
+    // generated previews. Permit exactly that token and no caller-controlled
+    // extra parameters; the bytes are still bounded and signature-checked
+    // before being embedded.
+    const tokenValues = url.searchParams.getAll('token');
+    return [...url.searchParams.keys()].every((key) => key === 'token')
+      && tokenValues.length === 1
+      && tokenValues[0].length > 0;
   } catch {
     return false;
   }
@@ -148,7 +164,7 @@ export async function getInlineShowcasePriorityPoster(src: string): Promise<stri
     return await getCachedInlineShowcasePriorityPoster(src);
   } catch {
     // The public page must remain available when the preview origin or cache is
-    // slow. Its existing external poster URL remains the rendering fallback.
+    // slow. Its existing external preview URL remains the rendering fallback.
     return null;
   }
 }

@@ -518,6 +518,18 @@ function normalizedContentEncodings(value) {
   return encodings.length > 0 ? encodings : ['identity'];
 }
 
+export function parseServerTiming(value) {
+  if (!value) return null;
+  const timings = {};
+  for (const entry of value.split(',')) {
+    const match = entry.trim().match(/^([a-z0-9-]+)\s*;\s*dur=(\d+(?:\.\d+)?)$/i);
+    if (!match) continue;
+    const durationMs = Number(match[2]);
+    if (Number.isFinite(durationMs)) timings[match[1].toLowerCase()] = durationMs;
+  }
+  return Object.keys(timings).length > 0 ? timings : null;
+}
+
 async function decodeResponseBody(body, contentEncodingHeader) {
   const encodings = normalizedContentEncodings(contentEncodingHeader);
   let decoded = body;
@@ -548,6 +560,7 @@ function failedSample(error, startedAt) {
     ok: false,
     status: null,
     matchedPath: null,
+    serverTiming: null,
     totalMs: finishedAt - startedAt,
     ttfbMs: finishedAt - startedAt,
   };
@@ -629,6 +642,10 @@ async function performRequest(
             ok: target.expectedStatuses.includes(response.statusCode),
             status: response.statusCode,
             matchedPath: responseHeader(response.headers, 'x-matched-path'),
+            serverTiming: parseServerTiming(
+              responseHeader(response.headers, 'x-scaling-certification-timing')
+                ?? responseHeader(response.headers, 'server-timing'),
+            ),
             totalMs: finishedAt - startedAt,
             ttfbMs: headersAt - startedAt,
           });
@@ -650,6 +667,7 @@ function summarizeTarget(target, samples, elapsedSeconds) {
   const statusCounts = {};
   const cacheStatusCounts = {};
   const contentEncodingCounts = {};
+  const serverTimingSamples = {};
   for (const sample of samples) {
     const status = sample.status === null ? 'network-error' : String(sample.status);
     statusCounts[status] = (statusCounts[status] ?? 0) + 1;
@@ -657,7 +675,21 @@ function summarizeTarget(target, samples, elapsedSeconds) {
     if (sample.contentEncoding) {
       contentEncodingCounts[sample.contentEncoding] = (contentEncodingCounts[sample.contentEncoding] ?? 0) + 1;
     }
+    if (sample.ok) {
+      for (const [phase, durationMs] of Object.entries(sample.serverTiming ?? {})) {
+        (serverTimingSamples[phase] ??= []).push(durationMs);
+      }
+    }
   }
+
+  const serverTimings = Object.fromEntries(
+    Object.entries(serverTimingSamples)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([phase, durations]) => [phase, {
+        requests: durations.length,
+        durationMs: summarizeDurations(durations),
+      }]),
+  );
 
   const result = {
     name: target.name,
@@ -691,6 +723,7 @@ function summarizeTarget(target, samples, elapsedSeconds) {
     cacheAgeSeconds: summarizeDurations(successful.map((sample) => sample.ageSeconds).filter((value) => value !== null)),
     cacheControls: [...new Set(successful.map((sample) => sample.cacheControl).filter(Boolean))],
     matchedPaths: [...new Set(successful.map((sample) => sample.matchedPath).filter(Boolean))],
+    serverTimings,
     ttfbMs: summarizeDurations(successful.map((sample) => sample.ttfbMs)),
     totalMs: summarizeDurations(successful.map((sample) => sample.totalMs)),
     sampleErrors: [...new Set(failed.map((sample) => sample.error).filter(Boolean))].slice(0, 3),
@@ -791,6 +824,10 @@ async function runSelfTest(budgetsPath) {
   assert.equal(percentile([1, 2, 3, 4], 50), 2);
   assert.equal(percentile([1, 2, 3, 4], 99), 4);
   assert.equal(summarizeDurations([10, 20, 30, 40]).p95, 40);
+  assert.deepEqual(
+    parseServerTiming('auth;dur=12.50, invalid, feed-total;dur=101.25'),
+    { auth: 12.5, 'feed-total': 101.25 },
+  );
   assert.ok(targets.every((target) => target.method === 'GET'));
   assert.ok(targets.every((target) => target.auth === undefined));
   assert.ok(targets.every((target) => target.p95EncodedBodyBytes > 0));

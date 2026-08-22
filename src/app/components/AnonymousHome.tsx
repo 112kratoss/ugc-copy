@@ -13,6 +13,7 @@ import type { HomeWhatsNewModel } from '@/lib/home-dashboard';
 import { loadHomeFeed, loadHomeWhatsNewModels } from '@/lib/home-dashboard-service';
 import { getFeedChip } from '@/lib/post-feed-chips';
 import { PRICING_CURRENCY, PRICING_PLAN_MAP } from '@/lib/pricing';
+import { getInlineShowcasePriorityPoster } from '@/lib/showcase-priority-poster';
 import {
   buildOrganizationSchema,
   buildSoftwareApplicationSchema,
@@ -49,8 +50,8 @@ function HomeFeedSkeleton() {
   );
 }
 
-function AnonymousFeedSection({ data }: { data: Promise<ShowcaseFeedPage | null> }) {
-  const feed = use(data);
+async function AnonymousFeedSection({ data }: { data: Promise<ShowcaseFeedPage | null> }) {
+  const feed = await data;
 
   if (!feed) {
     return (
@@ -67,12 +68,27 @@ function AnonymousFeedSection({ data }: { data: Promise<ShowcaseFeedPage | null>
     );
   }
 
+  const priorityPost = feed.items[0] ?? null;
+  const priorityMedia = priorityPost?.mediaItems
+    ?.slice()
+    .sort((left, right) => left.sortOrder - right.sortOrder)[0] ?? null;
+  const inlinePriorityPreview = priorityMedia?.previewUrl
+    ? await getInlineShowcasePriorityPoster(priorityMedia.previewUrl)
+    : null;
+
   return (
     <FeedClient
       initialFeed={feed}
       initialChipId="for-you"
       variant="embedded"
       detailContext={FEED_DETAIL_CONTEXT}
+      initialPriorityPreview={priorityPost && priorityMedia && inlinePriorityPreview
+        ? {
+            postId: priorityPost.id,
+            mediaId: priorityMedia.id,
+            dataUrl: inlinePriorityPreview,
+          }
+        : null}
     />
   );
 }

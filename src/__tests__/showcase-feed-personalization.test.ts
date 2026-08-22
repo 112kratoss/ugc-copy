@@ -353,11 +353,16 @@ describe('showcase feed personalization candidate filling', () => {
     const isCalls: Array<[string, unknown]> = [];
     const containsCalls: Array<[string, unknown]> = [];
     const selectCalls: string[] = [];
+    const updateCalls: unknown[] = [];
     const fluent = (options: { maybeSingleData?: unknown; awaitedData?: unknown }) => {
       const query: Record<string, unknown> = {};
-      for (const method of ['in', 'gt', 'gte', 'lt', 'order', 'limit', 'update', 'delete']) {
+      for (const method of ['in', 'gt', 'gte', 'lt', 'order', 'limit', 'delete']) {
         query[method] = vi.fn(() => query);
       }
+      query.update = vi.fn((value: unknown) => {
+        updateCalls.push(value);
+        return query;
+      });
       query.select = vi.fn((columns: string) => {
         selectCalls.push(columns);
         return query;
@@ -444,6 +449,7 @@ describe('showcase feed personalization candidate filling', () => {
     expect(algorithmReads).toBe(1);
     expect(db.rpc).not.toHaveBeenCalled();
     expect(insertCalls.every((insert) => insert.mock.calls.length === 0)).toBe(true);
+    expect(updateCalls).toEqual([]);
     expect(containsCalls).toContainEqual(['filters', {
       category: 'all', toolSlug: 'video-tool', unlockFilter: 'all', resourceFilter: 'all',
     }]);
@@ -551,7 +557,7 @@ describe('showcase feed personalization candidate filling', () => {
 
     const page = await getPersonalizedShowcaseFeedPage({
       anonymousKeyHash: null,
-      cursor: encodeRankedFeedCursor({ sessionId: 'gap-session', position: 0 }),
+      cursor: encodeRankedFeedCursor({ sessionId: 'gap-session', position: 1 }),
       fallbackItems: vi.fn(),
       filters: { category: 'all', toolSlug: null, unlockFilter: 'all', resourceFilter: 'all' },
       hydratePostIds,
@@ -827,6 +833,10 @@ describe('showcase feed personalization candidate filling', () => {
 
     expect(sessionItemInserts).toHaveLength(CANDIDATES);
     expect(factInserts).toHaveLength(PAGE_SIZE);
+    expect(sessionItemInserts.slice(0, PAGE_SIZE).every((row) => (
+      typeof row.served_at === 'string'
+    ))).toBe(true);
+    expect(sessionItemInserts.slice(PAGE_SIZE).every((row) => row.served_at === null)).toBe(true);
     // Positions are the served slice, not an arbitrary subset.
     expect(factInserts.map((row) => row.position)).toEqual([0, 1, 2]);
     // A fact exists because the delivery was served, so its creation is the
