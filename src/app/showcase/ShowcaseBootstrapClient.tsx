@@ -37,12 +37,6 @@ export interface ShowcaseBootstrapClientProps {
     initialPriorityPoster?: ShowcasePriorityPosterData | null;
 }
 
-// Long enough that the handoff lands after the first paint's work has drained,
-// short enough that a viewer reading the first card finds a live grid.
-const SHOWCASE_ACTIVATION_IDLE_TIMEOUT_MS = 1_200;
-const SHOWCASE_ACTIVATION_FALLBACK_MS = 1_200;
-const SHOWCASE_FOCUSED_ACTIVATION_RETRY_MS = 250;
-
 const CATEGORY_LINKS: Array<{ id: ShowcaseCategory; label: string }> = [
     { id: 'all', label: 'All posts' },
     { id: 'image', label: 'Images' },
@@ -232,7 +226,6 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
     const [isActivating, setIsActivating] = useState(false);
     const fullClientPromiseRef = useRef<Promise<ComponentType<ShowcaseBootstrapClientProps>> | null>(null);
     const initialScrollYRef = useRef<number | null>(null);
-    const bootstrapRootRef = useRef<HTMLDivElement | null>(null);
     const shouldRelayAnonymousDemandRef = useRef(false);
 
     const loadFullClient = useCallback(() => {
@@ -278,53 +271,6 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
             activate();
         }
     }, [activate, isAuthLoading, session?.access_token, user]);
-
-    useEffect(() => {
-        if (isAuthLoading || FullShowcaseClient || isActivating) {
-            return;
-        }
-
-        // Hand off during the first idle window rather than waiting for a
-        // pointer or scroll. The shell's cards are already painted, so this
-        // only upgrades them in place — but it means the grid is live before
-        // the viewer reaches for it instead of after.
-        let focusedRetryHandle: number | null = null;
-        const activateWhenFocusIsSafe = () => {
-            const activeElement = document.activeElement;
-            if (
-                activeElement
-                && activeElement !== document.body
-                && bootstrapRootRef.current?.contains(activeElement)
-            ) {
-                // Replacing the shell while a filter, creator link, or card
-                // owns focus would send keyboard users back to the document.
-                focusedRetryHandle = window.setTimeout(
-                    activateWhenFocusIsSafe,
-                    SHOWCASE_FOCUSED_ACTIVATION_RETRY_MS,
-                );
-                return;
-            }
-            activate();
-        };
-
-        if (typeof window.requestIdleCallback !== 'function') {
-            const handle = window.setTimeout(activateWhenFocusIsSafe, SHOWCASE_ACTIVATION_FALLBACK_MS);
-            return () => {
-                window.clearTimeout(handle);
-                if (focusedRetryHandle !== null) window.clearTimeout(focusedRetryHandle);
-            };
-        }
-
-        const handle = window.requestIdleCallback(activateWhenFocusIsSafe, {
-            timeout: SHOWCASE_ACTIVATION_IDLE_TIMEOUT_MS,
-        });
-        return () => {
-            if (typeof window.cancelIdleCallback === 'function') {
-                window.cancelIdleCallback(handle);
-            }
-            if (focusedRetryHandle !== null) window.clearTimeout(focusedRetryHandle);
-        };
-    }, [FullShowcaseClient, activate, isActivating, isAuthLoading]);
 
     useEffect(() => {
         if (isAuthLoading || FullShowcaseClient || isActivating) {
@@ -447,7 +393,6 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
 
     return (
         <div
-            ref={bootstrapRootRef}
             className="ui-page ui-page-ambient min-h-screen py-5 font-[family-name:var(--font-geist-sans)] sm:py-7"
             aria-busy={isActivating || undefined}
         >

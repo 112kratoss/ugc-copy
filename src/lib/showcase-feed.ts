@@ -1295,32 +1295,10 @@ async function attachViewerStateToFeed(
     return feed;
   }
 
-  let viewerSafeItems = feed.items;
-  try {
-    const blockedCreatorIds = await loadBlockedCreatorIds({
-      adminSupabase,
-      creatorIds: feed.items
-        .map((item) => item.creator.id)
-        .filter((id): id is string => Boolean(id)),
-      viewerUserId,
-    });
-    viewerSafeItems = feed.items.filter((item) => (
-      !item.creator.id || !blockedCreatorIds.has(item.creator.id)
-    ));
-  } catch (error) {
-    // Blocking is a user-safety boundary. Fail closed for authenticated feeds
-    // rather than returning content from a relationship we could not verify.
-    logBackendError('error_filtering_blocked_creators_from_showcase_feed', { error: error });
-    viewerSafeItems = [];
-  }
-
-  if (viewerSafeItems.length === 0) {
-    return { ...feed, items: [] };
-  }
-
+  const feedItemIds = feed.items.map((item) => item.id);
   const remixEligibleBundleIds = Array.from(
     new Set(
-      viewerSafeItems
+      feed.items
         .filter((item) => item.asset?.allowRemix)
         .map((item) => item.asset?.id)
         .filter((bundleId): bundleId is string => Boolean(bundleId) && !isGenerationRecipeAssetId(bundleId))
@@ -1332,14 +1310,14 @@ async function attachViewerStateToFeed(
       .from('post_saves')
       .select('post_id')
       .eq('user_id', viewerUserId)
-      .in('post_id', viewerSafeItems.map((item) => item.id));
+      .in('post_id', feedItemIds);
 
     if (error && isMissingPostsSchemaError(error)) {
       const legacySavedResult = await adminSupabase
         .from('showcase_saves')
         .select('generation_id')
         .eq('user_id', viewerUserId)
-        .in('generation_id', viewerSafeItems.map((item) => item.generationId ?? item.id));
+        .in('generation_id', feed.items.map((item) => item.generationId ?? item.id));
 
       if (legacySavedResult.error) {
         logBackendError('error_fetching_legacy_showcase_saved_state_for_feed_page', { error: legacySavedResult.error });
@@ -1380,10 +1358,39 @@ async function attachViewerStateToFeed(
     );
   };
 
-  const [savedIdSet, purchasedBundleIdSet] = await Promise.all([
+  const loadBlockedIds = async () => {
+    try {
+      return await loadBlockedCreatorIds({
+        adminSupabase,
+        creatorIds: feed.items
+          .map((item) => item.creator.id)
+          .filter((id): id is string => Boolean(id)),
+        viewerUserId,
+      });
+    } catch (error) {
+      // Blocking is a user-safety boundary. Fail closed for authenticated feeds
+      // rather than returning content from a relationship we could not verify.
+      logBackendError('error_filtering_blocked_creators_from_showcase_feed', { error });
+      return null;
+    }
+  };
+
+  // These viewer-state reads are independent. Running them together removes a
+  // full PostgREST round trip from every authenticated feed response.
+  const [blockedCreatorIds, savedIdSet, purchasedBundleIdSet] = await Promise.all([
+    loadBlockedIds(),
     loadSavedIds(),
     loadPurchasedBundleIds(),
   ]);
+  if (!blockedCreatorIds) {
+    return { ...feed, items: [] };
+  }
+  const viewerSafeItems = feed.items.filter((item) => (
+    !item.creator.id || !blockedCreatorIds.has(item.creator.id)
+  ));
+  if (viewerSafeItems.length === 0) {
+    return { ...feed, items: [] };
+  }
 
   return {
     ...feed,

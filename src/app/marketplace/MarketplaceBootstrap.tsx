@@ -12,6 +12,7 @@ import {
 
 import type MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
 import MarketplaceToolFilter from '@/app/marketplace/MarketplaceToolFilter';
+import { OptimizedPreviewImage } from '@/app/components/OptimizedPreviewImage';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
 export type MarketplaceBootstrapProps = ComponentProps<typeof MarketplaceBrowser>;
@@ -466,14 +467,12 @@ function BootstrapMediaPreview({
   if (post?.mediaUrl && post.mediaKind === 'image') {
     return (
       <div className="relative h-56 overflow-hidden border-b border-white/8 bg-black/60">
-        {/* Native lazy media keeps the bootstrap independent of the full preview components. */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={post.mediaPreviewUrl ?? post.mediaUrl}
+        <OptimizedPreviewImage
+          previewSrc={post.mediaPreviewUrl ?? post.mediaUrl}
+          fallbackSrc={post.mediaUrl}
           alt={post.title}
-          loading="lazy"
-          decoding="async"
-          className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.02]"
+          sizes="(min-width: 1280px) 33vw, (min-width: 768px) 50vw, 100vw"
+          className="object-cover transition duration-500 group-hover:scale-[1.02]"
         />
         <PreviewAccessBadge label={accessLabel} />
       </div>

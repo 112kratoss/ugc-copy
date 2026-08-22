@@ -39,7 +39,7 @@ describe('generation model catalog route adapter service', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('Cache-Control')).toBe(
-      'public, max-age=300, stale-while-revalidate=3600',
+      'public, max-age=300, s-maxage=300, stale-while-revalidate=3600',
     );
     expect(response.headers.get('ETag')).toBe(
       buildGenerationModelCatalogEtag(createCatalog('catalog-mobile-1'), 'mobile'),

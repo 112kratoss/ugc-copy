@@ -75,6 +75,45 @@ describe('MarketplaceBootstrap', () => {
     expect(browserModuleLoaded).not.toHaveBeenCalled();
   });
 
+  it('resizes an original image when no generated preview is available', () => {
+    const page = createPage(1, false);
+    page.items[0].post = {
+      id: 'post-1',
+      generationId: null,
+      title: 'Large source image',
+      category: 'image',
+      body: '',
+      postFormat: 'media',
+      visibility: 'public',
+      archivedAt: null,
+      tombstoned: false,
+      reviewStatus: 'visible',
+      sourceKind: 'magicbooklet',
+      sourceTool: null,
+      sourceToolSlug: null,
+      mediaUrl: '/large-source.png',
+      mediaPreviewUrl: null,
+      mediaRenditionUrl: null,
+      mediaKind: 'image',
+      saveCount: 0,
+      remixCount: 0,
+      shareVisitCount: 0,
+    };
+
+    render(
+      <MarketplaceBootstrap
+        initialPage={page}
+        initialFilters={INITIAL_FILTERS}
+        sourceToolOptions={[]}
+      />
+    );
+
+    const image = screen.getByRole('img', { name: 'Large source image' });
+    const renderedUrl = new URL(image.getAttribute('src') ?? '', 'http://localhost');
+    expect(renderedUrl.pathname).toBe('/_next/image');
+    expect(renderedUrl.searchParams.get('url')).toBe('/large-source.png');
+  });
+
   it('keeps search, filters, and card destinations accessible without activating JavaScript', async () => {
     render(
       <MarketplaceBootstrap

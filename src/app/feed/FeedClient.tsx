@@ -467,6 +467,7 @@ export default function FeedClient({
                             expanded={expandedIds.has(card.id)}
                             commentsOpen={commentsOpenIds.has(card.id)}
                             accessToken={accessToken}
+                            priorityMedia={cardIndex === 0}
                             detailContext={detailContext}
                             onToggleExpanded={() => toggleExpanded(card.id)}
                             onToggleComments={() => toggleComments(card.id)}

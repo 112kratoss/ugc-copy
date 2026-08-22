@@ -352,11 +352,16 @@ describe('showcase feed personalization candidate filling', () => {
     const eqCalls: Array<[string, unknown]> = [];
     const isCalls: Array<[string, unknown]> = [];
     const containsCalls: Array<[string, unknown]> = [];
+    const selectCalls: string[] = [];
     const fluent = (options: { maybeSingleData?: unknown; awaitedData?: unknown }) => {
       const query: Record<string, unknown> = {};
-      for (const method of ['select', 'in', 'gt', 'gte', 'lt', 'order', 'limit', 'update', 'delete']) {
+      for (const method of ['in', 'gt', 'gte', 'lt', 'order', 'limit', 'update', 'delete']) {
         query[method] = vi.fn(() => query);
       }
+      query.select = vi.fn((columns: string) => {
+        selectCalls.push(columns);
+        return query;
+      });
       query.is = vi.fn((field: string, value: unknown) => {
         isCalls.push([field, value]);
         return query;
@@ -389,19 +394,16 @@ describe('showcase feed personalization candidate filling', () => {
       }
       if (table === 'feed_sessions') {
         sessionReads += 1;
-        if (sessionReads === 1) return fluent({ maybeSingleData: { id: 'session-reused' } });
-        if (sessionReads === 2) {
-          return fluent({
-            maybeSingleData: {
-              id: 'session-reused',
-              viewer_user_id: null,
-              anonymous_key_hash: anonymousKeyHash,
-              algorithm_version_id: 'algorithm-7',
-              created_at: new Date().toISOString(),
-              expires_at: '2099-01-01T00:00:00.000Z',
-            },
-          });
-        }
+        if (sessionReads === 1) return fluent({
+          maybeSingleData: {
+            id: 'session-reused',
+            viewer_user_id: null,
+            anonymous_key_hash: anonymousKeyHash,
+            algorithm_version_id: 'algorithm-7',
+            created_at: new Date().toISOString(),
+            expires_at: '2099-01-01T00:00:00.000Z',
+          },
+        });
         return fluent({ awaitedData: [] });
       }
       if (table === 'feed_session_items') {
@@ -439,12 +441,15 @@ describe('showcase feed personalization candidate filling', () => {
       viewerUserId: null,
     });
 
-    expect(algorithmReads).toBe(2);
+    expect(algorithmReads).toBe(1);
     expect(db.rpc).not.toHaveBeenCalled();
     expect(insertCalls.every((insert) => insert.mock.calls.length === 0)).toBe(true);
     expect(containsCalls).toContainEqual(['filters', {
       category: 'all', toolSlug: 'video-tool', unlockFilter: 'all', resourceFilter: 'all',
     }]);
+    expect(selectCalls).toContain(
+      'id, viewer_user_id, anonymous_key_hash, algorithm_version_id, created_at, expires_at',
+    );
     expect(isCalls).toContainEqual(['experiment_assignment_id', null]);
     expect(hydratePostIds).toHaveBeenCalledWith(['persisted-post']);
     expect(page.feedSessionId).toBe('session-reused');

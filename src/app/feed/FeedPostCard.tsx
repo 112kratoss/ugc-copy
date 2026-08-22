@@ -48,6 +48,8 @@ interface FeedPostCardProps {
     expanded: boolean;
     commentsOpen: boolean;
     accessToken: string | null;
+    /** Prioritizes the above-the-fold cover that can become the page LCP. */
+    priorityMedia?: boolean;
     /**
      * Where detail links say the viewer came from (and return to). Defaults to
      * the /feed page; the embedded home-dashboard feed passes its own.
@@ -81,6 +83,7 @@ function FeedPostCardView({
     expanded,
     commentsOpen,
     accessToken,
+    priorityMedia = false,
     detailContext = DEFAULT_DETAIL_CONTEXT,
     onToggleExpanded,
     onToggleComments,
@@ -213,6 +216,7 @@ function FeedPostCardView({
                         aspectRatio={coverAspectRatio}
                         fit="contain"
                         sizes="(min-width: 768px) 640px, 100vw"
+                        priority={priorityMedia}
                         // `w-full` is load-bearing: with `width: auto`, CSS
                         // aspect-ratio transfers the max-height back into width,
                         // shrinking the frame to a left-aligned column. Full width

@@ -354,6 +354,8 @@ async function loadPersistedPage({
   cursorValue,
   hydratePostIds,
   limit,
+  preloadedAlgorithm = null,
+  preloadedSession = null,
   serviceClient,
   viewerUserId,
 }: {
@@ -361,18 +363,25 @@ async function loadPersistedPage({
   cursorValue: string;
   hydratePostIds: (postIds: string[]) => Promise<ShowcaseFeedItem[]>;
   limit: number;
+  preloadedAlgorithm?: ActiveAlgorithmConfig | null;
+  preloadedSession?: FeedSessionRow | null;
   serviceClient: SupabaseClient;
   viewerUserId: string | null;
 }): Promise<ShowcaseFeedPage | null> {
   const cursor = decodeRankedFeedCursor(cursorValue);
   if (!cursor) return null;
 
-  const { data: sessionData, error: sessionError } = await serviceClient
-    .from('feed_sessions')
-    .select('id, viewer_user_id, anonymous_key_hash, algorithm_version_id, created_at, expires_at')
-    .eq('id', cursor.sessionId)
-    .maybeSingle();
-  const session = sessionData as FeedSessionRow | null;
+  let session = preloadedSession;
+  let sessionError: unknown = null;
+  if (!session || session.id !== cursor.sessionId) {
+    const result = await serviceClient
+      .from('feed_sessions')
+      .select('id, viewer_user_id, anonymous_key_hash, algorithm_version_id, created_at, expires_at')
+      .eq('id', cursor.sessionId)
+      .maybeSingle();
+    session = result.data as FeedSessionRow | null;
+    sessionError = result.error;
+  }
   const expectedAnonymousKeyHash = viewerUserId ? null : anonymousKeyHash;
   const expiresAt = session ? Date.parse(session.expires_at) : Number.NaN;
   if (
@@ -386,7 +395,9 @@ async function loadPersistedPage({
     return null;
   }
 
-  const algorithm = await getAlgorithmVersion(serviceClient, session.algorithm_version_id);
+  const algorithm = preloadedAlgorithm?.id === session.algorithm_version_id
+    ? preloadedAlgorithm
+    : await getAlgorithmVersion(serviceClient, session.algorithm_version_id);
   if (!algorithm) return null;
 
   const scanBatchSize = Math.max(24, Math.min(FEED_HYDRATION_BATCH_SIZE, limit * 2));
@@ -448,16 +459,19 @@ async function loadPersistedPage({
     ? null
     : (pageRows.at(-1)?.row.position as number) + 1;
 
-  await serviceClient
-    .from('feed_sessions')
-    .update({ last_accessed_at: new Date().toISOString() })
-    .eq('id', session.id);
+  const servedAt = new Date().toISOString();
+  const telemetryWrites: Array<PromiseLike<unknown> | Promise<unknown>> = [
+    serviceClient
+      .from('feed_sessions')
+      .update({ last_accessed_at: servedAt })
+      .eq('id', session.id),
+  ];
   if (pageRows.length > 0) {
-    await serviceClient
+    telemetryWrites.push(serviceClient
       .from('feed_session_items')
-      .update({ served_at: new Date().toISOString() })
-      .in('id', pageRows.map(({ row }) => row.id));
-    await recordServedDeliveryFacts(
+      .update({ served_at: servedAt })
+      .in('id', pageRows.map(({ row }) => row.id)));
+    telemetryWrites.push(recordServedDeliveryFacts(
       serviceClient,
       session.id,
       pageRows.map(({ item, row }) => ({
@@ -466,8 +480,9 @@ async function loadPersistedPage({
         creatorUserId: item.creator.id || null,
         row,
       })),
-    );
+    ));
   }
+  await Promise.all(telemetryWrites);
 
   return buildPage({
     algorithmVersion: algorithm.algorithmVersion,
@@ -790,7 +805,7 @@ async function findReusableSession({
   const now = new Date();
   let query = serviceClient
     .from('feed_sessions')
-    .select('id')
+    .select('id, viewer_user_id, anonymous_key_hash, algorithm_version_id, created_at, expires_at')
     .eq('surface', 'showcase')
     .eq('mode', 'for-you')
     .eq('algorithm_version_id', algorithmVersionId)
@@ -808,7 +823,7 @@ async function findReusableSession({
     .limit(1)
     .maybeSingle();
   if (error || !data?.id) return null;
-  return String(data.id);
+  return data as FeedSessionRow;
 }
 
 function mergeUniqueFeedItems(
@@ -903,7 +918,7 @@ export async function getPersonalizedShowcaseFeedPage({
   }
 
   if (offset === 0) {
-    const reusableSessionId = await timed('session_reuse', () => findReusableSession({
+    const reusableSession = await timed('session_reuse', () => findReusableSession({
       algorithmVersionId: algorithm.id,
       anonymousKeyHash,
       experimentAssignmentId,
@@ -911,12 +926,14 @@ export async function getPersonalizedShowcaseFeedPage({
       serviceClient,
       viewerUserId,
     }));
-    if (reusableSessionId) {
+    if (reusableSession) {
       const reused = await timed('session_page', () => loadPersistedPage({
         anonymousKeyHash,
-        cursorValue: encodeRankedFeedCursor({ sessionId: reusableSessionId, position: 0 }),
+        cursorValue: encodeRankedFeedCursor({ sessionId: reusableSession.id, position: 0 }),
         hydratePostIds,
         limit,
+        preloadedAlgorithm: algorithm,
+        preloadedSession: reusableSession,
         serviceClient,
         viewerUserId,
       }));

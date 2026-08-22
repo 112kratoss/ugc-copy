@@ -1,5 +1,5 @@
 export const API_CACHE_CONTROL = {
-  publicCatalog: 'public, max-age=300, stale-while-revalidate=3600',
+  publicCatalog: 'public, max-age=300, s-maxage=300, stale-while-revalidate=3600',
   publicShortEdge: 'public, s-maxage=60, stale-while-revalidate=300',
   publicHourlyEdge: 'public, s-maxage=3600, stale-while-revalidate=86400',
   privateNoStore: 'private, no-store',

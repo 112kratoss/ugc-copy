@@ -22,7 +22,7 @@ describe('source tools route adapter service', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('Cache-Control')).toBe('public, max-age=300, stale-while-revalidate=3600');
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=300, s-maxage=300, stale-while-revalidate=3600');
     expect(response.headers.get('ETag')).toMatch(/^"[a-f0-9]{16}"$/);
     expect(response.headers.get('x-request-id')).toBe('source-tools-adapter-1');
     await expect(response.json()).resolves.toEqual({
@@ -66,7 +66,7 @@ describe('source tools route adapter service', () => {
 
     expect(response.status).toBe(304);
     expect(response.headers.get('ETag')).toBe(etag);
-    expect(response.headers.get('Cache-Control')).toBe('public, max-age=300, stale-while-revalidate=3600');
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=300, s-maxage=300, stale-while-revalidate=3600');
     expect(response.headers.get('x-request-id')).toBe('source-tools-adapter-304');
     await expect(response.text()).resolves.toBe('');
   });
@@ -79,7 +79,7 @@ describe('source tools route adapter service', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('Cache-Control')).toBe('public, max-age=300, stale-while-revalidate=3600');
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=300, s-maxage=300, stale-while-revalidate=3600');
     expect(response.headers.get('ETag')).toMatch(/^"[a-f0-9]{16}"$/);
     await expect(response.json()).resolves.toEqual({ tools: [] });
   });

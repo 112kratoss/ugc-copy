@@ -166,7 +166,7 @@ describe('ShowcaseBootstrapClient', () => {
     expect(screen.queryByText(`Trailing campaign ${SHOWCASE_INITIAL_RENDER_COUNT}`)).not.toBeInTheDocument();
   });
 
-  it('hands off during idle time without manufacturing anonymous personalization demand', async () => {
+  it('keeps the stable bootstrap through idle time without loading the heavy client', async () => {
     vi.useFakeTimers();
     const demandListener = vi.fn();
     window.addEventListener('showcase:demand', demandListener);
@@ -181,7 +181,9 @@ describe('ShowcaseBootstrapClient', () => {
       });
       await act(async () => Promise.resolve());
 
-      expect(screen.getByTestId('full-showcase-client')).toBeInTheDocument();
+      expect(screen.queryByTestId('full-showcase-client')).not.toBeInTheDocument();
+      expect(screen.getByRole('img', { name: 'Priority campaign' })).toBeInTheDocument();
+      expect(fullClientModuleLoaded).not.toHaveBeenCalled();
       expect(demandListener).not.toHaveBeenCalled();
     } finally {
       window.removeEventListener('showcase:demand', demandListener);
@@ -247,7 +249,7 @@ describe('ShowcaseBootstrapClient', () => {
     expect(screen.getAllByRole('img')).toHaveLength(1);
   });
 
-  it('does not replace the bootstrap while keyboard focus is inside it', async () => {
+  it('does not replace the bootstrap merely because keyboard focus later leaves it', async () => {
     vi.useFakeTimers();
     try {
       render(<ShowcaseBootstrapClient {...createProps()} />);
@@ -268,7 +270,8 @@ describe('ShowcaseBootstrapClient', () => {
         await Promise.resolve();
       });
       await act(async () => Promise.resolve());
-      expect(screen.getByTestId('full-showcase-client')).toBeInTheDocument();
+      expect(screen.queryByTestId('full-showcase-client')).not.toBeInTheDocument();
+      expect(fullClientModuleLoaded).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

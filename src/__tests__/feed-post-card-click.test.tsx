@@ -122,6 +122,14 @@ describe('FeedPostCard click routing', () => {
         vi.restoreAllMocks();
     });
 
+    it('prioritizes the first above-the-fold media cover when requested', () => {
+        renderCard({}, { priorityMedia: true });
+
+        const image = screen.getByRole('img', { name: 'A launch frame' });
+        expect(image).toHaveAttribute('loading', 'eager');
+        expect(image).toHaveAttribute('fetchpriority', 'high');
+    });
+
     it('opens the post when the card itself is clicked', () => {
         const { onOpenPost, onOpenMedia } = renderCard();
 

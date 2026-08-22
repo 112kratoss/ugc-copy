@@ -140,7 +140,7 @@ describe('/api/source-tools route', () => {
     const payload = await response.json();
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('Cache-Control')).toBe('public, max-age=300, stale-while-revalidate=3600');
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=300, s-maxage=300, stale-while-revalidate=3600');
     expect(response.headers.get('ETag')).toMatch(/^"[a-f0-9]{16}"$/);
     expect(response.headers.get('x-request-id')).toBe('source-tools-1');
     expect(payload.tools).toHaveLength(1);
@@ -180,7 +180,7 @@ describe('/api/source-tools route', () => {
 
     expect(response.status).toBe(304);
     expect(response.headers.get('ETag')).toBe(etag);
-    expect(response.headers.get('Cache-Control')).toBe('public, max-age=300, stale-while-revalidate=3600');
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=300, s-maxage=300, stale-while-revalidate=3600');
     expect(response.headers.get('x-request-id')).toBe('source-tools-304');
   });
 

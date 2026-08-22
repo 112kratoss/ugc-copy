@@ -36,7 +36,7 @@ describe('GET /api/generation-models', () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('Cache-Control')).toBe('public, max-age=300, stale-while-revalidate=3600');
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=300, s-maxage=300, stale-while-revalidate=3600');
     expect(response.headers.get('ETag')).toMatch(/^"generation-model-catalog-[a-f0-9]{24}"$/);
     expect(response.headers.get('ETag')).not.toBe(`"${body.revision}"`);
     expect(response.headers.get('x-request-id')).toBe('catalog-req-1');
