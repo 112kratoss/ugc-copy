@@ -3,7 +3,7 @@
 import Image from 'next/image';
 import { useState, type SyntheticEvent } from 'react';
 
-import { canOptimizePreviewImage } from '@/lib/preview-images';
+import { canOptimizePreviewImage, isGeneratedPreviewImage } from '@/lib/preview-images';
 
 interface OptimizedPreviewImageProps {
   previewSrc: string;
@@ -72,6 +72,7 @@ export function OptimizedPreviewImage({
   }
 
   if (!(isFallbackAttempt && fallbackToUnoptimized) && canOptimizePreviewImage(src)) {
+    const isBoundedGeneratedPreview = isGeneratedPreviewImage(src);
     return (
       <Image
         key={src}
@@ -83,6 +84,11 @@ export function OptimizedPreviewImage({
         loading={priority ? undefined : loading}
         priority={priority}
         fetchPriority={priority ? 'high' : undefined}
+        // Preview workers already emit a bounded WebP. The optimizer returned
+        // the same 22 KB payload in production but added another serverless
+        // fetch on the LCP path; keep Next's preload/fill behavior while
+        // allowing the browser to read that ready-made preview directly.
+        unoptimized={isBoundedGeneratedPreview}
         onLoad={onLoad}
         onError={handleError}
         className={className}

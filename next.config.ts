@@ -6,7 +6,7 @@ import { SHOWCASE_PUBLIC_MEDIA_MINIMUM_CACHE_TTL_SECONDS } from "./src/lib/showc
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   ? new URL(process.env.NEXT_PUBLIC_SUPABASE_URL)
   : undefined;
-const showcasePreconnectHeaders = supabaseUrl
+const publicMediaPreconnectHeaders = supabaseUrl
   ? [{ key: "Link", value: `<${supabaseUrl.origin}>; rel=preconnect` }]
   : [];
 
@@ -252,8 +252,11 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     return [
-      ...(showcasePreconnectHeaders.length > 0
-        ? [{ source: "/showcase", headers: showcasePreconnectHeaders }]
+      ...(publicMediaPreconnectHeaders.length > 0
+        ? ["/", "/home", "/feed", "/showcase", "/marketplace"].map((source) => ({
+            source,
+            headers: publicMediaPreconnectHeaders,
+          }))
         : []),
       {
         source: "/(.*)",

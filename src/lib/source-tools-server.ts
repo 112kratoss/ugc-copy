@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { unstable_cache } from 'next/cache';
+
 import type { GenerationModelCatalog } from '@/lib/generation-model-catalog';
 import { loadPublishedGenerationModelCatalog } from '@/lib/generation-model-catalog-store';
 import { createServiceClient } from '@/lib/server-helpers';
@@ -38,6 +40,7 @@ type SourceToolModelRow = {
 };
 
 const SOURCE_TOOLS_CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
+const SOURCE_TOOLS_CATALOG_CACHE_TTL_SECONDS = SOURCE_TOOLS_CATALOG_CACHE_TTL_MS / 1000;
 let cachedCatalog: {
   expiresAt: number;
   tools: SourceToolOption[];
@@ -191,6 +194,30 @@ async function loadSourceToolsCatalog(): Promise<SourceToolOption[]> {
   })), generationCatalog);
 }
 
+const getSharedCachedSourceToolsCatalog = unstable_cache(
+  loadSourceToolsCatalog,
+  ['source-tools-catalog-v1'],
+  { revalidate: SOURCE_TOOLS_CATALOG_CACHE_TTL_SECONDS },
+);
+
+function isMissingIncrementalCacheError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('incrementalCache missing');
+}
+
+async function loadSharedSourceToolsCatalog(): Promise<SourceToolOption[]> {
+  try {
+    return await getSharedCachedSourceToolsCatalog();
+  } catch (error) {
+    // Unit tests and standalone scripts do not always install Next's request
+    // cache. Preserve their direct-load behavior while production uses the
+    // shared cache across Vercel function instances.
+    if (isMissingIncrementalCacheError(error)) {
+      return loadSourceToolsCatalog();
+    }
+    throw error;
+  }
+}
+
 export async function listSourceToolsCatalog(): Promise<SourceToolOption[]> {
   const now = Date.now();
   if (cachedCatalog && cachedCatalog.expiresAt > now) {
@@ -198,7 +225,7 @@ export async function listSourceToolsCatalog(): Promise<SourceToolOption[]> {
   }
 
   if (!pendingCatalogLoad) {
-    pendingCatalogLoad = loadSourceToolsCatalog()
+    pendingCatalogLoad = loadSharedSourceToolsCatalog()
       .then((tools) => {
         cachedCatalog = {
           expiresAt: Date.now() + SOURCE_TOOLS_CATALOG_CACHE_TTL_MS,

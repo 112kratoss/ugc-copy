@@ -90,7 +90,8 @@ describe('production performance readiness', () => {
     expect(priorityPoster).toContain('SHOWCASE_PRIORITY_POSTER_MAX_BYTES = 64 * 1024');
     expect(priorityPoster).toContain("return `data:image/webp;base64,${Buffer.from(bytes).toString('base64')}`");
     expect(nextConfig).toContain('value: `<${supabaseUrl.origin}>; rel=preconnect`');
-    expect(nextConfig).toContain('{ source: "/showcase", headers: showcasePreconnectHeaders }');
+    expect(nextConfig).toContain('["/", "/home", "/feed", "/showcase", "/marketplace"]');
+    expect(nextConfig).toContain('headers: publicMediaPreconnectHeaders');
     expect(marketplacePolicy).toContain('MARKETPLACE_INITIAL_PAGE_SIZE = 3');
     expect(marketplacePolicy).toContain('MARKETPLACE_COMPACT_PAGE_SIZE = 12');
     expect(marketplacePolicy).toContain('MARKETPLACE_DEFAULT_PAGE_SIZE = 24');
