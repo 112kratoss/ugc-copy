@@ -1,15 +1,16 @@
 # Scaling Findings — 2026-08-22
 
 Scope: initial static re-audit of
-`0345d786ffb86a44c5cc997414997a073f1ace6b`, remediation in the current working
-tree, full source/build verification, the stored historical certificate
-artifacts, and the latest available production performance workflow evidence.
+`0345d786ffb86a44c5cc997414997a073f1ace6b`, remediation released as
+`1bf065bffda8899e9de3f4ba73ea66baf9cc181d`, full source/build/release
+verification, the stored historical certificate artifacts, and the latest
+available production performance workflow evidence.
 This is not a load certificate.
 
 ## S1 — Authenticated requests repeat network identity admission
 
 Severity: **High**
-Status: **IMPLEMENTED — DEPLOYED MEASUREMENT REQUIRED**
+Status: **DEPLOYED — SUSTAINED MEASUREMENT REQUIRED**
 Introduced after certified build: **Yes**
 
 ### Evidence
@@ -75,7 +76,7 @@ not an acceptable optimization.
 ## S2 — Upload admission is globally serialized and O(active reservations)
 
 Severity: **High**
-Status: **LOCAL DATABASE LOAD PASSED — END-TO-END LOAD REQUIRED**
+Status: **DEPLOYED; LOCAL DATABASE LOAD PASSED — END-TO-END LOAD REQUIRED**
 Introduced after certified build: **Yes**
 
 ### Evidence
@@ -133,7 +134,7 @@ PostgREST, Storage API and network path still require isolated end-to-end load.
 ## S3 — Upload reclaim is not scan/time bounded and is invisible to growth telemetry
 
 Severity: **High**
-Status: **IMPLEMENTED — LOAD REQUIRED**
+Status: **DEPLOYED — LOAD REQUIRED**
 Introduced after certified build: **Yes**
 
 ### Evidence
@@ -276,7 +277,7 @@ CDN behavior or multi-source anonymous capacity.
 ## S7 — New durable tables lack complete growth and retention accounting
 
 Severity: **Medium**
-Status: **IMPLEMENTED — MEASUREMENT REQUIRED**
+Status: **DEPLOYED — MEASUREMENT REQUIRED**
 
 Post-certificate features added durable state that is absent from the operational
 growth RPC, including upload reservations/tombstones and account-merge tickets.
@@ -307,7 +308,7 @@ thresholds.
 ## S8 — Catalog payload and frontend budgets are failing
 
 Severity: **Medium**
-Status: **PARTIAL — CATALOG FIXED LOCALLY; PRODUCTION/FRONTEND REVALIDATION REQUIRED**
+Status: **PARTIAL — CATALOG SOURCE DEPLOYED; PRODUCTION/FRONTEND REVALIDATION REQUIRED**
 
 The 2026-08-17 production run measured the generation-model catalog at 64,306
 decoded bytes P95 against a 57,344-byte budget, with 2,219.5 ms P99 TTFB against
@@ -377,16 +378,19 @@ upload counter reconciliation: status=ok / zero drift
 local DB fixture benchmark:  PASS (10k/100k/1m; 50 concurrent x 5 rounds)
 local Storage list-v2 probe: PASS (cursor response contract)
 linked migration connection: PASS (SSL + single-address /32 allow-list)
-linked migration parity:     DRIFT (173 aligned; 36 renamed remote rows;
-                              2 new scaling migrations not deployed)
+linked migration parity:     PASS (211 aligned; zero pending migrations)
+production schema presence:  PASS (linked post-release schema dump)
+protected production release: PASS (exact commit + post-promotion health)
+production ledger replay:    PASS (211/211 versions/names/statements exact)
 Supabase performance advisor: 0 errors / 0 warnings
 Supabase security advisor:    0 errors / 41 warnings
 ```
 
-A clean local Supabase replay and pgTAP now pass. A clean isolated-branch replay,
-deployed workflow checks and sustained load tests remain certificate gates. The
-live advisor scan is recorded above. The linked comparison confirms that the
-two new scaling migrations are not deployed yet and that 36 already-deployed
-migrations use generated remote timestamps. Release the committed migrations
-first, then run the repository's existing ledger-repair workflow from `main` so
-the production ledger remains replayable; do not repair history first.
+A clean local Supabase replay and pgTAP pass. The protected release deployed both
+scaling migrations and the Production-configured application, verified the exact
+commit after promotion, and passed production health. The post-release ledger
+workflow retained a backup and independently verified that all 211 production
+rows reproduce the repository exactly; the linked dry-run reports no pending
+migrations. A clean isolated-branch replay, a green current Production
+Performance run, and sustained load tests remain certificate gates. The live
+advisor scan is recorded above.
