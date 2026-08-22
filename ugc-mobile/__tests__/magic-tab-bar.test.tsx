@@ -105,7 +105,7 @@ const routes = [
   { key: 'profile-key', name: 'profile' },
 ];
 
-function renderTabBar(activeIndex = 0) {
+function renderTabBar(activeIndex = 0, { hidden = false }: { hidden?: boolean } = {}) {
   const navigation = {
     emit: vi.fn(() => ({ defaultPrevented: false })),
     navigate: vi.fn(),
@@ -129,6 +129,7 @@ function renderTabBar(activeIndex = 0) {
         descriptors={{} as never}
         navigation={navigation as never}
         insets={{ top: 0, right: 0, bottom: 0, left: 0 }}
+        hidden={hidden}
       />
     );
   });
@@ -136,10 +137,10 @@ function renderTabBar(activeIndex = 0) {
   return { tree: tree!, navigation };
 }
 
-async function renderTabBarAsync(activeIndex = 0) {
+async function renderTabBarAsync(activeIndex = 0, options: { hidden?: boolean } = {}) {
   let result: ReturnType<typeof renderTabBar> | undefined;
   await renderer.act(async () => {
-    result = renderTabBar(activeIndex);
+    result = renderTabBar(activeIndex, options);
   });
   return result!;
 }
@@ -149,6 +150,31 @@ describe('MagicTabBar', () => {
     routerState.push.mockClear();
     glassState.available = false;
     glassState.reduceTransparency = false;
+  });
+
+  it('hides by going invisible and inert, never by unmounting the blur surface', async () => {
+    const { tree } = await renderTabBarAsync(0, { hidden: true });
+
+    // The blur surface must survive hiding: remounting it mid tab-fade is the
+    // Android RenderNode-cycle crash. Invisibility comes from opacity, and
+    // inertness from pointerEvents plus the accessibility-hidden pair.
+    expect(tree.root.findAll((node) => String(node.type) === 'blur-view')).toHaveLength(1);
+
+    const root = tree.root.findAll((node) => String(node.type) === 'view')[0];
+    expect((root.props.style as Record<string, unknown>).opacity).toBe(0);
+    expect(root.props.pointerEvents).toBe('none');
+    expect(root.props.accessibilityElementsHidden).toBe(true);
+    expect(root.props.importantForAccessibility).toBe('no-hide-descendants');
+  });
+
+  it('stays visible and interactive when not hidden', async () => {
+    const { tree } = await renderTabBarAsync();
+
+    const root = tree.root.findAll((node) => String(node.type) === 'view')[0];
+    expect((root.props.style as Record<string, unknown>).opacity).toBe(1);
+    expect(root.props.pointerEvents).toBe('auto');
+    expect(root.props.accessibilityElementsHidden).toBe(false);
+    expect(root.props.importantForAccessibility).toBe('auto');
   });
 
   it('swaps the blur surface for Liquid Glass when the OS supports it', async () => {

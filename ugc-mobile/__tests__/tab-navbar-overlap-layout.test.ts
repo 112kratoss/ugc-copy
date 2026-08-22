@@ -25,10 +25,16 @@ describe('tab navbar overlap layout', () => {
     expect(source).not.toContain('getMagicTabBarMetrics');
   });
 
-  it('does not render the global tab bar on the creator route', () => {
+  it('hides the global tab bar on the creator route without unmounting it', () => {
     const source = readSource('app/(tabs)/_layout.tsx');
 
-    expect(source).toContain("props.state.routes[props.state.index]?.name === 'creator'");
-    expect(source).toMatch(/\? null\s*:\s*<MagicTabBar/);
+    // The bar must stay mounted on creator: remounting the Android BlurView
+    // while the tab fade runs builds a cyclic RenderNode graph and hwui
+    // crashes with a stack-overflow SIGSEGV. Hiding is MagicTabBar's job via
+    // the `hidden` prop; a null branch here reintroduces the crash.
+    expect(source).toContain(
+      "hidden={props.state.routes[props.state.index]?.name === 'creator'}"
+    );
+    expect(source).not.toMatch(/\? null\s*:\s*<MagicTabBar/);
   });
 });

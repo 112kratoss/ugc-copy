@@ -19,9 +19,15 @@ export default function TabLayout() {
     <Tabs
       backBehavior="history"
       tabBar={(props) => (
-        props.state.routes[props.state.index]?.name === 'creator'
-          ? null
-          : <MagicTabBar {...props} blurTarget={blurTarget} />
+        // The creator tab hides the bar but must not unmount it: remounting
+        // the Android blur surface while the scene fade runs crashes the
+        // renderer (cyclic RenderNode SIGSEGV). MagicTabBar owns the how of
+        // hiding; this just says when.
+        <MagicTabBar
+          {...props}
+          blurTarget={blurTarget}
+          hidden={props.state.routes[props.state.index]?.name === 'creator'}
+        />
       )}
       screenOptions={{
         animation: reducedMotion ? 'none' : 'fade',

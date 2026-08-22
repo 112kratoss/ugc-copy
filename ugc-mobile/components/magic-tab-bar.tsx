@@ -95,7 +95,8 @@ export function MagicTabBar({
   state,
   navigation,
   blurTarget,
-}: BottomTabBarProps & { blurTarget?: RefObject<View | null> }) {
+  hidden = false,
+}: BottomTabBarProps & { blurTarget?: RefObject<View | null>; hidden?: boolean }) {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const [createMenuVisible, setCreateMenuVisible] = useState(false);
@@ -176,6 +177,15 @@ export function MagicTabBar({
 
   return (
     <View
+      // Hidden means invisible and inert, never unmounted: attaching the
+      // Android BlurView mid tab-fade builds a cyclic RenderNode graph and
+      // hwui overflows its stack computing transforms (SIGSEGV). Keeping the
+      // bar mounted keeps the blur's target hookup stable across transitions,
+      // so hide with opacity, not `display: 'none'` — display none detaches
+      // the native view and reintroduces the same attach-during-fade window.
+      pointerEvents={hidden ? 'none' : 'auto'}
+      accessibilityElementsHidden={hidden}
+      importantForAccessibility={hidden ? 'no-hide-descendants' : 'auto'}
       style={{
         position: 'absolute',
         left: 0,
@@ -184,6 +194,7 @@ export function MagicTabBar({
         paddingHorizontal: metrics.horizontalPadding,
         paddingBottom: metrics.bottomPadding,
         paddingTop: metrics.topPadding,
+        opacity: hidden ? 0 : 1,
       }}
     >
       <MagicCreateMenu
