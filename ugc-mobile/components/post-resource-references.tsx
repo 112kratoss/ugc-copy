@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
+import { MediaLightbox, type LightboxMediaItem } from '@/components/media-lightbox';
 import { appTheme } from '@/lib/theme';
 import type { PostResourceItem } from '@/lib/types';
 
@@ -26,6 +27,9 @@ export function PostResourceReferences({
   const [fileUrls, setFileUrls] = useState<Record<string, string>>({});
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({});
   const [failedPreviewPaths, setFailedPreviewPaths] = useState<Record<string, boolean>>({});
+  // Keyed by item, not by position: signed URLs resolve in any order, so the
+  // list of viewable items can grow while the lightbox is open.
+  const [lightboxKey, setLightboxKey] = useState<string | null>(null);
   const requestedPaths = useRef(new Set<string>());
   const mounted = useRef(true);
 
@@ -65,16 +69,37 @@ export function PostResourceReferences({
     }
   }, [referenceItems, resolveFileUrl]);
 
+  // Everything the app can show itself: storage-backed images and videos
+  // whose signed URL has arrived. External links stay links, and audio has
+  // no in-app player, so both still hand off to the browser.
+  const lightboxItems = useMemo<LightboxMediaItem[]>(
+    () => referenceItems.flatMap((item, index) => {
+      const mediaKind = referenceMediaKind(item);
+      const url = item.storagePath ? fileUrls[item.storagePath] : null;
+      if (!mediaKind || !url) return [];
+      return [{ id: referenceKey(item, index), url, mediaKind, label: item.title, caption: item.description }];
+    }),
+    [fileUrls, referenceItems]
+  );
+  const lightboxIndex = lightboxKey ? lightboxItems.findIndex((item) => item.id === lightboxKey) : -1;
+
   if (!referenceItems.length) return null;
 
-  const openItem = async (item: PostResourceItem) => {
+  const openItem = async (item: PostResourceItem, index: number) => {
     try {
+      const storagePath = item.storagePath;
+      if (storagePath && referenceMediaKind(item)) {
+        const url = fileUrls[storagePath] ?? await resolveFileUrl(storagePath);
+        setFileUrls((current) => ({ ...current, [storagePath]: url }));
+        setLightboxKey(referenceKey(item, index));
+        return;
+      }
+
       if (item.externalUrl) {
         await onOpenUrl(item.externalUrl);
         return;
       }
 
-      const storagePath = item.storagePath;
       if (!storagePath) return;
       const url = fileUrls[storagePath] ?? await resolveFileUrl(storagePath);
       setFileUrls((current) => ({ ...current, [storagePath]: url }));
@@ -112,8 +137,8 @@ export function PostResourceReferences({
               accessibilityLabel={`Open reference ${item.title}`}
               accessibilityRole={isOpenable ? 'button' : undefined}
               disabled={!isOpenable}
-              key={item.id ?? `${item.type}:${item.title}:${storagePath ?? item.externalUrl ?? index}`}
-              onPress={() => void openItem(item)}
+              key={referenceKey(item, index)}
+              onPress={() => void openItem(item, index)}
               style={({ pressed }) => ({
                 width: 142,
                 minHeight: 222,
@@ -166,8 +191,27 @@ export function PostResourceReferences({
           );
         })}
       </ScrollView>
+      <MediaLightbox
+        items={lightboxItems}
+        activeIndex={lightboxIndex >= 0 ? lightboxIndex : null}
+        onClose={() => setLightboxKey(null)}
+        onNavigate={(index) => setLightboxKey(lightboxItems[index]?.id ?? null)}
+      />
     </View>
   );
+}
+
+function referenceKey(item: PostResourceItem, index: number) {
+  return item.id ?? `${item.type}:${item.title}:${item.storagePath ?? item.externalUrl ?? index}`;
+}
+
+/** What the app can put on its own lightbox stage. Audio is not on it. */
+export function referenceMediaKind(item: Pick<PostResourceItem, 'type' | 'contentType'>): 'image' | 'video' | null {
+  if (item.contentType?.startsWith('image/')) return 'image';
+  if (item.contentType?.startsWith('video/')) return 'video';
+  if (item.type === 'reference_image') return 'image';
+  if (item.type === 'reference_video') return 'video';
+  return null;
 }
 
 export function getReferenceResourceItems(items: PostResourceItem[] | undefined) {

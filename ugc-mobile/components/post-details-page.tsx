@@ -2,54 +2,70 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
-import { Copy, FileText, Lock, Repeat2, Share2 } from 'lucide-react-native';
+import { ChevronLeft, Copy, FileText, Lock, MessageCircle, MoreVertical, Repeat2, Share2 } from 'lucide-react-native';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from 'react-native';
 
-import { PostResourceBundleContent } from '@/components/post-resource-bundle-content';
-import { Pill } from '@/components/ui';
+import { PostResourceBundleContent, ResourceAction } from '@/components/post-resource-bundle-content';
+import { CreatorAvatar, Pill } from '@/components/ui';
+import { SaveHeart } from '@/components/save-heart';
 import { useAuth } from '@/lib/auth';
+import { formatCompactCount } from '@/lib/home-view-model';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
+import {
+  buildPostDetailsMeta,
+  getDetailsBackLabel,
+  getDetailsPrimaryAction,
+  getDetailsTitle,
+  getResourceSectionState,
+  getUnlockPriceLabel,
+  prepareUnlockedResourcesForDetails,
+} from '@/lib/post-details-view-model';
 import type { PostResourceKind } from '@/lib/types';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
-import { SaveHeart } from '@/components/save-heart';
+import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
 
 /**
- * The details behind a post: stats, prompt, caption, actions and the creator's
- * unlock. Lifted out of the immersive viewer so the standalone post screen can
- * render the same page as its swipe-left half — one details surface, two hosts.
+ * The details behind a post: who made it, the prompt, the caption, and the
+ * creator's unlockable resources. One surface, two hosts — the reel's
+ * swipe-left page and the text post screen's second page — so it carries its
+ * own header and its own way back.
  */
 export function PostDetailsPage({
   active,
   bottomInset,
   height,
+  hostRendersPostText = false,
   item,
+  onActionsOpen,
+  onBack,
+  onComments,
+  onCreatorOpen,
   onRecreate,
   onSave,
   onShare,
-  onUnlockRemix,
   saveLoading,
-  sheet = false,
-  hostRendersPostText = false,
   topInset,
   width,
 }: {
   active: boolean;
   bottomInset: number;
   height: number;
-  item: ImmersivePreviewItem;
-  onRecreate: (item: ImmersivePreviewItem) => void;
-  onSave: (item: ImmersivePreviewItem) => void;
-  onShare: (item: ImmersivePreviewItem) => void;
-  onUnlockRemix: (item: ImmersivePreviewItem) => void;
-  saveLoading: boolean;
-  sheet?: boolean;
   /**
    * True when the host already shows the post's title and body in full — the
    * text post page does. Over the reel, where the details page is the only
    * place the post is named without truncation, it does not.
    */
   hostRendersPostText?: boolean;
+  item: ImmersivePreviewItem;
+  onActionsOpen?: () => void;
+  onBack?: () => void;
+  onComments?: () => void;
+  onCreatorOpen?: (item: ImmersivePreviewItem) => void;
+  onRecreate: (item: ImmersivePreviewItem) => void;
+  onSave: (item: ImmersivePreviewItem) => void;
+  onShare: (item: ImmersivePreviewItem) => void;
+  saveLoading: boolean;
   topInset: number;
   width: number;
 }) {
@@ -79,11 +95,7 @@ export function PostDetailsPage({
       return api.unlockBundleWithCredits(unlock.postId);
     },
     onSuccess: async () => {
-      if (unlock) {
-        await queryClient.invalidateQueries({ queryKey: ['post-resource-bundle', unlock.postId, unlock.resourceId] });
-        await queryClient.invalidateQueries({ queryKey: ['marketplace-resource', unlock.resourceId] });
-        await queryClient.invalidateQueries({ queryKey: ['marketplace-resources'] });
-      }
+      if (unlock) await refreshUnlockedBundleCaches(queryClient, unlock);
       await Haptics.selectionAsync();
     },
   });
@@ -104,9 +116,16 @@ export function PostDetailsPage({
   }
 
   const bundle = resourceQuery.data?.bundle;
-  const canAccess = Boolean(bundle?.viewerCanAccess);
-  const resources = canAccess ? bundle?.resources ?? null : null;
+  const sectionState = getResourceSectionState({
+    hasUnlock: Boolean(unlock),
+    bundle,
+    isError: resourceQuery.isError,
+  });
+  const canAccess = sectionState === 'unlocked';
   const resourceKinds = bundle?.resourceKinds ?? unlock?.resourceKinds ?? [];
+  const prepared = canAccess && bundle?.resources
+    ? prepareUnlockedResourcesForDetails(bundle.resources, { detailsPrompt: details.prompt })
+    : null;
 
   const copyText = async (text: string) => {
     await Clipboard.setStringAsync(text);
@@ -129,10 +148,12 @@ export function PostDetailsPage({
 
   const unlockError = unlockMutation.error instanceof Error ? unlockMutation.error.message : null;
   const unlockAccent: ToolAccent = unlock?.accessMode === 'free' ? 'workflow' : 'commerce';
-  const unlockPriceLabel = unlock ? bundle?.priceQuote?.formatted ?? unlock.priceLabel : null;
-  const canRecreate = item.availableActions.includes('recreate');
-  const canUnlockRemix = item.availableActions.includes('unlock-remix');
-  const generationInfo = details?.generationInfo ?? null;
+  const unlockPriceLabel = getUnlockPriceLabel(unlock, bundle);
+  const primaryAction = getDetailsPrimaryAction(item, { canAccess });
+  const generationInfo = details.generationInfo ?? null;
+  const meta = buildPostDetailsMeta(item);
+  const canOpenCreator = Boolean(onCreatorOpen && item.creatorUsername);
+  const commentCount = Math.max(0, item.commentCount ?? 0);
   // A text post derives both `prompt` and `body` from the same paragraph, so
   // showing the caption after the host already printed it prints it twice.
   const captionText = hostRendersPostText
@@ -142,37 +163,64 @@ export function PostDetailsPage({
 
   return (
     <View style={{ width, height, backgroundColor: appTheme.colors.app }}>
+      <DetailsHeader
+        backLabel={getDetailsBackLabel(item)}
+        onActionsOpen={onActionsOpen}
+        onBack={onBack}
+        title={getDetailsTitle(item)}
+        topInset={topInset}
+      />
       <ScrollView
         contentContainerStyle={{
-          paddingTop: sheet ? 20 : topInset + 80,
-          // The swipe page pins a "Swipe right for media" pill over the bottom-left
-          // corner; the sheet has no such overlay, so only the page reserves room.
-          paddingBottom: sheet ? bottomInset + 36 : bottomInset + 84,
+          paddingTop: 8,
+          paddingBottom: bottomInset + 36,
           paddingHorizontal: 22,
           gap: appTheme.spacing.panel,
         }}
         showsVerticalScrollIndicator={false}
       >
-        <View style={{ gap: 8 }}>
-          <Text style={{ color: appTheme.colors.faint, ...appTheme.type.label, textTransform: 'uppercase' }}>
-            {generationInfo ? 'Creation details' : 'Post details'}
-          </Text>
+        <View style={{ gap: 10 }}>
           {hostRendersPostText ? null : (
             <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.pageTitle, fontWeight: '800' }}>
               {details.title}
             </Text>
           )}
-          <Text style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm, fontWeight: '700' }}>
-            {details.creatorLabel} · {details.categoryLabel}
-          </Text>
+          <Pressable
+            accessibilityRole={canOpenCreator ? 'button' : undefined}
+            accessibilityLabel={canOpenCreator ? `Open ${meta.creatorLabel} profile` : undefined}
+            disabled={!canOpenCreator}
+            onPress={() => onCreatorOpen?.(item)}
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 9,
+              minHeight: 36,
+              alignSelf: 'flex-start',
+              opacity: pressed ? appTheme.opacity.pressed : 1,
+            })}
+          >
+            <CreatorAvatar name={meta.creatorLabel} uri={details.creatorAvatar} size={28} />
+            <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
+              {meta.creatorLabel}
+            </Text>
+            {meta.timeLabel ? (
+              <Text style={{ color: appTheme.colors.faint, ...appTheme.type.bodySm }}>
+                {`· ${meta.timeLabel}`}
+              </Text>
+            ) : null}
+          </Pressable>
+          {meta.metaParts.length > 0 ? (
+            <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
+              {meta.metaParts.join(' · ')}
+            </Text>
+          ) : null}
         </View>
 
-        {/* A creation has no saves or remixes of its own, so the stat row carries
-            its production facts instead of zeroes. */}
+        {/* A creation's production facts are real information; a post's
+            "0 saves · 0 remixes · Showcase" was not. */}
         {generationInfo ? (
           <View style={{ flexDirection: 'row', gap: 10 }}>
             <DetailStat label="Model" value={generationInfo.model} />
-            <DetailStat label="Created" value={formatGenerationDate(generationInfo.createdAt)} />
             <DetailStat
               label={generationInfo.duration ? 'Duration' : 'Cost'}
               value={generationInfo.duration
@@ -180,13 +228,48 @@ export function PostDetailsPage({
                 : generationInfo.cost != null ? `${generationInfo.cost}` : '—'}
             />
           </View>
-        ) : (
+        ) : null}
+
+        {/* The one thing to do leads on its own line; the things to do with
+            it share the next. Four pills in a flow wrap left the last one
+            orphaned on a row of its own. */}
+        <View style={{ gap: 10 }}>
+          {primaryAction ? (
+            <DetailActionButton
+              grow
+              label={primaryAction.label}
+              icon={<Repeat2 size={18} color="#050505" strokeWidth={2.8} />}
+              primary
+              onPress={() => void onRecreate(item)}
+            />
+          ) : null}
           <View style={{ flexDirection: 'row', gap: 10 }}>
-            <DetailStat label="Saves" value={formatCount(details.saveCount)} />
-            <DetailStat label="Remixes" value={formatCount(details.remixCount)} />
-            <DetailStat label="Source" value={details.sourceLabel} />
+            <DetailActionButton
+              disabled={!item.canSave}
+              grow
+              label={item.isSaved ? 'Saved' : 'Save'}
+              icon={<SaveHeart saved={item.isSaved} size={18} enabled={item.canSave} />}
+              loading={saveLoading}
+              onPress={() => onSave(item)}
+            />
+            <DetailActionButton
+              disabled={!item.canShare}
+              grow
+              label="Share"
+              icon={<Share2 size={18} color={item.canShare ? '#fff' : 'rgba(255,255,255,0.5)'} strokeWidth={2.5} />}
+              onPress={() => void onShare(item)}
+            />
+            {onComments && item.canComment ? (
+              <DetailActionButton
+                accessibilityLabel="Comments"
+                grow
+                label={commentCount > 0 ? formatCompactCount(commentCount) : 'Comment'}
+                icon={<MessageCircle size={18} color="#fff" strokeWidth={2.5} />}
+                onPress={onComments}
+              />
+            ) : null}
           </View>
-        )}
+        </View>
 
         <DetailSection title="Prompt">
           {details.prompt ? (
@@ -200,102 +283,177 @@ export function PostDetailsPage({
           ) : null}
         </DetailSection>
 
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
-          {canRecreate ? (
-            <DetailActionButton
-              label="Recreate"
-              icon={<Repeat2 size={18} color="#050505" strokeWidth={2.8} />}
-              primary
-              onPress={() => void onRecreate(item)}
-            />
-          ) : null}
-          {canUnlockRemix && unlock ? (
-            <DetailActionButton
-              label="Remix"
-              icon={<Repeat2 size={18} color="#050505" strokeWidth={2.8} />}
-              primary
-              onPress={() => onUnlockRemix(item)}
-            />
-          ) : null}
-          <DetailActionButton
-            disabled={!item.canSave}
-            label={item.isSaved ? 'Saved' : 'Save'}
-            icon={<SaveHeart saved={item.isSaved} size={18} enabled={item.canSave} />}
-            loading={saveLoading}
-            onPress={() => onSave(item)}
-          />
-          <DetailActionButton
-            disabled={!item.canShare}
-            label="Share"
-            icon={<Share2 size={18} color={item.canShare ? '#fff' : 'rgba(255,255,255,0.5)'} strokeWidth={2.5} />}
-            onPress={() => void onShare(item)}
-          />
-        </View>
-
         {/* Most posts carry no unlock. A card announcing that absence is the
             page telling the reader about something that is not there. */}
-        {unlock ? (
-        <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: `${accentColor(unlockAccent)}55`, backgroundColor: appTheme.colors.surfaceStrong, padding: appTheme.spacing.card, gap: appTheme.spacing.gap }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
-            <View style={{ flex: 1, gap: 5 }}>
-              <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>Creator unlocks</Text>
-              <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
-                {bundle?.previewText ?? unlock.previewText ?? 'Reusable resources are attached to this post.'}
-              </Text>
-            </View>
-            {unlockPriceLabel ? <Pill label={unlockPriceLabel} accent={unlockAccent} /> : null}
-          </View>
-
-          {unlock ? (
-            <>
-              <ResourceKindRow kinds={resourceKinds} />
-              {resourceQuery.isLoading ? <ActivityIndicator color={appTheme.colors.primary} /> : null}
-              {resourceQuery.error instanceof Error ? (
-                <Text selectable style={{ color: '#ff8a9a', fontSize: 13, fontWeight: '700' }}>{resourceQuery.error.message}</Text>
-              ) : null}
-              <PostResourceBundleContent
-                fileLoadingPath={fileLoadingPath}
-                lockedPreview={bundle?.lockedPreview}
-                mediaItems={item.mediaItems}
-                onCopy={copyText}
-                onError={setResourceError}
-                onOpenFile={openResourceFile}
-                onOpenUrl={openResourceUrl}
-                resolveFileUrl={resolveResourceFileUrl}
-                resources={resources}
+        {unlock && sectionState !== 'none' ? (
+          sectionState === 'unlocked' ? (
+            <View style={{ gap: 12 }}>
+              <ResourcesHeading
+                pills={[
+                  { label: 'Unlocked', accent: 'workflow' },
+                  ...(prepared?.hasRemixAccess ? [{ label: 'Remix included', accent: 'primary' as ToolAccent }] : []),
+                ]}
               />
-              {!resources ? (
-                <View style={{ gap: 10 }}>
-                  <DetailActionButton
-                    label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Get resources — Free' : 'Unlock with credits'}
-                    icon={<Lock size={18} color="#050505" strokeWidth={2.8} />}
-                    loading={unlockMutation.isPending}
-                    primary
-                    onPress={() => {
-                      if (!user) {
-                        router.push('/auth');
-                        return;
-                      }
-                      unlockMutation.mutate();
-                    }}
-                  />
-                  {unlockError ? <Text selectable style={{ color: '#ff8a9a', fontSize: 13, fontWeight: '700' }}>{unlockError}</Text> : null}
-                </View>
+              {prepared && !prepared.isEmpty ? (
+                <PostResourceBundleContent
+                  fileLoadingPath={fileLoadingPath}
+                  mediaItems={item.mediaItems}
+                  onCopy={copyText}
+                  onError={setResourceError}
+                  onOpenFile={openResourceFile}
+                  onOpenUrl={openResourceUrl}
+                  resolveFileUrl={resolveResourceFileUrl}
+                  resources={prepared.resources}
+                />
               ) : null}
-              {resourceError ? <Text selectable style={{ color: '#ff8a9a', fontSize: 13, fontWeight: '700' }}>{resourceError}</Text> : null}
-            </>
-          ) : null}
-        </View>
+              {resourceError ? <ErrorText message={resourceError} /> : null}
+            </View>
+          ) : (
+            <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: `${accentColor(unlockAccent)}55`, backgroundColor: appTheme.colors.surface, padding: appTheme.spacing.card, gap: appTheme.spacing.gap }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
+                <View style={{ flex: 1, gap: 5 }}>
+                  <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>Creator's resources</Text>
+                  <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
+                    {bundle?.previewText ?? unlock.previewText ?? 'The prompt, files and notes behind this result.'}
+                  </Text>
+                </View>
+                {unlockPriceLabel ? <Pill label={unlockPriceLabel} accent={unlockAccent} /> : null}
+              </View>
+              <ResourceKindRow kinds={resourceKinds} />
+              {sectionState === 'loading' ? (
+                <ActivityIndicator color={appTheme.colors.primary} />
+              ) : sectionState === 'error' ? (
+                <View style={{ gap: 10 }}>
+                  <ErrorText message={resourceQuery.error instanceof Error ? resourceQuery.error.message : 'Could not load these resources.'} />
+                  <DetailActionButton label="Try again" icon={<FileText size={18} color="#fff" strokeWidth={2.5} />} onPress={() => void resourceQuery.refetch()} />
+                </View>
+              ) : (
+                <>
+                  <PostResourceBundleContent
+                    lockedPreview={bundle?.lockedPreview}
+                    mediaItems={item.mediaItems}
+                    resources={null}
+                  />
+                  <View style={{ gap: 10 }}>
+                    <DetailActionButton
+                      label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Get resources — Free' : 'Unlock with credits'}
+                      icon={<Lock size={18} color="#050505" strokeWidth={2.8} />}
+                      loading={unlockMutation.isPending}
+                      primary
+                      onPress={() => {
+                        if (!user) {
+                          router.push('/auth');
+                          return;
+                        }
+                        unlockMutation.mutate();
+                      }}
+                    />
+                    {unlockError ? <ErrorText message={unlockError} /> : null}
+                  </View>
+                </>
+              )}
+            </View>
+          )
         ) : null}
       </ScrollView>
     </View>
   );
 }
 
+/**
+ * The page's own chrome. Back here returns to the media (or the post), never
+ * out of the screen — that is the host's arrow, which steps aside while this
+ * page is showing. Opaque, so content scrolling under it stays legible.
+ */
+function DetailsHeader({
+  backLabel,
+  onActionsOpen,
+  onBack,
+  title,
+  topInset,
+}: {
+  backLabel: string;
+  onActionsOpen?: () => void;
+  onBack?: () => void;
+  title: string;
+  topInset: number;
+}) {
+  return (
+    <View
+      style={{
+        paddingTop: topInset + 4,
+        paddingBottom: 6,
+        paddingHorizontal: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: appTheme.colors.app,
+      }}
+    >
+      {onBack ? (
+        <HeaderButton accessibilityLabel={backLabel} onPress={onBack}>
+          <ChevronLeft size={26} color={appTheme.colors.text} strokeWidth={2.4} />
+        </HeaderButton>
+      ) : (
+        <View style={{ width: 48, height: 48 }} />
+      )}
+      <Text numberOfLines={1} style={{ flex: 1, textAlign: 'center', color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>
+        {title}
+      </Text>
+      {onActionsOpen ? (
+        <HeaderButton accessibilityLabel="More options" onPress={onActionsOpen}>
+          <MoreVertical size={22} color={appTheme.colors.text} strokeWidth={2.4} />
+        </HeaderButton>
+      ) : (
+        <View style={{ width: 48, height: 48 }} />
+      )}
+    </View>
+  );
+}
+
+function HeaderButton({ accessibilityLabel, children, onPress }: { accessibilityLabel: string; children: React.ReactNode; onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      hitSlop={6}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        width: 48,
+        height: 48,
+        borderRadius: 24,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: appTheme.colors.surfaceStrong,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+      })}
+    >
+      {children}
+    </Pressable>
+  );
+}
+
+function ResourcesHeading({ pills }: { pills: Array<{ label: string; accent: ToolAccent }> }) {
+  return (
+    <View style={{ gap: 8 }}>
+      <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>
+        Creator's resources
+      </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        {pills.map((pill) => <Pill key={pill.label} label={pill.label} accent={pill.accent} />)}
+      </View>
+    </View>
+  );
+}
+
+function ErrorText({ message }: { message: string }) {
+  return <Text selectable style={{ color: '#ff8a9a', fontSize: 13, fontWeight: '700' }}>{message}</Text>;
+}
+
 function DetailStat({ label, value }: { label: string; value: string }) {
   return (
     <View style={{ flex: 1, borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: appTheme.colors.surfaceStrong, padding: appTheme.spacing.gap, gap: 4 }}>
-      <Text numberOfLines={1} style={{ color: appTheme.colors.faint, ...appTheme.type.caption, textTransform: 'uppercase' }}>{label}</Text>
+      <Text numberOfLines={1} style={{ color: appTheme.colors.muted, ...appTheme.type.caption, textTransform: 'uppercase' }}>{label}</Text>
       <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{value}</Text>
     </View>
   );
@@ -325,28 +483,31 @@ function CopyableText({ text, onCopy }: { text: string; onCopy: (text: string) =
   return (
     <View style={{ borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: appTheme.colors.surface, padding: appTheme.spacing.gap, gap: appTheme.spacing.gap }}>
       <Text selectable style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>{text}</Text>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Copy text"
-        onPress={() => void onCopy(text)}
-        style={({ pressed }) => ({ alignSelf: 'flex-start', minHeight: appTheme.touch.compact, flexDirection: 'row', alignItems: 'center', gap: 6, opacity: pressed ? 0.7 : 1, paddingHorizontal: 4 })}
-      >
-        <Copy size={15} color={appTheme.colors.success} strokeWidth={2.4} />
-        <Text style={{ color: appTheme.colors.success, ...appTheme.type.caption, fontWeight: '800' }}>Copy</Text>
-      </Pressable>
+      <View style={{ flexDirection: 'row' }}>
+        <ResourceAction
+          icon={<Copy size={14} color={appTheme.colors.success} strokeWidth={2.5} />}
+          label="Copy"
+          onPress={() => onCopy(text)}
+        />
+      </View>
     </View>
   );
 }
 
 function DetailActionButton({
+  accessibilityLabel,
   disabled,
+  grow,
   icon,
   label,
   loading,
   onPress,
   primary,
 }: {
+  accessibilityLabel?: string;
   disabled?: boolean;
+  /** Share the row equally with its siblings instead of hugging the label. */
+  grow?: boolean;
   icon: React.ReactNode;
   label: string;
   loading?: boolean;
@@ -357,10 +518,12 @@ function DetailActionButton({
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? label}
       disabled={disabled || loading}
       onPress={onPress}
       style={({ pressed }) => ({
         minHeight: appTheme.touch.compact,
+        flex: grow ? 1 : undefined,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
@@ -397,16 +560,4 @@ function resourceKindLabel(kind: PostResourceKind) {
   if (kind === 'files') return 'Files';
   if (kind === 'notes') return 'Notes';
   return 'Remix';
-}
-
-function formatCount(value: number) {
-  if (value >= 1000000) return `${(value / 1000000).toFixed(value >= 10000000 ? 0 : 1)}M`;
-  if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}K`;
-  return String(value);
-}
-
-function formatGenerationDate(value: string) {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return '—';
-  return parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }

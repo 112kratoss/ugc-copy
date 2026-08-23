@@ -32,6 +32,10 @@ vi.mock('@/components/feed-media-frame', () => ({
   FeedMediaFrame: (props: MockProps) => React.createElement('feed-media-frame', props),
 }));
 
+vi.mock('@/components/media-lightbox', () => ({
+  MediaLightbox: (props: MockProps) => React.createElement('media-lightbox', props),
+}));
+
 import { PostResourceReferences } from '../components/post-resource-references';
 
 const referenceImage: PostResourceItem = {
@@ -86,7 +90,7 @@ describe('PostResourceReferences', () => {
     expect(preview.props.url).toBe('https://cdn.example.com/alisa.jpg');
   });
 
-  it('opens a reference using its prefetched signed URL', async () => {
+  it('shows a reference image in the app instead of a browser tab', async () => {
     const onOpenUrl = vi.fn(async () => undefined);
     let tree: renderer.ReactTestRenderer | undefined;
 
@@ -100,12 +104,98 @@ describe('PostResourceReferences', () => {
       );
     });
 
+    const lightbox = () => tree!.root.findByType('media-lightbox' as never);
+    expect(lightbox().props.activeIndex).toBeNull();
+
     const reference = tree!.root.findByProps({ accessibilityLabel: 'Open reference @alisa' });
     await renderer.act(async () => {
       await reference.props.onPress();
     });
 
-    expect(onOpenUrl).toHaveBeenCalledWith('https://cdn.example.com/alisa.jpg');
+    expect(onOpenUrl).not.toHaveBeenCalled();
+    expect(lightbox().props.activeIndex).toBe(0);
+    expect(lightbox().props.items).toEqual([
+      expect.objectContaining({
+        url: 'https://cdn.example.com/alisa.jpg',
+        mediaKind: 'image',
+        label: '@alisa',
+        caption: 'Character reference',
+      }),
+    ]);
+
+    await renderer.act(async () => {
+      lightbox().props.onClose();
+    });
+    expect(lightbox().props.activeIndex).toBeNull();
+  });
+
+  it('plays a reference video in the app but still hands audio to the browser', async () => {
+    const onOpenUrl = vi.fn(async () => undefined);
+    const videoReference: PostResourceItem = {
+      ...referenceImage,
+      id: 'video-reference',
+      type: 'reference_video',
+      title: 'Camera movement',
+      storagePath: 'references/camera.mp4',
+      contentType: 'video/mp4',
+    };
+    const audioReference: PostResourceItem = {
+      ...referenceImage,
+      id: 'audio-reference',
+      type: 'reference_audio',
+      title: 'Timing track',
+      storagePath: 'references/timing.mp3',
+      contentType: 'audio/mpeg',
+    };
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    await renderer.act(async () => {
+      tree = renderer.create(
+        <PostResourceReferences
+          items={[videoReference, audioReference]}
+          onOpenUrl={onOpenUrl}
+          resolveFileUrl={async (path) => `https://cdn.example.com/${path}`}
+        />
+      );
+    });
+
+    const lightbox = () => tree!.root.findByType('media-lightbox' as never);
+    expect(lightbox().props.items.map((item: { mediaKind: string }) => item.mediaKind)).toEqual(['video']);
+
+    await renderer.act(async () => {
+      await tree!.root.findByProps({ accessibilityLabel: 'Open reference Camera movement' }).props.onPress();
+    });
+    expect(lightbox().props.activeIndex).toBe(0);
+    expect(onOpenUrl).not.toHaveBeenCalled();
+
+    await renderer.act(async () => {
+      await tree!.root.findByProps({ accessibilityLabel: 'Open reference Timing track' }).props.onPress();
+    });
+    expect(onOpenUrl).toHaveBeenCalledWith('https://cdn.example.com/references/timing.mp3');
+  });
+
+  it('keeps an external link as a link', async () => {
+    const onOpenUrl = vi.fn(async () => undefined);
+    const linkedImage: PostResourceItem = {
+      ...referenceImage,
+      id: 'linked',
+      title: 'Mood board',
+      storagePath: null,
+      externalUrl: 'https://example.com/board',
+    };
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    await renderer.act(async () => {
+      tree = renderer.create(
+        <PostResourceReferences items={[linkedImage]} onOpenUrl={onOpenUrl} resolveFileUrl={vi.fn()} />
+      );
+    });
+
+    await renderer.act(async () => {
+      await tree!.root.findByProps({ accessibilityLabel: 'Open reference Mood board' }).props.onPress();
+    });
+    expect(onOpenUrl).toHaveBeenCalledWith('https://example.com/board');
+    expect(tree!.root.findByType('media-lightbox' as never).props.items).toEqual([]);
   });
 
   it('renders openable non-image reference media without an inline preview', async () => {

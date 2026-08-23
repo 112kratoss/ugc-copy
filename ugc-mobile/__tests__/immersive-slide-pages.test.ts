@@ -114,21 +114,18 @@ describe('immersive slide pages', () => {
     expect(buildImmersiveSlidePages(generation).map((page) => page.type)).toEqual(['media', 'details']);
   });
 
-  it('blocks active video playback while details page, details sheet, or action sheet is open', () => {
+  it('blocks active video playback while the details page or the action sheet is open', () => {
     expect(getImmersiveVideoBlockerId({
       detailsPageOpenItemId: 'post-1',
-      detailsSheetOpenItemId: null,
       actionsOpenItemId: null,
     })).toBe('post-1');
     expect(getImmersiveVideoBlockerId({
       detailsPageOpenItemId: null,
-      detailsSheetOpenItemId: 'post-1',
-      actionsOpenItemId: null,
-    })).toBe('post-1');
-    expect(getImmersiveVideoBlockerId({
-      detailsPageOpenItemId: null,
-      detailsSheetOpenItemId: null,
       actionsOpenItemId: 'post-1',
     })).toBe('post-1');
+    expect(getImmersiveVideoBlockerId({
+      detailsPageOpenItemId: null,
+      actionsOpenItemId: null,
+    })).toBeNull();
   });
 });

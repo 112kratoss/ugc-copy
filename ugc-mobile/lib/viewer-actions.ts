@@ -273,7 +273,12 @@ export function getRailActionOpacity({
   return pressed ? 0.72 : 1;
 }
 
-export function getViewerActionLabel(action: string) {
+/**
+ * One word for "make your own from this": someone else's post is remixed,
+ * your own creation is recreated. Pass the item's source type so the sheet,
+ * the rail and the details page all say the same thing for the same action.
+ */
+export function getViewerActionLabel(action: string, sourceType?: ImmersivePreviewItem['sourceType']) {
   switch (action) {
     case 'save':
       return 'Save';
@@ -284,7 +289,7 @@ export function getViewerActionLabel(action: string) {
     case 'share':
       return 'Share';
     case 'recreate':
-      return 'Recreate / Remix';
+      return sourceType === 'showcase' ? 'Remix' : 'Recreate';
     case 'unlock-remix':
       return 'Remix';
     case 'publish':
@@ -481,7 +486,7 @@ export function getViewerActionSlots(item: ImmersivePreviewItem): ViewerActionSl
   if (available.has('unlock-remix')) {
     slots.push({ id: 'create', action: 'unlock-remix', label: 'Remix', tone: 'primary' });
   } else if (available.has('recreate')) {
-    slots.push({ id: 'create', action: 'recreate', label: 'Create', tone: 'primary' });
+    slots.push({ id: 'create', action: 'recreate', label: getViewerActionLabel('recreate', item.sourceType), tone: 'primary' });
   }
 
   return slots;

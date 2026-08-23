@@ -10,6 +10,7 @@ import { AppText, Card, Pill, PrimaryButton, Screen, SecondaryButton, SectionTit
 import { useAuth } from '@/lib/auth';
 import { appTheme, type ToolAccent } from '@/lib/theme';
 import type { MarketplaceResource, PostResourceKind } from '@/lib/types';
+import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
 
 function resourceLabel(kinds?: PostResourceKind[]) {
   if (!kinds || kinds.length === 0) return 'Creator unlock';
@@ -51,6 +52,11 @@ export default function MarketplaceAssetScreen() {
     onSuccess: async (result) => {
       if ('credits' in result && typeof result.credits === 'number') {
         updateCredits(result.credits);
+      }
+      const postId = detailQuery.data?.postId;
+      if (postId && resourceId) {
+        await refreshUnlockedBundleCaches(queryClient, { postId, resourceId });
+        return;
       }
       await queryClient.invalidateQueries({ queryKey: ['marketplace-resource', resourceId] });
       await queryClient.invalidateQueries({ queryKey: ['marketplace-resources'] });

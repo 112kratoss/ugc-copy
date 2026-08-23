@@ -392,4 +392,81 @@ describe('PostResourceBundleContent', () => {
     expect(textValues(tree)).toContain('Purchased output');
     expect(textValues(tree)).not.toContain('No resources apply to this output.');
   });
+
+  it('shows a saved generation setup as settings and copies the raw note', async () => {
+    const onCopy = vi.fn();
+    const note = 'Saved generation setup\nModel: Nano Banana 2.0\nAspect ratio: 9:16\nResolution: 1K';
+    const resources: PostResourceBundleResources = {
+      promptText: null,
+      notesMarkdown: null,
+      workflowShareUrl: null,
+      workflowSnapshot: null,
+      attachments: [],
+      allowRemix: false,
+      sections: [
+        { id: 'notes', title: 'Guide or notes', kind: 'asset_group', description: null, sortOrder: 0, resourceType: 'note', scope: { kind: 'all' } },
+      ],
+      items: [
+        item({ id: 'setup', type: 'note', title: 'Notes', sectionId: 'notes', textContent: note, sortOrder: 0 }),
+      ],
+    };
+    const tree = renderContent(<PostResourceBundleContent onCopy={onCopy} resources={resources} />);
+
+    const values = textValues(tree);
+    expect(values).toEqual(expect.arrayContaining(['Generation setup', 'Model', 'Nano Banana 2.0', 'Aspect ratio', '9:16', 'Resolution', '1K']));
+    expect(values).not.toContain('Guide or notes');
+    expect(values).not.toContain('Notes');
+    expect(values).not.toContain(note);
+
+    await renderer.act(async () => {
+      await pressable(tree, 'Copy').props.onPress();
+    });
+    expect(onCopy).toHaveBeenCalledWith(note);
+  });
+
+  it('keeps hand-written notes as prose under the group the creator named', () => {
+    const resources: PostResourceBundleResources = {
+      promptText: null,
+      notesMarkdown: null,
+      workflowShareUrl: null,
+      workflowSnapshot: null,
+      attachments: [],
+      allowRemix: false,
+      sections: [
+        { id: 'notes', title: 'Why this works', kind: 'asset_group', description: null, sortOrder: 0, resourceType: 'note', scope: { kind: 'all' } },
+      ],
+      items: [
+        item({ id: 'guide', type: 'note', title: 'Notes', sectionId: 'notes', textContent: 'Open with tension, then pay it off.', sortOrder: 0 }),
+      ],
+    };
+    const tree = renderContent(<PostResourceBundleContent resources={resources} />);
+
+    const values = textValues(tree);
+    expect(values).toEqual(expect.arrayContaining(['Why this works', 'Guide or notes', 'Open with tension, then pay it off.']));
+    expect(values).not.toContain('Generation setup');
+  });
+
+  it('prints a lone generic item title once, not over its own group', () => {
+    const resources: PostResourceBundleResources = {
+      promptText: null,
+      notesMarkdown: null,
+      workflowShareUrl: null,
+      workflowSnapshot: null,
+      attachments: [],
+      allowRemix: false,
+      sections: [
+        { id: 'prompt', title: 'Prompt or script', kind: 'asset_group', description: null, sortOrder: 0, resourceType: 'prompt', scope: { kind: 'all' } },
+      ],
+      items: [
+        item({ id: 'prompt', type: 'prompt', title: 'Prompt', sectionId: 'prompt', textContent: 'A glossy product photo', sortOrder: 0 }),
+      ],
+    };
+    const tree = renderContent(<PostResourceBundleContent resources={resources} />);
+
+    const values = textValues(tree);
+    expect(values.filter((value) => value === 'Prompt or script')).toHaveLength(1);
+    expect(values).not.toContain('Prompt');
+    expect(values).not.toContain('1 item');
+    expect(values).toContain('A glossy product photo');
+  });
 });

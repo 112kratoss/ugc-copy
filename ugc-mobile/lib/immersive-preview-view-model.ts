@@ -45,6 +45,8 @@ export interface ImmersivePostDetails {
   body: string;
   categoryLabel: string;
   sourceLabel: string;
+  /** The tool (and model) the post was made with, when the source names one. */
+  toolLabel?: string | null;
   creatorLabel: string;
   creatorAvatar: string | null;
   saveCount: number;
@@ -420,6 +422,7 @@ function showcaseToImmersiveItem(source: PreviewViewerSource, item: ShowcaseFeed
       body: item.body.trim(),
       categoryLabel: categoryLabel(item.category, item.postFormat),
       sourceLabel: 'Showcase',
+      toolLabel: item.sourceTool?.trim() || null,
       creatorLabel,
       creatorAvatar: item.creator.avatar,
       saveCount: item.saveCount,
@@ -622,6 +625,7 @@ function ownerPostToImmersiveItem(
       body: item.body?.trim() || item.description?.trim() || '',
       categoryLabel: categoryLabel(item.category, item.postFormat),
       sourceLabel: item.sourceLabel?.trim() || 'Post',
+      toolLabel: item.sourceLabel?.trim() || null,
       creatorLabel: owner.creatorLabel,
       creatorAvatar: owner.creatorAvatar ?? null,
       saveCount: 0,

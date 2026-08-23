@@ -107,6 +107,17 @@ describe('viewer rail slots', () => {
     expect(slots.map((slot) => slot.id)).toEqual(['save', 'comment', 'share', 'details', 'create']);
     expect(slots.find((slot) => slot.id === 'save')?.label).toBe('Saved');
     expect(slots.find((slot) => slot.id === 'comment')?.label).toBe('4');
+    expect(slots.find((slot) => slot.id === 'create')?.label).toBe('Remix');
+  });
+
+  it('calls recreating your own creation a recreate, not a remix', () => {
+    const slots = getViewerActionSlots(railItem({
+      sourceType: 'generation',
+      generationId: 'gen-1',
+      availableActions: ['publish', 'recreate', 'share', 'view-details'],
+    }));
+
+    expect(slots.find((slot) => slot.id === 'create')?.label).toBe('Recreate');
   });
 
   it('drops ownership slots for an archived creation', () => {
@@ -146,6 +157,13 @@ describe('immersive viewer actions', () => {
     expect(getViewerActionLabel('view-details')).toBe('View details');
     expect(getViewerActionLabel('unlock-remix')).toBe('Remix');
     expect(getViewerActionLabel('delete-post')).toBe('Delete permanently');
+  });
+
+  it('uses one verb per source for making your own', () => {
+    expect(getViewerActionLabel('recreate', 'showcase')).toBe('Remix');
+    expect(getViewerActionLabel('recreate', 'generation')).toBe('Recreate');
+    expect(getViewerActionLabel('recreate', 'owner-post')).toBe('Recreate');
+    expect(getViewerActionLabel('recreate')).toBe('Recreate');
   });
 
   it('marks only removal-style commands as destructive', () => {

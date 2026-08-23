@@ -5,10 +5,10 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer } from 'expo-video';
-import { ArrowLeft, Copy, FileText, Globe, Heart, ImageOff, Images, Lock, LockKeyhole, MessageCircle, MoreVertical, Play, Repeat2, Share2, Wand2, X } from 'lucide-react-native';
+import { ArrowLeft, Copy, FileText, Globe, Heart, ImageOff, Images, Lock, LockKeyhole, MessageCircle, MoreHorizontal, Play, Repeat2, Share2, Wand2 } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
+import { cloneElement, useCallback, useEffect, useId, useMemo, useRef, useState, type MutableRefObject, type ReactElement } from 'react';
+import { AccessibilityInfo, ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
@@ -37,7 +37,11 @@ import {
   isImmersiveDetailsSlidePageIndex,
   type ImmersiveSlidePage,
 } from '@/lib/immersive-slide-pages';
+import { formatCompactCount } from '@/lib/home-view-model';
+import { buildReelCaption, getRailCountLabel, getReelFollowTarget } from '@/lib/reel-overlay-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
+import { useCreatorFollow } from '@/lib/use-creator-follow';
+import { useHardwareBack } from '@/lib/use-hardware-back';
 import {
   buildViewerItems,
   type ImmersiveSourceData,
@@ -138,7 +142,10 @@ export default function ImmersivePreviewViewerScreen() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [initialPositionReady, setInitialPositionReady] = useState(false);
   const [detailsPageOpenItemId, setDetailsPageOpenItemId] = useState<string | null>(null);
-  const [detailsSheetOpenItemId, setDetailsSheetOpenItemId] = useState<string | null>(null);
+  // The slide under the finger. Only it is ever driven from up here — back
+  // and the ⋮ sheet act on what the reader is looking at, never on a neighbour
+  // the list keeps mounted off-screen.
+  const activeSlideRef = useRef<ImmersiveSlideHandle | null>(null);
   const [actionsOpenItemId, setActionsOpenItemId] = useState<string | null>(null);
   const [commentsOpenItemId, setCommentsOpenItemId] = useState<string | null>(null);
   const [commentsReplyToId, setCommentsReplyToId] = useState<string | null>(null);
@@ -210,13 +217,20 @@ export default function ImmersivePreviewViewerScreen() {
     actionsOpenItemId,
     commentsOpenItemId,
     detailsPageOpenItemId,
-    detailsSheetOpenItemId,
     unlockRemixOpenItemId,
   });
   const activeVideoId = isFocused
     ? selectActiveImmersiveVideoId(items, activeIndex, overlayOpenItemId)
     : null;
   const activeItem = items[activeIndex];
+  const detailsOpenForActive = Boolean(activeItem) && detailsPageOpenItemId === activeItem.id;
+  const showMediaForActive = useCallback(() => {
+    activeSlideRef.current?.showMedia();
+  }, []);
+  // Back from the details page is back to the media, not out of the reel.
+  // Gated on focus: the listener would otherwise outlive a push to a creator
+  // profile or the sign-in screen and swallow their back key.
+  useHardwareBack(isFocused && detailsOpenForActive, showMediaForActive);
   const feedSessionId = sourceQuery.data?.feedSessionId ?? routeFeedSessionId ?? null;
   const algorithmVersion = sourceQuery.data?.algorithmVersion ?? routeAlgorithmVersion ?? null;
   const submitViewerFeedEvent = useCallback((
@@ -699,7 +713,6 @@ export default function ImmersivePreviewViewerScreen() {
           if (clampedIndex !== activeIndex) haptic.soft();
           setActiveIndex(clampedIndex);
           setDetailsPageOpenItemId(null);
-          setDetailsSheetOpenItemId(null);
           setActionsOpenItemId(null);
           setUnlockRemixOpenItemId(null);
         }}
@@ -713,7 +726,15 @@ export default function ImmersivePreviewViewerScreen() {
         renderItem={({ item, index }) => (
           <ImmersiveSlide
             active={index === activeIndex}
+            activeSlideRef={activeSlideRef}
             activeVideoId={activeVideoId}
+            authReturnTo={immersiveViewerReturnPath({
+              source,
+              initialId: item.id,
+              feedSessionId,
+              algorithmVersion,
+              creatorUsername,
+            })}
             bottomInset={bottomInset}
             height={height}
             item={item}
@@ -741,41 +762,29 @@ export default function ImmersivePreviewViewerScreen() {
         style={{ flex: 1, backgroundColor: '#000' }}
         windowSize={IMMERSIVE_VERTICAL_LIST_TUNING.windowSize}
       />
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Go back"
-        onPress={leaveViewer}
-        style={({ pressed }) => ({
-          position: 'absolute',
-          left: 16,
-          top: topInset + 10,
-          width: 48,
-          height: 48,
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderRadius: 24,
-          backgroundColor: 'rgba(0,0,0,0.18)',
-          opacity: pressed ? 0.7 : 1,
-        })}
-      >
-        <ArrowLeft size={30} color="#ffffff" strokeWidth={2.4} />
-      </Pressable>
-      {activeItem && hasImmersiveDetailsPage(activeItem) ? (
-        <ViewerDetailsSheet
-          bottomInset={bottomInset}
-          height={height}
-          item={activeItem}
-          onClose={() => setDetailsSheetOpenItemId(null)}
-          onRecreate={recreateItem}
-          onSave={saveItem}
-          onShare={shareItem}
-          onUnlockRemix={(item) => setUnlockRemixOpenItemId(item.id)}
-          saveLoading={saveMutation.isPending && saveMutation.variables?.postId === activeItem.showcasePostId}
-          topInset={topInset}
-          visible={detailsSheetOpenItemId === activeItem.id}
-          width={width}
-        />
-      ) : null}
+      {/* The details page draws its own header with its own way back; the
+          reel's arrow would be a second back button that leaves the reel. */}
+      {detailsOpenForActive ? null : (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          onPress={leaveViewer}
+          style={({ pressed }) => ({
+            position: 'absolute',
+            left: 16,
+            top: topInset + 10,
+            width: 48,
+            height: 48,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: 24,
+            backgroundColor: 'rgba(0,0,0,0.3)',
+            opacity: pressed ? 0.7 : 1,
+          })}
+        >
+          <IconShadow><ArrowLeft size={30} color="#ffffff" strokeWidth={2.4} /></IconShadow>
+        </Pressable>
+      )}
       {activeItem ? (
         <ViewerActionSheet
           item={activeItem}
@@ -787,7 +796,7 @@ export default function ImmersivePreviewViewerScreen() {
           } : undefined}
           onDetails={() => {
             setActionsOpenItemId(null);
-            setDetailsSheetOpenItemId(activeItem.id);
+            activeSlideRef.current?.openDetails();
           }}
           onRecreate={() => void recreateItem(activeItem)}
           onNotInterested={source === 'showcase-feed' && activeItem.sourceType === 'showcase'
@@ -869,9 +878,9 @@ function ViewerShell({ topInset, bottomInset, children }: { topInset: number; bo
         accessibilityRole="button"
         accessibilityLabel="Go back"
         onPress={leaveViewer}
-        style={{ position: 'absolute', left: 16, top: topInset + 10, width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.18)' }}
+        style={{ position: 'absolute', left: 16, top: topInset + 10, width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.3)' }}
       >
-        <ArrowLeft size={30} color="#ffffff" strokeWidth={2.4} />
+        <IconShadow><ArrowLeft size={30} color="#ffffff" strokeWidth={2.4} /></IconShadow>
       </Pressable>
       {children}
     </View>
@@ -886,9 +895,17 @@ function leaveViewer() {
   router.replace('/(tabs)/showcase' as never);
 }
 
+/** What the reel can ask of the slide the reader is on. */
+interface ImmersiveSlideHandle {
+  openDetails: () => void;
+  showMedia: () => void;
+}
+
 function ImmersiveSlide({
   active,
+  activeSlideRef,
   activeVideoId,
+  authReturnTo,
   bottomInset,
   height,
   item,
@@ -908,7 +925,10 @@ function ImmersiveSlide({
   onHorizontalScrollToggle,
 }: {
   active: boolean;
+  activeSlideRef: MutableRefObject<ImmersiveSlideHandle | null>;
   activeVideoId: string | null;
+  /** Where sign-in should land the viewer back: this reel, on this item. */
+  authReturnTo: string;
   bottomInset: number;
   height: number;
   item: ImmersivePreviewItem;
@@ -932,6 +952,24 @@ function ImmersiveSlide({
   const [saveHeartPopTrigger, setSaveHeartPopTrigger] = useState(0);
   const prevActiveRef = useRef(active);
   const doubleTapHeart = useDoubleTapSaveHeartAnimation({ height, width });
+  const { user } = useAuth();
+  const followTarget = getReelFollowTarget(item, user?.id ?? null);
+  const follow = useCreatorFollow({ creatorId: followTarget?.creatorId ?? null, enabled: active && Boolean(followTarget) });
+  const reelCaption = useMemo(() => buildReelCaption(item), [item]);
+  const [captionExpanded, setCaptionExpanded] = useState(false);
+  // The bottom scrim is sized to the text it protects, so it is measured.
+  const [captionBlockHeight, setCaptionBlockHeight] = useState(0);
+  useEffect(() => {
+    setCaptionExpanded(false);
+  }, [active, item.id]);
+  const { toggle: toggleFollow } = follow;
+  const onFollowPress = useCallback(() => {
+    if (!user) {
+      router.push({ pathname: '/auth', params: { returnTo: authReturnTo } } as never);
+      return;
+    }
+    toggleFollow();
+  }, [authReturnTo, toggleFollow, user]);
 
   const pages = useMemo(() => buildImmersiveSlidePages(item), [item]);
   const currentPageIsDetails = isImmersiveDetailsSlidePageIndex(pages, currentHorizontalIndex);
@@ -948,6 +986,23 @@ function ImmersiveSlide({
     updateCurrentHorizontalIndex(detailsIndex);
     horizontalRef.current?.scrollToIndex({ index: detailsIndex, animated: true });
   }, [pages, updateCurrentHorizontalIndex]);
+
+  const showMediaPage = useCallback(() => {
+    updateCurrentHorizontalIndex(0);
+    horizontalRef.current?.scrollToIndex({ index: 0, animated: true });
+  }, [updateCurrentHorizontalIndex]);
+
+  // Only the active slide answers the reel. A neighbour that the list keeps
+  // mounted must never be scrolled from outside: its native views may be
+  // clipped on Android, and activation snaps it back to page 0 anyway.
+  useEffect(() => {
+    if (!active) return;
+    const handle: ImmersiveSlideHandle = { openDetails: openDetailsPage, showMedia: showMediaPage };
+    activeSlideRef.current = handle;
+    return () => {
+      if (activeSlideRef.current === handle) activeSlideRef.current = null;
+    };
+  }, [active, activeSlideRef, openDetailsPage, showMediaPage]);
 
   useEffect(() => {
     if (!active) {
@@ -989,6 +1044,11 @@ function ImmersiveSlide({
       return null;
     }
 
+    // Only the text needs a scrim. It runs from just above the caption block
+    // to the bottom edge and no further — the picture above it is the point.
+    const scrimHeight = Math.max(220, captionBlockHeight + bottomInset + 120);
+    const showFollowPill = Boolean(followTarget) && (!user || !follow.loading);
+
     return (
       <View
         pointerEvents="box-none"
@@ -999,9 +1059,9 @@ function ImmersiveSlide({
       >
         <LinearGradient
           pointerEvents="none"
-          colors={['rgba(0,0,0,0.36)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0.82)']}
-          locations={[0, 0.48, 1]}
-          style={{ position: 'absolute', inset: 0 }}
+          colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.42)', 'rgba(0,0,0,0.84)']}
+          locations={[0, 0.42, 1]}
+          style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: scrimHeight }}
         />
 
         {/* Media count indicator */}
@@ -1030,41 +1090,40 @@ function ImmersiveSlide({
           </View>
         ) : null}
 
-        {/* Right rail buttons */}
+        {/* Right rail. The universal actions are bare icons with a count for a
+            label, the way every reel app draws them; only what is ours — Remix,
+            Details, the owner's publish controls — keeps a button and a word. */}
         <View
           pointerEvents="box-none"
           style={{
             position: 'absolute',
             right: 14,
-            bottom: bottomInset + 104,
+            bottom: bottomInset + 96,
             alignItems: 'center',
-            gap: 17,
+            gap: 14,
           }}
         >
-          <ViewerCreatorAvatar
-            item={item}
-            onPress={canOpenCreator ? () => onCreatorOpen(item) : undefined}
-            size={56}
-          />
-          <RailActionButton
-            icon={<MoreVertical size={27} color="#ffffff" strokeWidth={2.5} />}
-            label="More"
-            onPress={onActionsOpen}
-          />
           {railSlots.map((slot) => {
             if (slot.id === 'save') {
+              const saveCountLabel = getRailCountLabel(item.saveCount, formatCompactCount);
               return (
                 <RailActionButton
                   key={slot.id}
+                  accessibilityLabel={item.isSaved
+                    ? 'Saved'
+                    : saveCountLabel
+                      ? `Save, ${item.saveCount} ${item.saveCount === 1 ? 'save' : 'saves'}`
+                      : 'Save'}
                   disabled={!item.canSave}
-                  icon={<Heart size={27} {...getSaveHeartIconProps({ isSaved: item.isSaved, enabled: item.canSave })} />}
-                  label={slot.label}
+                  icon={<Heart size={30} {...getSaveHeartIconProps({ isSaved: item.isSaved, enabled: item.canSave })} />}
+                  label={saveCountLabel}
                   loading={saveLoading}
                   onPress={() => onSave(item)}
                   preserveIconWhileLoading
                   showDisabledAsActive={item.isSaved && !item.canSave}
                   tapAnimationSpec={getSaveHeartTapAnimationSpec({ willSave: !item.isSaved, enabled: item.canSave })}
                   externalPopTrigger={saveHeartPopTrigger}
+                  variant="bare"
                 />
               );
             }
@@ -1075,9 +1134,10 @@ function ImmersiveSlide({
                   accessibilityLabel={item.commentCount > 0
                     ? `${item.commentCount} ${item.commentCount === 1 ? 'comment' : 'comments'}`
                     : 'Comment'}
-                  icon={<MessageCircle size={27} color="#ffffff" strokeWidth={2.4} />}
-                  label={slot.label}
+                  icon={<MessageCircle size={30} color="#ffffff" strokeWidth={2.2} />}
+                  label={getRailCountLabel(item.commentCount, formatCompactCount)}
                   onPress={onComments}
+                  variant="bare"
                 />
               ) : null;
             }
@@ -1085,9 +1145,11 @@ function ImmersiveSlide({
               return (
                 <RailActionButton
                   key={slot.id}
-                  icon={<Share2 size={27} color="#ffffff" strokeWidth={2.4} />}
-                  label={slot.label}
+                  accessibilityLabel="Share"
+                  icon={<Share2 size={28} color="#ffffff" strokeWidth={2.2} />}
+                  label={null}
                   onPress={() => void onShare(item)}
+                  variant="bare"
                 />
               );
             }
@@ -1095,7 +1157,7 @@ function ImmersiveSlide({
               return hasImmersiveDetailsPage(item) ? (
                 <RailActionButton
                   key={slot.id}
-                  icon={<FileText size={27} color="#ffffff" strokeWidth={2.4} />}
+                  icon={<FileText size={26} color="#ffffff" strokeWidth={2.4} />}
                   label={slot.label}
                   onPress={openDetailsPage}
                 />
@@ -1106,7 +1168,7 @@ function ImmersiveSlide({
                 <RailActionButton
                   key={slot.id}
                   primary
-                  icon={<Repeat2 size={27} color="#050505" strokeWidth={2.8} />}
+                  icon={<Repeat2 size={26} color="#050505" strokeWidth={2.8} />}
                   label={slot.label}
                   onPress={slot.action === 'unlock-remix' ? () => onUnlockRemix(item) : () => void onRecreate(item)}
                 />
@@ -1116,12 +1178,12 @@ function ImmersiveSlide({
             // Ownership slots — publish, visibility, unlock — all delegate to the
             // same action ids the More sheet uses, so there is one code path per action.
             const ownerIcon = slot.id === 'publish'
-              ? <Globe size={27} color="#050505" strokeWidth={2.6} />
+              ? <Globe size={26} color="#050505" strokeWidth={2.6} />
               : slot.id === 'unlock'
-                ? <Wand2 size={27} color={appTheme.colors.success} strokeWidth={2.5} />
+                ? <Wand2 size={26} color={appTheme.colors.success} strokeWidth={2.5} />
                 : slot.action === 'make-private' || item.visibility === 'private' || item.visibility === 'unlisted'
-                  ? <LockKeyhole size={27} color={appTheme.colors.warning} strokeWidth={2.5} />
-                  : <Globe size={27} color="#ffffff" strokeWidth={2.4} />;
+                  ? <LockKeyhole size={26} color={appTheme.colors.warning} strokeWidth={2.5} />
+                  : <Globe size={26} color="#ffffff" strokeWidth={2.4} />;
 
             return (
               <RailActionButton
@@ -1135,16 +1197,26 @@ function ImmersiveSlide({
               />
             );
           })}
+          <RailActionButton
+            accessibilityLabel="More options"
+            icon={<MoreHorizontal size={28} color="#ffffff" strokeWidth={2.4} />}
+            label={null}
+            onPress={onActionsOpen}
+            variant="bare"
+          />
         </View>
 
-        {/* Bottom text descriptions */}
+        {/* Bottom text: who, then what — identity beside the caption, the way a
+            reader expects to find it, with the whole block one tap from its
+            full length. */}
         <View
           pointerEvents="box-none"
+          onLayout={(event) => setCaptionBlockHeight(event.nativeEvent.layout.height)}
           style={{
             position: 'absolute',
             left: 18,
-            right: 96,
-            bottom: bottomInset + 28,
+            right: 88,
+            bottom: bottomInset + 24,
             gap: 8,
           }}
         >
@@ -1177,26 +1249,52 @@ function ImmersiveSlide({
               </View>
             ) : null}
           </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Open ${item.creatorLabel} profile`}
-            disabled={!canOpenCreator}
-            onPress={() => onCreatorOpen(item)}
-            style={({ pressed }) => ({
-              alignSelf: 'flex-start',
-              opacity: pressed ? 0.72 : canOpenCreator ? 1 : 0.86,
-            })}
-          >
-            <Text numberOfLines={1} style={{ color: '#fff', fontSize: 18, lineHeight: 22, fontWeight: '800' }}>
-              {item.creatorLabel}
-            </Text>
-          </Pressable>
-          <Text numberOfLines={2} style={{ color: '#fff', fontSize: 22, lineHeight: 26, fontWeight: '800' }}>
-            {item.title}
-          </Text>
-          <Text numberOfLines={2} style={{ color: 'rgba(255,255,255,0.78)', fontSize: 14, lineHeight: 20, fontWeight: '700' }}>
-            {item.displayText}
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Open ${item.creatorLabel} profile`}
+              disabled={!canOpenCreator}
+              onPress={() => onCreatorOpen(item)}
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 9,
+                flexShrink: 1,
+                opacity: pressed ? 0.72 : canOpenCreator ? 1 : 0.86,
+              })}
+            >
+              <ViewerCreatorAvatar item={item} size={34} />
+              <Text numberOfLines={1} style={{ flexShrink: 1, color: '#fff', fontSize: 15, lineHeight: 19, fontWeight: '700', ...REEL_TEXT_SHADOW }}>
+                {item.creatorLabel}
+              </Text>
+            </Pressable>
+            {showFollowPill ? (
+              <FollowPill
+                following={Boolean(user) && follow.following}
+                pending={follow.pending}
+                onPress={onFollowPress}
+              />
+            ) : null}
+          </View>
+          {reelCaption.title || reelCaption.caption ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={captionExpanded ? 'Collapse caption' : 'Expand caption'}
+              onPress={() => setCaptionExpanded((current) => !current)}
+              style={{ gap: 3 }}
+            >
+              {reelCaption.title ? (
+                <Text numberOfLines={captionExpanded ? 4 : 1} style={{ color: '#fff', fontSize: 16, lineHeight: 21, fontWeight: '700', ...REEL_TEXT_SHADOW }}>
+                  {reelCaption.title}
+                </Text>
+              ) : null}
+              {reelCaption.caption ? (
+                <Text numberOfLines={captionExpanded ? 8 : 1} style={{ color: 'rgba(255,255,255,0.88)', fontSize: 14, lineHeight: 19, fontWeight: '400', ...REEL_TEXT_SHADOW }}>
+                  {reelCaption.caption}
+                </Text>
+              ) : null}
+            </Pressable>
+          ) : null}
           </>
           )}
         </View>
@@ -1216,7 +1314,6 @@ function ImmersiveSlide({
           onSave={onSave}
           onDoubleTapSave={saveFromDoubleTap}
           onShare={onShare}
-          onUnlockRemix={onUnlockRemix}
           page={pages[0] ?? { type: 'text' }}
           saveLoading={saveLoading}
           topInset={topInset}
@@ -1265,11 +1362,14 @@ function ImmersiveSlide({
             bottomInset={bottomInset}
             height={height}
             item={item}
+            onActionsOpen={onActionsOpen}
+            onComments={onComments}
+            onCreatorOpen={onCreatorOpen}
             onRecreate={onRecreate}
             onSave={onSave}
             onDoubleTapSave={saveFromDoubleTap}
             onShare={onShare}
-            onUnlockRemix={onUnlockRemix}
+            onShowMedia={showMediaPage}
             page={page}
             saveLoading={saveLoading}
             topInset={topInset}
@@ -1450,11 +1550,14 @@ function MediaSlidePage({
   bottomInset,
   height,
   item,
+  onActionsOpen,
+  onComments,
+  onCreatorOpen,
   onDoubleTapSave,
   onRecreate,
   onSave,
   onShare,
-  onUnlockRemix,
+  onShowMedia,
   page,
   saveLoading,
   topInset,
@@ -1464,11 +1567,15 @@ function MediaSlidePage({
   bottomInset: number;
   height: number;
   item: ImmersivePreviewItem;
+  onActionsOpen?: () => void;
+  onComments?: () => void;
+  onCreatorOpen?: (item: ImmersivePreviewItem) => void;
   onDoubleTapSave: (position: DoubleTapSavePosition) => void;
   onRecreate: (item: ImmersivePreviewItem) => void;
   onSave: (item: ImmersivePreviewItem) => void;
   onShare: (item: ImmersivePreviewItem) => void;
-  onUnlockRemix: (item: ImmersivePreviewItem) => void;
+  /** The details page's way back: the media page of the same slide. */
+  onShowMedia?: () => void;
   page: ImmersiveSlidePage;
   saveLoading: boolean;
   topInset: number;
@@ -1482,12 +1589,14 @@ function MediaSlidePage({
           bottomInset={bottomInset}
           height={height}
           item={item}
+          onActionsOpen={onActionsOpen}
+          onBack={onShowMedia}
+          onComments={onComments}
+          onCreatorOpen={onCreatorOpen}
           onRecreate={onRecreate}
           onSave={onSave}
           onShare={onShare}
-          onUnlockRemix={onUnlockRemix}
           saveLoading={saveLoading}
-          sheet={false}
           topInset={topInset}
           width={width}
         />
@@ -1503,114 +1612,6 @@ function MediaSlidePage({
         />
       )}
     </View>
-  );
-}
-
-function ViewerDetailsSheet({
-  bottomInset,
-  height,
-  item,
-  onClose,
-  onRecreate,
-  onSave,
-  onShare,
-  onUnlockRemix,
-  saveLoading,
-  topInset,
-  visible,
-  width,
-}: {
-  bottomInset: number;
-  height: number;
-  item: ImmersivePreviewItem;
-  onClose: () => void;
-  onRecreate: (item: ImmersivePreviewItem) => void;
-  onSave: (item: ImmersivePreviewItem) => void;
-  onShare: (item: ImmersivePreviewItem) => void;
-  onUnlockRemix: (item: ImmersivePreviewItem) => void;
-  saveLoading: boolean;
-  topInset: number;
-  visible: boolean;
-  width: number;
-}) {
-  const sheetHeight = Math.min(height * 0.9, height - topInset - 12);
-  const reducedMotion = useReducedMotion();
-
-  return (
-    <Modal
-      animationType={reducedMotion ? 'none' : 'slide'}
-      onRequestClose={onClose}
-      statusBarTranslucent
-      transparent
-      visible={visible}
-    >
-      <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.56)' }}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Close details"
-          onPress={onClose}
-          style={{ position: 'absolute', inset: 0 }}
-        />
-        <View
-          style={{
-            height: sheetHeight,
-            overflow: 'hidden',
-            borderTopLeftRadius: 24,
-            borderTopRightRadius: 24,
-            borderCurve: 'continuous',
-            borderWidth: 1,
-            borderBottomWidth: 0,
-            borderColor: 'rgba(255,255,255,0.14)',
-            backgroundColor: '#050506',
-          }}
-        >
-          <View
-            style={{
-              height: 58,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingHorizontal: 18,
-              borderBottomWidth: 1,
-              borderBottomColor: 'rgba(255,255,255,0.1)',
-            }}
-          >
-            <View style={{ width: 48 }} />
-            <Text style={{ color: '#fff', fontSize: 18, fontWeight: '800' }}>Details</Text>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Close details"
-              onPress={onClose}
-              style={({ pressed }) => ({
-                width: 48,
-                height: 48,
-                borderRadius: 24,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: 'rgba(255,255,255,0.08)',
-                opacity: pressed ? 0.7 : 1,
-              })}
-            >
-              <X size={22} color="#fff" />
-            </Pressable>
-          </View>
-          <PostDetailsPage
-            active={visible}
-            bottomInset={bottomInset}
-            height={sheetHeight - 58}
-            item={item}
-            onRecreate={onRecreate}
-            onSave={onSave}
-            onShare={onShare}
-            onUnlockRemix={onUnlockRemix}
-            saveLoading={saveLoading}
-            sheet
-            topInset={0}
-            width={width}
-          />
-        </View>
-      </View>
-    </Modal>
   );
 }
 
@@ -1952,6 +1953,63 @@ function ViewerCreatorAvatar({
   );
 }
 
+const REEL_TEXT_SHADOW = {
+  textShadowColor: 'rgba(0,0,0,0.55)',
+  textShadowOffset: { width: 0, height: 1 },
+  textShadowRadius: 5,
+} as const;
+
+type ShadowableIconProps = { color?: string; fill?: string; strokeWidth?: number };
+
+/**
+ * A bare icon over a photograph needs an edge. Native shadows cannot follow a
+ * glyph on Android, so the icon is drawn twice: a darker, slightly thicker
+ * copy a pixel below, then the icon itself — a soft halo that reads over
+ * both a pale sky and a black dress.
+ */
+function IconShadow({ children }: { children: ReactElement<ShadowableIconProps> }) {
+  const hasFill = Boolean(children.props.fill) && children.props.fill !== 'none' && children.props.fill !== 'transparent';
+  const shadow = cloneElement(children, {
+    color: 'rgba(0,0,0,0.55)',
+    fill: hasFill ? 'rgba(0,0,0,0.55)' : children.props.fill,
+    strokeWidth: (children.props.strokeWidth ?? 2) + 1.4,
+  });
+
+  return (
+    <View>
+      <View pointerEvents="none" style={{ position: 'absolute', top: 1.5, left: 0 }}>{shadow}</View>
+      {children}
+    </View>
+  );
+}
+
+function FollowPill({ following, pending, onPress }: { following: boolean; pending: boolean; onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={following ? 'Following' : 'Follow'}
+      accessibilityState={{ selected: following, busy: pending }}
+      disabled={pending}
+      hitSlop={6}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        minHeight: 30,
+        justifyContent: 'center',
+        borderRadius: 999,
+        borderWidth: 1.5,
+        borderColor: following ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.92)',
+        backgroundColor: 'rgba(0,0,0,0.18)',
+        paddingHorizontal: 12,
+        opacity: pending ? 0.6 : pressed ? 0.72 : 1,
+      })}
+    >
+      <Text style={{ color: following ? 'rgba(255,255,255,0.8)' : '#fff', fontSize: 13, lineHeight: 16, fontWeight: '700' }}>
+        {following ? 'Following' : 'Follow'}
+      </Text>
+    </Pressable>
+  );
+}
+
 function RailActionButton({
   accessibilityLabel: providedAccessibilityLabel,
   disabled,
@@ -1964,18 +2022,22 @@ function RailActionButton({
   preserveIconWhileLoading,
   showDisabledAsActive,
   tapAnimationSpec,
+  variant = 'circle',
 }: {
   accessibilityLabel?: string;
   disabled?: boolean;
   externalPopTrigger?: number;
-  icon: React.ReactNode;
-  label: string;
+  icon: ReactElement<ShadowableIconProps>;
+  /** Under the icon: a word for app-specific actions, a count for the rest, or nothing. */
+  label: string | null;
   loading?: boolean;
   onPress: () => void;
   primary?: boolean;
   preserveIconWhileLoading?: boolean;
   showDisabledAsActive?: boolean;
   tapAnimationSpec?: SaveHeartTapAnimationSpec;
+  /** `bare` draws the icon straight on the picture; `circle` gives it a button. */
+  variant?: 'circle' | 'bare';
 }) {
   const tapProgress = useRef(new Animated.Value(0)).current;
   const externalPopProgress = useRef(new Animated.Value(0)).current;
@@ -1983,12 +2045,8 @@ function RailActionButton({
   const reducedMotion = useReducedMotion();
   const [activeTapAnimationSpec, setActiveTapAnimationSpec] = useState(tapAnimationSpec);
   const animationSpec = activeTapAnimationSpec ?? tapAnimationSpec;
-  const displayLabel = label === '0' ? 'Save' : label;
-  const accessibilityLabel = providedAccessibilityLabel ?? (tapAnimationSpec && label !== 'Saved'
-    ? label === '0'
-      ? 'Save'
-      : `Save, ${label} ${label === '1' ? 'save' : 'saves'}`
-    : displayLabel);
+  const bare = variant === 'bare';
+  const accessibilityLabel = providedAccessibilityLabel ?? label ?? 'Action';
   const iconScale = tapProgress.interpolate({
     inputRange: [0, 0.32, 0.66, 1],
     outputRange: [
@@ -2096,14 +2154,16 @@ function RailActionButton({
     >
       <View
         style={{
-          width: 54,
-          height: 54,
+          // The touch target keeps its size either way; only the button drawing
+          // comes and goes with the variant.
+          width: bare ? 48 : 54,
+          height: bare ? 48 : 54,
           alignItems: 'center',
           justifyContent: 'center',
           borderRadius: 27,
-          borderWidth: primary ? 0 : 1,
+          borderWidth: primary || bare ? 0 : 1,
           borderColor: 'rgba(255,255,255,0.16)',
-          backgroundColor: primary ? appTheme.colors.primary : 'rgba(12,12,16,0.42)',
+          backgroundColor: bare ? 'transparent' : primary ? appTheme.colors.primary : 'rgba(12,12,16,0.42)',
         }}
       >
         {tapAnimationSpec && animationSpec ? (
@@ -2125,26 +2185,29 @@ function RailActionButton({
         ) : (
           <Animated.View style={{ transform: [{ scale: iconScale }] }}>
             <Animated.View style={{ transform: [{ scale: externalIconScale }] }}>
-              {icon}
+              {bare ? <IconShadow>{icon}</IconShadow> : icon}
             </Animated.View>
           </Animated.View>
         )}
       </View>
-      <Text
-        numberOfLines={1}
-        style={{
-          color: '#fff',
-          fontSize: 12,
-          lineHeight: 15,
-          fontWeight: '800',
-          textShadowColor: 'rgba(0,0,0,0.6)',
-          textShadowOffset: { width: 0, height: 1 },
-          textShadowRadius: 6,
-          fontVariant: ['tabular-nums'],
-        }}
-      >
-        {displayLabel}
-      </Text>
+      {label ? (
+        <Text
+          numberOfLines={1}
+          style={{
+            color: '#fff',
+            fontSize: 12,
+            lineHeight: 15,
+            fontWeight: bare ? '700' : '800',
+            marginTop: bare ? -2 : 0,
+            textShadowColor: 'rgba(0,0,0,0.6)',
+            textShadowOffset: { width: 0, height: 1 },
+            textShadowRadius: 6,
+            fontVariant: ['tabular-nums'],
+          }}
+        >
+          {label}
+        </Text>
+      ) : null}
     </Pressable>
   );
 }

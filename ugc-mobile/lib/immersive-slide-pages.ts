@@ -67,18 +67,15 @@ export function getImmersiveVideoBlockerId({
   actionsOpenItemId,
   commentsOpenItemId,
   detailsPageOpenItemId,
-  detailsSheetOpenItemId,
   unlockRemixOpenItemId,
 }: {
   actionsOpenItemId: string | null;
   commentsOpenItemId?: string | null;
   detailsPageOpenItemId: string | null;
-  detailsSheetOpenItemId: string | null;
   unlockRemixOpenItemId?: string | null;
 }) {
   return unlockRemixOpenItemId
     ?? commentsOpenItemId
     ?? detailsPageOpenItemId
-    ?? detailsSheetOpenItemId
     ?? actionsOpenItemId;
 }

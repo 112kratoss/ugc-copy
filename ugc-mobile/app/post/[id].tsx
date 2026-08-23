@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
+import { useIsFocused } from '@react-navigation/native';
 import {
   ArrowLeft,
   FileText,
@@ -38,10 +39,12 @@ import {
 import { readCachedImmersiveSourceData, readCachedProfile } from '@/lib/immersive-preview-source-data';
 import { getCommentCountLabel } from '@/lib/comments-view-model';
 import { getProfileHandle } from '@/lib/profile-view-model';
+import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
 import { buildTextPostPage } from '@/lib/text-post-page-view-model';
 import { appTheme } from '@/lib/theme';
 import type { ShowcasePostResponse } from '@/lib/types';
+import { useHardwareBack } from '@/lib/use-hardware-back';
 import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
 import { getSaveHeartIconProps, getViewerActionSlots, getViewerShareIntent, getViewerStateChip } from '@/lib/viewer-actions';
 
@@ -65,6 +68,9 @@ export default function PostScreen() {
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
   const insets = useSafeAreaInsets();
+  const topInset = resolvedTopInset(insets.top);
+  const bottomInset = resolvedBottomInset(insets.bottom);
+  const isFocused = useIsFocused();
   const { width, height } = useWindowDimensions();
   const pagerRef = useRef<FlatList<'post' | 'details'>>(null);
   const commentsRef = useRef<PostCommentsHandle>(null);
@@ -164,6 +170,11 @@ export default function PostScreen() {
     setPageIndex(index);
     pagerRef.current?.scrollToOffset({ offset: index * width, animated: true });
   }, [width]);
+  const showPost = useCallback(() => goToPage(0), [goToPage]);
+  const onDetailsPage = pageIndex === 1;
+  // Back from the details page returns to the post; only from the post does it
+  // leave the screen. Focus-gated so a pushed profile keeps its own back key.
+  useHardwareBack(isFocused && onDetailsPage, showPost);
 
   const openComments = useCallback(() => {
     if (pageIndex !== 0) {
@@ -266,7 +277,7 @@ export default function PostScreen() {
                 contentHeader={(
                   <TextPostContent
                     item={resolvedItem}
-                    topInset={insets.top}
+                    topInset={topInset}
                     saving={isSaving}
                     onActionsOpen={() => setActionsVisible(true)}
                     onComments={openComments}
@@ -304,10 +315,18 @@ export default function PostScreen() {
           ) : (
             <PostDetailsPage
               active={pageIndex === 1}
-              bottomInset={insets.bottom}
+              bottomInset={bottomInset}
               height={height}
               hostRendersPostText
               item={resolvedItem}
+              onActionsOpen={() => setActionsVisible(true)}
+              onBack={showPost}
+              onComments={openComments}
+              onCreatorOpen={() => {
+                if (resolvedItem.creatorUsername) {
+                  router.push(`/creators/${encodeURIComponent(resolvedItem.creatorUsername)}` as never);
+                }
+              }}
               onRecreate={() => undefined}
               onSave={() => {
                 if (!resolvedItem.showcasePostId) return;
@@ -318,35 +337,38 @@ export default function PostScreen() {
                 });
               }}
               onShare={() => void shareItem()}
-              onUnlockRemix={() => undefined}
               saveLoading={isSaving}
-              topInset={insets.top}
+              topInset={topInset}
               width={width}
             />
           )
         )}
       />
 
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Go back"
-        onPress={() => router.back()}
-        hitSlop={8}
-        style={({ pressed }) => ({
-          position: 'absolute',
-          left: appTheme.spacing.gap,
-          top: insets.top + 10,
-          height: 44,
-          width: 44,
-          borderRadius: 22,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: appTheme.colors.surfaceStrong,
-          opacity: pressed ? appTheme.opacity.pressed : 1,
-        })}
-      >
-        <ArrowLeft size={20} color={appTheme.colors.text} />
-      </Pressable>
+      {/* The details page carries its own header and its own way back to the
+          post; this arrow is the way off the screen, so it steps aside there. */}
+      {onDetailsPage ? null : (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          onPress={() => router.back()}
+          hitSlop={8}
+          style={({ pressed }) => ({
+            position: 'absolute',
+            left: appTheme.spacing.gap,
+            top: topInset + 10,
+            height: 44,
+            width: 44,
+            borderRadius: 22,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: appTheme.colors.surfaceStrong,
+            opacity: pressed ? appTheme.opacity.pressed : 1,
+          })}
+        >
+          <ArrowLeft size={20} color={appTheme.colors.text} />
+        </Pressable>
+      )}
 
       <ViewerActionSheet
         item={resolvedItem}

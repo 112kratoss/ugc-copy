@@ -13,6 +13,14 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-nati
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { PostResourceReferences, getReferenceResourceItems } from '@/components/post-resource-references';
+import {
+  formatItemCount,
+  getResourceGroupSubtitle,
+  parseGenerationSetupNotes,
+  resourceTypeLabel,
+  shouldShowResourceItemTitle,
+  type GenerationSetup,
+} from '@/lib/post-resource-bundle-view-model';
 import { appTheme } from '@/lib/theme';
 import type {
   PostResourceAttachment,
@@ -55,6 +63,10 @@ type ResourceCard = {
 };
 
 const ALL_SCOPE: PostResourceItemScope = { kind: 'all' };
+
+function normalizeTitle(value: string) {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase();
+}
 
 export function PostResourceBundleContent({
   fileLoadingPath = null,
@@ -174,7 +186,7 @@ export function PostResourceBundleContent({
     <View style={{ gap: 12 }}>
       {selector}
       {visibleCards.length > 0 ? visibleCards.map((card) => (
-        <UnlockedResourceCard
+        <UnlockedResourceGroup
           card={card}
           fileLoadingPath={fileLoadingPath}
           key={card.id}
@@ -294,7 +306,7 @@ function LockedResourceCard({
   );
 }
 
-function UnlockedResourceCard({
+function UnlockedResourceGroup({
   card,
   fileLoadingPath,
   mediaItems,
@@ -316,18 +328,32 @@ function UnlockedResourceCard({
   const references = getReferenceResourceItems(card.items);
   const referenceIds = new Set(references.map(resourceItemKey));
   const standardItems = card.items.filter((item) => !referenceIds.has(resourceItemKey(item)));
+  const group = { title: card.title, resourceType: card.resourceType, itemCount: card.items.length };
+  // A creator's saved setup arrives as a note titled like any other note. When
+  // it is the only thing in a generically named group, the group takes the
+  // setup's name — "Generation setup" says more than "Guide or notes".
+  const loneSetup = standardItems.length === 1 && references.length === 0
+    ? parseGenerationSetupNotes(standardItems[0].textContent)
+    : null;
+  const title = loneSetup && normalizeTitle(card.title) === normalizeTitle(resourceTypeLabel(card.resourceType))
+    ? loneSetup.title
+    : card.title;
+  // Settings are not "Guide or notes" to the reader, whatever type stored them.
+  const subtitle = loneSetup ? '' : getResourceGroupSubtitle(group);
 
   return (
-    <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.border, backgroundColor: appTheme.colors.surface, padding: appTheme.spacing.card, gap: 12 }}>
+    <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: appTheme.colors.borderSubtle, backgroundColor: appTheme.colors.surface, padding: appTheme.spacing.card, gap: 12 }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 11 }}>
         <ResourceTypeIcon type={card.resourceType} />
-        <View style={{ flex: 1, gap: 4 }}>
+        <View style={{ flex: 1, gap: 3 }}>
           <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>
-            {card.title}
+            {title}
           </Text>
-          <Text style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>
-            {resourceTypeLabel(card.resourceType)} · {formatItemCount(card.items.length)}
-          </Text>
+          {subtitle ? (
+            <Text style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>
+              {subtitle}
+            </Text>
+          ) : null}
           {card.description?.trim() ? (
             <Text selectable style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>
               {card.description.trim()}
@@ -336,9 +362,11 @@ function UnlockedResourceCard({
         </View>
       </View>
       <ScopeSummary mediaItems={mediaItems} scope={card.scope} />
-      {standardItems.map((item) => (
+      {standardItems.map((item, index) => (
         <ResourceItemRow
+          divided={index > 0}
           fileLoadingPath={fileLoadingPath}
+          group={group}
           item={item}
           key={resourceItemKey(item)}
           onCopy={onCopy}
@@ -360,14 +388,23 @@ function UnlockedResourceCard({
   );
 }
 
+/**
+ * One resource, laid out flat inside its group: what it is, then what it
+ * says, then what can be done with it. No box of its own — the group is the
+ * one surface, so the text on it keeps its contrast.
+ */
 function ResourceItemRow({
+  divided,
   fileLoadingPath,
+  group,
   item,
   onCopy,
   onOpenFile,
   onOpenUrl,
 }: {
+  divided: boolean;
   fileLoadingPath: string | null;
+  group: { title: string; resourceType: PostResourceItemType; itemCount: number };
   item: PostResourceItem;
   onCopy?: (text: string) => Promise<void> | void;
   onOpenFile?: (file: ResourceFileInput) => Promise<void> | void;
@@ -377,28 +414,37 @@ function ResourceItemRow({
   const externalUrl = item.externalUrl?.trim() ?? '';
   const storagePath = item.storagePath?.trim() ?? '';
   const fileLoading = Boolean(storagePath && storagePath === fileLoadingPath);
+  const setup = item.type === 'note' || item.type === 'settings' ? parseGenerationSetupNotes(textContent) : null;
+  const showTitle = shouldShowResourceItemTitle(group, item) && !(setup && group.itemCount === 1);
+  const meta = resourceItemMeta(item);
+  const hasHeading = showTitle || Boolean(item.description) || Boolean(meta);
+  const hasActions = Boolean((textContent && onCopy) || (externalUrl && onOpenUrl) || (storagePath && onOpenFile));
 
   return (
-    <View style={{ borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: appTheme.colors.surfaceStrong, padding: appTheme.spacing.gap, gap: 9 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
-        <View style={{ flex: 1, gap: 4 }}>
-          <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>{item.title}</Text>
+    <View
+      style={{
+        gap: 9,
+        paddingTop: divided ? 12 : 0,
+        borderTopWidth: divided ? 1 : 0,
+        borderTopColor: appTheme.colors.borderSubtle,
+      }}
+    >
+      {hasHeading ? (
+        <View style={{ gap: 3 }}>
+          {showTitle ? (
+            <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>{item.title}</Text>
+          ) : null}
           {item.description ? (
             <Text selectable style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{item.description}</Text>
           ) : null}
-          {resourceItemMeta(item) ? (
-            <Text style={{ color: appTheme.colors.faint, ...appTheme.type.caption }}>{resourceItemMeta(item)}</Text>
+          {meta ? (
+            <Text style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{meta}</Text>
           ) : null}
         </View>
-        {textContent && onCopy ? (
-          <ResourceAction
-            icon={<Copy size={14} color={appTheme.colors.success} strokeWidth={2.5} />}
-            label="Copy"
-            onPress={() => onCopy(textContent)}
-          />
-        ) : null}
-      </View>
-      {textContent ? (
+      ) : null}
+      {setup ? (
+        <GenerationSetupList entries={setup.entries} />
+      ) : textContent ? (
         <Text selectable style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>
           {textContent}
         </Text>
@@ -408,31 +454,59 @@ function ResourceItemRow({
           Workflow project included
         </Text>
       ) : null}
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-        {externalUrl && onOpenUrl ? (
-          <ResourceAction
-            icon={item.type === 'remix_link'
-              ? <Repeat2 size={14} color={appTheme.colors.primary} strokeWidth={2.5} />
-              : <ExternalLink size={14} color={appTheme.colors.primary} strokeWidth={2.5} />}
-            label={item.type === 'remix_link' ? 'Open remix' : item.type === 'workflow' ? 'Open workflow' : 'Open link'}
-            onPress={() => onOpenUrl(externalUrl)}
-          />
-        ) : null}
-        {storagePath && onOpenFile ? (
-          <ResourceAction
-            icon={fileLoading
-              ? <ActivityIndicator color={appTheme.colors.primary} size="small" />
-              : <Download size={14} color={appTheme.colors.primary} strokeWidth={2.5} />}
-            label={fileLoading ? 'Opening…' : 'Open file'}
-            onPress={() => onOpenFile({ contentType: item.contentType, storagePath, title: item.title })}
-          />
-        ) : null}
-      </View>
+      {hasActions ? (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          {textContent && onCopy ? (
+            <ResourceAction
+              icon={<Copy size={14} color={appTheme.colors.success} strokeWidth={2.5} />}
+              label="Copy"
+              onPress={() => onCopy(textContent)}
+            />
+          ) : null}
+          {externalUrl && onOpenUrl ? (
+            <ResourceAction
+              icon={item.type === 'remix_link'
+                ? <Repeat2 size={14} color={appTheme.colors.primary} strokeWidth={2.5} />
+                : <ExternalLink size={14} color={appTheme.colors.primary} strokeWidth={2.5} />}
+              label={item.type === 'remix_link' ? 'Open remix' : item.type === 'workflow' ? 'Open workflow' : 'Open link'}
+              onPress={() => onOpenUrl(externalUrl)}
+            />
+          ) : null}
+          {storagePath && onOpenFile ? (
+            <ResourceAction
+              icon={fileLoading
+                ? <ActivityIndicator color={appTheme.colors.primary} size="small" />
+                : <Download size={14} color={appTheme.colors.primary} strokeWidth={2.5} />}
+              label={fileLoading ? 'Opening…' : 'Open file'}
+              onPress={() => onOpenFile({ contentType: item.contentType, storagePath, title: item.title })}
+            />
+          ) : null}
+        </View>
+      ) : null}
     </View>
   );
 }
 
-function ResourceAction({ icon, label, onPress }: { icon: React.ReactNode; label: string; onPress: () => Promise<void> | void }) {
+/** A saved generation setup as the settings it is, not the paragraph it was stored as. */
+function GenerationSetupList({ entries }: { entries: GenerationSetup['entries'] }) {
+  return (
+    <View style={{ gap: 6 }}>
+      {entries.map((entry) => (
+        <View key={entry.key} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+          <Text style={{ flex: 1, color: appTheme.colors.muted, ...appTheme.type.caption, fontWeight: '700' }}>
+            {entry.key}
+          </Text>
+          <Text selectable style={{ flex: 1.4, color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>
+            {entry.value}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** The one small bordered pill for "do something with this text or file". */
+export function ResourceAction({ icon, label, onPress }: { icon: React.ReactNode; label: string; onPress: () => Promise<void> | void }) {
   return (
     <Pressable
       accessibilityLabel={label}
@@ -472,7 +546,7 @@ function ScopeSummary({ mediaItems, scope }: { mediaItems: ShowcaseMediaItem[]; 
   });
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-      <Text style={{ color: appTheme.colors.faint, ...appTheme.type.caption }}>
+      <Text style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>
         Applies to {normalizedScope.mediaKeys.length} {normalizedScope.mediaKeys.length === 1 ? 'output' : 'outputs'}
       </Text>
       {targets.slice(0, 4).map((item) => (
@@ -648,24 +722,6 @@ function resourceItemKey(item: PostResourceItem) {
 
 function bySortOrder(left: { sortOrder: number }, right: { sortOrder: number }) {
   return left.sortOrder - right.sortOrder;
-}
-
-function resourceTypeLabel(type: PostResourceItemType) {
-  if (type === 'prompt') return 'Prompt or script';
-  if (type === 'workflow') return 'Workflow or project';
-  if (type === 'reference_image' || type === 'reference_video' || type === 'reference_audio') return 'Reference media';
-  if (type === 'settings') return 'Model settings';
-  if (type === 'source_file') return 'Source assets';
-  if (type === 'preset') return 'Preset';
-  if (type === 'note') return 'Guide or notes';
-  if (type === 'remix_link') return 'Remix link';
-  if (type === 'remix_access') return 'Remix access';
-  return 'External link';
-}
-
-function formatItemCount(count: number) {
-  const normalized = Math.max(0, Math.round(count));
-  return `${normalized} ${normalized === 1 ? 'item' : 'items'}`;
 }
 
 function resourceItemMeta(item: PostResourceItem) {

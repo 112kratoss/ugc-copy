@@ -10,6 +10,7 @@ import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { PostResourceKind } from '@/lib/types';
+import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
 
 export function UnlockRemixPrompt({
   bottomInset,
@@ -53,12 +54,7 @@ export function UnlockRemixPrompt({
         await api.unlockBundleWithCredits(unlock.postId);
       }
 
-      await queryClient.invalidateQueries({ queryKey: ['post-resource-bundle', unlock.postId, unlock.resourceId] });
-      await queryClient.invalidateQueries({ queryKey: ['marketplace-resource', unlock.resourceId] });
-      await queryClient.invalidateQueries({ queryKey: ['marketplace-resources'] });
-      await queryClient.invalidateQueries({ queryKey: ['showcase-feed'] });
-      await queryClient.invalidateQueries({ queryKey: ['showcase-post', unlock.postId] });
-      await queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] });
+      await refreshUnlockedBundleCaches(queryClient, unlock);
       await Haptics.selectionAsync();
       setUnlocking(false);
       onClose();

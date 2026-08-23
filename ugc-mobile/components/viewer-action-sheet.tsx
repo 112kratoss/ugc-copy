@@ -458,7 +458,7 @@ export function ViewerActionSheet({
                     <Pressable
                       key={action}
                       accessibilityRole="button"
-                      accessibilityLabel={getViewerActionLabel(action)}
+                      accessibilityLabel={getViewerActionLabel(action, item.sourceType)}
                       disabled={Boolean(disabledReason)}
                       onPress={() => handleAction(action)}
                       style={({ pressed }) => ({
@@ -476,7 +476,7 @@ export function ViewerActionSheet({
                         color={isDestructiveViewerAction(action) ? appTheme.colors.danger : appTheme.colors.text}
                         style={{ fontWeight: '800' }}
                       >
-                        {getViewerActionLabel(action)}
+                        {getViewerActionLabel(action, item.sourceType)}
                       </AppText>
                       {disabledReason ? (
                         <AppText variant="caption" color="faint" style={{ marginTop: 3 }}>
