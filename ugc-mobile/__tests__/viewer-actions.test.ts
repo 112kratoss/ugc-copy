@@ -182,6 +182,9 @@ describe('immersive viewer actions', () => {
     expect(getViewerActionGroupLabel('publish')).toBe('Creation to post');
     expect(getViewerActionGroupLabel('view-linked')).toBe('Creation to post');
     expect(getViewerActionGroupLabel('edit-linked')).toBe('Creation to post');
+    expect(getViewerActionGroupLabel('change-linked-visibility')).toBe('Creation to post');
+    expect(getViewerActionGroupLabel('edit-post')).toBe('Your post');
+    expect(getViewerActionGroupLabel('change-visibility')).toBe('Your post');
     expect(getViewerActionGroupLabel('archive')).toBe('Library');
     expect(getViewerActionGroupLabel('delete-post')).toBe('Library');
     expect(getViewerActionGroupLabel('share')).toBe('Media actions');

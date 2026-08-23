@@ -79,15 +79,13 @@ export function pickPostVisibility(
   current: PostLifecycleVisibility,
   onPick: (next: PostLifecycleVisibility) => void,
 ) {
-  Alert.alert('Change visibility', 'Choose who can see this post.', [
-    ...POST_VISIBILITY_OPTIONS.map((option) => ({
-      text: option.value === current ? `${option.label} (current)` : option.label,
-      onPress: () => {
-        if (option.value !== current) onPick(option.value);
-      },
-    })),
-    { text: 'Cancel', style: 'cancel' as const },
-  ]);
+  // Android renders at most three alert buttons, so the current state doubles
+  // as the way out instead of a fourth Cancel button that only iOS would show.
+  Alert.alert('Change visibility', 'Choose who can see this post.', POST_VISIBILITY_OPTIONS.map((option) => (
+    option.value === current
+      ? { text: `Keep ${option.label.toLowerCase()}`, style: 'cancel' as const }
+      : { text: option.label, onPress: () => onPick(option.value) }
+  )), { cancelable: true });
 }
 
 export function describePostLifecycleError(error: unknown, fallback: string): string {

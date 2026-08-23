@@ -26,7 +26,7 @@ const publicWithListedRecipe: PostLifecyclePost = {
 };
 
 function getAlertAction(label: string, callIndex = 0) {
-  const actions = alertState.alert.mock.calls[callIndex]?.[2] as Array<{ text: string; onPress?: () => void }> | undefined;
+  const actions = alertState.alert.mock.calls[callIndex]?.[2] as Array<{ text: string; style?: string; onPress?: () => void }> | undefined;
   const action = actions?.find((candidate) => candidate.text === label);
   if (!action) throw new Error(`No alert action "${label}"`);
   return action;
@@ -113,13 +113,16 @@ describe('post lifecycle', () => {
     expect(describePostLifecycleError(new Error('   '), 'Please try again.')).toBe('Please try again.');
   });
 
-  it('offers the three states and marks the current one', () => {
+  it('offers the three states with the current one as the way out', () => {
     const onPick = vi.fn();
     pickPostVisibility('unlisted', onPick);
 
-    const actions = alertState.alert.mock.calls[0][2] as Array<{ text: string; onPress?: () => void }>;
-    expect(actions.map((action) => action.text)).toEqual(['Public', 'Unlisted (current)', 'Private', 'Cancel']);
-    getAlertAction('Unlisted (current)').onPress?.();
+    const actions = alertState.alert.mock.calls[0][2] as Array<{ text: string; style?: string; onPress?: () => void }>;
+    // Android shows at most three alert buttons, so there is no separate Cancel.
+    expect(actions.map((action) => action.text)).toEqual(['Public', 'Keep unlisted', 'Private']);
+    expect(getAlertAction('Keep unlisted').style).toBe('cancel');
+    expect(alertState.alert.mock.calls[0][3]).toEqual({ cancelable: true });
+    getAlertAction('Keep unlisted').onPress?.();
     expect(onPick).not.toHaveBeenCalled();
     getAlertAction('Private').onPress?.();
     expect(onPick).toHaveBeenCalledWith('private');

@@ -359,10 +359,11 @@ export function getViewerActionGroupLabel(action: string) {
     || action === 'edit-linked'
     || action === 'edit-linked-resources'
     || action === 'change-linked-visibility'
-    || action === 'edit-post'
-    || action === 'change-visibility'
   ) {
     return 'Creation to post';
+  }
+  if (action === 'edit-post' || action === 'change-visibility') {
+    return 'Your post';
   }
 
   if (action === 'archive' || action === 'restore' || action === 'unsave' || action === 'delete-post') {
