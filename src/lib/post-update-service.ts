@@ -34,6 +34,12 @@ import {
   markMediaUploadIntentsConsumed,
 } from '@/lib/media-upload-intents';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
+import { ensureDurableGenerationMedia } from '@/lib/durable-generation-media';
+import {
+  createGenerationShowcaseDerivative,
+  normalizeGenerationShowcaseCategory,
+  removeGenerationShowcaseDerivative,
+} from '@/lib/generation-post-media';
 import { excludePurchasedProofMediaPaths } from '@/lib/purchased-proof-media';
 import {
   formatUploadByteLimit,
@@ -213,6 +219,9 @@ export type PostUpdateDependencies = {
   replacePostMediaItems?: typeof replacePostMediaItems;
   createPostMediaPreview?: typeof createPostMediaPreview;
   listSourceToolsCatalog?: typeof listSourceToolsCatalog;
+  createGenerationShowcaseDerivative?: typeof createGenerationShowcaseDerivative;
+  removeGenerationShowcaseDerivative?: typeof removeGenerationShowcaseDerivative;
+  ensureDurableGenerationMedia?: typeof ensureDurableGenerationMedia;
 };
 
 type ResolvedPostUpdateDependencies = Required<PostUpdateDependencies>;
@@ -262,6 +271,11 @@ function resolveDependencies(dependencies: PostUpdateDependencies | undefined): 
     replacePostMediaItems: dependencies?.replacePostMediaItems ?? replacePostMediaItems,
     createPostMediaPreview: dependencies?.createPostMediaPreview ?? createPostMediaPreview,
     listSourceToolsCatalog: dependencies?.listSourceToolsCatalog ?? listSourceToolsCatalog,
+    createGenerationShowcaseDerivative:
+      dependencies?.createGenerationShowcaseDerivative ?? createGenerationShowcaseDerivative,
+    removeGenerationShowcaseDerivative:
+      dependencies?.removeGenerationShowcaseDerivative ?? removeGenerationShowcaseDerivative,
+    ensureDurableGenerationMedia: dependencies?.ensureDurableGenerationMedia ?? ensureDurableGenerationMedia,
   };
 }
 
@@ -385,6 +399,46 @@ function parseBundleInput(
     bundle,
     error: null,
   };
+}
+
+const GENERATION_DERIVED_FIELDS = ['category', 'sourceTool', 'sourceToolSlug', 'sourceTools'] as const;
+
+function stripGenerationDerivedFields(body: PostUpdateRequestBody): PostUpdateRequestBody {
+  const stripped: Record<string, unknown> = { ...body };
+  for (const key of GENERATION_DERIVED_FIELDS) {
+    delete stripped[key];
+  }
+  return stripped as PostUpdateRequestBody;
+}
+
+type OwnedGenerationExposureRow = {
+  id: string;
+  user_id: string;
+  model: string;
+  category: string | null;
+  output_url: string | null;
+  showcase_asset_path: string | null;
+};
+
+// Read with the service client: the authenticated Data API grant on
+// `generations` is column-scoped and cannot see the media columns.
+async function loadOwnedGenerationForPost(
+  adminSupabase: SupabaseClient,
+  generationId: string,
+  ownerUserId: string,
+): Promise<OwnedGenerationExposureRow | null> {
+  const { data, error } = await adminSupabase
+    .from('generations')
+    .select('id, user_id, model, category, output_url, showcase_asset_path')
+    .eq('id', generationId)
+    .eq('user_id', ownerUserId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return (data as OwnedGenerationExposureRow | null) ?? null;
 }
 
 async function loadOwnedPost(
@@ -1029,7 +1083,7 @@ export async function updateOwnerPostForRoute({
   adminSupabase,
   ownerUserId,
   postId,
-  body,
+  body: requestBody,
   dependencies,
 }: {
   adminSupabase: SupabaseClient;
@@ -1070,18 +1124,23 @@ export async function updateOwnerPostForRoute({
     }
     const existingBundle = await loadOwnedBundleStatus(adminSupabase, postId, ownerUserId);
 
-    const hasResourceBundlePayload = Object.prototype.hasOwnProperty.call(body, 'resourceBundle');
-    const touchesGenerationLockedFields = ['title', 'description', 'body', 'category', 'sourceTool', 'sourceToolSlug', 'sourceTools', 'mediaItems'].some((key) =>
-      Object.prototype.hasOwnProperty.call(body, key)
-    );
-
-    if (post.generation_id && touchesGenerationLockedFields) {
+    const isGenerationBacked = Boolean(post.generation_id);
+    // A post made from a creation keeps that creation's media; the only way to
+    // change it is to publish a different creation.
+    if (isGenerationBacked && Object.prototype.hasOwnProperty.call(requestBody, 'mediaItems')) {
       return {
         ok: false,
         status: 400,
-        body: { error: 'Generation-backed posts should be updated through the generation publish flow.' },
+        body: { error: 'A post made from a creation keeps its generated media. Publish a different creation to change it.' },
       };
     }
+    // Its category and source follow the creation too (the source is this
+    // product). Clients send them for every post kind, so they are dropped
+    // rather than refused.
+    const body: PostUpdateRequestBody = isGenerationBacked
+      ? stripGenerationDerivedFields(requestBody)
+      : requestBody;
+    const hasResourceBundlePayload = Object.prototype.hasOwnProperty.call(body, 'resourceBundle');
 
     const { items: submittedMediaItems, error: submittedMediaItemsError } = await parseSubmittedEditMediaItems({
       adminSupabase,
@@ -1180,24 +1239,6 @@ export async function updateOwnerPostForRoute({
 
     const nextVisibility = normalizeVisibility(body.visibility) ?? post.visibility;
 
-    if (
-      nextVisibility === 'public' &&
-      !hasResourceBundlePayload &&
-      existingBundle &&
-      existingBundle.access_mode !== 'none' &&
-      existingBundle.status === 'draft' &&
-      // A sold bundle's content is frozen by the database. Its status may still
-      // follow the post between private and public without resubmitting (and
-      // therefore attempting to rewrite) the package payload.
-      (existingBundle.sales_count ?? 0) === 0
-    ) {
-      return {
-        ok: false,
-        status: 400,
-        body: { error: 'This post already has a draft unlock. Please resubmit the unlock payload when publishing so we can validate and publish it together.' },
-      };
-    }
-
     const nextCategory =
       post.post_format === 'text'
         ? 'text'
@@ -1233,14 +1274,24 @@ export async function updateOwnerPostForRoute({
     const bundleForPublicValidation = hasResourceBundlePayload
       ? resourceBundle
       : frozenSoldBundleForRepublish;
+    // The posts trigger republishes a stored recipe with the post when it
+    // passes the quality gate, so a visibility change alone can expose text
+    // that was saved while the post was private and never safety-checked.
+    // Check whatever recipe would travel with the post, not only a resubmitted
+    // or sold one.
+    const bundleForSafetyCheck = hasResourceBundlePayload
+      ? resourceBundle
+      : existingBundle && existingBundle.access_mode !== 'none'
+        ? buildStoredBundleForQualityCheck(existingBundle)
+        : null;
     const safetyViolation = nextVisibility !== 'private'
       ? getPublicUgcSafetyViolation({
           title: nextTitle,
           description: nextDescription,
           body: nextBody,
           prompt: post.prompt,
-          resourcePrompt: bundleForPublicValidation?.resources?.promptText ?? null,
-          resourceNotes: bundleForPublicValidation?.resources?.notesMarkdown ?? null,
+          resourcePrompt: bundleForSafetyCheck?.resources?.promptText ?? null,
+          resourceNotes: bundleForSafetyCheck?.resources?.notesMarkdown ?? null,
         })
       : null;
     if (safetyViolation) {
@@ -1356,6 +1407,108 @@ export async function updateOwnerPostForRoute({
       };
     }
 
+    // A generation-backed post carries its media in two places: a public
+    // derivative while exposed, the owner's durable private copy while not.
+    // Moving between them used to be the publish route's job alone, which is
+    // why a visibility change from a client that used this route left a
+    // private post's media served from the public bucket. The linked
+    // generation is kept in step afterwards; its title and caption mirror the
+    // post's while it is exposed, as the publish route has always done.
+    const generationUpdate: Record<string, unknown> = {};
+    let removableDerivativePath: string | null = null;
+    if (isGenerationBacked && post.generation_id) {
+      let generation: OwnedGenerationExposureRow | null = null;
+      try {
+        generation = await loadOwnedGenerationForPost(adminSupabase, post.generation_id, ownerUserId);
+      } catch (error) {
+        logBackendError('failed_to_load_generation_for_post_update', { error });
+        return { ok: false, status: 500, body: { error: 'Failed to update post.' } };
+      }
+
+      if (generation) {
+        const exposureChanged = nextVisibility !== post.visibility;
+        const isExposing = nextVisibility !== 'private';
+        // A post that is public but lost its derivative (an older client's
+        // private → public) is healed on its next update.
+        const needsDerivative = isExposing && (exposureChanged || !post.showcase_asset_path);
+
+        if (needsDerivative) {
+          const outputUrl = generation.output_url ?? post.output_url;
+          if (!outputUrl) {
+            return { ok: false, status: 400, body: { error: 'This creation has no media to publish yet.' } };
+          }
+          const showcaseCategory = normalizeGenerationShowcaseCategory(post.category)
+            ?? normalizeGenerationShowcaseCategory(generation.category)
+            ?? 'image';
+          try {
+            const showcaseAssetPath = await resolvedDependencies.createGenerationShowcaseDerivative({
+              adminSupabase,
+              generationId: generation.id,
+              ownerUserId,
+              outputUrl,
+              category: showcaseCategory,
+            });
+            updatePayload.showcase_asset_path = showcaseAssetPath;
+            generationUpdate.showcase_asset_path = showcaseAssetPath;
+          } catch (error) {
+            logBackendError('failed_to_create_showcase_derivative_for_post_update', { error });
+            return {
+              ok: false,
+              status: 500,
+              body: { error: 'The public copy of this creation could not be prepared. The current visibility was kept.' },
+            };
+          }
+        } else if (exposureChanged) {
+          // Going private: keep the media reachable for the owner from a
+          // durable private location, then drop the public copy once the
+          // post row no longer points at it.
+          try {
+            const durableMedia = await resolvedDependencies.ensureDurableGenerationMedia({
+              supabase: adminSupabase,
+              generation: {
+                id: generation.id,
+                userId: generation.user_id,
+                model: generation.model,
+                category: generation.category,
+                outputUrl: generation.output_url,
+                showcaseAssetPath: generation.showcase_asset_path,
+              },
+            });
+            if (durableMedia.outputUrl && durableMedia.outputUrl !== post.output_url) {
+              updatePayload.output_url = durableMedia.outputUrl;
+            }
+            if (durableMedia.outputUrl && durableMedia.outputUrl !== generation.output_url) {
+              generationUpdate.output_url = durableMedia.outputUrl;
+            }
+          } catch (error) {
+            logBackendError('failed_to_secure_private_generation_media_for_post_update', { error });
+            return {
+              ok: false,
+              status: 500,
+              body: { error: 'This post could not be made private because its preview could not be secured. The current visibility was kept.' },
+            };
+          }
+          updatePayload.showcase_asset_path = null;
+          generationUpdate.showcase_asset_path = null;
+          removableDerivativePath = generation.showcase_asset_path ?? post.showcase_asset_path ?? null;
+        }
+
+        if (exposureChanged) {
+          generationUpdate.is_public = nextVisibility === 'public';
+        }
+        if (isExposing) {
+          if (Object.prototype.hasOwnProperty.call(body, 'title')) {
+            generationUpdate.title = nextTitle;
+          }
+          if (Object.prototype.hasOwnProperty.call(body, 'description')) {
+            generationUpdate.description = nextDescription;
+          }
+        }
+      } else {
+        logBackendWarning('post_update_generation_missing', { postId, generationId: post.generation_id });
+      }
+    }
+
     let preparedMedia: PreparedEditedPostMedia | null = null;
     if (submittedMediaItems) {
       const preparedResult = await prepareEditedPostMedia({
@@ -1430,6 +1583,28 @@ export async function updateOwnerPostForRoute({
         }
       }
       throw error;
+    }
+
+    if (post.generation_id && Object.keys(generationUpdate).length > 0) {
+      const { error: generationError } = await adminSupabase
+        .from('generations')
+        .update(generationUpdate)
+        .eq('id', post.generation_id)
+        .eq('user_id', ownerUserId);
+      if (generationError) {
+        logBackendError('failed_to_sync_generation_after_post_update', { error: generationError });
+      }
+    }
+
+    if (post.generation_id && removableDerivativePath) {
+      const removal = await resolvedDependencies.removeGenerationShowcaseDerivative({
+        adminSupabase,
+        generationId: post.generation_id,
+        showcaseAssetPath: removableDerivativePath,
+      });
+      if (removal.error) {
+        logBackendError('failed_to_delete_showcase_derivative_after_post_update', { error: removal.error });
+      }
     }
 
     const completedClaims = await completeUploadByteConsumptions(adminSupabase, [

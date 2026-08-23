@@ -1,8 +1,6 @@
 import 'server-only';
 import { logBackendError } from '@/lib/backend-logger';
 
-import path from 'node:path';
-import { createHash } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
@@ -23,15 +21,18 @@ import {
 } from '@/lib/posts-server';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import { normalizeSourceToolInputWithCatalog } from '@/lib/source-tools';
-import { MAGICBOOKLET_SOURCE_KIND, type ShowcaseItemCategory } from '@/lib/showcase';
+import { MAGICBOOKLET_SOURCE_KIND } from '@/lib/showcase';
 import {
   fetchWithProviderTimeout,
 } from '@/lib/provider-fetch';
 import { openAllowlistedRemoteMedia } from '@/lib/remote-media-security';
 import {
-  getUserOwnedStoredMediaLocation,
-  parseCanonicalStorageObjectPath,
-} from '@/lib/storage-ownership';
+  createGenerationShowcaseDerivative,
+  getCanonicalGenerationShowcaseAssetPath,
+  normalizeGenerationShowcaseCategory,
+  SHOWCASE_MEDIA_BUCKET,
+  type GenerationShowcaseCategory,
+} from '@/lib/generation-post-media';
 import {
   validatePostResourceBundleInput,
   type PostResourceBundleInput,
@@ -42,15 +43,15 @@ import {
 } from '@/lib/marketplace-trust';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
-import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
 import {
   getPublicUgcSafetyViolation,
   PUBLIC_UGC_SAFETY_ERROR,
 } from '@/lib/public-ugc-safety';
 
-type ShowcaseCategory = Exclude<ShowcaseItemCategory, 'text'>;
+type ShowcaseCategory = GenerationShowcaseCategory;
 
-const SHOWCASE_MEDIA_BUCKET = 'showcase_media';
+// Tests and the route adapter import this from here.
+export { getCanonicalGenerationShowcaseAssetPath };
 const MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR =
   'Posts are working, but atomic unlock publishing is not enabled on the connected Supabase project yet. Apply the post resource bundle migrations, including 20260508120000_post_system_marketplace_reliability.sql, and try again.';
 const GENERATION_SELECT_WITH_SHOWCASE_ASSET = 'id, user_id, status, model, category, creation_mode, output_url, showcase_asset_path, title, description, prompt, template_run_id, template_run_step_id';
@@ -58,20 +59,6 @@ const GENERATION_SELECT_WITH_SHOWCASE_ASSET = 'id, user_id, status, model, categ
 // also predate the template system — so it omits the template columns too and
 // such rows publish as ordinary generations.
 const GENERATION_SELECT_WITHOUT_SHOWCASE_ASSET = 'id, user_id, status, model, category, output_url, title, description, prompt';
-
-export function getCanonicalGenerationShowcaseAssetPath(
-  storagePath: string | null | undefined,
-  generationId: string,
-): string | null {
-  if (!storagePath) return null;
-  const canonicalPath = parseCanonicalStorageObjectPath(storagePath, { minimumSegments: 3 });
-  return canonicalPath?.startsWith(`showcase/${generationId}/`) ? canonicalPath : null;
-}
-
-function isExistingStorageObjectError(error: { message?: string; statusCode?: string } | null) {
-  return error?.statusCode === '409'
-    || /already exists|duplicate/i.test(error?.message ?? '');
-}
 
 type GenerationRow = {
   id: string;
@@ -201,21 +188,6 @@ function detectCategoryFromModel(model: string): ShowcaseCategory {
   return 'image';
 }
 
-function normalizePublishableShowcaseCategory(value: string | null | undefined): ShowcaseCategory | undefined {
-  if (value === 'motion' || value === 'ugc-ad') return 'video';
-  return value === 'image' || value === 'video' ? value : undefined;
-}
-
-function inferExtension(sourceName: string, category: ShowcaseCategory): string {
-  const candidate = sourceName.split('.').pop();
-  if (candidate && candidate.length <= 5) {
-    return candidate;
-  }
-
-  if (category === 'image') return 'jpg';
-  return 'mp4';
-}
-
 function normalizeTextValue(value: unknown): string | null {
   return typeof value === 'string' ? value.trim() : null;
 }
@@ -237,106 +209,6 @@ function isSoldResourceBundleMutationError(error: unknown): boolean {
   return [candidate.message, candidate.details, candidate.hint].some((value) => (
     typeof value === 'string' && /RESOURCE_BUNDLE_LOCKED|already been purchased/i.test(value)
   ));
-}
-
-function inferShowcaseContentType(sourceName: string, category: ShowcaseCategory) {
-  const extension = path.extname(sourceName).toLowerCase();
-  if (extension === '.png') return 'image/png';
-  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg';
-  if (extension === '.webp') return 'image/webp';
-  if (extension === '.gif') return 'image/gif';
-  if (extension === '.mov') return 'video/quicktime';
-  if (extension === '.webm') return 'video/webm';
-  if (extension === '.mp4' || extension === '.m4v') return 'video/mp4';
-  return category === 'image' ? 'image/jpeg' : 'video/mp4';
-}
-
-async function downloadStoredShowcaseSource(
-  adminSupabase: SupabaseClient,
-  bucket: string,
-  filePath: string,
-): Promise<{ body: Blob | ReadableStream<Uint8Array>; contentType: string | null }> {
-  const builder = adminSupabase.storage.from(bucket).download(filePath);
-  const streamBuilder = builder as typeof builder & {
-    asStream?: () => PromiseLike<{
-      data: ReadableStream<Uint8Array> | null;
-      error: { message?: string } | null;
-    }>;
-  };
-
-  if (typeof streamBuilder.asStream === 'function') {
-    const { data, error } = await streamBuilder.asStream();
-    if (error || !data) {
-      throw new Error(`Failed to load source media from ${bucket}/${filePath}`);
-    }
-    return { body: data, contentType: null };
-  }
-
-  const { data, error } = await builder;
-  if (error || !data) {
-    throw new Error(`Failed to load source media from ${bucket}/${filePath}`);
-  }
-  return { body: data, contentType: data.type || null };
-}
-
-async function createShowcaseDerivative({
-  adminSupabase,
-  category,
-  dependencies,
-  generationId,
-  ownerUserId,
-  outputUrl,
-}: {
-  adminSupabase: SupabaseClient;
-  category: ShowcaseCategory;
-  dependencies: ShowcasePublishServiceDependencies;
-  generationId: string;
-  ownerUserId: string;
-  outputUrl: string;
-}) {
-  const storedLocation = getUserOwnedStoredMediaLocation(outputUrl, ownerUserId);
-  let fileBody: Blob | ReadableStream<Uint8Array>;
-  let sourceName: string;
-  let contentType: string | null = null;
-
-  if (storedLocation) {
-    sourceName = storedLocation.filePath.split('/').pop() || `${generationId}.${inferExtension(outputUrl, category)}`;
-    const source = await downloadStoredShowcaseSource(
-      adminSupabase,
-      storedLocation.bucket,
-      storedLocation.filePath,
-    );
-    fileBody = source.body;
-    contentType = source.contentType;
-  } else if (outputUrl.startsWith('http')) {
-    const downloaded = await dependencies.openAllowlistedRemoteMedia({
-      url: outputUrl,
-      kind: category,
-    });
-    sourceName = downloaded.sourceName || `${generationId}.${inferExtension(outputUrl, category)}`;
-    fileBody = downloaded.body;
-    contentType = downloaded.contentType;
-  } else {
-    throw new Error('Unsupported media source for showcase publishing');
-  }
-
-  const baseName = path.basename(sourceName, path.extname(sourceName)) || generationId;
-  const sourceVersion = createHash('sha256').update(outputUrl).digest('hex').slice(0, 12);
-  const showcaseAssetPath = `showcase/${generationId}/${baseName}.${sourceVersion}.${inferExtension(sourceName, category)}`;
-
-  const { error: uploadError } = await adminSupabase.storage
-    .from(SHOWCASE_MEDIA_BUCKET)
-    .upload(showcaseAssetPath, fileBody, {
-      cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
-      contentType: contentType || inferShowcaseContentType(sourceName, category),
-      upsert: false,
-    });
-
-  if (uploadError && !isExistingStorageObjectError(uploadError)) {
-    throw new Error(`Failed to upload showcase derivative: ${uploadError.message}`);
-  }
-
-  return showcaseAssetPath;
 }
 
 async function loadOwnedGeneration({
@@ -691,9 +563,9 @@ export async function publishGenerationToShowcaseForRoute({
     }
   }
 
-  let detectedCategory = normalizePublishableShowcaseCategory(category)
-    ?? normalizePublishableShowcaseCategory(existingPost?.category)
-    ?? normalizePublishableShowcaseCategory(generation.category);
+  let detectedCategory = normalizeGenerationShowcaseCategory(category)
+    ?? normalizeGenerationShowcaseCategory(existingPost?.category)
+    ?? normalizeGenerationShowcaseCategory(generation.category);
   if (!detectedCategory && shouldExposePost) {
     detectedCategory = detectCategoryFromModel(generation.model);
   }
@@ -795,13 +667,13 @@ export async function publishGenerationToShowcaseForRoute({
     }
 
     if (hasShowcaseAssetColumn) {
-      nextShowcaseAssetPath = await createShowcaseDerivative({
+      nextShowcaseAssetPath = await createGenerationShowcaseDerivative({
         adminSupabase,
         generationId,
         ownerUserId: userId,
         outputUrl: generation.output_url,
         category: detectedCategory ?? 'image',
-        dependencies: resolvedDependencies,
+        openRemoteMedia: resolvedDependencies.openAllowlistedRemoteMedia,
       });
       updatePayload.showcase_asset_path = nextShowcaseAssetPath;
     }

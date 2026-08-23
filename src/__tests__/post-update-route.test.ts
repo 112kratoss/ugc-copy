@@ -91,6 +91,17 @@ const loadedBundle = vi.hoisted(() => ({
     status: 'draft',
   },
 }));
+const loadedGeneration = vi.hoisted(() => ({
+  value: {
+    id: 'generation-1',
+    user_id: 'user-1',
+    model: 'nano-banana-2',
+    category: 'image',
+    output_url: 'generated_images/user-1/example.jpg',
+    showcase_asset_path: null as string | null,
+  },
+  updates: [] as Array<Record<string, unknown>>,
+}));
 
 vi.mock('@/lib/server-helpers', () => ({
   createUserClient: () => ({
@@ -157,6 +168,29 @@ vi.mock('@/lib/server-helpers', () => ({
               data: postMediaRows.value,
               error: null,
             };
+          },
+        };
+
+        return query;
+      }
+
+      if (table === 'generations') {
+        const query = {
+          select() {
+            return query;
+          },
+          update(values: Record<string, unknown>) {
+            loadedGeneration.updates.push(values);
+            return query;
+          },
+          eq() {
+            return query;
+          },
+          async maybeSingle() {
+            return { data: loadedGeneration.value, error: null };
+          },
+          then(resolve: (value: { error: null }) => unknown) {
+            return Promise.resolve({ error: null }).then(resolve);
           },
         };
 
@@ -466,7 +500,12 @@ describe('/api/posts/[postId] route', () => {
     expect(data.resourceBundlePath).toBe('/showcase/post-1#recipe');
   });
 
-  it('rejects publishing a draft unlock without resubmitting the bundle payload', async () => {
+  // A stored draft recipe no longer has to be resubmitted to make the post
+  // public: the posts trigger promotes it if it passes the quality gate and
+  // leaves it a draft otherwise. Refusing here is what left mobile users with
+  // a free recipe unable to make their post public again at all.
+  it('lets a post with a stored draft recipe go public and leaves promotion to the database', async () => {
+    getMarketplaceQualityErrorForPostBundleMock.mockResolvedValue(null);
     const { PUT } = await import('@/app/api/posts/[postId]/route');
     const response = await PUT(new Request('http://localhost/api/posts/post-1', {
       method: 'PUT',
@@ -485,17 +524,29 @@ describe('/api/posts/[postId] route', () => {
 
     const data = await response.json();
 
-    expect(response.status).toBe(400);
-    expect(data.error).toMatch(/resubmit/i);
-    expect(data.error).toMatch(/unlock/i);
-    expect(getMarketplaceQualityErrorForPostBundleMock).not.toHaveBeenCalled();
-    expect(updatePostWithResourceBundleAtomicallyMock).not.toHaveBeenCalled();
+    expect(response.status, JSON.stringify(data)).toBe(200);
+    // The post-level public gate still runs; the unsold draft itself is the
+    // database's to judge, so no bundle is handed to the app-side check.
+    expect(getMarketplaceQualityErrorForPostBundleMock).toHaveBeenCalledWith(expect.objectContaining({ bundle: null }));
+    expect(updatePostWithResourceBundleAtomicallyMock).toHaveBeenCalledWith(expect.objectContaining({
+      patch: expect.objectContaining({ visibility: 'public', title: 'Helpful launch proof' }),
+      hasBundlePayload: false,
+    }));
   });
 
-  it('rejects source tool updates for generation-backed posts', async () => {
+  // The source of a post made from a creation is this product, and clients
+  // send source fields for every post kind, so they are dropped rather than
+  // refused.
+  it('drops source tool fields for a generation-backed post and keeps the creation as its source', async () => {
     loadedPost.value = {
       ...loadedPost.value,
       generation_id: 'generation-1',
+      category: 'image',
+      post_format: 'media',
+      showcase_asset_path: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      source_tool: 'magicbooklet',
+      source_tool_slug: 'magicbooklet',
     };
 
     const { PUT } = await import('@/app/api/posts/[postId]/route');
@@ -519,9 +570,11 @@ describe('/api/posts/[postId] route', () => {
 
     const data = await response.json();
 
-    expect(response.status).toBe(400);
-    expect(data.error).toMatch(/generation-backed posts/i);
-    expect(updatePostWithResourceBundleAtomicallyMock).not.toHaveBeenCalled();
+    expect(response.status, JSON.stringify(data)).toBe(200);
+    expect(updatePostWithResourceBundleAtomicallyMock).toHaveBeenCalledTimes(1);
+    const patch = updatePostWithResourceBundleAtomicallyMock.mock.calls[0][0].patch as Record<string, unknown>;
+    expect(patch).not.toHaveProperty('source_tool');
+    expect(patch).not.toHaveProperty('source_tool_slug');
     expect(sourceToolTableCalls.rpcCalls).toHaveLength(0);
   });
 

@@ -458,7 +458,7 @@ describe('CreationsPage', () => {
         return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
       }
 
-      if (url === '/api/showcase/publish') {
+      if (url === '/api/posts/post-public') {
         return Promise.resolve(jsonResponse({
           success: true,
           visibility: 'private',
@@ -485,23 +485,18 @@ describe('CreationsPage', () => {
     // The card moves before the server answers, and the All filter keeps it.
     expect(screen.getByRole('button', { name: 'Visibility of Public portrait post: Private' })).toBeInTheDocument();
 
+    // The post route, for a generation-backed post too: it moves the
+    // creation's media itself, and it is the door the mobile app uses.
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/showcase/publish', expect.objectContaining({
-        method: 'POST',
+      expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-public', expect.objectContaining({
+        method: 'PUT',
         headers: expect.objectContaining({
           Authorization: 'Bearer layout-session-token',
         }),
-        body: expect.any(String),
+        body: JSON.stringify({ visibility: 'private' }),
       }));
     });
-
-    const publishCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/showcase/publish') as
-      | [RequestInfo | URL, RequestInit?]
-      | undefined;
-    expect(JSON.parse(String(publishCall?.[1]?.body))).toEqual({
-      generationId: 'gen-public',
-      visibility: 'private',
-    });
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/showcase/publish', expect.anything());
     expect(await screen.findByRole('status')).toHaveTextContent('Post is private.');
     // No workspace reload: the change landed in local state.
     expect(fetchMock.mock.calls.filter(([input]) => String(input).startsWith('/api/posts?')).length).toBe(1);
@@ -877,7 +872,7 @@ describe('CreationsPage', () => {
         return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
       }
 
-      if (url === '/api/showcase/publish') {
+      if (url === '/api/posts/post-private') {
         return Promise.resolve(jsonResponse({
           success: true,
           visibility: JSON.parse(String(init?.body)).visibility,
@@ -900,12 +895,9 @@ describe('CreationsPage', () => {
     fireEvent.click(within(menu).getByRole('menuitemradio', { name: /unlisted/i }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/showcase/publish', expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          generationId: 'gen-private',
-          visibility: 'unlisted',
-        }),
+      expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-private', expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ visibility: 'unlisted' }),
       }));
     });
     expect(await screen.findByRole('status')).toHaveTextContent('Post is unlisted.');

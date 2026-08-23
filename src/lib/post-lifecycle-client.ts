@@ -5,7 +5,8 @@
  * Every owner surface (Studio's Post Library and Creations cards, the
  * showcase detail page) used to carry its own copy of these calls, and the
  * copies disagreed on which endpoint a generation-backed post goes through.
- * This module is the one place that knows.
+ * This module is the one place that knows: the post route, for every post,
+ * the same door the mobile app uses.
  */
 
 export type PostVisibility = 'public' | 'unlisted' | 'private';
@@ -13,9 +14,10 @@ export type PostVisibility = 'public' | 'unlisted' | 'private';
 export interface PostLifecycleRequestTarget {
   id: string;
   /**
-   * A generation-backed post is updated through the generation publish
-   * route; an uploaded post through the post route. The two return the same
-   * shape, so callers never see the difference.
+   * Kept on the target so surfaces can pass their post records through
+   * unchanged; the lifecycle no longer branches on it. Every post, made from a
+   * creation or uploaded, changes visibility through the post route, which
+   * moves a creation's media between its public and private copies itself.
    */
   generationId: string | null;
 }
@@ -103,27 +105,16 @@ export async function requestPostVisibilityChange({
   post: PostLifecycleRequestTarget;
   visibility: PostVisibility;
 }): Promise<PostVisibilityChangeResult> {
-  const { data } = post.generationId
-    ? await sendLifecycleRequest(
-        '/api/showcase/publish',
-        {
-          method: 'POST',
-          headers: buildHeaders(accessToken, true),
-          body: JSON.stringify({ generationId: post.generationId, visibility }),
-        },
-        'Failed to update post visibility.',
-        fetchImpl,
-      )
-    : await sendLifecycleRequest(
-        `/api/posts/${post.id}`,
-        {
-          method: 'PUT',
-          headers: buildHeaders(accessToken, true),
-          body: JSON.stringify({ visibility }),
-        },
-        'Failed to update post visibility.',
-        fetchImpl,
-      );
+  const { data } = await sendLifecycleRequest(
+    `/api/posts/${post.id}`,
+    {
+      method: 'PUT',
+      headers: buildHeaders(accessToken, true),
+      body: JSON.stringify({ visibility }),
+    },
+    'Failed to update post visibility.',
+    fetchImpl,
+  );
 
   const returnedVisibility = data.visibility;
   const resourceBundleStatus = data.resourceBundleStatus;

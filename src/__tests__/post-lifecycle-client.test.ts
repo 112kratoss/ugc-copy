@@ -12,9 +12,11 @@ const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
 describe('post lifecycle client', () => {
-  // The two owner-facing routes return the same shape, and the one thing
-  // every surface used to get wrong was which of them a post goes through.
-  it('sends a generation-backed visibility change through the generation publish route', async () => {
+  // Every post goes through the post route, the same door the mobile app
+  // uses; the route itself moves a creation's media between its public and
+  // private copies. Splitting by post kind is what let the two clients
+  // disagree.
+  it('sends a generation-backed visibility change through the post route', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({
       success: true,
       visibility: 'unlisted',
@@ -30,10 +32,10 @@ describe('post lifecycle client', () => {
       fetchImpl,
     });
 
-    expect(fetchImpl).toHaveBeenCalledWith('/api/showcase/publish', {
-      method: 'POST',
+    expect(fetchImpl).toHaveBeenCalledWith('/api/posts/post-1', {
+      method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer token' },
-      body: JSON.stringify({ generationId: 'gen-1', visibility: 'unlisted' }),
+      body: JSON.stringify({ visibility: 'unlisted' }),
     });
     expect(result).toEqual({
       visibility: 'unlisted',
