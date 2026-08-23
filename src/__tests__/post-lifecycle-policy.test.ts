@@ -22,7 +22,7 @@ describe('post lifecycle confirmation policy', () => {
     it('asks before taking a post with a listed recipe private', () => {
       expect(getPostLifecycleConfirmation({ type: 'visibility', next: 'private' }, publicPost(listedRecipe))).toEqual({
         title: 'Make this post private?',
-        message: 'Its recipe comes off the marketplace and goes back to draft. Making the post public again does not relist it — save it from the editor to relist.',
+        message: 'Its recipe comes off the marketplace until the post is public again.',
         confirmLabel: 'Make private',
       });
     });
@@ -30,7 +30,7 @@ describe('post lifecycle confirmation policy', () => {
     it('asks before taking a post with a listed recipe unlisted, since that demotes the recipe too', () => {
       expect(getPostLifecycleConfirmation({ type: 'visibility', next: 'unlisted' }, publicPost(listedRecipe))).toEqual({
         title: 'Make this post unlisted?',
-        message: 'Its recipe comes off the marketplace and goes back to draft. Making the post public again does not relist it — save it from the editor to relist.',
+        message: 'Its recipe comes off the marketplace until the post is public again.',
         confirmLabel: 'Make unlisted',
       });
     });
@@ -38,7 +38,7 @@ describe('post lifecycle confirmation policy', () => {
     it('reassures that buyers keep their unlock when the recipe has sold', () => {
       const confirmation = getPostLifecycleConfirmation({ type: 'visibility', next: 'private' }, publicPost(soldRecipe));
       expect(confirmation?.message).toBe(
-        'Its recipe comes off the marketplace and goes back to draft; buyers keep their unlock. Making the post public again does not relist it — save it from the editor to relist.',
+        'Its recipe comes off the marketplace until the post is public again; buyers keep their unlock.',
       );
     });
 

@@ -133,8 +133,10 @@ describe('usePostLifecycle', () => {
         message: 'Complete your profile before publishing publicly.',
       });
     });
+    // Going public shows the recipe as live straight away (the server
+    // re-promotes it with the post); the failure puts both back.
     expect(onPatch.mock.calls).toEqual([
-      ['post-1', { visibility: 'public', bundleStatus: 'draft' }],
+      ['post-1', { visibility: 'public', bundleStatus: 'published' }],
       ['post-1', { visibility: 'private', bundleStatus: 'draft' }],
     ]);
     expect(onSettled).not.toHaveBeenCalled();
@@ -190,7 +192,8 @@ describe('usePostLifecycle', () => {
     await waitFor(() => {
       expect(onSettled).toHaveBeenCalledWith({ type: 'restore', postId: 'post-1' });
     });
-    expect(onPatch).toHaveBeenCalledWith('post-1', { archivedAt: null });
+    // A restored public post re-exposes its recipe along with itself.
+    expect(onPatch).toHaveBeenCalledWith('post-1', { archivedAt: null, bundleStatus: 'published' });
     expect(feedbackMocks.pushToast).toHaveBeenCalledWith({ tone: 'success', message: 'Post restored.' });
   });
 

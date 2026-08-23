@@ -90,7 +90,7 @@ describe('ShowcaseDetailActions owner tools', () => {
     // and nothing moves until the answer.
     const dialog = await screen.findByRole('alertdialog', { name: 'Make this post unlisted?' });
     expect(dialog).toHaveAccessibleDescription(
-      'Its recipe comes off the marketplace and goes back to draft. Making the post public again does not relist it — save it from the editor to relist.',
+      'Its recipe comes off the marketplace until the post is public again.',
     );
     expect(clientMocks.requestPostVisibilityChange).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Visibility of Sunset study: Public' })).toBeInTheDocument();

@@ -59,12 +59,12 @@ export function getPostLifecycleConfirmation(
       };
 
     case 'visibility': {
-      // The only visibility change with a hidden, one-way cost is taking a
-      // post with a listed recipe off public: the server demotes the recipe
-      // to draft and unlists its marketplace asset, and making the post
-      // public again does not relist it — only a full save from the editor
-      // does. Every other transition is either reversible in place or fails
-      // loudly (going public runs the quality gate), so it stays one click.
+      // The one visibility change with a cost worth a pause is taking a post
+      // with a listed recipe off public: the recipe leaves the marketplace
+      // for as long as the post is not public. It comes back on its own when
+      // the post does, so the cost is the time away, not the listing itself.
+      // Every other transition is reversible in place or fails loudly (going
+      // public runs the quality gate), so it stays one click.
       const leavingPublic = post.visibility === 'public' && action.next !== 'public';
       if (!leavingPublic || post.bundle?.status !== 'published') {
         return null;
@@ -72,9 +72,9 @@ export function getPostLifecycleConfirmation(
       const label = action.next === 'unlisted' ? 'unlisted' : 'private';
       return {
         title: `Make this post ${label}?`,
-        message: `Its recipe comes off the marketplace and goes back to draft${
+        message: `Its recipe comes off the marketplace until the post is public again${
           post.bundle.salesCount > 0 ? '; buyers keep their unlock' : ''
-        }. Making the post public again does not relist it — save it from the editor to relist.`,
+        }.`,
         confirmLabel: `Make ${label}`,
       };
     }

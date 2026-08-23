@@ -132,11 +132,11 @@ export function usePostLifecycle({
     }
 
     const previousBundleStatus = post.bundle?.status ?? null;
-    // Mirror the server: leaving `public` demotes a published recipe to a
-    // draft. Returning to `public` does not re-promote it by itself.
+    // Mirror the server: a recipe is published while its post is public and
+    // a draft otherwise; the posts trigger moves it both ways.
     onPatch(post.id, {
       visibility: next,
-      bundleStatus: next !== 'public' && previousBundleStatus === 'published' ? 'draft' : previousBundleStatus,
+      bundleStatus: post.bundle ? (next === 'public' ? 'published' : 'draft') : null,
     });
 
     try {
@@ -217,7 +217,12 @@ export function usePostLifecycle({
       return false;
     }
 
-    onPatch(post.id, { archivedAt: null });
+    const previousBundleStatus = post.bundle?.status ?? null;
+    // Restoring re-exposes the post, and with it a recipe on a public post.
+    onPatch(post.id, {
+      archivedAt: null,
+      bundleStatus: post.bundle ? (post.visibility === 'public' ? 'published' : 'draft') : null,
+    });
 
     try {
       await requestPostRestore({ postId: post.id, accessToken });
@@ -225,7 +230,7 @@ export function usePostLifecycle({
       onSettled?.({ type: 'restore', postId: post.id });
       return true;
     } catch (error) {
-      onPatch(post.id, { archivedAt: post.archivedAt });
+      onPatch(post.id, { archivedAt: post.archivedAt, bundleStatus: previousBundleStatus });
       pushToast({ tone: 'error', message: describeError(error, 'Failed to restore post.') });
       return false;
     } finally {
