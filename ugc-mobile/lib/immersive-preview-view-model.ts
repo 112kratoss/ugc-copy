@@ -99,6 +99,8 @@ export interface ImmersivePreviewItem {
   linkedPostVisibility?: string | null;
   linkedPostArchivedAt?: string | null;
   linkedPostBundle?: OwnerPostListItem['bundle'] | null;
+  /** The post's own recipe, for an owned post, so lifecycle policy can see its state. */
+  ownerPostBundle?: OwnerPostListItem['bundle'] | null;
   linkedPostPath?: string | null;
   linkedPostOwnerPath?: string | null;
   archivedAt?: string | null;
@@ -534,7 +536,7 @@ function generationToImmersiveItem(
     linkedPostOwnerPath,
     archivedAt: item.archived_at ?? null,
     visibility: null,
-    availableActions: getGenerationAvailableActions(item, linkedPostId, linkedPostVisibility),
+    availableActions: getGenerationAvailableActions(item, linkedPostId, linkedPostArchivedAt),
     disabledActions: item.archived_at
       ? {
           publish: 'This creation is archived',
@@ -555,7 +557,7 @@ function findLinkedOwnerPost(item: GenerationListItem, ownerPosts: OwnerPostList
 function getGenerationAvailableActions(
   item: GenerationListItem,
   linkedPostId: string | null,
-  linkedPostVisibility: string | null
+  linkedPostArchivedAt: string | null
 ) {
   if (item.archived_at) {
     return ['restore', 'view-details'];
@@ -565,11 +567,11 @@ function getGenerationAvailableActions(
     return ['publish', 'recreate', 'archive', 'share', 'view-details'];
   }
 
+  // The linked post gets the same three-state control as a post of its own;
+  // the old public/private toggle could not reach unlisted from here.
   const linkedActions = ['edit-linked-resources'];
-  if (linkedPostVisibility === 'public') {
-    linkedActions.push('make-private');
-  } else if (linkedPostVisibility === 'private') {
-    linkedActions.push('make-public');
+  if (!linkedPostArchivedAt) {
+    linkedActions.push('change-linked-visibility');
   }
 
   return [...linkedActions, 'view-linked', 'recreate', 'archive', 'share', 'view-details'];
@@ -585,7 +587,9 @@ function ownerPostToImmersiveItem(
   const prompt = item.prompt?.trim() || item.body?.trim() || item.description?.trim() || item.title.trim();
   const title = item.title.trim() || displayText;
   const isManualOwnerPost = item.generationId == null;
-  const deleteActions = isManualOwnerPost ? ['delete-post'] : [];
+  // Every owned post can be deleted; the server handles a creation post the
+  // same way as an upload (including the second step when buyers exist).
+  const deleteActions = ['delete-post'];
   const activeGeneratedPostActions = isManualOwnerPost ? [] : ['recreate'];
 
   return {
@@ -644,6 +648,7 @@ function ownerPostToImmersiveItem(
     linkedPostId: null,
     linkedPostTitle: null,
     linkedPostVisibility: null,
+    ownerPostBundle: item.bundle ?? null,
     archivedAt: item.archivedAt ?? null,
     visibility: item.visibility,
     availableActions: item.archivedAt

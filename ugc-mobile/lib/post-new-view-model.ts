@@ -651,7 +651,13 @@ function getHydratedCardProjection(
   });
 
   return {
-    id: section?.id ?? first.sectionId ?? first.id ?? groupKey,
+    // A card that stands for a stored section keeps that section's id, which
+    // is what the save path writes back. A section-less card's id is only a
+    // React key and a prefix for any items added to it, so it is namespaced:
+    // reusing the item's own id here collided with the index-based group
+    // key of a neighbouring card (both read `item-2`). Mirrored in the web
+    // twin and pinned by the authoring contract fixture.
+    id: section?.id ?? first.sectionId ?? `hydrated-${groupKey}`,
     type,
     title: section?.publicTitle ?? section?.title ?? first.title,
     preview: section?.description ?? '',
@@ -849,7 +855,13 @@ export function buildUpdatePostPayload(
     : { resourceBundle: buildPostResourceBundleInput(draft.resource) ?? { accessMode: 'none' as const } };
 
   if (isGenerationBacked) {
+    // A post made from a creation keeps the creation's media, category, and
+    // source, so only the fields the owner writes travel. The server accepts
+    // these for generation-backed posts and keeps the creation in step.
     return {
+      title: draft.title.trim(),
+      description: (draft.description || draft.caption).trim(),
+      body: getCreatePostBody(draft),
       visibility: draft.visibility,
       ...resourceBundlePatch,
     };

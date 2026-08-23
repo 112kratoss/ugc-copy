@@ -573,6 +573,40 @@ describe('post new view model', () => {
     ]);
   });
 
+  // Server-assigned item ids look like `item-N`, and a section-less card used
+  // to take its first item's id while an id-less neighbour took an
+  // index-based `item-N` group key. On Review & publish the two cards then
+  // shared a React key (`item-2`), which React warns can duplicate or drop
+  // children. Section-backed cards must still keep the section id, which is
+  // what the save path writes back.
+  it('gives section-less hydrated cards ids that cannot collide with each other or with stored items', () => {
+    const cards = hydratePostComposerResourceCards({
+      accessMode: 'free',
+      summary: 'Prompt and notes',
+      previewText: 'Preview',
+      priceUsdCents: 0,
+      resources: {
+        promptText: 'Prompt',
+        notesMarkdown: 'Notes',
+        workflowShareUrl: null,
+        attachments: [],
+        allowRemix: false,
+        sections: [{ id: 'section-1', title: 'Settings', description: '' }],
+        items: [
+          { id: 'item-1', type: 'prompt', title: 'Prompt', textContent: 'A reusable prompt.' },
+          { id: 'item-2', type: 'note', title: 'Notes', textContent: 'Some notes.' },
+          { type: 'note', title: 'Loose note', textContent: 'No id on this one.' },
+          { id: 'item-4', type: 'settings', title: 'Settings', textContent: 'Seed 42', sectionId: 'section-1' },
+        ],
+      },
+    } as never);
+
+    const ids = cards.map((card) => card.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).not.toContain('item-2');
+    expect(ids).toContain('section-1');
+  });
+
   it('round-trips a workflow link once and preserves its media scope', () => {
     const original = buildPostResourceBundleInput({
       ...getDefaultPostComposerDraft().resource,
@@ -1299,7 +1333,10 @@ describe('post new view model', () => {
   });
 
   describe('edit payload builder', () => {
-    it('preserves existing post fields when generation-backed', () => {
+    // A creation post's media, category and source follow the creation; the
+    // owner's own words travel. Sending only the visibility is what locked
+    // title, story and caption behind "Creation details are fixed".
+    it('sends the owner-written fields for a generation-backed post and leaves the creation-derived ones out', () => {
       const draft = {
         ...getDefaultPostComposerDraft(),
         title: 'New Title',
@@ -1315,7 +1352,14 @@ describe('post new view model', () => {
       };
 
       const payload = buildUpdatePostPayload(true, draft);
+      expect(payload).not.toHaveProperty('category');
+      expect(payload).not.toHaveProperty('sourceTool');
+      expect(payload).not.toHaveProperty('sourceTools');
+      expect(payload).not.toHaveProperty('mediaItems');
       expect(payload).toMatchObject({
+        title: 'New Title',
+        description: 'New Caption',
+        body: 'New Caption',
         visibility: 'private',
         resourceBundle: {
           accessMode: 'free',
@@ -1344,6 +1388,9 @@ describe('post new view model', () => {
       };
 
       expect(buildUpdatePostPayload(true, draft, { preserveSoldResourceBundle: true })).toEqual({
+        title: '',
+        description: '',
+        body: '',
         visibility: 'private',
       });
       expect(buildUpdatePostPayload(false, draft, { preserveSoldResourceBundle: true })).not.toHaveProperty('resourceBundle');

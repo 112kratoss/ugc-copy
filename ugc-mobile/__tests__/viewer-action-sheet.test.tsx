@@ -180,10 +180,13 @@ describe('ViewerActionSheet permanent delete', () => {
     });
 
     expect(onClose).toHaveBeenCalled();
+    // The confirmation copy is the shared lifecycle policy's, the same words
+    // the web shows.
     expect(alertState.alert).toHaveBeenCalledWith(
-      'Delete post permanently?',
-      expect.stringContaining('permanently delete'),
-      expect.any(Array)
+      'Delete this post permanently?',
+      'This cannot be undone.',
+      expect.any(Array),
+      expect.anything()
     );
 
     await renderer.act(async () => {
@@ -258,13 +261,14 @@ describe('ViewerActionSheet permanent delete', () => {
     });
 
     expect(alertState.alert).toHaveBeenCalledWith(
-      'Delete post with paid unlocks?',
-      expect.stringContaining('paid unlock sales'),
-      expect.any(Array)
+      'People have bought this recipe',
+      expect.stringContaining('keep their unlock'),
+      expect.any(Array),
+      expect.anything()
     );
 
     await renderer.act(async () => {
-      await getAlertAction('Delete permanently', 1).onPress?.();
+      await getAlertAction('Delete anyway', 1).onPress?.();
     });
 
     expect(authState.api.deletePost).toHaveBeenNthCalledWith(1, 'post-123');

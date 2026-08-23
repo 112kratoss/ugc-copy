@@ -266,7 +266,13 @@ function getHydratedCardProjection(
   });
 
   return {
-    id: section?.id ?? first.sectionId ?? first.id ?? groupKey,
+    // A card that stands for a stored section keeps that section's id, which
+    // is what the save path writes back. A section-less card's id is only a
+    // React key and a prefix for any items added to it, so it is namespaced:
+    // reusing the item's own id here collided with the index-based group key
+    // of a neighbouring card (both read `item-2`). Mirrored in the mobile
+    // twin and pinned by the authoring contract fixture.
+    id: section?.id ?? first.sectionId ?? `hydrated-${groupKey}`,
     type,
     // An old private label remains useful inside the editor, but intent is
     // tracked separately so this fallback is never published by accident.

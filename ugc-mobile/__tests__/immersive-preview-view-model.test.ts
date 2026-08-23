@@ -616,13 +616,13 @@ describe('immersive preview view model', () => {
           },
         }),
       ]);
-      expect(item.availableActions).toEqual(['edit-linked-resources', 'make-private', 'view-linked', 'recreate', 'archive', 'share', 'view-details']);
+      expect(item.availableActions).toEqual(['edit-linked-resources', 'change-linked-visibility', 'view-linked', 'recreate', 'archive', 'share', 'view-details']);
       expect(item.linkedPostBundle).toMatchObject({ id: 'bundle-1', accessMode: 'paid' });
       expect(item.linkedPostVisibility).toBe('public');
       expect(item.disabledActions).toEqual({});
     });
 
-    it('returns add-unlock and make-public actions for a private linked creation without an unlock', () => {
+    it('returns add-unlock and change-visibility actions for a private linked creation without an unlock', () => {
       const [item] = buildImmersiveGenerationItems('profile-creations', [
         generation({ id: 'private-gen', linked_post_id: 'post-private', archived_at: null }),
       ], { creatorLabel: '@batman' }, [
@@ -635,12 +635,14 @@ describe('immersive preview view model', () => {
         }),
       ]);
 
-      expect(item.availableActions).toEqual(['edit-linked-resources', 'make-public', 'view-linked', 'recreate', 'archive', 'share', 'view-details']);
+      expect(item.availableActions).toEqual(['edit-linked-resources', 'change-linked-visibility', 'view-linked', 'recreate', 'archive', 'share', 'view-details']);
       expect(item.linkedPostBundle).toBeNull();
       expect(item.linkedPostVisibility).toBe('private');
     });
 
-    it('uses open-post instead of visibility toggle for unlisted linked creations', () => {
+    // The old two-way toggle had no state to offer an unlisted post; the
+    // three-state picker covers it like any other.
+    it('offers the visibility picker for unlisted linked creations too', () => {
       const [item] = buildImmersiveGenerationItems('profile-creations', [
         generation({ id: 'unlisted-gen', linked_post_id: 'post-unlisted', archived_at: null }),
       ], { creatorLabel: '@batman' }, [
@@ -653,7 +655,7 @@ describe('immersive preview view model', () => {
         }),
       ]);
 
-      expect(item.availableActions).toEqual(['edit-linked-resources', 'view-linked', 'recreate', 'archive', 'share', 'view-details']);
+      expect(item.availableActions).toEqual(['edit-linked-resources', 'change-linked-visibility', 'view-linked', 'recreate', 'archive', 'share', 'view-details']);
       expect(item.linkedPostVisibility).toBe('unlisted');
       expect(item.linkedPostPath).toBe('/showcase/post-unlisted');
     });
@@ -667,6 +669,18 @@ describe('immersive preview view model', () => {
       expect(item.disabledActions).toEqual({});
     });
 
+    // Delete used to be offered only for uploaded posts; a post made from a
+    // creation could not be deleted from the phone at all, while the web
+    // offered it on every post.
+    it('offers delete for a generation-backed owner post too', () => {
+      const [item] = buildImmersiveOwnerPostItems('profile-posts', [
+        ownerPost({ id: 'generated-post', archivedAt: null, generationId: 'gen-1' }),
+      ], { creatorLabel: '@batman' });
+      expect(item.isManualOwnerPost).toBe(false);
+      expect(item.generationId).toBe('gen-1');
+      expect(item.availableActions).toEqual(['edit-post', 'change-visibility', 'archive', 'delete-post', 'share', 'download', 'recreate', 'view-details']);
+    });
+
     it('returns correct actions for archived owner post', () => {
       const [item] = buildImmersiveOwnerPostItems('profile-posts', [
         ownerPost({ id: 'archived-post', archivedAt: '2026-06-10T00:00:00Z' }),
@@ -677,15 +691,6 @@ describe('immersive preview view model', () => {
         'edit-post': 'This post is archived',
         'change-visibility': 'This post is archived',
       });
-    });
-
-    it('does not offer permanent delete for generated owner posts', () => {
-      const [item] = buildImmersiveOwnerPostItems('profile-posts', [
-        ownerPost({ id: 'generated-post', generationId: 'gen-1', archivedAt: null }),
-      ], { creatorLabel: '@batman' });
-      expect(item.isManualOwnerPost).toBe(false);
-      expect(item.generationId).toBe('gen-1');
-      expect(item.availableActions).toEqual(['edit-post', 'change-visibility', 'archive', 'share', 'download', 'recreate', 'view-details']);
     });
 
     it('returns correct actions for archived creation', () => {

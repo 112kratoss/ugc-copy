@@ -162,10 +162,12 @@ export function getProfileMediaSectionTitle(tab: ProfileMediaTab) {
   return tab;
 }
 
-export function getProfileMediaEmptyTitle(tab: ProfileMediaTab) {
+export type ProfilePostsScope = 'active' | 'archived';
+
+export function getProfileMediaEmptyTitle(tab: ProfileMediaTab, postsScope: ProfilePostsScope = 'active') {
   if (tab === 'Saved') return 'No saved media yet';
   if (tab === 'Creations') return 'No creations yet';
-  return 'No posts yet';
+  return postsScope === 'archived' ? 'No archived posts' : 'No posts yet';
 }
 
 export function getProfileMediaSwipeTarget(currentTab: ProfileMediaTab, direction: ProfileMediaSwipeDirection) {
@@ -278,12 +280,16 @@ export function ownerPostToProfileMediaCard(item: OwnerPostListItem): ProfileMed
     // `mediaUrl`, so the filter has to accept it too or it discards tiles the
     // renderer could draw. Videos still require a poster, matching `gridReady`
     // being defined as `mediaKind === 'image'` in showcase-media.
-    isGridReady: !item.archivedAt && (isTextPost
+    // Readiness is about whether the tile can be drawn. Whether an archived
+    // post belongs in the grid is the grid's call: the Posts tab shows active
+    // and archived posts as two scopes, so an archived post must stay
+    // renderable rather than be dropped here.
+    isGridReady: isTextPost
       ? Boolean(previewText.trim())
       : Boolean(
         (descriptor?.gridReady ?? primaryMedia?.gridReady ?? previewUrl)
         || (item.mediaKind === 'image' && item.mediaUrl),
-      )),
+      ),
     isArchived: Boolean(item.archivedAt),
     badge: ownerPostBadge(item),
     statusLabel: item.archivedAt ? 'Archived' : 'Published',

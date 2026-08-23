@@ -1073,7 +1073,7 @@
       },
       "expectedCards": [
         {
-          "id": "item-1",
+          "id": "hydrated-item-item-1",
           "type": "prompt",
           "title": "Prompt",
           "preview": "",
@@ -1084,7 +1084,7 @@
           "mediaKeys": []
         },
         {
-          "id": "item-2",
+          "id": "hydrated-item-item-2",
           "type": "guide",
           "title": "Notes",
           "preview": "",
