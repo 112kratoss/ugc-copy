@@ -335,7 +335,11 @@ describe('PublishToShowcaseModal', () => {
     expect(body).not.toHaveProperty('prompt');
   });
 
-  it('prefills notes from the saved generation setup when no description exists', () => {
+  // The caption is the post's public description. The recipe's generated
+  // setup notes belong to the bundle, not the caption; prefilling them here
+  // published "Saved generation setup / Model: …" as the caption of every
+  // quick publish that did not clear the field.
+  it('starts the caption empty rather than prefilling the recipe notes', () => {
     render(
       <PublishToShowcaseModal
         isOpen
@@ -351,9 +355,28 @@ describe('PublishToShowcaseModal', () => {
       />
     );
 
-    expect(screen.getByRole('textbox', { name: /notes optional/i })).toHaveValue(
-      'Saved generation setup\nModel: Nano Banana 2.0\nAspect ratio: 4:5'
+    expect(screen.getByRole('textbox', { name: /caption optional/i })).toHaveValue('');
+    expect(screen.queryByRole('textbox', { name: /notes/i })).toBeNull();
+  });
+
+  it('keeps the generation description as the caption default', () => {
+    render(
+      <PublishToShowcaseModal
+        isOpen
+        onClose={vi.fn()}
+        generationId="gen-1"
+        defaultTitle="Moody portrait setup"
+        defaultDescription="  Shot at golden hour.  "
+        paywallPrefill={{
+          resourceKinds: ['notes'],
+          promptText: null,
+          notesMarkdown: 'Saved generation setup',
+          allowRemix: false,
+        }}
+      />
     );
+
+    expect(screen.getByRole('textbox', { name: /caption optional/i })).toHaveValue('Shot at golden hour.');
   });
 
   it('can publish a generated paid unlock from saved generation data', async () => {

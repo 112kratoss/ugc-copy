@@ -14,6 +14,7 @@ import {
     type PostLifecyclePatch,
     type PostLifecycleTarget,
 } from '@/app/components/usePostLifecycle';
+import { HoverVideo } from '@/app/components/HoverVideo';
 import CreationMediaFrame from '@/app/creations/CreationMediaFrame';
 import {
     buildPostRecipeManagementPath,
@@ -25,6 +26,7 @@ import {
 import { formatDurationShort, formatTimeAgoShort } from '@/lib/generation-timing';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
+import { resolvePlaybackUrl } from '@/lib/media-descriptor';
 import { getStoredMediaLocation } from '@/lib/media-urls';
 import { isAudioModel, isImageModel } from '@/lib/client-generation-models';
 import { getCreatorProfileReadiness, type ProfileApiResponse } from '@/lib/profile';
@@ -79,6 +81,7 @@ interface OwnerPost {
     mediaKind: 'image' | 'video' | null;
     mediaItems?: Array<{
       renditionUrl?: string | null;
+      previewUrl?: string | null;
     }>;
     title: string;
     description: string;
@@ -377,6 +380,22 @@ function mergePostAppend(previousPosts: OwnerPost[], incomingPosts: OwnerPost[])
     ];
 }
 
+function parseWorkspaceView(value: string | null): WorkspaceView {
+    return value === 'posts' || value === 'unlocks' ? value : 'creations';
+}
+
+function parsePostVisibilityFilter(value: string | null): OwnerPostVisibilityFilter {
+    return value === 'public' || value === 'unlisted' || value === 'private' || value === 'archived'
+        ? value
+        : 'all';
+}
+
+const WORKSPACE_TABS: ReadonlyArray<{ key: WorkspaceView; label: string; lede: string }> = [
+    { key: 'creations', label: 'Creations', lede: 'Preview private outputs, then turn the strongest ones into posts.' },
+    { key: 'posts', label: 'Post Library', lede: 'Use Post Library for full post edits, archive state, and cleanup after publishing.' },
+    { key: 'unlocks', label: 'Unlocks', lede: 'Everything you have unlocked from other creators, yours to keep.' },
+];
+
 export default function CreationsPage() {
     const router = useRouter();
     const pathname = usePathname();
@@ -385,14 +404,23 @@ export default function CreationsPage() {
     const userId = session?.user?.id ?? null;
     const accessToken = session?.access_token ?? null;
     const requestedGenerationId = searchParams.get('generation')?.trim() || null;
-    const initialView = searchParams.get('view') === 'posts' ? 'posts' : 'creations';
-    const initialPostVisibility = (() => {
-        const value = searchParams.get('visibility');
-        if (value === 'public' || value === 'unlisted' || value === 'private' || value === 'archived') {
-            return value;
+    // The URL is the only source of truth for the workspace controls, so the
+    // back button, a refresh, a shared link, and every returnTo land on the
+    // view the viewer was actually looking at. The tabs and filter chips are
+    // links that change it; nothing else does.
+    const activeView = parseWorkspaceView(searchParams.get('view'));
+    const postVisibilityFilter = parsePostVisibilityFilter(searchParams.get('visibility'));
+    const buildWorkspacePath = (view: WorkspaceView, visibility: OwnerPostVisibilityFilter = 'all') => {
+        const params = new URLSearchParams();
+        if (view !== 'creations') {
+            params.set('view', view);
         }
-        return 'all';
-    })();
+        if (view === 'posts' && visibility !== 'all') {
+            params.set('visibility', visibility);
+        }
+        const query = params.toString();
+        return query ? `${pathname}?${query}` : pathname;
+    };
     const [generations, setGenerations] = useState<Generation[]>([]);
     const [posts, setPosts] = useState<OwnerPost[]>([]);
     const [profile, setProfile] = useState<ProfileApiResponse | null>(null);
@@ -408,8 +436,6 @@ export default function CreationsPage() {
     const generationsRef = useRef<Generation[]>([]);
     const generationStatusRefreshInFlightRef = useRef(false);
     const [filter, setFilter] = useState<FilterType>('all');
-    const [activeView, setActiveView] = useState<WorkspaceView>(initialView);
-    const [postVisibilityFilter, setPostVisibilityFilter] = useState<OwnerPostVisibilityFilter>(initialPostVisibility);
     const [previewGen, setPreviewGen] = useState<Generation | null>(null);
     const requestedGenerationRef = useRef<string | null>(null);
     const [publishTarget, setPublishTarget] = useState<Generation | null>(null);
@@ -527,21 +553,6 @@ export default function CreationsPage() {
             bundle: null,
         };
     };
-
-    useEffect(() => {
-        const nextView = searchParams.get('view') === 'posts' ? 'posts' : 'creations';
-        const nextVisibility = (() => {
-            const value = searchParams.get('visibility');
-            if (value === 'public' || value === 'unlisted' || value === 'private' || value === 'archived') {
-                return value;
-            }
-            return 'all';
-        })();
-
-        // Browser navigation is the source of truth for these workspace controls.
-        setActiveView(nextView);
-        setPostVisibilityFilter(nextVisibility);
-    }, [searchParams]);
 
     useEffect(() => {
         const cachedWorkspace = readCreationsWorkspaceCache(userId);
@@ -1377,6 +1388,8 @@ export default function CreationsPage() {
     const activePortfolioPostCount = posts.filter(
         (post) => !post.archivedAt && post.visibility === 'public'
     ).length;
+    const activePostCount = posts.filter((post) => !post.archivedAt).length;
+    const archivedPostCount = posts.length - activePostCount;
     const isProfileIncomplete = !profileReadiness.profileComplete;
     const hasPortfolioProof = successfulGenerations.length > 0 && activePortfolioPostCount > 0;
     const shouldShowPortfolioStarter = activeView === 'creations' && !isLoading && (
@@ -1385,16 +1398,19 @@ export default function CreationsPage() {
         isProfileIncomplete
     );
 
+    // One colour per meaning, shared with the visibility menu: sky is public,
+    // violet is unlisted, neutral is private or gone. Amber is kept for
+    // "draft" so an unlisted post never reads as a taken-down one.
     const getPublishBadgeClass = (badge: CreationWorkspacePublishBadge): string => {
         switch (badge) {
             case 'Public':
                 return 'border-sky-400/20 bg-sky-500/10 text-sky-100';
             case 'Unlisted':
-                return 'border-amber-400/20 bg-amber-500/10 text-amber-100';
+                return 'border-violet-400/20 bg-violet-500/10 text-violet-100';
             case 'Private':
                 return 'border-white/12 bg-white/[0.05] text-zinc-200';
             case 'Archived':
-                return 'border-amber-400/20 bg-amber-500/10 text-amber-100';
+                return 'border-zinc-400/20 bg-zinc-500/10 text-zinc-200';
             case 'Not published':
             default:
                 return 'border-white/10 bg-white/[0.04] text-zinc-200';
@@ -1439,7 +1455,11 @@ export default function CreationsPage() {
                                 Studio
                             </h1>
                             <p className="text-sm text-zinc-500 font-medium tracking-wide">
-                                {successfulGenerations.length} CREATION{successfulGenerations.length !== 1 ? 'S' : ''} TOTAL
+                                {activeView === 'creations'
+                                    ? `${successfulGenerations.length} CREATION${successfulGenerations.length !== 1 ? 'S' : ''} TOTAL`
+                                    : activeView === 'posts'
+                                        ? `${activePostCount} POST${activePostCount !== 1 ? 'S' : ''}${archivedPostCount > 0 ? ` · ${archivedPostCount} ARCHIVED` : ''}`
+                                        : 'YOUR UNLOCKS'}
                             </p>
                         </div>
                     </div>
@@ -1470,30 +1490,27 @@ export default function CreationsPage() {
                 </div>
 
                 <div className="mb-6 flex flex-wrap items-center gap-3">
-                    {([
-                        { key: 'creations', label: 'Creations', description: 'Private outputs and publishing' },
-                        { key: 'posts', label: 'Post Library', description: 'Manage posts and recipes' },
-                        { key: 'unlocks', label: 'Unlocks', description: 'Everything you have unlocked' },
-                    ] as Array<{ key: WorkspaceView; label: string; description: string }>).map((tab) => (
-                        <button
-                            key={tab.key}
-                            type="button"
-                            onClick={() => setActiveView(tab.key)}
-                            className={`rounded-full border px-4 py-2.5 text-sm font-semibold transition ${
-                                activeView === tab.key
-                                    ? 'border-white/20 bg-white/10 text-white'
-                                    : 'border-white/8 bg-zinc-900/50 text-zinc-400 hover:border-white/14 hover:bg-zinc-800 hover:text-zinc-200'
-                            }`}
-                        >
-                            {tab.label}
-                        </button>
-                    ))}
+                    {/* Links, not buttons: each section has its own URL, so the
+                        browser's history and a shared link both know which one. */}
+                    <nav aria-label="Studio sections" className="flex flex-wrap items-center gap-3">
+                        {WORKSPACE_TABS.map((tab) => (
+                            <Link
+                                key={tab.key}
+                                href={buildWorkspacePath(tab.key)}
+                                scroll={false}
+                                aria-current={activeView === tab.key ? 'page' : undefined}
+                                className={`ui-focus-ring rounded-full border px-4 py-2.5 text-sm font-semibold transition ${
+                                    activeView === tab.key
+                                        ? 'border-white/20 bg-white/10 text-white'
+                                        : 'border-white/8 bg-zinc-900/50 text-zinc-400 hover:border-white/14 hover:bg-zinc-800 hover:text-zinc-200'
+                                }`}
+                            >
+                                {tab.label}
+                            </Link>
+                        ))}
+                    </nav>
                     <div className="text-sm text-zinc-500">
-                        {activeView === 'creations'
-                            ? 'Preview private outputs, then turn the strongest ones into posts.'
-                            : activeView === 'unlocks'
-                                ? 'Everything you have unlocked from other creators, yours to keep.'
-                                : 'Use Post Library for full post edits, archive state, and cleanup after publishing.'}
+                        {WORKSPACE_TABS.find((tab) => tab.key === activeView)?.lede}
                     </div>
                 </div>
 
@@ -1608,26 +1625,30 @@ export default function CreationsPage() {
                 )}
 
                 {activeView === 'posts' && !isLoading && posts.length > 0 && (
-                    <div className="mb-8 flex flex-wrap gap-2">
+                    <div role="group" aria-label="Filter posts by visibility" className="mb-8 flex flex-wrap gap-2">
                         {([
-                            { key: 'all', label: `All (${posts.filter((post) => !post.archivedAt).length})` },
+                            { key: 'all', label: `All (${activePostCount})` },
                             { key: 'public', label: `Public (${posts.filter((post) => !post.archivedAt && post.visibility === 'public').length})` },
                             { key: 'unlisted', label: `Unlisted (${posts.filter((post) => !post.archivedAt && post.visibility === 'unlisted').length})` },
                             { key: 'private', label: `Private (${posts.filter((post) => !post.archivedAt && post.visibility === 'private').length})` },
-                            { key: 'archived', label: `Archived (${posts.filter((post) => Boolean(post.archivedAt)).length})` },
+                            { key: 'archived', label: `Archived (${archivedPostCount})` },
                         ] as Array<{ key: OwnerPostVisibilityFilter; label: string }>).map((tab) => (
-                            <button
+                            // A filter is a refinement of the current section, so it
+                            // replaces the history entry instead of adding one.
+                            <Link
                                 key={tab.key}
-                                type="button"
-                                onClick={() => setPostVisibilityFilter(tab.key)}
-                                className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                                href={buildWorkspacePath('posts', tab.key)}
+                                replace
+                                scroll={false}
+                                aria-current={postVisibilityFilter === tab.key ? 'true' : undefined}
+                                className={`ui-focus-ring rounded-full border px-4 py-2 text-sm font-semibold transition ${
                                     postVisibilityFilter === tab.key
                                         ? 'border-white/20 bg-white/10 text-white'
                                         : 'border-white/8 bg-zinc-900/50 text-zinc-400 hover:border-white/14 hover:bg-zinc-800 hover:text-zinc-200'
                                 }`}
                             >
                                 {tab.label}
-                            </button>
+                            </Link>
                         ))}
                     </div>
                 )}
@@ -2182,7 +2203,13 @@ export default function CreationsPage() {
                                             <div className="relative overflow-hidden rounded-[22px] border border-white/8 bg-black/60">
                                                 {post.mediaUrl ? (
                                                     post.mediaKind === 'video' ? (
-                                                        <video src={post.mediaItems?.[0]?.renditionUrl ?? post.mediaUrl} controls playsInline preload="metadata" className="aspect-[4/5] w-full object-cover" />
+                                                        // Poster at rest, playback on hover: a page of rows must not
+                                                        // start a metadata fetch of every full-size video.
+                                                        <HoverVideo
+                                                            src={resolvePlaybackUrl({ url: post.mediaUrl, renditionUrl: post.mediaItems?.[0]?.renditionUrl })}
+                                                            poster={post.mediaItems?.[0]?.previewUrl}
+                                                            className="aspect-[4/5] w-full object-cover"
+                                                        />
                                                     ) : (
                                                         // eslint-disable-next-line @next/next/no-img-element
                                                         <img src={post.mediaUrl} alt={post.title} loading="lazy" decoding="async" className="aspect-[4/5] w-full object-cover" />

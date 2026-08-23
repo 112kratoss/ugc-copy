@@ -160,6 +160,90 @@ describe('CreationsPage', () => {
     expect(renderToString(<CreationsPage />)).toBe(withoutCache);
   });
 
+  // The section and filter live in the URL, so back, refresh, a shared link
+  // and every returnTo land on what the viewer was looking at. The old tabs
+  // set local state only, which is how the URL could say view=posts while
+  // the Creations tab was highlighted.
+  it('renders the sections as links that carry the view in the URL and mark the current one', async () => {
+    navigationState.searchParams = new URLSearchParams('view=unlocks');
+    render(<CreationsPage />);
+
+    const sections = await screen.findByRole('navigation', { name: 'Studio sections' });
+    const creations = within(sections).getByRole('link', { name: 'Creations' });
+    const posts = within(sections).getByRole('link', { name: 'Post Library' });
+    const unlocks = within(sections).getByRole('link', { name: 'Unlocks' });
+
+    expect(creations).toHaveAttribute('href', '/creations');
+    expect(posts).toHaveAttribute('href', '/creations?view=posts');
+    expect(unlocks).toHaveAttribute('href', '/creations?view=unlocks');
+    // Unlocks was not representable in the URL before.
+    expect(unlocks).toHaveAttribute('aria-current', 'page');
+    expect(creations).not.toHaveAttribute('aria-current');
+    expect(posts).not.toHaveAttribute('aria-current');
+    expect(screen.queryByRole('button', { name: 'Post Library' })).not.toBeInTheDocument();
+    expect(screen.getByText('YOUR UNLOCKS')).toBeInTheDocument();
+  });
+
+  it('keeps the visibility filter in the URL and counts the current section in the header', async () => {
+    navigationState.searchParams = new URLSearchParams('view=posts&visibility=private');
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.startsWith('/api/generations')) {
+        return Promise.resolve(jsonResponse({ generations: [] }));
+      }
+
+      if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
+        const basePost = {
+          generationId: null,
+          mediaUrl: null,
+          mediaKind: null,
+          description: '',
+          prompt: '',
+          body: 'Body',
+          category: 'text',
+          postFormat: 'text',
+          sourceKind: 'manual',
+          sourceTool: null,
+          sourceLabel: 'Manual',
+          createdAt: '2026-06-01T10:00:00.000Z',
+          updatedAt: '2026-06-01T10:00:00.000Z',
+          publicPath: null,
+          resourcePath: null,
+          canShare: false,
+          bundle: null,
+        };
+        return Promise.resolve(jsonResponse({
+          posts: [
+            { ...basePost, id: 'post-a', title: 'Private one', visibility: 'private', archivedAt: null, ownerPath: '/post/post-a/edit' },
+            { ...basePost, id: 'post-b', title: 'Public one', visibility: 'public', archivedAt: null, ownerPath: '/post/post-b/edit' },
+            { ...basePost, id: 'post-c', title: 'Archived one', visibility: 'public', archivedAt: '2026-06-02T10:00:00.000Z', ownerPath: '/post/post-c/edit' },
+          ],
+        }));
+      }
+
+      if (url === '/api/profile') {
+        return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    }));
+
+    render(<CreationsPage />);
+
+    expect(await screen.findByText('Private one')).toBeInTheDocument();
+    expect(screen.queryByText('Public one')).not.toBeInTheDocument();
+    // Archived posts are their own list, not part of the active count.
+    expect(screen.getByText('2 POSTS · 1 ARCHIVED')).toBeInTheDocument();
+
+    const filters = screen.getByRole('group', { name: 'Filter posts by visibility' });
+    expect(within(filters).getByRole('link', { name: 'All (2)' })).toHaveAttribute('href', '/creations?view=posts');
+    expect(within(filters).getByRole('link', { name: 'Private (1)' })).toHaveAttribute('href', '/creations?view=posts&visibility=private');
+    expect(within(filters).getByRole('link', { name: 'Private (1)' })).toHaveAttribute('aria-current', 'true');
+    expect(within(filters).getByRole('link', { name: 'Archived (1)' })).toHaveAttribute('href', '/creations?view=posts&visibility=archived');
+    expect(within(filters).getByRole('link', { name: 'Public (1)' })).not.toHaveAttribute('aria-current');
+  });
+
   it('uses the authenticated layout session for tab data instead of importing a fresh Supabase session', async () => {
     render(<CreationsPage />);
 
@@ -736,8 +820,12 @@ describe('CreationsPage', () => {
     expect(image).toHaveClass('aspect-[4/5]');
     expect(image).not.toHaveClass('h-full');
 
+    // A video row shows its poster and attaches the source only on hover, so
+    // a page of rows never starts a metadata fetch of every full-size file.
     const video = document.querySelector('video');
-    expect(video).toHaveAttribute('preload', 'metadata');
+    expect(video).toHaveAttribute('preload', 'none');
+    expect(video).not.toHaveAttribute('src');
+    expect(video).not.toHaveAttribute('controls');
     expect(video).toHaveClass('aspect-[4/5]');
     expect(video).not.toHaveClass('h-full');
   });
