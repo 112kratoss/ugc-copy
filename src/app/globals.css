@@ -20,6 +20,7 @@
 @source "./components/DeferredAppShellAccount.tsx";
 @source "./components/DeferredGenerationNotifications.tsx";
 @source "./components/DesignSystem.tsx";
+@source "./components/FeedbackViewport.tsx";
 @source "./components/GenerationNotifications.tsx";
 @source "./components/HomeExperience.tsx";
 @source "./components/HomeSlider.tsx";
@@ -29,6 +30,7 @@
 @source "./components/OptimizedPreviewImage.tsx";
 @source "./components/PostCommentAvatar.tsx";
 @source "./components/PostComments.tsx";
+@source "./components/PostVisibilityMenu.tsx";
 @source "./components/PublicShareButton.tsx";
 @source "./components/QuickStartsCard.tsx";
 @source "./components/RouteAuthBoundary.tsx";
@@ -39,9 +41,11 @@
 @source "./components/WhatsNewModelsCard.tsx";
 @source "./components/app-shell-auth-state.ts";
 @source "./components/app-shell-nav.ts";
+@source "./components/feedback-state.ts";
 @source "./components/navigation-progress-state.ts";
 @source "./components/useMediaLoadingPreferences.ts";
 @source "./components/useOptimisticPostSave.ts";
+@source "./components/usePostLifecycle.ts";
 @source "./components/useShareAction.ts";
 @source "./components/useSupabaseAuthCookieHint.ts";
 
@@ -467,6 +471,79 @@ button:disabled,
   max-width: 1860px;
   margin-inline: auto;
   padding-inline: clamp(1rem, 1.9vw, 2.25rem);
+}
+
+/*
+ * Feedback layer (FeedbackViewport): toasts and the confirmation dialog.
+ * Mounted in the root layout, so it renders on public and authenticated
+ * routes alike — named classes for the same reason as the home layout below.
+ * Sits above the publish modal (z 80) and the generation notification stack
+ * (z 70); the skip link (z 120) stays on top.
+ */
+.ui-toast-viewport {
+  pointer-events: none;
+  position: fixed;
+  top: 1rem;
+  left: 50%;
+  z-index: 110;
+  display: flex;
+  width: min(calc(100% - 2rem), 28rem);
+  flex-direction: column;
+  gap: 0.5rem;
+  transform: translateX(-50%);
+}
+
+.ui-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  border-width: 1px;
+  border-radius: 1rem;
+  padding: 0.75rem 0.875rem;
+  box-shadow: var(--ui-shadow-panel);
+  backdrop-filter: blur(12px);
+  animation: ui-toast-enter var(--ui-duration-base) var(--ui-ease-standard);
+}
+
+@keyframes ui-toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ui-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 1.5rem 1rem;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(4px);
+}
+
+.ui-confirm-dialog {
+  width: 100%;
+  max-width: 26rem;
+  border: 1px solid var(--ui-border-default);
+  border-radius: var(--ui-radius-2xl);
+  background: var(--ui-surface-1);
+  padding: 1.5rem;
+  box-shadow: var(--ui-shadow-panel);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-toast {
+    animation: none;
+  }
 }
 
 /*

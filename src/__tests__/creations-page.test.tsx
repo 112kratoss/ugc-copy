@@ -4,6 +4,8 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreationsPage from '@/app/creations/page';
+import FeedbackViewport from '@/app/components/FeedbackViewport';
+import { resetFeedbackState } from '@/app/components/feedback-state';
 
 const navigationState = vi.hoisted(() => {
   const push = vi.fn();
@@ -134,6 +136,7 @@ describe('CreationsPage', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    resetFeedbackState();
     window.sessionStorage.clear();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -383,10 +386,20 @@ describe('CreationsPage', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<CreationsPage />);
+    render(<><CreationsPage /><FeedbackViewport /></>);
 
     expect(await screen.findByText('Public portrait post')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /make private/i }));
+    // One control with the three states; it reads the current one.
+    const trigger = screen.getByRole('button', { name: 'Visibility of Public portrait post: Public' });
+    expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
+    fireEvent.click(trigger);
+    const menu = await screen.findByRole('menu', { name: 'Visibility of Public portrait post' });
+    expect(within(menu).getByRole('menuitemradio', { name: /public/i })).toHaveAttribute('aria-checked', 'true');
+    expect(within(menu).getByRole('menuitemradio', { name: /unlisted/i })).toBeInTheDocument();
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: /private/i }));
+
+    // The card moves before the server answers, and the All filter keeps it.
+    expect(screen.getByRole('button', { name: 'Visibility of Public portrait post: Private' })).toBeInTheDocument();
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/showcase/publish', expect.objectContaining({
@@ -405,6 +418,80 @@ describe('CreationsPage', () => {
       generationId: 'gen-public',
       visibility: 'private',
     });
+    expect(await screen.findByRole('status')).toHaveTextContent('Post is private.');
+    // No workspace reload: the change landed in local state.
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).startsWith('/api/posts?')).length).toBe(1);
+    expect(screen.getByRole('button', { name: 'Visibility of Public portrait post: Private' })).toBeInTheDocument();
+  });
+
+  it('rolls a visibility change back and reports the server error when the request fails', async () => {
+    navigationState.searchParams = new URLSearchParams('view=posts');
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.startsWith('/api/generations')) {
+        return Promise.resolve(jsonResponse({ generations: [] }));
+      }
+
+      if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
+        return Promise.resolve(jsonResponse({
+          posts: [
+            {
+              id: 'post-upload',
+              generationId: null,
+              visibility: 'private',
+              archivedAt: null,
+              mediaUrl: 'https://example.com/upload.jpg',
+              mediaKind: 'image',
+              title: 'Uploaded private post',
+              description: '',
+              prompt: '',
+              body: '',
+              category: 'image',
+              postFormat: 'media',
+              sourceKind: 'external',
+              sourceTool: 'Midjourney',
+              sourceLabel: 'Midjourney',
+              createdAt: '2026-06-01T10:00:00.000Z',
+              updatedAt: '2026-06-01T10:00:00.000Z',
+              publicPath: null,
+              ownerPath: '/post/post-upload/edit',
+              resourcePath: null,
+              canShare: false,
+              bundle: null,
+            },
+          ],
+        }));
+      }
+
+      if (url === '/api/profile') {
+        return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
+      }
+
+      if (url === '/api/posts/post-upload') {
+        return Promise.resolve(jsonResponse(
+          { success: false, error: 'Complete your profile before publishing publicly.' },
+          { status: 400 },
+        ));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<><CreationsPage /><FeedbackViewport /></>);
+
+    expect(await screen.findByText('Uploaded private post')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Visibility of Uploaded private post: Private' }));
+    fireEvent.click(within(await screen.findByRole('menu')).getByRole('menuitemradio', { name: /public/i }));
+
+    // An uploaded post goes through the post route, not the generation publish route.
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-upload', expect.objectContaining({ method: 'PUT' }));
+    });
+    expect(await screen.findByRole('status')).toHaveTextContent('Complete your profile before publishing publicly.');
+    expect(screen.getByRole('button', { name: 'Visibility of Uploaded private post: Private' })).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/showcase/publish', expect.anything());
   });
 
   // The quick publish modal rebuilds a recipe from the generation prefill and
@@ -655,7 +742,7 @@ describe('CreationsPage', () => {
     expect(video).not.toHaveClass('h-full');
   });
 
-  it('shows one-click public and private visibility actions on creation cards', async () => {
+  it('offers the three-state visibility menu on creation cards with a linked post', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
 
@@ -713,23 +800,30 @@ describe('CreationsPage', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<CreationsPage />);
+    render(<><CreationsPage /><FeedbackViewport /></>);
 
     expect(await screen.findByText('Public generated post')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /make private/i })).toHaveClass('w-full', 'rounded-2xl');
-    expect(screen.getByRole('button', { name: /make public/i })).toHaveClass('w-full', 'rounded-2xl');
+    expect(screen.getByRole('button', { name: 'Visibility of Public generated post: Public' })).toBeInTheDocument();
+    const privateTrigger = screen.getByRole('button', { name: 'Visibility of Private generated post: Private' });
 
-    fireEvent.click(screen.getByRole('button', { name: /make public/i }));
+    fireEvent.click(privateTrigger);
+    const menu = await screen.findByRole('menu', { name: 'Visibility of Private generated post' });
+    // Unlisted was unreachable from the old two-way toggle.
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: /unlisted/i }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/showcase/publish', expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
           generationId: 'gen-private',
-          visibility: 'public',
+          visibility: 'unlisted',
         }),
       }));
     });
+    expect(await screen.findByRole('status')).toHaveTextContent('Post is unlisted.');
+    expect(screen.getByRole('button', { name: 'Visibility of Private generated post: Unlisted' })).toBeInTheDocument();
+    // Staying on the Creations tab: a visibility change is not a reason to switch views.
+    expect(screen.getByText('Public generated post')).toBeInTheDocument();
   });
 
   it('uses stable creation media frames and a responsive grid while showing only the primary output', async () => {

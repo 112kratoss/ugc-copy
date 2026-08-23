@@ -2,11 +2,19 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
-import { Archive, Globe2, Loader2, Lock, PencilLine, Sparkles, Trash2, Wand2 } from 'lucide-react';
+import { useCallback, useState } from 'react';
+import { Archive, Loader2, PencilLine, Sparkles, Trash2, Wand2 } from 'lucide-react';
 
 import { useAuth } from '@/app/components/AuthProvider';
+import PostVisibilityMenu from '@/app/components/PostVisibilityMenu';
 import PublicShareButton from '@/app/components/PublicShareButton';
+import {
+  usePostLifecycle,
+  type PostLifecycleEvent,
+  type PostLifecyclePatch,
+  type PostLifecycleTarget,
+} from '@/app/components/usePostLifecycle';
+import type { PostVisibility } from '@/lib/post-lifecycle-client';
 import { getCurrentInternalPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 
@@ -20,6 +28,8 @@ interface ShowcaseDetailActionsProps {
   visibility: 'public' | 'unlisted';
   viewerIsOwner: boolean;
   hasResourceBundle: boolean;
+  /** The owner's bundle, so lifecycle policy can see what a change affects. */
+  bundle?: PostLifecycleTarget['bundle'];
   /** The document's engagement row renders Share instead. */
   showShare?: boolean;
   /** The document's engagement row renders Remix instead. */
@@ -36,6 +46,7 @@ export default function ShowcaseDetailActions({
   visibility,
   viewerIsOwner,
   hasResourceBundle,
+  bundle = null,
   showShare = true,
   showRemix = true,
 }: ShowcaseDetailActionsProps) {
@@ -43,6 +54,59 @@ export default function ShowcaseDetailActions({
   const { session, user } = useAuth();
   const [isWorking, setIsWorking] = useState<string | null>(null);
   const [remixError, setRemixError] = useState<string | null>(null);
+  // The page is server-rendered for the visibility it was opened at; this
+  // mirror lets the menu move first and the refresh catch up.
+  const [ownerVisibility, setOwnerVisibility] = useState<PostVisibility>(visibility);
+  const [ownerBundleStatus, setOwnerBundleStatus] = useState(bundle?.status ?? null);
+
+  const handleLifecycleAuthRequired = useCallback(() => {
+    router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(`/showcase/${postId}`))}`);
+  }, [postId, router]);
+
+  const handleLifecyclePatch = useCallback((_patchedPostId: string, patch: PostLifecyclePatch) => {
+    if (patch.visibility !== undefined) {
+      setOwnerVisibility(patch.visibility);
+    }
+    if (patch.bundleStatus !== undefined) {
+      setOwnerBundleStatus(patch.bundleStatus);
+    }
+  }, []);
+
+  const handleLifecycleSettled = useCallback((event: PostLifecycleEvent) => {
+    // A private post has no public page to stay on; the others re-render
+    // here with the server's view of the new state.
+    if (event.type === 'visibility') {
+      if (event.visibility === 'private') {
+        router.push(event.ownerPath ?? `/post/${postId}/edit`);
+      } else {
+        router.refresh();
+      }
+      return;
+    }
+    if (event.type === 'archive') {
+      router.push('/creations?view=posts&visibility=archived');
+      return;
+    }
+    if (event.type === 'delete') {
+      router.push('/creations?view=posts');
+    }
+  }, [postId, router]);
+
+  const postLifecycle = usePostLifecycle({
+    accessToken: session?.access_token ?? null,
+    onAuthRequired: handleLifecycleAuthRequired,
+    onPatch: handleLifecyclePatch,
+    onSettled: handleLifecycleSettled,
+  });
+
+  const lifecycleTarget: PostLifecycleTarget = {
+    id: postId,
+    generationId,
+    visibility: ownerVisibility,
+    archivedAt: null,
+    bundle: bundle && ownerBundleStatus ? { ...bundle, status: ownerBundleStatus } : bundle,
+  };
+  const lifecyclePending = postLifecycle.pendingAction(postId);
 
   const handleRemix = async () => {
     if (!user || !session?.access_token) {
@@ -66,150 +130,6 @@ export default function ShowcaseDetailActions({
           ? error.message
           : 'Could not start the remix. Please try again.',
       );
-    } finally {
-      setIsWorking(null);
-    }
-  };
-
-  const updateOwnerVisibility = async (nextVisibility: 'public' | 'unlisted' | 'private') => {
-    if (!session?.access_token) {
-      router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(`/showcase/${postId}`))}`);
-      return;
-    }
-
-    setIsWorking(`visibility:${nextVisibility}`);
-
-    try {
-      const response = generationId
-        ? await fetch('/api/showcase/publish', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${session.access_token}`,
-            },
-            body: JSON.stringify({
-              generationId,
-              visibility: nextVisibility,
-            }),
-          })
-        : await fetch(`/api/posts/${postId}`, {
-            method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${session.access_token}`,
-            },
-            body: JSON.stringify({
-              visibility: nextVisibility,
-            }),
-          });
-
-      const data = await response.json();
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Failed to update visibility.');
-      }
-
-      if (nextVisibility === 'private') {
-        router.push(data.ownerPath ?? `/post/${postId}/edit`);
-        return;
-      }
-
-      router.refresh();
-    } catch (error) {
-      console.error('Failed to update owner post visibility:', error);
-    } finally {
-      setIsWorking(null);
-    }
-  };
-
-  const handleArchive = async () => {
-    if (!session?.access_token || isWorking) {
-      return;
-    }
-
-    const confirmed = window.confirm('Archive this post? It will disappear from public surfaces until you restore it from your workspace.');
-    if (!confirmed) {
-      return;
-    }
-
-    setIsWorking('archive');
-
-    try {
-      const response = await fetch(`/api/posts/${postId}/archive`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
-      });
-      const data = await response.json();
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Failed to archive post.');
-      }
-
-      router.push('/creations?view=posts&visibility=archived');
-    } catch (error) {
-      console.error('Failed to archive owner post:', error);
-    } finally {
-      setIsWorking(null);
-    }
-  };
-
-  const handleDelete = async () => {
-    if (!session?.access_token || isWorking) {
-      return;
-    }
-
-    const confirmed = window.confirm(
-      'Delete this post permanently? If it has paid recipe purchases, you will get a second confirmation so you can still choose archive instead.'
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    setIsWorking('delete');
-
-    try {
-      let response = await fetch(`/api/posts/${postId}`, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          force: false,
-        }),
-      });
-      let data = await response.json();
-
-      if (response.status === 409 && data?.requiresForceDelete) {
-        const forceConfirmed = window.confirm(
-          'This post already has paid recipe purchases. Archive is safer, but you can still force delete it. Do you want to force delete it anyway?'
-        );
-
-        if (!forceConfirmed) {
-          setIsWorking(null);
-          return;
-        }
-
-        response = await fetch(`/api/posts/${postId}`, {
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({
-            force: true,
-          }),
-        });
-        data = await response.json();
-      }
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Failed to delete post.');
-      }
-
-      router.push('/creations?view=posts');
-    } catch (error) {
-      console.error('Failed to delete owner post:', error);
     } finally {
       setIsWorking(null);
     }
@@ -292,57 +212,31 @@ export default function ShowcaseDetailActions({
               </Link>
             ) : null}
 
-            {visibility !== 'public' ? (
-              <button
-                type="button"
-                disabled={Boolean(isWorking)}
-                onClick={() => void updateOwnerVisibility('public')}
-                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.04] disabled:opacity-60"
-              >
-                {isWorking === 'visibility:public' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe2 className="h-4 w-4" />}
-                Make public
-              </button>
-            ) : null}
-
-            {visibility !== 'unlisted' ? (
-              <button
-                type="button"
-                disabled={Boolean(isWorking)}
-                onClick={() => void updateOwnerVisibility('unlisted')}
-                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.04] disabled:opacity-60"
-              >
-                {isWorking === 'visibility:unlisted' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
-                Make unlisted
-              </button>
-            ) : null}
+            <PostVisibilityMenu
+              value={ownerVisibility}
+              onChange={(next) => void postLifecycle.setVisibility(lifecycleTarget, next)}
+              pending={lifecyclePending === 'visibility'}
+              disabled={Boolean(lifecyclePending)}
+              label={`Visibility of ${title}`}
+            />
 
             <button
               type="button"
-              disabled={Boolean(isWorking)}
-              onClick={() => void updateOwnerVisibility('private')}
-              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.04] disabled:opacity-60"
+              disabled={Boolean(lifecyclePending)}
+              onClick={() => void postLifecycle.archive(lifecycleTarget)}
+              className="ui-focus-ring inline-flex items-center gap-2 rounded-full border border-amber-400/25 bg-amber-500/10 px-3.5 py-2 text-sm font-medium text-amber-50 transition hover:border-amber-300/35 hover:bg-amber-500/15 disabled:opacity-60"
             >
-              {isWorking === 'visibility:private' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
-              Make private
-            </button>
-
-            <button
-              type="button"
-              disabled={Boolean(isWorking)}
-              onClick={() => void handleArchive()}
-              className="inline-flex items-center gap-2 rounded-full border border-amber-400/25 bg-amber-500/10 px-3.5 py-2 text-sm font-medium text-amber-50 transition hover:border-amber-300/35 hover:bg-amber-500/15 disabled:opacity-60"
-            >
-              {isWorking === 'archive' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Archive className="h-4 w-4" />}
+              {lifecyclePending === 'archive' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Archive className="h-4 w-4" />}
               Archive
             </button>
 
             <button
               type="button"
-              disabled={Boolean(isWorking)}
-              onClick={() => void handleDelete()}
-              className="inline-flex items-center gap-2 rounded-full border border-rose-400/25 bg-rose-500/10 px-3.5 py-2 text-sm font-medium text-rose-50 transition hover:border-rose-300/35 hover:bg-rose-500/15 disabled:opacity-60"
+              disabled={Boolean(lifecyclePending)}
+              onClick={() => void postLifecycle.remove(lifecycleTarget)}
+              className="ui-focus-ring inline-flex items-center gap-2 rounded-full border border-rose-400/25 bg-rose-500/10 px-3.5 py-2 text-sm font-medium text-rose-50 transition hover:border-rose-300/35 hover:bg-rose-500/15 disabled:opacity-60"
             >
-              {isWorking === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              {lifecyclePending === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
               Delete
             </button>
           </div>
