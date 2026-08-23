@@ -81,6 +81,29 @@ async function storedObjectExists(client: SupabaseClient, bucket: string, filePa
   return (data ?? []).some((entry) => entry.name === name);
 }
 
+/**
+ * Everything under showcase/<generationId>/ is this generation's public
+ * footprint — derivative, hashed previews, and the pre-hash `.preview.webp`
+ * files of the first pipeline revision, which no column or row references.
+ * Listing the folder catches those orphans; matching by column alone missed
+ * them.
+ */
+async function listGenerationFolderObjects(
+  client: SupabaseClient,
+  generationId: string,
+): Promise<string[]> {
+  const folder = `showcase/${generationId}`;
+  const { data, error } = await client.storage.from(SHOWCASE_BUCKET).list(folder, { limit: 1000 });
+  if (error) throw error;
+  return (data ?? [])
+    .filter((entry) => entry.id !== null || entry.metadata !== null)
+    .map((entry) => `${folder}/${entry.name}`)
+    .flatMap((filePath) => {
+      const canonical = canonicalShowcasePath(filePath, generationId);
+      return canonical ? [canonical] : [];
+    });
+}
+
 async function main() {
   const { data: posts, error: postsError } = await supabase
     .from('posts')
@@ -128,12 +151,16 @@ async function main() {
         if (canonical) removablePaths.add(canonical);
       }
     }
+    for (const orphanPath of await listGenerationFolderObjects(supabase, generationRow.id)) {
+      removablePaths.add(orphanPath);
+    }
 
     const stale =
       Boolean(generationRow.is_public)
       || Boolean(generationRow.showcase_asset_path)
       || Boolean(post.showcase_asset_path)
-      || legacyRows.length > 0;
+      || legacyRows.length > 0
+      || removablePaths.size > 0;
     if (!stale) {
       clean += 1;
       continue;
