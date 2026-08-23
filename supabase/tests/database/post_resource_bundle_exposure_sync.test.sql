@@ -13,7 +13,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(19);
+select plan(28);
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
 values
@@ -243,7 +243,85 @@ select is(
   'restating public visibility heals a recipe left as a draft'
 );
 
--- 9. The old sold-only function and trigger are gone; the new trigger is the
+-- 9. The linked marketplace asset follows exposure through the trigger, in
+--    both directions -- the unlisting used to live only inside the post RPCs,
+--    so archiving (which never ran them) left the listing active.
+insert into public.marketplace_assets (id, seller_user_id, post_id, type, title, price_usd_cents, status)
+values
+  ('90000000-0000-4000-8000-00000000e001'::uuid, 'a1000000-0000-4000-8000-00000000e001'::uuid,
+   'b0000000-0000-4000-8000-00000000e003'::uuid, 'prompt_pack', 'Sold linked listing', 500, 'active'),
+  ('90000000-0000-4000-8000-00000000e002'::uuid, 'a1000000-0000-4000-8000-00000000e001'::uuid,
+   'b0000000-0000-4000-8000-00000000e001'::uuid, 'prompt_pack', 'Unsold linked listing', 0, 'active');
+
+update public.posts set visibility = 'private'
+where id = 'b0000000-0000-4000-8000-00000000e003'::uuid;
+
+select is(
+  (select status from public.marketplace_assets where id = '90000000-0000-4000-8000-00000000e001'::uuid),
+  'unlisted',
+  'a post leaving public unlists its linked marketplace asset'
+);
+
+update public.posts set visibility = 'public'
+where id = 'b0000000-0000-4000-8000-00000000e003'::uuid;
+
+select is(
+  (select status from public.marketplace_assets where id = '90000000-0000-4000-8000-00000000e001'::uuid),
+  'active',
+  'a sold listing on a clean post comes back when the post returns to public'
+);
+
+update public.posts set archived_at = timezone('utc'::text, now())
+where id = 'b0000000-0000-4000-8000-00000000e001'::uuid;
+
+select is(
+  (select status from public.marketplace_assets where id = '90000000-0000-4000-8000-00000000e002'::uuid),
+  'unlisted',
+  'archiving a post unlists its linked marketplace asset'
+);
+
+update public.posts set archived_at = null
+where id = 'b0000000-0000-4000-8000-00000000e001'::uuid;
+
+select is(
+  (select status from public.marketplace_assets where id = '90000000-0000-4000-8000-00000000e002'::uuid),
+  'unlisted',
+  'an unsold listing stays unlisted on restore; only a sold one returns by itself'
+);
+
+-- 10. The post RPCs no longer carry their own unlisting; the trigger fires on
+--     their post UPDATE, which always assigns the visibility column.
+select is(
+  (select (public.update_post_with_resource_bundle(
+    'b0000000-0000-4000-8000-00000000e003'::uuid,
+    'a1000000-0000-4000-8000-00000000e001'::uuid,
+    '{"visibility": "private"}'::jsonb
+  )).visibility),
+  'private',
+  'the update RPC still flips visibility'
+);
+select is(
+  (select status from public.marketplace_assets where id = '90000000-0000-4000-8000-00000000e001'::uuid),
+  'unlisted',
+  'an update RPC call that hides the post unlists the listing through the trigger'
+);
+select is(
+  (select status from public.post_resource_bundles where id = 'c0000000-0000-4000-8000-00000000e003'::uuid),
+  'draft',
+  'an update RPC call that hides the post demotes the recipe through the trigger'
+);
+select is(
+  position('marketplace_assets' in pg_get_functiondef('public.update_post_with_resource_bundle(uuid, uuid, jsonb, boolean, jsonb)'::regprocedure)),
+  0,
+  'the update RPC no longer touches marketplace_assets itself'
+);
+select is(
+  position('marketplace_assets' in pg_get_functiondef('public.upsert_post_with_resource_bundle(jsonb, jsonb, boolean)'::regprocedure)),
+  0,
+  'the upsert RPC no longer touches marketplace_assets itself'
+);
+
+-- 11. The old sold-only function and trigger are gone; the new trigger is the
 --    one wired to posts, and the gate helper is backend-only.
 select hasnt_function(
   'public', 'sync_sold_post_resource_bundle_visibility', array[]::text[],
