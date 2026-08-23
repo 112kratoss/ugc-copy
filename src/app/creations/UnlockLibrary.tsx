@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { Archive, ArrowRight, BadgeCheck, Loader2, PackageOpen, Sparkles } from 'lucide-react';
 
+import StudioCard, { STUDIO_GRID_CLASS, StudioChip, StudioKindBadge } from '@/app/creations/StudioCard';
 import { formatUsdCents } from '@/lib/post-resource-bundles';
 import { supabase } from '@/lib/supabase';
 
@@ -55,32 +56,56 @@ function formatPurchaseDate(value: string): string {
 function UnlockStateBadge({ item }: { item: UnlockItem }) {
   if (item.tombstoned) {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300/25 bg-amber-300/10 px-2.5 py-1 text-[11px] font-semibold text-amber-200">
-        <Archive className="h-3 w-3" />
+      <StudioChip tone="amber" icon={<Archive className="h-3 w-3" />}>
         Creator removed the post — yours to keep
-      </span>
+      </StudioChip>
     );
   }
 
   if (item.retired) {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-300/20 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-zinc-300">
-        <Archive className="h-3 w-3" />
+      <StudioChip tone="muted" icon={<Archive className="h-3 w-3" />}>
         No longer sold — yours to keep
-      </span>
+      </StudioChip>
     );
   }
 
   if (item.hasNewerRevision) {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-200">
-        <Sparkles className="h-3 w-3" />
+      <StudioChip tone="emerald" icon={<Sparkles className="h-3 w-3" />}>
         Creator added an update
-      </span>
+      </StudioChip>
     );
   }
 
   return null;
+}
+
+/**
+ * The unlocked post's media, or the package mark when there is none — also
+ * when the URL no longer resolves, which is exactly the tombstoned and
+ * delisted case: the creator's media can be gone while the unlock stays.
+ */
+function UnlockMedia({ src }: { src: string | null }) {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  if (!src || failedSrc === src) {
+    return (
+      <div className="flex aspect-[4/5] w-full items-center justify-center bg-black/60">
+        <PackageOpen className="h-8 w-8 text-zinc-600" />
+      </div>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      onError={() => setFailedSrc(src)}
+      className="aspect-[4/5] w-full object-cover"
+    />
+  );
 }
 
 export default function UnlockLibrary() {
@@ -189,62 +214,40 @@ export default function UnlockLibrary() {
         {total} {total === 1 ? 'unlock' : 'unlocks'} · yours permanently
       </div>
 
-      <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {items.map((item) => {
-          // Not /showcase/:id -- that route only serves public, unarchived,
-          // moderation-clean posts, so it 404s exactly the tombstoned and
-          // delisted purchases this library exists to keep reachable. The
-          // /unlocks route checks entitlement and bounces back to the public
-          // page when the post is still publicly readable.
-          const href = `/unlocks/${item.unlockId}`;
-          const card = (
-            <div className="flex h-full flex-col gap-3 rounded-2xl border border-white/8 bg-zinc-900/50 p-4 transition hover:border-white/16 hover:bg-zinc-900/70">
-              <div className="flex items-start gap-3">
-                {item.post?.mediaUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={item.post.mediaUrl}
-                    alt=""
-                    className="h-14 w-14 flex-shrink-0 rounded-xl object-cover"
-                  />
-                ) : (
-                  <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-xl border border-white/8 bg-white/[0.03]">
-                    <PackageOpen className="h-5 w-5 text-zinc-600" />
-                  </div>
-                )}
-                <div className="min-w-0 flex-1">
-                  <h3 className="truncate text-sm font-semibold text-white">{item.title}</h3>
-                  <p className="mt-0.5 truncate text-xs text-zinc-500">
-                    by {item.creator.displayName}
-                  </p>
-                </div>
-              </div>
-
-              {item.previewText ? (
-                <p className="line-clamp-2 text-xs leading-5 text-zinc-400">{item.previewText}</p>
-              ) : null}
-
-              <div className="mt-auto space-y-2">
+      <ul className={STUDIO_GRID_CLASS}>
+        {items.map((item) => (
+          <StudioCard
+            key={item.unlockId}
+            as="li"
+            density="compact"
+            // Not /showcase/:id -- that route only serves public, unarchived,
+            // moderation-clean posts, so it 404s exactly the tombstoned and
+            // delisted purchases this library exists to keep reachable. The
+            // /unlocks route checks entitlement and bounces back to the public
+            // page when the post is still publicly readable.
+            href={`/unlocks/${item.unlockId}`}
+            media={<UnlockMedia src={item.post?.mediaUrl ?? null} />}
+            badge={(
+              <StudioKindBadge tone="emerald" icon={<BadgeCheck className="h-3.5 w-3.5" />}>
+                Unlocked
+              </StudioKindBadge>
+            )}
+            chips={(
+              <>
+                <StudioChip tone={item.purchasePriceUsdCents > 0 ? 'emerald' : 'sky'}>
+                  {item.purchasePriceUsdCents > 0
+                    ? `${item.purchasePriceUsdCents} tokens (${formatUsdCents(item.purchasePriceUsdCents)})`
+                    : 'Free'}
+                </StudioChip>
                 <UnlockStateBadge item={item} />
-                <div className="flex items-center justify-between text-[11px] text-zinc-500">
-                  <span className="inline-flex items-center gap-1">
-                    <BadgeCheck className="h-3 w-3 text-emerald-300/70" />
-                    {item.purchasePriceUsdCents > 0
-                      ? `${item.purchasePriceUsdCents} tokens (${formatUsdCents(item.purchasePriceUsdCents)})`
-                      : 'Free'}
-                  </span>
-                  <span>{formatPurchaseDate(item.purchasedAt)}</span>
-                </div>
-              </div>
-            </div>
-          );
-
-          return (
-            <li key={item.unlockId}>
-              <Link href={href} className="block h-full">{card}</Link>
-            </li>
-          );
-        })}
+              </>
+            )}
+            title={item.title}
+            subtitle={`by ${item.creator.displayName}`}
+            summary={item.previewText || undefined}
+            meta={[{ label: 'Unlocked', value: formatPurchaseDate(item.purchasedAt) }]}
+          />
+        ))}
       </ul>
 
       {nextOffset !== null ? (
