@@ -86,6 +86,16 @@ describe('ShowcaseDetailActions owner tools', () => {
     fireEvent.click(trigger);
     fireEvent.click(within(await screen.findByRole('menu')).getByRole('menuitemradio', { name: /unlisted/i }));
 
+    // The recipe is listed, so policy asks before the post leaves public —
+    // and nothing moves until the answer.
+    const dialog = await screen.findByRole('alertdialog', { name: 'Make this post unlisted?' });
+    expect(dialog).toHaveAccessibleDescription(
+      'Its recipe comes off the marketplace and goes back to draft. Making the post public again does not relist it — save it from the editor to relist.',
+    );
+    expect(clientMocks.requestPostVisibilityChange).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Visibility of Sunset study: Public' })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Make unlisted' }));
+
     await waitFor(() => {
       expect(clientMocks.requestPostVisibilityChange).toHaveBeenCalledWith({
         post: expect.objectContaining({ id: 'post-1', generationId: 'gen-1', visibility: 'public' }),
@@ -112,11 +122,31 @@ describe('ShowcaseDetailActions owner tools', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Visibility of Sunset study: Public' }));
     fireEvent.click(within(await screen.findByRole('menu')).getByRole('menuitemradio', { name: /private/i }));
+    const dialog = await screen.findByRole('alertdialog', { name: 'Make this post private?' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Make private' }));
 
     await waitFor(() => {
       expect(routerMocks.push).toHaveBeenCalledWith('/post/post-1/edit');
     });
     expect(routerMocks.refresh).not.toHaveBeenCalled();
+  });
+
+  it('changes visibility in one click when no recipe is listed', async () => {
+    clientMocks.requestPostVisibilityChange.mockResolvedValue({
+      visibility: 'private',
+      ownerPath: '/post/post-1/edit',
+      showcasePath: null,
+      resourceBundleStatus: null,
+    });
+    renderOwnerTools({ bundle: null, hasResourceBundle: false });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Visibility of Sunset study: Public' }));
+    fireEvent.click(within(await screen.findByRole('menu')).getByRole('menuitemradio', { name: /private/i }));
+
+    await waitFor(() => {
+      expect(routerMocks.push).toHaveBeenCalledWith('/post/post-1/edit');
+    });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
 
   it('confirms in the shared dialog before archiving, then goes to the archived list', async () => {

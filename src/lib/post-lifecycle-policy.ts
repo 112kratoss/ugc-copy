@@ -59,23 +59,24 @@ export function getPostLifecycleConfirmation(
       };
 
     case 'visibility': {
-      // TODO(athul): decide which visibility changes deserve friction.
-      //
-      // What the server does on each transition, so the copy can be honest:
-      //   → private / unlisted from public: the post leaves the showcase and
-      //     the feed; a published recipe is demoted to `draft` and its
-      //     marketplace listing is set to `unlisted`. Buyers keep access.
-      //   → public: the post must pass the public quality gate and the
-      //     creator-profile check (the request can fail with a reason).
-      //     A demoted recipe is NOT re-promoted by this flip; the editor's
-      //     full save is what republishes it.
-      //   → unlisted: reachable by link only. Reversible and quiet.
-      //
-      // Inputs available: `action.next`, `post.visibility`, `post.bundle`
-      // (accessMode, status, salesCount). Return null for one-click, or a
-      // confirmation with honest copy. Keep it to the transitions where a
-      // wrong click costs the creator something.
-      return null;
+      // The only visibility change with a hidden, one-way cost is taking a
+      // post with a listed recipe off public: the server demotes the recipe
+      // to draft and unlists its marketplace asset, and making the post
+      // public again does not relist it — only a full save from the editor
+      // does. Every other transition is either reversible in place or fails
+      // loudly (going public runs the quality gate), so it stays one click.
+      const leavingPublic = post.visibility === 'public' && action.next !== 'public';
+      if (!leavingPublic || post.bundle?.status !== 'published') {
+        return null;
+      }
+      const label = action.next === 'unlisted' ? 'unlisted' : 'private';
+      return {
+        title: `Make this post ${label}?`,
+        message: `Its recipe comes off the marketplace and goes back to draft${
+          post.bundle.salesCount > 0 ? '; buyers keep their unlock' : ''
+        }. Making the post public again does not relist it — save it from the editor to relist.`,
+        confirmLabel: `Make ${label}`,
+      };
     }
   }
 }
