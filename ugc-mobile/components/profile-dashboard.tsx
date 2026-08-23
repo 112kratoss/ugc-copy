@@ -25,6 +25,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StableMediaImage } from '@/components/media-preview';
 import { Reveal } from '@/components/reveal';
 import { ProfileGridSkeleton } from '@/components/skeleton';
+import { TopScrim } from '@/components/top-scrim';
 import { AppText, SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { formatUsdCents, getOwnerPostSalesSummary } from '@/lib/home-view-model';
@@ -510,7 +511,7 @@ function ProfileMediaList({
   );
 
   return (
-    <View {...swipeResponder.panHandlers} style={{ flex: 1, backgroundColor: appTheme.colors.background, paddingTop: topInset }}>
+    <View {...swipeResponder.panHandlers} style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
       <FlashList
         ref={listRef}
         data={isLoading ? [] : cards}
@@ -583,11 +584,13 @@ function ProfileMediaList({
         style={{ flex: 1, backgroundColor: appTheme.colors.background }}
         contentInsetAdjustmentBehavior="never"
         contentContainerStyle={{
-          paddingTop: 12,
+          paddingTop: topInset + 12,
           paddingHorizontal: horizontalPadding,
           paddingBottom: contentBottomPadding + 20,
         }}
       />
+
+      <TopScrim topInset={topInset} />
     </View>
   );
 }

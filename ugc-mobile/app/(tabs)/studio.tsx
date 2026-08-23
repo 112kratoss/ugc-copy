@@ -17,6 +17,7 @@ import { useRef } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { TopScrim } from '@/components/top-scrim';
 import { AppText, Card, IconButton, PrimaryButton, SecondaryButton, StatusBlock } from '@/components/ui';
 import { haptic } from '@/lib/haptics';
 import { useAuth } from '@/lib/auth';
@@ -135,7 +136,7 @@ export default function StudioScreen() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: appTheme.colors.background, paddingTop: topInset }}>
+    <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
       <ScrollView
         ref={scrollRef}
         bounces={false}
@@ -144,7 +145,7 @@ export default function StudioScreen() {
         showsVerticalScrollIndicator={false}
         style={{ flex: 1, backgroundColor: appTheme.colors.background }}
         contentContainerStyle={{
-          paddingTop: 18,
+          paddingTop: topInset + 18,
           paddingHorizontal: horizontalPadding,
           paddingBottom: tabBarMetrics.contentBottomOverlapPadding,
           gap: 18,
@@ -226,6 +227,8 @@ export default function StudioScreen() {
           </>
         )}
       </ScrollView>
+
+      <TopScrim topInset={topInset} />
     </View>
   );
 }

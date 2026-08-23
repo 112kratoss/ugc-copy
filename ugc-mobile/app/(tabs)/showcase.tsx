@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
+import { TopScrim } from '@/components/top-scrim';
 import { CreatorAvatar, SecondaryButton, StatusBlock } from '@/components/ui';
 import { WorkspaceSideMenuGestureLayer } from '@/components/workspace-side-menu-gesture-layer';
 import { useAuth } from '@/lib/auth';
@@ -744,6 +745,9 @@ export default function ShowcaseScreen() {
         ListFooterComponent={!isFirstLoad && showcaseQuery.isFetchingNextPage ? <BottomLoader /> : null}
         viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
         />
+
+        <TopScrim topInset={topInset} />
+
         <FeedFeedbackSheet
           creatorLabel={feedbackItem ? formatCreatorLabel(feedbackItem.creator.username || feedbackItem.creator.name) : '@creator'}
           hideCreatorDisabled={Boolean(

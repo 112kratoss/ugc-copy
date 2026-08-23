@@ -37,6 +37,7 @@ import { HomeSideMenu } from '@/components/home-side-menu';
 import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
 import { Reveal } from '@/components/reveal';
 import { HomeFeedSkeleton } from '@/components/skeleton';
+import { TopScrim } from '@/components/top-scrim';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
@@ -663,7 +664,7 @@ export function HomeDashboard() {
   ), [contentWidth, expandedBodyIds, horizontalPadding, visibleActiveVideoIds, toggleSave]);
 
   return (
-    <View style={{ flex: 1, backgroundColor: DASHBOARD_COLORS.background, paddingTop: topInset }}>
+    <View style={{ flex: 1, backgroundColor: DASHBOARD_COLORS.background }}>
       <FlashList
         // A lane is a new feed, not a mutation of the visible one. Remounting
         // gives it a true native origin; reusing the list preserves iOS's old
@@ -690,7 +691,8 @@ export function HomeDashboard() {
         )}
         showsVerticalScrollIndicator={false}
         viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
-        contentContainerStyle={{ paddingBottom: tabBarMetrics.contentBottomOverlapPadding + 24 }}
+        contentInsetAdjustmentBehavior="never"
+        contentContainerStyle={{ paddingTop: topInset, paddingBottom: tabBarMetrics.contentBottomOverlapPadding + 24 }}
         ListHeaderComponent={(
           <View style={{ gap: 18, paddingTop: 10, paddingBottom: 6 }}>
             <View style={{ paddingHorizontal: horizontalPadding }}>
@@ -755,6 +757,8 @@ export function HomeDashboard() {
           </View>
         ) : null}
       />
+
+      <TopScrim topInset={topInset} />
 
       <FeedFeedbackSheet
         creatorLabel={feedbackItem?.creator.username || feedbackItem?.creator.name || 'this creator'}
