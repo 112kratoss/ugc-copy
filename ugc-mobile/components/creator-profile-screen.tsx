@@ -39,6 +39,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { AppText, StatusBlock } from '@/components/ui';
+import { haptic } from '@/lib/haptics';
 import { useAuth } from '@/lib/auth';
 import {
   CREATOR_PROFILE_TABS,
@@ -286,6 +287,7 @@ export function CreatorProfileScreen({
   }, [activeTab, items.length, profileQuery]);
 
   const handleRefresh = () => {
+    haptic.light();
     lastLoadMoreItemCountRef.current = 0;
     lastLoadMoreAtRef.current = 0;
     queryClient.setQueryData<InfiniteData<CreatorProfileResponse>>(queryKey, (current) => {

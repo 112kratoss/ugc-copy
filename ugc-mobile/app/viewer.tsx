@@ -3,7 +3,7 @@ import * as Clipboard from 'expo-clipboard';
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, useNavigation } from 'expo-router';
 import { useVideoPlayer } from 'expo-video';
 import { ArrowLeft, Copy, FileText, Globe, Heart, ImageOff, Images, Lock, LockKeyhole, MessageCircle, MoreVertical, Play, Repeat2, Share2, Wand2, X } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
@@ -20,6 +20,14 @@ import { Pill, SecondaryButton, StatusBlock } from '@/components/ui';
 import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
 import { CommentsSheet } from '@/components/comments-sheet';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
+import { GestureDetector } from 'react-native-gesture-handler';
+
+import {
+  ViewerHeroOverlay,
+  ViewerTransitionBackdrop,
+  ViewerTransitionContainer,
+  useViewerTransition,
+} from '@/components/viewer-hero-transition';
 import { useAuth } from '@/lib/auth';
 import { applyCommentCountToSourceData } from '@/lib/comments-view-model';
 import { env } from '@/lib/env';
@@ -48,6 +56,7 @@ import {
   readCachedProfile,
 } from '@/lib/immersive-preview-source-data';
 import { getProfileHandle } from '@/lib/profile-view-model';
+import { haptic } from '@/lib/haptics';
 import { useReducedMotion } from '@/lib/motion';
 import {
   applyShowcaseSaveStateToFeedResponse,
@@ -85,6 +94,7 @@ import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { PostResourceKind, ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
 import { canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, getViewerActionSlots, getViewerShareIntent, getViewerShareSourceSurface, getViewerStateChip, type SaveHeartTapAnimationSpec, type ViewerStateTone } from '@/lib/viewer-actions';
 import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
+import { takeViewerOrigin } from '@/lib/viewer-transition';
 
 type ViewerParams = {
   algorithmVersion?: string | string[];
@@ -205,6 +215,10 @@ export default function ImmersivePreviewViewerScreen() {
     router.push(`/creators/${encodeURIComponent(item.creatorUsername)}` as never);
   }, []);
   const initialIndex = useMemo(() => getImmersiveInitialIndex(items, initialId), [items, initialId]);
+  const reducedMotion = useReducedMotion();
+  const navigation = useNavigation();
+  // Consumed once on mount: the tile that opened us left its rectangle behind.
+  const [origin] = useState(() => takeViewerOrigin(initialId, Date.now()));
   const overlayOpenItemId = getImmersiveVideoBlockerId({
     actionsOpenItemId,
     commentsOpenItemId,
@@ -216,6 +230,31 @@ export default function ImmersivePreviewViewerScreen() {
     ? selectActiveImmersiveVideoId(items, activeIndex, overlayOpenItemId)
     : null;
   const activeItem = items[activeIndex];
+  const heroTargetAspectRatio = useMemo(() => {
+    if (origin?.aspectRatio) return origin.aspectRatio;
+    const media = items[initialIndex]?.mediaItems?.[0];
+    return media?.width && media?.height ? media.width / media.height : null;
+  }, [initialIndex, items, origin]);
+  const transition = useViewerTransition({
+    origin,
+    width,
+    height,
+    reducedMotion,
+    targetAspectRatio: heroTargetAspectRatio,
+    dismissEnabled: activeIndex === 0 && !overlayOpenItemId && !isHorizontalScrolling,
+    shouldCollapseToOrigin: () => Boolean(origin) && items[activeIndex]?.id === origin?.id,
+    onDismissed: leaveViewer,
+  });
+  const { dismiss: dismissViewer, allowRemoveRef } = transition;
+  useEffect(() => navigation.addListener('beforeRemove', (event) => {
+    // Every way out — back button, system back, the dismiss drag, a blocked
+    // creator — runs the same collapse before the screen actually goes.
+    const actionType = event.data.action.type;
+    if (allowRemoveRef.current || reducedMotion) return;
+    if (actionType !== 'POP' && actionType !== 'GO_BACK' && actionType !== 'POP_TO_TOP') return;
+    event.preventDefault();
+    dismissViewer();
+  }), [allowRemoveRef, dismissViewer, navigation, reducedMotion]);
   const feedSessionId = sourceQuery.data?.feedSessionId ?? routeFeedSessionId ?? null;
   const algorithmVersion = sourceQuery.data?.algorithmVersion ?? routeAlgorithmVersion ?? null;
   const submitViewerFeedEvent = useCallback((
@@ -679,9 +718,16 @@ export default function ImmersivePreviewViewerScreen() {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#000' }}>
+    <View style={{ flex: 1, backgroundColor: 'transparent' }}>
+      <ViewerTransitionBackdrop transition={transition} />
+      <ViewerTransitionContainer transition={transition}>
+      {transition.contentReady ? (
+      <>
+      <GestureDetector gesture={transition.listGesture}>
       <FlatList
         ref={listRef}
+        bounces={false}
+        overScrollMode="never"
         data={items}
         decelerationRate="fast"
         getItemLayout={(_, index) => ({ length: height, offset: height * index, index })}
@@ -691,7 +737,12 @@ export default function ImmersivePreviewViewerScreen() {
         maxToRenderPerBatch={IMMERSIVE_VERTICAL_LIST_TUNING.maxToRenderPerBatch}
         onMomentumScrollEnd={(event) => {
           const nextIndex = Math.round(event.nativeEvent.contentOffset.y / height);
-          setActiveIndex(Math.max(0, Math.min(items.length - 1, nextIndex)));
+          const clampedIndex = Math.max(0, Math.min(items.length - 1, nextIndex));
+          // A quiet tick as each page settles: the reel feels like it has
+          // detents rather than sliding freely. Soft so it can repeat at
+          // browsing speed without nagging.
+          if (clampedIndex !== activeIndex) haptic.soft();
+          setActiveIndex(clampedIndex);
           setDetailsPageOpenItemId(null);
           setDetailsSheetOpenItemId(null);
           setActionsOpenItemId(null);
@@ -735,10 +786,11 @@ export default function ImmersivePreviewViewerScreen() {
         style={{ flex: 1, backgroundColor: '#000' }}
         windowSize={IMMERSIVE_VERTICAL_LIST_TUNING.windowSize}
       />
+      </GestureDetector>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Go back"
-        onPress={leaveViewer}
+        onPress={dismissViewer}
         style={({ pressed }) => ({
           position: 'absolute',
           left: 16,
@@ -754,6 +806,10 @@ export default function ImmersivePreviewViewerScreen() {
       >
         <ArrowLeft size={30} color="#ffffff" strokeWidth={2.4} />
       </Pressable>
+      </>
+      ) : null}
+      </ViewerTransitionContainer>
+      <ViewerHeroOverlay transition={transition} />
       {activeItem && hasImmersiveDetailsPage(activeItem) ? (
         <ViewerDetailsSheet
           bottomInset={bottomInset}

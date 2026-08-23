@@ -74,7 +74,12 @@ import {
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { SHOWCASE_DRAW_DISTANCE, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS } from '@/lib/media-performance';
 import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia } from '@/lib/showcase-media';
+import { Reveal } from '@/components/reveal';
+import { SkeletonBone } from '@/components/skeleton';
+import { haptic } from '@/lib/haptics';
+import { MotionView, usePressMotion } from '@/lib/motion';
 import { accentColor, appTheme } from '@/lib/theme';
+import { recordViewerOrigin } from '@/lib/viewer-transition';
 import type { ShowcaseFeedEventType, ShowcaseFeedItem, ShowcaseFeedResponse, ShowcasePostResponse } from '@/lib/types';
 
 type FeedFilterId = MobileShowcaseFeedFilterId;
@@ -400,6 +405,7 @@ export default function ShowcaseScreen() {
   };
 
   const handleRefresh = () => {
+    haptic.light();
     lastLoadMoreItemCountRef.current = 0;
     lastLoadMoreAtRef.current = 0;
     queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
@@ -413,6 +419,7 @@ export default function ShowcaseScreen() {
   };
 
   const openPost = (item: ShowcaseFeedItem) => {
+    haptic.light();
     recordFeedEvent(item, 'open');
     queryClient.setQueryData<ShowcasePostResponse>(createShowcasePostQueryKey(item.id, user?.id), {
       success: true,
@@ -599,9 +606,9 @@ export default function ShowcaseScreen() {
     [visibleActiveVideoIds, resolvedAspectRatios]
   );
 
-  const renderCard: ListRenderItem<ShowcaseMasonryCard> = ({ item, target }) => {
+  const renderCard: ListRenderItem<ShowcaseMasonryCard> = ({ item, target, index }) => {
     return (
-      <MasonryCardCell layout={gridLayout}>
+      <MasonryCardCell layout={gridLayout} index={index}>
         <MasonryPin
           card={item}
           layout={gridLayout}
@@ -765,11 +772,15 @@ function showcaseFeedErrorBody(error: unknown) {
   return 'Check your connection, then try again.';
 }
 
-function MasonryCardCell({ children, layout }: { children: React.ReactNode; layout: ShowcaseGridLayout }) {
+// The first two rows of pins rise into place as the feed lands; later cells
+// mount plain while scrolling.
+const SHOWCASE_REVEAL_COUNT = 6;
+
+function MasonryCardCell({ children, layout, index = 0 }: { children: React.ReactNode; layout: ShowcaseGridLayout; index?: number }) {
   return (
-    <View style={{ paddingHorizontal: layout.columnGap / 2, paddingBottom: layout.pinGap }}>
+    <Reveal index={index} enabled={index < SHOWCASE_REVEAL_COUNT} style={{ paddingHorizontal: layout.columnGap / 2, paddingBottom: layout.pinGap }}>
       {children}
-    </View>
+    </Reveal>
   );
 }
 
@@ -860,31 +871,13 @@ function SkeletonPin({ height, layout }: { height: number; layout: ShowcaseGridL
         gap: 9,
       }}
     >
-      <View
-        style={{
-          height,
-          borderRadius: layout.mediaRadius,
-          borderCurve: 'continuous',
-          backgroundColor: 'rgba(255,255,255,0.07)',
-        }}
-      >
-        <View
-          style={{
-            position: 'absolute',
-            right: 9,
-            top: 9,
-            width: 30,
-            height: 30,
-            borderRadius: 15,
-            backgroundColor: 'rgba(255,255,255,0.12)',
-          }}
-        />
-      </View>
+      <SkeletonBone width="100%" height={height} radius={layout.mediaRadius} />
       <View style={{ paddingHorizontal: 2, paddingBottom: 2 }}>
         <View style={{ minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 7 }}>
-          <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.10)' }} />
-          <View style={{ flex: 1, height: 13, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.08)' }} />
-          <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.08)' }} />
+          <SkeletonBone width={24} height={24} radius={12} strong />
+          <SkeletonBone width="55%" height={13} radius={4} />
+          <View style={{ flex: 1 }} />
+          <SkeletonBone width={24} height={24} radius={12} />
         </View>
       </View>
     </View>
@@ -926,22 +919,40 @@ function MasonryPin({
   const showActiveVideo = isVideoCard && activeVideoIds.includes(card.id) && Boolean(card.mediaUrl);
   const creatorLabel = formatCreatorLabel(card.creatorLabel);
   const signal = card.unlock;
+  const pressMotion = usePressMotion(false, { scale: appTheme.motion.scale.pressed });
+  const pinRef = useRef<View>(null);
+  // The viewer grows out of this pin: hand over its rectangle before opening.
+  const openFromPin = () => {
+    void recordViewerOrigin({
+      node: pinRef.current,
+      now: Date.now(),
+      id: card.item.id,
+      previewUrl: card.previewUrl ?? card.mediaUrl,
+      cacheKey: card.previewCacheKey,
+      thumbhash: card.previewThumbhash,
+      radius: layout.mediaRadius,
+      aspectRatio: card.aspectRatio,
+    }).finally(() => onOpenPost(card.item));
+  };
 
   return (
     <View style={{ gap: 5 }}>
+      <MotionView style={pressMotion.animatedStyle}>
       <Pressable
+        ref={pinRef}
         accessibilityRole="button"
         accessibilityLabel={`${card.title}. ${card.badge}${signal ? `. ${signal.summary}` : ''}. ${creatorLabel}`}
         accessibilityHint="Opens this post in the full-screen viewer"
-        onPress={() => onOpenPost(card.item)}
-        style={({ pressed }) => ({
+        onPress={openFromPin}
+        onPressIn={pressMotion.onPressIn}
+        onPressOut={pressMotion.onPressOut}
+        style={{
           height: mediaHeight,
           borderRadius: layout.mediaRadius,
           borderCurve: 'continuous',
           overflow: 'hidden',
           backgroundColor: '#050506',
-          opacity: pressed ? 0.92 : 1,
-        })}
+        }}
       >
         {hasShowcasePreviewMedia(card.item) ? (
           <ShowcaseMediaPreview
@@ -954,7 +965,7 @@ function MasonryPin({
             videoActivation={showActiveVideo ? 'visible' : 'never'}
             videoBackdrop="none"
             videoContentFit="cover"
-            onPress={() => onOpenPost(card.item)}
+            onPress={openFromPin}
             onScrollToggle={onScrollToggle}
           />
         ) : (
@@ -967,6 +978,7 @@ function MasonryPin({
         {signal ? <PinBadge label={signal.label} accent={accentColor(signal.accent)} /> : null}
         {isVideoCard ? <VideoCornerPlay /> : null}
       </Pressable>
+      </MotionView>
 
       <View style={{ minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 2 }}>
         <Pressable

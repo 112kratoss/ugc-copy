@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
+import { haptic } from '@/lib/haptics';
 import { useAnimatedState, usePressMotion } from '@/lib/motion';
 import { appTheme, type ToolAccent, accentColor, onAccentColor } from '@/lib/theme';
 
@@ -297,7 +298,7 @@ export function DisclosureSection({
   accent?: ToolAccent;
 }) {
   const color = accent ? accentColor(accent) : appTheme.colors.textSecondary;
-  const motion = usePressMotion();
+  const motion = usePressMotion(false, { scale: appTheme.motion.scale.pressedControl });
 
   return (
     <SurfaceSection
@@ -375,7 +376,11 @@ export function ChoiceChip({
         disabled={disabled}
         onBlur={motion.onBlur}
         onFocus={motion.onFocus}
-        onPress={onPress}
+        onPress={() => {
+          // A chip that is already active is a no-op; only a real change ticks.
+          if (!active) haptic.select();
+          onPress();
+        }}
         onPressIn={motion.onPressIn}
         onPressOut={motion.onPressOut}
         style={({ pressed }) => ({
@@ -594,7 +599,10 @@ export function ToggleRow({
         disabled={disabled}
         onBlur={motion.onBlur}
         onFocus={motion.onFocus}
-        onPress={() => onValueChange(!value)}
+        onPress={() => {
+          haptic.select();
+          onValueChange(!value);
+        }}
         onPressIn={motion.onPressIn}
         onPressOut={motion.onPressOut}
         style={({ pressed }) => ({
@@ -734,7 +742,10 @@ export function PrimaryButton({
         disabled={unavailable}
         onBlur={motion.onBlur}
         onFocus={motion.onFocus}
-        onPress={onPress}
+        onPress={() => {
+          haptic.light();
+          onPress?.();
+        }}
         onPressIn={motion.onPressIn}
         onPressOut={motion.onPressOut}
         style={({ pressed }) => ({
@@ -932,7 +943,7 @@ export function IconButton({
   accessibilityHint?: string;
 }) {
   const color = accent ? accentColor(accent) : appTheme.colors.text;
-  const motion = usePressMotion(Boolean(disabled));
+  const motion = usePressMotion(Boolean(disabled), { scale: appTheme.motion.scale.pressedControl });
 
   return (
     <MotionView style={motion.animatedStyle as StyleProp<ViewStyle>}>

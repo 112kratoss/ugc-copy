@@ -23,10 +23,15 @@ import { ActivityIndicator, PanResponder, Pressable, Text, useWindowDimensions, 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { StableMediaImage } from '@/components/media-preview';
+import { Reveal } from '@/components/reveal';
+import { ProfileGridSkeleton } from '@/components/skeleton';
 import { AppText, SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { formatUsdCents, getOwnerPostSalesSummary } from '@/lib/home-view-model';
+import { haptic } from '@/lib/haptics';
 import { immersiveViewerHref, profileMediaFeedHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
+import { MotionView, usePressMotion } from '@/lib/motion';
+import { recordViewerOrigin } from '@/lib/viewer-transition';
 import {
   FALLBACK_PROFILE_MEDIA,
   PROFILE_MEDIA_TABS,
@@ -72,6 +77,8 @@ const PROFILE_GALLERY_ASPECT_RATIO = 0.74;
 const PROFILE_MEDIA_SWIPE_START_DISTANCE = 28;
 const PROFILE_MEDIA_SWIPE_COMMIT_DISTANCE = 56;
 const PROFILE_MEDIA_SWIPE_AXIS_RATIO = 1.25;
+// Three rows rise into place when a tab's media lands; later rows mount plain.
+const PROFILE_GALLERY_REVEAL_COUNT = PROFILE_GALLERY_COLUMNS * 3;
 
 const PROFILE_COLORS = {
   background: appTheme.colors.background,
@@ -311,6 +318,7 @@ export function ProfileDashboard({
   // Collapse back to a single page before refetching, otherwise React Query refetches every
   // page the user has scrolled through.
   const refreshActiveMedia = () => {
+    haptic.light();
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
     lastLoadMorePageCountRef.current = 0;
@@ -512,9 +520,12 @@ function ProfileMediaList({
           </View>
         )}
         ListEmptyComponent={isLoading ? (
-          <View style={{ minHeight: 160, alignItems: 'center', justifyContent: 'center' }}>
-            <ActivityIndicator color={PROFILE_COLORS.coral} />
-          </View>
+          <ProfileGridSkeleton
+            columns={PROFILE_GALLERY_COLUMNS}
+            gap={PROFILE_GALLERY_GAP}
+            cardWidth={cardWidth}
+            cardHeight={cardHeight}
+          />
         ) : (
           <ProfileMediaEmpty title={emptyTitle} />
         )}
@@ -526,7 +537,9 @@ function ProfileMediaList({
         refreshing={Boolean(isRefreshing)}
         removeClippedSubviews={false}
         renderItem={({ item, index }) => (
-          <View
+          <Reveal
+            index={index}
+            enabled={index < PROFILE_GALLERY_REVEAL_COUNT}
             style={{
               width: cardWidth,
               marginRight: index % PROFILE_GALLERY_COLUMNS === PROFILE_GALLERY_COLUMNS - 1 ? 0 : PROFILE_GALLERY_GAP,
@@ -541,7 +554,7 @@ function ProfileMediaList({
               fallbackAvatarInitials={fallbackAvatarInitials}
               highlighted={activeTab === 'Posts' && highlightedPostId === item.sourceId}
             />
-          </View>
+          </Reveal>
         )}
         showsVerticalScrollIndicator={false}
         style={{ flex: 1, backgroundColor: appTheme.colors.background }}
@@ -985,12 +998,18 @@ function ProfileMediaTile({
     : item.label === 'Creation'
       ? `${item.label}, ${item.title}, ${item.linkedPostLabel ?? item.statusLabel ?? 'Status unavailable'}`
     : `${item.label}, ${item.title}`;
+  const motion = usePressMotion(false, { scale: appTheme.motion.scale.pressed });
+  const tileRef = useRef<View>(null);
 
   return (
+    <MotionView style={[{ width, height }, motion.animatedStyle]}>
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
+      onPressIn={motion.onPressIn}
+      onPressOut={motion.onPressOut}
       onPress={() => {
+        haptic.light();
         if (isFallbackPreview) {
           router.push(item.href as never);
           return;
@@ -1008,20 +1027,29 @@ function ProfileMediaTile({
         }
         // Saved media is for looking at, so it opens the reel. Creations and Posts
         // are for managing, so they open the card feed with their controls inline.
-        router.push(
-          (isSavedTile ? immersiveViewerHref : profileMediaFeedHref)({
-            source: item.viewerSource,
-            initialId: item.sourceId,
-          }) as never
-        );
+        const href = (isSavedTile ? immersiveViewerHref : profileMediaFeedHref)({
+          source: item.viewerSource,
+          initialId: item.sourceId,
+        });
+        if (!isSavedTile) {
+          router.push(href as never);
+          return;
+        }
+        // The reel grows out of this tile: hand over its rectangle first.
+        void recordViewerOrigin({
+          node: tileRef.current,
+          now: Date.now(),
+          id: item.sourceId,
+          previewUrl: item.previewUrl ?? item.mediaUrl,
+          cacheKey: item.previewCacheKey ?? item.id,
+          thumbhash: item.previewThumbhash,
+          radius: 12,
+        }).finally(() => router.push(href as never));
       }}
-      style={({ pressed }) => ({
-        width,
-        height,
-        opacity: pressed ? 0.84 : 1,
-      })}
+      style={{ flex: 1 }}
     >
       <View
+        ref={tileRef}
         testID={highlighted ? 'profile-highlighted-post-tile' : undefined}
         style={{
           flex: 1,
@@ -1056,6 +1084,7 @@ function ProfileMediaTile({
         )}
       </View>
     </Pressable>
+    </MotionView>
   );
 }
 
@@ -1113,36 +1142,23 @@ function ProfileSavedFeedOverlay({
         </Text>
       </View>
 
+      {/* The picture is the tile; a title on top of it competed with the
+          picture on every cell. The like count stays, in white, as a quiet
+          corner signal rather than a coral one. */}
       <View
         style={{
           position: 'absolute',
-          left: 8,
           right: 8,
           bottom: 8,
           flexDirection: 'row',
-          alignItems: 'flex-end',
-          gap: 8,
+          alignItems: 'center',
+          gap: 4,
         }}
       >
-        <Text
-          numberOfLines={2}
-          style={{
-            flex: 1,
-            minWidth: 0,
-            color: '#ffffff',
-            fontSize: 12,
-            lineHeight: 15,
-            fontWeight: '800',
-          }}
-        >
-          {item.title}
+        <Heart size={14} color="#ffffff" fill="#ffffff" strokeWidth={2.2} />
+        <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 12, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
+          {countLabel}
         </Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, minWidth: 34, justifyContent: 'flex-end' }}>
-          <Heart size={15} color={PROFILE_COLORS.coral} fill={PROFILE_COLORS.coral} strokeWidth={2.2} />
-          <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
-            {countLabel}
-          </Text>
-        </View>
       </View>
     </View>
   );

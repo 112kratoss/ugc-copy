@@ -18,6 +18,7 @@ import { ActivityIndicator, Linking, Pressable, ScrollView, useWindowDimensions,
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppText, Card, IconButton, PrimaryButton, SecondaryButton, StatusBlock } from '@/components/ui';
+import { haptic } from '@/lib/haptics';
 import { useAuth } from '@/lib/auth';
 import { navigateToNotificationDeepLink, registerForMobilePushNotifications, type MobilePushRegistrationResult } from '@/lib/notifications';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -154,7 +155,10 @@ export default function StudioScreen() {
           unreadCount={unreadCount}
           totalCount={notifications.length}
           isRefreshing={notificationsQuery.isRefetching}
-          onRefresh={() => notificationsQuery.refetch()}
+          onRefresh={() => {
+            haptic.light();
+            void notificationsQuery.refetch();
+          }}
           onMarkAllRead={() => markAllReadMutation.mutate()}
           canMarkAllRead={unreadCount > 0 && !markAllReadMutation.isPending}
         />

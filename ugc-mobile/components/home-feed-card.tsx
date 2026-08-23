@@ -1,9 +1,10 @@
-import { Heart, MessageCircle, Repeat2, Share2 } from 'lucide-react-native';
+import { MessageCircle, Repeat2, Share2 } from 'lucide-react-native';
 import { memo } from 'react';
 import { Text, View } from 'react-native';
 
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
 import { PostTextBlock } from '@/components/post-text-block';
+import { SaveHeart } from '@/components/save-heart';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import {
   canExpandHomeFeedBody,
@@ -12,7 +13,7 @@ import {
 } from '@/lib/home-feed-view-model';
 import { getShowcasePreviewMediaItems } from '@/lib/showcase-media';
 import { accentColor, appTheme } from '@/lib/theme';
-import { getSaveHeartIconProps } from '@/lib/viewer-actions';
+import type { ViewerOriginRect } from '@/lib/viewer-transition';
 
 export const HomeFeedCardView = memo(function HomeFeedCardView({
   card,
@@ -32,7 +33,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   contentWidth: number;
   showActiveVideo: boolean;
   bodyExpanded: boolean;
-  onOpen: () => void;
+  onOpen: (mediaRect: ViewerOriginRect | null) => void;
   onToggleBody: () => void;
   onFeedbackOpen: () => void;
   onCreatorOpen: () => void;
@@ -111,7 +112,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
         <>
           <FeedCardAction
             accessibilityLabel={card.isSaved ? `Remove ${card.title} from saved` : `Save ${card.title}`}
-            icon={<Heart size={19} {...getSaveHeartIconProps({ isSaved: card.isSaved, enabled: true })} />}
+            icon={<SaveHeart saved={card.isSaved} size={19} />}
             label={card.saveLabel}
             onPress={onSave}
           />

@@ -10,15 +10,18 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MagicCreateMenu } from '@/components/magic-create-menu';
 import { getCreateMenuActionHref, type CreateMenuActionId } from '@/lib/create-menu-view-model';
-import { useSpringState } from '@/lib/motion';
+import { haptic } from '@/lib/haptics';
+import { usePressMotion, useSpringState } from '@/lib/motion';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { appTheme } from '@/lib/theme';
 
 const PRIMARY = appTheme.colors.primary ?? '#FF7A59';
 const PRIMARY_STRONG = appTheme.colors.primaryStrong ?? '#FF8A6D';
-const PRIMARY_PRESSED = appTheme.colors.pressed ?? 'rgba(255,122,89,0.13)';
 const ON_PRIMARY = appTheme.colors.onPrimary ?? '#1A0E0A';
+// Read with a fallback like the colours above: the focused tests mock the
+// theme down to a couple of colours and have no motion block at all.
+const CONTROL_PRESS_SCALE = appTheme.motion?.scale.pressedControl ?? 0.9;
 
 // The glass branch drops the opaque panel fill on purpose — a near-solid
 // background cancels the material outright.
@@ -100,6 +103,7 @@ export function MagicTabBar({
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const [createMenuVisible, setCreateMenuVisible] = useState(false);
+  const createMotion = usePressMotion(false, { scale: CONTROL_PRESS_SCALE });
   const surfaceMode = useTabBarSurfaceMode();
   const pendingCreateAction = useRef<CreateMenuActionId | null>(null);
   const pendingActionFallback = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -225,34 +229,48 @@ export function MagicTabBar({
           <TabButton item={VISIBLE_TABS[3]} active={activeRoute === 'profile'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('profile')} />
         </View>
       </TabBarSurface>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Open create menu"
-        accessibilityHint="Choose whether to create media or publish a post"
-        accessibilityState={{ expanded: createMenuVisible }}
-        onPress={() => setCreateMenuVisible(true)}
-        style={({ pressed }) => ({
-          position: 'absolute',
-          top: 0,
-          alignSelf: 'center',
-          width: centerSize,
-          height: centerSize,
-          borderRadius: centerSize / 2,
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 1,
-          borderWidth: 2,
-          borderColor: appTheme.colors.panel,
-          backgroundColor: pressed ? PRIMARY_STRONG : PRIMARY,
-          opacity: pressed ? 0.85 : 1,
-          zIndex: 2,
-          elevation: 5,
-          boxShadow: '0 8px 20px rgba(0,0,0,0.36)',
-        })}
+      <AnimatedView
+        style={[
+          {
+            position: 'absolute',
+            top: 0,
+            alignSelf: 'center',
+            width: centerSize,
+            height: centerSize,
+            zIndex: 2,
+          },
+          createMotion.animatedStyle,
+        ]}
       >
-        <Plus size={isCompact ? 23 : 25} color={ON_PRIMARY} strokeWidth={2.7} />
-        <Text style={{ color: ON_PRIMARY, fontSize: 9, lineHeight: 11, fontWeight: '800' }}>Create</Text>
-      </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open create menu"
+          accessibilityHint="Choose whether to create media or publish a post"
+          accessibilityState={{ expanded: createMenuVisible }}
+          onPress={() => {
+            haptic.medium();
+            setCreateMenuVisible(true);
+          }}
+          onPressIn={createMotion.onPressIn}
+          onPressOut={createMotion.onPressOut}
+          style={({ pressed }) => ({
+            width: centerSize,
+            height: centerSize,
+            borderRadius: centerSize / 2,
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 1,
+            borderWidth: 2,
+            borderColor: appTheme.colors.panel,
+            backgroundColor: pressed ? PRIMARY_STRONG : PRIMARY,
+            elevation: 5,
+            boxShadow: '0 8px 20px rgba(0,0,0,0.36)',
+          })}
+        >
+          <Plus size={isCompact ? 23 : 25} color={ON_PRIMARY} strokeWidth={2.7} />
+          <Text style={{ color: ON_PRIMARY, fontSize: 9, lineHeight: 11, fontWeight: '800' }}>Create</Text>
+        </Pressable>
+      </AnimatedView>
     </View>
   );
 }
@@ -335,6 +353,7 @@ function TabButton({
   const Icon = item.Icon;
   const color = active ? PRIMARY : inactiveColor;
   const progress = useSpringState(active);
+  const press = usePressMotion(false, { scale: CONTROL_PRESS_SCALE });
   // `progress` is null under test, where AnimatedView is a plain View; fall back
   // to the settled value so the rendered tree still reflects the active state.
   const settled = active ? 1 : 0;
@@ -348,7 +367,12 @@ function TabButton({
       accessibilityRole="tab"
       accessibilityLabel={item.label}
       accessibilityState={{ selected: active }}
-      onPress={onPress}
+      onPress={() => {
+        haptic.select();
+        onPress();
+      }}
+      onPressIn={press.onPressIn}
+      onPressOut={press.onPressOut}
       style={({ pressed }) => ({
         position: 'relative',
         flex: 1,
@@ -356,11 +380,11 @@ function TabButton({
         minHeight: 52,
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 3,
         borderRadius: 18,
         borderCurve: 'continuous',
-        backgroundColor: active ? PRIMARY_PRESSED : pressed ? appTheme.colors.surfaceStrong : 'transparent',
-        opacity: pressed ? 0.75 : 1,
+        // The active tab is the coral icon, label and indicator; a coral pill
+        // behind them too was one accent too many on a bar this small.
+        backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'transparent',
       })}
     >
       <AnimatedView
@@ -379,10 +403,12 @@ function TabButton({
           transform: [{ scaleX: progress ?? settled }],
         }}
       />
-      <AnimatedView style={{ transform: [{ scale: iconScale ?? 1 }] }}>
-        <Icon size={iconSize} color={color} strokeWidth={active ? 2.5 : 2.1} />
+      <AnimatedView style={[{ alignItems: 'center', gap: 3 }, press.animatedStyle]}>
+        <AnimatedView style={{ transform: [{ scale: iconScale ?? 1 }] }}>
+          <Icon size={iconSize} color={color} strokeWidth={active ? 2.5 : 2.1} />
+        </AnimatedView>
+        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.76} style={{ color, fontSize: labelSize, fontWeight: active ? '800' : '600' }}>{item.label}</Text>
       </AnimatedView>
-      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.76} style={{ color, fontSize: labelSize, fontWeight: active ? '800' : '600' }}>{item.label}</Text>
     </Pressable>
   );
 }
