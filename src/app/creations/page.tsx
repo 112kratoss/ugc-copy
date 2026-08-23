@@ -10,6 +10,7 @@ import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import SkeletonLoader from '@/app/components/SkeletonLoader';
 import CreationMediaFrame from '@/app/creations/CreationMediaFrame';
 import {
+    buildPostRecipeManagementPath,
     resolveCreationWorkspaceCardState,
     type CreationWorkspaceCardState,
     type CreationWorkspaceMonetizationKind,
@@ -406,7 +407,6 @@ export default function CreationsPage() {
     const [previewGen, setPreviewGen] = useState<Generation | null>(null);
     const requestedGenerationRef = useRef<string | null>(null);
     const [publishTarget, setPublishTarget] = useState<Generation | null>(null);
-    const [initialSellAutoUnlockInPublishModal, setInitialSellAutoUnlockInPublishModal] = useState(false);
     const [shareAfterPublish, setShareAfterPublish] = useState(false);
     const [showPaidShortcutInPublishModal, setShowPaidShortcutInPublishModal] = useState(true);
     const [postVisibilityUpdatingKey, setPostVisibilityUpdatingKey] = useState<string | null>(null);
@@ -771,15 +771,16 @@ export default function CreationsPage() {
         }
     };
 
+    // The publish modal only opens for a generation that has no post yet.
+    // Recipe changes on an existing post link to the editor instead, which
+    // loads the stored bundle rather than rebuilding one from the prefill.
     const openPublishModal = useCallback(async (generation: Generation, options?: {
         shareAfterPublish?: boolean;
         showPaidShortcut?: boolean;
-        initialSellAutoUnlock?: boolean;
     }) => {
         try {
             const detailedGeneration = await loadGenerationDetail(generation);
             setPublishTarget(detailedGeneration);
-            setInitialSellAutoUnlockInPublishModal(Boolean(options?.initialSellAutoUnlock));
             setShareAfterPublish(Boolean(options?.shareAfterPublish));
             setShowPaidShortcutInPublishModal(
                 detailedGeneration.origin === 'template'
@@ -793,39 +794,8 @@ export default function CreationsPage() {
 
     const closePublishModal = () => {
         setPublishTarget(null);
-        setInitialSellAutoUnlockInPublishModal(false);
         setShareAfterPublish(false);
         setShowPaidShortcutInPublishModal(true);
-    };
-
-    const openUnlockModalForGeneration = (generation: Generation) => {
-        void openPublishModal(generation, {
-            showPaidShortcut: true,
-            initialSellAutoUnlock: true,
-        });
-    };
-
-    const openUnlockModalForPost = (post: OwnerPost) => {
-        const linkedGeneration = post.generationId
-            ? generationsRef.current.find((generation) => generation.id === post.generationId) ??
-                generations.find((generation) => generation.id === post.generationId) ??
-                null
-            : null;
-
-        if (!linkedGeneration) {
-            router.push(buildStudioDetailPath(post.id, 'resources'));
-            return;
-        }
-
-        openUnlockModalForGeneration({
-            ...linkedGeneration,
-            title: post.title || linkedGeneration.title,
-            description: post.description || linkedGeneration.description,
-            linked_post_id: post.id,
-            linked_post_title: post.title,
-            linked_post_visibility: post.visibility,
-            linked_post_archived_at: post.archivedAt,
-        });
     };
 
     const handlePublished = () => {
@@ -1391,18 +1361,15 @@ export default function CreationsPage() {
                     </button>
                 ) : null}
 
-                {canManageFromCreation && primaryIsUnlock ? (
-                    <button
-                        type="button"
-                        onClick={() => {
-                            setPreviewGen(null);
-                            openUnlockModalForGeneration(generation);
-                        }}
+                {canManageFromCreation && primaryIsUnlock && workspaceState.primaryAction.href ? (
+                    <Link
+                        href={workspaceState.primaryAction.href}
+                        onClick={() => setPreviewGen(null)}
                         className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 sm:w-auto sm:min-w-40"
                     >
                         <Wand2 className="h-4 w-4" />
                         {workspaceState.primaryAction.label}
-                    </button>
+                    </Link>
                 ) : null}
 
                 {customizeHref ? (
@@ -2063,20 +2030,14 @@ export default function CreationsPage() {
                                                             )}
                                                             {workspaceState.primaryAction.label}
                                                         </button>
-                                                    ) : primaryIsUnlock ? (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => openUnlockModalForGeneration(gen)}
-                                                            disabled={isGenerationDetailLoading}
-                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
+                                                    ) : primaryIsUnlock && workspaceState.primaryAction.href ? (
+                                                        <Link
+                                                            href={workspaceState.primaryAction.href}
+                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200"
                                                         >
-                                                            {isGenerationDetailLoading ? (
-                                                                <Loader2 className="h-4 w-4 animate-spin" />
-                                                            ) : (
-                                                                <Wand2 className="h-4 w-4" />
-                                                            )}
+                                                            <Wand2 className="h-4 w-4" />
                                                             {workspaceState.primaryAction.label}
-                                                        </button>
+                                                        </Link>
                                                     ) : null}
 
                                                     {hasCompactActionRow ? (
@@ -2476,22 +2437,13 @@ export default function CreationsPage() {
                                                                 {visibilityActionLabel}
                                                             </button>
                                                         ) : null}
-                                                        {post.generationId && !post.archivedAt ? (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => openUnlockModalForPost(post)}
+                                                        {!post.archivedAt ? (
+                                                            <Link
+                                                                href={buildPostRecipeManagementPath(post)}
                                                                 className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
                                                             >
                                                                 <Wand2 className="h-4 w-4" />
                                                                 {post.bundle ? 'Manage recipe' : 'Add recipe'}
-                                                            </button>
-                                                        ) : post.resourcePath ? (
-                                                            <Link
-                                                                href={buildStudioDetailPath(post.id, 'resources')}
-                                                                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
-                                                            >
-                                                                <Wand2 className="h-4 w-4" />
-                                                                Manage recipe
                                                             </Link>
                                                         ) : null}
                                                     </div>
@@ -2594,7 +2546,6 @@ export default function CreationsPage() {
                 defaultDescription={publishTarget?.description ?? ''}
                 showPaidShortcut={showPaidShortcutInPublishModal}
                 mediaOnly={publishTarget?.origin === 'template'}
-                initialSellAutoUnlock={initialSellAutoUnlockInPublishModal}
                 paywallPrefill={publishTarget?.paywallPrefill ?? null}
                 shareAfterPublish={shareAfterPublish ? {
                     title: publishTarget ? getPreviewTitle(publishTarget) : 'Creation',

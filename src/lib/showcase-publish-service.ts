@@ -135,6 +135,7 @@ export type ShowcasePublishServiceDependencies = {
   isMissingPostResourceBundlesSchemaError: typeof isMissingPostResourceBundlesSchemaError;
   listSourceToolsCatalog: typeof listSourceToolsCatalog;
   loadFrozenSoldGenerationBundleForQuality: typeof loadFrozenSoldGenerationBundleForQuality;
+  loadExistingGenerationPostContent: typeof loadExistingGenerationPostContent;
 };
 
 export type ShowcasePublishServiceResult =
@@ -188,6 +189,8 @@ function resolveDependencies(
     listSourceToolsCatalog: dependencies?.listSourceToolsCatalog ?? listSourceToolsCatalog,
     loadFrozenSoldGenerationBundleForQuality:
       dependencies?.loadFrozenSoldGenerationBundleForQuality ?? loadFrozenSoldGenerationBundleForQuality,
+    loadExistingGenerationPostContent:
+      dependencies?.loadExistingGenerationPostContent ?? loadExistingGenerationPostContent,
   };
 }
 
@@ -427,6 +430,42 @@ async function loadFrozenSoldGenerationBundleForQuality({
   };
 }
 
+type ExistingGenerationPostContent = {
+  title: string | null;
+  description: string | null;
+  prompt: string | null;
+  body: string | null;
+  category: string | null;
+};
+
+/**
+ * The content a visibility-only request must carry forward. The post row is
+ * written with upsert semantics, so every column this caller does not supply
+ * would otherwise be rebuilt from the generation — and the generation never
+ * saw the caption, body, or title edits made in the post editor.
+ */
+async function loadExistingGenerationPostContent({
+  generationId,
+  ownerUserId,
+  supabase,
+}: {
+  generationId: string;
+  ownerUserId: string;
+  supabase: SupabaseClient;
+}): Promise<ExistingGenerationPostContent | null> {
+  const { data, error } = await supabase
+    .from('posts')
+    .select('title, description, prompt, body, category')
+    .eq('generation_id', generationId)
+    .eq('user_id', ownerUserId)
+    .maybeSingle();
+  if (error) {
+    throw error;
+  }
+
+  return (data as ExistingGenerationPostContent | null) ?? null;
+}
+
 /**
  * Whether the generation is the canonical deliverable of the viewer's own
  * successful, non-test template run. Anything else that is template-linked —
@@ -618,31 +657,6 @@ export async function publishGenerationToShowcaseForRoute({
     return { ok: false, status: 400, body: { error: 'Audio generations are not publishable to the showcase yet' } };
   }
 
-  let detectedCategory = normalizePublishableShowcaseCategory(category)
-    ?? normalizePublishableShowcaseCategory(generation.category);
-  if (!detectedCategory && shouldExposePost) {
-    detectedCategory = detectCategoryFromModel(generation.model);
-  }
-
-  const normalizedBody = normalizeTextValue(body);
-  const hasRecipe = Boolean(bundleForPublicValidation && bundleForPublicValidation.accessMode !== 'none');
-  const isPaidRecipe = bundleForPublicValidation?.accessMode === 'paid';
-  const requestedDescription = normalizeTextValue(description);
-  const descriptionCandidate = requestedDescription
-    ?? (isPaidRecipe ? null : generation.description?.trim() ?? null);
-  const sanitizedPublicContent = sanitizePublicPostContent({
-    body: normalizedBody ?? '',
-    description: descriptionCandidate ?? '',
-    hasRecipe,
-    isPaidRecipe,
-    prompt: normalizeTextValue(prompt) ?? generation.prompt?.trim() ?? '',
-  });
-  const resolvedTitle =
-    normalizeTextValue(title)
-    ?? generation.title?.trim()
-    ?? resolvedDependencies.deriveTitleFromBody(sanitizedPublicContent.body || null)
-    ?? null;
-
   // This endpoint serves two very different callers. Studio flips an existing
   // post's visibility with nothing but { generationId, visibility }, and that
   // must keep working — it is not composing anything. A request that carries
@@ -653,6 +667,57 @@ export async function publishGenerationToShowcaseForRoute({
     || body !== undefined
     || category !== undefined
     || requestBody.resourceBundle !== undefined;
+
+  // A visibility-only request is written through the same upsert as a compose
+  // submission, so its post content has to come from the stored post rather
+  // than be rebuilt from the generation. The generation never received the
+  // body or the edits made while the post was private; falling back to it
+  // silently erased them. Refusing the flip beats wiping the caption.
+  let existingPost: ExistingGenerationPostContent | null = null;
+  if (!isComposeSubmission) {
+    try {
+      existingPost = await resolvedDependencies.loadExistingGenerationPostContent({
+        generationId,
+        ownerUserId: userId,
+        supabase: adminSupabase,
+      });
+    } catch (error) {
+      logBackendError('failed_to_load_existing_post_for_visibility_change', { error });
+      return {
+        ok: false,
+        status: 500,
+        body: { error: 'Could not load the existing post before changing its visibility. Try again.' },
+      };
+    }
+  }
+
+  let detectedCategory = normalizePublishableShowcaseCategory(category)
+    ?? normalizePublishableShowcaseCategory(existingPost?.category)
+    ?? normalizePublishableShowcaseCategory(generation.category);
+  if (!detectedCategory && shouldExposePost) {
+    detectedCategory = detectCategoryFromModel(generation.model);
+  }
+
+  const normalizedBody = normalizeTextValue(body) ?? normalizeTextValue(existingPost?.body);
+  const hasRecipe = Boolean(bundleForPublicValidation && bundleForPublicValidation.accessMode !== 'none');
+  const isPaidRecipe = bundleForPublicValidation?.accessMode === 'paid';
+  const requestedDescription = normalizeTextValue(description);
+  const descriptionCandidate = requestedDescription
+    ?? normalizeTextValue(existingPost?.description)
+    ?? (isPaidRecipe ? null : generation.description?.trim() ?? null);
+  const sanitizedPublicContent = sanitizePublicPostContent({
+    body: normalizedBody ?? '',
+    description: descriptionCandidate ?? '',
+    hasRecipe,
+    isPaidRecipe,
+    prompt: normalizeTextValue(prompt) ?? generation.prompt?.trim() ?? '',
+  });
+  const resolvedTitle =
+    normalizeTextValue(title)
+    ?? normalizeTextValue(existingPost?.title)
+    ?? generation.title?.trim()
+    ?? resolvedDependencies.deriveTitleFromBody(sanitizedPublicContent.body || null)
+    ?? null;
 
   if (isComposeSubmission && !resolvedTitle) {
     return { ok: false, status: 400, body: { error: 'Add a title for your post.', field: 'title' } };
@@ -795,7 +860,11 @@ export async function publishGenerationToShowcaseForRoute({
     category: detectedCategory ?? 'image',
     title: resolvedTitle,
     description: sanitizedPublicContent.description || null,
-    prompt: shouldExposePromptPublic ? normalizeTextValue(prompt) ?? generation.prompt?.trim() ?? null : null,
+    prompt: shouldExposePromptPublic
+      ? normalizeTextValue(prompt) ?? generation.prompt?.trim() ?? null
+      : isComposeSubmission
+        ? null
+        : normalizeTextValue(existingPost?.prompt) || null,
     body: sanitizedPublicContent.body || null,
     post_format: sanitizedPublicContent.body ? 'mixed' : 'media',
     source_kind: MAGICBOOKLET_SOURCE_KIND,

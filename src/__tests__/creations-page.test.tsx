@@ -407,7 +407,11 @@ describe('CreationsPage', () => {
     });
   });
 
-  it('opens the publish setup modal from a generated card Add recipe action', async () => {
+  // The quick publish modal rebuilds a recipe from the generation prefill and
+  // sends no body, so opening it on a post that already exists would replace
+  // whatever the editor saved. An existing post's recipe is always edited in
+  // the editor, which loads the stored bundle.
+  it('links a generated card Add recipe action to the post editor instead of the publish modal', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
 
@@ -421,27 +425,6 @@ describe('CreationsPage', () => {
               linked_post_title: 'Linked generated post',
               linked_post_visibility: 'public',
               linked_post_archived_at: null,
-            }),
-          ],
-        }));
-      }
-
-      if (url === '/api/generations?includeArchived=true&id=gen-linked&limit=1') {
-        return Promise.resolve(jsonResponse({
-          generations: [
-            makeGeneration({
-              id: 'gen-linked',
-              title: 'Linked generated post',
-              linked_post_id: 'post-linked',
-              linked_post_title: 'Linked generated post',
-              linked_post_visibility: 'public',
-              linked_post_archived_at: null,
-              paywallPrefill: {
-                resourceKinds: ['prompt', 'notes', 'remix'],
-                promptText: 'Create a generated portrait.',
-                notesMarkdown: 'Saved generation setup',
-                allowRemix: true,
-              },
             }),
           ],
         }));
@@ -461,19 +444,21 @@ describe('CreationsPage', () => {
 
     render(<CreationsPage />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /^add recipe$/i }));
-
-    expect(await screen.findByRole('dialog', { name: /publish this creation/i })).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('/api/generations?includeArchived=true&id=gen-linked&limit=1', {
-      headers: { Authorization: 'Bearer layout-session-token' },
-    });
-    await waitFor(() => {
-      expect(screen.getByRole('radio', { name: 'Paid' })).toBeChecked();
-    });
-    expect(navigationState.push).not.toHaveBeenCalled();
+    const addRecipeLink = await screen.findByRole('link', { name: /^add recipe$/i });
+    expect(addRecipeLink).toHaveAttribute(
+      'href',
+      '/post/post-linked/edit?resourceMode=paid&focus=price&from=creations#recipe',
+    );
+    expect(screen.queryByRole('button', { name: /^add recipe$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /publish this creation/i })).not.toBeInTheDocument();
+    // No detail fetch: the link needs nothing beyond the linked post id.
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/generations?includeArchived=true&id=gen-linked&limit=1',
+      expect.anything(),
+    );
   });
 
-  it('removes an existing recipe from a generation-backed Post Library Manage recipe action', async () => {
+  it('links a Post Library Manage recipe action to the post editor for a generation-backed post', async () => {
     navigationState.searchParams = new URLSearchParams('view=posts');
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
@@ -484,23 +469,6 @@ describe('CreationsPage', () => {
             makeGeneration({
               id: 'gen-bundled',
               title: 'Bundled generated post',
-            }),
-          ],
-        }));
-      }
-
-      if (url === '/api/generations?includeArchived=true&id=gen-bundled&limit=1') {
-        return Promise.resolve(jsonResponse({
-          generations: [
-            makeGeneration({
-              id: 'gen-bundled',
-              title: 'Bundled generated post',
-              paywallPrefill: {
-                resourceKinds: ['prompt', 'notes', 'remix'],
-                promptText: 'Create a reusable generated portrait.',
-                notesMarkdown: 'Saved bundled setup',
-                allowRemix: true,
-              },
             }),
           ],
         }));
@@ -533,13 +501,37 @@ describe('CreationsPage', () => {
               canShare: true,
               bundle: {
                 id: 'bundle-1',
-                accessMode: 'paid',
-                status: 'draft',
-                priceUsdCents: 900,
+                accessMode: 'free',
+                status: 'published',
+                priceUsdCents: 0,
                 salesCount: 0,
                 earningsUsdCents: 0,
                 resourceKinds: ['prompt', 'notes', 'remix'],
               },
+            },
+            {
+              id: 'post-uploaded',
+              generationId: null,
+              visibility: 'public',
+              archivedAt: null,
+              mediaUrl: 'https://example.com/upload.jpg',
+              mediaKind: 'image',
+              title: 'Uploaded post without a recipe',
+              description: '',
+              prompt: '',
+              body: '',
+              category: 'image',
+              postFormat: 'media',
+              sourceKind: 'external',
+              sourceTool: 'Midjourney',
+              sourceLabel: 'Midjourney',
+              createdAt: '2026-06-01T09:00:00.000Z',
+              updatedAt: '2026-06-01T09:00:00.000Z',
+              publicPath: '/showcase/post-uploaded',
+              ownerPath: '/post/post-uploaded/edit',
+              resourcePath: null,
+              canShare: true,
+              bundle: null,
             },
           ],
         }));
@@ -553,54 +545,29 @@ describe('CreationsPage', () => {
         }));
       }
 
-      if (url === '/api/showcase/publish') {
-        return Promise.resolve(jsonResponse({
-          success: true,
-          visibility: 'public',
-          postId: 'post-bundled',
-          resourceBundleStatus: null,
-          resourceBundlePath: null,
-        }));
-      }
-
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
     vi.stubGlobal('fetch', fetchMock);
 
     render(<CreationsPage />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /^manage recipe$/i }));
+    // The stored recipe is free; the editor link carries that so it opens on
+    // the saved access mode rather than the modal's Paid / 900 default.
+    const manageRecipeLink = await screen.findByRole('link', { name: /^manage recipe$/i });
+    expect(manageRecipeLink).toHaveAttribute(
+      'href',
+      '/post/post-bundled/edit?resourceMode=free&focus=price&from=creations#recipe',
+    );
+    expect(screen.queryByRole('button', { name: /^manage recipe$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /publish this creation/i })).not.toBeInTheDocument();
 
-    expect(await screen.findByRole('dialog', { name: /publish this creation/i })).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('/api/generations?includeArchived=true&id=gen-bundled&limit=1', {
-      headers: { Authorization: 'Bearer layout-session-token' },
-    });
-    await waitFor(() => {
-      expect(screen.getByRole('radio', { name: 'Paid' })).toBeChecked();
-    });
+    // An uploaded post with no recipe gets the same entry point.
+    expect(screen.getByRole('link', { name: /^add recipe$/i })).toHaveAttribute(
+      'href',
+      '/post/post-uploaded/edit?resourceMode=paid&focus=price&from=creations#recipe',
+    );
     expect(navigationState.push).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('radio', { name: 'Off' }));
-    expect(screen.getByRole('radio', { name: 'Paid' })).not.toBeChecked();
-    fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/showcase/publish', expect.objectContaining({
-        method: 'POST',
-        body: expect.any(String),
-      }));
-    });
-
-    const publishCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/showcase/publish') as
-      | [RequestInfo | URL, RequestInit?]
-      | undefined;
-    expect(JSON.parse(String(publishCall?.[1]?.body))).toMatchObject({
-      generationId: 'gen-bundled',
-      visibility: 'public',
-      resourceBundle: {
-        accessMode: 'none',
-      },
-    });
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/showcase/publish', expect.anything());
   });
 
   it('keeps Post Library previews intrinsically sized and lazy-loaded', async () => {

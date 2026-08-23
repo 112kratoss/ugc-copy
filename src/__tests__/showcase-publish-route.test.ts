@@ -27,8 +27,19 @@ type GenerationInputMediaRow = {
   metadata: Record<string, unknown> | null;
 };
 
+type ExistingPostRow = {
+  title: string | null;
+  description: string | null;
+  prompt: string | null;
+  body: string | null;
+  category: string | null;
+};
+
 let generationState: GenerationRow | null = null;
 let generationInputMediaRows: GenerationInputMediaRow[] = [];
+// The post already written for `generationState`, read back by a
+// visibility-only request so the upsert carries its content forward.
+let existingPostState: ExistingPostRow | null = null;
 const generationUpdates: Array<Record<string, unknown>> = [];
 const postUpserts: Array<Record<string, unknown>> = [];
 const listingUpdateCalls: Array<{
@@ -105,6 +116,27 @@ function createServiceClientTestDouble() {
               },
               error: null,
             };
+          },
+        };
+
+        return query;
+      }
+
+      if (table === 'posts') {
+        const filters: Record<string, unknown> = {};
+        const query = {
+          select() {
+            return query;
+          },
+          eq(column: string, value: unknown) {
+            filters[column] = value;
+            return query;
+          },
+          async maybeSingle() {
+            const matches = existingPostState
+              && filters.generation_id === generationState?.id
+              && filters.user_id === generationState?.user_id;
+            return { data: matches ? existingPostState : null, error: null };
           },
         };
 
@@ -223,6 +255,7 @@ describe('/api/showcase/publish route', () => {
       prompt: 'Original prompt',
     };
     generationInputMediaRows = [];
+    existingPostState = null;
     generationUpdates.length = 0;
     postUpserts.length = 0;
     listingUpdateCalls.length = 0;
@@ -515,6 +548,44 @@ describe('/api/showcase/publish route', () => {
       p_owner_user_id: 'user-1',
       p_has_bundle: false,
     });
+  });
+
+  // End to end: the row the RPC upserts for Studio's "Make private" carries the
+  // post's own content, not a rebuild from the (stale) generation row.
+  it('keeps the edited title, caption, and body on a visibility-only request', async () => {
+    existingPostState = {
+      title: 'Golden hour study',
+      description: 'Edited caption',
+      prompt: null,
+      body: 'Here is how I lit it.',
+      category: 'image',
+    };
+
+    const { POST } = await import('@/app/api/showcase/publish/route');
+    const response = await POST(new Request('http://localhost/api/showcase/publish', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token',
+      },
+      body: JSON.stringify({
+        generationId: 'gen-1',
+        visibility: 'private',
+      }),
+    }) as NextRequest);
+
+    const data = await response.json();
+
+    expect(response.status, JSON.stringify(data)).toBe(200);
+    expect(postUpserts[0]).toMatchObject({
+      generation_id: 'gen-1',
+      visibility: 'private',
+      title: 'Golden hour study',
+      description: 'Edited caption',
+      body: 'Here is how I lit it.',
+      post_format: 'mixed',
+    });
+    expect(postUpserts[0]).not.toMatchObject({ title: 'Original title' });
   });
 
   it('secures legacy provider media before making a generation-backed post private', async () => {
