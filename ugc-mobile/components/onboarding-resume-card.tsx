@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { Pressable, View } from 'react-native';
 
 import { useAuth } from '@/lib/auth';
+import { haptic } from '@/lib/haptics';
+import { MotionView, usePressMotion } from '@/lib/motion';
 import { useOnboarding } from '@/lib/onboarding';
 import { appTheme } from '@/lib/theme';
 import type { WelcomeCreditResponse } from '@/lib/types';
@@ -13,6 +15,7 @@ export function OnboardingResumeCard({ compact = false }: { compact?: boolean })
   const { api, user } = useAuth();
   const { state, update } = useOnboarding();
   const [welcome, setWelcome] = useState<WelcomeCreditResponse | null>(null);
+  const motion = usePressMotion(false, { scale: appTheme.motion.scale.pressedCard });
 
   useEffect(() => {
     if (!user || state.status !== 'completed') return;
@@ -49,29 +52,33 @@ export function OnboardingResumeCard({ compact = false }: { compact?: boolean })
   const glyphSize = compact ? 17 : 23;
 
   const open = async () => {
+    haptic.light();
     const lastStep = rewardPending ? 5 : showOptionalIntro ? 0 : state.lastStep;
     await update({ status: 'in_progress', lastStep });
     router.push((rewardPending ? '/onboarding?resume=identity' : '/onboarding') as never);
   };
 
   return (
+    <MotionView style={motion.animatedStyle}>
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${title}. ${body}`}
       onPress={() => void open()}
-      style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
+      onPressIn={motion.onPressIn}
+      onPressOut={motion.onPressOut}
     >
-      <Card accent="primary" padding={compact ? 'sm' : 'md'} style={{ flexDirection: 'row', alignItems: 'center', gap: compact ? 11 : 14 }}>
-        <View style={{ width: iconSize, height: iconSize, borderRadius: iconSize / 2, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.selectedStrong }}>
-          {rewardPending ? <Gift size={glyphSize} color={appTheme.colors.primary} /> : <Sparkles size={glyphSize} color={appTheme.colors.primary} />}
+      <Card padding={compact ? 'sm' : 'md'} style={{ flexDirection: 'row', alignItems: 'center', gap: compact ? 11 : 14 }}>
+        <View style={{ width: iconSize, height: iconSize, borderRadius: iconSize / 2, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.surfaceStrong }}>
+          {rewardPending ? <Gift size={glyphSize} color={appTheme.colors.text} /> : <Sparkles size={glyphSize} color={appTheme.colors.text} />}
         </View>
         <View style={{ flex: 1, gap: compact ? 2 : 4 }}>
-          {compact ? null : <Kicker color="primary">Creator setup</Kicker>}
+          {compact ? null : <Kicker>Creator setup</Kicker>}
           <AppText variant={compact ? 'button' : 'cardTitle'}>{title}</AppText>
           <AppText variant="caption" color="muted" numberOfLines={compact ? 1 : undefined}>{body}</AppText>
         </View>
         <ArrowRight size={compact ? 18 : 20} color={appTheme.colors.primary} />
       </Card>
     </Pressable>
+    </MotionView>
   );
 }

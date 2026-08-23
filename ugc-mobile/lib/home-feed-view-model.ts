@@ -90,6 +90,21 @@ export function getHomeFeedChip(id: HomeFeedChipId | string | null | undefined) 
   return HOME_FEED_CHIPS.find((chip) => chip.id === id) ?? HOME_FEED_CHIPS[0];
 }
 
+/**
+ * The freshest preview in the feed for each tool slide, so the rail shows what
+ * people are making right now instead of a bundled stock still. Cards arrive
+ * newest first, so the first match per tool wins.
+ */
+export function pickHomeSlidePreviews(cards: HomeFeedCard[]): Partial<Record<ToolAccent, string>> {
+  const previews: Partial<Record<ToolAccent, string>> = {};
+  for (const card of cards) {
+    if (previews[card.accent]) continue;
+    const url = card.previewUrl ?? (card.mediaKind === 'image' ? card.mediaUrl : null);
+    if (url) previews[card.accent] = url;
+  }
+  return previews;
+}
+
 export function getHomeFeedSlides(shortcuts: HomeToolShortcut[] = HOME_TOOL_SHORTCUTS): HomeFeedSlide[] {
   return [
     {

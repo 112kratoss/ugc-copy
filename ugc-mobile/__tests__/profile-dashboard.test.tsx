@@ -377,7 +377,7 @@ describe('ProfileDashboard media tiles routing', () => {
     authState.api.getSavedMedia.mockClear();
   });
 
-  it('routes to /viewer with correct source and initialId for Saved tiles', () => {
+  it('routes to /viewer with correct source and initialId for Saved tiles', async () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<ProfileDashboard />);
@@ -388,8 +388,11 @@ describe('ProfileDashboard media tiles routing', () => {
       accessibilityLabel: 'Saved, Saved Title, 5 likes',
     });
 
-    renderer.act(() => {
+    // The tile hands its rectangle to the viewer before navigating, which is
+    // one microtask; the route it lands on is what matters here.
+    await renderer.act(async () => {
       tile.props.onPress();
+      await Promise.resolve();
     });
 
     expect(routerState.push).toHaveBeenCalledWith({

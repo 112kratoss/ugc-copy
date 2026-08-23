@@ -1,18 +1,20 @@
 const colors = {
-  // Obsidian Studio: neutral graphite layers with a warm, readable foreground.
-  app: '#0c0c0e',
-  background: '#101012',
-  page: '#101012',
-  panel: '#19191c',
-  panelSoft: '#202024',
-  surface: 'rgba(255,248,237,0.05)',
-  surfaceStrong: 'rgba(255,248,237,0.08)',
-  surfaceInset: '#0d0d0f',
-  overlay: 'rgba(8,8,10,0.72)',
-  overlayStrong: 'rgba(8,8,10,0.90)',
-  borderSubtle: 'rgba(255,248,237,0.09)',
-  border: 'rgba(255,248,237,0.14)',
-  borderStrong: 'rgba(255,248,237,0.24)',
+  // Obsidian Studio, deepened: the ground is true black so media supplies the
+  // colour, and panels sit a real step above it instead of a 3% lift that
+  // read as one flat grey. Warm ivory foreground, as before.
+  app: '#000000',
+  background: '#070708',
+  page: '#070708',
+  panel: '#151518',
+  panelSoft: '#1f1f24',
+  surface: 'rgba(255,248,237,0.06)',
+  surfaceStrong: 'rgba(255,248,237,0.10)',
+  surfaceInset: '#0b0b0d',
+  overlay: 'rgba(4,4,6,0.74)',
+  overlayStrong: 'rgba(4,4,6,0.92)',
+  borderSubtle: 'rgba(255,248,237,0.07)',
+  border: 'rgba(255,248,237,0.12)',
+  borderStrong: 'rgba(255,248,237,0.22)',
 
   // Warm ivory type keeps the dark UI from feeling cold without lowering contrast.
   text: '#fff8ed',
@@ -43,6 +45,17 @@ const colors = {
   workflow: '#67d6a7',
   amber: '#f2b95e',
   commerce: '#f2b95e',
+} as const;
+
+// Display face: Bricolage Grotesque carries titles and the wordmark; body text
+// stays on the system font for legibility and zero load cost. One token, so
+// the face can be swapped in one line. The faces are registered under these
+// exact names by expo-font, and each is a single weight — so the title
+// variants below set `fontWeight: '400'` to stop Android fake-bolding a face
+// that is already bold.
+export const DISPLAY_FONT = {
+  bold: 'BricolageGrotesque_700Bold',
+  extraBold: 'BricolageGrotesque_800ExtraBold',
 } as const;
 
 export const appTheme = {
@@ -86,7 +99,7 @@ export const appTheme = {
     },
     pressed: {
       background: colors.pressed,
-      scale: 0.985,
+      scale: 0.96,
     },
     disabled: {
       opacity: 0.5,
@@ -112,27 +125,31 @@ export const appTheme = {
   },
   type: {
     display: {
+      fontFamily: DISPLAY_FONT.extraBold,
       fontSize: 36,
       lineHeight: 42,
-      fontWeight: '800',
-      letterSpacing: -0.8,
+      fontWeight: '400',
+      letterSpacing: -0.6,
     },
     pageTitle: {
+      fontFamily: DISPLAY_FONT.extraBold,
       fontSize: 30,
       lineHeight: 36,
-      fontWeight: '800',
-      letterSpacing: -0.45,
+      fontWeight: '400',
+      letterSpacing: -0.3,
     },
     sectionTitle: {
+      fontFamily: DISPLAY_FONT.extraBold,
       fontSize: 22,
       lineHeight: 28,
-      fontWeight: '700',
-      letterSpacing: -0.2,
+      fontWeight: '400',
+      letterSpacing: -0.1,
     },
     cardTitle: {
+      fontFamily: DISPLAY_FONT.bold,
       fontSize: 18,
       lineHeight: 24,
-      fontWeight: '700',
+      fontWeight: '400',
     },
     body: {
       fontSize: 16,
@@ -161,10 +178,11 @@ export const appTheme = {
       letterSpacing: 0.1,
     },
     metric: {
+      fontFamily: DISPLAY_FONT.extraBold,
       fontSize: 34,
       lineHeight: 40,
-      fontWeight: '800',
-      letterSpacing: -0.5,
+      fontWeight: '400',
+      letterSpacing: -0.3,
     },
   },
   icon: {
@@ -190,7 +208,13 @@ export const appTheme = {
       reveal: 240,
     },
     scale: {
-      pressed: 0.985,
+      // Press feedback has to clear the perception floor: a 1–2% change reads
+      // as nothing under a thumb. Cards travel less than controls because
+      // their absolute movement is already large; controls (icon buttons,
+      // tabs, the create button) travel most because they are small.
+      pressed: 0.96,
+      pressedCard: 0.975,
+      pressedControl: 0.9,
       selected: 1.12,
     },
     // Springs rather than eased curves: the settle is the point. Friction is
@@ -198,6 +222,11 @@ export const appTheme = {
     spring: {
       tension: 190,
       friction: 13,
+      // Press-in is close to critically damped so the surface lands under the
+      // finger at once; release is underdamped so it settles back with a small
+      // visible rebound, which is what makes a tap feel physical.
+      pressIn: { stiffness: 700, damping: 40, mass: 0.7 },
+      release: { stiffness: 420, damping: 17, mass: 0.7 },
     },
   },
   shadow: {

@@ -19,6 +19,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { CommentListSkeleton } from '@/components/skeleton';
 import { CreatorAvatar, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import {
@@ -537,8 +538,8 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
       </Text>
     </View>
   ) : commentsUnavailable ? retryState : commentsQuery.isLoading ? (
-    <View style={{ paddingVertical: appTheme.spacing.section, alignItems: 'center' }}>
-      <ActivityIndicator color={appTheme.colors.faint} />
+    <View style={{ paddingHorizontal: appTheme.spacing.panel, paddingVertical: appTheme.spacing.card }}>
+      <CommentListSkeleton />
     </View>
   ) : (
     <View style={{ paddingVertical: appTheme.spacing.section, paddingHorizontal: appTheme.spacing.panel, gap: 4 }}>

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
-import { AccessibilityInfo, Animated, type ViewStyle } from 'react-native';
+import { useCallback, useEffect, useState, useSyncExternalStore, type ComponentProps } from 'react';
+import { AccessibilityInfo, Animated, View, type ViewStyle } from 'react-native';
 
 import { appTheme } from '@/lib/theme';
 
@@ -14,6 +14,25 @@ function optionalNativeExport<T>(read: () => T) {
 
 const animatedApi = optionalNativeExport(() => Animated);
 const accessibilityApi = optionalNativeExport(() => AccessibilityInfo);
+
+/**
+ * The view every press-motion consumer wraps itself in. Resolved once so the
+ * component identity is stable across renders, and tolerant of the minimal
+ * react-native mocks focused tests use: no Animated means a plain View, no
+ * View means a passthrough.
+ */
+export const MotionView = (
+  optionalNativeExport(() => Animated.View)
+  ?? optionalNativeExport(() => View)
+  ?? (({ children }: { children?: React.ReactNode }) => children ?? null)
+) as typeof Animated.View;
+
+export type MotionViewProps = ComponentProps<typeof Animated.View>;
+
+type PressMotionOptions = {
+  /** Scale to settle at while pressed; defaults to `appTheme.motion.scale.pressed`. */
+  scale?: number;
+};
 
 type ReducedMotionSubscription = { remove?: () => void } | undefined;
 
@@ -93,26 +112,31 @@ export function useReducedMotion() {
 }
 
 /**
- * Shared press feedback: a very small scale change with a visible keyboard focus state.
+ * Shared press feedback: the surface springs down under the finger and springs
+ * back with a small rebound on release, plus a visible keyboard focus state.
  * Motion is removed completely when the OS reduced-motion preference is enabled.
+ *
+ * Theme reads stay inside the handlers on purpose: focused component tests
+ * mock the theme down to a few colours and never press anything.
  */
-export function usePressMotion(disabled = false) {
+export function usePressMotion(disabled = false, options?: PressMotionOptions) {
   const reducedMotion = useReducedMotion();
   const [focused, setFocused] = useState(false);
   const [scale] = useState<Animated.Value | null>(() => createValue(1));
+  const pressedScale = options?.scale;
 
-  const animateScale = useCallback((toValue: number, duration: number) => {
+  const animateScale = useCallback((toValue: number, phase: 'pressIn' | 'release') => {
     if (!scale) return;
 
     scale.stopAnimation();
-    if (reducedMotion || !animatedApi?.timing) {
+    if (reducedMotion || !animatedApi?.spring) {
       scale.setValue(1);
       return;
     }
 
-    animatedApi.timing(scale, {
+    animatedApi.spring(scale, {
       toValue,
-      duration,
+      ...appTheme.motion.spring[phase],
       useNativeDriver: true,
     }).start();
   }, [reducedMotion, scale]);
@@ -130,10 +154,10 @@ export function usePressMotion(disabled = false) {
     onFocus: () => setFocused(true),
     onPressIn: () => {
       if (!disabled) {
-        animateScale(appTheme.motion.scale.pressed, appTheme.motion.duration.pressIn);
+        animateScale(pressedScale ?? appTheme.motion.scale.pressed, 'pressIn');
       }
     },
-    onPressOut: () => animateScale(1, appTheme.motion.duration.pressOut),
+    onPressOut: () => animateScale(1, 'release'),
     reducedMotion,
   };
 }

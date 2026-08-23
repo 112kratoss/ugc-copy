@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
-import { Copy, FileText, Heart, Lock, Repeat2, Share2 } from 'lucide-react-native';
+import { Copy, FileText, Lock, Repeat2, Share2 } from 'lucide-react-native';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from 'react-native';
 
@@ -12,7 +12,7 @@ import { useAuth } from '@/lib/auth';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import type { PostResourceKind } from '@/lib/types';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
-import { getSaveHeartIconProps } from '@/lib/viewer-actions';
+import { SaveHeart } from '@/components/save-heart';
 
 /**
  * The details behind a post: stats, prompt, caption, actions and the creator's
@@ -220,7 +220,7 @@ export function PostDetailsPage({
           <DetailActionButton
             disabled={!item.canSave}
             label={item.isSaved ? 'Saved' : 'Save'}
-            icon={<Heart size={18} {...getSaveHeartIconProps({ isSaved: item.isSaved, enabled: item.canSave })} />}
+            icon={<SaveHeart saved={item.isSaved} size={18} enabled={item.canSave} />}
             loading={saveLoading}
             onPress={() => onSave(item)}
           />

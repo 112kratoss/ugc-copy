@@ -1,12 +1,15 @@
+import { BricolageGrotesque_700Bold, BricolageGrotesque_800ExtraBold, useFonts } from '@expo-google-fonts/bricolage-grotesque';
 import { DarkTheme, ThemeProvider } from '@react-navigation/native';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import Constants from 'expo-constants';
 import { AppMetricsRoot } from 'expo-observe';
 import { Stack, router, usePathname } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
 import 'react-native-reanimated';
 import { View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-url-polyfill/auto';
 
@@ -27,6 +30,12 @@ export {
 export const unstable_settings = {
   initialRouteName: '(tabs)',
 };
+
+// The display face arrives from the bundle in a few frames; holding the splash
+// until then means the first screen never swaps fonts in front of the user.
+// FONT_SPLASH_FALLBACK_MS guarantees the splash can never hang on it.
+const FONT_SPLASH_FALLBACK_MS = 1200;
+void SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -58,6 +67,19 @@ export default AppMetricsRoot.wrap(RootLayout);
 
 function RootLayoutNav() {
   const reducedMotion = useReducedMotion();
+  const [fontsLoaded, fontError] = useFonts({ BricolageGrotesque_700Bold, BricolageGrotesque_800ExtraBold });
+
+  useEffect(() => {
+    if (!fontsLoaded && !fontError) return;
+    void SplashScreen.hideAsync().catch(() => undefined);
+  }, [fontError, fontsLoaded]);
+
+  useEffect(() => {
+    const fallback = setTimeout(() => {
+      void SplashScreen.hideAsync().catch(() => undefined);
+    }, FONT_SPLASH_FALLBACK_MS);
+    return () => clearTimeout(fallback);
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -68,6 +90,7 @@ function RootLayoutNav() {
           <UpgradeRequiredCoordinator />
           <SafeAreaProvider>
             <ThemeProvider value={navigationTheme}>
+              <GestureHandlerRootView style={{ flex: 1 }}>
               <View style={{ flex: 1, backgroundColor: appTheme.colors.app }}>
                 <StatusBar style="light" backgroundColor={appTheme.colors.background} translucent={false} />
                 <Stack
@@ -116,7 +139,18 @@ function RootLayoutNav() {
                     contentStyle: { backgroundColor: appTheme.colors.app },
                   }}
                 />
-                <Stack.Screen name="viewer" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
+                {/* The viewer animates itself: it grows out of the tapped tile over
+                    the screen underneath, so the stack must keep that screen visible
+                    and add no transition of its own. */}
+                <Stack.Screen
+                  name="viewer"
+                  options={{
+                    headerShown: false,
+                    presentation: 'transparentModal',
+                    animation: 'none',
+                    contentStyle: { backgroundColor: 'transparent' },
+                  }}
+                />
                 <Stack.Screen name="profile-media-feed" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
                 <Stack.Screen name="showcase" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
                 <Stack.Screen name="creators/[username]" options={{ title: 'Creator' }} />
@@ -132,6 +166,7 @@ function RootLayoutNav() {
                 <Stack.Screen name="help" options={{ title: 'Help & Support' }} />
                 </Stack>
               </View>
+              </GestureHandlerRootView>
             </ThemeProvider>
           </SafeAreaProvider>
         </OnboardingProvider>

@@ -26,6 +26,7 @@ import {
   Text,
   useWindowDimensions,
   View,
+  type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -34,6 +35,8 @@ import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
 import { HomeFeedCardView } from '@/components/home-feed-card';
 import { HomeSideMenu } from '@/components/home-side-menu';
 import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
+import { Reveal } from '@/components/reveal';
+import { HomeFeedSkeleton } from '@/components/skeleton';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
@@ -51,6 +54,7 @@ import {
   getHomeSlideOffset,
   getHomeSlidePassWidth,
   getInitialHomeSlideIndex,
+  pickHomeSlidePreviews,
   shouldAutoAdvanceHomeSlides,
   type HomeFeedCard,
   type HomeFeedChipId,
@@ -60,7 +64,8 @@ import {
 import { getOwnerPostSalesSummary } from '@/lib/home-view-model';
 import { immersiveViewerHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
 import { SHOWCASE_DRAW_DISTANCE, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS } from '@/lib/media-performance';
-import { useReducedMotion } from '@/lib/motion';
+import { haptic } from '@/lib/haptics';
+import { MotionView, usePressMotion, useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { selectActiveShowcaseVideoIds } from '@/lib/showcase-display';
 import {
@@ -92,7 +97,7 @@ import {
   type ShowcaseFeedPageParam,
 } from '@/lib/showcase-feed-query';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
-import { accentColor, appTheme } from '@/lib/theme';
+import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type {
   ShowcaseFeedEventType,
   ShowcaseFeedItem,
@@ -101,6 +106,7 @@ import type {
 } from '@/lib/types';
 import { buildShareUrl, getNativeRemixCreateHref } from '@/lib/viewer-actions';
 import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
+import { setViewerOrigin, type ViewerOriginRect } from '@/lib/viewer-transition';
 
 const DASHBOARD_COLORS = {
   background: appTheme.colors.background,
@@ -123,6 +129,9 @@ const TOOL_PREVIEW_IMAGES = {
 
 const LOAD_MORE_COOLDOWN_MS = 800;
 const TOP_SLIDE_HEIGHT = 170;
+// Only the cards that can be on screen when a lane first lands rise into
+// place; everything past that mounts plain while scrolling.
+const FEED_REVEAL_COUNT = 6;
 
 export function HomeDashboard() {
   const {
@@ -344,6 +353,7 @@ export function HomeDashboard() {
   }, [api, feedItems, requestedCommentsPostId, requestedReplyToId]);
 
   const cards = useMemo(() => buildHomeFeedCards(feedItems), [feedItems]);
+  const slidePreviews = useMemo(() => pickHomeSlidePreviews(cards), [cards]);
   const hasItems = cards.length > 0;
   const isFirstLoad = feedQuery.isLoading && !hasItems;
   const isRefreshing = feedQuery.isRefetching && !feedQuery.isFetchingNextPage;
@@ -387,6 +397,7 @@ export function HomeDashboard() {
   };
 
   const handleRefresh = () => {
+    haptic.light();
     lastLoadMoreItemCountRef.current = 0;
     lastLoadMoreAtRef.current = 0;
     queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
@@ -404,12 +415,19 @@ export function HomeDashboard() {
     setActiveChipId(chipId);
   };
 
-  const openPost = (item: ShowcaseFeedItem) => {
+  const openPost = (
+    item: ShowcaseFeedItem,
+    origin?: { rect: ViewerOriginRect | null; previewUrl: string | null; cacheKey?: string | null; thumbhash?: string | null; aspectRatio?: number | null },
+  ) => {
     recordFeedEvent(item, 'open');
     queryClient.setQueryData<ShowcasePostResponse>(createShowcasePostQueryKey(item.id, user?.id), {
       success: true,
       item,
     });
+    // The viewer grows out of the card's media when the card could measure it.
+    if (origin?.rect) {
+      setViewerOrigin({ ...origin, rect: origin.rect, radius: 0, id: item.id, recordedAt: Date.now() });
+    }
     router.push(immersiveViewerHref({
       source: 'showcase-feed',
       initialId: item.id,
@@ -423,7 +441,7 @@ export function HomeDashboard() {
    * through other showcase posts — so a written post opens its own screen
    * rather than being dropped into a reel of other people's media.
    */
-  const openCard = (card: HomeFeedCard, options: { comments?: boolean } = {}) => {
+  const openCard = (card: HomeFeedCard, options: { comments?: boolean; mediaRect?: ViewerOriginRect | null } = {}) => {
     if (getHomeFeedCardOpenTarget(card) === 'post') {
       recordFeedEvent(card.item, 'open');
       // Seeded so the post screen paints from cache instead of refetching.
@@ -437,7 +455,13 @@ export function HomeDashboard() {
       }) as never);
       return;
     }
-    openPost(card.item);
+    openPost(card.item, {
+      rect: options.mediaRect ?? null,
+      previewUrl: card.previewUrl ?? card.mediaUrl,
+      cacheKey: card.previewCacheKey,
+      thumbhash: card.previewThumbhash,
+      aspectRatio: card.aspectRatio,
+    });
   };
 
   const toggleBodyExpanded = (postId: string) => {
@@ -626,14 +650,14 @@ export function HomeDashboard() {
     );
   };
 
-  const renderCard: ListRenderItem<HomeFeedCard> = useCallback(({ item: card }) => (
-    <View style={{ paddingHorizontal: horizontalPadding, paddingBottom: 14 }}>
+  const renderCard: ListRenderItem<HomeFeedCard> = useCallback(({ item: card, index }) => (
+    <Reveal index={index} enabled={index < FEED_REVEAL_COUNT} style={{ paddingHorizontal: horizontalPadding, paddingBottom: 14 }}>
       <HomeFeedCardView
         card={card}
         contentWidth={contentWidth}
         showActiveVideo={visibleActiveVideoIds.includes(card.id)}
         bodyExpanded={expandedBodyIds.includes(card.id)}
-        onOpen={() => openCard(card)}
+        onOpen={(mediaRect) => openCard(card, { mediaRect })}
         onToggleBody={() => toggleBodyExpanded(card.id)}
         onFeedbackOpen={() => setFeedbackItem(card.item)}
         onCreatorOpen={() => openCreator(card.item)}
@@ -649,7 +673,7 @@ export function HomeDashboard() {
         onRemix={() => void remixItem(card.item)}
         onShare={() => void shareItem(card.item)}
       />
-    </View>
+    </Reveal>
   ), [contentWidth, expandedBodyIds, horizontalPadding, visibleActiveVideoIds, toggleSave]);
 
   return (
@@ -694,6 +718,7 @@ export function HomeDashboard() {
               isFocused={isFocused}
               reduceMotion={reduceMotion}
               signedIn={Boolean(user)}
+              slidePreviews={slidePreviews}
               slideWidth={slideWidth}
             />
 
@@ -708,11 +733,13 @@ export function HomeDashboard() {
             />
           </View>
         )}
-        ListEmptyComponent={(
+        ListEmptyComponent={isFirstLoad ? (
+          <View style={{ paddingHorizontal: horizontalPadding }}>
+            <HomeFeedSkeleton width={contentWidth} />
+          </View>
+        ) : (
           <View style={{ paddingHorizontal: horizontalPadding, paddingTop: 32 }}>
-            {isFirstLoad ? (
-              <ActivityIndicator color={DASHBOARD_COLORS.faint} />
-            ) : feedQuery.isError ? (
+            {feedQuery.isError ? (
               <View style={{ gap: 12 }}>
                 <StatusBlock
                   tone="danger"
@@ -791,24 +818,16 @@ export function HomeDashboard() {
 function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: () => void }) {
   return (
     <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-      <Pressable
-        accessibilityRole="button"
+      <TopBarControl
         accessibilityLabel="Open menu"
-        onPress={onMenuPress}
-        style={({ pressed }) => ({
-          width: 48,
-          height: 48,
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderRadius: 24,
-          borderWidth: 1,
-          borderColor: DASHBOARD_COLORS.border,
-          backgroundColor: DASHBOARD_COLORS.surface,
-          opacity: pressed ? 0.72 : 1,
-        })}
+        onPress={() => {
+          haptic.select();
+          onMenuPress();
+        }}
+        style={{ width: 48 }}
       >
         <Menu size={22} color={DASHBOARD_COLORS.text} strokeWidth={2.2} />
-      </Pressable>
+      </TopBarControl>
 
       <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, minWidth: 0 }}>
         <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: DASHBOARD_COLORS.coral }} />
@@ -818,50 +837,74 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
       </View>
 
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
-        <Pressable
-          accessibilityRole="button"
+        <TopBarControl
           accessibilityLabel="Open credits"
-          onPress={() => router.push('/pricing' as never)}
-          style={({ pressed }) => ({
-            minWidth: 68,
-            height: 48,
-            borderRadius: 24,
-            borderWidth: 1,
-            borderColor: DASHBOARD_COLORS.border,
-            backgroundColor: DASHBOARD_COLORS.surface,
-            alignItems: 'center',
-            justifyContent: 'center',
-            paddingHorizontal: 10,
-            opacity: pressed ? 0.78 : 1,
-          })}
+          onPress={() => {
+            haptic.light();
+            router.push('/pricing' as never);
+          }}
+          style={{ minWidth: 68, paddingHorizontal: 10 }}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <Crown size={15} color="#fbbf24" fill="rgba(251,191,36,0.2)" />
             <Text style={{ color: DASHBOARD_COLORS.text, fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{credits}</Text>
             <Plus size={14} color={DASHBOARD_COLORS.coral} strokeWidth={2.5} />
           </View>
-        </Pressable>
+        </TopBarControl>
 
-        <Pressable
-          accessibilityRole="button"
+        <TopBarControl
           accessibilityLabel="Open studio activity"
-          onPress={() => router.push('/studio' as never)}
-          style={({ pressed }) => ({
-            width: 48,
+          onPress={() => {
+            haptic.light();
+            router.push('/studio' as never);
+          }}
+          style={{ width: 48 }}
+        >
+          <Bell size={21} color={DASHBOARD_COLORS.text} strokeWidth={2.1} />
+        </TopBarControl>
+      </View>
+    </View>
+  );
+}
+
+/** Round top-bar control: springs down under the thumb instead of dimming. */
+function TopBarControl({
+  accessibilityLabel,
+  children,
+  onPress,
+  style,
+}: {
+  accessibilityLabel: string;
+  children: ReactNode;
+  onPress: () => void;
+  style?: ViewStyle;
+}) {
+  const motion = usePressMotion(false, { scale: appTheme.motion.scale.pressedControl });
+
+  return (
+    <MotionView style={motion.animatedStyle}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel}
+        onPress={onPress}
+        onPressIn={motion.onPressIn}
+        onPressOut={motion.onPressOut}
+        style={[
+          {
             height: 48,
-            borderRadius: 24,
             alignItems: 'center',
             justifyContent: 'center',
+            borderRadius: 24,
             borderWidth: 1,
             borderColor: DASHBOARD_COLORS.border,
             backgroundColor: DASHBOARD_COLORS.surface,
-            opacity: pressed ? 0.72 : 1,
-          })}
-        >
-          <Bell size={21} color={DASHBOARD_COLORS.text} strokeWidth={2.1} />
-        </Pressable>
-      </View>
-    </View>
+          },
+          style,
+        ]}
+      >
+        {children}
+      </Pressable>
+    </MotionView>
   );
 }
 
@@ -876,6 +919,7 @@ function TopSlider({
   isFocused,
   reduceMotion,
   signedIn,
+  slidePreviews,
   slideWidth,
 }: {
   activeGenerationCount: number;
@@ -884,6 +928,7 @@ function TopSlider({
   isFocused: boolean;
   reduceMotion: boolean;
   signedIn: boolean;
+  slidePreviews: Partial<Record<ToolAccent, string>>;
   slideWidth: number;
 }) {
   const slides = useMemo(() => getHomeFeedSlides(), []);
@@ -1023,6 +1068,7 @@ function TopSlider({
       // (Android) or rubber-band (iOS) before the fold teleports it home.
       overScrollMode="never"
       bounces={false}
+      extraData={slidePreviews}
       style={{ height: TOP_SLIDE_HEIGHT }}
       contentContainerStyle={{ paddingHorizontal: horizontalPadding }}
       renderItem={({ item }) => (
@@ -1030,6 +1076,7 @@ function TopSlider({
           <TopSlide
             activeGenerationCount={activeGenerationCount}
             displayName={displayName}
+            previewUrl={item.slide.kind === 'tool' ? slidePreviews[item.slide.accent] ?? null : null}
             reduceMotion={reduceMotion}
             signedIn={signedIn}
             slide={item.slide}
@@ -1044,6 +1091,7 @@ function TopSlider({
 function TopSlide({
   activeGenerationCount,
   displayName,
+  previewUrl,
   reduceMotion,
   signedIn,
   slide,
@@ -1051,6 +1099,7 @@ function TopSlide({
 }: {
   activeGenerationCount: number;
   displayName: string;
+  previewUrl: string | null;
   reduceMotion: boolean;
   signedIn: boolean;
   slide: HomeFeedSlide;
@@ -1145,7 +1194,6 @@ function TopSlide({
   }
 
   const Icon = slide.id === 'image' ? ImageIcon : slide.id === 'video' ? Play : slide.id === 'motion' ? Rocket : Sparkles;
-  const accent = accentColor(slide.accent);
 
   return (
     <Pressable
@@ -1170,10 +1218,10 @@ function TopSlide({
           overflow: 'hidden',
         }}
       >
-        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, backgroundColor: accent }} />
         {slide.previewVariant ? (
           <ToolPreview
             variant={slide.previewVariant}
+            previewUrl={previewUrl}
             icon={<Icon size={18} color="#ffffff" fill={slide.id === 'video' ? 'transparent' : 'rgba(255,255,255,0.14)'} />}
           />
         ) : null}
@@ -1192,14 +1240,26 @@ function TopSlide({
 
 function ToolPreview({
   variant,
+  previewUrl,
   icon,
 }: {
   variant: 'kingdom' | 'city' | 'runner';
+  /** The newest community preview for this tool; the bundled still is the fallback. */
+  previewUrl: string | null;
   icon: ReactNode;
 }) {
   return (
     <View style={{ height: 82, overflow: 'hidden', backgroundColor: DASHBOARD_COLORS.surfaceRaised }}>
       <Image source={TOOL_PREVIEW_IMAGES[variant]} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+      {previewUrl ? (
+        <Image
+          source={{ uri: previewUrl }}
+          cachePolicy="memory-disk"
+          contentFit="cover"
+          transition={240}
+          style={{ position: 'absolute', inset: 0 }}
+        />
+      ) : null}
       <LinearGradient colors={['rgba(0,0,0,0.04)', 'rgba(0,0,0,0.48)']} style={{ position: 'absolute', inset: 0 }} />
       <View style={{ position: 'absolute', left: 9, top: 9, width: 30, height: 30, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.38)', alignItems: 'center', justifyContent: 'center' }}>
         {icon}
