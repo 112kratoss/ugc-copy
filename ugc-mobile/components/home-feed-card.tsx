@@ -13,7 +13,6 @@ import {
 } from '@/lib/home-feed-view-model';
 import { getShowcasePreviewMediaItems } from '@/lib/showcase-media';
 import { accentColor, appTheme } from '@/lib/theme';
-import type { ViewerOriginRect } from '@/lib/viewer-transition';
 
 export const HomeFeedCardView = memo(function HomeFeedCardView({
   card,
@@ -33,7 +32,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   contentWidth: number;
   showActiveVideo: boolean;
   bodyExpanded: boolean;
-  onOpen: (mediaRect: ViewerOriginRect | null) => void;
+  onOpen: () => void;
   onToggleBody: () => void;
   onFeedbackOpen: () => void;
   onCreatorOpen: () => void;

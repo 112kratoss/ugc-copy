@@ -139,18 +139,11 @@ function RootLayoutNav() {
                     contentStyle: { backgroundColor: appTheme.colors.app },
                   }}
                 />
-                {/* The viewer animates itself: it grows out of the tapped tile over
-                    the screen underneath, so the stack must keep that screen visible
-                    and add no transition of its own. */}
-                <Stack.Screen
-                  name="viewer"
-                  options={{
-                    headerShown: false,
-                    presentation: 'transparentModal',
-                    animation: 'none',
-                    contentStyle: { backgroundColor: 'transparent' },
-                  }}
-                />
+                {/* A plain native fade: the reel, its rail and its caption arrive in
+                    the same frame, the way a tapped reel opens elsewhere. A hero
+                    zoom out of the tile was tried (2026-08-23) and read as the media
+                    arriving before its controls, so it was taken out. */}
+                <Stack.Screen name="viewer" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
                 <Stack.Screen name="profile-media-feed" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
                 <Stack.Screen name="showcase" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
                 <Stack.Screen name="creators/[username]" options={{ title: 'Creator' }} />

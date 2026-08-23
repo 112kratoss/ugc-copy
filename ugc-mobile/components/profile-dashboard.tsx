@@ -31,7 +31,6 @@ import { formatUsdCents, getOwnerPostSalesSummary } from '@/lib/home-view-model'
 import { haptic } from '@/lib/haptics';
 import { immersiveViewerHref, profileMediaFeedHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
 import { MotionView, usePressMotion } from '@/lib/motion';
-import { recordViewerOrigin } from '@/lib/viewer-transition';
 import {
   FALLBACK_PROFILE_MEDIA,
   PROFILE_MEDIA_TABS,
@@ -999,7 +998,6 @@ function ProfileMediaTile({
       ? `${item.label}, ${item.title}, ${item.linkedPostLabel ?? item.statusLabel ?? 'Status unavailable'}`
     : `${item.label}, ${item.title}`;
   const motion = usePressMotion(false, { scale: appTheme.motion.scale.pressed });
-  const tileRef = useRef<View>(null);
 
   return (
     <MotionView style={[{ width, height }, motion.animatedStyle]}>
@@ -1031,25 +1029,11 @@ function ProfileMediaTile({
           source: item.viewerSource,
           initialId: item.sourceId,
         });
-        if (!isSavedTile) {
-          router.push(href as never);
-          return;
-        }
-        // The reel grows out of this tile: hand over its rectangle first.
-        void recordViewerOrigin({
-          node: tileRef.current,
-          now: Date.now(),
-          id: item.sourceId,
-          previewUrl: item.previewUrl ?? item.mediaUrl,
-          cacheKey: item.previewCacheKey ?? item.id,
-          thumbhash: item.previewThumbhash,
-          radius: 12,
-        }).finally(() => router.push(href as never));
+        router.push(href as never);
       }}
       style={{ flex: 1 }}
     >
       <View
-        ref={tileRef}
         testID={highlighted ? 'profile-highlighted-post-tile' : undefined}
         style={{
           flex: 1,

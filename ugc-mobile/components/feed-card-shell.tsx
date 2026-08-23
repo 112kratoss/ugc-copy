@@ -1,12 +1,11 @@
 import { MoreVertical } from 'lucide-react-native';
-import { useRef, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
 import { CreatorAvatar } from '@/components/ui';
 import { haptic } from '@/lib/haptics';
 import { MotionView, usePressMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
-import { measureViewerOrigin, type ViewerOriginRect } from '@/lib/viewer-transition';
 
 /**
  * The card chrome shared by the Home feed and the Profile media feed: a thin
@@ -50,8 +49,7 @@ export function FeedCardShell({
   onMorePress: () => void;
   moreAccessibilityLabel: string;
   media?: ReactNode;
-  /** Receives the media's on-screen rectangle so the viewer can grow out of it. */
-  onOpen?: (mediaRect: ViewerOriginRect | null) => void;
+  onOpen?: () => void;
   openAccessibilityLabel: string;
   /** Publish/visibility state for owned media. Home passes nothing. */
   statusChip?: ReactNode;
@@ -62,10 +60,9 @@ export function FeedCardShell({
   // action rows are separate targets, but the object under the thumb is the
   // card, and that is what should move.
   const openMotion = usePressMotion(!onOpen, { scale: appTheme.motion.scale.pressedCard });
-  const mediaRef = useRef<View>(null);
   const open = onOpen ? () => {
     haptic.light();
-    void measureViewerOrigin(mediaRef.current).then(onOpen);
+    onOpen();
   } : undefined;
   const caption = (
     <View
@@ -168,7 +165,7 @@ export function FeedCardShell({
         onPressOut={openMotion.onPressOut}
         style={{ paddingTop: media ? appTheme.spacing.gap : 0 }}
       >
-        {media ? <View ref={mediaRef} collapsable={false}>{media}</View> : caption}
+        {media ? media : caption}
       </Pressable>
 
       <View

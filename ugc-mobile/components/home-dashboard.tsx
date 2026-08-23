@@ -106,7 +106,6 @@ import type {
 } from '@/lib/types';
 import { buildShareUrl, getNativeRemixCreateHref } from '@/lib/viewer-actions';
 import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
-import { setViewerOrigin, type ViewerOriginRect } from '@/lib/viewer-transition';
 
 const DASHBOARD_COLORS = {
   background: appTheme.colors.background,
@@ -415,19 +414,12 @@ export function HomeDashboard() {
     setActiveChipId(chipId);
   };
 
-  const openPost = (
-    item: ShowcaseFeedItem,
-    origin?: { rect: ViewerOriginRect | null; previewUrl: string | null; cacheKey?: string | null; thumbhash?: string | null; aspectRatio?: number | null },
-  ) => {
+  const openPost = (item: ShowcaseFeedItem) => {
     recordFeedEvent(item, 'open');
     queryClient.setQueryData<ShowcasePostResponse>(createShowcasePostQueryKey(item.id, user?.id), {
       success: true,
       item,
     });
-    // The viewer grows out of the card's media when the card could measure it.
-    if (origin?.rect) {
-      setViewerOrigin({ ...origin, rect: origin.rect, radius: 0, id: item.id, recordedAt: Date.now() });
-    }
     router.push(immersiveViewerHref({
       source: 'showcase-feed',
       initialId: item.id,
@@ -441,7 +433,7 @@ export function HomeDashboard() {
    * through other showcase posts — so a written post opens its own screen
    * rather than being dropped into a reel of other people's media.
    */
-  const openCard = (card: HomeFeedCard, options: { comments?: boolean; mediaRect?: ViewerOriginRect | null } = {}) => {
+  const openCard = (card: HomeFeedCard, options: { comments?: boolean } = {}) => {
     if (getHomeFeedCardOpenTarget(card) === 'post') {
       recordFeedEvent(card.item, 'open');
       // Seeded so the post screen paints from cache instead of refetching.
@@ -455,13 +447,7 @@ export function HomeDashboard() {
       }) as never);
       return;
     }
-    openPost(card.item, {
-      rect: options.mediaRect ?? null,
-      previewUrl: card.previewUrl ?? card.mediaUrl,
-      cacheKey: card.previewCacheKey,
-      thumbhash: card.previewThumbhash,
-      aspectRatio: card.aspectRatio,
-    });
+    openPost(card.item);
   };
 
   const toggleBodyExpanded = (postId: string) => {
@@ -657,7 +643,7 @@ export function HomeDashboard() {
         contentWidth={contentWidth}
         showActiveVideo={visibleActiveVideoIds.includes(card.id)}
         bodyExpanded={expandedBodyIds.includes(card.id)}
-        onOpen={(mediaRect) => openCard(card, { mediaRect })}
+        onOpen={() => openCard(card)}
         onToggleBody={() => toggleBodyExpanded(card.id)}
         onFeedbackOpen={() => setFeedbackItem(card.item)}
         onCreatorOpen={() => openCreator(card.item)}

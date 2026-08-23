@@ -79,7 +79,6 @@ import { SkeletonBone } from '@/components/skeleton';
 import { haptic } from '@/lib/haptics';
 import { MotionView, usePressMotion } from '@/lib/motion';
 import { accentColor, appTheme } from '@/lib/theme';
-import { recordViewerOrigin } from '@/lib/viewer-transition';
 import type { ShowcaseFeedEventType, ShowcaseFeedItem, ShowcaseFeedResponse, ShowcasePostResponse } from '@/lib/types';
 
 type FeedFilterId = MobileShowcaseFeedFilterId;
@@ -920,30 +919,15 @@ function MasonryPin({
   const creatorLabel = formatCreatorLabel(card.creatorLabel);
   const signal = card.unlock;
   const pressMotion = usePressMotion(false, { scale: appTheme.motion.scale.pressed });
-  const pinRef = useRef<View>(null);
-  // The viewer grows out of this pin: hand over its rectangle before opening.
-  const openFromPin = () => {
-    void recordViewerOrigin({
-      node: pinRef.current,
-      now: Date.now(),
-      id: card.item.id,
-      previewUrl: card.previewUrl ?? card.mediaUrl,
-      cacheKey: card.previewCacheKey,
-      thumbhash: card.previewThumbhash,
-      radius: layout.mediaRadius,
-      aspectRatio: card.aspectRatio,
-    }).finally(() => onOpenPost(card.item));
-  };
 
   return (
     <View style={{ gap: 5 }}>
       <MotionView style={pressMotion.animatedStyle}>
       <Pressable
-        ref={pinRef}
         accessibilityRole="button"
         accessibilityLabel={`${card.title}. ${card.badge}${signal ? `. ${signal.summary}` : ''}. ${creatorLabel}`}
         accessibilityHint="Opens this post in the full-screen viewer"
-        onPress={openFromPin}
+        onPress={() => onOpenPost(card.item)}
         onPressIn={pressMotion.onPressIn}
         onPressOut={pressMotion.onPressOut}
         style={{
@@ -965,7 +949,7 @@ function MasonryPin({
             videoActivation={showActiveVideo ? 'visible' : 'never'}
             videoBackdrop="none"
             videoContentFit="cover"
-            onPress={openFromPin}
+            onPress={() => onOpenPost(card.item)}
             onScrollToggle={onScrollToggle}
           />
         ) : (
