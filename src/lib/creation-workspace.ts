@@ -100,7 +100,16 @@ function buildGeneratedPaywallComposerPath(generationId: string): string {
   })}`;
 }
 
-function buildCreationPaywallManagementPath(post: CreationWorkspaceResolvedPost): string {
+/**
+ * Every recipe edit on an existing post goes through the post editor, which
+ * loads the stored bundle. The quick publish modal is for first publish only:
+ * it rebuilds the bundle from the generation prefill and would replace a
+ * hand-built recipe with the automatic one.
+ */
+export function buildPostRecipeManagementPath(post: {
+  id: string;
+  bundle: { accessMode: 'free' | 'paid' } | null;
+}): string {
   const resourceMode = post.bundle?.accessMode ?? 'paid';
   return `/post/${post.id}/edit?${buildCreationsQuery({
     resourceMode,
@@ -285,7 +294,7 @@ export function resolveCreationWorkspaceCardState(
     primaryAction: {
       type: state === 'published_no_bundle' ? 'add-paywall' : 'manage-paywall',
       label: state === 'published_no_bundle' ? 'Add recipe' : 'Manage recipe',
-      href: buildCreationPaywallManagementPath(linkedPost),
+      href: buildPostRecipeManagementPath(linkedPost),
     },
     secondaryAction: {
       type: 'open-post',

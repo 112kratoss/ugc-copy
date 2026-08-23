@@ -199,7 +199,7 @@ describe('restoreOwnerPostForRoute', () => {
 
   it('restores only archived posts owned by the caller', async () => {
     const client = createClient({
-      postResult: { data: { id: 'post-1' }, error: null },
+      postResult: { data: { id: 'post-1', generation_id: null, visibility: 'public', showcase_asset_path: null }, error: null },
     });
 
     const result = await restoreOwnerPostForRoute({
@@ -220,9 +220,66 @@ describe('restoreOwnerPostForRoute', () => {
         ['eq', 'user_id', 'user-1'],
         ['not', 'archived_at', 'is', null],
       ],
-      selectColumns: 'id',
+      selectColumns: 'id, generation_id, visibility, showcase_asset_path',
     }]);
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+  });
+
+  // Archive flips the linked generation's exposure off and forgets its
+  // showcase path; restore used to clear archived_at and nothing else, so the
+  // Creations card kept saying "not public" for a post that was live.
+  it('puts a public post\'s linked generation back on show when restoring', async () => {
+    const client = createClient({
+      postResult: {
+        data: {
+          id: 'post-1',
+          generation_id: 'generation-1',
+          visibility: 'public',
+          showcase_asset_path: 'showcase/generation-1/example.jpg',
+        },
+        error: null,
+      },
+    });
+
+    await restoreOwnerPostForRoute({
+      adminSupabase: client.client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+    });
+
+    expect(client.updateCalls).toContainEqual({
+      table: 'generations',
+      values: { is_public: true, showcase_asset_path: 'showcase/generation-1/example.jpg' },
+      filters: [['eq', 'id', 'generation-1']],
+      selectColumns: null,
+    });
+  });
+
+  it('keeps a private post\'s linked generation private when restoring', async () => {
+    const client = createClient({
+      postResult: {
+        data: {
+          id: 'post-1',
+          generation_id: 'generation-1',
+          visibility: 'private',
+          showcase_asset_path: 'showcase/generation-1/example.jpg',
+        },
+        error: null,
+      },
+    });
+
+    await restoreOwnerPostForRoute({
+      adminSupabase: client.client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+    });
+
+    expect(client.updateCalls).toContainEqual({
+      table: 'generations',
+      values: { is_public: false, showcase_asset_path: null },
+      filters: [['eq', 'id', 'generation-1']],
+      selectColumns: null,
+    });
   });
 
   it('returns not found when no archived owned post matches', async () => {

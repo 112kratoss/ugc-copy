@@ -3,13 +3,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Archive, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Globe, ImageIcon, Loader2, LockKeyhole, PencilLine, Plus, RotateCcw, Trash2, UserRound, Volume2, Wand2, Zap } from 'lucide-react';
+import { Archive, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Globe, ImageIcon, Loader2, PencilLine, Plus, RotateCcw, Trash2, UserRound, Volume2, Wand2, Zap } from 'lucide-react';
 import { useAuth } from '@/app/components/AuthProvider';
 import MediaDetailsPreviewModal, { type MediaDetailsType } from '@/app/components/MediaDetailsPreviewModal';
+import PostVisibilityMenu from '@/app/components/PostVisibilityMenu';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import SkeletonLoader from '@/app/components/SkeletonLoader';
+import {
+    usePostLifecycle,
+    type PostLifecyclePatch,
+    type PostLifecycleTarget,
+} from '@/app/components/usePostLifecycle';
+import { HoverVideo } from '@/app/components/HoverVideo';
 import CreationMediaFrame from '@/app/creations/CreationMediaFrame';
 import {
+    buildPostRecipeManagementPath,
     resolveCreationWorkspaceCardState,
     type CreationWorkspaceCardState,
     type CreationWorkspaceMonetizationKind,
@@ -18,6 +26,7 @@ import {
 import { formatDurationShort, formatTimeAgoShort } from '@/lib/generation-timing';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
+import { resolvePlaybackUrl } from '@/lib/media-descriptor';
 import { getStoredMediaLocation } from '@/lib/media-urls';
 import { isAudioModel, isImageModel } from '@/lib/client-generation-models';
 import { getCreatorProfileReadiness, type ProfileApiResponse } from '@/lib/profile';
@@ -72,6 +81,7 @@ interface OwnerPost {
     mediaKind: 'image' | 'video' | null;
     mediaItems?: Array<{
       renditionUrl?: string | null;
+      previewUrl?: string | null;
     }>;
     title: string;
     description: string;
@@ -370,6 +380,22 @@ function mergePostAppend(previousPosts: OwnerPost[], incomingPosts: OwnerPost[])
     ];
 }
 
+function parseWorkspaceView(value: string | null): WorkspaceView {
+    return value === 'posts' || value === 'unlocks' ? value : 'creations';
+}
+
+function parsePostVisibilityFilter(value: string | null): OwnerPostVisibilityFilter {
+    return value === 'public' || value === 'unlisted' || value === 'private' || value === 'archived'
+        ? value
+        : 'all';
+}
+
+const WORKSPACE_TABS: ReadonlyArray<{ key: WorkspaceView; label: string; lede: string }> = [
+    { key: 'creations', label: 'Creations', lede: 'Preview private outputs, then turn the strongest ones into posts.' },
+    { key: 'posts', label: 'Post Library', lede: 'Use Post Library for full post edits, archive state, and cleanup after publishing.' },
+    { key: 'unlocks', label: 'Unlocks', lede: 'Everything you have unlocked from other creators, yours to keep.' },
+];
+
 export default function CreationsPage() {
     const router = useRouter();
     const pathname = usePathname();
@@ -378,14 +404,23 @@ export default function CreationsPage() {
     const userId = session?.user?.id ?? null;
     const accessToken = session?.access_token ?? null;
     const requestedGenerationId = searchParams.get('generation')?.trim() || null;
-    const initialView = searchParams.get('view') === 'posts' ? 'posts' : 'creations';
-    const initialPostVisibility = (() => {
-        const value = searchParams.get('visibility');
-        if (value === 'public' || value === 'unlisted' || value === 'private' || value === 'archived') {
-            return value;
+    // The URL is the only source of truth for the workspace controls, so the
+    // back button, a refresh, a shared link, and every returnTo land on the
+    // view the viewer was actually looking at. The tabs and filter chips are
+    // links that change it; nothing else does.
+    const activeView = parseWorkspaceView(searchParams.get('view'));
+    const postVisibilityFilter = parsePostVisibilityFilter(searchParams.get('visibility'));
+    const buildWorkspacePath = (view: WorkspaceView, visibility: OwnerPostVisibilityFilter = 'all') => {
+        const params = new URLSearchParams();
+        if (view !== 'creations') {
+            params.set('view', view);
         }
-        return 'all';
-    })();
+        if (view === 'posts' && visibility !== 'all') {
+            params.set('visibility', visibility);
+        }
+        const query = params.toString();
+        return query ? `${pathname}?${query}` : pathname;
+    };
     const [generations, setGenerations] = useState<Generation[]>([]);
     const [posts, setPosts] = useState<OwnerPost[]>([]);
     const [profile, setProfile] = useState<ProfileApiResponse | null>(null);
@@ -401,18 +436,22 @@ export default function CreationsPage() {
     const generationsRef = useRef<Generation[]>([]);
     const generationStatusRefreshInFlightRef = useRef(false);
     const [filter, setFilter] = useState<FilterType>('all');
-    const [activeView, setActiveView] = useState<WorkspaceView>(initialView);
-    const [postVisibilityFilter, setPostVisibilityFilter] = useState<OwnerPostVisibilityFilter>(initialPostVisibility);
     const [previewGen, setPreviewGen] = useState<Generation | null>(null);
     const requestedGenerationRef = useRef<string | null>(null);
     const [publishTarget, setPublishTarget] = useState<Generation | null>(null);
-    const [initialSellAutoUnlockInPublishModal, setInitialSellAutoUnlockInPublishModal] = useState(false);
     const [shareAfterPublish, setShareAfterPublish] = useState(false);
     const [showPaidShortcutInPublishModal, setShowPaidShortcutInPublishModal] = useState(true);
-    const [postVisibilityUpdatingKey, setPostVisibilityUpdatingKey] = useState<string | null>(null);
     const [restoreTarget, setRestoreTarget] = useState<Generation | null>(null);
     const [restoringGenerationId, setRestoringGenerationId] = useState<string | null>(null);
     const restoreInputRef = useRef<HTMLInputElement>(null);
+    const postsRef = useRef<OwnerPost[]>([]);
+    const profileRef = useRef<ProfileApiResponse | null>(null);
+    useEffect(() => {
+        postsRef.current = posts;
+    }, [posts]);
+    useEffect(() => {
+        profileRef.current = profile;
+    }, [profile]);
     const creationsReturnPath = searchParams.toString()
         ? `${pathname}?${searchParams.toString()}`
         : pathname;
@@ -423,20 +462,97 @@ export default function CreationsPage() {
             section,
         });
 
-    useEffect(() => {
-        const nextView = searchParams.get('view') === 'posts' ? 'posts' : 'creations';
-        const nextVisibility = (() => {
-            const value = searchParams.get('visibility');
-            if (value === 'public' || value === 'unlisted' || value === 'private' || value === 'archived') {
-                return value;
+    // Lifecycle changes land in local state (and the session cache, so a
+    // reload does not flash the old state) instead of refetching the whole
+    // workspace. A generation card reads its linked post from `posts` first
+    // and from its own linked_post_* columns only as a fallback, so both are
+    // kept in step.
+    const patchPost = useCallback((postId: string, patch: PostLifecyclePatch) => {
+        const nextPosts = postsRef.current.map((post) => {
+            if (post.id !== postId) {
+                return post;
             }
-            return 'all';
-        })();
+            return {
+                ...post,
+                ...(patch.visibility !== undefined ? { visibility: patch.visibility } : {}),
+                ...(patch.archivedAt !== undefined ? { archivedAt: patch.archivedAt } : {}),
+                ...(patch.bundleStatus !== undefined && post.bundle
+                    ? { bundle: { ...post.bundle, status: patch.bundleStatus ?? post.bundle.status } }
+                    : {}),
+            };
+        });
+        const nextGenerations = generationsRef.current.map((generation) => {
+            if (generation.linked_post_id !== postId) {
+                return generation;
+            }
+            return {
+                ...generation,
+                ...(patch.visibility !== undefined ? { linked_post_visibility: patch.visibility } : {}),
+                ...(patch.archivedAt !== undefined ? { linked_post_archived_at: patch.archivedAt } : {}),
+            };
+        });
+        postsRef.current = nextPosts;
+        generationsRef.current = nextGenerations;
+        setPosts(nextPosts);
+        setGenerations(nextGenerations);
+        writeCreationsWorkspaceCache(userId, {
+            generations: nextGenerations,
+            posts: nextPosts,
+            profile: profileRef.current,
+        });
+    }, [userId]);
 
-        // Browser navigation is the source of truth for these workspace controls.
-        setActiveView(nextView);
-        setPostVisibilityFilter(nextVisibility);
-    }, [searchParams]);
+    const removePost = useCallback((postId: string) => {
+        const nextPosts = postsRef.current.filter((post) => post.id !== postId);
+        const nextGenerations = generationsRef.current.map((generation) => (
+            generation.linked_post_id === postId
+                ? {
+                    ...generation,
+                    linked_post_id: null,
+                    linked_post_title: null,
+                    linked_post_visibility: null,
+                    linked_post_archived_at: null,
+                }
+                : generation
+        ));
+        postsRef.current = nextPosts;
+        generationsRef.current = nextGenerations;
+        setPosts(nextPosts);
+        setGenerations(nextGenerations);
+        writeCreationsWorkspaceCache(userId, {
+            generations: nextGenerations,
+            posts: nextPosts,
+            profile: profileRef.current,
+        });
+    }, [userId]);
+
+    const handleLifecycleAuthRequired = useCallback(() => {
+        router.push(`/login?returnUrl=${encodeURIComponent(creationsReturnPath)}`);
+    }, [creationsReturnPath, router]);
+
+    const postLifecycle = usePostLifecycle({
+        accessToken,
+        onAuthRequired: handleLifecycleAuthRequired,
+        onPatch: patchPost,
+        onRemoved: removePost,
+    });
+
+    // A generation card's linked post is the full owner record when it is
+    // loaded, so policy can see its bundle; otherwise the generation's own
+    // linkage columns are enough to act on.
+    const resolveLinkedPostTarget = (
+        generation: Generation,
+        linkedPost: NonNullable<CreationWorkspaceCardState['linkedPost']>,
+    ): PostLifecycleTarget => {
+        const ownerPost = postsRef.current.find((post) => post.id === linkedPost.id);
+        return ownerPost ?? {
+            id: linkedPost.id,
+            generationId: generation.id,
+            visibility: linkedPost.visibility,
+            archivedAt: linkedPost.archivedAt,
+            bundle: null,
+        };
+    };
 
     useEffect(() => {
         const cachedWorkspace = readCreationsWorkspaceCache(userId);
@@ -771,15 +887,16 @@ export default function CreationsPage() {
         }
     };
 
+    // The publish modal only opens for a generation that has no post yet.
+    // Recipe changes on an existing post link to the editor instead, which
+    // loads the stored bundle rather than rebuilding one from the prefill.
     const openPublishModal = useCallback(async (generation: Generation, options?: {
         shareAfterPublish?: boolean;
         showPaidShortcut?: boolean;
-        initialSellAutoUnlock?: boolean;
     }) => {
         try {
             const detailedGeneration = await loadGenerationDetail(generation);
             setPublishTarget(detailedGeneration);
-            setInitialSellAutoUnlockInPublishModal(Boolean(options?.initialSellAutoUnlock));
             setShareAfterPublish(Boolean(options?.shareAfterPublish));
             setShowPaidShortcutInPublishModal(
                 detailedGeneration.origin === 'template'
@@ -793,83 +910,12 @@ export default function CreationsPage() {
 
     const closePublishModal = () => {
         setPublishTarget(null);
-        setInitialSellAutoUnlockInPublishModal(false);
         setShareAfterPublish(false);
         setShowPaidShortcutInPublishModal(true);
     };
 
-    const openUnlockModalForGeneration = (generation: Generation) => {
-        void openPublishModal(generation, {
-            showPaidShortcut: true,
-            initialSellAutoUnlock: true,
-        });
-    };
-
-    const openUnlockModalForPost = (post: OwnerPost) => {
-        const linkedGeneration = post.generationId
-            ? generationsRef.current.find((generation) => generation.id === post.generationId) ??
-                generations.find((generation) => generation.id === post.generationId) ??
-                null
-            : null;
-
-        if (!linkedGeneration) {
-            router.push(buildStudioDetailPath(post.id, 'resources'));
-            return;
-        }
-
-        openUnlockModalForGeneration({
-            ...linkedGeneration,
-            title: post.title || linkedGeneration.title,
-            description: post.description || linkedGeneration.description,
-            linked_post_id: post.id,
-            linked_post_title: post.title,
-            linked_post_visibility: post.visibility,
-            linked_post_archived_at: post.archivedAt,
-        });
-    };
-
     const handlePublished = () => {
         void fetchCreations();
-    };
-
-    const handleCreationPostVisibilityChange = async (
-        generationId: string,
-        postId: string,
-        nextVisibility: Extract<OwnerPost['visibility'], 'public' | 'private'>
-    ) => {
-        if (!session?.access_token) {
-            router.push('/login?returnUrl=/creations');
-            return;
-        }
-
-        const updateKey = `${postId}:${nextVisibility}`;
-        setPostVisibilityUpdatingKey(updateKey);
-
-        try {
-            const res = await fetch('/api/showcase/publish', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${session.access_token}`
-                },
-                body: JSON.stringify({
-                    generationId,
-                    visibility: nextVisibility,
-                })
-            });
-
-            const data = await res.json();
-            if (!res.ok || !data.success) {
-                throw new Error(data.error || 'Failed to update post visibility.');
-            }
-
-            await fetchCreations();
-        } catch (error) {
-            console.error('Failed to update creation post visibility:', error);
-            window.alert(error instanceof Error ? error.message : 'Failed to update post visibility.');
-        } finally {
-            setPostVisibilityUpdatingKey(null);
-        }
     };
 
     const requestPreviewRestore = (generation: Generation) => {
@@ -935,167 +981,6 @@ export default function CreationsPage() {
             await navigator.clipboard.writeText(`${window.location.origin}${path}`);
         } catch (error) {
             console.error('Failed to copy post link:', error);
-        }
-    };
-
-    const handlePostVisibilityChange = async (
-        post: OwnerPost,
-        nextVisibility: Extract<OwnerPost['visibility'], 'public' | 'private'>
-    ) => {
-        if (!session?.access_token) {
-            router.push('/login?returnUrl=/creations?view=posts');
-            return;
-        }
-
-        if (post.archivedAt) {
-            return;
-        }
-
-        const updateKey = `${post.id}:${nextVisibility}`;
-        setPostVisibilityUpdatingKey(updateKey);
-
-        try {
-            const isGenerationBacked = Boolean(post.generationId);
-            const response = await fetch(isGenerationBacked ? '/api/showcase/publish' : `/api/posts/${post.id}`, {
-                method: isGenerationBacked ? 'POST' : 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${session.access_token}`,
-                },
-                body: JSON.stringify(isGenerationBacked
-                    ? {
-                        generationId: post.generationId,
-                        visibility: nextVisibility,
-                    }
-                    : {
-                        visibility: nextVisibility,
-                    }),
-            });
-            const data = await response.json();
-            if (!response.ok || !data.success) {
-                throw new Error(data.error || 'Failed to update post visibility.');
-            }
-
-            await fetchCreations();
-            setActiveView('posts');
-            setPostVisibilityFilter(nextVisibility);
-        } catch (error) {
-            console.error('Failed to update post visibility:', error);
-            window.alert(error instanceof Error ? error.message : 'Failed to update post visibility.');
-        } finally {
-            setPostVisibilityUpdatingKey(null);
-        }
-    };
-
-    const handlePostArchive = async (postId: string) => {
-        if (!session?.access_token) {
-            router.push('/login?returnUrl=/creations?view=posts');
-            return;
-        }
-
-        const confirmed = window.confirm('Archive this post? It will disappear from public surfaces until you restore it.');
-        if (!confirmed) {
-            return;
-        }
-
-        try {
-            const response = await fetch(`/api/posts/${postId}/archive`, {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${session.access_token}`,
-                },
-            });
-            const data = await response.json();
-            if (!response.ok || !data.success) {
-                throw new Error(data.error || 'Failed to archive post.');
-            }
-
-            await fetchCreations();
-            setActiveView('posts');
-            setPostVisibilityFilter('archived');
-        } catch (error) {
-            console.error('Failed to archive post:', error);
-        }
-    };
-
-    const handlePostRestore = async (postId: string) => {
-        if (!session?.access_token) {
-            router.push('/login?returnUrl=/creations?view=posts&visibility=archived');
-            return;
-        }
-
-        try {
-            const response = await fetch(`/api/posts/${postId}/restore`, {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${session.access_token}`,
-                },
-            });
-            const data = await response.json();
-            if (!response.ok || !data.success) {
-                throw new Error(data.error || 'Failed to restore post.');
-            }
-
-            await fetchCreations();
-            setActiveView('posts');
-            setPostVisibilityFilter('all');
-        } catch (error) {
-            console.error('Failed to restore post:', error);
-        }
-    };
-
-    const handlePostDelete = async (postId: string) => {
-        if (!session?.access_token) {
-            router.push('/login?returnUrl=/creations?view=posts');
-            return;
-        }
-
-        const confirmed = window.confirm(
-            'Delete this post permanently? If it has paid recipe purchases, you will get a second confirmation so you can still choose archive instead.'
-        );
-        if (!confirmed) {
-            return;
-        }
-
-        try {
-            let response = await fetch(`/api/posts/${postId}`, {
-                method: 'DELETE',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${session.access_token}`,
-                },
-                body: JSON.stringify({ force: false }),
-            });
-            let data = await response.json();
-
-            if (response.status === 409 && data?.requiresForceDelete) {
-                const forceConfirmed = window.confirm(
-                    'This post already has paid recipe purchases. Archive is safer, but you can still force delete it. Do you want to continue?'
-                );
-
-                if (!forceConfirmed) {
-                    return;
-                }
-
-                response = await fetch(`/api/posts/${postId}`, {
-                    method: 'DELETE',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        Authorization: `Bearer ${session.access_token}`,
-                    },
-                    body: JSON.stringify({ force: true }),
-                });
-                data = await response.json();
-            }
-
-            if (!response.ok || !data.success) {
-                throw new Error(data.error || 'Failed to delete post.');
-            }
-
-            await fetchCreations();
-            setActiveView('posts');
-        } catch (error) {
-            console.error('Failed to delete post:', error);
         }
     };
 
@@ -1391,18 +1276,15 @@ export default function CreationsPage() {
                     </button>
                 ) : null}
 
-                {canManageFromCreation && primaryIsUnlock ? (
-                    <button
-                        type="button"
-                        onClick={() => {
-                            setPreviewGen(null);
-                            openUnlockModalForGeneration(generation);
-                        }}
+                {canManageFromCreation && primaryIsUnlock && workspaceState.primaryAction.href ? (
+                    <Link
+                        href={workspaceState.primaryAction.href}
+                        onClick={() => setPreviewGen(null)}
                         className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 sm:w-auto sm:min-w-40"
                     >
                         <Wand2 className="h-4 w-4" />
                         {workspaceState.primaryAction.label}
-                    </button>
+                    </Link>
                 ) : null}
 
                 {customizeHref ? (
@@ -1506,6 +1388,8 @@ export default function CreationsPage() {
     const activePortfolioPostCount = posts.filter(
         (post) => !post.archivedAt && post.visibility === 'public'
     ).length;
+    const activePostCount = posts.filter((post) => !post.archivedAt).length;
+    const archivedPostCount = posts.length - activePostCount;
     const isProfileIncomplete = !profileReadiness.profileComplete;
     const hasPortfolioProof = successfulGenerations.length > 0 && activePortfolioPostCount > 0;
     const shouldShowPortfolioStarter = activeView === 'creations' && !isLoading && (
@@ -1514,16 +1398,19 @@ export default function CreationsPage() {
         isProfileIncomplete
     );
 
+    // One colour per meaning, shared with the visibility menu: sky is public,
+    // violet is unlisted, neutral is private or gone. Amber is kept for
+    // "draft" so an unlisted post never reads as a taken-down one.
     const getPublishBadgeClass = (badge: CreationWorkspacePublishBadge): string => {
         switch (badge) {
             case 'Public':
                 return 'border-sky-400/20 bg-sky-500/10 text-sky-100';
             case 'Unlisted':
-                return 'border-amber-400/20 bg-amber-500/10 text-amber-100';
+                return 'border-violet-400/20 bg-violet-500/10 text-violet-100';
             case 'Private':
                 return 'border-white/12 bg-white/[0.05] text-zinc-200';
             case 'Archived':
-                return 'border-amber-400/20 bg-amber-500/10 text-amber-100';
+                return 'border-zinc-400/20 bg-zinc-500/10 text-zinc-200';
             case 'Not published':
             default:
                 return 'border-white/10 bg-white/[0.04] text-zinc-200';
@@ -1568,7 +1455,11 @@ export default function CreationsPage() {
                                 Studio
                             </h1>
                             <p className="text-sm text-zinc-500 font-medium tracking-wide">
-                                {successfulGenerations.length} CREATION{successfulGenerations.length !== 1 ? 'S' : ''} TOTAL
+                                {activeView === 'creations'
+                                    ? `${successfulGenerations.length} CREATION${successfulGenerations.length !== 1 ? 'S' : ''} TOTAL`
+                                    : activeView === 'posts'
+                                        ? `${activePostCount} POST${activePostCount !== 1 ? 'S' : ''}${archivedPostCount > 0 ? ` · ${archivedPostCount} ARCHIVED` : ''}`
+                                        : 'YOUR UNLOCKS'}
                             </p>
                         </div>
                     </div>
@@ -1599,30 +1490,27 @@ export default function CreationsPage() {
                 </div>
 
                 <div className="mb-6 flex flex-wrap items-center gap-3">
-                    {([
-                        { key: 'creations', label: 'Creations', description: 'Private outputs and publishing' },
-                        { key: 'posts', label: 'Post Library', description: 'Manage posts and recipes' },
-                        { key: 'unlocks', label: 'Unlocks', description: 'Everything you have unlocked' },
-                    ] as Array<{ key: WorkspaceView; label: string; description: string }>).map((tab) => (
-                        <button
-                            key={tab.key}
-                            type="button"
-                            onClick={() => setActiveView(tab.key)}
-                            className={`rounded-full border px-4 py-2.5 text-sm font-semibold transition ${
-                                activeView === tab.key
-                                    ? 'border-white/20 bg-white/10 text-white'
-                                    : 'border-white/8 bg-zinc-900/50 text-zinc-400 hover:border-white/14 hover:bg-zinc-800 hover:text-zinc-200'
-                            }`}
-                        >
-                            {tab.label}
-                        </button>
-                    ))}
+                    {/* Links, not buttons: each section has its own URL, so the
+                        browser's history and a shared link both know which one. */}
+                    <nav aria-label="Studio sections" className="flex flex-wrap items-center gap-3">
+                        {WORKSPACE_TABS.map((tab) => (
+                            <Link
+                                key={tab.key}
+                                href={buildWorkspacePath(tab.key)}
+                                scroll={false}
+                                aria-current={activeView === tab.key ? 'page' : undefined}
+                                className={`ui-focus-ring rounded-full border px-4 py-2.5 text-sm font-semibold transition ${
+                                    activeView === tab.key
+                                        ? 'border-white/20 bg-white/10 text-white'
+                                        : 'border-white/8 bg-zinc-900/50 text-zinc-400 hover:border-white/14 hover:bg-zinc-800 hover:text-zinc-200'
+                                }`}
+                            >
+                                {tab.label}
+                            </Link>
+                        ))}
+                    </nav>
                     <div className="text-sm text-zinc-500">
-                        {activeView === 'creations'
-                            ? 'Preview private outputs, then turn the strongest ones into posts.'
-                            : activeView === 'unlocks'
-                                ? 'Everything you have unlocked from other creators, yours to keep.'
-                                : 'Use Post Library for full post edits, archive state, and cleanup after publishing.'}
+                        {WORKSPACE_TABS.find((tab) => tab.key === activeView)?.lede}
                     </div>
                 </div>
 
@@ -1737,26 +1625,30 @@ export default function CreationsPage() {
                 )}
 
                 {activeView === 'posts' && !isLoading && posts.length > 0 && (
-                    <div className="mb-8 flex flex-wrap gap-2">
+                    <div role="group" aria-label="Filter posts by visibility" className="mb-8 flex flex-wrap gap-2">
                         {([
-                            { key: 'all', label: `All (${posts.filter((post) => !post.archivedAt).length})` },
+                            { key: 'all', label: `All (${activePostCount})` },
                             { key: 'public', label: `Public (${posts.filter((post) => !post.archivedAt && post.visibility === 'public').length})` },
                             { key: 'unlisted', label: `Unlisted (${posts.filter((post) => !post.archivedAt && post.visibility === 'unlisted').length})` },
                             { key: 'private', label: `Private (${posts.filter((post) => !post.archivedAt && post.visibility === 'private').length})` },
-                            { key: 'archived', label: `Archived (${posts.filter((post) => Boolean(post.archivedAt)).length})` },
+                            { key: 'archived', label: `Archived (${archivedPostCount})` },
                         ] as Array<{ key: OwnerPostVisibilityFilter; label: string }>).map((tab) => (
-                            <button
+                            // A filter is a refinement of the current section, so it
+                            // replaces the history entry instead of adding one.
+                            <Link
                                 key={tab.key}
-                                type="button"
-                                onClick={() => setPostVisibilityFilter(tab.key)}
-                                className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                                href={buildWorkspacePath('posts', tab.key)}
+                                replace
+                                scroll={false}
+                                aria-current={postVisibilityFilter === tab.key ? 'true' : undefined}
+                                className={`ui-focus-ring rounded-full border px-4 py-2 text-sm font-semibold transition ${
                                     postVisibilityFilter === tab.key
                                         ? 'border-white/20 bg-white/10 text-white'
                                         : 'border-white/8 bg-zinc-900/50 text-zinc-400 hover:border-white/14 hover:bg-zinc-800 hover:text-zinc-200'
                                 }`}
                             >
                                 {tab.label}
-                            </button>
+                            </Link>
                         ))}
                     </div>
                 )}
@@ -1910,30 +1802,12 @@ export default function CreationsPage() {
                                 const canCopyLinkedPost =
                                     Boolean(workspaceState.linkedPost?.canShare) &&
                                     Boolean(linkedPostPublicPath);
-                                const linkedPostQuickVisibility =
-                                    workspaceState.linkedPost &&
-                                    !workspaceState.linkedPost.archivedAt &&
-                                    (workspaceState.linkedPost.visibility === 'public' || workspaceState.linkedPost.visibility === 'private')
-                                        ? workspaceState.linkedPost.visibility
-                                        : null;
-                                const nextLinkedPostVisibility: Extract<OwnerPost['visibility'], 'public' | 'private'> | null =
-                                    linkedPostQuickVisibility === 'public'
-                                        ? 'private'
-                                        : linkedPostQuickVisibility === 'private'
-                                            ? 'public'
-                                            : null;
-                                const linkedPostVisibilityActionLabel =
-                                    nextLinkedPostVisibility === 'public' ? 'Make public' : 'Make private';
-                                const LinkedPostVisibilityActionIcon =
-                                    nextLinkedPostVisibility === 'public' ? Globe : LockKeyhole;
-                                const isLinkedPostVisibilityUpdating =
-                                    Boolean(workspaceState.linkedPost) &&
-                                    Boolean(nextLinkedPostVisibility) &&
-                                    postVisibilityUpdatingKey === `${workspaceState.linkedPost?.id}:${nextLinkedPostVisibility}`;
-                                const linkedPostVisibilityActionClass =
-                                    nextLinkedPostVisibility === 'public'
-                                        ? 'border-sky-400/25 bg-sky-500/10 text-sky-100 hover:border-sky-300/35 hover:bg-sky-500/15'
-                                        : 'border-white/12 bg-white/[0.05] text-zinc-200 hover:border-white/20 hover:bg-white/[0.08]';
+                                const linkedPostTarget = workspaceState.linkedPost && !workspaceState.linkedPost.archivedAt
+                                    ? resolveLinkedPostTarget(gen, workspaceState.linkedPost)
+                                    : null;
+                                const linkedPostPendingAction = linkedPostTarget
+                                    ? postLifecycle.pendingAction(linkedPostTarget.id)
+                                    : null;
                                 const hasPrimaryAction =
                                     canManageFromCreation &&
                                     workspaceState.primaryAction.type !== 'none' &&
@@ -1950,8 +1824,7 @@ export default function CreationsPage() {
                                 });
                                 const hasSecondaryInlineAction =
                                     Boolean(workspaceState.secondaryAction.href) && !primaryIsPublish;
-                                const hasLinkedVisibilityAction =
-                                    Boolean(workspaceState.linkedPost) && Boolean(nextLinkedPostVisibility);
+                                const hasLinkedVisibilityAction = Boolean(linkedPostTarget);
                                 const hasCompactActionRow = hasSecondaryInlineAction || hasLinkedVisibilityAction;
                                 const isGenerationDetailLoading = generationDetailLoadingId === gen.id;
                                 return (
@@ -2063,20 +1936,14 @@ export default function CreationsPage() {
                                                             )}
                                                             {workspaceState.primaryAction.label}
                                                         </button>
-                                                    ) : primaryIsUnlock ? (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => openUnlockModalForGeneration(gen)}
-                                                            disabled={isGenerationDetailLoading}
-                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
+                                                    ) : primaryIsUnlock && workspaceState.primaryAction.href ? (
+                                                        <Link
+                                                            href={workspaceState.primaryAction.href}
+                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200"
                                                         >
-                                                            {isGenerationDetailLoading ? (
-                                                                <Loader2 className="h-4 w-4 animate-spin" />
-                                                            ) : (
-                                                                <Wand2 className="h-4 w-4" />
-                                                            )}
+                                                            <Wand2 className="h-4 w-4" />
                                                             {workspaceState.primaryAction.label}
-                                                        </button>
+                                                        </Link>
                                                     ) : null}
 
                                                     {hasCompactActionRow ? (
@@ -2091,24 +1958,15 @@ export default function CreationsPage() {
                                                                 </Link>
                                                             ) : null}
 
-                                                            {hasLinkedVisibilityAction && workspaceState.linkedPost && nextLinkedPostVisibility ? (
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => void handleCreationPostVisibilityChange(
-                                                                        gen.id,
-                                                                        workspaceState.linkedPost!.id,
-                                                                        nextLinkedPostVisibility
-                                                                    )}
-                                                                    disabled={Boolean(postVisibilityUpdatingKey)}
-                                                                    className={`inline-flex w-full items-center justify-center gap-2 rounded-2xl border px-3 py-2.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${linkedPostVisibilityActionClass}`}
-                                                                >
-                                                                    {isLinkedPostVisibilityUpdating ? (
-                                                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                                                    ) : (
-                                                                        <LinkedPostVisibilityActionIcon className="h-3.5 w-3.5" />
-                                                                    )}
-                                                                    {linkedPostVisibilityActionLabel}
-                                                                </button>
+                                                            {linkedPostTarget ? (
+                                                                <PostVisibilityMenu
+                                                                    value={linkedPostTarget.visibility}
+                                                                    onChange={(next) => void postLifecycle.setVisibility(linkedPostTarget, next)}
+                                                                    pending={linkedPostPendingAction === 'visibility'}
+                                                                    disabled={Boolean(linkedPostPendingAction)}
+                                                                    label={`Visibility of ${workspaceState.linkedPost?.title ?? 'linked post'}`}
+                                                                    size="sm"
+                                                                />
                                                             ) : null}
                                                         </div>
                                                     ) : null}
@@ -2323,13 +2181,6 @@ export default function CreationsPage() {
                                     hour: '2-digit',
                                     minute: '2-digit',
                                 });
-                                const statusClass = post.archivedAt
-                                    ? 'border-amber-400/20 bg-amber-500/10 text-amber-100'
-                                    : post.visibility === 'public'
-                                        ? 'border-sky-400/20 bg-sky-500/10 text-sky-100'
-                                        : post.visibility === 'unlisted'
-                                            ? 'border-amber-400/20 bg-amber-500/10 text-amber-100'
-                                            : 'border-white/12 bg-white/[0.05] text-zinc-200';
                                 const bundleStatusClass = post.bundle?.status === 'published'
                                     ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
                                     : 'border-amber-400/20 bg-amber-500/10 text-amber-100';
@@ -2340,14 +2191,8 @@ export default function CreationsPage() {
                                         : post.postFormat === 'text'
                                             ? 'Text'
                                             : post.category;
-                                const nextVisibility: Extract<OwnerPost['visibility'], 'public' | 'private'> =
-                                    post.visibility === 'private' ? 'public' : 'private';
-                                const visibilityActionLabel = nextVisibility === 'public' ? 'Make public' : 'Make private';
-                                const VisibilityActionIcon = nextVisibility === 'public' ? Globe : LockKeyhole;
-                                const isVisibilityUpdating = postVisibilityUpdatingKey === `${post.id}:${nextVisibility}`;
-                                const visibilityActionClass = nextVisibility === 'public'
-                                    ? 'border-sky-400/25 bg-sky-500/10 text-sky-100 hover:border-sky-300/35 hover:bg-sky-500/15'
-                                    : 'border-white/12 bg-white/[0.05] text-zinc-200 hover:border-white/20 hover:bg-white/[0.08]';
+                                const pendingAction = postLifecycle.pendingAction(post.id);
+                                const isBusy = Boolean(pendingAction);
 
                                 return (
                                     <article
@@ -2358,7 +2203,13 @@ export default function CreationsPage() {
                                             <div className="relative overflow-hidden rounded-[22px] border border-white/8 bg-black/60">
                                                 {post.mediaUrl ? (
                                                     post.mediaKind === 'video' ? (
-                                                        <video src={post.mediaItems?.[0]?.renditionUrl ?? post.mediaUrl} controls playsInline preload="metadata" className="aspect-[4/5] w-full object-cover" />
+                                                        // Poster at rest, playback on hover: a page of rows must not
+                                                        // start a metadata fetch of every full-size video.
+                                                        <HoverVideo
+                                                            src={resolvePlaybackUrl({ url: post.mediaUrl, renditionUrl: post.mediaItems?.[0]?.renditionUrl })}
+                                                            poster={post.mediaItems?.[0]?.previewUrl}
+                                                            className="aspect-[4/5] w-full object-cover"
+                                                        />
                                                     ) : (
                                                         // eslint-disable-next-line @next/next/no-img-element
                                                         <img src={post.mediaUrl} alt={post.title} loading="lazy" decoding="async" className="aspect-[4/5] w-full object-cover" />
@@ -2387,9 +2238,12 @@ export default function CreationsPage() {
                                                             </p>
                                                         </div>
                                                         <div className="flex shrink-0 flex-wrap gap-2">
-                                                            <span className={`rounded-full border px-3 py-1 text-xs font-medium capitalize ${statusClass}`}>
-                                                                {post.archivedAt ? 'Archived' : post.visibility}
-                                                            </span>
+                                                            {/* Live visibility is the menu in the action row; only the archived state needs a chip. */}
+                                                            {post.archivedAt ? (
+                                                                <span className="rounded-full border border-zinc-400/20 bg-zinc-500/10 px-3 py-1 text-xs font-medium text-zinc-200">
+                                                                    Archived
+                                                                </span>
+                                                            ) : null}
                                                             {post.bundle ? (
                                                                 <span className={`rounded-full border px-3 py-1 text-xs font-medium ${bundleStatusClass}`}>
                                                                     {post.bundle.status === 'published' ? 'Recipe live' : 'Recipe draft'}
@@ -2462,36 +2316,21 @@ export default function CreationsPage() {
                                                             </Link>
                                                         ) : null}
                                                         {!post.archivedAt ? (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => void handlePostVisibilityChange(post, nextVisibility)}
-                                                                disabled={Boolean(postVisibilityUpdatingKey)}
-                                                                className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${visibilityActionClass}`}
-                                                            >
-                                                                {isVisibilityUpdating ? (
-                                                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                                                ) : (
-                                                                    <VisibilityActionIcon className="h-4 w-4" />
-                                                                )}
-                                                                {visibilityActionLabel}
-                                                            </button>
+                                                            <PostVisibilityMenu
+                                                                value={post.visibility}
+                                                                onChange={(next) => void postLifecycle.setVisibility(post, next)}
+                                                                pending={pendingAction === 'visibility'}
+                                                                disabled={isBusy}
+                                                                label={`Visibility of ${post.title}`}
+                                                            />
                                                         ) : null}
-                                                        {post.generationId && !post.archivedAt ? (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => openUnlockModalForPost(post)}
+                                                        {!post.archivedAt ? (
+                                                            <Link
+                                                                href={buildPostRecipeManagementPath(post)}
                                                                 className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
                                                             >
                                                                 <Wand2 className="h-4 w-4" />
                                                                 {post.bundle ? 'Manage recipe' : 'Add recipe'}
-                                                            </button>
-                                                        ) : post.resourcePath ? (
-                                                            <Link
-                                                                href={buildStudioDetailPath(post.id, 'resources')}
-                                                                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
-                                                            >
-                                                                <Wand2 className="h-4 w-4" />
-                                                                Manage recipe
                                                             </Link>
                                                         ) : null}
                                                     </div>
@@ -2511,32 +2350,35 @@ export default function CreationsPage() {
                                                         {post.archivedAt ? (
                                                             <button
                                                                 type="button"
-                                                                onClick={() => void handlePostRestore(post.id)}
-                                                                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-emerald-400/25 bg-emerald-500/10 text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
+                                                                onClick={() => void postLifecycle.restore(post)}
+                                                                disabled={isBusy}
+                                                                className="ui-focus-ring inline-flex h-9 w-9 items-center justify-center rounded-full border border-emerald-400/25 bg-emerald-500/10 text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-60"
                                                                 title="Restore post"
                                                                 aria-label="Restore post"
                                                             >
-                                                                <RotateCcw className="h-4 w-4" />
+                                                                {pendingAction === 'restore' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
                                                             </button>
                                                         ) : (
                                                             <button
                                                                 type="button"
-                                                                onClick={() => void handlePostArchive(post.id)}
-                                                                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-amber-400/25 bg-amber-500/10 text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-500/15"
+                                                                onClick={() => void postLifecycle.archive(post)}
+                                                                disabled={isBusy}
+                                                                className="ui-focus-ring inline-flex h-9 w-9 items-center justify-center rounded-full border border-amber-400/25 bg-amber-500/10 text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-500/15 disabled:cursor-not-allowed disabled:opacity-60"
                                                                 title="Archive post"
                                                                 aria-label="Archive post"
                                                             >
-                                                                <Archive className="h-4 w-4" />
+                                                                {pendingAction === 'archive' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Archive className="h-4 w-4" />}
                                                             </button>
                                                         )}
                                                         <button
                                                             type="button"
-                                                            onClick={() => void handlePostDelete(post.id)}
-                                                            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-rose-400/25 bg-rose-500/10 text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15"
+                                                            onClick={() => void postLifecycle.remove(post)}
+                                                            disabled={isBusy}
+                                                            className="ui-focus-ring inline-flex h-9 w-9 items-center justify-center rounded-full border border-rose-400/25 bg-rose-500/10 text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-60"
                                                             title="Delete post"
                                                             aria-label="Delete post"
                                                         >
-                                                            <Trash2 className="h-4 w-4" />
+                                                            {pendingAction === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                                                         </button>
                                                     </div>
                                                 </div>
@@ -2594,7 +2436,6 @@ export default function CreationsPage() {
                 defaultDescription={publishTarget?.description ?? ''}
                 showPaidShortcut={showPaidShortcutInPublishModal}
                 mediaOnly={publishTarget?.origin === 'template'}
-                initialSellAutoUnlock={initialSellAutoUnlockInPublishModal}
                 paywallPrefill={publishTarget?.paywallPrefill ?? null}
                 shareAfterPublish={shareAfterPublish ? {
                     title: publishTarget ? getPreviewTitle(publishTarget) : 'Creation',

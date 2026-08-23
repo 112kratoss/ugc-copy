@@ -516,6 +516,187 @@ describe('publishGenerationToShowcaseForRoute', () => {
     expect(publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledTimes(1);
   });
 
+  // The post row is written with upsert semantics, so a visibility-only
+  // request has to supply the whole row. Studio's "Make private" used to
+  // rebuild it from the generation, which never saw the body or the edits
+  // made while the post was private — one click erased the caption.
+  it('carries the stored post content through a visibility-only flip instead of rebuilding it from the generation', async () => {
+    const generation = {
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      // Stale: the post was retitled while private, and that path never
+      // mirrors back onto the generation.
+      title: 'Sunset v1',
+      description: 'First draft caption',
+      prompt: 'Original prompt',
+    };
+    const adminClient = createAdminClientMock(generation);
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn(async () => ({
+      postId: 'post-1',
+      visibility: 'private' as const,
+      bundleId: null,
+      bundleStatus: null,
+    }));
+    const loadExistingGenerationPostContent = vi.fn(async () => ({
+      title: 'Golden hour study',
+      description: 'Edited caption',
+      prompt: null,
+      body: 'Here is how I lit it.',
+      category: 'image',
+    }));
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      body: {
+        generationId: 'gen-1',
+        visibility: 'private',
+      },
+      userId: 'user-1',
+      dependencies: {
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+          outputUrl: mediaGeneration.outputUrl,
+          createdLocation: null,
+        })),
+        listSourceToolsCatalog: vi.fn(async () => [
+          {
+            slug: 'magicbooklet',
+            label: 'magicbooklet',
+            models: [],
+            supportedMediaKinds: ['image' as const, 'video' as const],
+          },
+        ]),
+        publishGenerationPostWithResourceBundleAtomically,
+        loadExistingGenerationPostContent,
+      } satisfies Partial<ShowcasePublishServiceDependencies>,
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(loadExistingGenerationPostContent).toHaveBeenCalledWith({
+      generationId: 'gen-1',
+      ownerUserId: 'user-1',
+      supabase: adminClient.client,
+    });
+    expect(publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      post: expect.objectContaining({
+        title: 'Golden hour study',
+        description: 'Edited caption',
+        body: 'Here is how I lit it.',
+        post_format: 'mixed',
+        visibility: 'private',
+      }),
+    }));
+  });
+
+  it('does not consult the stored post for a compose submission, whose payload is the whole post', async () => {
+    const generation = {
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: 'Sunset v1',
+      description: null,
+      prompt: 'Original prompt',
+    };
+    const adminClient = createAdminClientMock(generation);
+    const loadExistingGenerationPostContent = vi.fn(async () => ({
+      title: 'Golden hour study',
+      description: 'Edited caption',
+      prompt: null,
+      body: 'Here is how I lit it.',
+      category: 'image',
+    }));
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn(async () => ({
+      postId: 'post-1',
+      visibility: 'private' as const,
+      bundleId: null,
+      bundleStatus: null,
+    }));
+
+    await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      body: {
+        generationId: 'gen-1',
+        visibility: 'private',
+        title: 'Retitled in the editor',
+        // The editor omits an emptied body rather than sending ''. That is a
+        // clear, not a gap to fill from storage.
+      },
+      userId: 'user-1',
+      dependencies: {
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+          outputUrl: mediaGeneration.outputUrl,
+          createdLocation: null,
+        })),
+        listSourceToolsCatalog: vi.fn(async () => []),
+        publishGenerationPostWithResourceBundleAtomically,
+        loadExistingGenerationPostContent,
+      } satisfies Partial<ShowcasePublishServiceDependencies>,
+    });
+
+    expect(loadExistingGenerationPostContent).not.toHaveBeenCalled();
+    expect(publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      post: expect.objectContaining({
+        title: 'Retitled in the editor',
+        body: null,
+        post_format: 'media',
+      }),
+    }));
+  });
+
+  it('refuses a visibility-only flip when the stored post cannot be read, rather than wiping it', async () => {
+    const generation = {
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: 'Sunset v1',
+      description: null,
+      prompt: null,
+    };
+    const adminClient = createAdminClientMock(generation);
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn();
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      body: {
+        generationId: 'gen-1',
+        visibility: 'public',
+      },
+      userId: 'user-1',
+      dependencies: {
+        loadExistingGenerationPostContent: vi.fn(async () => {
+          throw new Error('connection reset');
+        }),
+        publishGenerationPostWithResourceBundleAtomically,
+      } satisfies Partial<ShowcasePublishServiceDependencies>,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      body: { error: 'Could not load the existing post before changing its visibility. Try again.' },
+    });
+    expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    expect(logBackendErrorMock).toHaveBeenCalledWith(
+      'failed_to_load_existing_post_for_visibility_change',
+      expect.objectContaining({ error: expect.any(Error) }),
+    );
+  });
+
   it('maps a sold-package mutation rejected inside the generation transaction to a conflict', async () => {
     const generation = {
       id: 'gen-sold',

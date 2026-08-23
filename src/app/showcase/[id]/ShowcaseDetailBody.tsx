@@ -417,6 +417,9 @@ export default function ShowcaseDetailBody({
                   visibility={detail.visibility}
                   viewerIsOwner={Boolean(viewerUserId && viewerUserId === detail.creator.id)}
                   hasResourceBundle={Boolean(detail.resourceBundle)}
+                  bundle={bundle
+                    ? { accessMode: bundle.accessMode, status: bundle.status, salesCount: bundle.salesCount }
+                    : null}
                   showShare={false}
                   showRemix={false}
                 />

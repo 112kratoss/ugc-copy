@@ -56,11 +56,14 @@ function normalizeOptionalText(value: string): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function getDefaultPublishDescription(
-  defaultDescription: string,
-  paywallPrefill: GenerationPaywallPrefill | null | undefined
-): string {
-  return defaultDescription.trim() || paywallPrefill?.notesMarkdown?.trim() || '';
+/**
+ * The caption is the post's public description. It must not start out as the
+ * recipe's generated setup notes: those travel with the bundle (see
+ * `buildAutoResourceBundle`), and prefilling them here published "Saved
+ * generation setup / Model: …" as the caption of every quick publish.
+ */
+function getDefaultPublishDescription(defaultDescription: string): string {
+  return defaultDescription.trim();
 }
 
 const DEFAULT_PRICE_TOKENS = 900;
@@ -192,7 +195,7 @@ export default function PublishToShowcaseModal({
 }: PublishToShowcaseModalProps) {
   const [publishTitle, setPublishTitle] = useState(defaultTitle);
   const [publishDescription, setPublishDescription] = useState(() =>
-    getDefaultPublishDescription(defaultDescription, paywallPrefill)
+    getDefaultPublishDescription(defaultDescription)
   );
   const [recipeAccess, setRecipeAccess] = useState<PostResourceBundleAccessMode>('none');
   const [priceTokens, setPriceTokens] = useState(String(DEFAULT_PRICE_TOKENS));
@@ -249,7 +252,7 @@ export default function PublishToShowcaseModal({
 
     // Opening a generation starts a fresh publish draft from its supplied defaults.
     setPublishTitle(defaultTitle);
-    setPublishDescription(getDefaultPublishDescription(defaultDescription, paywallPrefill));
+    setPublishDescription(getDefaultPublishDescription(defaultDescription));
     // Callers that open this modal from a "sell" action land on paid; everyone
     // else starts with no recipe attached and opts in.
     setRecipeAccess(initialSellAutoUnlock && hasAutoUnlock ? 'paid' : 'none');
@@ -556,7 +559,7 @@ export default function PublishToShowcaseModal({
             <p id="publish-to-showcase-description" className="mt-2 text-sm leading-6 text-zinc-400">
               {mediaOnly
                 ? 'Add a title and caption, then share it to Showcase or keep it private.'
-                : 'Title, notes, and optional price.'}
+                : 'Title, caption, and optional price.'}
             </p>
           </div>
           <button
@@ -625,9 +628,9 @@ export default function PublishToShowcaseModal({
           </div>
 
           <div>
-            <label htmlFor="publish-notes-input" className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Notes optional</label>
+            <label htmlFor="publish-caption-input" className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Caption optional</label>
             <textarea
-              id="publish-notes-input"
+              id="publish-caption-input"
               value={publishDescription}
               onChange={(event) => setPublishDescription(event.target.value)}
               placeholder="Add a short caption or context for the post."

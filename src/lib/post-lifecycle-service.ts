@@ -14,6 +14,13 @@ type ArchivedPostRow = {
   generation_id?: string | null;
 };
 
+type RestoredPostRow = {
+  id: string;
+  generation_id?: string | null;
+  visibility?: 'public' | 'unlisted' | 'private' | null;
+  showcase_asset_path?: string | null;
+};
+
 export type PostLifecycleResult =
   | {
     ok: true;
@@ -103,6 +110,8 @@ export async function archiveOwnerPostForRoute({
 
   invalidateShowcaseFeedCache();
 
+  // The posts trigger already demoted the recipe when archived_at was set;
+  // this matches no rows now and stays as a belt for older schemas.
   await adminSupabase
     .from('post_resource_bundles')
     .update({ status: 'draft' })
@@ -157,8 +166,9 @@ export async function restoreOwnerPostForRoute({
     .eq('id', postId)
     .eq('user_id', ownerUserId)
     .not('archived_at', 'is', null)
-    .select('id')
+    .select('id, generation_id, visibility, showcase_asset_path')
     .maybeSingle();
+  const post = data as RestoredPostRow | null;
 
   if (error) {
     return {
@@ -168,7 +178,7 @@ export async function restoreOwnerPostForRoute({
     };
   }
 
-  if (!data) {
+  if (!post) {
     return {
       ok: false,
       status: 404,
@@ -177,6 +187,21 @@ export async function restoreOwnerPostForRoute({
   }
 
   invalidateShowcaseFeedCache();
+
+  // Archive cleared the linked generation's exposure flags; put back whatever
+  // the post's own visibility says. The post row kept the showcase path, so
+  // nothing has to be re-derived. The recipe itself is re-promoted by the
+  // posts trigger when archived_at clears.
+  if (post.generation_id) {
+    const isExposed = post.visibility !== 'private';
+    await adminSupabase
+      .from('generations')
+      .update({
+        is_public: post.visibility === 'public',
+        showcase_asset_path: isExposed ? post.showcase_asset_path ?? null : null,
+      })
+      .eq('id', post.generation_id);
+  }
 
   return {
     ok: true,

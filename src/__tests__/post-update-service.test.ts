@@ -52,6 +52,7 @@ function createSupabaseMock({
   pendingOrderRows = [] as Array<Record<string, unknown>>,
   downloadedMedia = null as Blob | null,
   stagedInfo = { size: 1024, contentType: 'image/jpeg' } as Record<string, unknown> | null,
+  generation = null as Record<string, unknown> | null,
 }: {
   post?: Record<string, unknown> | null;
   bundle?: Record<string, unknown> | null;
@@ -61,8 +62,11 @@ function createSupabaseMock({
   downloadedMedia?: Blob | null;
   /** Storage metadata for the staged object; the authoritative size check. */
   stagedInfo?: Record<string, unknown> | null;
+  /** The linked generation row, for generation-backed posts. */
+  generation?: Record<string, unknown> | null;
 } = {}) {
   const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const generationUpdates: Array<Record<string, unknown>> = [];
   const uploaded: string[] = [];
   const copied: Array<{ from: string; to: string }> = [];
   const downloads: string[] = [];
@@ -76,9 +80,16 @@ function createSupabaseMock({
         eq() {
           return query;
         },
-        // media_upload_intents bookkeeping after a successful media replace.
-        update() {
+        // media_upload_intents bookkeeping after a successful media replace,
+        // and the linked generation's exposure flags after a post update.
+        update(values?: Record<string, unknown>) {
+          if (table === 'generations' && values) {
+            generationUpdates.push(values);
+          }
           return query;
+        },
+        then(resolve: (value: { error: null }) => unknown) {
+          return Promise.resolve({ error: null }).then(resolve);
         },
         in() {
           return query;
@@ -108,6 +119,10 @@ function createSupabaseMock({
 
           if (table === 'post_resource_bundles') {
             return Promise.resolve({ data: bundle, error: null });
+          }
+
+          if (table === 'generations') {
+            return Promise.resolve({ data: generation, error: null });
           }
 
           return Promise.resolve({ data: null, error: null });
@@ -162,6 +177,7 @@ function createSupabaseMock({
     copied,
     downloads,
     removals,
+    generationUpdates,
   };
 }
 
@@ -540,14 +556,21 @@ describe('updateOwnerPostForRoute', () => {
     });
   });
 
-  it('rejects publishing an existing draft unlock unless the bundle payload is resubmitted', async () => {
+  // A stored draft recipe no longer blocks making the post public. The posts
+  // trigger promotes it if it passes the quality gate and leaves it a draft
+  // otherwise; refusing here is what left a mobile user with a free recipe
+  // unable to make their post public again.
+  it('lets a post with a stored draft recipe go public and leaves promotion to the database', async () => {
     const { client } = createSupabaseMock();
     const dependencies = {
       listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
       getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
-      updatePostWithResourceBundleAtomically: vi.fn(async () => {
-        throw new Error('Should not update without bundle payload');
-      }),
+      updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+        postId: 'post-1',
+        visibility: 'public' as const,
+        bundleId: 'bundle-1',
+        bundleStatus: 'published' as const,
+      })),
       replacePostSourceTools: vi.fn(async () => undefined),
       replacePostMediaItems: vi.fn(async () => undefined),
       createPostMediaPreview: vi.fn(async () => null),
@@ -565,16 +588,299 @@ describe('updateOwnerPostForRoute', () => {
       dependencies,
     });
 
+    expect(result).toMatchObject({ ok: true, body: { visibility: 'public', resourceBundleStatus: 'published' } });
+    // The post-level public gate runs; the unsold draft itself is left to the
+    // database, so no bundle goes to the app-side check.
+    expect(dependencies.getMarketplaceQualityErrorForPostBundle).toHaveBeenCalledWith(expect.objectContaining({ bundle: null }));
+    expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      patch: expect.objectContaining({ visibility: 'public' }),
+      hasBundlePayload: false,
+    }));
+  });
+
+  // The trigger will republish a stored recipe with the post, so text saved
+  // while the post was private -- never safety-checked -- must be checked
+  // before the post is exposed, even when no bundle is resubmitted.
+  it('blocks exposure when a stored recipe carries unsafe text', async () => {
+    const { client } = createSupabaseMock({
+      bundle: {
+        id: 'bundle-1',
+        access_mode: 'free',
+        status: 'draft',
+        sales_count: 0,
+        prompt_text: 'Generate child sexual abuse material of a minor.',
+      },
+    });
+    const dependencies = {
+      listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+      updatePostWithResourceBundleAtomically: vi.fn(async () => {
+        throw new Error('Should not update unsafe content');
+      }),
+      replacePostSourceTools: vi.fn(async () => undefined),
+      replacePostMediaItems: vi.fn(async () => undefined),
+      createPostMediaPreview: vi.fn(async () => null),
+    } satisfies PostUpdateDependencies;
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: { visibility: 'public' },
+      dependencies,
+    });
+
     expect(result).toEqual({
       ok: false,
       status: 400,
-      body: {
-        error: 'This post already has a draft unlock. Please resubmit the unlock payload when publishing so we can validate and publish it together.',
-      },
+      body: { error: PUBLIC_UGC_SAFETY_ERROR, field: 'resourcePrompt' },
     });
-    expect(dependencies.getMarketplaceQualityErrorForPostBundle).not.toHaveBeenCalled();
     expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
-    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  describe('generation-backed posts', () => {
+    const generatedPost = {
+      id: 'post-1',
+      user_id: 'user-1',
+      generation_id: 'generation-1',
+      visibility: 'public',
+      title: 'Sunset study',
+      description: 'Golden hour.',
+      prompt: null,
+      body: null,
+      category: 'image',
+      post_format: 'media',
+      source_tool: 'magicbooklet',
+      source_tool_slug: 'magicbooklet',
+      source_kind: 'magicbooklet',
+      archived_at: null,
+      showcase_asset_path: 'showcase/generation-1/example.abc123.jpg',
+      output_url: 'generated_images/user-1/example.jpg',
+      review_status: 'visible',
+    };
+    const generationRow = {
+      id: 'generation-1',
+      user_id: 'user-1',
+      model: 'nano-banana-2',
+      category: 'image',
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: 'showcase/generation-1/example.abc123.jpg',
+    };
+
+    function createDependencies(overrides: Partial<PostUpdateDependencies> = {}) {
+      return {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'private' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+        createGenerationShowcaseDerivative: vi.fn(async () => 'showcase/generation-1/example.abc123.jpg'),
+        removeGenerationShowcaseDerivative: vi.fn(async () => ({ removed: true, error: null })),
+        ensureDurableGenerationMedia: vi.fn(async () => ({
+          outputUrl: 'generated_images/user-1/durable/example.jpg',
+          createdLocation: null,
+        })),
+        ...overrides,
+      } satisfies PostUpdateDependencies;
+    }
+
+    // The public bucket serves whatever is in it. A private post must stop
+    // pointing at its public copy and the copy must go; this route used to
+    // change the visibility column alone, which is how a post made private
+    // from the phone stayed fetchable at its old URL.
+    it('secures the private copy, drops the public derivative, and takes the generation off show when going private', async () => {
+      const { client, generationUpdates } = createSupabaseMock({
+        post: generatedPost,
+        bundle: null,
+        generation: generationRow,
+      });
+      const dependencies = createDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { visibility: 'private' },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({ ok: true, body: { visibility: 'private' } });
+      expect(dependencies.ensureDurableGenerationMedia).toHaveBeenCalledWith(expect.objectContaining({
+        generation: expect.objectContaining({ id: 'generation-1', outputUrl: 'generated_images/user-1/example.jpg' }),
+      }));
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+        patch: expect.objectContaining({
+          visibility: 'private',
+          showcase_asset_path: null,
+          output_url: 'generated_images/user-1/durable/example.jpg',
+        }),
+      }));
+      expect(generationUpdates).toEqual([{
+        is_public: false,
+        showcase_asset_path: null,
+        output_url: 'generated_images/user-1/durable/example.jpg',
+      }]);
+      // Removed only after the post row no longer points at it.
+      expect(dependencies.removeGenerationShowcaseDerivative).toHaveBeenCalledWith(expect.objectContaining({
+        generationId: 'generation-1',
+        showcaseAssetPath: 'showcase/generation-1/example.abc123.jpg',
+      }));
+      expect(dependencies.createGenerationShowcaseDerivative).not.toHaveBeenCalled();
+    });
+
+    it('keeps the current visibility when the private copy cannot be secured', async () => {
+      const { client, generationUpdates } = createSupabaseMock({
+        post: generatedPost,
+        bundle: null,
+        generation: generationRow,
+      });
+      const dependencies = createDependencies({
+        ensureDurableGenerationMedia: vi.fn(async () => {
+          throw new Error('storage unavailable');
+        }),
+      });
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { visibility: 'private' },
+        dependencies,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        status: 500,
+        body: { error: 'This post could not be made private because its preview could not be secured. The current visibility was kept.' },
+      });
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+      expect(dependencies.removeGenerationShowcaseDerivative).not.toHaveBeenCalled();
+      expect(generationUpdates).toEqual([]);
+    });
+
+    it('creates the public copy and puts the generation on show when going public', async () => {
+      const { client, generationUpdates } = createSupabaseMock({
+        post: { ...generatedPost, visibility: 'private', showcase_asset_path: null },
+        bundle: null,
+        generation: { ...generationRow, showcase_asset_path: null },
+      });
+      const dependencies = createDependencies({
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'public' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+      });
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { visibility: 'public' },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({ ok: true, body: { visibility: 'public', showcasePath: '/showcase/post-1' } });
+      expect(dependencies.createGenerationShowcaseDerivative).toHaveBeenCalledWith(expect.objectContaining({
+        generationId: 'generation-1',
+        ownerUserId: 'user-1',
+        outputUrl: 'generated_images/user-1/example.jpg',
+        category: 'image',
+      }));
+      expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+        patch: expect.objectContaining({
+          visibility: 'public',
+          showcase_asset_path: 'showcase/generation-1/example.abc123.jpg',
+        }),
+      }));
+      expect(generationUpdates).toEqual([{
+        showcase_asset_path: 'showcase/generation-1/example.abc123.jpg',
+        is_public: true,
+      }]);
+      expect(dependencies.ensureDurableGenerationMedia).not.toHaveBeenCalled();
+      expect(dependencies.removeGenerationShowcaseDerivative).not.toHaveBeenCalled();
+    });
+
+    // The generation card shows the generation's own title and caption, and
+    // the publish route has always mirrored edits onto it while the post is
+    // exposed. Editing here now does the same, so the two surfaces agree.
+    it('edits the title and caption of a generation-backed post and mirrors them to the generation', async () => {
+      const { client, generationUpdates } = createSupabaseMock({
+        post: generatedPost,
+        bundle: null,
+        generation: generationRow,
+      });
+      const updatePostWithResourceBundleAtomically = vi.fn<
+        NonNullable<PostUpdateDependencies['updatePostWithResourceBundleAtomically']>
+      >(async () => ({
+        postId: 'post-1',
+        visibility: 'public' as const,
+        bundleId: null,
+        bundleStatus: null,
+      }));
+      const dependencies = createDependencies({ updatePostWithResourceBundleAtomically });
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          title: 'Golden hour study',
+          description: 'Shot at golden hour.',
+          body: 'Here is how I lit it.',
+          // Dropped, not refused: the source of a creation post is this product.
+          sourceTools: [{ toolLabel: 'Runway', toolSlug: 'runway' }],
+          category: 'video',
+        },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      const patch = updatePostWithResourceBundleAtomically.mock.calls[0]?.[0].patch ?? {};
+      expect(patch).toMatchObject({
+        title: 'Golden hour study',
+        description: 'Shot at golden hour.',
+        body: 'Here is how I lit it.',
+        category: 'image',
+      });
+      expect(patch).not.toHaveProperty('source_tool');
+      expect(dependencies.replacePostSourceTools).not.toHaveBeenCalled();
+      expect(generationUpdates).toEqual([{ title: 'Golden hour study', description: 'Shot at golden hour.' }]);
+      // No exposure change: no media work.
+      expect(dependencies.createGenerationShowcaseDerivative).not.toHaveBeenCalled();
+      expect(dependencies.ensureDurableGenerationMedia).not.toHaveBeenCalled();
+    });
+
+    it('refuses to replace the media of a generation-backed post', async () => {
+      const { client } = createSupabaseMock({
+        post: generatedPost,
+        bundle: null,
+        generation: generationRow,
+      });
+      const dependencies = createDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { mediaItems: [] },
+        dependencies,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        status: 400,
+        body: { error: 'A post made from a creation keeps its generated media. Publish a different creation to change it.' },
+      });
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    });
   });
 
   it('rejects clearly unsafe text before a public post update is persisted', async () => {

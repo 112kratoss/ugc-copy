@@ -4,6 +4,8 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreationsPage from '@/app/creations/page';
+import FeedbackViewport from '@/app/components/FeedbackViewport';
+import { resetFeedbackState } from '@/app/components/feedback-state';
 
 const navigationState = vi.hoisted(() => {
   const push = vi.fn();
@@ -134,6 +136,7 @@ describe('CreationsPage', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    resetFeedbackState();
     window.sessionStorage.clear();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -155,6 +158,90 @@ describe('CreationsPage', () => {
     }));
 
     expect(renderToString(<CreationsPage />)).toBe(withoutCache);
+  });
+
+  // The section and filter live in the URL, so back, refresh, a shared link
+  // and every returnTo land on what the viewer was looking at. The old tabs
+  // set local state only, which is how the URL could say view=posts while
+  // the Creations tab was highlighted.
+  it('renders the sections as links that carry the view in the URL and mark the current one', async () => {
+    navigationState.searchParams = new URLSearchParams('view=unlocks');
+    render(<CreationsPage />);
+
+    const sections = await screen.findByRole('navigation', { name: 'Studio sections' });
+    const creations = within(sections).getByRole('link', { name: 'Creations' });
+    const posts = within(sections).getByRole('link', { name: 'Post Library' });
+    const unlocks = within(sections).getByRole('link', { name: 'Unlocks' });
+
+    expect(creations).toHaveAttribute('href', '/creations');
+    expect(posts).toHaveAttribute('href', '/creations?view=posts');
+    expect(unlocks).toHaveAttribute('href', '/creations?view=unlocks');
+    // Unlocks was not representable in the URL before.
+    expect(unlocks).toHaveAttribute('aria-current', 'page');
+    expect(creations).not.toHaveAttribute('aria-current');
+    expect(posts).not.toHaveAttribute('aria-current');
+    expect(screen.queryByRole('button', { name: 'Post Library' })).not.toBeInTheDocument();
+    expect(screen.getByText('YOUR UNLOCKS')).toBeInTheDocument();
+  });
+
+  it('keeps the visibility filter in the URL and counts the current section in the header', async () => {
+    navigationState.searchParams = new URLSearchParams('view=posts&visibility=private');
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.startsWith('/api/generations')) {
+        return Promise.resolve(jsonResponse({ generations: [] }));
+      }
+
+      if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
+        const basePost = {
+          generationId: null,
+          mediaUrl: null,
+          mediaKind: null,
+          description: '',
+          prompt: '',
+          body: 'Body',
+          category: 'text',
+          postFormat: 'text',
+          sourceKind: 'manual',
+          sourceTool: null,
+          sourceLabel: 'Manual',
+          createdAt: '2026-06-01T10:00:00.000Z',
+          updatedAt: '2026-06-01T10:00:00.000Z',
+          publicPath: null,
+          resourcePath: null,
+          canShare: false,
+          bundle: null,
+        };
+        return Promise.resolve(jsonResponse({
+          posts: [
+            { ...basePost, id: 'post-a', title: 'Private one', visibility: 'private', archivedAt: null, ownerPath: '/post/post-a/edit' },
+            { ...basePost, id: 'post-b', title: 'Public one', visibility: 'public', archivedAt: null, ownerPath: '/post/post-b/edit' },
+            { ...basePost, id: 'post-c', title: 'Archived one', visibility: 'public', archivedAt: '2026-06-02T10:00:00.000Z', ownerPath: '/post/post-c/edit' },
+          ],
+        }));
+      }
+
+      if (url === '/api/profile') {
+        return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    }));
+
+    render(<CreationsPage />);
+
+    expect(await screen.findByText('Private one')).toBeInTheDocument();
+    expect(screen.queryByText('Public one')).not.toBeInTheDocument();
+    // Archived posts are their own list, not part of the active count.
+    expect(screen.getByText('2 POSTS · 1 ARCHIVED')).toBeInTheDocument();
+
+    const filters = screen.getByRole('group', { name: 'Filter posts by visibility' });
+    expect(within(filters).getByRole('link', { name: 'All (2)' })).toHaveAttribute('href', '/creations?view=posts');
+    expect(within(filters).getByRole('link', { name: 'Private (1)' })).toHaveAttribute('href', '/creations?view=posts&visibility=private');
+    expect(within(filters).getByRole('link', { name: 'Private (1)' })).toHaveAttribute('aria-current', 'true');
+    expect(within(filters).getByRole('link', { name: 'Archived (1)' })).toHaveAttribute('href', '/creations?view=posts&visibility=archived');
+    expect(within(filters).getByRole('link', { name: 'Public (1)' })).not.toHaveAttribute('aria-current');
   });
 
   it('uses the authenticated layout session for tab data instead of importing a fresh Supabase session', async () => {
@@ -371,7 +458,7 @@ describe('CreationsPage', () => {
         return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
       }
 
-      if (url === '/api/showcase/publish') {
+      if (url === '/api/posts/post-public') {
         return Promise.resolve(jsonResponse({
           success: true,
           visibility: 'private',
@@ -383,31 +470,114 @@ describe('CreationsPage', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<CreationsPage />);
+    render(<><CreationsPage /><FeedbackViewport /></>);
 
     expect(await screen.findByText('Public portrait post')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /make private/i }));
+    // One control with the three states; it reads the current one.
+    const trigger = screen.getByRole('button', { name: 'Visibility of Public portrait post: Public' });
+    expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
+    fireEvent.click(trigger);
+    const menu = await screen.findByRole('menu', { name: 'Visibility of Public portrait post' });
+    expect(within(menu).getByRole('menuitemradio', { name: /public/i })).toHaveAttribute('aria-checked', 'true');
+    expect(within(menu).getByRole('menuitemradio', { name: /unlisted/i })).toBeInTheDocument();
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: /private/i }));
 
+    // The card moves before the server answers, and the All filter keeps it.
+    expect(screen.getByRole('button', { name: 'Visibility of Public portrait post: Private' })).toBeInTheDocument();
+
+    // The post route, for a generation-backed post too: it moves the
+    // creation's media itself, and it is the door the mobile app uses.
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/showcase/publish', expect.objectContaining({
-        method: 'POST',
+      expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-public', expect.objectContaining({
+        method: 'PUT',
         headers: expect.objectContaining({
           Authorization: 'Bearer layout-session-token',
         }),
-        body: expect.any(String),
+        body: JSON.stringify({ visibility: 'private' }),
       }));
     });
-
-    const publishCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/showcase/publish') as
-      | [RequestInfo | URL, RequestInit?]
-      | undefined;
-    expect(JSON.parse(String(publishCall?.[1]?.body))).toEqual({
-      generationId: 'gen-public',
-      visibility: 'private',
-    });
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/showcase/publish', expect.anything());
+    expect(await screen.findByRole('status')).toHaveTextContent('Post is private.');
+    // No workspace reload: the change landed in local state.
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).startsWith('/api/posts?')).length).toBe(1);
+    expect(screen.getByRole('button', { name: 'Visibility of Public portrait post: Private' })).toBeInTheDocument();
   });
 
-  it('opens the publish setup modal from a generated card Add recipe action', async () => {
+  it('rolls a visibility change back and reports the server error when the request fails', async () => {
+    navigationState.searchParams = new URLSearchParams('view=posts');
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.startsWith('/api/generations')) {
+        return Promise.resolve(jsonResponse({ generations: [] }));
+      }
+
+      if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
+        return Promise.resolve(jsonResponse({
+          posts: [
+            {
+              id: 'post-upload',
+              generationId: null,
+              visibility: 'private',
+              archivedAt: null,
+              mediaUrl: 'https://example.com/upload.jpg',
+              mediaKind: 'image',
+              title: 'Uploaded private post',
+              description: '',
+              prompt: '',
+              body: '',
+              category: 'image',
+              postFormat: 'media',
+              sourceKind: 'external',
+              sourceTool: 'Midjourney',
+              sourceLabel: 'Midjourney',
+              createdAt: '2026-06-01T10:00:00.000Z',
+              updatedAt: '2026-06-01T10:00:00.000Z',
+              publicPath: null,
+              ownerPath: '/post/post-upload/edit',
+              resourcePath: null,
+              canShare: false,
+              bundle: null,
+            },
+          ],
+        }));
+      }
+
+      if (url === '/api/profile') {
+        return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
+      }
+
+      if (url === '/api/posts/post-upload') {
+        return Promise.resolve(jsonResponse(
+          { success: false, error: 'Complete your profile before publishing publicly.' },
+          { status: 400 },
+        ));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<><CreationsPage /><FeedbackViewport /></>);
+
+    expect(await screen.findByText('Uploaded private post')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Visibility of Uploaded private post: Private' }));
+    fireEvent.click(within(await screen.findByRole('menu')).getByRole('menuitemradio', { name: /public/i }));
+
+    // An uploaded post goes through the post route, not the generation publish route.
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-upload', expect.objectContaining({ method: 'PUT' }));
+    });
+    expect(await screen.findByRole('status')).toHaveTextContent('Complete your profile before publishing publicly.');
+    expect(screen.getByRole('button', { name: 'Visibility of Uploaded private post: Private' })).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/showcase/publish', expect.anything());
+  });
+
+  // The quick publish modal rebuilds a recipe from the generation prefill and
+  // sends no body, so opening it on a post that already exists would replace
+  // whatever the editor saved. An existing post's recipe is always edited in
+  // the editor, which loads the stored bundle.
+  it('links a generated card Add recipe action to the post editor instead of the publish modal', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
 
@@ -421,27 +591,6 @@ describe('CreationsPage', () => {
               linked_post_title: 'Linked generated post',
               linked_post_visibility: 'public',
               linked_post_archived_at: null,
-            }),
-          ],
-        }));
-      }
-
-      if (url === '/api/generations?includeArchived=true&id=gen-linked&limit=1') {
-        return Promise.resolve(jsonResponse({
-          generations: [
-            makeGeneration({
-              id: 'gen-linked',
-              title: 'Linked generated post',
-              linked_post_id: 'post-linked',
-              linked_post_title: 'Linked generated post',
-              linked_post_visibility: 'public',
-              linked_post_archived_at: null,
-              paywallPrefill: {
-                resourceKinds: ['prompt', 'notes', 'remix'],
-                promptText: 'Create a generated portrait.',
-                notesMarkdown: 'Saved generation setup',
-                allowRemix: true,
-              },
             }),
           ],
         }));
@@ -461,19 +610,21 @@ describe('CreationsPage', () => {
 
     render(<CreationsPage />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /^add recipe$/i }));
-
-    expect(await screen.findByRole('dialog', { name: /publish this creation/i })).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('/api/generations?includeArchived=true&id=gen-linked&limit=1', {
-      headers: { Authorization: 'Bearer layout-session-token' },
-    });
-    await waitFor(() => {
-      expect(screen.getByRole('radio', { name: 'Paid' })).toBeChecked();
-    });
-    expect(navigationState.push).not.toHaveBeenCalled();
+    const addRecipeLink = await screen.findByRole('link', { name: /^add recipe$/i });
+    expect(addRecipeLink).toHaveAttribute(
+      'href',
+      '/post/post-linked/edit?resourceMode=paid&focus=price&from=creations#recipe',
+    );
+    expect(screen.queryByRole('button', { name: /^add recipe$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /publish this creation/i })).not.toBeInTheDocument();
+    // No detail fetch: the link needs nothing beyond the linked post id.
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/generations?includeArchived=true&id=gen-linked&limit=1',
+      expect.anything(),
+    );
   });
 
-  it('removes an existing recipe from a generation-backed Post Library Manage recipe action', async () => {
+  it('links a Post Library Manage recipe action to the post editor for a generation-backed post', async () => {
     navigationState.searchParams = new URLSearchParams('view=posts');
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
@@ -484,23 +635,6 @@ describe('CreationsPage', () => {
             makeGeneration({
               id: 'gen-bundled',
               title: 'Bundled generated post',
-            }),
-          ],
-        }));
-      }
-
-      if (url === '/api/generations?includeArchived=true&id=gen-bundled&limit=1') {
-        return Promise.resolve(jsonResponse({
-          generations: [
-            makeGeneration({
-              id: 'gen-bundled',
-              title: 'Bundled generated post',
-              paywallPrefill: {
-                resourceKinds: ['prompt', 'notes', 'remix'],
-                promptText: 'Create a reusable generated portrait.',
-                notesMarkdown: 'Saved bundled setup',
-                allowRemix: true,
-              },
             }),
           ],
         }));
@@ -533,13 +667,37 @@ describe('CreationsPage', () => {
               canShare: true,
               bundle: {
                 id: 'bundle-1',
-                accessMode: 'paid',
-                status: 'draft',
-                priceUsdCents: 900,
+                accessMode: 'free',
+                status: 'published',
+                priceUsdCents: 0,
                 salesCount: 0,
                 earningsUsdCents: 0,
                 resourceKinds: ['prompt', 'notes', 'remix'],
               },
+            },
+            {
+              id: 'post-uploaded',
+              generationId: null,
+              visibility: 'public',
+              archivedAt: null,
+              mediaUrl: 'https://example.com/upload.jpg',
+              mediaKind: 'image',
+              title: 'Uploaded post without a recipe',
+              description: '',
+              prompt: '',
+              body: '',
+              category: 'image',
+              postFormat: 'media',
+              sourceKind: 'external',
+              sourceTool: 'Midjourney',
+              sourceLabel: 'Midjourney',
+              createdAt: '2026-06-01T09:00:00.000Z',
+              updatedAt: '2026-06-01T09:00:00.000Z',
+              publicPath: '/showcase/post-uploaded',
+              ownerPath: '/post/post-uploaded/edit',
+              resourcePath: null,
+              canShare: true,
+              bundle: null,
             },
           ],
         }));
@@ -553,54 +711,29 @@ describe('CreationsPage', () => {
         }));
       }
 
-      if (url === '/api/showcase/publish') {
-        return Promise.resolve(jsonResponse({
-          success: true,
-          visibility: 'public',
-          postId: 'post-bundled',
-          resourceBundleStatus: null,
-          resourceBundlePath: null,
-        }));
-      }
-
       return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
     vi.stubGlobal('fetch', fetchMock);
 
     render(<CreationsPage />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /^manage recipe$/i }));
+    // The stored recipe is free; the editor link carries that so it opens on
+    // the saved access mode rather than the modal's Paid / 900 default.
+    const manageRecipeLink = await screen.findByRole('link', { name: /^manage recipe$/i });
+    expect(manageRecipeLink).toHaveAttribute(
+      'href',
+      '/post/post-bundled/edit?resourceMode=free&focus=price&from=creations#recipe',
+    );
+    expect(screen.queryByRole('button', { name: /^manage recipe$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /publish this creation/i })).not.toBeInTheDocument();
 
-    expect(await screen.findByRole('dialog', { name: /publish this creation/i })).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('/api/generations?includeArchived=true&id=gen-bundled&limit=1', {
-      headers: { Authorization: 'Bearer layout-session-token' },
-    });
-    await waitFor(() => {
-      expect(screen.getByRole('radio', { name: 'Paid' })).toBeChecked();
-    });
+    // An uploaded post with no recipe gets the same entry point.
+    expect(screen.getByRole('link', { name: /^add recipe$/i })).toHaveAttribute(
+      'href',
+      '/post/post-uploaded/edit?resourceMode=paid&focus=price&from=creations#recipe',
+    );
     expect(navigationState.push).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('radio', { name: 'Off' }));
-    expect(screen.getByRole('radio', { name: 'Paid' })).not.toBeChecked();
-    fireEvent.click(screen.getByRole('button', { name: /^public post$/i }));
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/showcase/publish', expect.objectContaining({
-        method: 'POST',
-        body: expect.any(String),
-      }));
-    });
-
-    const publishCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/showcase/publish') as
-      | [RequestInfo | URL, RequestInit?]
-      | undefined;
-    expect(JSON.parse(String(publishCall?.[1]?.body))).toMatchObject({
-      generationId: 'gen-bundled',
-      visibility: 'public',
-      resourceBundle: {
-        accessMode: 'none',
-      },
-    });
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/showcase/publish', expect.anything());
   });
 
   it('keeps Post Library previews intrinsically sized and lazy-loaded', async () => {
@@ -682,13 +815,17 @@ describe('CreationsPage', () => {
     expect(image).toHaveClass('aspect-[4/5]');
     expect(image).not.toHaveClass('h-full');
 
+    // A video row shows its poster and attaches the source only on hover, so
+    // a page of rows never starts a metadata fetch of every full-size file.
     const video = document.querySelector('video');
-    expect(video).toHaveAttribute('preload', 'metadata');
+    expect(video).toHaveAttribute('preload', 'none');
+    expect(video).not.toHaveAttribute('src');
+    expect(video).not.toHaveAttribute('controls');
     expect(video).toHaveClass('aspect-[4/5]');
     expect(video).not.toHaveClass('h-full');
   });
 
-  it('shows one-click public and private visibility actions on creation cards', async () => {
+  it('offers the three-state visibility menu on creation cards with a linked post', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
 
@@ -735,7 +872,7 @@ describe('CreationsPage', () => {
         return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
       }
 
-      if (url === '/api/showcase/publish') {
+      if (url === '/api/posts/post-private') {
         return Promise.resolve(jsonResponse({
           success: true,
           visibility: JSON.parse(String(init?.body)).visibility,
@@ -746,23 +883,27 @@ describe('CreationsPage', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<CreationsPage />);
+    render(<><CreationsPage /><FeedbackViewport /></>);
 
     expect(await screen.findByText('Public generated post')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /make private/i })).toHaveClass('w-full', 'rounded-2xl');
-    expect(screen.getByRole('button', { name: /make public/i })).toHaveClass('w-full', 'rounded-2xl');
+    expect(screen.getByRole('button', { name: 'Visibility of Public generated post: Public' })).toBeInTheDocument();
+    const privateTrigger = screen.getByRole('button', { name: 'Visibility of Private generated post: Private' });
 
-    fireEvent.click(screen.getByRole('button', { name: /make public/i }));
+    fireEvent.click(privateTrigger);
+    const menu = await screen.findByRole('menu', { name: 'Visibility of Private generated post' });
+    // Unlisted was unreachable from the old two-way toggle.
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: /unlisted/i }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/showcase/publish', expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          generationId: 'gen-private',
-          visibility: 'public',
-        }),
+      expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-private', expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ visibility: 'unlisted' }),
       }));
     });
+    expect(await screen.findByRole('status')).toHaveTextContent('Post is unlisted.');
+    expect(screen.getByRole('button', { name: 'Visibility of Private generated post: Unlisted' })).toBeInTheDocument();
+    // Staying on the Creations tab: a visibility change is not a reason to switch views.
+    expect(screen.getByText('Public generated post')).toBeInTheDocument();
   });
 
   it('uses stable creation media frames and a responsive grid while showing only the primary output', async () => {
