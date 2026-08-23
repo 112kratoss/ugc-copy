@@ -186,6 +186,19 @@ function createServiceClientTestDouble() {
         return query;
       }
 
+      // A private publish retires the legacy media rows still pointing at the
+      // derivative; these fixtures carry none.
+      if (table === 'post_media') {
+        return {
+          select() {
+            return { eq: async () => ({ data: [], error: null }) };
+          },
+          delete() {
+            return { in: async () => ({ error: null }) };
+          },
+        };
+      }
+
       throw new Error(`Unexpected service table access: ${table}`);
     },
     rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {

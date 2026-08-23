@@ -80,10 +80,15 @@ function createCanonicalTemplateAdminClientMock({
  * see the publish columns — and deliberately throws on `template_runs`:
  * an unlinked row must never pay for the canonical-run lookup.
  */
-function createAdminClientMock(generation: Record<string, unknown> | null = null, loadError: { message: string; code?: string } | null = null) {
+function createAdminClientMock(
+  generation: Record<string, unknown> | null = null,
+  loadError: { message: string; code?: string } | null = null,
+  options: { postMediaRows?: Array<Record<string, unknown>> } = {},
+) {
   const removeMock = vi.fn(async () => ({ data: null, error: null }));
   const selects: string[] = [];
   const eqs: Array<{ column: string; value: unknown }> = [];
+  const deletedMediaRowIds: string[][] = [];
 
   return {
     client: {
@@ -94,6 +99,22 @@ function createAdminClientMock(generation: Record<string, unknown> | null = null
             maybeSingle: vi.fn(async () => ({ data: null, error: null })),
           };
           return { select: vi.fn(() => query) };
+        }
+
+        // A private publish retires the legacy media rows that still point at
+        // the derivative (see removeGenerationShowcaseDerivative).
+        if (table === 'post_media') {
+          return {
+            select: vi.fn(() => ({
+              eq: vi.fn(async () => ({ data: options.postMediaRows ?? [], error: null })),
+            })),
+            delete: vi.fn(() => ({
+              in: vi.fn(async (_column: string, ids: string[]) => {
+                deletedMediaRowIds.push(ids);
+                return { error: null };
+              }),
+            })),
+          };
         }
 
         if (table !== 'generations') {
@@ -128,6 +149,7 @@ function createAdminClientMock(generation: Record<string, unknown> | null = null
         })),
       },
     } as unknown as SupabaseClient,
+    deletedMediaRowIds,
     eqs,
     removeMock,
     selects,
@@ -345,7 +367,17 @@ describe('publishGenerationToShowcaseForRoute', () => {
       description: 'Original description',
       prompt: 'Original prompt',
     };
-    const adminClient = createAdminClientMock(generation);
+    // A post from before the 2026-06 gallery backfill: its media row and the
+    // row's preview both live in the public bucket next to the derivative.
+    const adminClient = createAdminClientMock(generation, null, {
+      postMediaRows: [{
+        id: 'media-row-1',
+        storage_path: 'showcase/gen-1/example.jpg',
+        preview_storage_path: 'showcase/gen-1/example.preview.1234.webp',
+        rendition_storage_path: null,
+        teaser_storage_path: null,
+      }],
+    });
     const publishGenerationPostWithResourceBundleAtomically = vi.fn(async () => ({
       postId: 'post-1',
       visibility: 'private' as const,
@@ -414,7 +446,11 @@ describe('publishGenerationToShowcaseForRoute', () => {
       }),
       hasBundlePayload: false,
     }));
-    expect(adminClient.removeMock).toHaveBeenCalledWith(['showcase/gen-1/example.jpg']);
+    expect(adminClient.deletedMediaRowIds).toEqual([['media-row-1']]);
+    expect(adminClient.removeMock).toHaveBeenCalledWith([
+      'showcase/gen-1/example.jpg',
+      'showcase/gen-1/example.preview.1234.webp',
+    ]);
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 

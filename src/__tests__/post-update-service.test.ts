@@ -681,7 +681,7 @@ describe('updateOwnerPostForRoute', () => {
         replacePostMediaItems: vi.fn(async () => undefined),
         createPostMediaPreview: vi.fn(async () => null),
         createGenerationShowcaseDerivative: vi.fn(async () => 'showcase/generation-1/example.abc123.jpg'),
-        removeGenerationShowcaseDerivative: vi.fn(async () => ({ removed: true, error: null })),
+        removeGenerationShowcaseDerivative: vi.fn(async () => ({ removed: true, removedPaths: [], removedMediaRows: 0, error: null })),
         ensureDurableGenerationMedia: vi.fn(async () => ({
           outputUrl: 'generated_images/user-1/durable/example.jpg',
           createdLocation: null,
@@ -726,10 +726,12 @@ describe('updateOwnerPostForRoute', () => {
         showcase_asset_path: null,
         output_url: 'generated_images/user-1/durable/example.jpg',
       }]);
-      // Removed only after the post row no longer points at it.
+      // Removed only after the post row no longer points at it, together with
+      // any legacy media row of this post that still serves the same copy.
       expect(dependencies.removeGenerationShowcaseDerivative).toHaveBeenCalledWith(expect.objectContaining({
         generationId: 'generation-1',
         showcaseAssetPath: 'showcase/generation-1/example.abc123.jpg',
+        postId: 'post-1',
       }));
       expect(dependencies.createGenerationShowcaseDerivative).not.toHaveBeenCalled();
     });

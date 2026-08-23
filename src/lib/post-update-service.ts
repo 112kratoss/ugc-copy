@@ -1602,6 +1602,7 @@ export async function updateOwnerPostForRoute({
         adminSupabase,
         generationId: post.generation_id,
         showcaseAssetPath: removableDerivativePath,
+        postId,
       });
       if (removal.error) {
         logBackendError('failed_to_delete_showcase_derivative_after_post_update', { error: removal.error });

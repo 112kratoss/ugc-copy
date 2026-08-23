@@ -30,6 +30,7 @@ import {
   createGenerationShowcaseDerivative,
   getCanonicalGenerationShowcaseAssetPath,
   normalizeGenerationShowcaseCategory,
+  removeGenerationShowcaseDerivative,
   SHOWCASE_MEDIA_BUCKET,
   type GenerationShowcaseCategory,
 } from '@/lib/generation-post-media';
@@ -852,17 +853,14 @@ export async function publishGenerationToShowcaseForRoute({
   invalidateShowcaseFeedCache();
 
   if (effectiveVisibility === 'private' && hasShowcaseAssetColumn && generation.showcase_asset_path) {
-    const removableShowcasePath = getCanonicalGenerationShowcaseAssetPath(
-      generation.showcase_asset_path,
-      generation.id,
-    );
-    if (removableShowcasePath) {
-      const removalResult = await adminSupabase.storage
-        .from(SHOWCASE_MEDIA_BUCKET)
-        .remove([removableShowcasePath]);
-      if (removalResult.error) {
-        logBackendError('failed_to_delete_showcase_derivative_after_unpublish', { error: removalResult.error });
-      }
+    const removal = await removeGenerationShowcaseDerivative({
+      adminSupabase,
+      generationId: generation.id,
+      showcaseAssetPath: generation.showcase_asset_path,
+      postId,
+    });
+    if (removal.error) {
+      logBackendError('failed_to_delete_showcase_derivative_after_unpublish', { error: removal.error });
     }
   }
 
