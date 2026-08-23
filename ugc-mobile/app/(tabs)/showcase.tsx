@@ -24,6 +24,7 @@ import { WorkspaceSideMenuGestureLayer } from '@/components/workspace-side-menu-
 import { useAuth } from '@/lib/auth';
 import { showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
+import { createSerializedImageLoader } from '@/lib/serialized-image-loader';
 import { isShowcaseVideoPreviewCandidate } from '@/lib/showcase-display';
 import {
   INITIAL_SHOWCASE_ACTIVATION_STATE,
@@ -125,6 +126,12 @@ const FEED_HORIZONTAL_PADDING = 8;
 const SHOWCASE_ASPECT_RATIO_FLUSH_MS = 50;
 /** Stable empty list so a blurred feed does not churn `extraData`. */
 const NO_ACTIVE_VIDEO_IDS: string[] = [];
+
+// One loader for the process: the first measurement anywhere warms expo-image's
+// native loader alone, and every later burst from this grid queues behind it.
+const measureShowcaseImage = createSerializedImageLoader(
+  (url: string, options: { maxWidth: number; maxHeight: number }) => Image.loadAsync(url, options)
+);
 
 export default function ShowcaseScreen() {
   const { api, user } = useAuth();
@@ -346,7 +353,7 @@ export default function ShowcaseScreen() {
       if (aspectRatioRequestsRef.current.has(requestKey)) continue;
       aspectRatioRequestsRef.current.add(requestKey);
 
-      void Image.loadAsync(card.previewUrl, { maxWidth: 96, maxHeight: 96 })
+      void measureShowcaseImage(card.previewUrl, { maxWidth: 96, maxHeight: 96 })
         .then((image) => {
           const aspectRatio = image.width / image.height;
           if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) return;
