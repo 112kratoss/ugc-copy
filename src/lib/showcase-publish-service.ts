@@ -308,6 +308,9 @@ type ExistingGenerationPostContent = {
   prompt: string | null;
   body: string | null;
   category: string | null;
+  /** The stored recipe's text, which a visibility flip may publish with the post. */
+  resourcePromptText: string | null;
+  resourceNotesMarkdown: string | null;
 };
 
 /**
@@ -327,15 +330,41 @@ async function loadExistingGenerationPostContent({
 }): Promise<ExistingGenerationPostContent | null> {
   const { data, error } = await supabase
     .from('posts')
-    .select('title, description, prompt, body, category')
+    .select('id, title, description, prompt, body, category')
     .eq('generation_id', generationId)
     .eq('user_id', ownerUserId)
     .maybeSingle();
   if (error) {
     throw error;
   }
+  const post = data as (Omit<ExistingGenerationPostContent, 'resourcePromptText' | 'resourceNotesMarkdown'> & { id: string }) | null;
+  if (!post) {
+    return null;
+  }
 
-  return (data as ExistingGenerationPostContent | null) ?? null;
+  // The posts trigger republishes a stored recipe with the post when it
+  // passes the quality gate, so a flip to public can expose recipe text that
+  // was saved while the post was private and never safety-checked.
+  const { data: bundle, error: bundleError } = await supabase
+    .from('post_resource_bundles')
+    .select('prompt_text, notes_markdown')
+    .eq('post_id', post.id)
+    .eq('owner_user_id', ownerUserId)
+    .maybeSingle();
+  if (bundleError) {
+    throw bundleError;
+  }
+  const bundleText = bundle as { prompt_text: string | null; notes_markdown: string | null } | null;
+
+  return {
+    title: post.title,
+    description: post.description,
+    prompt: post.prompt,
+    body: post.body,
+    category: post.category,
+    resourcePromptText: bundleText?.prompt_text ?? null,
+    resourceNotesMarkdown: bundleText?.notes_markdown ?? null,
+  };
 }
 
 /**
@@ -603,6 +632,15 @@ export async function publishGenerationToShowcaseForRoute({
         // Inspect the originating prompt even when a recipe or privacy choice
         // keeps it out of the public post payload.
         prompt: normalizeTextValue(prompt) ?? generation.prompt?.trim() ?? null,
+        // Recipe text is distributed to buyers like the caption is. A compose
+        // submission carries it in the request; a visibility-only flip may
+        // republish the stored one.
+        resourcePrompt: effectiveResourceBundle?.resources?.promptText
+          ?? existingPost?.resourcePromptText
+          ?? null,
+        resourceNotes: effectiveResourceBundle?.resources?.notesMarkdown
+          ?? existingPost?.resourceNotesMarkdown
+          ?? null,
       })
     : null;
   if (safetyViolation) {

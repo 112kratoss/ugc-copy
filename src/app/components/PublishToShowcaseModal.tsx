@@ -160,7 +160,6 @@ interface PublishToShowcaseModalProps {
   defaultDescription?: string;
   showPaidShortcut?: boolean;
   mediaOnly?: boolean;
-  initialSellAutoUnlock?: boolean;
   paywallPrefill?: GenerationPaywallPrefill | null;
   shareAfterPublish?: {
     title: string;
@@ -188,7 +187,6 @@ export default function PublishToShowcaseModal({
   defaultDescription = '',
   showPaidShortcut = true,
   mediaOnly = false,
-  initialSellAutoUnlock = false,
   paywallPrefill = null,
   shareAfterPublish,
   onPublished,
@@ -253,14 +251,13 @@ export default function PublishToShowcaseModal({
     // Opening a generation starts a fresh publish draft from its supplied defaults.
     setPublishTitle(defaultTitle);
     setPublishDescription(getDefaultPublishDescription(defaultDescription));
-    // Callers that open this modal from a "sell" action land on paid; everyone
-    // else starts with no recipe attached and opts in.
-    setRecipeAccess(initialSellAutoUnlock && hasAutoUnlock ? 'paid' : 'none');
+    // A fresh publish starts with no recipe attached; the creator opts in.
+    setRecipeAccess('none');
     setPriceTokens(String(DEFAULT_PRICE_TOKENS));
     setPublishingVisibility(null);
     setFormError(null);
     setNeedsProfileRepair(false);
-  }, [defaultDescription, defaultTitle, generationId, hasAutoUnlock, initialSellAutoUnlock, isOpen, paywallPrefill]);
+  }, [defaultDescription, defaultTitle, generationId, isOpen]);
 
   useEffect(() => {
     if (!isOpen || !generationId) {

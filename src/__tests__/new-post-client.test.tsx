@@ -712,7 +712,11 @@ describe('NewPostClient', () => {
     expect(payload).not.toHaveProperty('resourceBundle');
   });
 
-  it('leaves a sold generation package out of the publish payload', async () => {
+  // An existing post made from a creation is saved through the post route
+  // like any other post; the publish route is for creating one. The sold
+  // package is still left out, since the update path treats a missing key as
+  // "preserve what is stored".
+  it('saves an existing sold generation post through the post route without resending its package', async () => {
     enqueueResponse({
       ok: true,
       json: async () => ({
@@ -777,11 +781,14 @@ describe('NewPostClient', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/showcase/publish', expect.objectContaining({ method: 'POST' }));
+      expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-gen-sold-1', expect.objectContaining({ method: 'PUT' }));
     });
-    const publishCall = fetchMock.mock.calls.find(([url]) => String(url) === '/api/showcase/publish');
-    const payload = JSON.parse(String((publishCall?.[1] as { body: string }).body));
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/showcase/publish', expect.anything());
+    const updateCall = fetchMock.mock.calls.find(([url]) => String(url) === '/api/posts/post-gen-sold-1');
+    const payload = JSON.parse(String((updateCall?.[1] as { body: string }).body));
+    expect(payload).toMatchObject({ title: 'A sold generated post', visibility: 'public' });
     expect(payload).not.toHaveProperty('resourceBundle');
+    expect(payload).not.toHaveProperty('mediaItems');
   });
 
   it('keeps an untouched legacy private resource label out of the public title', async () => {

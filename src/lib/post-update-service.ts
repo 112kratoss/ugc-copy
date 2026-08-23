@@ -1412,8 +1412,7 @@ export async function updateOwnerPostForRoute({
     // Moving between them used to be the publish route's job alone, which is
     // why a visibility change from a client that used this route left a
     // private post's media served from the public bucket. The linked
-    // generation is kept in step afterwards; its title and caption mirror the
-    // post's while it is exposed, as the publish route has always done.
+    // generation is kept in step afterwards, its title and caption included.
     const generationUpdate: Record<string, unknown> = {};
     let removableDerivativePath: string | null = null;
     if (isGenerationBacked && post.generation_id) {
@@ -1496,13 +1495,15 @@ export async function updateOwnerPostForRoute({
         if (exposureChanged) {
           generationUpdate.is_public = nextVisibility === 'public';
         }
-        if (isExposing) {
-          if (Object.prototype.hasOwnProperty.call(body, 'title')) {
-            generationUpdate.title = nextTitle;
-          }
-          if (Object.prototype.hasOwnProperty.call(body, 'description')) {
-            generationUpdate.description = nextDescription;
-          }
+        // The creation card shows the generation's own title and caption, so
+        // they follow the post's whenever the post is edited — private too,
+        // or a post retitled while private would show its old name in
+        // Creations until the next public save.
+        if (Object.prototype.hasOwnProperty.call(body, 'title')) {
+          generationUpdate.title = nextTitle;
+        }
+        if (Object.prototype.hasOwnProperty.call(body, 'description')) {
+          generationUpdate.description = nextDescription;
         }
       } else {
         logBackendWarning('post_update_generation_missing', { postId, generationId: post.generation_id });

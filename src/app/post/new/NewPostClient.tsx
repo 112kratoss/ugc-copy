@@ -2033,7 +2033,12 @@ export default function NewPostClient({ initialPost = null }: NewPostClientProps
         ? undefined
         : await uploadComposerMedia(itemsWithStagedPaths, session.user.id);
 
-      if (generationId) {
+      // The publish route creates a post from a creation. Once the post
+      // exists, every edit — including one made from a creation — goes
+      // through the post route like any other post: it accepts the owner's
+      // fields for a generation-backed post, keeps the creation's media in
+      // step, and patches rather than rewrites the row.
+      if (generationId && !isEditMode) {
         const response = await fetch('/api/showcase/publish', {
           method: 'POST',
           headers: {

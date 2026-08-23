@@ -858,6 +858,28 @@ describe('updateOwnerPostForRoute', () => {
       expect(dependencies.ensureDurableGenerationMedia).not.toHaveBeenCalled();
     });
 
+    it('mirrors a title edited while the post is private, so the creation card does not go stale', async () => {
+      const { client, generationUpdates } = createSupabaseMock({
+        post: { ...generatedPost, visibility: 'private', showcase_asset_path: null },
+        bundle: null,
+        generation: { ...generationRow, showcase_asset_path: null },
+      });
+      const dependencies = createDependencies();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { title: 'Renamed while private' },
+        dependencies,
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      expect(generationUpdates).toEqual([{ title: 'Renamed while private' }]);
+      expect(dependencies.createGenerationShowcaseDerivative).not.toHaveBeenCalled();
+      expect(dependencies.ensureDurableGenerationMedia).not.toHaveBeenCalled();
+    });
+
     it('refuses to replace the media of a generation-backed post', async () => {
       const { client } = createSupabaseMock({
         post: generatedPost,

@@ -28,6 +28,7 @@ type GenerationInputMediaRow = {
 };
 
 type ExistingPostRow = {
+  id: string;
   title: string | null;
   description: string | null;
   prompt: string | null;
@@ -137,6 +138,23 @@ function createServiceClientTestDouble() {
               && filters.generation_id === generationState?.id
               && filters.user_id === generationState?.user_id;
             return { data: matches ? existingPostState : null, error: null };
+          },
+        };
+
+        return query;
+      }
+
+      if (table === 'post_resource_bundles') {
+        // The stored recipe's text, read for the safety check on exposure.
+        const query = {
+          select() {
+            return query;
+          },
+          eq() {
+            return query;
+          },
+          async maybeSingle() {
+            return { data: null, error: null };
           },
         };
 
@@ -554,6 +572,7 @@ describe('/api/showcase/publish route', () => {
   // post's own content, not a rebuild from the (stale) generation row.
   it('keeps the edited title, caption, and body on a visibility-only request', async () => {
     existingPostState = {
+      id: 'post-1',
       title: 'Golden hour study',
       description: 'Edited caption',
       prompt: null,

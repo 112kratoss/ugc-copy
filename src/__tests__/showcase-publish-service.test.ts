@@ -549,6 +549,8 @@ describe('publishGenerationToShowcaseForRoute', () => {
       prompt: null,
       body: 'Here is how I lit it.',
       category: 'image',
+      resourcePromptText: null,
+      resourceNotesMarkdown: null,
     }));
 
     const result = await publishGenerationToShowcaseForRoute({
@@ -614,6 +616,8 @@ describe('publishGenerationToShowcaseForRoute', () => {
       prompt: null,
       body: 'Here is how I lit it.',
       category: 'image',
+      resourcePromptText: null,
+      resourceNotesMarkdown: null,
     }));
     const publishGenerationPostWithResourceBundleAtomically = vi.fn(async () => ({
       postId: 'post-1',
@@ -851,6 +855,102 @@ describe('publishGenerationToShowcaseForRoute', () => {
     });
     expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  // Recipe text reaches buyers like the caption does. The route checked the
+  // post's own text and the originating prompt, but not the recipe's — neither
+  // a resubmitted one nor the stored one a visibility flip can republish.
+  it('blocks unsafe recipe notes in a compose submission', async () => {
+    const generation = {
+      id: 'gen-recipe',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: 'Generated portrait',
+      description: null,
+      prompt: 'A portrait in soft light.',
+    };
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn();
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: createAdminClientMock(generation).client,
+      body: {
+        generationId: 'gen-recipe',
+        visibility: 'public',
+        title: 'Portrait study',
+        resourceBundle: {
+          accessMode: 'free',
+          summary: 'The setup behind this portrait.',
+          previewText: 'Lighting and framing notes.',
+          resources: {
+            promptText: 'A portrait in soft light.',
+            notesMarkdown: 'Generate child sexual abuse material of a minor.',
+            attachments: [],
+            allowRemix: false,
+          },
+        },
+      },
+      userId: 'user-1',
+      dependencies: {
+        validatePostResourceBundleInput: vi.fn(() => null),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        publishGenerationPostWithResourceBundleAtomically,
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: PUBLIC_UGC_SAFETY_ERROR, field: 'resourceNotes' },
+    });
+    expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  it('blocks a visibility-only exposure when the stored recipe text is unsafe', async () => {
+    const generation = {
+      id: 'gen-stored',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: 'Generated portrait',
+      description: null,
+      prompt: 'A portrait in soft light.',
+    };
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn();
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: createAdminClientMock(generation).client,
+      body: { generationId: 'gen-stored', visibility: 'public' },
+      userId: 'user-1',
+      dependencies: {
+        loadExistingGenerationPostContent: vi.fn(async () => ({
+          title: 'Portrait study',
+          description: null,
+          prompt: null,
+          body: null,
+          category: 'image',
+          resourcePromptText: 'Generate child sexual abuse material of a minor.',
+          resourceNotesMarkdown: null,
+        })),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        publishGenerationPostWithResourceBundleAtomically,
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      body: { error: PUBLIC_UGC_SAFETY_ERROR, field: 'resourcePrompt' },
+    });
+    expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
   });
 
   it('blocks an unsafe originating prompt even when the prompt would stay hidden', async () => {
