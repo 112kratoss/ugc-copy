@@ -7,6 +7,7 @@ import { Archive, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, 
 import { useAuth } from '@/app/components/AuthProvider';
 import MediaDetailsPreviewModal, { type MediaDetailsType } from '@/app/components/MediaDetailsPreviewModal';
 import PostVisibilityMenu from '@/app/components/PostVisibilityMenu';
+import StudioOverflowMenu, { type StudioOverflowMenuItem } from '@/app/components/StudioOverflowMenu';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import SkeletonLoader from '@/app/components/SkeletonLoader';
 import {
@@ -16,6 +17,14 @@ import {
 } from '@/app/components/usePostLifecycle';
 import { HoverVideo } from '@/app/components/HoverVideo';
 import CreationMediaFrame from '@/app/creations/CreationMediaFrame';
+import StudioCard, {
+    STUDIO_GRID_CLASS,
+    StudioChip,
+    StudioDetail,
+    StudioKindBadge,
+    studioActionClass,
+    type StudioChipTone,
+} from '@/app/creations/StudioCard';
 import {
     buildPostRecipeManagementPath,
     resolveCreationWorkspaceCardState,
@@ -137,8 +146,6 @@ const CREATIONS_WORKSPACE_CACHE_TTL_MS = 5 * 60 * 1000;
 const CREATIONS_GENERATIONS_PAGE_SIZE = 36;
 const CREATIONS_POSTS_PAGE_SIZE = 36;
 const SIGNED_MEDIA_URL_REFRESH_BUFFER_MS = 5 * 60 * 1000;
-const STUDIO_GRID_CLASS = 'grid items-stretch gap-4 xl:gap-5 [grid-template-columns:repeat(auto-fill,minmax(min(100%,16rem),1fr))]';
-
 function getCreationsWorkspaceCacheKey(userId: string) {
     return `magicbooklet:creations-cache:v1:${userId}`;
 }
@@ -1401,33 +1408,32 @@ export default function CreationsPage() {
     // One colour per meaning, shared with the visibility menu: sky is public,
     // violet is unlisted, neutral is private or gone. Amber is kept for
     // "draft" so an unlisted post never reads as a taken-down one.
-    const getPublishBadgeClass = (badge: CreationWorkspacePublishBadge): string => {
+    const getPublishBadgeTone = (badge: CreationWorkspacePublishBadge): StudioChipTone => {
         switch (badge) {
             case 'Public':
-                return 'border-sky-400/20 bg-sky-500/10 text-sky-100';
+                return 'sky';
             case 'Unlisted':
-                return 'border-violet-400/20 bg-violet-500/10 text-violet-100';
-            case 'Private':
-                return 'border-white/12 bg-white/[0.05] text-zinc-200';
+                return 'violet';
             case 'Archived':
-                return 'border-zinc-400/20 bg-zinc-500/10 text-zinc-200';
+                return 'muted';
+            case 'Private':
             case 'Not published':
             default:
-                return 'border-white/10 bg-white/[0.04] text-zinc-200';
+                return 'neutral';
         }
     };
 
-    const getMonetizationBadgeClass = (kind: CreationWorkspaceMonetizationKind): string => {
+    const getMonetizationBadgeTone = (kind: CreationWorkspaceMonetizationKind): StudioChipTone => {
         switch (kind) {
             case 'free':
-                return 'border-sky-400/20 bg-sky-500/10 text-sky-100';
+                return 'sky';
             case 'paid':
-                return 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100';
+                return 'emerald';
             case 'draft':
-                return 'border-amber-400/20 bg-amber-500/10 text-amber-100';
+                return 'amber';
             case 'none':
             default:
-                return 'border-white/10 bg-white/[0.04] text-zinc-200';
+                return 'neutral';
         }
     };
 
@@ -1752,19 +1758,22 @@ export default function CreationsPage() {
                         </div>
                         <div className={STUDIO_GRID_CLASS}>
                             {processingGenerations.map((gen) => (
-                                <div key={gen.id}
-                                    className="flex h-full flex-col overflow-hidden rounded-2xl border border-yellow-500/20 bg-white/[0.02] backdrop-blur-md">
-                                    <div className="flex aspect-[4/5] items-center justify-center bg-black/60">
-                                        <div className="flex flex-col items-center gap-3">
-                                            <Loader2 className="w-8 h-8 text-yellow-400 animate-spin" />
-                                            <span className="text-xs text-zinc-400">{getStartedAgoLabel(gen) ?? 'Still processing in background...'}</span>
+                                <StudioCard
+                                    key={gen.id}
+                                    density="compact"
+                                    tone="processing"
+                                    media={(
+                                        <div className="flex aspect-[4/5] items-center justify-center bg-black/60">
+                                            <div className="flex flex-col items-center gap-3">
+                                                <Loader2 className="h-8 w-8 animate-spin text-yellow-400" />
+                                                <span className="text-xs text-zinc-400">{getStartedAgoLabel(gen) ?? 'Still processing in background...'}</span>
+                                            </div>
                                         </div>
-                                    </div>
-                                    <div className="mt-auto flex items-center justify-between gap-3 p-4">
-                                        <p className="text-xs text-zinc-500">{formatDate(gen.created_at)}</p>
-                                        <span className="text-xs text-zinc-500">{getStartedAgoLabel(gen) ?? 'Processing'}</span>
-                                    </div>
-                                </div>
+                                    )}
+                                    chips={<StudioChip tone="amber">Processing</StudioChip>}
+                                    title={getPreviewTitle(gen)}
+                                    meta={[{ label: 'Started', value: formatDate(gen.created_at) }]}
+                                />
                             ))}
                         </div>
                     </div>
@@ -1790,11 +1799,7 @@ export default function CreationsPage() {
                                 const primaryMediaUrl = gen.output_url ?? outputUrls[0];
                                 const canManageFromCreation = !isAudio && isShareSupported(gen);
                                 const completedInLabel = getCompletedInLabel(gen);
-                                const badgeClass = isImage
-                                    ? 'border-blue-400/30 bg-blue-500/20 text-blue-100'
-                                    : isAudio
-                                        ? 'border-emerald-400/30 bg-emerald-500/20 text-emerald-100'
-                                        : 'border-rose-400/30 bg-rose-500/20 text-rose-100';
+                                const kindTone: StudioChipTone = isImage ? 'sky' : isAudio ? 'emerald' : 'rose';
                                 const badgeLabel = isImage ? 'Image' : isAudio ? 'Audio' : 'Video';
                                 const publishBadgeLabel = workspaceState.publishBadge;
                                 const monetizationBadgeLabel = getMonetizationBadgeLabel(workspaceState);
@@ -1822,217 +1827,187 @@ export default function CreationsPage() {
                                     month: 'short',
                                     day: 'numeric',
                                 });
-                                const hasSecondaryInlineAction =
-                                    Boolean(workspaceState.secondaryAction.href) && !primaryIsPublish;
-                                const hasLinkedVisibilityAction = Boolean(linkedPostTarget);
-                                const hasCompactActionRow = hasSecondaryInlineAction || hasLinkedVisibilityAction;
+                                // The linked post's own page opens from its title in the
+                                // detail block, so the footer stays one row.
+                                const linkedPostHref = hasPrimaryAction && !primaryIsPublish
+                                    ? workspaceState.secondaryAction.href ?? null
+                                    : null;
                                 const isGenerationDetailLoading = generationDetailLoadingId === gen.id;
+                                const cardTitle = getPreviewTitle(gen);
+                                const overflowItems: StudioOverflowMenuItem[] = [];
+                                if (canCopyLinkedPost && linkedPostPublicPath) {
+                                    overflowItems.push({
+                                        key: 'copy-link',
+                                        label: 'Copy post link',
+                                        icon: <Copy className="h-4 w-4" />,
+                                        onSelect: () => void copyPostLink(linkedPostPublicPath),
+                                    });
+                                }
+                                if (primaryMediaUrl) {
+                                    overflowItems.push({
+                                        key: 'download',
+                                        label: 'Download creation',
+                                        icon: <Download className="h-4 w-4" />,
+                                        href: primaryMediaUrl,
+                                        download: `creation_${gen.id}.${inferDownloadExtension(gen)}`,
+                                    });
+                                }
+                                if (!isTemplateResult) {
+                                    overflowItems.push(
+                                        {
+                                            key: 'archive',
+                                            label: 'Archive creation',
+                                            icon: <Archive className="h-4 w-4" />,
+                                            tone: 'warning',
+                                            onSelect: () => void handleGenerationArchive(gen.id),
+                                        },
+                                        {
+                                            key: 'delete',
+                                            label: 'Delete creation',
+                                            icon: <Trash2 className="h-4 w-4" />,
+                                            tone: 'danger',
+                                            onSelect: () => void handleGenerationDelete(gen.id),
+                                        },
+                                    );
+                                }
                                 return (
-                                    <div
+                                    <StudioCard
                                         key={gen.id}
-                                        data-testid={`creation-card-${gen.id}`}
-                                        className="group flex h-full flex-col overflow-hidden rounded-[24px] border border-white/[0.07] bg-[linear-gradient(180deg,rgba(24,24,27,0.78),rgba(8,8,10,0.96))] shadow-[0_18px_60px_rgba(0,0,0,0.34)] backdrop-blur-md transition duration-300 hover:border-white/14 hover:shadow-[0_24px_80px_rgba(0,0,0,0.46)]"
-                                    >
-                                        <div className="relative shrink-0 overflow-hidden bg-black">
-                                            {primaryMediaUrl ? (
-                                                <CreationMediaFrame
-                                                    key={primaryMediaUrl}
-                                                    id={gen.id}
-                                                    mediaKind={mediaKind}
-                                                    src={primaryMediaUrl}
-                                                    posterSrc={gen.preview_url}
-                                                    alt={isImage ? 'Generated image' : `${badgeLabel} generation`}
-                                                    outputCount={Math.max(outputUrls.length, gen.output_count ?? 0)}
-                                                    onOpen={() => void openPreviewModal(gen)}
-                                                    onRestore={!isAudio && !isTemplateResult ? () => requestPreviewRestore(gen) : undefined}
-                                                    isRestoring={restoringGenerationId === gen.id}
-                                                />
-                                            ) : null}
-                                            <div className={`absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] backdrop-blur-md ${badgeClass}`}>
-                                                <MediaIcon className="h-3.5 w-3.5" />
+                                        density="compact"
+                                        testId={`creation-card-${gen.id}`}
+                                        media={primaryMediaUrl ? (
+                                            <CreationMediaFrame
+                                                key={primaryMediaUrl}
+                                                id={gen.id}
+                                                mediaKind={mediaKind}
+                                                src={primaryMediaUrl}
+                                                posterSrc={gen.preview_url}
+                                                alt={isImage ? 'Generated image' : `${badgeLabel} generation`}
+                                                outputCount={Math.max(outputUrls.length, gen.output_count ?? 0)}
+                                                onOpen={() => void openPreviewModal(gen)}
+                                                onRestore={!isAudio && !isTemplateResult ? () => requestPreviewRestore(gen) : undefined}
+                                                isRestoring={restoringGenerationId === gen.id}
+                                            />
+                                        ) : null}
+                                        badge={(
+                                            <StudioKindBadge tone={kindTone} icon={<MediaIcon className="h-3.5 w-3.5" />}>
                                                 {badgeLabel}
-                                            </div>
-                                            <a href={primaryMediaUrl} download={`creation_${gen.id}.${inferDownloadExtension(gen)}`} target="_blank" rel="noopener noreferrer"
-                                                className="absolute right-3 top-3 rounded-full bg-black/60 p-2 text-white opacity-0 shadow-lg backdrop-blur-md transition-all hover:bg-white hover:text-black focus:opacity-100 group-hover:opacity-100"
-                                                title="Download creation"
-                                                aria-label="Download creation"
-                                            >
-                                                <Download className="w-4 h-4" />
-                                            </a>
-                                        </div>
-
-                                        <div className="flex flex-1 flex-col gap-3.5 p-3.5 sm:p-4">
-                                            <div className="min-w-0">
-                                                <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-white">
-                                                    {getPreviewTitle(gen)}
-                                                </h3>
-                                                <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-400">
-                                                    {getPreviewSummary(gen)}
-                                                </p>
-                                            </div>
-
-                                            <div className="grid grid-cols-3 gap-2 rounded-[18px] border border-white/8 bg-black/25 p-2.5">
-                                                <div>
-                                                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600">Created</div>
-                                                    <div className="mt-1 text-xs font-medium text-zinc-200">{createdShort}</div>
-                                                </div>
-                                                <div>
-                                                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600">Render</div>
-                                                    <div className="mt-1 flex items-center gap-1 text-xs font-medium text-zinc-200">
+                                            </StudioKindBadge>
+                                        )}
+                                        chips={(
+                                            <>
+                                                {isTemplateResult ? <StudioChip tone="emerald">From template</StudioChip> : null}
+                                                <StudioChip tone={getPublishBadgeTone(publishBadgeLabel)}>{publishBadgeLabel}</StudioChip>
+                                                <StudioChip tone={getMonetizationBadgeTone(workspaceState.monetizationKind)}>{monetizationBadgeLabel}</StudioChip>
+                                            </>
+                                        )}
+                                        title={cardTitle}
+                                        summary={getPreviewSummary(gen)}
+                                        meta={[
+                                            { label: 'Created', value: createdShort },
+                                            {
+                                                label: 'Render',
+                                                value: (
+                                                    <>
                                                         <Clock className="h-3 w-3 text-zinc-500" />
                                                         {gen.duration ? `${Math.round(gen.duration)}s` : completedInLabel?.replace('Completed in ', '') ?? 'Ready'}
-                                                    </div>
-                                                </div>
-                                                <div>
-                                                    <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600">Credits</div>
-                                                    <div className="mt-1 flex items-center gap-1 text-xs font-medium text-zinc-200">
+                                                    </>
+                                                ),
+                                            },
+                                            {
+                                                label: 'Credits',
+                                                value: (
+                                                    <>
                                                         <Zap className="h-3 w-3 text-zinc-500" />
                                                         {gen.cost ?? 0}
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            <div className="flex flex-wrap gap-2">
-                                                {isTemplateResult ? (
-                                                    <div className="inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-100">
-                                                        From template
-                                                    </div>
-                                                ) : null}
-                                                <div className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${getPublishBadgeClass(publishBadgeLabel)}`}>
-                                                    {publishBadgeLabel}
-                                                </div>
-                                                <div className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${getMonetizationBadgeClass(workspaceState.monetizationKind)}`}>
-                                                    {monetizationBadgeLabel}
-                                                </div>
-                                            </div>
-
-                                            {workspaceState.linkedPost ? (
-                                                <div className="rounded-2xl border border-white/8 bg-black/25 p-2.5">
-                                                    <div className="flex items-center justify-between gap-3">
-                                                        <div className="min-w-0">
-                                                            <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Linked post</div>
-                                                            <div className="mt-1 truncate text-sm font-semibold text-white">{workspaceState.linkedPost.title}</div>
-                                                        </div>
-                                                        <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-zinc-300">
-                                                            {workspaceState.linkedPost.archivedAt ? 'Archived' : workspaceState.linkedPost.visibility}
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            ) : null}
-
-                                            {hasPrimaryAction ? (
-                                                <div className="space-y-2">
-                                                    {primaryIsPublish ? (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => void openPublishModal(gen)}
-                                                            disabled={isGenerationDetailLoading}
-                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
-                                                        >
-                                                            {isGenerationDetailLoading ? (
-                                                                <Loader2 className="h-4 w-4 animate-spin" />
-                                                            ) : (
-                                                                <Globe className="h-4 w-4" />
-                                                            )}
-                                                            {workspaceState.primaryAction.label}
-                                                        </button>
-                                                    ) : primaryIsUnlock && workspaceState.primaryAction.href ? (
-                                                        <Link
-                                                            href={workspaceState.primaryAction.href}
-                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200"
-                                                        >
-                                                            <Wand2 className="h-4 w-4" />
-                                                            {workspaceState.primaryAction.label}
-                                                        </Link>
-                                                    ) : null}
-
-                                                    {hasCompactActionRow ? (
-                                                        <div className={`grid gap-2 ${hasSecondaryInlineAction && hasLinkedVisibilityAction ? 'min-[1180px]:grid-cols-2' : ''}`}>
-                                                            {hasSecondaryInlineAction && workspaceState.secondaryAction.href ? (
-                                                                <Link
-                                                                    href={workspaceState.secondaryAction.href}
-                                                                    className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-xs font-medium text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
-                                                                >
-                                                                    <ExternalLink className="h-3.5 w-3.5" />
-                                                                    {workspaceState.secondaryAction.label}
-                                                                </Link>
-                                                            ) : null}
-
-                                                            {linkedPostTarget ? (
-                                                                <PostVisibilityMenu
-                                                                    value={linkedPostTarget.visibility}
-                                                                    onChange={(next) => void postLifecycle.setVisibility(linkedPostTarget, next)}
-                                                                    pending={linkedPostPendingAction === 'visibility'}
-                                                                    disabled={Boolean(linkedPostPendingAction)}
-                                                                    label={`Visibility of ${workspaceState.linkedPost?.title ?? 'linked post'}`}
-                                                                    size="sm"
-                                                                />
-                                                            ) : null}
-                                                        </div>
-                                                    ) : null}
-                                                </div>
-                                            ) : null}
-
-                                            <div className="mt-auto flex items-center justify-between gap-3 border-t border-white/8 pt-3">
-                                                <div className="flex min-w-0 flex-wrap gap-2">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => void openPreviewModal(gen)}
-                                                        disabled={isGenerationDetailLoading}
-                                                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+                                                    </>
+                                                ),
+                                            },
+                                        ]}
+                                        detail={workspaceState.linkedPost ? (
+                                            <StudioDetail
+                                                label="Linked post"
+                                                trailing={linkedPostTarget ? (
+                                                    <PostVisibilityMenu
+                                                        value={linkedPostTarget.visibility}
+                                                        onChange={(next) => void postLifecycle.setVisibility(linkedPostTarget, next)}
+                                                        pending={linkedPostPendingAction === 'visibility'}
+                                                        disabled={Boolean(linkedPostPendingAction)}
+                                                        label={`Visibility of ${workspaceState.linkedPost.title}`}
+                                                        align="end"
+                                                        size="sm"
+                                                    />
+                                                ) : (
+                                                    <StudioChip tone="muted">Archived</StudioChip>
+                                                )}
+                                            >
+                                                {linkedPostHref ? (
+                                                    <Link
+                                                        href={linkedPostHref}
+                                                        aria-label={workspaceState.secondaryAction.label ?? 'Open post'}
+                                                        className="ui-focus-ring flex items-center gap-1.5 rounded-md text-sm font-semibold text-white transition hover:text-[var(--ui-primary)]"
                                                     >
-                                                        {isGenerationDetailLoading ? (
-                                                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                                        ) : (
-                                                            <Eye className="h-3.5 w-3.5" />
-                                                        )}
-                                                        Details
-                                                    </button>
-                                                    {canCopyLinkedPost && workspaceState.linkedPost?.publicPath ? (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => linkedPostPublicPath && void copyPostLink(linkedPostPublicPath)}
-                                                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-zinc-100 transition hover:bg-white/[0.08]"
-                                                        >
-                                                            <Copy className="h-3.5 w-3.5" />
-                                                            Link
-                                                        </button>
-                                                    ) : null}
-                                                    {isTemplateResult && gen.template?.runId ? (
-                                                        <Link
-                                                            href={`/template-runs/${gen.template.runId}`}
-                                                            className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
-                                                        >
-                                                            <ExternalLink className="h-3.5 w-3.5" />
-                                                            Open run
-                                                        </Link>
-                                                    ) : null}
-                                                </div>
-                                                {!isTemplateResult ? (
-                                                    <div className="flex shrink-0 gap-1.5">
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => void handleGenerationArchive(gen.id)}
-                                                            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-amber-400/20 bg-amber-500/10 text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-500/15"
-                                                            title="Archive creation"
-                                                            aria-label="Archive creation"
-                                                        >
-                                                            <Archive className="h-3.5 w-3.5" />
-                                                        </button>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => void handleGenerationDelete(gen.id)}
-                                                            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-rose-400/20 bg-rose-500/10 text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15"
-                                                            title="Delete creation"
-                                                            aria-label="Delete creation"
-                                                        >
-                                                            <Trash2 className="h-3.5 w-3.5" />
-                                                        </button>
-                                                    </div>
+                                                        <span className="truncate">{workspaceState.linkedPost.title}</span>
+                                                        <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />
+                                                    </Link>
+                                                ) : (
+                                                    <div className="truncate text-sm font-semibold text-white">{workspaceState.linkedPost.title}</div>
+                                                )}
+                                            </StudioDetail>
+                                        ) : null}
+                                        primaryAction={hasPrimaryAction ? (
+                                            primaryIsPublish ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void openPublishModal(gen)}
+                                                    disabled={isGenerationDetailLoading}
+                                                    className={studioActionClass('primary', { size: 'md', full: true })}
+                                                >
+                                                    {isGenerationDetailLoading ? (
+                                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                                    ) : (
+                                                        <Globe className="h-4 w-4" />
+                                                    )}
+                                                    {workspaceState.primaryAction.label}
+                                                </button>
+                                            ) : primaryIsUnlock && workspaceState.primaryAction.href ? (
+                                                <Link
+                                                    href={workspaceState.primaryAction.href}
+                                                    className={studioActionClass('emerald', { size: 'md', full: true })}
+                                                >
+                                                    <Wand2 className="h-4 w-4" />
+                                                    {workspaceState.primaryAction.label}
+                                                </Link>
+                                            ) : null
+                                        ) : null}
+                                        actions={(
+                                            <>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void openPreviewModal(gen)}
+                                                    disabled={isGenerationDetailLoading}
+                                                    className={studioActionClass('secondary')}
+                                                >
+                                                    {isGenerationDetailLoading ? (
+                                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                                    ) : (
+                                                        <Eye className="h-3.5 w-3.5" />
+                                                    )}
+                                                    Details
+                                                </button>
+                                                {isTemplateResult && gen.template?.runId ? (
+                                                    <Link
+                                                        href={`/template-runs/${gen.template.runId}`}
+                                                        className={studioActionClass('emerald')}
+                                                    >
+                                                        <ExternalLink className="h-3.5 w-3.5" />
+                                                        Open run
+                                                    </Link>
                                                 ) : null}
-                                            </div>
-                                        </div>
-                                    </div>
+                                            </>
+                                        )}
+                                        menu={<StudioOverflowMenu label={`More actions for ${cardTitle}`} items={overflowItems} />}
+                                    />
                                 );
                             })}
                         </div>
@@ -2044,18 +2019,47 @@ export default function CreationsPage() {
                     <div className="mb-10">
                         <h2 className="text-xs font-bold text-red-400/80 uppercase tracking-widest mb-4">Failed ({failedGenerations.length})</h2>
                         <div className={STUDIO_GRID_CLASS}>
-                            {failedGenerations.map((gen) => (
-                                <div key={gen.id}
-                                    className="flex h-full flex-col overflow-hidden rounded-[1.5rem] border border-red-500/20 bg-white/[0.02] opacity-60 backdrop-blur-md">
-                                    <div className="flex aspect-[4/5] items-center justify-center bg-black/60">
-                                        <span className="text-xs text-red-400/60">Generation failed</span>
-                                    </div>
-                                    <div className="mt-auto flex items-center justify-between p-4">
-                                        <p className="text-xs text-zinc-500">{formatDate(gen.created_at)}</p>
-                                        {gen.cost && <span className="flex items-center gap-1 text-xs text-zinc-500"><Zap className="w-3 h-3" />{gen.cost}</span>}
-                                    </div>
-                                </div>
-                            ))}
+                            {failedGenerations.map((gen) => {
+                                const failedTitle = getPreviewTitle(gen);
+                                return (
+                                    <StudioCard
+                                        key={gen.id}
+                                        density="compact"
+                                        tone="failed"
+                                        media={(
+                                            <div className="flex aspect-[4/5] items-center justify-center bg-black/60">
+                                                <span className="text-xs text-red-400/60">Generation failed</span>
+                                            </div>
+                                        )}
+                                        chips={<StudioChip tone="rose">Failed</StudioChip>}
+                                        title={failedTitle}
+                                        meta={[
+                                            { label: 'Created', value: formatDate(gen.created_at) },
+                                            ...(gen.cost ? [{
+                                                label: 'Credits',
+                                                value: (
+                                                    <>
+                                                        <Zap className="h-3 w-3 text-zinc-500" />
+                                                        {gen.cost}
+                                                    </>
+                                                ),
+                                            }] : []),
+                                        ]}
+                                        menu={(
+                                            <StudioOverflowMenu
+                                                label={`More actions for ${failedTitle}`}
+                                                items={[{
+                                                    key: 'delete',
+                                                    label: 'Delete creation',
+                                                    icon: <Trash2 className="h-4 w-4" />,
+                                                    tone: 'danger',
+                                                    onSelect: () => void handleGenerationDelete(gen.id),
+                                                }]}
+                                            />
+                                        )}
+                                    />
+                                );
+                            })}
                         </div>
                     </div>
                 )}
@@ -2069,35 +2073,46 @@ export default function CreationsPage() {
                             </p>
                         </div>
                         <div className={STUDIO_GRID_CLASS}>
-                            {archivedGenerations.map((gen) => (
-                                <div
-                                    key={gen.id}
-                                    className="flex h-full flex-col rounded-[1.5rem] border border-white/[0.08] bg-white/[0.02] p-4 backdrop-blur-md"
-                                >
-                                    <div className="flex h-full flex-col rounded-[1.25rem] border border-white/8 bg-black/60 p-4">
-                                        <div className="text-sm font-semibold text-white">{getPreviewTitle(gen)}</div>
-                                        <p className="mt-2 text-xs text-zinc-500">{formatDate(gen.created_at)}</p>
-                                        <div className="mt-auto flex flex-wrap gap-2 pt-4">
+                            {archivedGenerations.map((gen) => {
+                                const archivedTitle = getPreviewTitle(gen);
+                                return (
+                                    <StudioCard
+                                        key={gen.id}
+                                        density="compact"
+                                        tone="archived"
+                                        media={(
+                                            <div className="flex aspect-[4/5] items-center justify-center bg-black/60">
+                                                <Archive className="h-8 w-8 text-zinc-600" />
+                                            </div>
+                                        )}
+                                        chips={<StudioChip tone="muted">Archived</StudioChip>}
+                                        title={archivedTitle}
+                                        meta={[{ label: 'Created', value: formatDate(gen.created_at) }]}
+                                        actions={(
                                             <button
                                                 type="button"
                                                 onClick={() => void handleGenerationRestore(gen.id)}
-                                                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
+                                                className={studioActionClass('emerald')}
                                             >
-                                                <RotateCcw className="h-4 w-4" />
+                                                <RotateCcw className="h-3.5 w-3.5" />
                                                 Restore
                                             </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => void handleGenerationDelete(gen.id)}
-                                                className="inline-flex items-center gap-2 rounded-full border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15"
-                                            >
-                                                <Trash2 className="h-4 w-4" />
-                                                Delete
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
+                                        )}
+                                        menu={(
+                                            <StudioOverflowMenu
+                                                label={`More actions for ${archivedTitle}`}
+                                                items={[{
+                                                    key: 'delete',
+                                                    label: 'Delete creation',
+                                                    icon: <Trash2 className="h-4 w-4" />,
+                                                    tone: 'danger',
+                                                    onSelect: () => void handleGenerationDelete(gen.id),
+                                                }]}
+                                            />
+                                        )}
+                                    />
+                                );
+                            })}
                         </div>
                     </div>
                 )}
@@ -2181,9 +2196,6 @@ export default function CreationsPage() {
                                     hour: '2-digit',
                                     minute: '2-digit',
                                 });
-                                const bundleStatusClass = post.bundle?.status === 'published'
-                                    ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
-                                    : 'border-amber-400/20 bg-amber-500/10 text-amber-100';
                                 const categoryLabel = post.mediaKind === 'video'
                                     ? 'Video'
                                     : post.mediaKind === 'image'
@@ -2191,200 +2203,164 @@ export default function CreationsPage() {
                                         : post.postFormat === 'text'
                                             ? 'Text'
                                             : post.category;
+                                const kindTone: StudioChipTone = post.mediaKind === 'video'
+                                    ? 'rose'
+                                    : post.mediaKind === 'image'
+                                        ? 'sky'
+                                        : 'neutral';
                                 const pendingAction = postLifecycle.pendingAction(post.id);
                                 const isBusy = Boolean(pendingAction);
+                                const overflowItems: StudioOverflowMenuItem[] = [];
+                                if (post.canShare) {
+                                    overflowItems.push({
+                                        key: 'copy-link',
+                                        label: 'Copy post link',
+                                        icon: <Copy className="h-4 w-4" />,
+                                        onSelect: () => void copyPostLink(post.publicPath ?? `/showcase/${post.id}`),
+                                    });
+                                }
+                                overflowItems.push(post.archivedAt
+                                    ? {
+                                        key: 'restore',
+                                        label: 'Restore post',
+                                        icon: <RotateCcw className="h-4 w-4" />,
+                                        tone: 'success',
+                                        disabled: isBusy,
+                                        pending: pendingAction === 'restore',
+                                        onSelect: () => void postLifecycle.restore(post),
+                                    }
+                                    : {
+                                        key: 'archive',
+                                        label: 'Archive post',
+                                        icon: <Archive className="h-4 w-4" />,
+                                        tone: 'warning',
+                                        disabled: isBusy,
+                                        pending: pendingAction === 'archive',
+                                        onSelect: () => void postLifecycle.archive(post),
+                                    });
+                                overflowItems.push({
+                                    key: 'delete',
+                                    label: 'Delete post',
+                                    icon: <Trash2 className="h-4 w-4" />,
+                                    tone: 'danger',
+                                    disabled: isBusy,
+                                    pending: pendingAction === 'delete',
+                                    onSelect: () => void postLifecycle.remove(post),
+                                });
 
                                 return (
-                                    <article
+                                    <StudioCard
                                         key={post.id}
-                                        className="overflow-hidden rounded-[28px] border border-white/[0.08] bg-[linear-gradient(135deg,rgba(24,24,27,0.82),rgba(8,8,10,0.96))] p-3 shadow-[0_20px_70px_rgba(0,0,0,0.32)] backdrop-blur-md transition hover:border-white/14"
-                                    >
-                                        <div className="grid gap-4 md:grid-cols-[180px_minmax(0,1fr)]">
-                                            <div className="relative overflow-hidden rounded-[22px] border border-white/8 bg-black/60">
-                                                {post.mediaUrl ? (
-                                                    post.mediaKind === 'video' ? (
-                                                        // Poster at rest, playback on hover: a page of rows must not
-                                                        // start a metadata fetch of every full-size video.
-                                                        <HoverVideo
-                                                            src={resolvePlaybackUrl({ url: post.mediaUrl, renditionUrl: post.mediaItems?.[0]?.renditionUrl })}
-                                                            poster={post.mediaItems?.[0]?.previewUrl}
-                                                            className="aspect-[4/5] w-full object-cover"
-                                                        />
-                                                    ) : (
-                                                        // eslint-disable-next-line @next/next/no-img-element
-                                                        <img src={post.mediaUrl} alt={post.title} loading="lazy" decoding="async" className="aspect-[4/5] w-full object-cover" />
-                                                    )
-                                                ) : (
-                                                    <div className="flex aspect-[4/5] w-full items-center justify-center p-4 text-sm leading-6 text-zinc-400">
-                                                        <span className="line-clamp-6">{post.body || 'Text post'}</span>
-                                                    </div>
+                                        density="expanded"
+                                        tone={post.archivedAt ? 'archived' : 'default'}
+                                        media={post.mediaUrl ? (
+                                            post.mediaKind === 'video' ? (
+                                                // Poster at rest, playback on hover: a page of rows must not
+                                                // start a metadata fetch of every full-size video.
+                                                <HoverVideo
+                                                    src={resolvePlaybackUrl({ url: post.mediaUrl, renditionUrl: post.mediaItems?.[0]?.renditionUrl })}
+                                                    poster={post.mediaItems?.[0]?.previewUrl}
+                                                    className="aspect-[4/5] w-full object-cover"
+                                                />
+                                            ) : (
+                                                // eslint-disable-next-line @next/next/no-img-element
+                                                <img src={post.mediaUrl} alt={post.title} loading="lazy" decoding="async" className="aspect-[4/5] w-full object-cover" />
+                                            )
+                                        ) : (
+                                            <div className="flex aspect-[4/5] w-full items-center justify-center p-4 text-sm leading-6 text-zinc-400">
+                                                <span className="line-clamp-6">{post.body || 'Text post'}</span>
+                                            </div>
+                                        )}
+                                        badge={<StudioKindBadge tone={kindTone}>{categoryLabel}</StudioKindBadge>}
+                                        chips={post.archivedAt || post.bundle ? (
+                                            <>
+                                                {/* Live visibility is the menu in the action row; only the archived state needs a chip. */}
+                                                {post.archivedAt ? <StudioChip tone="muted">Archived</StudioChip> : null}
+                                                {post.bundle ? (
+                                                    <StudioChip tone={post.bundle.status === 'published' ? 'emerald' : 'amber'}>
+                                                        {post.bundle.status === 'published' ? 'Recipe live' : 'Recipe draft'}
+                                                    </StudioChip>
+                                                ) : null}
+                                            </>
+                                        ) : null}
+                                        title={(
+                                            <Link href={post.ownerPath} className="transition hover:text-[var(--ui-primary)]">
+                                                {post.title}
+                                            </Link>
+                                        )}
+                                        subtitle={`${post.sourceLabel} · Updated ${updatedLabel}`}
+                                        summary={postSummary}
+                                        detail={post.bundle ? (
+                                            <StudioDetail
+                                                label="Recipe"
+                                                labelTone="text-emerald-300/80"
+                                                trailing={(
+                                                    <span className="text-xs leading-5 text-zinc-500">
+                                                        {post.bundle.salesCount} sold · {formatUsdCents(post.bundle.earningsUsdCents)} earned
+                                                    </span>
                                                 )}
-                                                <div className="absolute left-3 top-3 rounded-full border border-white/10 bg-black/60 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-100 backdrop-blur-md">
-                                                    {categoryLabel}
+                                            >
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <StudioChip tone="neutral">
+                                                        {post.bundle.accessMode === 'free'
+                                                            ? 'Free recipe'
+                                                            : formatUsdCents(post.bundle.priceUsdCents)}
+                                                    </StudioChip>
+                                                    {post.bundle.resourceKinds.slice(0, 4).map((kind) => (
+                                                        <StudioChip key={`${post.id}-${kind}`} tone="neutral" className="text-zinc-300">
+                                                            {getPostResourceKindLabel(kind)}
+                                                        </StudioChip>
+                                                    ))}
                                                 </div>
-                                            </div>
-
-                                            <div className="flex min-w-0 flex-col justify-between gap-4 p-1 md:p-2">
-                                                <div>
-                                                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                                                        <div className="min-w-0">
-                                                            <h3 className="line-clamp-2 text-lg font-semibold leading-6 text-white">
-                                                                <Link href={post.ownerPath} className="transition hover:text-[var(--ui-primary)]">
-                                                                    {post.title}
-                                                                </Link>
-                                                            </h3>
-                                                            <p className="mt-2 text-sm text-zinc-500">
-                                                                {post.sourceLabel} · Updated {updatedLabel}
-                                                            </p>
-                                                        </div>
-                                                        <div className="flex shrink-0 flex-wrap gap-2">
-                                                            {/* Live visibility is the menu in the action row; only the archived state needs a chip. */}
-                                                            {post.archivedAt ? (
-                                                                <span className="rounded-full border border-zinc-400/20 bg-zinc-500/10 px-3 py-1 text-xs font-medium text-zinc-200">
-                                                                    Archived
-                                                                </span>
-                                                            ) : null}
-                                                            {post.bundle ? (
-                                                                <span className={`rounded-full border px-3 py-1 text-xs font-medium ${bundleStatusClass}`}>
-                                                                    {post.bundle.status === 'published' ? 'Recipe live' : 'Recipe draft'}
-                                                                </span>
-                                                            ) : null}
-                                                        </div>
-                                                    </div>
-
-                                                    <p className="mt-4 line-clamp-2 max-w-3xl text-sm leading-6 text-zinc-400">
-                                                        {postSummary}
-                                                    </p>
-
-                                                    <div className="mt-4 rounded-[20px] border border-white/8 bg-black/25 p-3">
-                                                        {post.bundle ? (
-                                                            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                                                                <div>
-                                                                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300/80">
-                                                                        Recipe
-                                                                    </div>
-                                                                    <div className="mt-1 flex flex-wrap items-center gap-2">
-                                                                        <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-100">
-                                                                            {post.bundle.accessMode === 'free'
-                                                                                ? 'Free recipe'
-                                                                                : formatUsdCents(post.bundle.priceUsdCents)}
-                                                                        </span>
-                                                                        {post.bundle.resourceKinds.slice(0, 4).map((kind) => (
-                                                                            <span
-                                                                                key={`${post.id}-${kind}`}
-                                                                                className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-300"
-                                                                            >
-                                                                                {getPostResourceKindLabel(kind)}
-                                                                            </span>
-                                                                        ))}
-                                                                    </div>
-                                                                </div>
-                                                                <div className="text-xs leading-5 text-zinc-500">
-                                                                    {post.bundle.salesCount} sold · {formatUsdCents(post.bundle.earningsUsdCents)} earned
-                                                                </div>
-                                                            </div>
-                                                        ) : (
-                                                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                                                <div>
-                                                                    <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Recipe</div>
-                                                                    <p className="mt-1 text-sm text-zinc-300">No reusable prompt, files, notes, or workflow attached.</p>
-                                                                </div>
-                                                                <span className="self-start rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-zinc-300">
-                                                                    No recipe
-                                                                </span>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                </div>
-
-                                                <div className="flex flex-col gap-3 border-t border-white/8 pt-4 lg:flex-row lg:items-center lg:justify-between">
-                                                    <div className="flex flex-wrap gap-2">
-                                                        <Link
-                                                            href={post.ownerPath}
-                                                            className="inline-flex items-center gap-2 rounded-full bg-white px-3.5 py-2 text-sm font-semibold text-black transition hover:bg-zinc-200"
-                                                        >
-                                                            <PencilLine className="h-4 w-4" />
-                                                            Edit post
-                                                        </Link>
-                                                        {post.publicPath ? (
-                                                            <Link
-                                                                href={buildStudioDetailPath(post.id)}
-                                                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
-                                                            >
-                                                                <ExternalLink className="h-4 w-4" />
-                                                                View live
-                                                            </Link>
-                                                        ) : null}
-                                                        {!post.archivedAt ? (
-                                                            <PostVisibilityMenu
-                                                                value={post.visibility}
-                                                                onChange={(next) => void postLifecycle.setVisibility(post, next)}
-                                                                pending={pendingAction === 'visibility'}
-                                                                disabled={isBusy}
-                                                                label={`Visibility of ${post.title}`}
-                                                            />
-                                                        ) : null}
-                                                        {!post.archivedAt ? (
-                                                            <Link
-                                                                href={buildPostRecipeManagementPath(post)}
-                                                                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
-                                                            >
-                                                                <Wand2 className="h-4 w-4" />
-                                                                {post.bundle ? 'Manage recipe' : 'Add recipe'}
-                                                            </Link>
-                                                        ) : null}
-                                                    </div>
-
-                                                    <div className="flex flex-wrap gap-2">
-                                                        {post.canShare ? (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => void copyPostLink(post.publicPath ?? `/showcase/${post.id}`)}
-                                                                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-100 transition hover:bg-white/[0.08]"
-                                                                title="Copy post link"
-                                                                aria-label="Copy post link"
-                                                            >
-                                                                <Copy className="h-4 w-4" />
-                                                            </button>
-                                                        ) : null}
-                                                        {post.archivedAt ? (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => void postLifecycle.restore(post)}
-                                                                disabled={isBusy}
-                                                                className="ui-focus-ring inline-flex h-9 w-9 items-center justify-center rounded-full border border-emerald-400/25 bg-emerald-500/10 text-emerald-100 transition hover:border-emerald-300/35 hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-60"
-                                                                title="Restore post"
-                                                                aria-label="Restore post"
-                                                            >
-                                                                {pendingAction === 'restore' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-                                                            </button>
-                                                        ) : (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => void postLifecycle.archive(post)}
-                                                                disabled={isBusy}
-                                                                className="ui-focus-ring inline-flex h-9 w-9 items-center justify-center rounded-full border border-amber-400/25 bg-amber-500/10 text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-500/15 disabled:cursor-not-allowed disabled:opacity-60"
-                                                                title="Archive post"
-                                                                aria-label="Archive post"
-                                                            >
-                                                                {pendingAction === 'archive' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Archive className="h-4 w-4" />}
-                                                            </button>
-                                                        )}
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => void postLifecycle.remove(post)}
-                                                            disabled={isBusy}
-                                                            className="ui-focus-ring inline-flex h-9 w-9 items-center justify-center rounded-full border border-rose-400/25 bg-rose-500/10 text-rose-100 transition hover:border-rose-300/35 hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-60"
-                                                            title="Delete post"
-                                                            aria-label="Delete post"
-                                                        >
-                                                            {pendingAction === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </article>
+                                            </StudioDetail>
+                                        ) : (
+                                            <StudioDetail
+                                                label="Recipe"
+                                                trailing={<StudioChip tone="neutral" className="text-zinc-300">No recipe</StudioChip>}
+                                            >
+                                                <p className="text-sm text-zinc-300">No reusable prompt, files, notes, or workflow attached.</p>
+                                            </StudioDetail>
+                                        )}
+                                        actions={(
+                                            <>
+                                                <Link
+                                                    href={post.ownerPath}
+                                                    className={studioActionClass('primary', { size: 'md' })}
+                                                >
+                                                    <PencilLine className="h-4 w-4" />
+                                                    Edit post
+                                                </Link>
+                                                {post.publicPath ? (
+                                                    <Link
+                                                        href={buildStudioDetailPath(post.id)}
+                                                        className={studioActionClass('secondary', { size: 'md' })}
+                                                    >
+                                                        <ExternalLink className="h-4 w-4" />
+                                                        View live
+                                                    </Link>
+                                                ) : null}
+                                                {!post.archivedAt ? (
+                                                    <PostVisibilityMenu
+                                                        value={post.visibility}
+                                                        onChange={(next) => void postLifecycle.setVisibility(post, next)}
+                                                        pending={pendingAction === 'visibility'}
+                                                        disabled={isBusy}
+                                                        label={`Visibility of ${post.title}`}
+                                                    />
+                                                ) : null}
+                                                {!post.archivedAt ? (
+                                                    <Link
+                                                        href={buildPostRecipeManagementPath(post)}
+                                                        className={studioActionClass('emerald', { size: 'md' })}
+                                                    >
+                                                        <Wand2 className="h-4 w-4" />
+                                                        {post.bundle ? 'Manage recipe' : 'Add recipe'}
+                                                    </Link>
+                                                ) : null}
+                                            </>
+                                        )}
+                                        menu={<StudioOverflowMenu label={`More actions for ${post.title}`} items={overflowItems} />}
+                                    />
                                 );
                             })}
                         </div>

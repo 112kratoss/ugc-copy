@@ -551,13 +551,16 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(authState.api.listGenerations).toHaveBeenCalledWith(false, { limit: 24 });
   });
 
-  it('requests active non-archived owner posts for the Profile Posts grid', () => {
+  // Archived posts are fetched with the rest so the Posts tab can show them
+  // under their own scope; the archive dialog promises they can be restored
+  // from the profile, and before this there was nowhere to do it.
+  it('requests owner posts including archived ones for the Profile Posts grid', () => {
     renderer.act(() => {
       renderer.create(<ProfileDashboard initialTab="Posts" />);
     });
 
     expect(authState.api.listOwnerPosts).toHaveBeenCalledWith({
-      includeArchived: false,
+      includeArchived: true,
       includeSummary: true,
       limit: 24,
       offset: 0,
@@ -599,7 +602,7 @@ describe('ProfileDashboard media tiles routing', () => {
 
     expect(authState.api.listGenerations).toHaveBeenCalledWith(false, { cursor: '24', limit: 24 });
     expect(authState.api.listOwnerPosts).toHaveBeenCalledWith({
-      includeArchived: false,
+      includeArchived: true,
       includeSummary: false,
       limit: 24,
       offset: 24,
@@ -986,7 +989,7 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(tree!.root.findByProps({ children: 'Write three captions for a product launch.' })).toBeTruthy();
   });
 
-  it('hides archived and media-less non-text posts from the Profile grid', () => {
+  it('keeps archived and media-less non-text posts out of the active Posts grid, and lists archived ones under their own scope', () => {
     queryState.ownerPosts = [
       {
         id: 'ready-post',
@@ -1053,6 +1056,15 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(tree!.root.findByProps({ accessibilityLabel: 'Post, Reusable note' })).toBeTruthy();
     expect(tree!.root.findAllByProps({ accessibilityLabel: 'Post, Empty media post' })).toHaveLength(0);
     expect(tree!.root.findAllByProps({ accessibilityLabel: 'Post, Archived post' })).toHaveLength(0);
+
+    // The scope control counts what each scope holds and swaps the grid.
+    const archivedScope = tree!.root.findByProps({ accessibilityLabel: 'Archived (1)' });
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Active (2)' })).toBeTruthy();
+    renderer.act(() => {
+      archivedScope.props.onPress();
+    });
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Post, Archived post' })).toBeTruthy();
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Post, Ready media post' })).toHaveLength(0);
   });
 
   it('renders text posts as intentional text preview tiles', () => {

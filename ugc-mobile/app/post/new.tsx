@@ -245,7 +245,7 @@ function PostDetailsPage({
   sourceTools,
   detailErrors,
   isPickingMedia,
-  isFieldsLocked,
+  isMediaLocked,
   isMadeWithOpen,
   mediaControlRef,
   titleInputRef,
@@ -265,7 +265,7 @@ function PostDetailsPage({
   sourceTools: SourceToolOption[];
   detailErrors: PostComposerDetailErrors;
   isPickingMedia: boolean;
-  isFieldsLocked: boolean;
+  isMediaLocked: boolean;
   isMadeWithOpen: boolean;
   mediaControlRef: RefObject<View | null>;
   titleInputRef: RefObject<TextInput | null>;
@@ -294,7 +294,6 @@ function PostDetailsPage({
         value={draft.title}
         onChangeText={(title) => onChange({ title: title.slice(0, TITLE_MAX_LENGTH) })}
         placeholder="What is this creation about?"
-        editable={!isFieldsLocked}
       />
       <FieldErrorText message={detailErrors.title} />
     </ComposerFieldShell>
@@ -311,7 +310,6 @@ function PostDetailsPage({
         placeholder="Share a prompt, idea, breakdown, or useful note..."
         multiline
         minHeight={170}
-        editable={!isFieldsLocked}
       />
       <FieldErrorText message={detailErrors.content} />
     </ComposerFieldShell>
@@ -319,15 +317,15 @@ function PostDetailsPage({
 
   return (
     <View style={{ gap: 18 }}>
-      {isFieldsLocked ? (
+      {isMediaLocked ? (
         <StatusBlock
           tone="neutral"
-          title="Creation details are fixed"
-          body="This post stays connected to its generated media. You can still change visibility and manage eligible resources in Review & publish."
+          title="Creation media is fixed"
+          body="This post stays connected to its generated media. The title, story, visibility, and resources are yours to change."
         />
       ) : null}
 
-      {!selectedGeneration && !isFieldsLocked ? (
+      {!selectedGeneration && !isMediaLocked ? (
         <PostFormatSelector value={draft.mode === 'text' ? 'text' : 'upload'} onChange={onModeChange} />
       ) : null}
 
@@ -343,7 +341,7 @@ function PostDetailsPage({
           onPickMedia={onPickMedia}
           onRemoveMedia={onRemoveMedia}
           onReorderMedia={onReorderMedia}
-          disabled={isFieldsLocked}
+          disabled={isMediaLocked}
           controlRef={mediaControlRef}
           error={detailErrors.media}
         />
@@ -384,7 +382,7 @@ function PostDetailsPage({
           <MadeWithSection
             rows={draft.madeWithRows}
             sourceTools={sourceTools}
-            disabled={isFieldsLocked || draft.mode === 'creation'}
+            disabled={isMediaLocked || draft.mode === 'creation'}
             compactReadOnly={draft.mode === 'creation'}
             onUpdate={onUpdateMadeWith}
             onAdd={onAddMadeWith}
@@ -403,7 +401,6 @@ function PostDetailsPage({
           placeholder="Share the idea, process, or story behind it..."
           multiline
           minHeight={150}
-          editable={!isFieldsLocked}
         />
       </ComposerFieldShell> : null}
     </View>
@@ -1718,7 +1715,7 @@ export default function NewPostScreen() {
   const isTemplateBacked = isTemplateGeneration(selectedGeneration);
   const isGenerationBacked = Boolean(postQuery.data?.post?.generationId) || draft.mode === 'creation';
   const isEditMode = Boolean(postId);
-  const isFieldsLocked = isEditMode && isGenerationBacked;
+  const isMediaLocked = isEditMode && isGenerationBacked;
   const hasPaidOrders = postQuery.data?.post?.hasPaidOrders === true;
   const canSubmit = !isPickingMedia
     && !isPickingResourceFile
@@ -2154,7 +2151,7 @@ export default function NewPostScreen() {
   }
 
   const setMode = (mode: Exclude<PostComposerMode, 'creation'>) => {
-    if (isFieldsLocked) return;
+    if (isMediaLocked) return;
     setMessage(null);
     const next = {
       ...draft,
@@ -2500,7 +2497,7 @@ export default function NewPostScreen() {
   };
 
   const chooseMedia = async (kind: 'image' | 'video' | 'mixed') => {
-    if (isFieldsLocked || isPickingMedia || isRecoveringDraftMedia) return;
+    if (isMediaLocked || isPickingMedia || isRecoveringDraftMedia) return;
     setMessage(null);
     setPendingRetryMedia([]);
     setIsPickingMedia(true);
@@ -3025,7 +3022,7 @@ export default function NewPostScreen() {
             sourceTools={sourceTools}
             detailErrors={detailErrors}
             isPickingMedia={isPickingMedia}
-            isFieldsLocked={isFieldsLocked}
+            isMediaLocked={isMediaLocked}
             isMadeWithOpen={isMadeWithOpen}
             mediaControlRef={mediaControlRef}
             titleInputRef={titleInputRef}
@@ -3692,7 +3689,7 @@ function ProofSection({
   draft,
   selectedGeneration,
   isPickingMedia,
-  isFieldsLocked,
+  isMediaLocked,
   onModeChange,
   onPickMedia,
   onRemoveMedia,
@@ -3701,7 +3698,7 @@ function ProofSection({
   draft: PostComposerDraft;
   selectedGeneration: GenerationListItem | null;
   isPickingMedia: boolean;
-  isFieldsLocked: boolean;
+  isMediaLocked: boolean;
   onModeChange: (mode: Exclude<PostComposerMode, 'creation'>) => void;
   onPickMedia: () => void;
   onRemoveMedia: (id: string) => void;
@@ -3716,8 +3713,8 @@ function ProofSection({
     >
       {!selectedGeneration ? (
         <SegmentedRow>
-          <Chip label="Media" active={draft.proofMode === 'media' && draft.mode !== 'creation'} onPress={() => onModeChange('upload')} disabled={isFieldsLocked} />
-          <Chip label="Text" active={draft.proofMode === 'text'} onPress={() => onModeChange('text')} disabled={isFieldsLocked} />
+          <Chip label="Media" active={draft.proofMode === 'media' && draft.mode !== 'creation'} onPress={() => onModeChange('upload')} disabled={isMediaLocked} />
+          <Chip label="Text" active={draft.proofMode === 'text'} onPress={() => onModeChange('text')} disabled={isMediaLocked} />
         </SegmentedRow>
       ) : null}
 
@@ -3734,7 +3731,7 @@ function ProofSection({
           onPickMedia={onPickMedia}
           onRemoveMedia={onRemoveMedia}
           onReorderMedia={onReorderMedia}
-          disabled={isFieldsLocked}
+          disabled={isMediaLocked}
         />
       ) : null}
 

@@ -45,6 +45,7 @@
 @source "./components/navigation-progress-state.ts";
 @source "./components/useMediaLoadingPreferences.ts";
 @source "./components/useOptimisticPostSave.ts";
+@source "./components/useAnchoredMenu.ts";
 @source "./components/usePostLifecycle.ts";
 @source "./components/useShareAction.ts";
 @source "./components/useSupabaseAuthCookieHint.ts";

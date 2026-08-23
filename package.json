@@ -22,6 +22,7 @@
     "backfill:post-media-previews": "npm run backfill:media-previews",
     "backfill:showcase-assets": "node scripts/backfill-showcase-assets.mjs",
     "backfill:showcase-media-cache": "tsx --env-file-if-exists=.env.local scripts/backfill-showcase-media-cache.ts",
+    "backfill:private-post-media": "tsx --env-file-if-exists=.env.local scripts/backfill-private-post-media.ts",
     "db:migrations:check": "node scripts/check-supabase-migration-drift.mjs",
     "db:inspect:performance": "node scripts/inspect-supabase-performance.mjs --local",
     "db:benchmark:scaling": "node scripts/benchmark-local-scaling.mjs",

@@ -44,6 +44,13 @@ import { getProfileHandle } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
 import { getNativeRemixCreateHref, getViewerShareIntent, getViewerShareSourceSurface } from '@/lib/viewer-actions';
+import {
+  changePostVisibility,
+  pickPostVisibility,
+  toPostLifecyclePost,
+  type PostLifecyclePost,
+} from '@/lib/post-lifecycle';
+import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
 import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
 
 type ProfileMediaFeedParams = {
@@ -198,17 +205,17 @@ export function ProfileMediaFeedScreen() {
   }, [user]);
 
   const applyPostVisibility = useCallback(async (
-    postId: string,
-    visibility: 'public' | 'unlisted' | 'private',
+    post: PostLifecyclePost,
+    visibility: PostLifecycleVisibility,
     action: string
   ) => {
     setPendingAction(action);
     try {
-      await api.updatePost(postId, { visibility });
-      await refreshViewerMediaCaches(queryClient, user?.id);
-      await sourceQuery.refetch();
-    } catch {
-      Alert.alert('Could not update visibility', 'Please try again.');
+      const outcome = await changePostVisibility({ api, post, visibility });
+      if (outcome === 'done') {
+        await refreshViewerMediaCaches(queryClient, user?.id);
+        await sourceQuery.refetch();
+      }
     } finally {
       setPendingAction(null);
     }
@@ -256,30 +263,25 @@ export function ProfileMediaFeedScreen() {
       case 'save':
       case 'unsave':
         return;
-      case 'change-visibility':
-        Alert.alert('Change visibility', 'Choose who can see this post.', [
-          { text: 'Public', onPress: () => void applyPostVisibility(item.id, 'public', action) },
-          { text: 'Unlisted', onPress: () => void applyPostVisibility(item.id, 'unlisted', action) },
-          { text: 'Private', onPress: () => void applyPostVisibility(item.id, 'private', action) },
-          { text: 'Cancel', style: 'cancel' },
-        ]);
+      case 'change-visibility': {
+        const post = toPostLifecyclePost({
+          id: item.id,
+          visibility: item.visibility,
+          archivedAt: item.archivedAt,
+          bundle: item.ownerPostBundle ?? null,
+        });
+        pickPostVisibility(post.visibility, (next) => void applyPostVisibility(post, next, action));
         return;
-      case 'make-private':
-      case 'make-public': {
-        const linkedPostId = item.linkedPostId;
-        if (!linkedPostId) return;
-        const nextVisibility = action === 'make-private' ? 'private' : 'public';
-        const label = action === 'make-private' ? 'Make private' : 'Make public';
-        Alert.alert(
-          `${label}?`,
-          action === 'make-private'
-            ? 'This linked post will leave public surfaces until you make it public again.'
-            : 'This linked post will return to public surfaces.',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            { text: label, onPress: () => void applyPostVisibility(linkedPostId, nextVisibility, action) },
-          ]
-        );
+      }
+      case 'change-linked-visibility': {
+        if (!item.linkedPostId) return;
+        const post = toPostLifecyclePost({
+          id: item.linkedPostId,
+          visibility: item.linkedPostVisibility,
+          archivedAt: item.linkedPostArchivedAt,
+          bundle: item.linkedPostBundle ?? null,
+        });
+        pickPostVisibility(post.visibility, (next) => void applyPostVisibility(post, next, action));
         return;
       }
       default:

@@ -1025,6 +1025,119 @@ describe('CreationsPage', () => {
     expect(setIntervalSpy).not.toHaveBeenCalled();
   });
 
+  it('keeps each card\'s lifecycle actions in its overflow menu on both tabs', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url === GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: [
+            makeGeneration({
+              id: 'gen-linked',
+              title: 'Linked generated post',
+              linked_post_id: 'post-linked',
+              linked_post_title: 'Linked generated post',
+              linked_post_visibility: 'public',
+              linked_post_archived_at: null,
+            }),
+          ],
+        }));
+      }
+
+      if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
+        return Promise.resolve(jsonResponse({
+          posts: [
+            {
+              id: 'post-linked',
+              generationId: 'gen-linked',
+              visibility: 'public',
+              archivedAt: null,
+              mediaUrl: 'https://example.com/post.jpg',
+              mediaKind: 'image',
+              title: 'Linked generated post',
+              description: '',
+              prompt: '',
+              body: '',
+              category: 'image',
+              postFormat: 'media',
+              sourceKind: 'magicbooklet',
+              sourceTool: 'magicbooklet',
+              sourceLabel: 'magicbooklet',
+              createdAt: '2026-06-01T10:00:00.000Z',
+              updatedAt: '2026-06-01T10:00:00.000Z',
+              publicPath: '/showcase/post-linked',
+              ownerPath: '/post/post-linked/edit',
+              resourcePath: null,
+              canShare: true,
+              bundle: null,
+            },
+            {
+              id: 'post-archived',
+              generationId: null,
+              visibility: 'public',
+              archivedAt: '2026-06-02T10:00:00.000Z',
+              mediaUrl: null,
+              mediaKind: 'text',
+              title: 'Archived note',
+              description: '',
+              prompt: '',
+              body: 'A note.',
+              category: 'text',
+              postFormat: 'text',
+              sourceKind: 'manual',
+              sourceTool: null,
+              sourceLabel: 'Manual',
+              createdAt: '2026-06-01T09:00:00.000Z',
+              updatedAt: '2026-06-02T10:00:00.000Z',
+              publicPath: null,
+              ownerPath: '/post/post-archived/edit',
+              resourcePath: null,
+              canShare: false,
+              bundle: null,
+            },
+          ],
+        }));
+      }
+
+      if (url === '/api/profile') {
+        return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { unmount } = render(<CreationsPage />);
+
+    // A creation card: the visible row is the primary work; the rest waits in the menu.
+    const card = await screen.findByTestId('creation-card-gen-linked');
+    expect(within(card).getByRole('button', { name: 'Details' })).toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: 'Archive creation' })).not.toBeInTheDocument();
+    fireEvent.click(within(card).getByRole('button', { name: 'More actions for Linked generated post' }));
+    const creationMenu = await screen.findByRole('menu', { name: 'More actions for Linked generated post' });
+    expect(within(creationMenu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Copy post link',
+      'Download creation',
+      'Archive creation',
+      'Delete creation',
+    ]);
+    fireEvent.keyDown(creationMenu, { key: 'Escape' });
+    unmount();
+
+    // Post Library: the same menu, with the post's own lifecycle inside it.
+    navigationState.searchParams = new URLSearchParams('view=posts&visibility=archived');
+    render(<CreationsPage />);
+    const archivedRow = await screen.findByRole('heading', { name: 'Archived note' });
+    expect(screen.queryByRole('button', { name: /^visibility of archived note/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Archived note' }));
+    const archivedMenu = await screen.findByRole('menu', { name: 'More actions for Archived note' });
+    expect(within(archivedMenu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Restore post',
+      'Delete post',
+    ]);
+    expect(archivedRow).toBeInTheDocument();
+  });
+
   it('shows canonical template results without unsafe lifecycle actions', async () => {
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = String(input);

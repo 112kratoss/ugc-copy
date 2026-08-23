@@ -28,6 +28,7 @@ type GenerationInputMediaRow = {
 };
 
 type ExistingPostRow = {
+  id: string;
   title: string | null;
   description: string | null;
   prompt: string | null;
@@ -143,6 +144,23 @@ function createServiceClientTestDouble() {
         return query;
       }
 
+      if (table === 'post_resource_bundles') {
+        // The stored recipe's text, read for the safety check on exposure.
+        const query = {
+          select() {
+            return query;
+          },
+          eq() {
+            return query;
+          },
+          async maybeSingle() {
+            return { data: null, error: null };
+          },
+        };
+
+        return query;
+      }
+
       if (table === 'generation_input_media') {
         const query = {
           select() {
@@ -166,6 +184,19 @@ function createServiceClientTestDouble() {
         };
 
         return query;
+      }
+
+      // A private publish retires the legacy media rows still pointing at the
+      // derivative; these fixtures carry none.
+      if (table === 'post_media') {
+        return {
+          select() {
+            return { eq: async () => ({ data: [], error: null }) };
+          },
+          delete() {
+            return { in: async () => ({ error: null }) };
+          },
+        };
       }
 
       throw new Error(`Unexpected service table access: ${table}`);
@@ -554,6 +585,7 @@ describe('/api/showcase/publish route', () => {
   // post's own content, not a rebuild from the (stale) generation row.
   it('keeps the edited title, caption, and body on a visibility-only request', async () => {
     existingPostState = {
+      id: 'post-1',
       title: 'Golden hour study',
       description: 'Edited caption',
       prompt: null,

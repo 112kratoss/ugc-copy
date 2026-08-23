@@ -73,14 +73,17 @@ describe('viewer rail slots', () => {
     const slots = getViewerActionSlots(railItem({
       linkedPostId: 'post-1',
       linkedPostVisibility: 'public',
-      availableActions: ['edit-linked-resources', 'make-private', 'view-linked', 'recreate', 'share', 'view-details'],
+      availableActions: ['edit-linked-resources', 'change-linked-visibility', 'view-linked', 'recreate', 'share', 'view-details'],
     }));
 
     expect(slots.map((slot) => slot.id)).toEqual(['visibility', 'unlock', 'share', 'details', 'create']);
+    // The rail names the linked post's current state; the action opens the
+    // three-state picker, which the old public/private toggle could not reach
+    // unlisted from.
     expect(slots.find((slot) => slot.id === 'visibility')).toMatchObject({
-      action: 'make-private',
-      label: 'Private',
-      a11yLabel: 'Make linked post private',
+      action: 'change-linked-visibility',
+      label: 'Public',
+      a11yLabel: 'Change linked post visibility, currently public',
     });
     // No bundle attached yet, so the unlock slot invites creating one — the rail label
     // stays short and the full phrasing lives on the accessibility label.
@@ -179,6 +182,9 @@ describe('immersive viewer actions', () => {
     expect(getViewerActionGroupLabel('publish')).toBe('Creation to post');
     expect(getViewerActionGroupLabel('view-linked')).toBe('Creation to post');
     expect(getViewerActionGroupLabel('edit-linked')).toBe('Creation to post');
+    expect(getViewerActionGroupLabel('change-linked-visibility')).toBe('Creation to post');
+    expect(getViewerActionGroupLabel('edit-post')).toBe('Your post');
+    expect(getViewerActionGroupLabel('change-visibility')).toBe('Your post');
     expect(getViewerActionGroupLabel('archive')).toBe('Library');
     expect(getViewerActionGroupLabel('delete-post')).toBe('Library');
     expect(getViewerActionGroupLabel('share')).toBe('Media actions');

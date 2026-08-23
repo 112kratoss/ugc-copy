@@ -141,16 +141,11 @@ export default function ShowcaseDetailBody({
   const shouldRenderTextNoteBody =
     isTextOnlyPost &&
     normalizeComparableText(publicText) !== normalizeComparableText(displayTitle);
-  // Composers auto-fill the description with the generation setup, which is
-  // exactly what the recipe's notes hold — showing both prints the settings
-  // twice, once as a mangled lede. The recipe is the better home for it.
-  const bundleNotesText = bundle?.resources?.notesMarkdown
-    ?? bundle?.resources?.items?.find((item) => item.type === 'note' && item.textContent)?.textContent
-    ?? null;
-  const shouldRenderLede = !isTextOnlyPost
-    && Boolean(detail.description)
-    && (!bundleNotesText
-      || normalizeComparableText(detail.description) !== normalizeComparableText(bundleNotesText));
+  // The description is the creator's caption. (It used to be compared against
+  // the recipe's notes because the quick publish modal prefilled it with
+  // them; the modal no longer does, and 20260824090000 cleared the rows it
+  // had left behind.)
+  const shouldRenderLede = !isTextOnlyPost && Boolean(detail.description);
   const resourceBundlePanel = bundle ? (
     <PostResourceBundlePanel
       postId={detail.id}

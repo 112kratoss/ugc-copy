@@ -310,10 +310,8 @@ export function getViewerActionLabel(action: string, sourceType?: ImmersivePrevi
       return 'Edit linked post';
     case 'edit-linked-resources':
       return 'Manage unlock';
-    case 'make-private':
-      return 'Make private';
-    case 'make-public':
-      return 'Make public';
+    case 'change-linked-visibility':
+      return 'Change visibility';
     case 'open-original':
       return 'Open original post';
     case 'view-details':
@@ -360,12 +358,12 @@ export function getViewerActionGroupLabel(action: string) {
     || action === 'view-linked'
     || action === 'edit-linked'
     || action === 'edit-linked-resources'
-    || action === 'make-private'
-    || action === 'make-public'
-    || action === 'edit-post'
-    || action === 'change-visibility'
+    || action === 'change-linked-visibility'
   ) {
     return 'Creation to post';
+  }
+  if (action === 'edit-post' || action === 'change-visibility') {
+    return 'Your post';
   }
 
   if (action === 'archive' || action === 'restore' || action === 'unsave' || action === 'delete-post') {
@@ -429,21 +427,20 @@ export function getViewerActionSlots(item: ImmersivePreviewItem): ViewerActionSl
         tone: 'primary',
       });
     }
-    if (available.has('make-private')) {
+    if (available.has('change-linked-visibility')) {
+      // The rail shows where the linked post sits; the action opens the
+      // three-state picker.
+      const current = item.linkedPostVisibility === 'public'
+        ? 'Public'
+        : item.linkedPostVisibility === 'unlisted'
+          ? 'Unlisted'
+          : 'Private';
       slots.push({
         id: 'visibility',
-        action: 'make-private',
-        label: 'Private',
-        a11yLabel: 'Make linked post private',
-        tone: 'warning',
-      });
-    } else if (available.has('make-public')) {
-      slots.push({
-        id: 'visibility',
-        action: 'make-public',
-        label: 'Public',
-        a11yLabel: 'Make linked post public',
-        tone: 'success',
+        action: 'change-linked-visibility',
+        label: current,
+        a11yLabel: `Change linked post visibility, currently ${current.toLowerCase()}`,
+        tone: item.linkedPostVisibility === 'public' ? 'success' : 'warning',
       });
     }
     if (available.has('edit-linked-resources')) {

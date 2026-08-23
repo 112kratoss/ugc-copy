@@ -3,8 +3,15 @@ import { router } from 'expo-router';
 import { Alert, Linking, Modal, Pressable, ScrollView, View } from 'react-native';
 
 import { AppText } from '@/components/ui';
-import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
+import {
+  archivePost as runArchivePost,
+  changePostVisibility,
+  deletePost as runDeletePost,
+  pickPostVisibility,
+  restorePost as runRestorePost,
+  toPostLifecyclePost,
+} from '@/lib/post-lifecycle';
 import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
 import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
 import { immersiveViewerHref, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
@@ -83,37 +90,29 @@ export function ViewerActionSheet({
     queryClient.setQueriesData<ImmersiveSourceData>({ queryKey: ['immersive-preview-source'] }, removeFromSource);
   };
 
-  const deletePost = async (force = false) => {
-    try {
-      if (force) {
-        await api.deletePost(item.id, { force: true });
-      } else {
-        await api.deletePost(item.id);
-      }
-      removeDeletedPostFromCaches(item.id);
-      await refreshMedia();
-      onDeleted?.(item.id);
-    } catch (error) {
-      if (!force && isForceDeleteRequired(error)) {
-        Alert.alert(
-          'Delete post with paid unlocks?',
-          'This post has paid unlock sales. Permanent delete removes the post for everyone and cannot be undone.',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Delete permanently',
-              style: 'destructive',
-              onPress: () => {
-                void deletePost(true);
-              },
-            },
-          ]
-        );
-        return;
-      }
+  // The owner-post record the policy reasons about: its own visibility and
+  // recipe for a post item, the linked post's for a creation item.
+  const lifecyclePost = toPostLifecyclePost({
+    id: item.id,
+    visibility: item.visibility,
+    archivedAt: item.archivedAt,
+    bundle: item.ownerPostBundle ?? null,
+  });
+  const linkedLifecyclePost = item.linkedPostId
+    ? toPostLifecyclePost({
+        id: item.linkedPostId,
+        visibility: item.linkedPostVisibility,
+        archivedAt: item.linkedPostArchivedAt,
+        bundle: item.linkedPostBundle ?? null,
+      })
+    : null;
 
-      Alert.alert('Could not delete post', error instanceof Error ? error.message : 'Please try again.');
-    }
+  const deletePost = async () => {
+    const outcome = await runDeletePost({ api, post: lifecyclePost });
+    if (outcome !== 'done') return;
+    removeDeletedPostFromCaches(item.id);
+    await refreshMedia();
+    onDeleted?.(item.id);
   };
 
   const confirmMutation = (
@@ -140,12 +139,10 @@ export function ViewerActionSheet({
     ]);
   };
 
-  const updateVisibility = async (visibility: 'public' | 'unlisted' | 'private') => {
-    try {
-      await api.updatePost(item.id, { visibility });
+  const updateVisibility = async (post: NonNullable<typeof linkedLifecyclePost>, visibility: 'public' | 'unlisted' | 'private') => {
+    const outcome = await changePostVisibility({ api, post, visibility });
+    if (outcome === 'done') {
       await refreshMedia();
-    } catch {
-      Alert.alert('Could not update visibility', 'Please try again.');
     }
   };
 
@@ -159,57 +156,56 @@ export function ViewerActionSheet({
     };
 
     if (action === 'save' || action === 'unsave') {
+      // A bookmark is reversible in place: no dialog, like the web.
       const shouldSave = action === 'save';
-      confirmMutation(
-        shouldSave ? 'Save post' : 'Unsave post',
-        shouldSave ? 'Add this post to your saved media?' : 'Remove this post from your saved media?',
-        shouldSave ? 'Save' : 'Unsave',
-        () => item.showcasePostId
-          ? api.saveShowcasePost(item.showcasePostId, {
+      void (async () => {
+        try {
+          if (item.showcasePostId) {
+            await api.saveShowcasePost(item.showcasePostId, {
               shouldSave,
               sourceSurface: item.source === 'profile-saved' ? 'mobile-profile-saved' : 'mobile-viewer-actions',
-            })
-          : Promise.resolve(),
-        !shouldSave
-      );
+            });
+          }
+          await refreshMedia();
+        } catch {
+          Alert.alert('Could not update media', 'Please try again.');
+        }
+      })();
       return;
     }
     if (action === 'archive') {
-      const isPost = item.sourceType === 'owner-post';
+      if (item.sourceType === 'owner-post') {
+        void runArchivePost({ api, post: lifecyclePost }).then(async (outcome) => {
+          if (outcome === 'done') await refreshMedia();
+        });
+        return;
+      }
       confirmMutation(
-        `Archive ${isPost ? 'post' : 'creation'}`,
+        'Archive creation',
         'You can restore it later from your profile.',
         'Archive',
-        () => isPost ? api.archivePost(item.id) : api.archiveGeneration(item.id),
+        () => api.archiveGeneration(item.id),
         true
       );
       return;
     }
     if (action === 'restore') {
-      const isPost = item.sourceType === 'owner-post';
+      if (item.sourceType === 'owner-post') {
+        void runRestorePost({ api, post: lifecyclePost }).then(async (outcome) => {
+          if (outcome === 'done') await refreshMedia();
+        });
+        return;
+      }
       confirmMutation(
-        `Restore ${isPost ? 'post' : 'creation'}`,
+        'Restore creation',
         'Return this item to your active media?',
         'Restore',
-        () => isPost ? api.restorePost(item.id) : api.restoreGeneration(item.id)
+        () => api.restoreGeneration(item.id)
       );
       return;
     }
     if (action === 'delete-post') {
-      Alert.alert(
-        'Delete post permanently?',
-        'This will permanently delete this post. This cannot be undone.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Delete',
-            style: 'destructive',
-            onPress: () => {
-              void deletePost();
-            },
-          },
-        ]
-      );
+      void deletePost();
       return;
     }
     if (action === 'publish') {
@@ -232,26 +228,12 @@ export function ViewerActionSheet({
       router.push({ pathname: '/post/new', params: { postId: item.linkedPostId, focus: 'resources' } } as never);
       return;
     }
-    if ((action === 'make-private' || action === 'make-public') && item.linkedPostId) {
-      const nextVisibility = action === 'make-private' ? 'private' : 'public';
-      const label = action === 'make-private' ? 'Make private' : 'Make public';
-      confirmMutation(
-        `${label}?`,
-        action === 'make-private'
-          ? 'This linked post will leave public surfaces until you make it public again.'
-          : 'This linked post will return to public surfaces.',
-        label,
-        () => item.linkedPostId ? api.updatePost(item.linkedPostId, { visibility: nextVisibility }) : Promise.resolve()
-      );
+    if (action === 'change-linked-visibility' && linkedLifecyclePost) {
+      pickPostVisibility(linkedLifecyclePost.visibility, (next) => void updateVisibility(linkedLifecyclePost, next));
       return;
     }
     if (action === 'change-visibility') {
-      Alert.alert('Change visibility', 'Choose who can see this post.', [
-        { text: 'Public', onPress: () => void updateVisibility('public') },
-        { text: 'Unlisted', onPress: () => void updateVisibility('unlisted') },
-        { text: 'Private', onPress: () => void updateVisibility('private') },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
+      pickPostVisibility(lifecyclePost.visibility, (next) => void updateVisibility(lifecyclePost, next));
       return;
     }
     if (action === 'recreate') {
@@ -509,15 +491,4 @@ function groupViewerActions(actions: string[]) {
   }
 
   return groups;
-}
-
-function isForceDeleteRequired(error: unknown) {
-  return error instanceof ApiError
-    && error.status === 409
-    && isRecord(error.details)
-    && error.details.requiresForceDelete === true;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }

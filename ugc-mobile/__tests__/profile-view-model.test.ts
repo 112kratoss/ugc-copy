@@ -173,13 +173,18 @@ describe('profile view model media cards', () => {
       isGridReady: true,
     });
     expect(ownerPostToProfileMediaCard({ ...base, id: 'empty-media-post' }).isGridReady).toBe(false);
-    expect(ownerPostToProfileMediaCard({
+    // Archived posts stay renderable: the Posts tab shows them under their
+    // own scope instead of dropping them, which used to leave no place to
+    // restore from despite the archive dialog promising one.
+    const archivedCard = ownerPostToProfileMediaCard({
       ...base,
       id: 'archived-post',
       mediaUrl: 'https://cdn.example.com/post.jpg',
       mediaKind: 'image',
       archivedAt: '2026-06-11T00:00:00.000Z',
-    }).isGridReady).toBe(false);
+    });
+    expect(archivedCard.isGridReady).toBe(true);
+    expect(archivedCard.isArchived).toBe(true);
   });
 });
 

@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Globe, Link2, Loader2, LockKeyhole } from 'lucide-react';
 
+import { useAnchoredMenu } from '@/app/components/useAnchoredMenu';
 import type { PostVisibility } from '@/lib/post-lifecycle-client';
 
 export const POST_VISIBILITY_OPTIONS: ReadonlyArray<{
@@ -37,22 +38,12 @@ interface PostVisibilityMenuProps {
 }
 
 const MENU_WIDTH_PX = 256;
-const MENU_GAP_PX = 8;
-
-interface MenuPosition {
-  top: number;
-  left: number;
-}
 
 /**
  * The one visibility control for an owned post: a trigger showing the
  * current state and a menu of the three states with what each means.
  * Rendered on the showcase detail page and in Studio, so it avoids responsive
  * display utilities (see the CSS note in globals.css).
- *
- * The menu is portaled to the body and positioned from the trigger's rect:
- * the cards it sits in clip overflow for their rounded corners and would cut
- * a nested popover off after the first item.
  */
 export default function PostVisibilityMenu({
   value,
@@ -63,41 +54,22 @@ export default function PostVisibilityMenu({
   label = 'Change visibility',
   size = 'md',
 }: PostVisibilityMenuProps) {
-  // The menu's viewport position doubles as its open state.
-  const [position, setPosition] = useState<MenuPosition | null>(null);
-  const isOpen = position !== null;
+  const { isOpen, position, open: openMenu, close, rootRef, triggerRef, menuRef } = useAnchoredMenu({
+    align,
+    width: MENU_WIDTH_PX,
+  });
   const [activeIndex, setActiveIndex] = useState(() =>
     Math.max(0, POST_VISIBILITY_OPTIONS.findIndex((option) => option.value === value)),
   );
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const menuId = useId();
   const current = POST_VISIBILITY_OPTIONS.find((option) => option.value === value) ?? POST_VISIBILITY_OPTIONS[0];
   const isInert = disabled || pending;
 
-  const close = useCallback((restoreFocus: boolean) => {
-    setPosition(null);
-    if (restoreFocus) {
-      triggerRef.current?.focus();
-    }
-  }, []);
-
-  const open = useCallback(() => {
-    const rect = triggerRef.current?.getBoundingClientRect();
-    if (!rect) {
-      return;
-    }
-    const preferredLeft = align === 'end' ? rect.right - MENU_WIDTH_PX : rect.left;
-    // Keep the menu inside the viewport on narrow screens.
-    const left = Math.max(
-      MENU_GAP_PX,
-      Math.min(preferredLeft, window.innerWidth - MENU_WIDTH_PX - MENU_GAP_PX),
-    );
+  const open = () => {
     setActiveIndex(Math.max(0, POST_VISIBILITY_OPTIONS.findIndex((option) => option.value === value)));
-    setPosition({ top: rect.bottom + MENU_GAP_PX, left });
-  }, [align, value]);
+    openMenu();
+  };
 
   useEffect(() => {
     if (!isOpen) {
@@ -108,36 +80,6 @@ export default function PostVisibilityMenu({
     const frame = window.requestAnimationFrame(() => itemRefs.current[currentIndex]?.focus());
     return () => window.cancelAnimationFrame(frame);
   }, [isOpen, value]);
-
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-    // The menu is fixed to the viewport, so any scroll or resize moves the
-    // trigger out from under it; closing is simpler than tracking it.
-    const handleViewportChange = () => close(false);
-    window.addEventListener('resize', handleViewportChange);
-    window.addEventListener('scroll', handleViewportChange, true);
-    return () => {
-      window.removeEventListener('resize', handleViewportChange);
-      window.removeEventListener('scroll', handleViewportChange, true);
-    };
-  }, [close, isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (rootRef.current?.contains(target) || menuRef.current?.contains(target)) {
-        return;
-      }
-      close(false);
-    };
-    document.addEventListener('pointerdown', handlePointerDown);
-    return () => document.removeEventListener('pointerdown', handlePointerDown);
-  }, [close, isOpen]);
 
   const moveActive = (delta: number) => {
     const count = POST_VISIBILITY_OPTIONS.length;

@@ -107,7 +107,7 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
           key={slot.id}
           accessibilityLabel={`${slot.a11yLabel ?? slot.label} — ${card.title}`}
           disabled={Boolean(pendingAction) && pendingAction !== slot.action}
-          icon={profileActionIcon(slot.id, slot.action, item.visibility)}
+          icon={profileActionIcon(slot.id, item.visibility ?? item.linkedPostVisibility)}
           // Share reads from its icon alone, the same as on the Home card, which
           // keeps the ownership actions the only labelled things in the row.
           label={slot.id === 'share' ? undefined : slot.label}
@@ -121,7 +121,6 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
 
 function profileActionIcon(
   id: string,
-  action: string | undefined,
   visibility: string | null | undefined
 ) {
   const muted = appTheme.colors.faint;
@@ -129,7 +128,8 @@ function profileActionIcon(
   if (id === 'publish') return <Globe size={19} color={appTheme.colors.primary} strokeWidth={2.4} />;
   if (id === 'unlock') return <Wand2 size={19} color={appTheme.colors.success} strokeWidth={2.4} />;
   if (id === 'visibility') {
-    const isPrivate = action === 'make-private' || visibility === 'private' || visibility === 'unlisted';
+    // The icon reports where the post (or the creation's linked post) sits now.
+    const isPrivate = visibility === 'private' || visibility === 'unlisted';
     return isPrivate
       ? <LockKeyhole size={19} color={appTheme.colors.warning} strokeWidth={2.3} />
       : <Globe size={19} color={appTheme.colors.success} strokeWidth={2.3} />;

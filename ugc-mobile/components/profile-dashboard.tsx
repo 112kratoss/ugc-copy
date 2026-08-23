@@ -47,6 +47,7 @@ import {
   type ProfileMediaCard,
   type ProfileMediaSwipeDirection,
   type ProfileMediaTab,
+  type ProfilePostsScope,
 } from '@/lib/profile-view-model';
 import {
   PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS,
@@ -102,6 +103,10 @@ export function ProfileDashboard({
   const { user, api, credits } = useAuth();
   const isFocused = useIsFocused();
   const [activeTab, setActiveTab] = useState<ProfileMediaTab>(initialTab);
+  // Archived posts live under their own scope of the Posts tab: the archive
+  // dialog promises they can be restored from the profile, so they have to be
+  // reachable here.
+  const [postsScope, setPostsScope] = useState<ProfilePostsScope>('active');
   const [backgroundMediaReady, setBackgroundMediaReady] = useState(false);
   const queryClient = useQueryClient();
   const loadingMoreRef = useRef(false);
@@ -141,7 +146,7 @@ export function ProfileDashboard({
     initialPageParam: 0,
     // Only the first page pays for the sales-summary aggregate.
     queryFn: ({ pageParam }) => api.listOwnerPosts({
-      includeArchived: false,
+      includeArchived: true,
       includeSummary: pageParam === 0,
       limit: PROFILE_MEDIA_PAGE_SIZE,
       offset: pageParam,
@@ -215,10 +220,13 @@ export function ProfileDashboard({
     () => flattenProfileOwnerPostPages(postsQuery.data?.pages),
     [postsQuery.data]
   );
-  const postCards = useMemo(
+  const allPostCards = useMemo(
     () => ownerPosts.map(ownerPostToProfileMediaCard).filter((card) => card.isGridReady),
     [ownerPosts]
   );
+  const activePostCards = useMemo(() => allPostCards.filter((card) => !card.isArchived), [allPostCards]);
+  const archivedPostCards = useMemo(() => allPostCards.filter((card) => card.isArchived), [allPostCards]);
+  const postCards = postsScope === 'archived' ? archivedPostCards : activePostCards;
   const salesSummary = useMemo(
     () => postsQuery.data?.pages[0]?.summary ?? getOwnerPostSalesSummary(ownerPosts),
     [ownerPosts, postsQuery.data]
@@ -230,7 +238,7 @@ export function ProfileDashboard({
   const stats = getProfileStats({
     generationsCount: creationCards.length,
     generationsHasMore: generationsQuery.hasNextPage,
-    postsCount: postCards.length,
+    postsCount: activePostCards.length,
     postsHasMore: postsQuery.hasNextPage,
     savedCount: savedCards.length,
     savedHasMore: savedQuery.hasNextPage,
@@ -378,9 +386,12 @@ export function ProfileDashboard({
       activeTab={activeTab}
       cards={tabCards}
       contentBottomPadding={tabBarMetrics.contentBottomOverlapPadding}
-      emptyTitle={getProfileMediaEmptyTitle(activeTab)}
+      emptyTitle={getProfileMediaEmptyTitle(activeTab, postsScope)}
       fallbackAvatarInitials={initials}
       fallbackAvatarUrl={profile?.avatarUrl}
+      postsScope={postsScope}
+      postsScopeCounts={{ active: activePostCards.length, archived: archivedPostCards.length }}
+      onPostsScopeChange={setPostsScope}
       header={(
         <>
           <ProfileTitle />
@@ -451,6 +462,9 @@ function ProfileMediaList({
   onRefresh,
   onSwipeTab,
   onTabChange,
+  postsScope = 'active',
+  postsScopeCounts,
+  onPostsScopeChange,
   title,
   topInset,
 }: {
@@ -471,6 +485,9 @@ function ProfileMediaList({
   onRefresh?: () => void;
   onSwipeTab: (direction: ProfileMediaSwipeDirection) => void;
   onTabChange: (tab: ProfileMediaTab) => void;
+  postsScope?: ProfilePostsScope;
+  postsScopeCounts?: Record<ProfilePostsScope, number>;
+  onPostsScopeChange?: (scope: ProfilePostsScope) => void;
   title?: string;
   topInset: number;
 }) {
@@ -510,6 +527,13 @@ function ProfileMediaList({
               onTabChange={onTabChange}
               title={title}
             />
+            {activeTab === 'Posts' && onPostsScopeChange ? (
+              <ProfilePostsScopeControl
+                value={postsScope}
+                counts={postsScopeCounts}
+                onChange={onPostsScopeChange}
+              />
+            ) : null}
             {mediaError ? (
               <View style={{ gap: appTheme.spacing.gap }}>
                 <StatusBlock tone="danger" title={`Could not load ${activeTab.toLowerCase()}`} body="Your existing media is safe. Check your connection, then retry." />
@@ -961,6 +985,52 @@ function ProfileSegment({ value, onChange }: { value: ProfileMediaTab; onChange:
             })}
           >
             <Text numberOfLines={1} style={{ color: active ? '#111114' : PROFILE_COLORS.muted, fontSize: 12, fontWeight: '800' }}>{tab}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function ProfilePostsScopeControl({
+  value,
+  counts,
+  onChange,
+}: {
+  value: ProfilePostsScope;
+  counts?: Record<ProfilePostsScope, number>;
+  onChange: (scope: ProfilePostsScope) => void;
+}) {
+  const options: Array<{ value: ProfilePostsScope; label: string }> = [
+    { value: 'active', label: counts ? `Active (${counts.active})` : 'Active' },
+    { value: 'archived', label: counts ? `Archived (${counts.archived})` : 'Archived' },
+  ];
+  return (
+    <View accessibilityRole="radiogroup" accessibilityLabel="Filter posts" style={{ flexDirection: 'row', gap: 8 }}>
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <Pressable
+            key={option.value}
+            accessibilityRole="radio"
+            accessibilityLabel={option.label}
+            accessibilityState={{ selected: active, checked: active }}
+            onPress={() => onChange(option.value)}
+            style={({ pressed }) => ({
+              minHeight: appTheme.touch.compact,
+              paddingHorizontal: 14,
+              borderRadius: 999,
+              borderWidth: 1,
+              borderColor: active ? PROFILE_COLORS.coral : PROFILE_COLORS.border,
+              backgroundColor: active ? 'rgba(255, 122, 89, 0.14)' : PROFILE_COLORS.surface,
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: pressed ? 0.78 : 1,
+            })}
+          >
+            <Text numberOfLines={1} style={{ color: active ? PROFILE_COLORS.coral : PROFILE_COLORS.muted, fontSize: 12, fontWeight: '800' }}>
+              {option.label}
+            </Text>
           </Pressable>
         );
       })}

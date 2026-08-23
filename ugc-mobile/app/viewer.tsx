@@ -89,6 +89,13 @@ import {
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { PostResourceKind, ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
 import { canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, getViewerActionSlots, getViewerShareIntent, getViewerShareSourceSurface, getViewerStateChip, type SaveHeartTapAnimationSpec, type ViewerStateTone } from '@/lib/viewer-actions';
+import {
+  changePostVisibility,
+  pickPostVisibility,
+  toPostLifecyclePost,
+  type PostLifecyclePost,
+} from '@/lib/post-lifecycle';
+import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
 import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
 
 type ViewerParams = {
@@ -531,18 +538,18 @@ export default function ImmersivePreviewViewerScreen() {
   };
 
   const applyPostVisibility = async (
-    postId: string,
-    visibility: 'public' | 'unlisted' | 'private',
+    post: PostLifecyclePost,
+    visibility: PostLifecycleVisibility,
     action: string
   ) => {
     setOwnerActionPending(action);
     try {
-      await api.updatePost(postId, { visibility });
-      await refreshViewerMediaCaches(queryClient, user?.id);
-      await sourceQuery.refetch();
-      void AccessibilityInfo.announceForAccessibility(`This post is now ${visibility}.`);
-    } catch {
-      Alert.alert('Could not update visibility', 'Please try again.');
+      const outcome = await changePostVisibility({ api, post, visibility });
+      if (outcome === 'done') {
+        await refreshViewerMediaCaches(queryClient, user?.id);
+        await sourceQuery.refetch();
+        void AccessibilityInfo.announceForAccessibility(`This post is now ${visibility}.`);
+      }
     } finally {
       setOwnerActionPending(null);
     }
@@ -572,29 +579,24 @@ export default function ImmersivePreviewViewerScreen() {
     }
 
     if (action === 'change-visibility') {
-      Alert.alert('Change visibility', 'Choose who can see this post.', [
-        { text: 'Public', onPress: () => void applyPostVisibility(item.id, 'public', action) },
-        { text: 'Unlisted', onPress: () => void applyPostVisibility(item.id, 'unlisted', action) },
-        { text: 'Private', onPress: () => void applyPostVisibility(item.id, 'private', action) },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
+      const post = toPostLifecyclePost({
+        id: item.id,
+        visibility: item.visibility,
+        archivedAt: item.archivedAt,
+        bundle: item.ownerPostBundle ?? null,
+      });
+      pickPostVisibility(post.visibility, (next) => void applyPostVisibility(post, next, action));
       return;
     }
 
-    if ((action === 'make-private' || action === 'make-public') && item.linkedPostId) {
-      const linkedPostId = item.linkedPostId;
-      const nextVisibility = action === 'make-private' ? 'private' : 'public';
-      const label = action === 'make-private' ? 'Make private' : 'Make public';
-      Alert.alert(
-        `${label}?`,
-        action === 'make-private'
-          ? 'This linked post will leave public surfaces until you make it public again.'
-          : 'This linked post will return to public surfaces.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: label, onPress: () => void applyPostVisibility(linkedPostId, nextVisibility, action) },
-        ]
-      );
+    if (action === 'change-linked-visibility' && item.linkedPostId) {
+      const post = toPostLifecyclePost({
+        id: item.linkedPostId,
+        visibility: item.linkedPostVisibility,
+        archivedAt: item.linkedPostArchivedAt,
+        bundle: item.linkedPostBundle ?? null,
+      });
+      pickPostVisibility(post.visibility, (next) => void applyPostVisibility(post, next, action));
     }
   };
 
@@ -1181,7 +1183,7 @@ function ImmersiveSlide({
               ? <Globe size={26} color="#050505" strokeWidth={2.6} />
               : slot.id === 'unlock'
                 ? <Wand2 size={26} color={appTheme.colors.success} strokeWidth={2.5} />
-                : slot.action === 'make-private' || item.visibility === 'private' || item.visibility === 'unlisted'
+                : (item.visibility ?? item.linkedPostVisibility) === 'private' || (item.visibility ?? item.linkedPostVisibility) === 'unlisted'
                   ? <LockKeyhole size={26} color={appTheme.colors.warning} strokeWidth={2.5} />
                   : <Globe size={26} color="#ffffff" strokeWidth={2.4} />;
 
