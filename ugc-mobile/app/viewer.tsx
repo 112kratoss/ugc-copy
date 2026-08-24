@@ -1136,7 +1136,8 @@ function ImmersiveSlide({
                   accessibilityLabel={item.commentCount > 0
                     ? `${item.commentCount} ${item.commentCount === 1 ? 'comment' : 'comments'}`
                     : 'Comment'}
-                  icon={<MessageCircle size={30} color="#ffffff" strokeWidth={2.2} />}
+                  icon={<MessageCircle size={30} color="#ffffff" fill="transparent" strokeWidth={2.2} />}
+                  iconShadow={false}
                   label={getRailCountLabel(item.commentCount, formatCompactCount)}
                   onPress={onComments}
                   variant="bare"
@@ -2017,6 +2018,7 @@ function RailActionButton({
   disabled,
   externalPopTrigger,
   icon,
+  iconShadow = true,
   label,
   loading,
   onPress,
@@ -2030,6 +2032,8 @@ function RailActionButton({
   disabled?: boolean;
   externalPopTrigger?: number;
   icon: ReactElement<ShadowableIconProps>;
+  /** Bare icons use the shared contrast halo unless a glyph should remain flat. */
+  iconShadow?: boolean;
   /** Under the icon: a word for app-specific actions, a count for the rest, or nothing. */
   label: string | null;
   loading?: boolean;
@@ -2187,7 +2191,7 @@ function RailActionButton({
         ) : (
           <Animated.View style={{ transform: [{ scale: iconScale }] }}>
             <Animated.View style={{ transform: [{ scale: externalIconScale }] }}>
-              {bare ? <IconShadow>{icon}</IconShadow> : icon}
+              {bare && iconShadow ? <IconShadow>{icon}</IconShadow> : icon}
             </Animated.View>
           </Animated.View>
         )}
