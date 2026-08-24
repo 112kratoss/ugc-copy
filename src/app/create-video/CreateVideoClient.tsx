@@ -43,12 +43,14 @@ import {
     getPersistedFile,
     getPersistedImageElementRecords,
     getPersistedMediaRecords,
+    getPersistedSubjectRecords,
     getPersistedValue,
     PERSISTED_MEDIA_KEYS,
     removePersistedMedia,
     setPersistedFile,
     setPersistedImageElementRecords,
     setPersistedMediaRecords,
+    setPersistedSubjectRecords,
     setPersistedValue,
 } from '@/lib/persisted-media';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
@@ -836,6 +838,33 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 }))
         );
     };
+    const persistKlingSubjects = async (nextSubjects: KlingSubjectDraft[]) => {
+        if (remixId) {
+            return;
+        }
+
+        await setPersistedSubjectRecords(
+            PERSISTED_MEDIA_KEYS.createVideoKlingSubjects,
+            nextSubjects
+                // Only locally-uploaded images can be restored from storage; a
+                // subject with any unrestorable image is dropped whole so it
+                // never comes back depicting a different set.
+                .filter((subject) => subject.images.length > 0 && subject.images.every((image) => image.file))
+                .map((subject) => ({
+                    id: subject.id,
+                    displayName: subject.displayName,
+                    images: subject.images.map((image) => ({
+                        id: image.id,
+                        file: image.file as File,
+                    })),
+                }))
+        );
+    };
+    const commitKlingSubjects = (nextSubjects: KlingSubjectDraft[]) => {
+        setKlingSubjects(nextSubjects);
+        klingSubjectsRef.current = nextSubjects;
+        void persistKlingSubjects(nextSubjects);
+    };
     const persistSeedanceAssets = async (
         nextElements: VideoElementDraft[] = elementsRef.current,
         nextReferenceVideos: SeedanceMediaReferenceDraft[] = referenceVideosRef.current,
@@ -1510,6 +1539,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                    savedReferenceVideos,
 	                    savedReferenceAudios,
 	                    savedKlingVideoElements,
+	                    savedKlingSubjects,
 	                    savedSeedanceAssets,
 	                ] = await Promise.all([
 	                    getPersistedFile(PERSISTED_MEDIA_KEYS.createVideoStartImage),
@@ -1519,6 +1549,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                    getPersistedMediaRecords(PERSISTED_MEDIA_KEYS.createVideoReferenceVideos),
 	                    getPersistedMediaRecords(PERSISTED_MEDIA_KEYS.createVideoReferenceAudios),
 	                    getPersistedMediaRecords(PERSISTED_MEDIA_KEYS.createVideoKlingVideoElements),
+	                    getPersistedSubjectRecords(PERSISTED_MEDIA_KEYS.createVideoKlingSubjects),
 	                    getPersistedValue<SeedanceAssetCollections>(PERSISTED_MEDIA_KEYS.createVideoSeedanceAssets),
 	                ]);
 
@@ -1589,6 +1620,20 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                            source: 'upload',
 	                        }))
 	                    ));
+	                }
+
+	                if (savedKlingSubjects.length > 0) {
+	                    setKlingSubjects(savedKlingSubjects.map((subject) => ({
+	                        id: subject.id,
+	                        displayName: subject.displayName,
+	                        images: subject.images.map((image) => ({
+	                            id: image.id,
+	                            file: image.file,
+	                            previewUrl: URL.createObjectURL(image.file),
+	                            remoteUrl: null,
+	                            storagePath: null,
+	                        })),
+	                    })));
 	                }
             } catch (err) {
                 console.error('Error loading persisted video media:', err);
@@ -2902,8 +2947,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     startedAtMs,
                     estimatedTotalMs,
                 }));
+                const uploadedSubjects: KlingSubjectDraft[] = [];
                 for (const [subjectIndex, subject] of klingSubjects.entries()) {
                     const handle = klingSubjectHandles[subjectIndex];
+                    const uploadedImages: KlingSubjectImageDraft[] = [];
                     for (const image of subject.images) {
                         let remoteUrl = image.remoteUrl;
                         let storagePath = image.storagePath;
@@ -2915,6 +2962,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         if (!remoteUrl && !storagePath) {
                             throw new Error(`Missing media for ${subject.displayName}`);
                         }
+                        uploadedImages.push({ ...image, remoteUrl, storagePath });
                         requestKlingSubjectInputs.push({
                             slot: 'subjectImages',
                             kind: 'image',
@@ -2925,7 +2973,10 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                             sourceGenerationId: null,
                         });
                     }
+                    uploadedSubjects.push({ ...subject, images: uploadedImages });
                 }
+                // Keep the uploaded URLs so a retry does not re-upload the set.
+                commitKlingSubjects(uploadedSubjects);
             }
 
             if (!klingSubjectsActive && (activeReferenceMode === 'frames' || combinesFrameWithReferences) && startImageFile) {
@@ -3634,7 +3685,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                                    subjects={klingSubjects}
 	                                    handles={klingSubjectHandles}
 	                                    disabled={isGenerating}
-	                                    onChange={setKlingSubjects}
+	                                    onChange={commitKlingSubjects}
 	                                />
 	                            </motion.div>
 	                        )}
