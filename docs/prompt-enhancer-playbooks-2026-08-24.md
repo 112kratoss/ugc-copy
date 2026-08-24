@@ -59,22 +59,35 @@ LLM comparison, and published prompt-rewriting evals).
     ideogram-character 4→1 (Kie uses only the first reference), Kling 3.0
     multi-shot quality gate 6→5 shots (Kie's `multi_prompt` cap; O3 stays 6).
 
-## Known follow-ups (deliberately not in this change)
+## Follow-up status (updated 2026-08-24, second pass)
 
-- **Imagen 4 sunset**: Google shut the upstream Imagen API on 2026-08-17; Kie
-  still serves it. Live-test a generation and plan migration to nano-banana-2.
-- **Production catalog release** for the maxImages fixes (ops:
-  `generation-model-catalog` stage/publish workflow).
-- **Hidden-audio UX**: wan-2.7 / grok video / minimax-h3 / happyhorse always
-  output audio but the catalog models them as `supportsSound: false`; the
-  enhancer now scripts audio, but the catalog/UI story (an "audio always on"
-  affordance) is open.
-- **Streaming the rewrite**: rejected for now — plan-then-compile means the
-  final prompt only exists after compilation, so token streaming would show the
-  user raw JSON. Revisit with a two-lane UX if latency ever matters more than
-  the planner.
-- **kling-o3 `elements`** (named @subjects) still needs a subject-grouping UI
-  before the @Name grammar can be exercised end-to-end.
+- **DONE — Production catalog release for the caps**: revision
+  `enhancer-reference-caps-20260824` published and live-verified (qwen3 and
+  qwen3-pro max 3, ideogram-character max 1). Serves both platforms via
+  `/api/generation-models` with no app deploy.
+- **DONE — Imagen 4 sunset handled**: live probes on 2026-08-24 failed with
+  provider 500s on both `google/imagen4-fast` and `google/imagen4`, so revision
+  `imagen-family-disable-20260824` disables the family on web and mobile
+  (entries retained for a clean re-enable). The code catalog keeps them for
+  code-source environments.
+- **DONE — Hidden-audio affordance**: web shows an "always generates audio"
+  note in the Audio settings section, mobile shows it in the prompt panel
+  helper; both key off `ALWAYS_ON_AUDIO_VIDEO_MODELS`.
+- **DONE — Audio enhancement UI**: workflow text-prompt nodes now offer
+  voiceover and sound-effect branches as enhancement targets (medium `audio`);
+  dialogue-mode voiceover nodes are excluded because they ignore connected
+  prompt text at run time. Music nodes stay unsupported (no playbook).
+- **DONE — Mobile parity**: enhancement level (Full/Light), Undo, and
+  frame-vision URLs shipped in the mobile prompt panel and request builder.
+  Reaches phones with the next store release; the backend behavior is live for
+  the current app already.
+- **Streaming the rewrite**: still rejected — plan-then-compile means the final
+  prompt only exists after compilation, so token streaming would show raw JSON.
+- **kling-o3 `elements`** (named multi-image @subjects): still deferred — a
+  subject group (2–4 images per named subject) is not expressible in the
+  current catalog descriptor schema, so this is a control-plane feature
+  (descriptor schema + grouping editor + live paid test), not a fix. Flat
+  references remain correct today.
 - **Live eval harness**: `npm run eval:enhancer` (scripts/enhancer-eval.ts)
   runs fixture prompts through the real provider and checks constraint
   obedience; not part of CI (costs money, needs `KIE_AI_API_KEY`).
