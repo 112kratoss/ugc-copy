@@ -871,6 +871,42 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         : 0;
     const showSavedElementNotice = !canUseVideoElements && !currentIsMultiShot && (elements.length > 0 || referenceMode === 'elements');
     const showMultiShotElementNotice = currentIsMultiShot && (elements.length > 0 || referenceMode === 'elements' || (hasKnownElementMentions && !hasKnownKlingVideoMentions));
+    // Enhance-time frame uploads, cached briefly so repeated enhance clicks on
+    // the same attached file don't re-upload it every time.
+    const enhanceFrameUploadCacheRef = useRef<Map<File, { url: string; at: number }>>(new Map());
+    const ENHANCE_FRAME_CACHE_TTL_MS = 10 * 60 * 1000;
+
+    const resolveEnhancerFrameUrl = async (file: File | null, url: string | null): Promise<string | null> => {
+        if (url && url.startsWith('https://')) return url;
+        if (!file) return null;
+        const cached = enhanceFrameUploadCacheRef.current.get(file);
+        if (cached && Date.now() - cached.at < ENHANCE_FRAME_CACHE_TTL_MS) {
+            return cached.url;
+        }
+        const upload = await uploadMediaToTemporaryStorage(file);
+        enhanceFrameUploadCacheRef.current.set(file, { url: upload.signedUrl, at: Date.now() });
+        return upload.signedUrl;
+    };
+
+    // Sends the actual attached frames to the enhancer LLM as vision input so
+    // image-to-video prompts describe real motion instead of imagining the frame.
+    const prepareSinglePromptEnhancerContext = async () => {
+        const base = buildSinglePromptQualityContext();
+        if (!(activeReferenceMode === 'frames' || combinesFrameWithReferences)) {
+            return base;
+        }
+
+        const frameImageUrls: string[] = [];
+        const resolvedStartUrl = await resolveEnhancerFrameUrl(startImageFile, startImageUrl);
+        if (resolvedStartUrl) frameImageUrls.push(resolvedStartUrl);
+        if (activeReferenceMode === 'frames' && activeSupportsEndFrame) {
+            const resolvedEndUrl = await resolveEnhancerFrameUrl(endImageFile, endImageUrl);
+            if (resolvedEndUrl) frameImageUrls.push(resolvedEndUrl);
+        }
+
+        return frameImageUrls.length > 0 ? { ...base, frameImageUrls } : base;
+    };
+
     const buildSinglePromptQualityContext = () => ({
         modelId: selectedModel,
         mode: currentMode,
@@ -3015,6 +3051,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 : undefined
                                         }
                                         context={buildSinglePromptQualityContext()}
+                                        prepareContext={prepareSinglePromptEnhancerContext}
                                         disabled={isGenerating}
                                         showWarnings={false}
                                     />
