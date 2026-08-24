@@ -1,4 +1,5 @@
 import type { EnhancerContext, Medium } from '@/lib/prompt-enhancer';
+import { getEnhancerPlaybookById, normalizeEnhancerModelId } from '@/lib/prompt-enhancer-playbooks';
 
 type PromptEnhancementWarningSeverity = 'info' | 'warning' | 'blocking';
 
@@ -28,9 +29,10 @@ const TRANSITION_RE = /\b(transition|from|to|into|between|smoothly|morph|transfo
 const VAGUE_QUALITY_RE = /\b(cinematic|epic|beautiful|cool|amazing|viral|high quality|best|awesome|stunning)\b/gi;
 const TEMPORAL_CONNECTOR_RE = /\b(then|after|before|next|finally|suddenly|meanwhile|as .* then|and then)\b/gi;
 const QUOTED_DIALOGUE_RE = /["“”][^"“”]{2,}["“”]/;
+const CHOREOGRAPHY_RE = /\b(danc\w*|jump\w*|backflip\w*|wav\w*|spin\w*|twirl\w*|kick\w*|punch\w*|clap\w*|march\w*|stomp\w*|choreograph\w*)\b/i;
 
 function normalizeModelId(selectedModel: string): string {
-  return selectedModel === 'kling-3.0-video' ? 'kling-3.0/video' : selectedModel;
+  return normalizeEnhancerModelId(selectedModel);
 }
 
 function uniqueWarnings(warnings: PromptEnhancementWarning[]): PromptEnhancementWarning[] {
@@ -79,8 +81,34 @@ export function inspectPromptQuality({
     return { warnings, qualityScore: 0 };
   }
 
+  const playbook = getEnhancerPlaybookById(selectedModel);
+  const maxChars = playbook?.budget.maxChars;
+  if (maxChars && trimmedPrompt.length > maxChars) {
+    warnings.push({
+      code: 'over_model_length_cap',
+      severity: 'warning',
+      message: `This prompt exceeds the ${maxChars}-character limit for ${playbook.label}.`,
+      fixHint: 'Trim detail from the end — overflow is cut off or rejected by the provider.',
+    });
+  }
+
+  if (medium === 'motion') {
+    if (CHOREOGRAPHY_RE.test(trimmedPrompt)) {
+      warnings.push({
+        code: 'motion_choreography_in_prompt',
+        severity: 'warning',
+        message: 'Motion-control prompts should not direct movement — the reference video owns the choreography.',
+        fixHint: 'Describe the character identity, environment, lighting, and style instead of actions.',
+      });
+    }
+
+    const unique = uniqueWarnings(warnings);
+    return { warnings: unique, qualityScore: scoreWarnings(unique) };
+  }
+
   if (medium !== 'video') {
-    return { warnings: [], qualityScore: 100 };
+    const unique = uniqueWarnings(warnings);
+    return { warnings: unique, qualityScore: scoreWarnings(unique) };
   }
 
   if (trimmedPrompt.length < 18) {
@@ -156,11 +184,21 @@ export function inspectPromptQuality({
     });
   }
 
-  if (normalizedModel === 'kling-3.0/video' && context?.isMultiShot && (context.shotCount ?? 0) > 6) {
+  // Kie's kling-3.0/video multi_prompt accepts at most 5 shots; kling-o3 takes 6.
+  if (normalizedModel === 'kling-3.0/video' && context?.isMultiShot && (context.shotCount ?? 0) > 5) {
     warnings.push({
       code: 'kling_too_many_shots',
       severity: 'blocking',
-      message: 'Kling multi-shot should stay at 6 shots or fewer.',
+      message: 'Kling 3.0 multi-shot supports at most 5 shots.',
+      fixHint: 'Merge adjacent beats or split the concept into separate generations.',
+    });
+  }
+
+  if (normalizedModel === 'kling-o3' && context?.isMultiShot && (context.shotCount ?? 0) > 6) {
+    warnings.push({
+      code: 'kling_too_many_shots',
+      severity: 'blocking',
+      message: 'Kling O3 multi-shot supports at most 6 shots.',
       fixHint: 'Merge adjacent beats or split the concept into separate generations.',
     });
   }

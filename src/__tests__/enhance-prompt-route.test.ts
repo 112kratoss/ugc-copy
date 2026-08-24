@@ -285,13 +285,18 @@ describe('/api/enhance-prompt route', () => {
       context,
       'Create a product poster and the text reads SALE'
     );
-    expect(callPromptEnhancerMock).toHaveBeenCalledWith('system prompt', 'Create a product poster and the text reads SALE');
+    expect(callPromptEnhancerMock).toHaveBeenCalledWith(
+      'system prompt',
+      'Create a product poster and the text reads SALE',
+      { responseSchema: expect.any(Object) }
+    );
     expect(createUserClientMock).toHaveBeenCalledTimes(1);
     expect(rawCreateClientMock).not.toHaveBeenCalled();
 
     const data = await response.json();
     expect(data.remainingCredits).toBe(98);
-    expect(data.agentId).toBe('generic-media-enhancer');
+    // Image models now resolve to their own agents instead of the generic fallback.
+    expect(data.agentId).toBe('nano-banana-pro-art-director');
     expect(typeof data.qualityScore).toBe('number');
     expect(Array.isArray(data.warnings)).toBe(true);
     expect(Array.isArray(data.appliedSafeguards)).toBe(true);

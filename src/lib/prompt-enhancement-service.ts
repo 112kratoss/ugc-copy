@@ -18,6 +18,7 @@ import {
   buildEnhancerSystemPrompt,
   buildPromptEnhancementArtifacts,
   callPromptEnhancer,
+  getPlannerResponseSchema,
   getPromptEnhancementCost,
   type EnhancerContext,
   type Medium,
@@ -62,10 +63,39 @@ type PromptEnhancementRequest = {
   bodyRecord: Record<string, unknown>;
 };
 
-const VALID_MEDIUMS: Medium[] = ['image', 'video', 'motion'];
+const VALID_MEDIUMS: Medium[] = ['image', 'video', 'motion', 'audio'];
+
+const MAX_FRAME_IMAGE_URLS = 3;
+const MAX_FRAME_IMAGE_URL_LENGTH = 2048;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+/** Keep only https URLs the enhancer LLM may safely be pointed at. */
+function sanitizeFrameImageUrls(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((url): url is string =>
+      typeof url === 'string'
+      && url.length <= MAX_FRAME_IMAGE_URL_LENGTH
+      && url.startsWith('https://'))
+    .slice(0, MAX_FRAME_IMAGE_URLS);
+}
+
+function sanitizeEnhancerContext(context: EnhancerContext | undefined): EnhancerContext | undefined {
+  if (!context) {
+    return context;
+  }
+
+  const frameImageUrls = sanitizeFrameImageUrls(context.frameImageUrls);
+  return {
+    ...context,
+    frameImageUrls: frameImageUrls.length > 0 ? frameImageUrls : undefined,
+  };
 }
 
 function validatePromptEnhancementBody(body: unknown): PromptEnhancementRequest | { error: string; status: number } {
@@ -100,7 +130,9 @@ function validatePromptEnhancementBody(body: unknown): PromptEnhancementRequest 
     medium: medium as Medium,
     selectedModel,
     prompt,
-    context: isRecord(context) ? context as EnhancerContext : context as EnhancerContext | undefined,
+    context: sanitizeEnhancerContext(
+      isRecord(context) ? context as EnhancerContext : undefined
+    ),
     bodyRecord: body,
   };
 }
@@ -206,7 +238,11 @@ export async function enhancePromptForUser({
       validated.prompt
     );
 
-    const result = await callPromptEnhancer(systemPrompt, validated.prompt);
+    const responseSchema = getPlannerResponseSchema(validated.selectedModel);
+    const result = await callPromptEnhancer(systemPrompt, validated.prompt, {
+      ...(validated.context?.frameImageUrls?.length ? { imageUrls: validated.context.frameImageUrls } : {}),
+      ...(responseSchema ? { responseSchema } : {}),
+    });
     const artifacts = buildPromptEnhancementArtifacts(
       validated.medium,
       validated.selectedModel,

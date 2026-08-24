@@ -221,9 +221,13 @@ describe('prompt enhancer strategy', () => {
 
     expect(artifacts.playbookId).toBe('gpt-image-2');
     expect(artifacts.plannerMode).toBe('structured-image');
-    expect(artifacts.compiledPrompt).toContain('ChatGPT-style product campaign still');
-    expect(artifacts.compiledPrompt).toContain('Preserve the exact product shape');
-    expect(artifacts.compiledPrompt).toContain('Include readable text "Glow Faster"');
+    // gpt-image-2 compiles to the official labeled-sections brief.
+    expect(artifacts.compiledPrompt).toContain('Scene: on a warm amber studio set.');
+    expect(artifacts.compiledPrompt).toContain('Subject: a ChatGPT-style product campaign still');
+    expect(artifacts.compiledPrompt).toContain('Preserve: the exact product shape.');
+    expect(artifacts.compiledPrompt).toContain('Text: Include readable text "Glow Faster"');
+    expect(artifacts.compiledPrompt).toContain('Use case:');
+    expect(artifacts.compiledPrompt).toContain('Constraints: no watermark.');
   });
 
   it('compiles Veo prompts without quoted dialogue and keeps one scene per clip', () => {
