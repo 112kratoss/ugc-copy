@@ -15,6 +15,7 @@
     "uuid": "11.1.1"
   },
   "scripts": {
+    "eval:enhancer": "tsx --env-file-if-exists=.env.local --tsconfig tsconfig.scripts.json scripts/enhancer-eval.ts",
     "backfill:legacy-media": "node scripts/backfill-legacy-temp-media.mjs",
     "backfill:media-previews": "tsx scripts/backfill-media-previews.ts",
     "backfill:media-upload-intents": "tsx --env-file-if-exists=.env.local scripts/backfill-media-upload-intents.ts",
