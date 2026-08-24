@@ -650,7 +650,9 @@ export default function ShowcaseScreen() {
         keyExtractor={(item) => item.id}
         masonry
         numColumns={2}
-        optimizeItemArrangement={false}
+        // Keep the ranked data array intact, but allow visual column placement
+        // to diverge from strict alternation so variable-height cards stay balanced.
+        optimizeItemArrangement={true}
         onEndReached={requestNextPage}
         // Pending-preview posts now keep their place in the masonry feed, so a
         // half-screen runway is enough to hide the next-page round trip without
