@@ -2,30 +2,37 @@
 
 import React from 'react';
 import renderer from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
 const queryState = vi.hoisted(() => ({
   fetchNextPage: vi.fn(() => Promise.resolve()),
+  filter: 'all',
+  hasNextPage: false,
+  isFetchNextPageError: false,
+  isFetching: false,
+  isFetchingNextPage: false,
+  pages: [{ items: [], pageInfo: { hasMore: false, nextOffset: null } }] as Array<Record<string, unknown>>,
   refetch: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock('@shopify/flash-list', () => ({
-  FlashList: (props: MockProps) => React.createElement('flash-list', props),
+  FlashList: (props: MockProps) => React.createElement('flash-list', props, props.ListFooterComponent as React.ReactNode),
 }));
 
 vi.mock('@tanstack/react-query', () => ({
   useInfiniteQuery: () => ({
     data: {
-      pages: [{ items: [], pageInfo: { hasMore: false, nextOffset: null } }],
+      pages: queryState.pages,
       pageParams: [{ offset: 0 }],
     },
     error: null,
     fetchNextPage: queryState.fetchNextPage,
-    hasNextPage: false,
-    isFetching: false,
-    isFetchingNextPage: false,
+    hasNextPage: queryState.hasNextPage,
+    isFetchNextPageError: queryState.isFetchNextPageError,
+    isFetching: queryState.isFetching,
+    isFetchingNextPage: queryState.isFetchingNextPage,
     isLoading: false,
     isRefetching: false,
     refetch: queryState.refetch,
@@ -43,7 +50,7 @@ vi.mock('expo-router', () => ({
     push: vi.fn(),
     setParams: vi.fn(),
   },
-  useLocalSearchParams: () => ({}),
+  useLocalSearchParams: () => ({ filter: queryState.filter }),
 }));
 
 vi.mock('@react-navigation/native', () => ({
@@ -147,7 +154,53 @@ vi.mock('@/lib/motion', () => ({
 
 import ShowcaseScreen from '../app/(tabs)/showcase';
 
+function feedItem() {
+  return {
+    id: 'post-1',
+    mediaUrl: 'https://cdn.example.com/post-1.jpg',
+    mediaKind: 'image',
+    mediaItems: [{
+      id: 'post-1:media',
+      url: 'https://cdn.example.com/post-1.jpg',
+      previewUrl: 'https://cdn.example.com/post-1.preview.webp',
+      gridReady: true,
+      mediaKind: 'image',
+      contentType: 'image/jpeg',
+      originalName: null,
+      width: 800,
+      height: 1000,
+      durationSeconds: null,
+      sortOrder: 0,
+    }],
+    model: 'manual',
+    title: 'Portrait',
+    prompt: 'Portrait prompt',
+    body: null,
+    category: 'image',
+    postFormat: 'media',
+    saveCount: 1,
+    remixCount: 0,
+    commentCount: 0,
+    createdAt: '2026-08-25T00:00:00.000Z',
+    creator: { id: 'creator-1', username: 'creator', name: 'Creator', avatar: null },
+    generationId: null,
+    asset: null,
+    canRemix: false,
+  };
+}
+
 describe('Showcase screen', () => {
+  beforeEach(() => {
+    queryState.fetchNextPage.mockClear();
+    queryState.refetch.mockClear();
+    queryState.filter = 'all';
+    queryState.hasNextPage = false;
+    queryState.isFetchNextPageError = false;
+    queryState.isFetching = false;
+    queryState.isFetchingNextPage = false;
+    queryState.pages = [{ items: [], pageInfo: { hasMore: false, nextOffset: null } }];
+  });
+
   it('balances variable-height cards across two masonry columns', () => {
     let tree: renderer.ReactTestRenderer | undefined;
 
@@ -160,6 +213,72 @@ describe('Showcase screen', () => {
     expect(list.props.numColumns).toBe(2);
     expect(list.props.optimizeItemArrangement).toBe(true);
 
+    renderer.act(() => tree!.unmount());
+  });
+
+  it('explains when a filtered Showcase has reached its end', () => {
+    queryState.filter = 'unlocks';
+    queryState.pages = [{ items: [feedItem()], pageInfo: { hasMore: false, nextOffset: null } }];
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ShowcaseScreen />);
+    });
+
+    expect(tree!.root.findAll((node) => (
+      String(node.type) === 'text' && node.props.children === "You've reached the end of Unlocks."
+    ))).toHaveLength(1);
+    renderer.act(() => tree!.unmount());
+  });
+
+  it('uses a neutral all-caught-up message for the unfiltered feed', () => {
+    queryState.pages = [{ items: [feedItem()], pageInfo: { hasMore: false, nextOffset: null } }];
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ShowcaseScreen />);
+    });
+
+    expect(tree!.root.findAll((node) => (
+      String(node.type) === 'text' && node.props.children === "You're all caught up."
+    ))).toHaveLength(1);
+    renderer.act(() => tree!.unmount());
+  });
+
+  it('shows a visible load-more retry and clears the automatic page lock', async () => {
+    queryState.hasNextPage = true;
+    queryState.isFetchNextPageError = true;
+    queryState.pages = [{ items: [feedItem()], pageInfo: { hasMore: true, nextOffset: 12 } }];
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ShowcaseScreen />);
+    });
+
+    const retry = tree!.root.findByProps({ accessibilityLabel: "Couldn't load more. Retry" });
+    await renderer.act(async () => {
+      retry.props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(queryState.fetchNextPage).toHaveBeenCalledTimes(1);
+    renderer.act(() => tree!.unmount());
+  });
+
+  it('keeps the loader ahead of an error footer while a page is in flight', () => {
+    queryState.hasNextPage = true;
+    queryState.isFetchNextPageError = true;
+    queryState.isFetching = true;
+    queryState.isFetchingNextPage = true;
+    queryState.pages = [{ items: [feedItem()], pageInfo: { hasMore: true, nextOffset: 12 } }];
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ShowcaseScreen />);
+    });
+
+    expect(tree!.root.findAll((node) => String(node.type) === 'activity-indicator')).toHaveLength(1);
+    expect(tree!.root.findAllByProps({ accessibilityLabel: "Couldn't load more. Retry" })).toHaveLength(0);
     renderer.act(() => tree!.unmount());
   });
 });

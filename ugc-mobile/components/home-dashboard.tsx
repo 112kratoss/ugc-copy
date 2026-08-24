@@ -32,6 +32,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentsSheet } from '@/components/comments-sheet';
 import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
+import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { HomeFeedCardView } from '@/components/home-feed-card';
 import { HomeSideMenu } from '@/components/home-side-menu';
 import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
@@ -41,6 +42,7 @@ import { TopScrim } from '@/components/top-scrim';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
+import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import {
   HOME_FEED_CHIPS,
   HOME_SLIDE_INTERVAL_MS,
@@ -212,7 +214,7 @@ export function HomeDashboard() {
 
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
-  const lastLoadMoreItemCountRef = useRef(0);
+  const lastLoadMorePageCountRef = useRef<number | null>(null);
   const qualifiedImpressionsRef = useRef(new Set<string>());
   const restoringCommentContextRef = useRef<string | null>(null);
   const feedEventRuntimeRef = useRef({
@@ -324,6 +326,7 @@ export function HomeDashboard() {
     const flattened = flattenShowcaseFeedPages(feedQuery.data?.pages);
     return user ? flattened : filterAnonymousSessionShowcaseFeedItems(flattened);
   }, [feedQuery.data?.pages, user]);
+  const feedPageCount = feedQuery.data?.pages.length ?? 0;
   const requestedCommentsPostId = (
     Array.isArray(requestedComments) ? requestedComments[0] : requestedComments
   )?.trim() || null;
@@ -377,28 +380,34 @@ export function HomeDashboard() {
 
   const requestNextPage = () => {
     const now = Date.now();
-    if (
-      !feedQuery.hasNextPage ||
-      feedQuery.isFetchingNextPage ||
-      feedQuery.isLoading ||
-      loadingMoreRef.current ||
-      lastLoadMoreItemCountRef.current === feedItems.length ||
-      now - lastLoadMoreAtRef.current < LOAD_MORE_COOLDOWN_MS
-    ) {
-      return;
-    }
+    if (!canRequestNextFeedPage({
+      cooldownMs: LOAD_MORE_COOLDOWN_MS,
+      hasNextPage: feedQuery.hasNextPage,
+      isBusy: feedQuery.isFetching,
+      isRequestInFlight: loadingMoreRef.current,
+      lastRequestedAt: lastLoadMoreAtRef.current,
+      lastRequestedPageCount: lastLoadMorePageCountRef.current,
+      now,
+      pageCount: feedPageCount,
+    })) return;
 
     loadingMoreRef.current = true;
     lastLoadMoreAtRef.current = now;
-    lastLoadMoreItemCountRef.current = feedItems.length;
+    lastLoadMorePageCountRef.current = feedPageCount;
     void feedQuery.fetchNextPage().finally(() => {
       loadingMoreRef.current = false;
     });
   };
 
+  const retryNextPage = () => {
+    lastLoadMorePageCountRef.current = null;
+    lastLoadMoreAtRef.current = 0;
+    requestNextPage();
+  };
+
   const handleRefresh = () => {
     haptic.light();
-    lastLoadMoreItemCountRef.current = 0;
+    lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
     queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
       if (!current?.pages.length) return current;
@@ -410,7 +419,7 @@ export function HomeDashboard() {
   const selectChip = (chipId: HomeFeedChipId) => {
     if (chipId === activeChipId) return;
     qualifiedImpressionsRef.current.clear();
-    lastLoadMoreItemCountRef.current = 0;
+    lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
     setActiveChipId(chipId);
   };
@@ -755,6 +764,8 @@ export function HomeDashboard() {
           <View style={{ paddingVertical: 20, alignItems: 'center' }}>
             <ActivityIndicator color={DASHBOARD_COLORS.faint} />
           </View>
+        ) : feedQuery.isFetchNextPageError ? (
+          <FeedLoadMoreErrorFooter onRetry={retryNextPage} />
         ) : null}
       />
 

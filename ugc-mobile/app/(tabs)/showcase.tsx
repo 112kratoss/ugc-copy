@@ -19,10 +19,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
+import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { TopScrim } from '@/components/top-scrim';
 import { CreatorAvatar, SecondaryButton, StatusBlock } from '@/components/ui';
 import { WorkspaceSideMenuGestureLayer } from '@/components/workspace-side-menu-gesture-layer';
 import { useAuth } from '@/lib/auth';
+import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { createSerializedImageLoader } from '@/lib/serialized-image-loader';
@@ -173,7 +175,7 @@ export default function ShowcaseScreen() {
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
-  const lastLoadMoreItemCountRef = useRef(0);
+  const lastLoadMorePageCountRef = useRef<number | null>(null);
   const aspectRatioRequestsRef = useRef(new Set<string>());
   // Scroll phase lives in a ref: these handlers fire continuously, and only a
   // committed election needs to reach React.
@@ -334,11 +336,17 @@ export default function ShowcaseScreen() {
     return user ? flattened : filterAnonymousSessionShowcaseFeedItems(flattened);
   }, [showcaseQuery.data?.pages, user]);
   const cards = useMemo(() => buildShowcaseMasonry(showcaseItems), [showcaseItems]);
+  const showcasePageCount = showcaseQuery.data?.pages.length ?? 0;
   // Keyed off the rendered cards, not the ranked items: a page that is entirely
   // text posts renders nothing, and that has to read as empty, not as loaded.
   const hasItems = cards.length > 0;
   const isFirstLoad = showcaseQuery.isLoading && !hasItems;
   const isRefreshing = showcaseQuery.isRefetching && !showcaseQuery.isFetchingNextPage;
+  const endMessage = activeToolLabel
+    ? `You've reached the end of ${activeToolLabel}.`
+    : activeFilterId === 'all'
+      ? "You're all caught up."
+      : `You've reached the end of ${activeFilter.label}.`;
 
   useEffect(() => {
     if (typeof Image.loadAsync !== 'function') return;
@@ -382,7 +390,7 @@ export default function ShowcaseScreen() {
     qualifiedImpressionsRef.current.clear();
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
-    lastLoadMoreItemCountRef.current = 0;
+    lastLoadMorePageCountRef.current = null;
   }, [activeFilterId, activeTool]);
 
   const clearToolFilter = () => {
@@ -392,28 +400,34 @@ export default function ShowcaseScreen() {
 
   const requestNextPage = () => {
     const now = Date.now();
-    if (
-      !showcaseQuery.hasNextPage ||
-      showcaseQuery.isFetchingNextPage ||
-      showcaseQuery.isLoading ||
-      loadingMoreRef.current ||
-      lastLoadMoreItemCountRef.current === showcaseItems.length ||
-      now - lastLoadMoreAtRef.current < LOAD_MORE_COOLDOWN_MS
-    ) {
-      return;
-    }
+    if (!canRequestNextFeedPage({
+      cooldownMs: LOAD_MORE_COOLDOWN_MS,
+      hasNextPage: showcaseQuery.hasNextPage,
+      isBusy: showcaseQuery.isFetching,
+      isRequestInFlight: loadingMoreRef.current,
+      lastRequestedAt: lastLoadMoreAtRef.current,
+      lastRequestedPageCount: lastLoadMorePageCountRef.current,
+      now,
+      pageCount: showcasePageCount,
+    })) return;
 
     loadingMoreRef.current = true;
     lastLoadMoreAtRef.current = now;
-    lastLoadMoreItemCountRef.current = showcaseItems.length;
+    lastLoadMorePageCountRef.current = showcasePageCount;
     void showcaseQuery.fetchNextPage().finally(() => {
       loadingMoreRef.current = false;
     });
   };
 
+  const retryNextPage = () => {
+    lastLoadMorePageCountRef.current = null;
+    lastLoadMoreAtRef.current = 0;
+    requestNextPage();
+  };
+
   const handleRefresh = () => {
     haptic.light();
-    lastLoadMoreItemCountRef.current = 0;
+    lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
     queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
       if (!current?.pages.length) return current;
@@ -724,7 +738,7 @@ export default function ShowcaseScreen() {
                 ) : null}
               </ScrollView>
             </View>
-            {showcaseQuery.error ? (
+            {showcaseQuery.error && !hasItems ? (
               <View style={{ gap: appTheme.spacing.gap }}>
                 <StatusBlock
                   tone="danger"
@@ -744,7 +758,14 @@ export default function ShowcaseScreen() {
               : `No posts matched ${activeFilter.label.toLowerCase()} yet. Pull to refresh or switch filters.`} />
           ) : null
         }
-        ListFooterComponent={!isFirstLoad && showcaseQuery.isFetchingNextPage ? <BottomLoader /> : null}
+        ListFooterComponent={
+          isFirstLoad ? null
+            : showcaseQuery.isFetchingNextPage ? <BottomLoader />
+              : showcaseQuery.isFetchNextPageError ? <FeedLoadMoreErrorFooter onRetry={retryNextPage} />
+                : hasItems && !isRefreshing && showcaseQuery.hasNextPage === false ? (
+                  <FeedEndFooter message={endMessage} />
+                ) : null
+        }
         viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
         />
 

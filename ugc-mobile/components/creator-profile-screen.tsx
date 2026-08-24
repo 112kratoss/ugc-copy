@@ -16,7 +16,6 @@ import {
   MapPin,
   Pencil,
   Play,
-  RefreshCw,
   Repeat2,
   Share2,
   UserCheck,
@@ -38,7 +37,9 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
+import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { AppText, StatusBlock } from '@/components/ui';
+import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { haptic } from '@/lib/haptics';
 import { useAuth } from '@/lib/auth';
 import {
@@ -91,7 +92,7 @@ export function CreatorProfileScreen({
   const [followError, setFollowError] = useState<string | null>(null);
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
-  const lastLoadMoreItemCountRef = useRef(0);
+  const lastLoadMorePageCountRef = useRef<number | null>(null);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const contentWidth = Math.min(width, 430);
   const horizontalPadding = contentWidth < 390 ? 14 : 16;
@@ -110,6 +111,7 @@ export function CreatorProfileScreen({
   });
   const data = profileQuery.data?.pages[0];
   const items = useMemo(() => flattenCreatorProfilePages(profileQuery.data?.pages), [profileQuery.data?.pages]);
+  const profilePageCount = profileQuery.data?.pages.length ?? 0;
   const currentTabItems = useMemo(() => creatorProfileTabItems(items, activeTab), [activeTab, items]);
   const socialLinks = useMemo(() => data ? creatorProfileSocialLinks(data.profile) : [], [data]);
   const listItems = useMemo<CreatorListItem[]>(() => {
@@ -135,7 +137,7 @@ export function CreatorProfileScreen({
     setActiveVideoItemId(null);
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
-    lastLoadMoreItemCountRef.current = 0;
+    lastLoadMorePageCountRef.current = null;
   }, [activeTab, username]);
 
   const followMutation = useMutation({
@@ -268,27 +270,34 @@ export function CreatorProfileScreen({
 
   const requestNextPage = useCallback(() => {
     const now = Date.now();
-    if (
-      activeTab === 'tools'
-      || !profileQuery.hasNextPage
-      || profileQuery.isFetchingNextPage
-      || profileQuery.isLoading
-      || loadingMoreRef.current
-      || lastLoadMoreItemCountRef.current === items.length
-      || now - lastLoadMoreAtRef.current < LOAD_MORE_COOLDOWN_MS
-    ) return;
+    if (activeTab === 'tools' || !canRequestNextFeedPage({
+      cooldownMs: LOAD_MORE_COOLDOWN_MS,
+      hasNextPage: profileQuery.hasNextPage,
+      isBusy: profileQuery.isFetching,
+      isRequestInFlight: loadingMoreRef.current,
+      lastRequestedAt: lastLoadMoreAtRef.current,
+      lastRequestedPageCount: lastLoadMorePageCountRef.current,
+      now,
+      pageCount: profilePageCount,
+    })) return;
 
     loadingMoreRef.current = true;
     lastLoadMoreAtRef.current = now;
-    lastLoadMoreItemCountRef.current = items.length;
+    lastLoadMorePageCountRef.current = profilePageCount;
     void profileQuery.fetchNextPage().finally(() => {
       loadingMoreRef.current = false;
     });
-  }, [activeTab, items.length, profileQuery]);
+  }, [activeTab, profilePageCount, profileQuery]);
+
+  const retryNextPage = useCallback(() => {
+    lastLoadMorePageCountRef.current = null;
+    lastLoadMoreAtRef.current = 0;
+    requestNextPage();
+  }, [requestNextPage]);
 
   const handleRefresh = () => {
     haptic.light();
-    lastLoadMoreItemCountRef.current = 0;
+    lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
     queryClient.setQueryData<InfiniteData<CreatorProfileResponse>>(queryKey, (current) => {
       if (!current?.pages.length) return current;
@@ -421,15 +430,7 @@ export function CreatorProfileScreen({
               <ActivityIndicator color={appTheme.colors.image} />
             </View>
           ) : profileQuery.isFetchNextPageError ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Retry loading creations"
-              onPress={() => void profileQuery.fetchNextPage()}
-              style={({ pressed }) => ({ minHeight: 72, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: pressed ? appTheme.opacity.pressed : 1 })}
-            >
-              <RefreshCw size={17} color={appTheme.colors.danger} />
-              <Text style={{ color: appTheme.colors.danger, ...appTheme.type.label }}>Could not load more. Retry</Text>
-            </Pressable>
+            <FeedLoadMoreErrorFooter onRetry={retryNextPage} />
           ) : null
         }
       />

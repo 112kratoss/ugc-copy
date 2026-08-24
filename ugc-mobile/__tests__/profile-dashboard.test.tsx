@@ -67,7 +67,8 @@ vi.mock('@shopify/flash-list', () => ({
     props.ListHeaderComponent,
     props.data?.length
       ? props.data.map((item, index) => props.renderItem?.({ item, index }))
-      : props.ListEmptyComponent
+      : props.ListEmptyComponent,
+    props.ListFooterComponent as React.ReactNode
   ),
 }));
 
@@ -157,6 +158,9 @@ const queryState = vi.hoisted(() => ({
   generationsIsFetchingNextPage: false,
   ownerPostsIsFetchingNextPage: false,
   savedMediaIsFetchingNextPage: false,
+  generationsIsFetchNextPageError: false,
+  ownerPostsIsFetchNextPageError: false,
+  savedMediaIsFetchNextPageError: false,
   generationsIsFetched: false,
   generationsIsFetching: false,
   generationsIsStale: false,
@@ -213,6 +217,7 @@ vi.mock('@tanstack/react-query', () => ({
         },
         fetchNextPage: queryState.fetchNextGenerations,
         hasNextPage: queryState.generationsHasNextPage,
+        isFetchNextPageError: queryState.generationsIsFetchNextPageError,
         isFetchingNextPage: queryState.generationsIsFetchingNextPage,
         isFetched: queryState.generationsIsFetched,
         isFetching: queryState.generationsIsFetching,
@@ -236,6 +241,7 @@ vi.mock('@tanstack/react-query', () => ({
         },
         fetchNextPage: queryState.fetchNextOwnerPosts,
         hasNextPage: queryState.ownerPostsHasNextPage,
+        isFetchNextPageError: queryState.ownerPostsIsFetchNextPageError,
         isFetchingNextPage: queryState.ownerPostsIsFetchingNextPage,
         isFetched: queryState.ownerPostsIsFetched,
         isFetching: queryState.ownerPostsIsFetching,
@@ -259,6 +265,7 @@ vi.mock('@tanstack/react-query', () => ({
         },
         fetchNextPage: queryState.fetchNextSavedMedia,
         hasNextPage: queryState.savedMediaHasNextPage,
+        isFetchNextPageError: queryState.savedMediaIsFetchNextPageError,
         isFetchingNextPage: queryState.savedMediaIsFetchingNextPage,
         isFetched: queryState.savedMediaIsFetched,
         isFetching: queryState.savedMediaIsFetching,
@@ -370,6 +377,9 @@ describe('ProfileDashboard media tiles routing', () => {
     queryState.generationsIsFetchingNextPage = false;
     queryState.ownerPostsIsFetchingNextPage = false;
     queryState.savedMediaIsFetchingNextPage = false;
+    queryState.generationsIsFetchNextPageError = false;
+    queryState.ownerPostsIsFetchNextPageError = false;
+    queryState.savedMediaIsFetchNextPageError = false;
     queryState.fetchNextGenerations.mockClear();
     queryState.fetchNextOwnerPosts.mockClear();
     queryState.fetchNextSavedMedia.mockClear();
@@ -697,6 +707,26 @@ describe('ProfileDashboard media tiles routing', () => {
       tree!.update(<ProfileDashboard initialTab="Creations" />);
     });
     expect(tree!.root.find((node) => String(node.type) === 'flash-list').props.ListFooterComponent).not.toBeNull();
+  });
+
+  it('shows a recoverable footer after a profile-media page fails', async () => {
+    queryState.generationsHasNextPage = true;
+    queryState.generationsIsFetchNextPageError = true;
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => {
+      tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+      await Promise.resolve();
+    });
+    const callsBeforeRetry = queryState.fetchNextGenerations.mock.calls.length;
+    const retry = tree!.root.findByProps({ accessibilityLabel: "Couldn't load more. Retry" });
+
+    await renderer.act(async () => {
+      retry.props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(queryState.fetchNextGenerations.mock.calls.length).toBe(callsBeforeRetry + 1);
   });
 
   it('marks a hero stat as partial while more pages remain', () => {

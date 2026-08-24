@@ -23,11 +23,13 @@ import { ActivityIndicator, PanResponder, Pressable, Text, useWindowDimensions, 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { StableMediaImage } from '@/components/media-preview';
+import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { Reveal } from '@/components/reveal';
 import { ProfileGridSkeleton } from '@/components/skeleton';
 import { TopScrim } from '@/components/top-scrim';
 import { AppText, SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
+import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { formatUsdCents, getOwnerPostSalesSummary } from '@/lib/home-view-model';
 import { haptic } from '@/lib/haptics';
 import { immersiveViewerHref, profileMediaFeedHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
@@ -112,7 +114,7 @@ export function ProfileDashboard({
   const queryClient = useQueryClient();
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
-  const lastLoadMorePageCountRef = useRef(0);
+  const lastLoadMorePageCountRef = useRef<number | null>(null);
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const topInset = resolvedTopInset(insets.top);
@@ -188,7 +190,7 @@ export function ProfileDashboard({
   useEffect(() => {
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
-    lastLoadMorePageCountRef.current = 0;
+    lastLoadMorePageCountRef.current = null;
   }, [activeTab, user?.id]);
 
   useEffect(() => {
@@ -256,11 +258,6 @@ export function ProfileDashboard({
     (activeTab === 'Saved' && savedQuery.isLoading)
     || (activeTab === 'Creations' && generationsQuery.isLoading)
     || (activeTab === 'Posts' && postsQuery.isLoading);
-  const mediaError = activeTab === 'Saved'
-    ? savedQuery.error
-    : activeTab === 'Creations'
-      ? generationsQuery.error
-      : postsQuery.error;
   const activeTabPaging = activeTab === 'Saved'
     ? savedQuery
     : activeTab === 'Creations'
@@ -268,23 +265,22 @@ export function ProfileDashboard({
       : postsQuery;
   const activeHasNextPage = activeTabPaging.hasNextPage;
   const activeIsFetchingNextPage = activeTabPaging.isFetchingNextPage;
+  const activeIsFetchNextPageError = activeTabPaging.isFetchNextPageError;
   const activePageCount = activeTabPaging.data?.pages.length ?? 0;
+  const mediaError = activeIsFetchNextPageError ? null : activeTabPaging.error;
 
   const requestNextPage = useCallback(() => {
     const now = Date.now();
-    if (
-      !activeHasNextPage
-      || activeIsFetchingNextPage
-      || activeMediaIsFetching
-      || loadingMoreRef.current
-      // Guard on page count, not item count: a page can legitimately add zero tiles once the
-      // server and the isGridReady filter have had their say, and an item-count guard would
-      // then latch shut and block every later page.
-      || lastLoadMorePageCountRef.current === activePageCount
-      || now - lastLoadMoreAtRef.current < PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS
-    ) {
-      return;
-    }
+    if (!canRequestNextFeedPage({
+      cooldownMs: PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS,
+      hasNextPage: activeHasNextPage,
+      isBusy: activeMediaIsFetching,
+      isRequestInFlight: loadingMoreRef.current,
+      lastRequestedAt: lastLoadMoreAtRef.current,
+      lastRequestedPageCount: lastLoadMorePageCountRef.current,
+      now,
+      pageCount: activePageCount,
+    })) return;
 
     loadingMoreRef.current = true;
     lastLoadMoreAtRef.current = now;
@@ -310,6 +306,12 @@ export function ProfileDashboard({
     savedQuery,
   ]);
 
+  const retryNextPage = useCallback(() => {
+    lastLoadMorePageCountRef.current = null;
+    lastLoadMoreAtRef.current = 0;
+    requestNextPage();
+  }, [requestNextPage]);
+
   // A page that yields few renderable tiles can leave the grid too short to scroll, so
   // onEndReached would never fire again. Top it up until the grid can carry itself.
   useEffect(() => {
@@ -329,7 +331,7 @@ export function ProfileDashboard({
     haptic.light();
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
-    lastLoadMorePageCountRef.current = 0;
+    lastLoadMorePageCountRef.current = null;
 
     if (activeTab === 'Saved') {
       queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(
@@ -431,11 +433,13 @@ export function ProfileDashboard({
       )}
       horizontalPadding={horizontalPadding}
       highlightedPostId={highlightedPostId}
+      isFetchNextPageError={activeIsFetchNextPageError}
       isFetchingNextPage={activeIsFetchingNextPage}
       isLoading={isMediaLoading}
       isRefreshing={activeMediaIsFetching && !activeIsFetchingNextPage}
       mediaError={mediaError}
       onEndReached={requestNextPage}
+      onRetryNextPage={retryNextPage}
       onRefresh={refreshActiveMedia}
       onSwipeTab={handleMediaSwipe}
       onTabChange={handleMediaTabChange}
@@ -455,12 +459,14 @@ function ProfileMediaList({
   header,
   horizontalPadding,
   highlightedPostId,
+  isFetchNextPageError,
   isFetchingNextPage,
   isLoading,
   isRefreshing,
   mediaError,
   onEndReached,
   onRefresh,
+  onRetryNextPage,
   onSwipeTab,
   onTabChange,
   postsScope = 'active',
@@ -478,12 +484,14 @@ function ProfileMediaList({
   header: React.ReactNode;
   horizontalPadding: number;
   highlightedPostId?: string | null;
+  isFetchNextPageError?: boolean;
   isFetchingNextPage?: boolean;
   isLoading: boolean;
   isRefreshing?: boolean;
   mediaError?: unknown;
   onEndReached?: () => void;
   onRefresh?: () => void;
+  onRetryNextPage?: () => void;
   onSwipeTab: (direction: ProfileMediaSwipeDirection) => void;
   onTabChange: (tab: ProfileMediaTab) => void;
   postsScope?: ProfilePostsScope;
@@ -553,7 +561,9 @@ function ProfileMediaList({
         ) : (
           <ProfileMediaEmpty title={emptyTitle} />
         )}
-        ListFooterComponent={isFetchingNextPage ? <ProfileGridFooterLoader /> : null}
+        ListFooterComponent={isFetchingNextPage ? <ProfileGridFooterLoader />
+          : isFetchNextPageError && onRetryNextPage ? <FeedLoadMoreErrorFooter onRetry={onRetryNextPage} />
+            : null}
         numColumns={PROFILE_GALLERY_COLUMNS}
         onEndReached={onEndReached}
         onEndReachedThreshold={0.32}
