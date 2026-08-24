@@ -106,7 +106,7 @@ import {
 } from '@/lib/reference-mentions';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
-import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse } from '@/lib/types';
+import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel } from '@/lib/types';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
 
 const TOOL_META: Record<CreatorToolId, { title: string; accent: ToolAccent; subtitle: string }> = {
@@ -1014,6 +1014,13 @@ export function MediaCreationScreen({
     }
   };
 
+  const handleUndoEnhance = () => {
+    if (enhanceUndo && enhanceUndo.enhanced === currentDraft.prompt) {
+      updatePrompt(enhanceUndo.previous);
+    }
+    setEnhanceUndo(null);
+  };
+
   const pollGenerationForTool = (
     tool: CreatorToolId,
     predictionId: string,
@@ -1185,12 +1192,7 @@ export function MediaCreationScreen({
           enhanceLevel={enhanceLevel}
           onEnhanceLevelChange={setEnhanceLevel}
           canUndoEnhance={enhanceUndo !== null && enhanceUndo.enhanced === currentDraft.prompt}
-          onUndoEnhance={() => {
-            if (enhanceUndo && enhanceUndo.enhanced === currentDraft.prompt) {
-              updatePrompt(enhanceUndo.previous);
-            }
-            setEnhanceUndo(null);
-          }}
+          onUndoEnhance={handleUndoEnhance}
           onFocus={() => setIsPromptFocused(true)}
           onBlur={() => setIsPromptFocused(false)}
         />
@@ -1425,6 +1427,10 @@ export function MediaCreationScreen({
               validationErrors={validation.errors}
               onPromptChange={updatePrompt}
               onEnhance={enhancePrompt}
+              enhanceLevel={enhanceLevel}
+              onEnhanceLevelChange={setEnhanceLevel}
+              canUndoEnhance={enhanceUndo !== null && enhanceUndo.enhanced === currentDraft.prompt}
+              onUndoEnhance={handleUndoEnhance}
               onChange={(draft) => replaceDraft(draft)}
               onUploadImages={() => uploadImageReferences('video')}
               onUploadStart={() => uploadSingleImage('start')}
@@ -1446,6 +1452,10 @@ export function MediaCreationScreen({
               validationErrors={validation.errors}
               onPromptChange={updatePrompt}
               onEnhance={enhancePrompt}
+              enhanceLevel={enhanceLevel}
+              onEnhanceLevelChange={setEnhanceLevel}
+              canUndoEnhance={enhanceUndo !== null && enhanceUndo.enhanced === currentDraft.prompt}
+              onUndoEnhance={handleUndoEnhance}
               onChange={(draft) => replaceDraft(draft)}
               onUploadCharacter={() => uploadSingleImage('character')}
               onUploadMotion={() => uploadReferenceVideo('motion')}
@@ -1640,6 +1650,10 @@ export function MediaCreationScreen({
             promptMessage={promptMessage}
             onPromptChange={updatePrompt}
             onEnhance={enhancePrompt}
+            enhanceLevel={enhanceLevel}
+            onEnhanceLevelChange={setEnhanceLevel}
+            canUndoEnhance={enhanceUndo !== null && enhanceUndo.enhanced === currentDraft.prompt}
+            onUndoEnhance={handleUndoEnhance}
             onUploadReferences={() => uploadImageReferences('image')}
             onRenameReference={(id, displayName) => setImageDraft((draft) => {
               const currentReference = draft.references.find((media) => media.id === id);
@@ -2049,6 +2063,10 @@ function ImagePromptComposer({
   promptMessage,
   onPromptChange,
   onEnhance,
+  enhanceLevel,
+  onEnhanceLevelChange,
+  canUndoEnhance,
+  onUndoEnhance,
   onUploadReferences,
   onRenameReference,
   onRemoveReference,
@@ -2063,6 +2081,10 @@ function ImagePromptComposer({
   promptMessage: string | null;
   onPromptChange: (prompt: string) => void;
   onEnhance: () => void;
+  enhanceLevel: PromptEnhancementLevel;
+  onEnhanceLevelChange: (level: PromptEnhancementLevel) => void;
+  canUndoEnhance: boolean;
+  onUndoEnhance: () => void;
   onUploadReferences: () => void;
   onRenameReference: (id: string, displayName: string) => void;
   onRemoveReference: (id: string) => void;
@@ -2246,6 +2268,14 @@ function ImagePromptComposer({
           <ComposerToolbarButton icon={<Layers size={15} color={appTheme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
           <ComposerToolbarButton icon={<Wand2 size={16} color={appTheme.colors.primary} />} label={isEnhancing ? 'Enhancing' : 'Enhance'} onPress={onEnhance} disabled={isEnhancing} accent />
         </View>
+
+        <EnhanceControlsRow
+          level={enhanceLevel}
+          onLevelChange={onEnhanceLevelChange}
+          canUndo={canUndoEnhance}
+          onUndo={onUndoEnhance}
+          disabled={isEnhancing}
+        />
 
         <View
           testID="image-reference-rail"
@@ -2508,6 +2538,10 @@ function VideoCreatorComposer({
   validationErrors,
   onPromptChange,
   onEnhance,
+  enhanceLevel,
+  onEnhanceLevelChange,
+  canUndoEnhance,
+  onUndoEnhance,
   onChange,
   onUploadImages,
   onUploadStart,
@@ -2527,6 +2561,10 @@ function VideoCreatorComposer({
   validationErrors: string[];
   onPromptChange: (prompt: string) => void;
   onEnhance: () => void;
+  enhanceLevel: PromptEnhancementLevel;
+  onEnhanceLevelChange: (level: PromptEnhancementLevel) => void;
+  canUndoEnhance: boolean;
+  onUndoEnhance: () => void;
   onChange: (draft: VideoCreationDraft) => void;
   onUploadImages: () => void;
   onUploadStart: () => void;
@@ -2808,6 +2846,14 @@ function VideoCreatorComposer({
         <ComposerToolbarButton icon={<Wand2 size={16} color={appTheme.colors.primary} />} label={isEnhancing ? 'Enhancing' : 'Enhance'} onPress={onEnhance} disabled={isEnhancing || draft.isMultiShot} accent />
       </View>
 
+        <EnhanceControlsRow
+          level={enhanceLevel}
+          onLevelChange={onEnhanceLevelChange}
+          canUndo={canUndoEnhance}
+          onUndo={onUndoEnhance}
+          disabled={isEnhancing}
+        />
+
       <View testID="video-reference-section" style={{ borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(115,191,242,0.13)', backgroundColor: appTheme.colors.panel, padding: 14, gap: 12 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
           <View style={{ gap: 2 }}>
@@ -2945,6 +2991,10 @@ function MotionCreatorComposer({
   validationErrors,
   onPromptChange,
   onEnhance,
+  enhanceLevel,
+  onEnhanceLevelChange,
+  canUndoEnhance,
+  onUndoEnhance,
   onChange,
   onUploadCharacter,
   onUploadMotion,
@@ -2959,6 +3009,10 @@ function MotionCreatorComposer({
   validationErrors: string[];
   onPromptChange: (prompt: string) => void;
   onEnhance: () => void;
+  enhanceLevel: PromptEnhancementLevel;
+  onEnhanceLevelChange: (level: PromptEnhancementLevel) => void;
+  canUndoEnhance: boolean;
+  onUndoEnhance: () => void;
   onChange: (draft: MotionCreationDraft) => void;
   onUploadCharacter: () => void;
   onUploadMotion: () => void;
@@ -3020,6 +3074,14 @@ function MotionCreatorComposer({
         <ComposerToolbarButton icon={<Layers size={15} color={appTheme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} quiet />
         <ComposerToolbarButton icon={<Wand2 size={16} color={appTheme.colors.primary} />} label={isEnhancing ? 'Enhancing' : 'Enhance'} onPress={onEnhance} disabled={isEnhancing || !draft.prompt.trim()} accent />
       </View>
+
+        <EnhanceControlsRow
+          level={enhanceLevel}
+          onLevelChange={onEnhanceLevelChange}
+          canUndo={canUndoEnhance}
+          onUndo={onUndoEnhance}
+          disabled={isEnhancing}
+        />
 
       <ReferenceDetailsOverlay
         media={selectedMedia}
@@ -3142,6 +3204,70 @@ function SheetDragHandle({ label, onDismiss }: { label: string; onDismiss: () =>
     >
       <GripHorizontal size={28} color={appTheme.colors.faint} />
     </Pressable>
+  );
+}
+
+/**
+ * Enhancement level + undo, shared by every prompt surface (the three creator
+ * composers and the guided PromptPanel) so the controls cannot drift apart.
+ */
+function EnhanceControlsRow({
+  level,
+  onLevelChange,
+  canUndo,
+  onUndo,
+  disabled,
+}: {
+  level: PromptEnhancementLevel;
+  onLevelChange: (level: PromptEnhancementLevel) => void;
+  canUndo: boolean;
+  onUndo: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+      <View style={{ flexDirection: 'row', borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)', padding: 2 }}>
+        {([['cinematic', 'Full'], ['faithful', 'Light']] as const).map(([value, label]) => (
+          <Pressable
+            key={value}
+            accessibilityRole="button"
+            accessibilityLabel={value === 'cinematic' ? 'Full enhancement' : 'Light enhancement'}
+            accessibilityState={{ selected: level === value, disabled }}
+            disabled={disabled}
+            onPress={() => onLevelChange(value)}
+            style={{
+              minHeight: 32,
+              paddingHorizontal: 12,
+              borderRadius: appTheme.radii.pill,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: level === value ? 'rgba(255,122,89,0.18)' : 'transparent',
+              opacity: disabled ? 0.5 : 1,
+            }}
+          >
+            <Text style={{ color: level === value ? '#FFB09C' : '#8E918C', fontWeight: '700', fontSize: 12 }}>{label}</Text>
+          </Pressable>
+        ))}
+      </View>
+      {canUndo ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Undo enhancement"
+          onPress={onUndo}
+          style={{
+            minHeight: 32,
+            paddingHorizontal: 12,
+            borderRadius: appTheme.radii.pill,
+            borderWidth: 1,
+            borderColor: 'rgba(255,255,255,0.12)',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Text style={{ color: '#B9BDB7', fontWeight: '700', fontSize: 12 }}>Undo</Text>
+        </Pressable>
+      ) : null}
+    </View>
   );
 }
 
@@ -3951,8 +4077,8 @@ function PromptPanel({
   message?: string | null;
   onPromptChange: (value: string) => void;
   onEnhance: () => void;
-  enhanceLevel: 'cinematic' | 'faithful';
-  onEnhanceLevelChange: (level: 'cinematic' | 'faithful') => void;
+  enhanceLevel: PromptEnhancementLevel;
+  onEnhanceLevelChange: (level: PromptEnhancementLevel) => void;
   canUndoEnhance: boolean;
   onUndoEnhance: () => void;
   onFocus: () => void;
@@ -4002,47 +4128,13 @@ function PromptPanel({
           <Text style={{ color: '#F6F3EC', fontWeight: '700', fontSize: 13 }}>Enhance</Text>
         </Pressable>
       </View>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-        <View style={{ flexDirection: 'row', borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)', padding: 2 }}>
-          {([['cinematic', 'Full'], ['faithful', 'Light']] as const).map(([value, label]) => (
-            <Pressable
-              key={value}
-              accessibilityRole="button"
-              accessibilityLabel={value === 'cinematic' ? 'Full enhancement' : 'Light enhancement'}
-              accessibilityState={{ selected: enhanceLevel === value }}
-              onPress={() => onEnhanceLevelChange(value)}
-              style={{
-                minHeight: 32,
-                paddingHorizontal: 12,
-                borderRadius: appTheme.radii.pill,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: enhanceLevel === value ? 'rgba(255,122,89,0.18)' : 'transparent',
-              }}
-            >
-              <Text style={{ color: enhanceLevel === value ? '#FFB09C' : '#8E918C', fontWeight: '700', fontSize: 12 }}>{label}</Text>
-            </Pressable>
-          ))}
-        </View>
-        {canUndoEnhance ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Undo enhancement"
-            onPress={onUndoEnhance}
-            style={{
-              minHeight: 32,
-              paddingHorizontal: 12,
-              borderRadius: appTheme.radii.pill,
-              borderWidth: 1,
-              borderColor: 'rgba(255,255,255,0.12)',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Text style={{ color: '#B9BDB7', fontWeight: '700', fontSize: 12 }}>Undo</Text>
-          </Pressable>
-        ) : null}
-      </View>
+      <EnhanceControlsRow
+        level={enhanceLevel}
+        onLevelChange={onEnhanceLevelChange}
+        canUndo={canUndoEnhance}
+        onUndo={onUndoEnhance}
+        disabled={isEnhancing}
+      />
       {message ? <Text selectable style={{ color: appTheme.colors.danger, fontWeight: '800', lineHeight: 20 }}>{message}</Text> : null}
       <TextInput
         accessibilityLabel={optional ? 'Optional motion prompt' : 'Generation prompt'}

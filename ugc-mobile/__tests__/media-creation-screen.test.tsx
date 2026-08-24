@@ -1844,4 +1844,49 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(collectText(tree!.root).some((item) => item.includes('1K · 4:5 · JPG'))).toBe(true);
     vi.useRealTimers();
   });
+  it('offers enhancement level and undo on every prompt surface', async () => {
+    // Four separate prompt surfaces call enhancePrompt (three creator
+    // composers plus the guided PromptPanel); a device check caught the
+    // controls shipping on only one of them.
+    authState.api.enhancePrompt.mockResolvedValue({ enhancedPrompt: 'Enhanced product prompt.', remainingCredits: 900 });
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" />);
+    });
+
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Full enhancement' })).toBeTruthy();
+    const lightControl = tree!.root.findByProps({ accessibilityLabel: 'Light enhancement' });
+    expect(lightControl.props.accessibilityState).toEqual(expect.objectContaining({ selected: false }));
+
+    renderer.act(() => {
+      lightControl.props.onPress();
+    });
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Light enhancement' }).props.accessibilityState)
+      .toEqual(expect.objectContaining({ selected: true }));
+
+    renderer.act(() => {
+      tree!.root.findAll((node) => String(node.type) === 'textinput')[0].props.onChangeText('creator lifts the serum');
+    });
+    // No enhancement has run, so there is nothing to undo yet.
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Undo enhancement' })).toHaveLength(0);
+
+    await renderer.act(async () => {
+      await findPressableByText(tree!.root, 'Enhance').props.onPress();
+    });
+
+    expect(authState.api.enhancePrompt).toHaveBeenCalledWith(expect.objectContaining({
+      context: expect.objectContaining({ enhancementLevel: 'faithful' }),
+    }));
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value)
+      .toBe('Enhanced product prompt.');
+
+    const undoControl = tree!.root.findAllByProps({ accessibilityLabel: 'Undo enhancement' })[0];
+    expect(undoControl).toBeTruthy();
+    renderer.act(() => {
+      undoControl.props.onPress();
+    });
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value)
+      .toBe('creator lifts the serum');
+  });
 });
