@@ -83,11 +83,17 @@ LLM comparison, and published prompt-rewriting evals).
   the current app already.
 - **Streaming the rewrite**: still rejected — plan-then-compile means the final
   prompt only exists after compilation, so token streaming would show raw JSON.
-- **kling-o3 `elements`** (named multi-image @subjects): still deferred — a
-  subject group (2–4 images per named subject) is not expressible in the
-  current catalog descriptor schema, so this is a control-plane feature
-  (descriptor schema + grouping editor + live paid test), not a fix. Flat
-  references remain correct today.
+- **DONE — kling-o3 named multi-image subjects** (third pass, same day):
+  provider contract live-verified on `kling-3.0-omni/text-to-video` (2-image
+  subject, task 7da3646b6a8362b9aa783c2176d0c71e, successful video). Shipped as
+  a `subjectImages` slot in a `subjects` input mode gated on
+  `referenceMode=subjects` (catalog release `kling-o3-subjects-20260824`),
+  grouped by shared handle in the unified start service, validated 2–4 images ×
+  ≤3 subjects in generation-services, mapped to the provider `elements` field,
+  and edited on web via the Named subjects card (session-only state; @handles
+  feed prompt mentions and the enhancer's preservation safeguards). Mobile
+  never sees the mode until its UI can group images — the gating setting is
+  unreachable from the catalog-driven mobile UI by design.
 - **Live eval harness**: `npm run eval:enhancer` (scripts/enhancer-eval.ts)
   runs fixture prompts through the real provider and checks constraint
   obedience; not part of CI (costs money, needs `KIE_AI_API_KEY`).

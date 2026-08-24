@@ -162,3 +162,13 @@ All web unit/integration tests live flat in `src/__tests__/` (~540 files) — ne
 ## Operational runbooks (`docs/`)
 
 `production-deployment-runbook.md` (topology, env contract, gates), `supabase-local-prod-workflow.md`, `generation-model-catalog-operations.md`, `moderation-operations.md` (staffed queue, service-role CLI), `mobile-store-product-catalog.md` (IAP tier provisioning), and `post-resource-bundle-v1.md`. Dated research snapshots (`performance-audit-2026-07-16.md`, `ui-consistency-research-2026-06-14.md`) and agent plans/specs (`docs/superpowers/`) sit alongside the runbooks. `scaling-audit.md` is the active scaling entry point; it links the current finding set and exact-build certificates. Dated audit journals live under `docs/archive/` and must not be treated as current capacity claims.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

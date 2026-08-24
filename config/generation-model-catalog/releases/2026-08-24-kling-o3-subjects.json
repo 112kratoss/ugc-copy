@@ -1,0 +1,373 @@
+{
+  "manifestVersion": 1,
+  "mode": "clone-active",
+  "release": {
+    "schemaVersion": 2,
+    "revision": "kling-o3-subjects-20260824",
+    "basedOnRevision": "imagen-family-disable-20260824",
+    "changeNote": "Add the Kling O3 named-subjects input mode: a subjectImages slot (up to 12 images, up to 3 named subjects, grouped 2-4 images per subject by shared handle in application code) gated on referenceMode=subjects so catalog-driven UIs that cannot group images never surface it. Provider contract live-verified 2026-08-24 on kling-3.0-omni/text-to-video (task 7da3646b6a8362b9aa783c2176d0c71e). Everything else about the entry is unchanged.",
+    "createdBy": "enhancer-v2 pass 2026-08-24 (Claude Code, operator athulsmanjeri@gmail.com)"
+  },
+  "upgrade": {
+    "legacyDescriptorsToV2": true
+  },
+  "expectedModelIds": [
+    "flux-2-pro",
+    "gemini-omni-video",
+    "gpt-image-2",
+    "grok-imagine-image",
+    "grok-imagine-image-2",
+    "grok-imagine-video",
+    "hailuo-2.3",
+    "happyhorse-1.1",
+    "ideogram-character",
+    "ideogram-v3",
+    "imagen-4",
+    "imagen-4-fast",
+    "imagen-4-ultra",
+    "kling-2.6",
+    "kling-3.0",
+    "kling-3.0-turbo",
+    "kling-3.0-video",
+    "kling-o3",
+    "minimax-h3",
+    "nano-banana-2",
+    "nano-banana-2-lite",
+    "nano-banana-pro",
+    "qwen3",
+    "qwen3-pro",
+    "seedance-1.5-pro",
+    "seedance-2",
+    "seedance-2-5",
+    "seedance-2-fast",
+    "seedance-2-mini",
+    "seedream-5-lite",
+    "seedream-5-pro",
+    "veo-3.1",
+    "wan-2.7",
+    "wan-2.7-image",
+    "wan-2.7-image-pro",
+    "z-image"
+  ],
+  "defaults": {
+    "web": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    },
+    "mobile": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    }
+  },
+  "entries": [
+    {
+      "modelId": "kling-o3",
+      "kind": "video",
+      "publicDescriptor": {
+        "id": "kling-o3",
+        "kind": "video",
+        "badge": null,
+        "inputs": {
+          "endFrame": false,
+          "startFrame": true,
+          "audioReferences": null,
+          "imageReferences": {
+            "max": 7,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "characterReferences": null,
+          "preparedAudioReferences": null,
+          "combineFramesWithReferences": false
+        },
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "type": "choice",
+            "label": "Aspect ratio",
+            "options": [
+              {
+                "label": "16:9",
+                "value": "16:9"
+              },
+              {
+                "label": "9:16",
+                "value": "9:16"
+              },
+              {
+                "label": "1:1",
+                "value": "1:1"
+              }
+            ],
+            "defaultValue": "16:9",
+            "presentation": "chips"
+          },
+          {
+            "key": "resolution",
+            "type": "choice",
+            "label": "Resolution",
+            "options": [
+              {
+                "label": "720p",
+                "value": "720p"
+              },
+              {
+                "label": "1080p",
+                "value": "1080p"
+              },
+              {
+                "label": "4k",
+                "value": "4k"
+              }
+            ],
+            "defaultValue": "720p",
+            "presentation": "chips"
+          },
+          {
+            "key": "duration",
+            "max": 15,
+            "min": 3,
+            "step": 1,
+            "type": "integer",
+            "unit": "seconds",
+            "label": "Duration",
+            "defaultValue": 5,
+            "presentation": "stepper"
+          },
+          {
+            "key": "sound",
+            "type": "boolean",
+            "label": "Sound",
+            "defaultValue": false,
+            "presentation": "toggle"
+          },
+          {
+            "key": "isMultiShot",
+            "type": "boolean",
+            "label": "Multi-shot",
+            "defaultValue": false,
+            "presentation": "toggle"
+          },
+          {
+            "key": "referenceMode",
+            "type": "choice",
+            "label": "Input mode",
+            "options": [
+              {
+                "label": "Frames",
+                "value": "frames"
+              },
+              {
+                "label": "References",
+                "value": "elements"
+              }
+            ],
+            "defaultValue": "frames",
+            "presentation": "chips",
+            "minClientSchemaVersion": 2
+          }
+        ],
+        "sortOrder": 130,
+        "inputModes": [
+          {
+            "key": "frames",
+            "label": "Frames",
+            "slots": [
+              {
+                "key": "startFrame",
+                "max": 1,
+                "min": 0,
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame"
+              }
+            ],
+            "default": true,
+            "conditions": [
+              {
+                "key": "referenceMode",
+                "value": "frames",
+                "source": "setting",
+                "operator": "equals"
+              }
+            ]
+          },
+          {
+            "key": "references",
+            "label": "Reusable references",
+            "slots": [
+              {
+                "key": "imageReferences",
+                "max": 7,
+                "min": 0,
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "maxNamed": 3,
+                "supportsNaming": true
+              }
+            ],
+            "default": false,
+            "conditions": [
+              {
+                "key": "referenceMode",
+                "value": "elements",
+                "source": "setting",
+                "operator": "equals"
+              }
+            ]
+          },
+          {
+            "key": "subjects",
+            "label": "Named subjects",
+            "default": false,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "subjects"
+              }
+            ],
+            "slots": [
+              {
+                "key": "subjectImages",
+                "kind": "image",
+                "role": "reference",
+                "label": "Subject images",
+                "min": 0,
+                "max": 12,
+                "supportsNaming": true,
+                "maxNamed": 3
+              }
+            ]
+          }
+        ],
+        "description": "Multi-shot Kling with named subjects and 4K output",
+        "displayName": "Kling O3",
+        "recommended": false,
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "capabilities": {
+          "sound": true,
+          "fixedLens": false,
+          "multiShot": true,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "schemaVersion": 2,
+        "inputConstraints": [],
+        "minClientSchemaVersion": 1
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "video-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "text": "kling-3.0-omni/text-to-video",
+        "image": "kling-3.0-omni/image-to-video",
+        "default": "kling-3.0-omni/text-to-video",
+        "reference": "kling-3.0-omni/reference-to-video"
+      },
+      "pricingStrategy": "per-second",
+      "pricingConfig": {
+        "rate": {
+          "config": {
+            "table": {
+              "4k": {
+                "true": 67,
+                "false": 67
+              },
+              "720p": {
+                "true": 18,
+                "false": 14
+              },
+              "1080p": {
+                "true": 23,
+                "false": 18
+              }
+            },
+            "dimensions": [
+              {
+                "key": "resolution",
+                "source": "setting",
+                "defaultValue": "720p"
+              },
+              {
+                "key": "sound",
+                "source": "setting",
+                "defaultValue": false
+              }
+            ]
+          },
+          "strategy": "lookup"
+        },
+        "rounding": "ceil",
+        "durationSettingKey": "duration"
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "rules": [
+          {
+            "max": 2,
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "conditions": [
+              {
+                "key": "referenceMode",
+                "value": "frames",
+                "source": "setting",
+                "operator": "equals"
+              }
+            ]
+          },
+          {
+            "max": 7,
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "conditions": [
+              {
+                "key": "referenceMode",
+                "value": "elements",
+                "source": "setting",
+                "operator": "equals"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 12,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "subjects"
+              }
+            ]
+          }
+        ],
+        "normalizedDefaults": {
+          "mode": "",
+          "sound": false,
+          "fixedLens": false,
+          "resolution": "",
+          "referenceMode": "frames"
+        },
+        "passthroughSettingKeys": [
+          "referenceMode"
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    }
+  ],
+  "acceptanceQuotes": []
+}

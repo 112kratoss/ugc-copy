@@ -94,6 +94,12 @@ Kling O3 therefore ships with flat `image_urls` references (up to 7), which work
 Wiring `elements` needs a subject-grouping editor (N images per named subject, ≤3
 subjects) plus a live test generation — tracked as follow-up, not guessed at here.
 
+> **Resolved 2026-08-24:** the live test generation succeeded
+> (kling-3.0-omni/text-to-video, 2-image subject, task
+> 7da3646b6a8362b9aa783c2176d0c71e) and `elements` shipped end to end — see
+> `docs/prompt-enhancer-playbooks-2026-08-24.md` and catalog release
+> `2026-08-24-kling-o3-subjects.json`.
+
 ### `minimax-h3` → `minimax-h3/text-to-video` · `/image-to-video` · `/reference-to-video`
 - text: `prompt` (req), `aspect_ratio` (req), `duration` (req), `resolution`
 - image: `prompt`, `first_frame_url`, `last_frame_url`, `duration`, `resolution`
