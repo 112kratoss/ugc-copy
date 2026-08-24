@@ -21,7 +21,7 @@ import StudioModelPicker from '@/app/components/StudioModelPicker';
 import PublicShareButton from '@/app/components/PublicShareButton';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
-import { clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, getVideoElementSupport, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/client-generation-models';
+import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, getVideoElementSupport, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/client-generation-models';
 import { getVideoInputAffordances } from '@/lib/generation-model-affordances';
 import type { GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import {
@@ -4136,6 +4136,16 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         </span>
                                         <span>{currentSound ? 'ON' : 'OFF'}</span>
                                     </button>
+                                </div>
+                            )}
+
+                            {!videoModel.supportsSound && ALWAYS_ON_AUDIO_VIDEO_MODELS.has(selectedModel) && (
+                                <div>
+                                    <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Audio</h2>
+                                    <div className="w-full p-3 rounded-xl flex items-center gap-2 text-sm font-medium bg-black/50 text-zinc-400 border border-white/5">
+                                        <Volume2 className="w-4 h-4 shrink-0 text-green-400/70" />
+                                        <span>This model always generates audio. Describe the sound you want in the prompt, or say “no music”.</span>
+                                    </div>
                                 </div>
                             )}
                         </div>

@@ -73,6 +73,7 @@ import {
   type GenerationModelCatalog,
 } from '@/lib/generation-model-catalog';
 import {
+  ALWAYS_ON_AUDIO_VIDEO_MODELS,
   applyModelDefaults,
   buildPromptEnhancementRequest,
   createDefaultCreationDraft,
@@ -466,6 +467,8 @@ export function MediaCreationScreen({
   const [isUploading, setIsUploading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
+  const [enhanceLevel, setEnhanceLevel] = useState<'cinematic' | 'faithful'>('cinematic');
+  const [enhanceUndo, setEnhanceUndo] = useState<{ previous: string; enhanced: string } | null>(null);
   const [status, setStatus] = useState<GenerationStatusResponse | null>(null);
   const [lastGenerationId, setLastGenerationId] = useState<string | null>(null);
   const [lastPredictionId, setLastPredictionId] = useState<string | null>(null);
@@ -996,8 +999,10 @@ export function MediaCreationScreen({
     setPromptMessage(null);
     setIsEnhancing(true);
     try {
-      const result = await api.enhancePrompt(buildPromptEnhancementRequest(currentDraft));
+      const previousPrompt = currentDraft.prompt;
+      const result = await api.enhancePrompt(buildPromptEnhancementRequest(currentDraft, { level: enhanceLevel }));
       updatePrompt(result.enhancedPrompt);
+      setEnhanceUndo({ previous: previousPrompt, enhanced: result.enhancedPrompt });
       if (typeof result.remainingCredits === 'number') updateCredits(result.remainingCredits);
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
@@ -1177,6 +1182,15 @@ export function MediaCreationScreen({
           message={promptMessage}
           onPromptChange={updatePrompt}
           onEnhance={enhancePrompt}
+          enhanceLevel={enhanceLevel}
+          onEnhanceLevelChange={setEnhanceLevel}
+          canUndoEnhance={enhanceUndo !== null && enhanceUndo.enhanced === currentDraft.prompt}
+          onUndoEnhance={() => {
+            if (enhanceUndo && enhanceUndo.enhanced === currentDraft.prompt) {
+              updatePrompt(enhanceUndo.previous);
+            }
+            setEnhanceUndo(null);
+          }}
           onFocus={() => setIsPromptFocused(true)}
           onBlur={() => setIsPromptFocused(false)}
         />
@@ -3925,6 +3939,10 @@ function PromptPanel({
   message,
   onPromptChange,
   onEnhance,
+  enhanceLevel,
+  onEnhanceLevelChange,
+  canUndoEnhance,
+  onUndoEnhance,
   onFocus,
   onBlur,
 }: {
@@ -3933,15 +3951,22 @@ function PromptPanel({
   message?: string | null;
   onPromptChange: (value: string) => void;
   onEnhance: () => void;
+  enhanceLevel: 'cinematic' | 'faithful';
+  onEnhanceLevelChange: (level: 'cinematic' | 'faithful') => void;
+  canUndoEnhance: boolean;
+  onUndoEnhance: () => void;
   onFocus: () => void;
   onBlur: () => void;
 }) {
   const optional = draft.tool === 'motion';
+  const alwaysOnAudio = draft.tool === 'video' && ALWAYS_ON_AUDIO_VIDEO_MODELS.has(draft.model);
   const body = draft.tool === 'motion'
     ? 'Optional direction after required media is attached.'
     : draft.tool === 'video' && draft.isMultiShot
       ? 'Shot prompts below drive multi-shot mode.'
-      : 'Use @handles after adding named references.';
+      : alwaysOnAudio
+        ? 'This model always adds audio — describe the sound you want, or say “no music”.'
+        : 'Use @handles after adding named references.';
   return (
     <SurfaceSection
       eyebrow="Prompt"
@@ -3976,6 +4001,47 @@ function PromptPanel({
           {isEnhancing ? <ActivityIndicator color="#F6F3EC" size="small" /> : <Wand2 size={16} color="#FF7A59" />}
           <Text style={{ color: '#F6F3EC', fontWeight: '700', fontSize: 13 }}>Enhance</Text>
         </Pressable>
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <View style={{ flexDirection: 'row', borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)', padding: 2 }}>
+          {([['cinematic', 'Full'], ['faithful', 'Light']] as const).map(([value, label]) => (
+            <Pressable
+              key={value}
+              accessibilityRole="button"
+              accessibilityLabel={value === 'cinematic' ? 'Full enhancement' : 'Light enhancement'}
+              accessibilityState={{ selected: enhanceLevel === value }}
+              onPress={() => onEnhanceLevelChange(value)}
+              style={{
+                minHeight: 32,
+                paddingHorizontal: 12,
+                borderRadius: appTheme.radii.pill,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: enhanceLevel === value ? 'rgba(255,122,89,0.18)' : 'transparent',
+              }}
+            >
+              <Text style={{ color: enhanceLevel === value ? '#FFB09C' : '#8E918C', fontWeight: '700', fontSize: 12 }}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+        {canUndoEnhance ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Undo enhancement"
+            onPress={onUndoEnhance}
+            style={{
+              minHeight: 32,
+              paddingHorizontal: 12,
+              borderRadius: appTheme.radii.pill,
+              borderWidth: 1,
+              borderColor: 'rgba(255,255,255,0.12)',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Text style={{ color: '#B9BDB7', fontWeight: '700', fontSize: 12 }}>Undo</Text>
+          </Pressable>
+        ) : null}
       </View>
       {message ? <Text selectable style={{ color: appTheme.colors.danger, fontWeight: '800', lineHeight: 20 }}>{message}</Text> : null}
       <TextInput

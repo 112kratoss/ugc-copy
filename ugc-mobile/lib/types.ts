@@ -636,6 +636,8 @@ export interface PromptEnhancementWarning {
   fixHint?: string;
 }
 
+export type PromptEnhancementLevel = 'faithful' | 'cinematic';
+
 export interface PromptEnhancementRequest {
   medium: PromptEnhancementMedium;
   selectedModel: string;
@@ -650,6 +652,10 @@ export interface PromptEnhancementRequest {
     isMultiShot?: boolean;
     shotCount?: number;
     elementReferences?: Array<{ handle: string; displayName: string }>;
+    /** Uploaded frame URLs so the enhancer LLM can see the actual start/end frames. */
+    frameImageUrls?: string[];
+    /** 'faithful' = light-touch slot filling; 'cinematic' (default) = full rewrite. */
+    enhancementLevel?: PromptEnhancementLevel;
   };
 }
 

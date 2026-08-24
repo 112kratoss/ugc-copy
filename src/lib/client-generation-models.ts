@@ -588,3 +588,15 @@ export function isAudioModel(modelId: string): boolean {
   return (AUDIO_MODEL_IDS as readonly string[]).includes(modelId)
     || (AUDIO_PROVIDER_MODEL_IDS as readonly string[]).includes(modelId);
 }
+
+/**
+ * Video models whose provider generates an audio track unconditionally — there
+ * is no sound toggle to offer, but the UI should say audio is coming and the
+ * prompt enhancer scripts the soundscape (or "no music") for them.
+ */
+export const ALWAYS_ON_AUDIO_VIDEO_MODELS: ReadonlySet<string> = new Set([
+  'wan-2.7',
+  'grok-imagine-video',
+  'minimax-h3',
+  'happyhorse-1.1',
+]);
