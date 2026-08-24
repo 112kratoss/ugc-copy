@@ -140,6 +140,15 @@ vi.mock('@/lib/generation-model-client', async () => {
             inputs: {},
           },
           {
+            id: 'kling-o3',
+            kind: 'video',
+            displayName: 'Kling O3',
+            description: 'Test omni video model',
+            controls: [],
+            capabilities: {},
+            inputs: {},
+          },
+          {
             id: 'seedance-1.5-pro',
             kind: 'video',
             displayName: 'Seedance 1.5 Pro',
@@ -351,6 +360,19 @@ describe('CreateVideoClient Kling video elements', () => {
     fireEvent.click(screen.getByText('Multi-Shot'));
 
     expect(screen.getByText('Kling video elements')).toBeInTheDocument();
+  });
+
+  it('shows the named-subjects editor only for Kling O3 and enforces the image range', async () => {
+    render(<CreateVideoClient prefill={{ model: 'kling-o3' }} />);
+
+    expect(await screen.findByText('Named subjects')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Add subject'));
+    expect(screen.getByPlaceholderText('Subject name')).toHaveValue('Subject 1');
+    // One subject with zero images is below the 2-image floor.
+    expect(screen.getByText(/add at least 2/i)).toBeInTheDocument();
+    // The handle chip is derived from the display name for @mentions.
+    expect(screen.getByText('@Subject_1')).toBeInTheDocument();
   });
 
   it('submits uploaded Kling video elements with handles', async () => {
