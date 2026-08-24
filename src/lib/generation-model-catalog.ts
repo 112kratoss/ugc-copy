@@ -481,6 +481,29 @@ function videoInputModes(
       slots: videoElementSlots,
     });
   }
+  if (modelId === 'kling-o3') {
+    // Multi-image named subjects: 2–4 images per @subject, up to 3 subjects,
+    // grouped by a shared handle (grouping cardinality is enforced in
+    // generation-services, like the video-element semantics above). Gated on
+    // its own referenceMode value so catalog-driven UIs that cannot group
+    // images never surface the slot.
+    modes.push({
+      key: 'subjects',
+      label: 'Named subjects',
+      default: false,
+      conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'subjects' }],
+      slots: [{
+        key: 'subjectImages',
+        kind: 'image',
+        role: 'reference',
+        label: 'Subject images',
+        min: 0,
+        max: 12,
+        supportsNaming: true,
+        maxNamed: 3,
+      }],
+    });
+  }
   if (modelId === 'gemini-omni-video') {
     modes.push({
       key: 'prepared-assets',

@@ -464,8 +464,10 @@ export async function dispatchCatalogGenerationAdapter({
     const referenceInputs = request.inputs.filter((asset) => (
       asset.slot !== 'startFrame' && asset.slot !== 'endFrame'
     ));
+    const subjectImageInputs = referenceInputs
+      .filter((asset) => asset.slot === 'subjectImages' && asset.kind === 'image' && asset.url && asset.handle);
     const referenceImageUrls = referenceInputs
-      .filter((asset) => asset.kind === 'image' && asset.url)
+      .filter((asset) => asset.kind === 'image' && asset.url && asset.slot !== 'subjectImages')
       .map((asset) => asset.url!);
     const referenceVideoUrls = referenceInputs
       .filter((asset) => asset.kind === 'video' && asset.url)
@@ -480,7 +482,27 @@ export async function dispatchCatalogGenerationAdapter({
       .filter((asset) => asset.kind === 'character' && asset.assetId)
       .map((asset) => asset.assetId!);
     const namedImageInputs = referenceInputs
-      .filter((asset) => asset.kind === 'image' && asset.url && asset.handle);
+      .filter((asset) => asset.kind === 'image' && asset.url && asset.handle && asset.slot !== 'subjectImages');
+    // Group subject images into named subjects by their shared handle, keeping
+    // first-seen order for both subjects and their images.
+    const klingSubjects: Array<{
+      handle: string;
+      displayName: string;
+      images: Array<{ url: string; storagePath: string | null }>;
+    }> = [];
+    for (const asset of subjectImageInputs) {
+      const existing = klingSubjects.find((subject) => subject.handle === asset.handle);
+      const image = { url: asset.url!, storagePath: asset.storagePath ?? null };
+      if (existing) {
+        existing.images.push(image);
+      } else {
+        klingSubjects.push({
+          handle: asset.handle!,
+          displayName: asset.label ?? asset.handle!.replace(/^@/, ''),
+          images: [image],
+        });
+      }
+    }
     const videoElementInputs = referenceInputs
       .filter((asset) => (
         asset.kind === 'video'
@@ -526,6 +548,7 @@ export async function dispatchCatalogGenerationAdapter({
         storagePath: asset.storagePath ?? null,
         sourceGenerationId: asset.sourceGenerationId ?? null,
       })),
+      klingSubjects,
       startImageUrl,
       endImageUrl,
       mode: String(normalized.mode ?? ''),
