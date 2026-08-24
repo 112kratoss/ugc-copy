@@ -84,6 +84,13 @@ const VOICEOVER_MODEL_OPTIONS = [
   'text-to-dialogue-v3',
 ] as const;
 
+const AUDIO_MODEL_LABELS: Record<string, string> = {
+  'text-to-speech-turbo-2-5': 'ElevenLabs TTS Turbo 2.5',
+  'text-to-speech-multilingual-v2': 'ElevenLabs TTS Multilingual V2',
+  'text-to-dialogue-v3': 'ElevenLabs Text-to-Dialogue V3',
+  'sound-effect-v2': 'ElevenLabs Sound Effect V2',
+};
+
 function getActiveModelOptions(registry: unknown): Array<{ value: string; label: string }> {
   return getActiveRegistryModels(registry as Record<string, {
     id: string;
@@ -1103,7 +1110,7 @@ function MultiShotEditor({
 interface PromptEnhancementTargetOption {
   target: WorkflowPromptEnhancementTarget;
   title: string;
-  mediumLabel: 'Image' | 'Video' | 'Motion';
+  mediumLabel: 'Image' | 'Video' | 'Motion' | 'Voiceover' | 'Sound FX';
   modelLabel: string;
   accentClassName: string;
 }
@@ -1213,6 +1220,28 @@ function getPromptEnhancementTargetOption(
     };
   }
 
+  if (target.nodeType === 'voiceover-generate') {
+    const data = normalizeNodeData('voiceover-generate', node.data as Partial<WorkflowNodeData>) as VoiceoverGenerateNodeData;
+    return {
+      target,
+      title: data.title,
+      mediumLabel: 'Voiceover',
+      modelLabel: AUDIO_MODEL_LABELS[data.model] ?? data.model,
+      accentClassName: 'border-cyan-500/20 bg-cyan-500/10 text-cyan-100',
+    };
+  }
+
+  if (target.nodeType === 'sound-effects-generate') {
+    const data = normalizeNodeData('sound-effects-generate', node.data as Partial<WorkflowNodeData>) as SoundEffectsGenerateNodeData;
+    return {
+      target,
+      title: data.title,
+      mediumLabel: 'Sound FX',
+      modelLabel: AUDIO_MODEL_LABELS[data.model] ?? data.model,
+      accentClassName: 'border-cyan-500/20 bg-cyan-500/10 text-cyan-100',
+    };
+  }
+
   const data = normalizeNodeData('motion-generate', node.data as Partial<WorkflowNodeData>) as MotionGenerateNodeData;
   return {
     target,
@@ -1226,7 +1255,7 @@ function getPromptEnhancementTargetOption(
 function buildPromptEnhancementRequest(
   graph: WorkflowCanvasGraph,
   target: WorkflowPromptEnhancementTarget
-): { medium: 'image' | 'video' | 'motion'; selectedModel: string; context: EnhancerContext } | null {
+): { medium: 'image' | 'video' | 'motion' | 'audio'; selectedModel: string; context: EnhancerContext } | null {
   const node = getNodeById(graph, target.nodeId);
   if (!node) {
     return null;
@@ -1291,6 +1320,24 @@ function buildPromptEnhancementRequest(
     };
   }
 
+  if (target.nodeType === 'voiceover-generate') {
+    const data = normalizeNodeData('voiceover-generate', node.data as Partial<WorkflowNodeData>) as VoiceoverGenerateNodeData;
+    return {
+      medium: 'audio',
+      selectedModel: data.model,
+      context: { modelId: data.model },
+    };
+  }
+
+  if (target.nodeType === 'sound-effects-generate') {
+    const data = normalizeNodeData('sound-effects-generate', node.data as Partial<WorkflowNodeData>) as SoundEffectsGenerateNodeData;
+    return {
+      medium: 'audio',
+      selectedModel: data.model,
+      context: { modelId: data.model, duration: data.duration },
+    };
+  }
+
   const data = normalizeNodeData('motion-generate', node.data as Partial<WorkflowNodeData>) as MotionGenerateNodeData;
   return {
     medium: 'motion',
@@ -1310,11 +1357,11 @@ function getPromptEnhancementHelperText(
   targets: PromptEnhancementTargetOption[]
 ) {
   if (!prompt.trim()) {
-    return 'Add prompt text first, then enhance it for a connected image, video, or motion branch.';
+    return 'Add prompt text first, then enhance it for a connected image, video, motion, or audio branch.';
   }
 
   if (targets.length === 0) {
-    return 'Prompt enhancement works when this prompt feeds an image, video, or motion generator.';
+    return 'Prompt enhancement works when this prompt feeds an image, video, motion, voiceover, or sound-effect generator.';
   }
 
   if (targets.length === 1) {

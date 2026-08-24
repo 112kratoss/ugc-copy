@@ -2007,9 +2007,14 @@ export interface WorkflowConnectionValidationResult {
 
 const WORKFLOW_MOTION_OUTPUT_DURATION_SECONDS = 10;
 
-type WorkflowPromptEnhancementMedium = 'image' | 'video' | 'motion';
+type WorkflowPromptEnhancementMedium = 'image' | 'video' | 'motion' | 'audio';
 
-type WorkflowPromptEnhancementNodeType = 'image-generate' | 'video-generate' | 'motion-generate';
+type WorkflowPromptEnhancementNodeType =
+  | 'image-generate'
+  | 'video-generate'
+  | 'motion-generate'
+  | 'voiceover-generate'
+  | 'sound-effects-generate';
 
 export interface WorkflowPromptEnhancementTarget {
   nodeId: string;
@@ -2032,12 +2037,18 @@ const WORKFLOW_PROMPT_ENHANCEMENT_MEDIA: Record<
   'image-generate': 'image',
   'video-generate': 'video',
   'motion-generate': 'motion',
+  'voiceover-generate': 'audio',
+  'sound-effects-generate': 'audio',
 };
 
 function isWorkflowPromptEnhancementNodeType(
   value: WorkflowNodeKind
 ): value is WorkflowPromptEnhancementNodeType {
-  return value === 'image-generate' || value === 'video-generate' || value === 'motion-generate';
+  return value === 'image-generate'
+    || value === 'video-generate'
+    || value === 'motion-generate'
+    || value === 'voiceover-generate'
+    || value === 'sound-effects-generate';
 }
 
 function isWorkflowPromptMentionNodeType(
@@ -3156,6 +3167,18 @@ export function getPromptEnhancementTargets(
           nextNode.data as Partial<WorkflowNodeData>
         ) as VideoGenerateNodeData;
         if (videoData.isMultiShot) {
+          continue;
+        }
+      }
+
+      if (nextNode.type === 'voiceover-generate') {
+        const voiceoverData = normalizeNodeData(
+          'voiceover-generate',
+          nextNode.data as Partial<WorkflowNodeData>
+        ) as VoiceoverGenerateNodeData;
+        // Dialogue mode owns its turns locally and ignores connected prompt
+        // text at run time, so enhancing for it would be misleading.
+        if (voiceoverData.model === 'text-to-dialogue-v3') {
           continue;
         }
       }
