@@ -1200,6 +1200,22 @@ export function getKieImageModelId(model: ImageModelId, referenceCount: number):
   return model;
 }
 
+/**
+ * Ideogram's server-side Magic Prompt (expand_prompt) rewrites the prompt again
+ * after our enhancer. That double rewrite is the main threat to exact-typography
+ * jobs, and Ideogram's own docs recommend manual prompts for production
+ * precision — so expansion is disabled whenever the prompt quotes literal text.
+ */
+export function promptLocksExactText(prompt: string): boolean {
+  return /["“][^"“”]{1,}["”]/.test(prompt);
+}
+
+/** Condensed from Wan's open-weights default negative prompt (shared_config.py). */
+export const WAN_VIDEO_DEFAULT_NEGATIVE_PROMPT =
+  'blurry, low quality, overexposed, garish tones, gray cast, JPEG artifacts, static, still frame, '
+  + 'flicker, unnatural movement, distorted faces, badly drawn hands, fused fingers, extra limbs, '
+  + 'deformed body, subtitles, text, watermark, cluttered background, crowded background';
+
 function getIdeogramImageSize(aspectRatio: string): string {
   return ({
     '1:1': 'square_hd',
@@ -1753,7 +1769,7 @@ export async function startImageGeneration(params: {
         prompt: compiledPrompt,
         rendering_speed: qualityMode.toUpperCase(),
         style: 'AUTO',
-        expand_prompt: true,
+        expand_prompt: !promptLocksExactText(compiledPrompt),
         image_size: getIdeogramImageSize(aspectRatio),
       };
       if (resolvedImageUrls[0]) {
@@ -1799,7 +1815,7 @@ export async function startImageGeneration(params: {
         prompt: compiledPrompt,
         rendering_speed: qualityMode.toUpperCase(),
         style: 'AUTO',
-        expand_prompt: true,
+        expand_prompt: !promptLocksExactText(compiledPrompt),
         image_size: getIdeogramImageSize(aspectRatio),
         reference_image_urls: resolvedImageUrls,
         num_images: 1,
@@ -2545,6 +2561,9 @@ export async function startVideoGeneration(params: {
         resolution,
         duration,
         prompt_extend: true,
+        // Condensed from the Wan reference implementation's default negative
+        // stack — the hosted API does not apply one for you (≤500-char field).
+        negative_prompt: WAN_VIDEO_DEFAULT_NEGATIVE_PROMPT,
         watermark: false,
       };
       if (effectiveReferenceMode === 'references') {
