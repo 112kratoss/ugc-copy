@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   defaultInstallOnboardingState,
+  isWelcomeRewardPending,
   mergeInstallOnboardingState,
   parseInstallOnboardingState,
 } from '../lib/onboarding-state';
@@ -28,5 +29,25 @@ describe('install onboarding state', () => {
     const second = mergeInstallOnboardingState(first, { status: 'completed' }, '2026-07-13T11:00:00.000Z');
     expect(first.completedAt).toBe('2026-07-13T10:00:00.000Z');
     expect(second.completedAt).toBe(first.completedAt);
+  });
+});
+
+describe('welcome reward pending', () => {
+  it('advertises a claimable Creator Pack only while it is eligible', () => {
+    expect(isWelcomeRewardPending('eligible')).toBe(true);
+  });
+
+  it('does not advertise a reward the claim screen would refuse', () => {
+    // `unavailable` is the regression this pins: it used to read as pending, so
+    // the card promised a reward, routed into onboarding, and found the claim
+    // button hidden — reappearing on every visit with no way to dismiss it.
+    for (const status of ['unavailable', 'requires_account', 'not_eligible', 'legacy_ineligible', 'claimed', 'already_claimed']) {
+      expect(isWelcomeRewardPending(status)).toBe(false);
+    }
+  });
+
+  it('treats a missing status as nothing to claim', () => {
+    expect(isWelcomeRewardPending(null)).toBe(false);
+    expect(isWelcomeRewardPending(undefined)).toBe(false);
   });
 });

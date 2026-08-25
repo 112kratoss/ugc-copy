@@ -299,7 +299,9 @@ export default function OnboardingScreen() {
       } else {
         setMessage(result.status === 'unavailable'
           ? 'Your Creator Pack is temporarily unavailable. You can continue and claim it from Home.'
-          : 'Finish your creator name before claiming this reward.');
+          : result.status === 'requires_account'
+            ? 'Create an account to unlock your Creator Pack.'
+            : 'Finish your creator name before claiming this reward.');
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not claim credits.');

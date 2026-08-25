@@ -32,6 +32,14 @@ export type WelcomeCreditStatus =
   | 'claimed'
   | 'already_claimed'
   | 'legacy_ineligible'
+  /**
+   * The caller is a guest (anonymous auth user). The grant RPC refuses these
+   * outright (20260811120000), so surfacing `not_eligible` here sent guests to
+   * "finish your creator name" — a gate they cannot pass, because
+   * `PATCH /api/profile` also rejects anonymous users. Registering is the only
+   * route, so it gets its own status and its own copy.
+   */
+  | 'requires_account'
   | 'not_eligible'
   | 'unavailable';
 

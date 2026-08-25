@@ -1,19 +1,27 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { type CSSProperties, useEffect, useState } from 'react';
 import { ArrowRight, Gift, Loader2, Sparkles } from 'lucide-react';
 
 import { supabase } from '@/lib/supabase';
 
 type WelcomeCreditResponse = {
-  status: 'eligible' | 'claimed' | 'already_claimed' | 'legacy_ineligible' | 'not_eligible' | 'unavailable';
+  status: 'eligible' | 'claimed' | 'already_claimed' | 'legacy_ineligible' | 'requires_account' | 'not_eligible' | 'unavailable';
   amount: number;
   credits: number;
   promotionalCredits: number;
   claimedAt: string | null;
   identityComplete: boolean;
 };
+
+const CELEBRATION_DURATION_MS = 850;
+const CONFETTI_PIECES = 14;
+
+function prefersReducedMotion() {
+  return typeof window !== 'undefined'
+    && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+}
 
 async function authorizedRequest(path: string, init?: RequestInit) {
   const { data } = await supabase.auth.getSession();
@@ -36,6 +44,39 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [claiming, setClaiming] = useState(false);
+  const [animatedCredits, setAnimatedCredits] = useState<number | null>(null);
+  const [celebrating, setCelebrating] = useState(false);
+
+  /**
+   * Mirrors the mobile reward screen: the number counts up from zero and the
+   * card pops once. Claiming credits is the one moment in onboarding worth
+   * marking, and a silent copy swap read as "did that work?".
+   *
+   * The count-up is driven by requestAnimationFrame rather than a CSS
+   * transition because the value itself is text, not a style. Reduced-motion
+   * callers skip straight to the final number and get no confetti.
+   */
+  const celebrate = (amount: number) => {
+    if (prefersReducedMotion()) {
+      setAnimatedCredits(amount);
+      return;
+    }
+    setCelebrating(true);
+    setAnimatedCredits(0);
+    const startedAt = performance.now();
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / CELEBRATION_DURATION_MS);
+      // easeOutCubic so the count decelerates into its final value.
+      setAnimatedCredits(Math.round(amount * (1 - (1 - progress) ** 3)));
+      if (progress < 1) {
+        requestAnimationFrame(tick);
+        return;
+      }
+      setAnimatedCredits(amount);
+      window.setTimeout(() => setCelebrating(false), 700);
+    };
+    requestAnimationFrame(tick);
+  };
 
   const load = async () => {
     setLoading(true);
@@ -70,10 +111,14 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
     setClaiming(true);
     setError(null);
     try {
-      setWelcome(await authorizedRequest('/api/credits/welcome/claim', {
+      const result = await authorizedRequest('/api/credits/welcome/claim', {
         method: 'POST',
         body: JSON.stringify({ sourceSurface: 'web' }),
-      }));
+      });
+      setWelcome(result);
+      if (result.status === 'claimed' || result.status === 'already_claimed') {
+        celebrate(result.amount);
+      }
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Could not claim your credits.');
     } finally {
@@ -83,6 +128,8 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
 
   const claimed = welcome?.status === 'claimed' || welcome?.status === 'already_claimed';
   const legacy = welcome?.status === 'legacy_ineligible';
+  const requiresAccount = welcome?.status === 'requires_account';
+  const displayedCredits = animatedCredits ?? welcome?.amount ?? 25;
 
   return (
     <main className="ui-page ui-page-ambient min-h-screen py-10 sm:py-16">
@@ -96,9 +143,11 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
           <p className="mx-auto mt-3 max-w-lg text-sm leading-7 text-[var(--ui-text-secondary)]">
             {legacy
               ? 'Your existing welcome credits are already active.'
-              : claimed
-                ? 'Your creation credits are ready for your first project.'
-                : 'Claim creation-only credits for images, video, and motion.'}
+              : requiresAccount
+                ? 'Create an account to unlock your Creator Pack. Guest sessions cannot hold a welcome reward.'
+                : claimed
+                  ? 'Your creation credits are ready for your first project.'
+                  : 'Claim creation-only credits for images, video, and motion.'}
           </p>
 
           {loading ? (
@@ -107,7 +156,25 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
             </div>
           ) : (
             <div className="mt-8">
-              <div aria-live="polite" className="text-6xl font-black tabular-nums text-[var(--ui-primary)]">{welcome?.amount ?? 25}</div>
+              <div className={`welcome-reward-count relative inline-block${celebrating ? ' is-celebrating' : ''}`}>
+                {celebrating ? (
+                  <span aria-hidden className="pointer-events-none absolute left-1/2 top-1/2 block h-0 w-0">
+                    {Array.from({ length: CONFETTI_PIECES }, (_, index) => (
+                      <span
+                        key={index}
+                        className="welcome-reward-confetti"
+                        style={{
+                          // Even fan around the number, alternating the two brand tones.
+                          '--angle': `${(360 / CONFETTI_PIECES) * index}deg`,
+                          '--delay': `${index * 18}ms`,
+                          background: index % 2 === 0 ? 'var(--ui-primary)' : 'var(--ui-text-primary)',
+                        } as CSSProperties}
+                      />
+                    ))}
+                  </span>
+                ) : null}
+                <div aria-live="polite" className="relative text-6xl font-black tabular-nums text-[var(--ui-primary)]">{displayedCredits}</div>
+              </div>
               <div className="mt-1 text-sm font-bold text-[var(--ui-text-secondary)]">creation credits</div>
               <p className="mt-3 text-xs text-[var(--ui-text-muted)]">Creation credits cannot be used for marketplace purchases.</p>
             </div>
@@ -124,10 +191,18 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
                 className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 text-sm font-black text-[var(--ui-primary-on)] disabled:opacity-60"
               >
                 {claiming ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Gift className="h-4 w-4" aria-hidden />}
-                {claiming ? 'Claiming…' : 'Claim 25 credits'}
+                {claiming ? 'Claiming…' : `Claim ${welcome?.amount ?? 25} credits`}
               </button>
             ) : null}
-            {welcome?.status !== 'eligible' || error ? (
+            {requiresAccount ? (
+              <Link
+                href={`/login?mode=signup&returnUrl=${encodeURIComponent(`/welcome-reward?next=${encodeURIComponent(nextPath)}`)}`}
+                className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 text-sm font-black text-[var(--ui-primary-on)]"
+              >
+                Create an account <ArrowRight className="h-4 w-4" aria-hidden />
+              </Link>
+            ) : null}
+            {(welcome?.status !== 'eligible' && !requiresAccount) || error ? (
               <Link href={nextPath} className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-6 text-sm font-black text-[var(--ui-primary-on)]">
                 Start creating <ArrowRight className="h-4 w-4" aria-hidden />
               </Link>

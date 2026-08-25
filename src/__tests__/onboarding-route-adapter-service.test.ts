@@ -1,7 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
-import { postWelcomeCreditsClaimRouteResponse } from '@/lib/onboarding-route-adapter-service';
+import {
+  getWelcomeCreditsRouteResponse,
+  postWelcomeCreditsClaimRouteResponse,
+} from '@/lib/onboarding-route-adapter-service';
 
 function queryResult(data: unknown) {
   const query = {
@@ -132,11 +135,65 @@ describe('onboarding route adapter service', () => {
     });
 
     expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toMatchObject({ status: 'not_eligible' });
+    // `requires_account`, not `not_eligible`: the latter is the "finish your
+    // creator name" state, and a guest cannot finish it — PATCH /api/profile
+    // rejects anonymous callers too, so that copy pointed at a locked door.
+    await expect(response.json()).resolves.toMatchObject({ status: 'requires_account' });
     // Rejected before the service-role client is even built, so a scripted
     // attempt cannot burn the rate limiter or reach the RPC.
     expect(rpc).not.toHaveBeenCalled();
     expect(createServiceClient).not.toHaveBeenCalled();
     expect(enforceBackendRateLimit).not.toHaveBeenCalled();
+  });
+
+  it('reports requires_account from the status endpoint, not not_eligible', async () => {
+    // The status endpoint and the claim endpoint disagreed: the claim checked
+    // is_anonymous, the status check did not, so a guest was told to finish a
+    // creator name it can never set. Both now answer the same way.
+    const guest = {
+      id: '4a1f7c8e-2d3b-4e5f-8a9c-1b2d3e4f5a6b',
+      created_at: '2026-08-12T10:00:00.000Z',
+      is_anonymous: true,
+    };
+    const program = queryResult({
+      program_key: 'welcome_credits_v1',
+      amount: 25,
+      promotional_amount: 25,
+      enabled: true,
+      activated_at: '2026-08-11T00:00:00.000Z',
+    });
+    // No grant row, and the placeholder identity every guest carries: under the
+    // old ordering this fell through to the identity check and read
+    // `not_eligible`.
+    const grant = queryResult(null);
+    const profile = queryResult({
+      credits: 0,
+      promotional_credits: 0,
+      username: 'creator-4a1f7c8e',
+      display_name: null,
+    });
+    const admin = {
+      from: vi.fn((table: string) => {
+        if (table === 'credit_grant_programs') return program;
+        if (table === 'credit_grants') return grant;
+        if (table === 'profiles') return profile;
+        throw new Error(`Unexpected table: ${table}`);
+      }),
+    } as unknown as SupabaseClient;
+    const userClient = {
+      auth: { getUser: vi.fn(async () => ({ data: { user: guest }, error: null })) },
+    } as unknown as SupabaseClient;
+
+    const response = await getWelcomeCreditsRouteResponse({
+      request: new Request('https://app.example/api/credits/welcome'),
+      dependencies: {
+        createUserClient: vi.fn(() => userClient),
+        createServiceClient: vi.fn(() => admin),
+        enforceBackendRateLimit: vi.fn(),
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ status: 'requires_account' });
   });
 });

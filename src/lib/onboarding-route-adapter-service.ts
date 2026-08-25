@@ -162,6 +162,14 @@ async function loadWelcomeCreditStatus(admin: SupabaseClient, user: User) {
     status = 'already_claimed';
   } else if (!typedProgram?.enabled || !typedProgram.activated_at) {
     status = (typedProfile?.credits ?? 0) >= fallbackAmount ? 'legacy_ineligible' : 'unavailable';
+  } else if (user.is_anonymous === true) {
+    // Ordered ahead of the activation-date and identity checks on purpose: for a
+    // guest those two would answer a question they cannot act on. The claim
+    // endpoint and the RPC both refuse anonymous callers, so the only truthful
+    // next step is "create an account" and the status has to say so. Kept behind
+    // the program-enabled branch so a disabled program still reads `unavailable`
+    // for everyone.
+    status = 'requires_account';
   } else if (new Date(user.created_at).getTime() < new Date(typedProgram.activated_at).getTime()) {
     status = 'legacy_ineligible';
   } else if (!identityComplete) {
@@ -318,7 +326,7 @@ export async function postWelcomeCreditsClaimRouteResponse({
     if (user.is_anonymous === true) {
       return privateJson(
         request,
-        { error: 'Create an account to claim your welcome credits.', status: 'not_eligible' },
+        { error: 'Create an account to claim your welcome credits.', status: 'requires_account' },
         403,
       );
     }

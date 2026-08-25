@@ -56,6 +56,23 @@ export function parseInstallOnboardingState(value: string | null): InstallOnboar
   }
 }
 
+/**
+ * Whether the Creator Pack card should advertise a claimable reward.
+ *
+ * Only `eligible` qualifies. `unavailable` used to count too, which meant the
+ * card read "Your Creator Pack is waiting" whenever the grant program was off
+ * or the lookup failed — and tapping it routed into onboarding, where the claim
+ * button is hidden for exactly those statuses. The card then returned on every
+ * visit with no way to clear it.
+ *
+ * `requires_account` is excluded as well: a guest cannot claim, and the
+ * "create an account" prompt belongs on the auth surfaces, not on a card that
+ * promises credits.
+ */
+export function isWelcomeRewardPending(status: string | null | undefined): boolean {
+  return status === 'eligible';
+}
+
 export function mergeInstallOnboardingState(
   current: InstallOnboardingState,
   update: Partial<InstallOnboardingState>,
