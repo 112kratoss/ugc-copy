@@ -123,7 +123,7 @@ describe('remixShowcasePostForRoute', () => {
     );
     expect(serviceClient.fromMock).toHaveBeenCalledWith('generations');
     expect(serviceClient.selectMock).toHaveBeenCalledWith(
-      'id, user_id, is_public, share_input_media_for_remix, category, prompt, workflow_settings',
+      'id, user_id, is_public, share_input_media_for_remix, category, model, prompt, workflow_settings',
     );
     expect(serviceClient.eqMock).toHaveBeenCalledWith('id', 'gen-1');
     expect(serviceClient.rpcMock).toHaveBeenCalledWith('increment_post_remix_count', {
@@ -173,6 +173,43 @@ describe('remixShowcasePostForRoute', () => {
     expect(result.ok).toBe(true);
     expect(result.ok ? result.body.redirectTo : null).toBe(`${expectedPath}?remix=gen-1&remixPost=post-1`);
   });
+
+  it.each([
+    ['by stored category', { category: 'audio', model: 'nano-banana-2' }],
+    ['by model when the category is stale', { category: null, model: 'text-to-speech-turbo-2-5' }],
+  ] as Array<[string, { category: string | null; model: string }]>)(
+    'refuses an audio remix %s instead of routing it to a tool that cannot take it',
+    async (_label, generationOverrides) => {
+      const serviceClient = createServiceClientMock({
+        generation: { ...PUBLIC_CREATOR_GENERATION, ...generationOverrides },
+      });
+      const dependencies = createDependencies({
+        id: 'post-1',
+        generation_id: 'gen-1',
+        user_id: 'creator-1',
+        // The post row carries a showcase category; the audio signal lives on
+        // the generation, which is what the guard reads.
+        category: 'image',
+        visibility: 'public',
+        prompt: 'a prompt',
+        source_kind: 'magicbooklet',
+      });
+
+      const result = await remixShowcasePostForRoute({
+        actorUserId: 'user-1',
+        referenceId: 'post-1',
+        serviceClient: serviceClient.client,
+        dependencies,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.ok ? null : result.status).toBe(400);
+      expect(result.ok ? null : result.body.error).toBe('Audio creations cannot be remixed yet');
+      // A refusal must not inflate the creator's remix count or ping them.
+      expect(serviceClient.rpcMock).not.toHaveBeenCalled();
+      expect(dependencies.notifyPostSocialActivity).not.toHaveBeenCalled();
+    }
+  );
 
   it('falls back to the post category when the generation row has none', async () => {
     const serviceClient = createServiceClientMock({

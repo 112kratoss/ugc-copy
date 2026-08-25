@@ -20,6 +20,7 @@ import {
   AccessibilityInfo,
   ActivityIndicator,
   Alert,
+  Linking,
   Pressable,
   RefreshControl,
   Share,
@@ -42,6 +43,7 @@ import { TopScrim } from '@/components/top-scrim';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
+import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE } from '@/lib/viewer-actions';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import {
   HOME_FEED_CHIPS,
@@ -169,6 +171,9 @@ export function HomeDashboard() {
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsItem, setCommentsItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsReplyToId, setCommentsReplyToId] = useState<string | null>(null);
+  // The remix request runs before we know where it lands, so the tapped card
+  // owns the spinner until navigation takes over.
+  const [remixingItemId, setRemixingItemId] = useState<string | null>(null);
   // Held by the list, not the card: FlashList recycles card views, and local
   // expansion state would follow a recycled view onto an unrelated post.
   const [expandedBodyIds, setExpandedBodyIds] = useState<string[]>([]);
@@ -495,9 +500,12 @@ export function HomeDashboard() {
 
   const remixItem = async (item: ShowcaseFeedItem) => {
     if (!user) {
-      router.push('/auth' as never);
+      // The post page is where the Remix button lives, so land them on it
+      // rather than the tab root they started from.
+      router.push({ pathname: '/auth', params: { returnTo: `/post/${item.id}` } } as never);
       return;
     }
+    setRemixingItemId(item.id);
     try {
       const result = await api.remixShowcasePost(item.id);
       recordFeedEvent(item, 'remix_start');
@@ -508,11 +516,19 @@ export function HomeDashboard() {
       });
       if (href) {
         router.push(href as never);
+      } else if (result.redirectTo) {
+        const webUrl = `${env.siteUrl}${result.redirectTo}`;
+        Alert.alert(REMIX_NEEDS_WEB_TITLE, REMIX_NEEDS_WEB_BODY, [
+          { text: 'Not now', style: 'cancel' },
+          { text: 'Open web', onPress: () => { void Linking.openURL(webUrl); } },
+        ]);
       } else {
         Alert.alert('Could not start remix', 'This post cannot be opened in the creator tools right now.');
       }
     } catch (error) {
       Alert.alert('Could not start remix', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      setRemixingItemId(null);
     }
   };
 
@@ -675,10 +691,11 @@ export function HomeDashboard() {
           setCommentsItem(card.item);
         }}
         onRemix={() => void remixItem(card.item)}
+        remixLoading={remixingItemId === card.item.id}
         onShare={() => void shareItem(card.item)}
       />
     </Reveal>
-  ), [contentWidth, expandedBodyIds, horizontalPadding, visibleActiveVideoIds, toggleSave]);
+  ), [contentWidth, expandedBodyIds, horizontalPadding, remixingItemId, visibleActiveVideoIds, toggleSave]);
 
   return (
     <View style={{ flex: 1, backgroundColor: DASHBOARD_COLORS.background }}>

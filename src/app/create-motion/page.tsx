@@ -16,11 +16,13 @@ export default async function CreateMotionPage({
   const resolvedSearchParams = searchParams ? await searchParams : {};
   const prefill: CreateMotionPrefill = {
     remixId: getFirstValue(resolvedSearchParams.remix),
+    remixPostId: getFirstValue(resolvedSearchParams.remixPost),
     prompt: getFirstValue(resolvedSearchParams.prompt),
     model: getFirstValue(resolvedSearchParams.model),
   };
   const returnParams = new URLSearchParams();
   if (prefill.remixId) returnParams.set('remix', prefill.remixId);
+  if (prefill.remixPostId) returnParams.set('remixPost', prefill.remixPostId);
   if (prefill.prompt) returnParams.set('prompt', prefill.prompt);
   if (prefill.model) returnParams.set('model', prefill.model);
   const returnTo = returnParams.size > 0

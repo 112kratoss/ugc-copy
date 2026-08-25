@@ -7,6 +7,7 @@ import {
   getRemixRestoreWarning,
   getRemixResultReferenceLabel,
 } from '@/lib/remix-source-client';
+import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import type { RemixSourceBundle } from '@/lib/remix-source';
 
 describe('remix source client helpers', () => {
@@ -102,3 +103,26 @@ describe('remix source client helpers', () => {
   });
 });
 
+describe('remix prompt ownership', () => {
+  it('lets the restore fill a prompt the creator never touched', () => {
+    expect(hasCreatorEditedPromptDuringRemix('', '')).toBe(false);
+  });
+
+  it('treats a tool default the creator left alone as untouched', () => {
+    const motionDefault = "No distortion, the character's movements are consistent with the video.";
+    expect(hasCreatorEditedPromptDuringRemix(motionDefault, motionDefault)).toBe(false);
+  });
+
+  it('protects a prompt typed while the restore was still in flight', () => {
+    expect(hasCreatorEditedPromptDuringRemix('my own idea', '')).toBe(true);
+  });
+
+  it('protects an edit made on top of a tool default', () => {
+    const motionDefault = "No distortion, the character's movements are consistent with the video.";
+    expect(hasCreatorEditedPromptDuringRemix('a dog surfing', motionDefault)).toBe(true);
+  });
+
+  it('does not count clearing the field as creator input worth keeping', () => {
+    expect(hasCreatorEditedPromptDuringRemix('   ', 'something')).toBe(false);
+  });
+});

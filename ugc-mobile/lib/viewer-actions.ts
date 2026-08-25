@@ -1,6 +1,15 @@
 import type { ImmersivePreviewItem, PreviewViewerSource } from './immersive-preview-view-model';
 import type { CreatorToolId, GenerationShareSourceSurface } from './types';
 
+/**
+ * Shown when a remix has nowhere to land in the app. The web create tools can
+ * still take it, but leaving the app should be the viewer's choice rather than
+ * a silent hand-off to a browser.
+ */
+export const REMIX_NEEDS_WEB_TITLE = 'Opens on the web';
+export const REMIX_NEEDS_WEB_BODY =
+  'This creation type is not in the app’s creator tools yet. You can keep going on the web.';
+
 export const SAVE_HEART_COLOR = '#ff3b64';
 const ENABLED_HEART_COLOR = '#ffffff';
 const DISABLED_HEART_COLOR = 'rgba(255,255,255,0.5)';

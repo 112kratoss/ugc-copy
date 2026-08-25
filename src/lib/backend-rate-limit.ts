@@ -313,6 +313,18 @@ export const SHOWCASE_REMIX_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+/**
+ * Matched to SHOWCASE_REMIX_RATE_LIMIT on purpose: hydrating a remix is the
+ * second half of starting one, so it should not be possible to pull sources
+ * faster than remixes can be started. The read is the expensive half — a
+ * service-role fetch plus a signed URL minted per restored asset.
+ */
+export const REMIX_SOURCE_RATE_LIMIT = {
+  scope: 'remix-source:load',
+  limit: 60,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const SHOWCASE_PREVIEW_READ_URL_RATE_LIMIT = {
   scope: 'showcase-preview:read-url',
   limit: 240,

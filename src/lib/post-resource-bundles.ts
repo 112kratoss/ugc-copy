@@ -1,5 +1,6 @@
 import type { SerializedWorkflowCanvasGraph } from '@/lib/workflow-canvas';
 import { normalizePostMediaKey } from '@/lib/post-media-key';
+import { resolveRemixTool } from '@/lib/remix-tools';
 import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 
 export const POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS = 10;
@@ -1289,15 +1290,9 @@ export function describePostResourceKinds(kinds: PostResourceKind[]): string {
 }
 
 function targetForMediaCategory(category: string | null | undefined): Exclude<PostRemixTarget, null> {
-  if (category === 'video') {
-    return 'video';
-  }
-
-  if (category === 'motion') {
-    return 'motion';
-  }
-
-  return 'image';
+  // Shared with the redirect the remix endpoint emits, so the tool a post
+  // advertises is always the tool the viewer actually lands in.
+  return resolveRemixTool(category);
 }
 
 function normalizePostResourceRemixDescriptors(value: unknown): PostResourceRemixDescriptor[] {

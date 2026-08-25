@@ -43,7 +43,7 @@ import {
     isPostResourceKind,
     type PostResourceKind,
 } from '@/lib/post-resource-bundles';
-import { buildShowcaseDetailPath } from '@/lib/share';
+import { buildShowcaseDetailPath, getCurrentInternalPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
 import { isTextOnlyPost } from '@/lib/post-feed-presentation';
@@ -284,7 +284,9 @@ export default function ShowcaseClient({
         initialItems: restoredInitialFeed.items,
         accessToken: session?.access_token ?? null,
         isSignedIn: Boolean(user && session?.access_token),
-        onAuthRequired: () => router.push('/login?returnUrl=/showcase'),
+        onAuthRequired: () => router.push(
+            `/login?returnUrl=${encodeURIComponent(getCurrentInternalPath('/showcase'))}`
+        ),
         onError: (error) => console.error('Save failed:', error),
         onSuccess: ({ id, isSaved, sourceSurface }) => {
             const savedItem = feedItemsForEventsRef.current.find((candidate) => candidate.id === id);
@@ -984,7 +986,9 @@ export default function ShowcaseClient({
         sourceSurface: ShowcaseEventSourceSurface = 'showcase'
     ) => {
         if (!user || !session?.access_token) {
-            router.push('/login?returnUrl=/showcase');
+            // Deep in the reel the bare '/showcase' fallback costs the viewer the
+            // post and their scroll position, so return to wherever they are.
+            router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath('/showcase'))}`);
             return;
         }
 

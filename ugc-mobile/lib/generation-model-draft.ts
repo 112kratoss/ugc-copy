@@ -738,6 +738,24 @@ function remixCatalogSettings(
   return normalizeCatalogSettings(model, settings);
 }
 
+/**
+ * Whether the creator typed a prompt of their own while a remix restore was
+ * still in flight.
+ *
+ * The create screen is interactive the moment it mounts and the bundle lands
+ * whenever /api/remix-source answers, so replacing the draft outright discards
+ * anything typed in between. Their words win over the restore.
+ *
+ * Both halves matter: a non-empty default prompt must not read as creator
+ * input, so the value also has to have changed since the restore began.
+ */
+export function hasCreatorEditedPromptDuringRemix(
+  currentPrompt: string,
+  promptWhenRemixStarted: string
+): boolean {
+  return currentPrompt.trim().length > 0 && currentPrompt !== promptWhenRemixStarted;
+}
+
 export function hydrateCatalogCreationDraftFromRemixSource(
   baseDraft: CreationDraft,
   bundle: RemixSourceBundle,

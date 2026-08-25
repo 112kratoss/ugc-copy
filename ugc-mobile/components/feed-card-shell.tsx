@@ -1,6 +1,6 @@
 import { MoreVertical } from 'lucide-react-native';
 import type { ReactNode } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
 import { CreatorAvatar } from '@/components/ui';
 import { haptic } from '@/lib/haptics';
@@ -196,6 +196,7 @@ export function FeedCardAction({
   disabled,
   icon,
   label,
+  loading,
   onPress,
   tone,
 }: {
@@ -203,6 +204,8 @@ export function FeedCardAction({
   disabled?: boolean;
   icon: ReactNode;
   label?: string;
+  /** Swaps the glyph for a spinner and blocks repeat taps while a request is in flight. */
+  loading?: boolean;
   onPress: () => void;
   tone?: 'default' | 'primary' | 'success' | 'warning';
 }) {
@@ -213,15 +216,15 @@ export function FeedCardAction({
       : tone === 'warning'
         ? appTheme.colors.warning
         : appTheme.colors.faint;
-  const motion = usePressMotion(Boolean(disabled), { scale: appTheme.motion.scale.pressedControl });
+  const motion = usePressMotion(Boolean(disabled || loading), { scale: appTheme.motion.scale.pressedControl });
 
   return (
     <MotionView style={motion.animatedStyle}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel}
-        accessibilityState={{ disabled: Boolean(disabled) }}
-        disabled={disabled}
+        accessibilityState={{ disabled: Boolean(disabled || loading), busy: Boolean(loading) }}
+        disabled={disabled || loading}
         onPress={onPress}
         onPressIn={motion.onPressIn}
         onPressOut={motion.onPressOut}
@@ -233,10 +236,10 @@ export function FeedCardAction({
           justifyContent: 'center',
           gap: 6,
           paddingHorizontal: appTheme.spacing.compact,
-          opacity: disabled ? appTheme.opacity.pressed : 1,
+          opacity: disabled || loading ? appTheme.opacity.pressed : 1,
         }}
       >
-        {icon}
+        {loading ? <ActivityIndicator color={labelColor} size="small" /> : icon}
         {label ? (
           <Text style={{ color: labelColor, ...appTheme.type.caption, fontWeight: '800' }}>
             {label}

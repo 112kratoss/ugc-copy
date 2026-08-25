@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import CreateImagePage from '@/app/create-image/page';
@@ -29,6 +29,30 @@ vi.mock('@/app/post/new/NewPostClient', () => ({
 }));
 
 describe('creator auth return paths', () => {
+
+  it('carries the remix pair through sign-in on every media tool', async () => {
+    const remixParams = { remix: 'gen-1', remixPost: 'post-1' };
+
+    render(await CreateImagePage({ searchParams: Promise.resolve(remixParams) }));
+    expect(screen.getByTestId('auth-boundary')).toHaveAttribute(
+      'data-return-to',
+      '/create-image?remix=gen-1&remixPost=post-1'
+    );
+    cleanup();
+
+    render(await CreateVideoPage({ searchParams: Promise.resolve(remixParams) }));
+    expect(screen.getByTestId('auth-boundary')).toHaveAttribute(
+      'data-return-to',
+      '/create-video?remix=gen-1&remixPost=post-1'
+    );
+    cleanup();
+
+    render(await CreateMotionPage({ searchParams: Promise.resolve(remixParams) }));
+    expect(screen.getByTestId('auth-boundary')).toHaveAttribute(
+      'data-return-to',
+      '/create-motion?remix=gen-1&remixPost=post-1'
+    );
+  });
   it('preserves image model and recipe parameters through sign-in', async () => {
     render(await CreateImagePage({
       searchParams: Promise.resolve({

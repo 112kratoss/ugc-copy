@@ -89,7 +89,7 @@ import {
 } from '@/lib/showcase-media-progress';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { PostResourceKind, ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
-import { canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, getViewerActionSlots, getViewerShareIntent, getViewerShareSourceSurface, getViewerStateChip, type SaveHeartTapAnimationSpec, type ViewerStateTone } from '@/lib/viewer-actions';
+import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE, canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, getViewerActionSlots, getViewerShareIntent, getViewerShareSourceSurface, getViewerStateChip, type SaveHeartTapAnimationSpec, type ViewerStateTone } from '@/lib/viewer-actions';
 import {
   changePostVisibility,
   pickPostVisibility,
@@ -160,6 +160,9 @@ export default function ImmersivePreviewViewerScreen() {
   const [commentsOpenItemId, setCommentsOpenItemId] = useState<string | null>(null);
   const [commentsReplyToId, setCommentsReplyToId] = useState<string | null>(null);
   const [unlockRemixOpenItemId, setUnlockRemixOpenItemId] = useState<string | null>(null);
+  // Remixing is two round trips — this endpoint, then the restore on the
+  // create screen — and the tap has to look like it landed for both.
+  const [remixingItemId, setRemixingItemId] = useState<string | null>(null);
   const [ownerActionPending, setOwnerActionPending] = useState<string | null>(null);
   const [isHorizontalScrolling, setIsHorizontalScrolling] = useState(false);
   const qualifiedImpressionsRef = useRef(new Set<string>());
@@ -520,11 +523,25 @@ export default function ImmersivePreviewViewerScreen() {
 
   const recreateItem = async (item: ImmersivePreviewItem) => {
     if (!user) {
-      router.push('/auth');
+      // Send them back to this exact item, so signing in does not cost them
+      // their place in the reel and a second hunt for the post.
+      router.push({
+        pathname: '/auth',
+        params: {
+          returnTo: immersiveViewerReturnPath({
+            source,
+            initialId: item.id,
+            feedSessionId,
+            algorithmVersion,
+            creatorUsername,
+          }),
+        },
+      } as never);
       return;
     }
 
     if (item.sourceType === 'showcase' && item.showcasePostId) {
+      setRemixingItemId(item.id);
       try {
         const response = await api.remixShowcasePost(item.showcasePostId);
         if (source === 'showcase-feed') {
@@ -540,12 +557,19 @@ export default function ImmersivePreviewViewerScreen() {
           return;
         }
         if (response.redirectTo) {
-          await Linking.openURL(`${env.siteUrl}${response.redirectTo}`);
+          // Leaving the app is the viewer's call, not a silent hand-off.
+          const webUrl = `${env.siteUrl}${response.redirectTo}`;
+          Alert.alert(REMIX_NEEDS_WEB_TITLE, REMIX_NEEDS_WEB_BODY, [
+            { text: 'Not now', style: 'cancel' },
+            { text: 'Open web', onPress: () => { void Linking.openURL(webUrl); } },
+          ]);
           return;
         }
       } catch (error) {
         Alert.alert('Could not start remix', error instanceof Error ? error.message : 'Please try again.');
         return;
+      } finally {
+        setRemixingItemId(null);
       }
     }
 
@@ -773,6 +797,7 @@ export default function ImmersivePreviewViewerScreen() {
             onShare={shareItem}
             onUnlockRemix={(nextItem) => setUnlockRemixOpenItemId(nextItem.id)}
             ownerActionPending={index === activeIndex ? ownerActionPending : null}
+            remixLoading={remixingItemId === item.id}
             saveLoading={saveMutation.isPending && saveMutation.variables?.postId === item.showcasePostId}
             topInset={topInset}
             width={width}
@@ -877,6 +902,13 @@ export default function ImmersivePreviewViewerScreen() {
         />
       ) : null}
       <UnlockRemixPrompt
+        authReturnTo={unlockRemixSheetItem ? immersiveViewerReturnPath({
+          source,
+          initialId: unlockRemixSheetItem.id,
+          feedSessionId,
+          algorithmVersion,
+          creatorUsername,
+        }) : undefined}
         bottomInset={bottomInset}
         item={unlockRemixSheetItem}
         onClose={() => setUnlockRemixOpenItemId(null)}
@@ -940,6 +972,7 @@ function ImmersiveSlide({
   onShare,
   onUnlockRemix,
   ownerActionPending,
+  remixLoading,
   saveLoading,
   topInset,
   width,
@@ -963,6 +996,7 @@ function ImmersiveSlide({
   onShare: (item: ImmersivePreviewItem) => void;
   onUnlockRemix: (item: ImmersivePreviewItem) => void;
   ownerActionPending?: string | null;
+  remixLoading: boolean;
   saveLoading: boolean;
   topInset: number;
   width: number;
@@ -1192,6 +1226,7 @@ function ImmersiveSlide({
                   primary
                   icon={<Repeat2 size={26} color="#050505" strokeWidth={2.8} />}
                   label={slot.label}
+                  loading={slot.action === 'unlock-remix' ? false : remixLoading}
                   onPress={slot.action === 'unlock-remix' ? () => onUnlockRemix(item) : () => void onRecreate(item)}
                 />
               );
@@ -1337,6 +1372,7 @@ function ImmersiveSlide({
           onDoubleTapSave={saveFromDoubleTap}
           onShare={onShare}
           page={pages[0] ?? { type: 'text' }}
+          remixLoading={remixLoading}
           saveLoading={saveLoading}
           topInset={topInset}
           width={width}
@@ -1393,6 +1429,7 @@ function ImmersiveSlide({
             onShare={onShare}
             onShowMedia={showMediaPage}
             page={page}
+            remixLoading={remixLoading}
             saveLoading={saveLoading}
             topInset={topInset}
             width={width}
@@ -1581,6 +1618,7 @@ function MediaSlidePage({
   onShare,
   onShowMedia,
   page,
+  remixLoading,
   saveLoading,
   topInset,
   width,
@@ -1599,6 +1637,7 @@ function MediaSlidePage({
   /** The details page's way back: the media page of the same slide. */
   onShowMedia?: () => void;
   page: ImmersiveSlidePage;
+  remixLoading: boolean;
   saveLoading: boolean;
   topInset: number;
   width: number;
@@ -1618,6 +1657,7 @@ function MediaSlidePage({
           onRecreate={onRecreate}
           onSave={onSave}
           onShare={onShare}
+          remixLoading={remixLoading}
           saveLoading={saveLoading}
           topInset={topInset}
           width={width}

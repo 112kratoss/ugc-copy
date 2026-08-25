@@ -44,6 +44,7 @@ export function PostDetailsPage({
   onRecreate,
   onSave,
   onShare,
+  remixLoading,
   saveLoading,
   topInset,
   width,
@@ -65,6 +66,7 @@ export function PostDetailsPage({
   onRecreate: (item: ImmersivePreviewItem) => void;
   onSave: (item: ImmersivePreviewItem) => void;
   onShare: (item: ImmersivePreviewItem) => void;
+  remixLoading?: boolean;
   saveLoading: boolean;
   topInset: number;
   width: number;
@@ -240,6 +242,7 @@ export function PostDetailsPage({
               label={primaryAction.label}
               icon={<Repeat2 size={18} color="#050505" strokeWidth={2.8} />}
               primary
+              loading={remixLoading}
               onPress={() => void onRecreate(item)}
             />
           ) : null}

@@ -191,15 +191,18 @@ describe('UnlockRemixPrompt', () => {
     expect(onUnlocked).toHaveBeenCalledWith(expect.objectContaining({ id: 'post-123' }));
   });
 
-  it('sends signed-out users to auth from the prompt', () => {
+  it('sends signed-out users to auth and brings them back to where they were', () => {
     authState.user = null;
-    const { onClose, onUnlocked, tree } = renderPrompt();
+    const returnTo = '/viewer?source=showcase-feed&initialId=post-123';
+    const { onClose, onUnlocked, tree } = renderPrompt({ authReturnTo: returnTo });
 
     renderer.act(() => {
       findPressableByAccessibilityLabel(tree.root, 'Sign in to unlock').props.onPress();
     });
 
-    expect(routerState.push).toHaveBeenCalledWith('/auth');
+    // Without the return path, signing in drops them at the tab root and the
+    // unlock they came for is gone.
+    expect(routerState.push).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo } });
     expect(onClose).toHaveBeenCalled();
     expect(onUnlocked).not.toHaveBeenCalled();
   });

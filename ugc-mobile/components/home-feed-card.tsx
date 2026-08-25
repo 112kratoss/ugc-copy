@@ -27,6 +27,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   onComments,
   onRemix,
   onShare,
+  remixLoading,
 }: {
   card: HomeFeedCard;
   contentWidth: number;
@@ -40,6 +41,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   onComments: () => void;
   onRemix: () => void;
   onShare: () => void;
+  remixLoading?: boolean;
 }) {
   const accent = accentColor(card.accent);
   const hasMedia = card.previewKind !== 'text' && Boolean(card.mediaUrl);
@@ -126,6 +128,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
               accessibilityLabel={`Remix ${card.title}`}
               icon={<Repeat2 size={19} color={appTheme.colors.faint} strokeWidth={2.2} />}
               label={card.remixLabel}
+              loading={remixLoading}
               onPress={onRemix}
             />
           ) : null}

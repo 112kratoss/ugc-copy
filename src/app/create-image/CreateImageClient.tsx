@@ -12,6 +12,7 @@ import {
     StudioBackgroundProcessingNotice,
     StudioGenerationStatus,
     StudioMediaPreviewModal,
+    StudioRemixHydrationNotice,
     StudioRemixNotice,
     StudioRunPanel,
     StudioWorkspacePanel,
@@ -22,6 +23,7 @@ import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import { useAuth } from '@/app/components/AuthProvider';
 import type { RemixSourceBundle } from '@/lib/remix-source';
+import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import {
     createRemixElementSeeds,
     createRemixResultReferenceElement,
@@ -183,6 +185,13 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
     const refetchModelCatalog = modelCatalog.refetch;
     const [selectedModel, setSelectedModel] = useState<ModelId>('nano-banana-2');
     const [prompt, setPrompt] = useState('');
+
+    // Mirrors the live prompt so the remix restore below can tell whether the
+    // creator typed while /api/remix-source was still in flight.
+    const promptRef = useRef(prompt);
+    useEffect(() => {
+        promptRef.current = prompt;
+    }, [prompt]);
     const [elements, setElements] = useState<ImageElementDraft[]>([]);
     const [aspectRatio, setAspectRatio] = useState('auto');
     const [resolution, setResolution] = useState<ImageResolution>('1K');
@@ -354,6 +363,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
         if (!session?.access_token) return;
 
         let isCancelled = false;
+        const promptWhenRemixStarted = promptRef.current;
 
         const fetchRemixData = async () => {
             try {
@@ -380,7 +390,9 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
 
                 setRemixSourceBundle(bundle);
                 setRemixTitle(bundle.generation.title);
-                setPrompt(bundle.generation.prompt);
+                if (!hasCreatorEditedPromptDuringRemix(promptRef.current, promptWhenRemixStarted)) {
+                    setPrompt(bundle.generation.prompt);
+                }
                 setRemixImageUrl(bundle.result?.mediaType === 'image' ? bundle.result.url : null);
                 setRemixRestoreWarning(getRemixRestoreWarning(bundle.restoreIssues));
 
@@ -1164,6 +1176,15 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                     <StudioRemixNotice description={catalogNotice} />
                                 </motion.div>
                             ) : null}
+                            {remixId && isRemixLoading && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 12 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: -12 }}
+                                >
+                                    <StudioRemixHydrationNotice />
+                                </motion.div>
+                            )}
                             {remixId && !isRemixLoading && (
                                 <motion.div
                                     initial={{ opacity: 0, y: 12 }}

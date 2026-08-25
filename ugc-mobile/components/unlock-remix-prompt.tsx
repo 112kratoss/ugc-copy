@@ -17,8 +17,10 @@ export function UnlockRemixPrompt({
   item,
   onClose,
   onUnlocked,
+  authReturnTo,
   visible,
 }: {
+  authReturnTo?: string;
   bottomInset: number;
   item: ImmersivePreviewItem | null;
   onClose: () => void;
@@ -41,7 +43,7 @@ export function UnlockRemixPrompt({
 
     if (!user) {
       onClose();
-      router.push('/auth');
+      router.push({ pathname: '/auth', params: { returnTo: authReturnTo } } as never);
       return;
     }
 
