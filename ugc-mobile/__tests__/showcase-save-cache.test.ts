@@ -105,15 +105,10 @@ describe('showcase save cache helpers', () => {
   it('schedules post-save refresh work without blocking the saved-state indicator', () => {
     const neverSettlingWork = new Promise(() => undefined);
     const invalidatedKeys: Array<readonly unknown[]> = [];
-    let hapticCount = 0;
 
     const result = scheduleShowcaseSaveCompletionEffects({
       postId: 'post-1',
       userId: 'user-1',
-      hapticFeedback: () => {
-        hapticCount += 1;
-        return neverSettlingWork;
-      },
       invalidateQueries: (filters) => {
         invalidatedKeys.push(filters.queryKey);
         return neverSettlingWork;
@@ -121,11 +116,28 @@ describe('showcase save cache helpers', () => {
     });
 
     expect(result).toBeUndefined();
-    expect(hapticCount).toBe(1);
     expect(invalidatedKeys).toEqual([
-      ['showcase-feed'],
       ['showcase-post', 'post-1'],
       ['profile-saved-media', 'user-1'],
     ]);
+  });
+
+  // Regression: the feed key is matched by prefix, so invalidating it refetched
+  // every loaded page of every mounted infinite feed. The resulting
+  // `isRefetching` window drove RefreshControl into a programmatic refresh,
+  // which on iOS shifts the scroll view down and only restores that offset at
+  // the top of the list — the feed walked downward on every save.
+  it('never invalidates the showcase feed, which the optimistic write already reconciled', () => {
+    const invalidatedKeys: Array<readonly unknown[]> = [];
+
+    scheduleShowcaseSaveCompletionEffects({
+      postId: 'post-1',
+      userId: 'user-1',
+      invalidateQueries: (filters) => {
+        invalidatedKeys.push(filters.queryKey);
+      },
+    });
+
+    expect(invalidatedKeys.some((key) => key[0] === 'showcase-feed')).toBe(false);
   });
 });

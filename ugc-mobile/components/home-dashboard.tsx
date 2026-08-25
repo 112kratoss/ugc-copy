@@ -359,7 +359,14 @@ export function HomeDashboard() {
   const slidePreviews = useMemo(() => pickHomeSlidePreviews(cards), [cards]);
   const hasItems = cards.length > 0;
   const isFirstLoad = feedQuery.isLoading && !hasItems;
-  const isRefreshing = feedQuery.isRefetching && !feedQuery.isFetchingNextPage;
+  // Bound to the viewer's own pull, never to an incidental refetch. On iOS,
+  // `refreshing` flipping true without a drag behind it runs
+  // RCTRefreshControl.beginRefreshingProgrammatically, which shifts the scroll
+  // view down by the control's height from wherever it currently sits — and the
+  // matching end only restores that offset when the list is already at the top.
+  // Anywhere else the shift is kept, so every background refetch left the feed
+  // permanently pushed down by another notch.
+  const [pullRefreshing, setPullRefreshing] = useState(false);
 
   const { toggleSave } = useShowcaseSaveMutation();
 
@@ -407,13 +414,14 @@ export function HomeDashboard() {
 
   const handleRefresh = () => {
     haptic.light();
+    setPullRefreshing(true);
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
     queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
       if (!current?.pages.length) return current;
       return { pages: current.pages.slice(0, 1), pageParams: current.pageParams.slice(0, 1) };
     });
-    void feedQuery.refetch();
+    void feedQuery.refetch().finally(() => setPullRefreshing(false));
   };
 
   const selectChip = (chipId: HomeFeedChipId) => {
@@ -691,7 +699,7 @@ export function HomeDashboard() {
         onEndReachedThreshold={0.32}
         refreshControl={(
           <RefreshControl
-            refreshing={isRefreshing}
+            refreshing={pullRefreshing}
             onRefresh={handleRefresh}
             tintColor={DASHBOARD_COLORS.faint}
             colors={[DASHBOARD_COLORS.coral]}
