@@ -1310,6 +1310,7 @@ export default function CreateImageClient({ prefill }: { prefill: CreateImagePre
                                 medium="image"
                                 selectedModel={selectedModel}
                                 label={isElementEnhancementLocked ? 'Polish' : 'Enhance'}
+                                showLevelToggle={!isElementEnhancementLocked}
                                 helperText={
                                     isElementEnhancementLocked
                                         ? 'Named elements stay locked. This only adds light visual polish around your original @element sentence.'

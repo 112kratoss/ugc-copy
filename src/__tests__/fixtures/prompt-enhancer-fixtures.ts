@@ -64,7 +64,8 @@ export const PROMPT_ENHANCER_FIXTURES: PromptEnhancerFixture[] = [
       'Prompt scenario: video.image_to_video_start_frame',
       'Starting frame or reference image is attached',
       'Planner mode: structured-video',
-      'Focus on how the scene should move: subject action, camera movement, timing, and environmental change while preserving the referenced look',
+      'describe only the dynamics — subject motion, camera movement, timing, and environmental change',
+      'Remove every static description the frame already provides',
     ],
   },
   {

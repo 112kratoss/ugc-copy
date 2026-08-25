@@ -1,0 +1,460 @@
+{
+  "manifestVersion": 1,
+  "mode": "clone-active",
+  "release": {
+    "schemaVersion": 2,
+    "revision": "imagen-family-disable-20260824",
+    "basedOnRevision": "enhancer-reference-caps-20260824",
+    "changeNote": "Disable the Imagen 4 family on web and mobile. Google shut the upstream Imagen API on 2026-08-17; live createTask probes on 2026-08-24 failed with provider failCode 500 on both google/imagen4-fast (task 5e16bfb7b7d134f7c19623385ba35854) and google/imagen4 (task eee0adc0563be319956ded649209a1a9), so every paid generation would fail and refund. Entries and pricing are retained for a clean re-enable if Kie restores fulfillment; nano-banana-2 is the recommended replacement per Google.",
+    "createdBy": "enhancer-v2 pass 2026-08-24 (Claude Code, operator athulsmanjeri@gmail.com)"
+  },
+  "upgrade": {
+    "legacyDescriptorsToV2": true
+  },
+  "expectedModelIds": [
+    "flux-2-pro",
+    "gemini-omni-video",
+    "gpt-image-2",
+    "grok-imagine-image",
+    "grok-imagine-image-2",
+    "grok-imagine-video",
+    "hailuo-2.3",
+    "happyhorse-1.1",
+    "ideogram-character",
+    "ideogram-v3",
+    "imagen-4",
+    "imagen-4-fast",
+    "imagen-4-ultra",
+    "kling-2.6",
+    "kling-3.0",
+    "kling-3.0-turbo",
+    "kling-3.0-video",
+    "kling-o3",
+    "minimax-h3",
+    "nano-banana-2",
+    "nano-banana-2-lite",
+    "nano-banana-pro",
+    "qwen3",
+    "qwen3-pro",
+    "seedance-1.5-pro",
+    "seedance-2",
+    "seedance-2-5",
+    "seedance-2-fast",
+    "seedance-2-mini",
+    "seedream-5-lite",
+    "seedream-5-pro",
+    "veo-3.1",
+    "wan-2.7",
+    "wan-2.7-image",
+    "wan-2.7-image-pro",
+    "z-image"
+  ],
+  "defaults": {
+    "web": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    },
+    "mobile": {
+      "image": "nano-banana-2",
+      "video": "kling-3.0-video",
+      "motion": "kling-2.6"
+    }
+  },
+  "entries": [
+    {
+      "modelId": "imagen-4",
+      "kind": "image",
+      "publicDescriptor": {
+        "id": "imagen-4",
+        "kind": "image",
+        "badge": "Quality",
+        "inputs": {
+          "endFrame": false,
+          "startFrame": false,
+          "audioReferences": null,
+          "imageReferences": null,
+          "videoReferences": null,
+          "characterReferences": null,
+          "preparedAudioReferences": null,
+          "combineFramesWithReferences": false
+        },
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "type": "choice",
+            "label": "Aspect ratio",
+            "options": [
+              {
+                "label": "auto",
+                "value": "auto"
+              },
+              {
+                "label": "1:1",
+                "value": "1:1"
+              },
+              {
+                "label": "16:9",
+                "value": "16:9"
+              },
+              {
+                "label": "9:16",
+                "value": "9:16"
+              },
+              {
+                "label": "3:4",
+                "value": "3:4"
+              },
+              {
+                "label": "4:3",
+                "value": "4:3"
+              }
+            ],
+            "defaultValue": "auto",
+            "presentation": "chips"
+          },
+          {
+            "key": "resolution",
+            "type": "choice",
+            "label": "Resolution",
+            "options": [
+              {
+                "label": "1K",
+                "value": "1K"
+              }
+            ],
+            "defaultValue": "1K",
+            "presentation": "chips"
+          }
+        ],
+        "sortOrder": 90,
+        "inputModes": [
+          {
+            "key": "prompt-only",
+            "label": "Prompt only",
+            "slots": [],
+            "default": true
+          }
+        ],
+        "description": "Balanced Google image generation with stronger detail and typography",
+        "displayName": "Imagen 4",
+        "recommended": false,
+        "availability": {
+          "web": false,
+          "mobile": false
+        },
+        "capabilities": {
+          "sound": false,
+          "fixedLens": false,
+          "multiShot": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "schemaVersion": 2,
+        "inputConstraints": [],
+        "minClientSchemaVersion": 1
+      },
+      "webEnabled": false,
+      "mobileEnabled": false,
+      "adapterKey": "kie-task-v1",
+      "adapterConfig": {
+        "settings": {
+          "aspectRatio": {
+            "field": "aspect_ratio"
+          }
+        }
+      },
+      "providerModelMap": {
+        "default": "google/imagen4"
+      },
+      "pricingStrategy": "lookup",
+      "pricingConfig": {
+        "table": {
+          "1K": 8
+        },
+        "dimensions": [
+          {
+            "key": "resolution",
+            "source": "setting",
+            "defaultValue": "1K"
+          }
+        ]
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "rules": [],
+        "normalizedDefaults": {
+          "googleSearch": false,
+          "outputFormat": "jpg"
+        }
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "imagen-4-fast",
+      "kind": "image",
+      "publicDescriptor": {
+        "id": "imagen-4-fast",
+        "kind": "image",
+        "badge": "Fast",
+        "inputs": {
+          "endFrame": false,
+          "startFrame": false,
+          "audioReferences": null,
+          "imageReferences": null,
+          "videoReferences": null,
+          "characterReferences": null,
+          "preparedAudioReferences": null,
+          "combineFramesWithReferences": false
+        },
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "type": "choice",
+            "label": "Aspect ratio",
+            "options": [
+              {
+                "label": "auto",
+                "value": "auto"
+              },
+              {
+                "label": "1:1",
+                "value": "1:1"
+              },
+              {
+                "label": "16:9",
+                "value": "16:9"
+              },
+              {
+                "label": "9:16",
+                "value": "9:16"
+              },
+              {
+                "label": "3:4",
+                "value": "3:4"
+              },
+              {
+                "label": "4:3",
+                "value": "4:3"
+              }
+            ],
+            "defaultValue": "auto",
+            "presentation": "chips"
+          },
+          {
+            "key": "resolution",
+            "type": "choice",
+            "label": "Resolution",
+            "options": [
+              {
+                "label": "1K",
+                "value": "1K"
+              }
+            ],
+            "defaultValue": "1K",
+            "presentation": "chips"
+          }
+        ],
+        "sortOrder": 80,
+        "inputModes": [
+          {
+            "key": "prompt-only",
+            "label": "Prompt only",
+            "slots": [],
+            "default": true
+          }
+        ],
+        "description": "Fast Google image generation for polished everyday creative",
+        "displayName": "Imagen 4 Fast",
+        "recommended": false,
+        "availability": {
+          "web": false,
+          "mobile": false
+        },
+        "capabilities": {
+          "sound": false,
+          "fixedLens": false,
+          "multiShot": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "schemaVersion": 2,
+        "inputConstraints": [],
+        "minClientSchemaVersion": 1
+      },
+      "webEnabled": false,
+      "mobileEnabled": false,
+      "adapterKey": "kie-task-v1",
+      "adapterConfig": {
+        "settings": {
+          "aspectRatio": {
+            "field": "aspect_ratio"
+          }
+        }
+      },
+      "providerModelMap": {
+        "default": "google/imagen4-fast"
+      },
+      "pricingStrategy": "lookup",
+      "pricingConfig": {
+        "table": {
+          "1K": 4
+        },
+        "dimensions": [
+          {
+            "key": "resolution",
+            "source": "setting",
+            "defaultValue": "1K"
+          }
+        ]
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "rules": [],
+        "normalizedDefaults": {
+          "googleSearch": false,
+          "outputFormat": "jpg"
+        }
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "imagen-4-ultra",
+      "kind": "image",
+      "publicDescriptor": {
+        "id": "imagen-4-ultra",
+        "kind": "image",
+        "badge": "Ultra",
+        "inputs": {
+          "endFrame": false,
+          "startFrame": false,
+          "audioReferences": null,
+          "imageReferences": null,
+          "videoReferences": null,
+          "characterReferences": null,
+          "preparedAudioReferences": null,
+          "combineFramesWithReferences": false
+        },
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "type": "choice",
+            "label": "Aspect ratio",
+            "options": [
+              {
+                "label": "auto",
+                "value": "auto"
+              },
+              {
+                "label": "1:1",
+                "value": "1:1"
+              },
+              {
+                "label": "16:9",
+                "value": "16:9"
+              },
+              {
+                "label": "9:16",
+                "value": "9:16"
+              },
+              {
+                "label": "3:4",
+                "value": "3:4"
+              },
+              {
+                "label": "4:3",
+                "value": "4:3"
+              }
+            ],
+            "defaultValue": "auto",
+            "presentation": "chips"
+          },
+          {
+            "key": "resolution",
+            "type": "choice",
+            "label": "Resolution",
+            "options": [
+              {
+                "label": "1K",
+                "value": "1K"
+              }
+            ],
+            "defaultValue": "1K",
+            "presentation": "chips"
+          }
+        ],
+        "sortOrder": 100,
+        "inputModes": [
+          {
+            "key": "prompt-only",
+            "label": "Prompt only",
+            "slots": [],
+            "default": true
+          }
+        ],
+        "description": "Highest-quality Imagen 4 output for final production assets",
+        "displayName": "Imagen 4 Ultra",
+        "recommended": false,
+        "availability": {
+          "web": false,
+          "mobile": false
+        },
+        "capabilities": {
+          "sound": false,
+          "fixedLens": false,
+          "multiShot": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "schemaVersion": 2,
+        "inputConstraints": [],
+        "minClientSchemaVersion": 1
+      },
+      "webEnabled": false,
+      "mobileEnabled": false,
+      "adapterKey": "kie-task-v1",
+      "adapterConfig": {
+        "settings": {
+          "aspectRatio": {
+            "field": "aspect_ratio"
+          }
+        }
+      },
+      "providerModelMap": {
+        "default": "google/imagen4-ultra"
+      },
+      "pricingStrategy": "lookup",
+      "pricingConfig": {
+        "table": {
+          "1K": 12
+        },
+        "dimensions": [
+          {
+            "key": "resolution",
+            "source": "setting",
+            "defaultValue": "1K"
+          }
+        ]
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "rules": [],
+        "normalizedDefaults": {
+          "googleSearch": false,
+          "outputFormat": "jpg"
+        }
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    }
+  ],
+  "acceptanceQuotes": []
+}

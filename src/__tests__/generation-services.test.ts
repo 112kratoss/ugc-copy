@@ -3393,4 +3393,121 @@ describe('generation services', () => {
     });
     expect(rpcCalls.some((call) => call.fn === 'refund_generation')).toBe(false);
   });
+
+  it('maps Kling O3 named subjects into the provider elements field', async () => {
+    // Contract live-verified 2026-08-24 (kling-3.0-omni/text-to-video, task
+    // 7da3646b6a8362b9aa783c2176d0c71e): 2–4 images per named subject fuse into
+    // one identity referenced in the prompt as @name.
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-o3-subjects-1' } }),
+      } as Response;
+    });
+
+    const { supabase } = createSupabaseMock();
+    await startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: '@hero lifts the serum and smiles at the camera.',
+      model: 'kling-o3',
+      duration: 5,
+      aspectRatio: '16:9',
+      resolution: '720p',
+      sound: false,
+      klingSubjects: [
+        {
+          handle: '@hero',
+          displayName: 'Hero creator',
+          description: 'the creator shown in the reference images',
+          images: [
+            { url: 'https://cdn.example.com/hero-front.jpg' },
+            { url: 'https://cdn.example.com/hero-side.jpg' },
+          ],
+        },
+      ],
+    });
+
+    expect(providerBody).toMatchObject({
+      model: 'kling-3.0-omni/text-to-video',
+      input: {
+        prompt: '@hero lifts the serum and smiles at the camera.',
+        elements: [
+          {
+            name: 'hero',
+            description: 'the creator shown in the reference images',
+            element_input_urls: [
+              'https://cdn.example.com/hero-front.jpg',
+              'https://cdn.example.com/hero-side.jpg',
+            ],
+          },
+        ],
+      },
+    });
+    expect((providerBody as unknown as { input?: Record<string, unknown> })?.input?.image_urls).toBeUndefined();
+  });
+
+  it('rejects Kling O3 subjects with the wrong image count or model', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const { supabase } = createSupabaseMock();
+
+    await expect(startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: '@hero waves.',
+      model: 'kling-o3',
+      duration: 5,
+      klingSubjects: [{
+        handle: '@hero',
+        displayName: 'Hero',
+        images: [{ url: 'https://cdn.example.com/only-one.jpg' }],
+      }],
+    })).rejects.toThrow(/needs 2 to 4 images/);
+
+    await expect(startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'A creator waves.',
+      model: 'kling-3.0-video',
+      duration: 5,
+      mode: 'std',
+      klingSubjects: [{
+        handle: '@hero',
+        displayName: 'Hero',
+        images: [
+          { url: 'https://cdn.example.com/a.jpg' },
+          { url: 'https://cdn.example.com/b.jpg' },
+        ],
+      }],
+    })).rejects.toThrow(/only available for Kling O3/);
+  });
+
+  it('keeps Kling O3 subjects exclusive with frames and reference images', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const { supabase } = createSupabaseMock();
+
+    await expect(startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: '@hero waves.',
+      model: 'kling-o3',
+      duration: 5,
+      startImageUrl: 'https://cdn.example.com/frame.jpg',
+      klingSubjects: [{
+        handle: '@hero',
+        displayName: 'Hero',
+        images: [
+          { url: 'https://cdn.example.com/a.jpg' },
+          { url: 'https://cdn.example.com/b.jpg' },
+        ],
+      }],
+    })).rejects.toThrow(/replace reference images and frames/);
+  });
 });

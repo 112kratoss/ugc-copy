@@ -21,7 +21,7 @@ import StudioModelPicker from '@/app/components/StudioModelPicker';
 import PublicShareButton from '@/app/components/PublicShareButton';
 import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
-import { clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, getVideoElementSupport, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/client-generation-models';
+import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, getVideoElementSupport, isValidVideoDuration, VIDEO_MODELS, VideoModelId } from '@/lib/client-generation-models';
 import { getVideoInputAffordances } from '@/lib/generation-model-affordances';
 import type { GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 import {
@@ -43,12 +43,14 @@ import {
     getPersistedFile,
     getPersistedImageElementRecords,
     getPersistedMediaRecords,
+    getPersistedSubjectRecords,
     getPersistedValue,
     PERSISTED_MEDIA_KEYS,
     removePersistedMedia,
     setPersistedFile,
     setPersistedImageElementRecords,
     setPersistedMediaRecords,
+    setPersistedSubjectRecords,
     setPersistedValue,
 } from '@/lib/persisted-media';
 import { BACKGROUND_PROCESSING_ERROR, getBackgroundProcessingCopy } from '@/lib/generation-feedback';
@@ -233,6 +235,196 @@ type KlingVideoElementDraft = {
     sourceGenerationId?: string | null;
     durationSeconds?: number | null;
 };
+
+type KlingSubjectImageDraft = {
+    id: string;
+    file: File | null;
+    previewUrl: string;
+    remoteUrl: string | null;
+    storagePath: string | null;
+};
+
+// A Kling O3 named multi-image subject: 2–4 images fused into one identity the
+// prompt references as @handle. Session-only state (no draft persistence yet).
+type KlingSubjectDraft = {
+    id: string;
+    displayName: string;
+    images: KlingSubjectImageDraft[];
+};
+
+const KLING_SUBJECT_LIMIT = 3;
+const KLING_SUBJECT_MIN_IMAGES = 2;
+const KLING_SUBJECT_MAX_IMAGES = 4;
+
+function buildKlingSubjectHandle(displayName: string, index: number, used: Set<string>): string {
+    const base = displayName.trim().replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    let handle = `@${base || `subject_${index + 1}`}`;
+    let suffix = 2;
+    while (used.has(handle)) {
+        handle = `@${base || `subject_${index + 1}`}_${suffix}`;
+        suffix += 1;
+    }
+    used.add(handle);
+    return handle;
+}
+
+function KlingSubjectsEditor({
+    subjects,
+    handles,
+    disabled,
+    onChange,
+}: {
+    subjects: KlingSubjectDraft[];
+    handles: string[];
+    disabled: boolean;
+    onChange: (next: KlingSubjectDraft[]) => void;
+}) {
+    const addSubject = () => {
+        if (subjects.length >= KLING_SUBJECT_LIMIT) return;
+        onChange([...subjects, {
+            id: `subject-${crypto.randomUUID()}`,
+            displayName: `Subject ${subjects.length + 1}`,
+            images: [],
+        }]);
+    };
+
+    const updateSubject = (subjectId: string, updates: Partial<KlingSubjectDraft>) => {
+        onChange(subjects.map((subject) => (subject.id === subjectId ? { ...subject, ...updates } : subject)));
+    };
+
+    const removeSubject = (subjectId: string) => {
+        const subject = subjects.find((candidate) => candidate.id === subjectId);
+        subject?.images.forEach((image) => revokeObjectUrl(image.previewUrl));
+        onChange(subjects.filter((candidate) => candidate.id !== subjectId));
+    };
+
+    const addImages = (subjectId: string, files: FileList | null) => {
+        if (!files || files.length === 0) return;
+        const subject = subjects.find((candidate) => candidate.id === subjectId);
+        if (!subject) return;
+        const availableSlots = Math.max(0, KLING_SUBJECT_MAX_IMAGES - subject.images.length);
+        const nextImages = Array.from(files).slice(0, availableSlots).map((file) => ({
+            id: `subject-image-${crypto.randomUUID()}`,
+            file,
+            previewUrl: URL.createObjectURL(file),
+            remoteUrl: null,
+            storagePath: null,
+        }));
+        updateSubject(subjectId, { images: [...subject.images, ...nextImages] });
+    };
+
+    const removeImage = (subjectId: string, imageId: string) => {
+        const subject = subjects.find((candidate) => candidate.id === subjectId);
+        if (!subject) return;
+        const image = subject.images.find((candidate) => candidate.id === imageId);
+        if (image) revokeObjectUrl(image.previewUrl);
+        updateSubject(subjectId, { images: subject.images.filter((candidate) => candidate.id !== imageId) });
+    };
+
+    return (
+        <div>
+            <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                    <h2 className="text-sm font-semibold text-white">Named subjects</h2>
+                    <p className="mt-1 text-sm text-zinc-400">
+                        Give each subject 2–4 images of the same person or product, then mention its @handle in the prompt or shot prompts.
+                    </p>
+                </div>
+                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-300">
+                    {subjects.length}/{KLING_SUBJECT_LIMIT}
+                </span>
+            </div>
+
+            {subjects.length > 0 && (
+                <div className="mb-4 space-y-3">
+                    {subjects.map((subject, subjectIndex) => {
+                        const imageCountOk = subject.images.length >= KLING_SUBJECT_MIN_IMAGES
+                            && subject.images.length <= KLING_SUBJECT_MAX_IMAGES;
+                        return (
+                            <div key={subject.id} className="rounded-[24px] border border-zinc-700/40 bg-black/35 p-3">
+                                <div className="mb-3 flex items-center gap-2">
+                                    <input
+                                        type="text"
+                                        value={subject.displayName}
+                                        disabled={disabled}
+                                        onChange={(event) => updateSubject(subject.id, { displayName: event.target.value })}
+                                        className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none transition focus:border-emerald-500/40"
+                                        placeholder="Subject name"
+                                    />
+                                    <span className="shrink-0 truncate rounded-full border border-white/8 bg-white/[0.03] px-2.5 py-1 text-xs font-semibold text-emerald-300">
+                                        {handles[subjectIndex]}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        disabled={disabled}
+                                        onClick={() => removeSubject(subject.id)}
+                                        className="shrink-0 rounded-full bg-black/60 p-1.5 text-white transition hover:bg-red-500"
+                                        aria-label={`Remove ${subject.displayName}`}
+                                    >
+                                        <X className="h-3 w-3" />
+                                    </button>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    {subject.images.map((image) => (
+                                        <div key={image.id} className="relative h-16 w-16 overflow-hidden rounded-xl border border-white/10 bg-black">
+                                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                                            <img src={image.previewUrl || image.remoteUrl || undefined} alt="" className="h-full w-full object-cover" />
+                                            <button
+                                                type="button"
+                                                disabled={disabled}
+                                                onClick={() => removeImage(subject.id, image.id)}
+                                                className="absolute right-0.5 top-0.5 rounded-full bg-black/70 p-0.5 text-white transition hover:bg-red-500"
+                                                aria-label="Remove subject image"
+                                            >
+                                                <X className="h-2.5 w-2.5" />
+                                            </button>
+                                        </div>
+                                    ))}
+                                    {subject.images.length < KLING_SUBJECT_MAX_IMAGES && (
+                                        <label className={`flex h-16 w-16 cursor-pointer items-center justify-center rounded-xl border border-dashed border-white/15 text-zinc-400 transition hover:border-emerald-500/40 hover:text-emerald-300 ${disabled ? 'pointer-events-none opacity-50' : ''}`}>
+                                            <Plus className="h-4 w-4" />
+                                            <input
+                                                type="file"
+                                                accept="image/*"
+                                                multiple
+                                                disabled={disabled}
+                                                className="hidden"
+                                                onChange={(event) => {
+                                                    addImages(subject.id, event.target.files);
+                                                    event.target.value = '';
+                                                }}
+                                            />
+                                        </label>
+                                    )}
+                                </div>
+                                <p className={`mt-2 text-[11px] font-semibold uppercase tracking-[0.14em] ${imageCountOk ? 'text-zinc-500' : 'text-amber-300'}`}>
+                                    {subject.images.length}/{KLING_SUBJECT_MAX_IMAGES} images{imageCountOk ? '' : ` — add at least ${KLING_SUBJECT_MIN_IMAGES}`}
+                                </p>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+
+            {subjects.length < KLING_SUBJECT_LIMIT && (
+                <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={addSubject}
+                    className="rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-xs font-semibold text-zinc-200 transition hover:bg-white/[0.08]"
+                >
+                    Add subject
+                </button>
+            )}
+
+            {subjects.length > 0 && (
+                <p className="mt-3 text-xs text-zinc-500">
+                    Named subjects replace frames and reference images for this run.
+                </p>
+            )}
+        </div>
+    );
+}
 
 type KlingVideoElementSeed = {
     id?: string | null;
@@ -434,6 +626,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [preparedAudioIdDraft, setPreparedAudioIdDraft] = useState('');
     const [characterIdDraft, setCharacterIdDraft] = useState('');
     const [klingVideoElements, setKlingVideoElements] = useState<KlingVideoElementDraft[]>([]);
+    const [klingSubjects, setKlingSubjects] = useState<KlingSubjectDraft[]>([]);
+    const klingSubjectsRef = useRef<KlingSubjectDraft[]>([]);
     const [referenceMode, setReferenceMode] = useState<'frames' | 'elements'>('frames');
     const [elementNameDrafts, setElementNameDrafts] = useState<Record<string, string>>({});
     const [klingVideoNameDrafts, setKlingVideoNameDrafts] = useState<Record<string, string>>({});
@@ -554,6 +748,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     }, [modelCatalog.catalog, selectedModel, videoModel, prefillModel, remixId]);
     const isSeedance2Family = isSeedance2VideoModelId(selectedModel);
     const isKlingVideoModel = selectedModel === 'kling-3.0-video';
+    const isKlingO3Model = selectedModel === 'kling-o3';
     const isWanVideoModel = selectedModel === 'wan-2.7';
     const isGeminiOmniVideoModel = selectedModel === 'gemini-omni-video';
     const supportsMultimodalReferences = isSeedance2Family || isWanVideoModel || isGeminiOmniVideoModel;
@@ -643,6 +838,33 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 }))
         );
     };
+    const persistKlingSubjects = async (nextSubjects: KlingSubjectDraft[]) => {
+        if (remixId) {
+            return;
+        }
+
+        await setPersistedSubjectRecords(
+            PERSISTED_MEDIA_KEYS.createVideoKlingSubjects,
+            nextSubjects
+                // Only locally-uploaded images can be restored from storage; a
+                // subject with any unrestorable image is dropped whole so it
+                // never comes back depicting a different set.
+                .filter((subject) => subject.images.length > 0 && subject.images.every((image) => image.file))
+                .map((subject) => ({
+                    id: subject.id,
+                    displayName: subject.displayName,
+                    images: subject.images.map((image) => ({
+                        id: image.id,
+                        file: image.file as File,
+                    })),
+                }))
+        );
+    };
+    const commitKlingSubjects = (nextSubjects: KlingSubjectDraft[]) => {
+        setKlingSubjects(nextSubjects);
+        klingSubjectsRef.current = nextSubjects;
+        void persistKlingSubjects(nextSubjects);
+    };
     const persistSeedanceAssets = async (
         nextElements: VideoElementDraft[] = elementsRef.current,
         nextReferenceVideos: SeedanceMediaReferenceDraft[] = referenceVideosRef.current,
@@ -722,6 +944,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         activeReferenceMode === 'elements'
             ? elements.length + referenceVideos.length + referenceAudios.length + preparedAudioIds.length + characterIds.length + (combinesFrameWithReferences && (startImageUrl || startImageFile) ? 1 : 0)
             : frameReferenceCount + (isKlingVideoModel ? klingVideoElements.length : 0);
+    const klingSubjectsActive = isKlingO3Model && klingSubjects.length > 0;
+    const klingSubjectHandles = (() => {
+        if (!isKlingO3Model) return [] as string[];
+        const used = new Set<string>();
+        return klingSubjects.map((subject, index) => buildKlingSubjectHandle(subject.displayName, index, used));
+    })();
     const quoteRequest = useMemo(() => modelCatalog.catalog ? {
         kind: 'video' as const,
         modelId: selectedModel,
@@ -733,10 +961,12 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             resolution: currentResolution,
             fixedLens: currentFixedLens,
             isMultiShot: currentIsMultiShot,
-            referenceMode: activeReferenceMode,
+            referenceMode: klingSubjectsActive ? 'subjects' : activeReferenceMode,
         },
         inputCounts: {
-            images: activeReferenceMode === 'elements' ? elements.length : frameReferenceCount,
+            images: klingSubjectsActive
+                ? klingSubjects.reduce((count, subject) => count + subject.images.length, 0)
+                : activeReferenceMode === 'elements' ? elements.length : frameReferenceCount,
             videos: (activeReferenceMode === 'elements' ? referenceVideos.length : 0) + klingVideoElements.length,
             audios: activeReferenceMode === 'elements' ? referenceAudios.length : 0,
             preparedAudios: isGeminiOmniVideoModel ? preparedAudioIds.length : 0,
@@ -781,7 +1011,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 : [],
         },
         catalogRevision: modelCatalog.catalog.revision,
-    } : null, [activeReferenceMode, activeSupportsEndFrame, characterIds.length, currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, elements.length, endImageFile, endImageUrl, frameReferenceCount, isGeminiOmniVideoModel, klingVideoElements.length, modelCatalog.catalog, videoElementsSlotActive, preparedAudioIds.length, referenceAudios.length, referenceVideos, selectedModel, startImageFile, startImageUrl, totalDuration]);
+    } : null, [activeReferenceMode, activeSupportsEndFrame, characterIds.length, currentAspectRatio, currentFixedLens, currentIsMultiShot, currentMode, currentResolution, currentSound, elements.length, endImageFile, endImageUrl, frameReferenceCount, isGeminiOmniVideoModel, klingSubjects, klingSubjectsActive, klingVideoElements.length, modelCatalog.catalog, videoElementsSlotActive, preparedAudioIds.length, referenceAudios.length, referenceVideos, selectedModel, startImageFile, startImageUrl, totalDuration]);
     const quoteState = useWebGenerationModelQuote(quoteRequest, session?.access_token);
     useEffect(() => {
         if (quoteState.error?.code !== 'CATALOG_CHANGED' && quoteState.error?.code !== 'MODEL_UNAVAILABLE') return;
@@ -812,7 +1042,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const insufficientCredits = userCredits !== null && estimatedCost !== null && userCredits < estimatedCost;
     const elementHandles = elements.map((element) => element.handle);
     const klingVideoHandles = isKlingVideoModel ? klingVideoElements.map((element) => element.handle) : [];
-    const knownPromptHandles = [...elementHandles, ...klingVideoHandles];
+    const knownPromptHandles = [...elementHandles, ...klingVideoHandles, ...klingSubjectHandles];
     const knownElementMentions = extractPromptHandles(prompt).filter((handle) => elementHandles.includes(handle));
     const knownKlingVideoMentions = extractPromptHandles(prompt).filter((handle) => klingVideoHandles.includes(handle));
     const staleElementMentions = findUnknownPromptHandles(prompt, knownPromptHandles);
@@ -837,6 +1067,14 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 displayName: element.displayName,
                 handle: element.handle,
                 kind: 'video' as const,
+            }))
+            : []),
+        ...(isKlingO3Model
+            ? klingSubjects.map((subject, index) => ({
+                id: subject.id,
+                displayName: subject.displayName,
+                handle: klingSubjectHandles[index],
+                kind: 'image' as const,
             }))
             : []),
     ];
@@ -871,6 +1109,42 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         : 0;
     const showSavedElementNotice = !canUseVideoElements && !currentIsMultiShot && (elements.length > 0 || referenceMode === 'elements');
     const showMultiShotElementNotice = currentIsMultiShot && (elements.length > 0 || referenceMode === 'elements' || (hasKnownElementMentions && !hasKnownKlingVideoMentions));
+    // Enhance-time frame uploads, cached briefly so repeated enhance clicks on
+    // the same attached file don't re-upload it every time.
+    const enhanceFrameUploadCacheRef = useRef<Map<File, { url: string; at: number }>>(new Map());
+    const ENHANCE_FRAME_CACHE_TTL_MS = 10 * 60 * 1000;
+
+    const resolveEnhancerFrameUrl = async (file: File | null, url: string | null): Promise<string | null> => {
+        if (url && url.startsWith('https://')) return url;
+        if (!file) return null;
+        const cached = enhanceFrameUploadCacheRef.current.get(file);
+        if (cached && Date.now() - cached.at < ENHANCE_FRAME_CACHE_TTL_MS) {
+            return cached.url;
+        }
+        const upload = await uploadMediaToTemporaryStorage(file);
+        enhanceFrameUploadCacheRef.current.set(file, { url: upload.signedUrl, at: Date.now() });
+        return upload.signedUrl;
+    };
+
+    // Sends the actual attached frames to the enhancer LLM as vision input so
+    // image-to-video prompts describe real motion instead of imagining the frame.
+    const prepareSinglePromptEnhancerContext = async () => {
+        const base = buildSinglePromptQualityContext();
+        if (!(activeReferenceMode === 'frames' || combinesFrameWithReferences)) {
+            return base;
+        }
+
+        const frameImageUrls: string[] = [];
+        const resolvedStartUrl = await resolveEnhancerFrameUrl(startImageFile, startImageUrl);
+        if (resolvedStartUrl) frameImageUrls.push(resolvedStartUrl);
+        if (activeReferenceMode === 'frames' && activeSupportsEndFrame) {
+            const resolvedEndUrl = await resolveEnhancerFrameUrl(endImageFile, endImageUrl);
+            if (resolvedEndUrl) frameImageUrls.push(resolvedEndUrl);
+        }
+
+        return frameImageUrls.length > 0 ? { ...base, frameImageUrls } : base;
+    };
+
     const buildSinglePromptQualityContext = () => ({
         modelId: selectedModel,
         mode: currentMode,
@@ -885,14 +1159,19 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         hasEndImage: activeReferenceMode === 'frames' && activeSupportsEndFrame && Boolean(endImageFile || endImageUrl),
         referenceImageCount: activeReferenceMode === 'elements' ? elements.length : 0,
         hasReferenceVideo: hasReferenceVideoForRun,
-        elementReferences: activeReferenceMode === 'elements' || klingVideoElements.length > 0
+        elementReferences: activeReferenceMode === 'elements' || klingVideoElements.length > 0 || klingSubjectsActive
             ? [
                 ...(activeReferenceMode === 'elements' ? elements : []),
                 ...(isKlingVideoModel ? klingVideoElements : []),
             ].map((element) => ({
                 handle: element.handle,
                 displayName: element.displayName,
-            }))
+            })).concat(klingSubjectsActive
+                ? klingSubjects.map((subject, index) => ({
+                    handle: klingSubjectHandles[index],
+                    displayName: subject.displayName,
+                }))
+                : [])
             : undefined,
     });
     const buildShotPromptQualityContext = (shot: MultiShot, index: number) => ({
@@ -942,6 +1221,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             referenceVideosRef.current.forEach((reference) => revokeObjectUrl(reference.previewUrl));
             referenceAudiosRef.current.forEach((reference) => revokeObjectUrl(reference.previewUrl));
             klingVideoElementsRef.current.forEach((element) => revokeObjectUrl(element.previewUrl));
+            klingSubjectsRef.current.forEach((subject) => subject.images.forEach((image) => revokeObjectUrl(image.previewUrl)));
         };
     }, []);
 
@@ -959,7 +1239,8 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 
     useEffect(() => {
         klingVideoElementsRef.current = klingVideoElements;
-    }, [klingVideoElements]);
+        klingSubjectsRef.current = klingSubjects;
+    }, [klingVideoElements, klingSubjects]);
 
     useEffect(() => {
         if (videoModel.modeOptions?.length) {
@@ -1258,6 +1539,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                    savedReferenceVideos,
 	                    savedReferenceAudios,
 	                    savedKlingVideoElements,
+	                    savedKlingSubjects,
 	                    savedSeedanceAssets,
 	                ] = await Promise.all([
 	                    getPersistedFile(PERSISTED_MEDIA_KEYS.createVideoStartImage),
@@ -1267,6 +1549,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                    getPersistedMediaRecords(PERSISTED_MEDIA_KEYS.createVideoReferenceVideos),
 	                    getPersistedMediaRecords(PERSISTED_MEDIA_KEYS.createVideoReferenceAudios),
 	                    getPersistedMediaRecords(PERSISTED_MEDIA_KEYS.createVideoKlingVideoElements),
+	                    getPersistedSubjectRecords(PERSISTED_MEDIA_KEYS.createVideoKlingSubjects),
 	                    getPersistedValue<SeedanceAssetCollections>(PERSISTED_MEDIA_KEYS.createVideoSeedanceAssets),
 	                ]);
 
@@ -1337,6 +1620,20 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
 	                            source: 'upload',
 	                        }))
 	                    ));
+	                }
+
+	                if (savedKlingSubjects.length > 0) {
+	                    setKlingSubjects(savedKlingSubjects.map((subject) => ({
+	                        id: subject.id,
+	                        displayName: subject.displayName,
+	                        images: subject.images.map((image) => ({
+	                            id: image.id,
+	                            file: image.file,
+	                            previewUrl: URL.createObjectURL(image.file),
+	                            remoteUrl: null,
+	                            storagePath: null,
+	                        })),
+	                    })));
 	                }
             } catch (err) {
                 console.error('Error loading persisted video media:', err);
@@ -2345,6 +2642,23 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
             return;
         }
 
+        if (klingSubjectsActive) {
+            if (klingSubjects.length > KLING_SUBJECT_LIMIT) {
+                setError(`Kling O3 supports up to ${KLING_SUBJECT_LIMIT} named subjects per run.`);
+                return;
+            }
+            const invalidSubject = klingSubjects.find((subject) =>
+                subject.images.length < KLING_SUBJECT_MIN_IMAGES || subject.images.length > KLING_SUBJECT_MAX_IMAGES);
+            if (invalidSubject) {
+                setError(`${invalidSubject.displayName || 'Each subject'} needs ${KLING_SUBJECT_MIN_IMAGES}–${KLING_SUBJECT_MAX_IMAGES} images of the same subject.`);
+                return;
+            }
+            if (frameReferenceCount > 0 || (activeReferenceMode === 'elements' && (elements.length > 0 || referenceVideos.length > 0 || referenceAudios.length > 0))) {
+                setError('Named subjects replace frames and reference images for this run — remove one or the other.');
+                return;
+            }
+        }
+
         if (supportsMultimodalReferences && activeReferenceMode === 'elements' && referenceVideos.length > referenceVideoLimit) {
             setError(`${videoModel.displayName} supports up to ${referenceVideoLimit} reference videos per run.`);
             return;
@@ -2616,7 +2930,56 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 })));
             }
 
-            if ((activeReferenceMode === 'frames' || combinesFrameWithReferences) && startImageFile) {
+            const requestKlingSubjectInputs: Array<{
+                slot: 'subjectImages';
+                kind: 'image';
+                url: string;
+                label: string;
+                handle: string;
+                storagePath: string | null;
+                sourceGenerationId: null;
+            }> = [];
+            if (klingSubjectsActive) {
+                const subjectImageCount = klingSubjects.reduce((count, subject) => count + subject.images.length, 0);
+                setGenerationTiming(createLocalGenerationTiming({
+                    kind: 'video',
+                    phaseLabel: subjectImageCount === 1 ? 'Uploading 1 subject image' : `Uploading ${subjectImageCount} subject images`,
+                    startedAtMs,
+                    estimatedTotalMs,
+                }));
+                const uploadedSubjects: KlingSubjectDraft[] = [];
+                for (const [subjectIndex, subject] of klingSubjects.entries()) {
+                    const handle = klingSubjectHandles[subjectIndex];
+                    const uploadedImages: KlingSubjectImageDraft[] = [];
+                    for (const image of subject.images) {
+                        let remoteUrl = image.remoteUrl;
+                        let storagePath = image.storagePath;
+                        if (!remoteUrl && image.file) {
+                            const upload = await uploadMediaToTemporaryStorage(image.file);
+                            remoteUrl = upload.signedUrl;
+                            storagePath = upload.storagePath;
+                        }
+                        if (!remoteUrl && !storagePath) {
+                            throw new Error(`Missing media for ${subject.displayName}`);
+                        }
+                        uploadedImages.push({ ...image, remoteUrl, storagePath });
+                        requestKlingSubjectInputs.push({
+                            slot: 'subjectImages',
+                            kind: 'image',
+                            url: storagePath || remoteUrl!,
+                            label: subject.displayName,
+                            handle,
+                            storagePath: storagePath ?? null,
+                            sourceGenerationId: null,
+                        });
+                    }
+                    uploadedSubjects.push({ ...subject, images: uploadedImages });
+                }
+                // Keep the uploaded URLs so a retry does not re-upload the set.
+                commitKlingSubjects(uploadedSubjects);
+            }
+
+            if (!klingSubjectsActive && (activeReferenceMode === 'frames' || combinesFrameWithReferences) && startImageFile) {
                 setGenerationTiming(createLocalGenerationTiming({
                     kind: 'video',
                     phaseLabel: 'Uploading start frame',
@@ -2681,7 +3044,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                     resolution: currentResolution,
                     fixedLens: currentFixedLens,
                     isMultiShot: currentIsMultiShot,
-                    referenceMode: activeReferenceMode,
+                    referenceMode: klingSubjectsActive ? 'subjects' : activeReferenceMode,
                 },
                 inputs: [
                     ...requestElements.map((element, index) => ({
@@ -2722,6 +3085,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         storagePath: element.storagePath,
                         sourceGenerationId: element.sourceGenerationId,
                     })),
+                    ...requestKlingSubjectInputs,
                     ...(startUrl ? [{
                         slot: 'startFrame',
                         kind: 'image',
@@ -3015,6 +3379,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                                 : undefined
                                         }
                                         context={buildSinglePromptQualityContext()}
+                                        prepareContext={prepareSinglePromptEnhancerContext}
                                         disabled={isGenerating}
                                         showWarnings={false}
                                     />
@@ -3309,6 +3674,21 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                 </div>
                             </motion.div>
                         )}
+
+	                        {isKlingO3Model && (
+	                            <motion.div
+	                                initial={{ opacity: 0, y: 16 }}
+	                                animate={{ opacity: 1, y: 0 }}
+	                                className="rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,rgba(16,22,20,0.96),rgba(7,10,9,0.94))] p-5 shadow-[0_24px_90px_-56px_rgba(0,0,0,0.95)] sm:p-6"
+	                            >
+	                                <KlingSubjectsEditor
+	                                    subjects={klingSubjects}
+	                                    handles={klingSubjectHandles}
+	                                    disabled={isGenerating}
+	                                    onChange={commitKlingSubjects}
+	                                />
+	                            </motion.div>
+	                        )}
 
 	                        {showKlingVideoElementEditor && (
 	                            <motion.div
@@ -4099,6 +4479,16 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                                         </span>
                                         <span>{currentSound ? 'ON' : 'OFF'}</span>
                                     </button>
+                                </div>
+                            )}
+
+                            {!videoModel.supportsSound && ALWAYS_ON_AUDIO_VIDEO_MODELS.has(selectedModel) && (
+                                <div>
+                                    <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Audio</h2>
+                                    <div className="w-full p-3 rounded-xl flex items-center gap-2 text-sm font-medium bg-black/50 text-zinc-400 border border-white/5">
+                                        <Volume2 className="w-4 h-4 shrink-0 text-green-400/70" />
+                                        <span>This model always generates audio. Describe the sound you want in the prompt, or say “no music”.</span>
+                                    </div>
                                 </div>
                             )}
                         </div>

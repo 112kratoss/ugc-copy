@@ -907,7 +907,26 @@ describe('WorkflowNodeEditors', () => {
     expect(screen.queryByRole('button', { name: /insert @/i })).not.toBeInTheDocument();
   });
 
-  it('disables prompt enhancement when the prompt does not feed image, video, or motion generation', () => {
+  it('disables prompt enhancement when the prompt feeds no enhanceable generator', () => {
+    // Music has no enhancement playbook, so a music-only branch stays disabled.
+    const promptNode = createWorkflowNode('text-input', { x: 0, y: 0 });
+    const musicNode = createWorkflowNode('music-generate', { x: 240, y: 0 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [promptNode, musicNode],
+      edges: [
+        { id: 'prompt-music', source: promptNode.id, target: musicNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
+      ],
+    });
+
+    renderInteractiveInspector(graph, { selectedNodeId: promptNode.id });
+
+    expect(screen.getByRole('button', { name: /enhance prompt/i })).toBeDisabled();
+    expect(
+      screen.getByText(/prompt enhancement works when this prompt feeds an image, video, motion, voiceover, or sound-effect generator/i)
+    ).toBeInTheDocument();
+  });
+
+  it('enhances a voiceover branch as an audio script', async () => {
     const promptNode = createWorkflowNode('text-input', { x: 0, y: 0 });
     const voiceoverNode = createWorkflowNode('voiceover-generate', { x: 240, y: 0 });
     const graph = normalizeWorkflowGraph({
@@ -917,12 +936,23 @@ describe('WorkflowNodeEditors', () => {
       ],
     });
 
+    requestPromptEnhancementMock.mockResolvedValue({
+      enhancedPrompt: 'Our serum is four dollars ninety-nine cents this week.',
+      remainingCredits: 48,
+    });
+
     renderInteractiveInspector(graph, { selectedNodeId: promptNode.id });
 
-    expect(screen.getByRole('button', { name: /enhance prompt/i })).toBeDisabled();
-    expect(
-      screen.getByText(/prompt enhancement works when this prompt feeds an image, video, or motion generator/i)
-    ).toBeInTheDocument();
+    const enhanceButton = screen.getByRole('button', { name: /enhance prompt/i });
+    expect(enhanceButton).toBeEnabled();
+    fireEvent.click(enhanceButton);
+
+    await waitFor(() => {
+      expect(requestPromptEnhancementMock).toHaveBeenCalledWith(expect.objectContaining({
+        medium: 'audio',
+        selectedModel: 'text-to-speech-turbo-2-5',
+      }));
+    });
   });
 
   it('enhances immediately when there is a single supported downstream target', async () => {

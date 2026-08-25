@@ -83,6 +83,8 @@ describe('descriptor-driven affordances', () => {
 
   it('reports the required character reference on ideogram-character', () => {
     const affordances = getImageInputAffordances(descriptorFor('ideogram-character'));
-    expect(affordances?.references.max).toBe(4);
+    // Kie's ideogram/character endpoint uses only the first reference image
+    // ("rest will be ignored"), so the app stops collecting extras.
+    expect(affordances?.references.max).toBe(1);
   });
 });

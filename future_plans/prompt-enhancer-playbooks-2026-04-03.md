@@ -1,5 +1,9 @@
 # Prompt Enhancer Playbooks Research Snapshot
 
+> **Superseded 2026-08-24** by `docs/prompt-enhancer-playbooks-2026-08-24.md`
+> (full per-model registry rebuild backed by `docs/research/prompt-enhancer-2026-08-24/`).
+> Kept for the historical baseline of the original six playbooks.
+
 Date: 2026-04-03
 
 This note captures the research baseline used for the model-specific prompt enhancer playbooks introduced in `src/lib/prompt-enhancer.ts`.

@@ -205,7 +205,11 @@ describe('enhancePromptForUser', () => {
       { aspectRatio: '9:16' },
       'Create a product poster and the text reads SALE'
     );
-    expect(callPromptEnhancerMock).toHaveBeenCalledWith('system prompt', 'Create a product poster and the text reads SALE');
+    expect(callPromptEnhancerMock).toHaveBeenCalledWith(
+      'system prompt',
+      'Create a product poster and the text reads SALE',
+      { responseSchema: expect.any(Object) }
+    );
     expect(result).toEqual({
       ok: true,
       response: {

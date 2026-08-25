@@ -143,20 +143,43 @@ describe('workflow canvas helpers', () => {
     ]);
   });
 
-  it('returns no prompt enhancement targets for audio-only downstream branches', () => {
+  it('offers voiceover and sound-effect branches as audio enhancement targets', () => {
     const promptNode = createWorkflowNode('text-input', { x: 0, y: 0 });
     const voiceoverNode = createWorkflowNode('voiceover-generate', { x: 240, y: 0 });
-    const musicNode = createWorkflowNode('music-generate', { x: 240, y: 180 });
+    const sfxNode = createWorkflowNode('sound-effects-generate', { x: 240, y: 120 });
+    // Music has no enhancement playbook and dialogue mode ignores connected
+    // prompt text at run time — neither should surface as a target.
+    const musicNode = createWorkflowNode('music-generate', { x: 240, y: 240 });
+    const dialogueNode = createWorkflowNode('voiceover-generate', { x: 240, y: 360 });
 
     const graph = normalizeWorkflowGraph({
-      nodes: [promptNode, voiceoverNode, musicNode],
+      nodes: [
+        promptNode,
+        voiceoverNode,
+        sfxNode,
+        musicNode,
+        {
+          ...dialogueNode,
+          data: normalizeNodeData('voiceover-generate', {
+            ...dialogueNode.data,
+            model: 'text-to-dialogue-v3',
+          }),
+        },
+      ],
       edges: [
         { id: 'prompt-voice', source: promptNode.id, target: voiceoverNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
+        { id: 'prompt-sfx', source: promptNode.id, target: sfxNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
         { id: 'prompt-music', source: promptNode.id, target: musicNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
+        { id: 'prompt-dialogue', source: promptNode.id, target: dialogueNode.id, sourceHandle: 'text', targetHandle: 'prompt' },
       ],
     });
 
-    expect(getPromptEnhancementTargets(graph, promptNode.id)).toEqual([]);
+    const targets = getPromptEnhancementTargets(graph, promptNode.id);
+    expect(targets.map((target) => [target.nodeType, target.medium]).sort()).toEqual([
+      ['sound-effects-generate', 'audio'],
+      ['voiceover-generate', 'audio'],
+    ]);
+    expect(targets.some((target) => target.nodeId === dialogueNode.id)).toBe(false);
   });
 
   it('skips multi-shot video nodes when resolving prompt enhancement targets', () => {

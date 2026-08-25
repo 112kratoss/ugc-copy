@@ -188,6 +188,77 @@ describe('unified generation start service', () => {
     expect(startMotion).not.toHaveBeenCalled();
   });
 
+  it('groups subjectImages slot assets into Kling O3 named subjects by handle', async () => {
+    const startVideo = vi.fn(async () => ({
+      predictionId: 'provider-task-o3',
+      generationId: 'generation-o3',
+      remainingCredits: 10,
+      cost: 70,
+    }));
+    const request = parseUnifiedGenerationRequest({
+      kind: 'video',
+      modelId: 'kling-o3',
+      catalogRevision: 'catalog-v2',
+      prompt: '@hero lifts the serum and smiles.',
+      settings: { duration: 5, resolution: '720p', referenceMode: 'subjects' },
+      inputs: [
+        { slot: 'subjectImages', kind: 'image', url: 'https://cdn.example.com/hero-a.jpg', label: 'Hero creator', handle: '@hero' },
+        { slot: 'subjectImages', kind: 'image', url: 'https://cdn.example.com/hero-b.jpg', label: 'Hero creator', handle: '@hero', storagePath: 'uploads/user/hero-b.jpg' },
+      ],
+    });
+
+    await dispatchCatalogGenerationAdapter({
+      request,
+      quote: {
+        modelId: 'kling-o3',
+        catalogRevision: 'catalog-v2',
+        normalizedSettings: { duration: 5, resolution: '720p', referenceMode: 'subjects' },
+        costCredits: 70,
+      },
+      operation: {
+        modelId: 'kling-o3',
+        kind: 'video',
+        adapterKey: 'video-v1',
+        providerModelMap: {},
+        adapterConfig: {},
+        pricingStrategy: 'flat',
+        pricingConfig: { credits: 70 },
+        validationStrategy: 'descriptor-rules-v1',
+        validationConfig: {},
+        verificationConfig: {},
+      },
+      supabase: {} as never,
+      adminSupabase: {} as never,
+      userId: 'user-1',
+      clientRequestKeyHash: 'request-hash',
+      sourceGenerationId: null,
+      dependencies: {
+        startCatalog: vi.fn(),
+        startImage: vi.fn(),
+        startVideo,
+        startMotion: vi.fn(),
+      },
+    });
+
+    expect(startVideo).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'kling-o3',
+      klingSubjects: [
+        {
+          handle: '@hero',
+          displayName: 'Hero creator',
+          images: [
+            { url: 'https://cdn.example.com/hero-a.jpg', storagePath: null },
+            { url: 'https://cdn.example.com/hero-b.jpg', storagePath: 'uploads/user/hero-b.jpg' },
+          ],
+        },
+      ],
+      // Subject images never leak into the flat reference mappings.
+      imageUrls: [],
+      elements: [],
+      elementImageUrls: [],
+    }));
+  });
+
   it('resolves the remix source with the service-role client', async () => {
     // Grants on generations only allow service-role reads of is_public, so the
     // route must hand resolveSource the admin client — passing the user client

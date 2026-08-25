@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateVideoClient from '@/app/create-video/CreateVideoClient';
-import type { PersistedImageElementRecord } from '@/lib/persisted-media';
+import type { PersistedImageElementRecord, PersistedSubjectRecord } from '@/lib/persisted-media';
 
 const mockPush = vi.fn();
 const mockUpdateCredits = vi.fn();
@@ -18,6 +18,18 @@ const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
   async (_key: string, _elements: PersistedImageElementRecord[]): Promise<void> => {
     void _key;
     void _elements;
+  }
+));
+const getPersistedSubjectRecordsMock = vi.hoisted(() => vi.fn(
+  async (_key: string): Promise<PersistedSubjectRecord[]> => {
+    void _key;
+    return [];
+  }
+));
+const setPersistedSubjectRecordsMock = vi.hoisted(() => vi.fn(
+  async (_key: string, _subjects: PersistedSubjectRecord[]): Promise<void> => {
+    void _key;
+    void _subjects;
   }
 ));
 const uploadMock = vi.fn(async () => ({ error: null }));
@@ -76,16 +88,21 @@ vi.mock('@/lib/persisted-media', () => ({
     createVideoReferenceVideos: 'create-video:reference-videos',
     createVideoReferenceAudios: 'create-video:reference-audios',
     createVideoKlingVideoElements: 'create-video:kling-video-elements',
+    createVideoKlingSubjects: 'create-video:kling-subjects',
     createVideoSeedanceAssets: 'create-video:seedance-assets',
   },
   getPersistedFile: vi.fn(async () => null),
   getPersistedImageElementRecords: getPersistedImageElementRecordsMock,
   getPersistedMediaRecords: vi.fn(async () => []),
+  // Hydration loads every persisted slot in one Promise.all, so a missing mock
+  // here rejects the whole load and silently disables ALL draft restoration.
+  getPersistedSubjectRecords: getPersistedSubjectRecordsMock,
   getPersistedValue: vi.fn(async () => null),
   removePersistedMedia: vi.fn(async () => undefined),
   setPersistedFile: vi.fn(async () => undefined),
   setPersistedImageElementRecords: setPersistedImageElementRecordsMock,
   setPersistedMediaRecords: vi.fn(async () => undefined),
+  setPersistedSubjectRecords: setPersistedSubjectRecordsMock,
   setPersistedValue: vi.fn(async () => undefined),
 }));
 
@@ -135,6 +152,15 @@ vi.mock('@/lib/generation-model-client', async () => {
             kind: 'video',
             displayName: 'Kling 3.0 Cinematic',
             description: 'Test video model',
+            controls: [],
+            capabilities: {},
+            inputs: {},
+          },
+          {
+            id: 'kling-o3',
+            kind: 'video',
+            displayName: 'Kling O3',
+            description: 'Test omni video model',
             controls: [],
             capabilities: {},
             inputs: {},
@@ -351,6 +377,36 @@ describe('CreateVideoClient Kling video elements', () => {
     fireEvent.click(screen.getByText('Multi-Shot'));
 
     expect(screen.getByText('Kling video elements')).toBeInTheDocument();
+  });
+
+  it('restores persisted named subjects on load', async () => {
+    getPersistedSubjectRecordsMock.mockResolvedValueOnce([{
+      id: 'subject-1',
+      displayName: 'Hero creator',
+      images: [
+        { id: 'image-1', file: new File(['front'], 'front.png', { type: 'image/png' }) },
+        { id: 'image-2', file: new File(['side'], 'side.png', { type: 'image/png' }) },
+      ],
+    }]);
+
+    render(<CreateVideoClient prefill={{ model: 'kling-o3' }} />);
+
+    expect(await screen.findByDisplayValue('Hero creator')).toBeInTheDocument();
+    expect(screen.getByText('2/4 images')).toBeInTheDocument();
+    expect(screen.getByText('@Hero_creator')).toBeInTheDocument();
+  });
+
+  it('shows the named-subjects editor only for Kling O3 and enforces the image range', async () => {
+    render(<CreateVideoClient prefill={{ model: 'kling-o3' }} />);
+
+    expect(await screen.findByText('Named subjects')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Add subject'));
+    expect(screen.getByPlaceholderText('Subject name')).toHaveValue('Subject 1');
+    // One subject with zero images is below the 2-image floor.
+    expect(screen.getByText(/add at least 2/i)).toBeInTheDocument();
+    // The handle chip is derived from the display name for @mentions.
+    expect(screen.getByText('@Subject_1')).toBeInTheDocument();
   });
 
   it('submits uploaded Kling video elements with handles', async () => {

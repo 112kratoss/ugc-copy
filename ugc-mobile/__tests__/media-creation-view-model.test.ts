@@ -788,4 +788,29 @@ describe('media creation view model', () => {
       },
     });
   });
+
+  it('sends uploaded frame urls and the light-touch level to the enhancer', () => {
+    const draft = {
+      ...createDefaultCreationDraft('video'),
+      prompt: 'She lifts the serum toward the camera.',
+      model: 'veo-3.1' as const,
+      referenceMode: 'frames' as const,
+      startFrame: imageReference({ url: 'https://cdn.example.com/start.png', storagePath: 'uploads/user/start.png', displayName: 'Start', fileName: 'start.png' }),
+      endFrame: imageReference({ url: 'https://cdn.example.com/end.png', storagePath: 'uploads/user/end.png', displayName: 'End', fileName: 'end.png' }),
+    };
+
+    const request = buildPromptEnhancementRequest(draft, { level: 'faithful' });
+    expect(request.context).toMatchObject({
+      hasStartImage: true,
+      hasEndImage: true,
+      frameImageUrls: ['https://cdn.example.com/start.png', 'https://cdn.example.com/end.png'],
+      enhancementLevel: 'faithful',
+    });
+
+    // Default level stays implicit, and element mode never leaks frame urls.
+    const defaultRequest = buildPromptEnhancementRequest(draft);
+    expect(defaultRequest.context?.enhancementLevel).toBeUndefined();
+    const elementsDraft = { ...draft, referenceMode: 'elements' as const };
+    expect(buildPromptEnhancementRequest(elementsDraft).context?.frameImageUrls).toBeUndefined();
+  });
 });

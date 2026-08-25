@@ -144,6 +144,11 @@ One Vercel cron (`/api/cron/backend-jobs`, every 10 min, `CRON_SECRET` bearer au
 
 All web unit/integration tests live flat in `src/__tests__/` (~540 files) — never colocated. Notable conventions: `*-migration.test.ts` files assert the SQL content of migrations (add one when you add a migration); contract fixture tests pin the mobile API. E2E lives in `tests/e2e/` and uses an auth bypass (`src/lib/e2e-auth.ts`) that is build-blocked in production. Mobile logic is factored into `ugc-mobile/lib/*-view-model.ts` modules precisely so it can be vitest-tested without rendering.
 
+Two E2E gotchas worth knowing before you debug one:
+
+- **Playwright's own dev server refuses to start if another `next dev` is already running**, even on a different port, and the failure reads as a config error. Stop any preview/dev server (including one started via `preview_start`) before `npm run test:e2e`.
+- **The auth bypass needs its cookie, not just the env vars.** A spec that only visits an authenticated route lands on `/login`; add `{ name: 'e2e-auth', value: 'workflow-user', url: 'http://127.0.0.1:3100' }` via `context.addCookies` first (see the existing specs).
+
 ## Conventions and cautions
 
 - **Bug fixes — reproduce first, at the layer the bug actually lives**: pure logic (`src/lib/*-service.ts`, `ugc-mobile/lib/*-view-model.ts`) reproduces as a failing vitest case — write it before the fix and keep it as the regression test. Rendering, navigation, native-module, and provider-callback bugs do **not** reproduce in vitest: use `npm run test:e2e` (web) or a booted simulator/emulator (mobile has no E2E harness). Never call one of those fixed on unit-test evidence, or on a dependency bump that merely appears to help — confirm on the surface the bug was reported on. If you cannot reproduce it at all, stop and report: state what you ruled out and what evidence would confirm the cause. Never ship a speculative fix in place of a reproduction.
@@ -162,3 +167,13 @@ All web unit/integration tests live flat in `src/__tests__/` (~540 files) — ne
 ## Operational runbooks (`docs/`)
 
 `production-deployment-runbook.md` (topology, env contract, gates), `supabase-local-prod-workflow.md`, `generation-model-catalog-operations.md`, `moderation-operations.md` (staffed queue, service-role CLI), `mobile-store-product-catalog.md` (IAP tier provisioning), and `post-resource-bundle-v1.md`. Dated research snapshots (`performance-audit-2026-07-16.md`, `ui-consistency-research-2026-06-14.md`) and agent plans/specs (`docs/superpowers/`) sit alongside the runbooks. `scaling-audit.md` is the active scaling entry point; it links the current finding set and exact-build certificates. Dated audit journals live under `docs/archive/` and must not be treated as current capacity claims.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

@@ -636,6 +636,16 @@ function validationConfigForModel(
           : 'Reusable references are not available for this model yet.',
       });
     }
+    if (modelId === 'kling-o3') {
+      // Named multi-image subjects: 3 subjects × 4 images. Per-subject grouping
+      // (2–4 images each) is enforced in generation-services.
+      rules.push({
+        type: 'max-slot-count',
+        slotKey: 'images',
+        max: 12,
+        conditions: [{ source: 'setting', key: 'referenceMode', operator: 'equals', value: 'subjects' }],
+      });
+    }
     if (modelId === 'veo-3.1') {
       rules.push({
         type: 'max-slot-count',

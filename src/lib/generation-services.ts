@@ -140,6 +140,24 @@ export interface KlingVideoElementInput {
   sourceGenerationId?: string | null;
 }
 
+export interface KlingSubjectImageInput {
+  url: string;
+  storagePath?: string | null;
+}
+
+/**
+ * A Kling O3 named multi-image subject: 2–4 images of the same subject that the
+ * provider fuses into one identity, referenced in the prompt as @handle.
+ * Contract live-verified 2026-08-24 against kling-3.0-omni/text-to-video.
+ */
+export interface KlingSubjectInput {
+  id?: string | null;
+  handle?: string | null;
+  displayName?: string | null;
+  description?: string | null;
+  images: KlingSubjectImageInput[];
+}
+
 export type TemplateGenerationContext = Readonly<{
   runId: string;
   stepId: string;
@@ -893,6 +911,65 @@ function normalizeKlingVideoElementInputs(value: KlingVideoElementInput[] | unde
     } => Boolean(element));
 }
 
+const KLING_SUBJECT_MIN_IMAGES = 2;
+const KLING_SUBJECT_MAX_IMAGES = 4;
+const KLING_SUBJECT_MAX_COUNT = 3;
+
+function normalizeKlingSubjectInputs(value: KlingSubjectInput[] | undefined) {
+  const usedHandles = new Set<string>();
+
+  return (value || [])
+    .map((subject, index) => {
+      if (!subject || typeof subject !== 'object') {
+        return null;
+      }
+
+      const images = Array.isArray(subject.images)
+        ? subject.images
+          .map((image) => ({
+            url: typeof image?.url === 'string' ? image.url.trim() : '',
+            storagePath: typeof image?.storagePath === 'string' ? image.storagePath : null,
+          }))
+          .filter((image) => image.url.length > 0)
+        : [];
+      if (images.length === 0) {
+        return null;
+      }
+
+      const displayName = normalizeElementDisplayName(
+        typeof subject.displayName === 'string' ? subject.displayName : undefined,
+        index + 1
+      );
+      const normalizedHandle = normalizeReferenceHandle(subject.handle);
+      const handle = normalizedHandle && !usedHandles.has(normalizedHandle)
+        ? normalizedHandle
+        : buildElementHandle(displayName, usedHandles, index + 1);
+
+      if (normalizedHandle && handle === normalizedHandle) {
+        usedHandles.add(handle);
+      }
+
+      const description = typeof subject.description === 'string' && subject.description.trim()
+        ? subject.description.trim()
+        : displayName;
+
+      return {
+        id: typeof subject.id === 'string' && subject.id.trim() ? subject.id : null,
+        handle,
+        displayName,
+        description,
+        images,
+      };
+    })
+    .filter((subject): subject is {
+      id: string | null;
+      handle: string;
+      displayName: string;
+      description: string;
+      images: Array<{ url: string; storagePath: string | null }>;
+    } => Boolean(subject));
+}
+
 // Seedance/Kling reference slots accept provider-issued asset handles instead
 // of URLs. These opaque tokens contain no scheme or path separators, so they
 // cannot address a network host.
@@ -1199,6 +1276,22 @@ export function getKieImageModelId(model: ImageModelId, referenceCount: number):
   // provider id differs requires an explicit case above.
   return model;
 }
+
+/**
+ * Ideogram's server-side Magic Prompt (expand_prompt) rewrites the prompt again
+ * after our enhancer. That double rewrite is the main threat to exact-typography
+ * jobs, and Ideogram's own docs recommend manual prompts for production
+ * precision — so expansion is disabled whenever the prompt quotes literal text.
+ */
+export function promptLocksExactText(prompt: string): boolean {
+  return /["“][^"“”]{1,}["”]/.test(prompt);
+}
+
+/** Condensed from Wan's open-weights default negative prompt (shared_config.py). */
+export const WAN_VIDEO_DEFAULT_NEGATIVE_PROMPT =
+  'blurry, low quality, overexposed, garish tones, gray cast, JPEG artifacts, static, still frame, '
+  + 'flicker, unnatural movement, distorted faces, badly drawn hands, fused fingers, extra limbs, '
+  + 'deformed body, subtitles, text, watermark, cluttered background, crowded background';
 
 function getIdeogramImageSize(aspectRatio: string): string {
   return ({
@@ -1753,7 +1846,7 @@ export async function startImageGeneration(params: {
         prompt: compiledPrompt,
         rendering_speed: qualityMode.toUpperCase(),
         style: 'AUTO',
-        expand_prompt: true,
+        expand_prompt: !promptLocksExactText(compiledPrompt),
         image_size: getIdeogramImageSize(aspectRatio),
       };
       if (resolvedImageUrls[0]) {
@@ -1799,7 +1892,7 @@ export async function startImageGeneration(params: {
         prompt: compiledPrompt,
         rendering_speed: qualityMode.toUpperCase(),
         style: 'AUTO',
-        expand_prompt: true,
+        expand_prompt: !promptLocksExactText(compiledPrompt),
         image_size: getIdeogramImageSize(aspectRatio),
         reference_image_urls: resolvedImageUrls,
         num_images: 1,
@@ -1924,6 +2017,7 @@ export async function startVideoGeneration(params: {
   preparedAudioIds?: string[];
   characterIds?: string[];
   klingVideoElements?: KlingVideoElementInput[];
+  klingSubjects?: KlingSubjectInput[];
   isMultiShot?: boolean;
   multiPrompts?: VideoMultiPromptInput[];
   elements?: ImageElementDescriptor[];
@@ -1963,6 +2057,7 @@ export async function startVideoGeneration(params: {
     preparedAudioIds = [],
     characterIds = [],
     klingVideoElements = [],
+    klingSubjects = [],
     isMultiShot = false,
     multiPrompts,
     elements = [],
@@ -2005,6 +2100,7 @@ export async function startVideoGeneration(params: {
   const trimmedPrompt = rawPrompt.trim();
   const normalizedReferences = normalizeReferenceImageInputs(references);
   const normalizedKlingVideoElements = normalizeKlingVideoElementInputs(klingVideoElements);
+  const normalizedKlingSubjects = normalizeKlingSubjectInputs(klingSubjects);
   const normalizedElements = normalizedReferences.length > 0
     ? normalizedReferences
       .filter((reference) => Boolean(reference.handle))
@@ -2110,6 +2206,17 @@ export async function startVideoGeneration(params: {
         ),
       })))
     : [];
+  const resolvedKlingSubjects = model === 'kling-o3'
+    ? await Promise.all(normalizedKlingSubjects.map(async (subject) => ({
+        ...subject,
+        imageUrls: await Promise.all(subject.images.map((image) => resolveGenerationMediaSource(
+          supabase,
+          image.url,
+          userId,
+          { templateAssetScope: templateAssetScope(templateContext) },
+        ))),
+      })))
+    : [];
   const resolvedElementImageUrls = normalizedReferences.length > 0
     ? resolvedReferenceImageUrls.filter((_url, index) => Boolean(normalizedReferences[index]?.handle))
     : await resolveMediaUrls(
@@ -2204,6 +2311,38 @@ export async function startVideoGeneration(params: {
     );
   }
 
+  if (normalizedKlingSubjects.length > 0 && model !== 'kling-o3') {
+    throw new GenerationServiceError(
+      'Named multi-image subjects are only available for Kling O3.',
+      400
+    );
+  }
+
+  if (resolvedKlingSubjects.length > KLING_SUBJECT_MAX_COUNT) {
+    throw new GenerationServiceError(
+      `Kling O3 supports up to ${KLING_SUBJECT_MAX_COUNT} named subjects per run.`,
+      400
+    );
+  }
+
+  for (const subject of resolvedKlingSubjects) {
+    if (subject.imageUrls.length < KLING_SUBJECT_MIN_IMAGES || subject.imageUrls.length > KLING_SUBJECT_MAX_IMAGES) {
+      throw new GenerationServiceError(
+        `Each Kling O3 named subject needs ${KLING_SUBJECT_MIN_IMAGES} to ${KLING_SUBJECT_MAX_IMAGES} images (${subject.displayName} has ${subject.imageUrls.length}).`,
+        400
+      );
+    }
+  }
+
+  if (resolvedKlingSubjects.length > 0 && (imageUrls.length > 0 || startImageUrl || endImageUrl || references?.length)) {
+    // The provider allows mixing subjects with flat references under a combined
+    // cap matrix; the app keeps the first release simple and unambiguous.
+    throw new GenerationServiceError(
+      'Kling O3 named subjects replace reference images and frames for this run.',
+      400
+    );
+  }
+
   const resolvedStartImageUrl = startImageUrl
     ? await resolveGenerationMediaSource(
         supabase,
@@ -2276,6 +2415,7 @@ export async function startVideoGeneration(params: {
   const validPromptHandles = [
     ...normalizedElements.map((element) => element.handle),
     ...resolvedKlingVideoElements.map((element) => element.handle),
+    ...resolvedKlingSubjects.map((subject) => subject.handle),
   ];
   const unknownPromptHandles = !isMultiShot
     ? findUnknownPromptHandles(activePrompt, validPromptHandles)
@@ -2290,7 +2430,7 @@ export async function startVideoGeneration(params: {
   const compiledPrompt = normalizedElements.length > 0
     ? compilePromptWithElements(trimmedPrompt, normalizedElements, 'video')
     : trimmedPrompt;
-  if (isMultiShot && model === 'kling-3.0-video') {
+  if (isMultiShot && (model === 'kling-3.0-video' || model === 'kling-o3')) {
     const unknownShotHandles = normalizedMultiPrompts.flatMap((shot) =>
       findUnknownPromptHandles(shot.prompt, validPromptHandles)
     );
@@ -2421,6 +2561,16 @@ export async function startVideoGeneration(params: {
         input.image_urls = klingO3ImageUrls;
       }
 
+      if (resolvedKlingSubjects.length > 0) {
+        // Multi-image named subjects, referenced in the prompt as @name.
+        // Field shape live-verified 2026-08-24 (see the playbook doc).
+        input.elements = resolvedKlingSubjects.map((subject) => ({
+          name: subject.handle.replace(/^@/, ''),
+          description: subject.description,
+          element_input_urls: subject.imageUrls,
+        }));
+      }
+
       body = { model: providerModelId, input };
     } else if (selectedModel.provider === 'minimax') {
       const usesReferences = providerReferenceImageUrls.length > 0
@@ -2545,6 +2695,9 @@ export async function startVideoGeneration(params: {
         resolution,
         duration,
         prompt_extend: true,
+        // Condensed from the Wan reference implementation's default negative
+        // stack — the hosted API does not apply one for you (≤500-char field).
+        negative_prompt: WAN_VIDEO_DEFAULT_NEGATIVE_PROMPT,
         watermark: false,
       };
       if (effectiveReferenceMode === 'references') {

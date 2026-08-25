@@ -1656,7 +1656,22 @@ export function buildGenerationPayload(draft: CreationDraft): ImageGenerationReq
   };
 }
 
-export function buildPromptEnhancementRequest(draft: CreationDraft): PromptEnhancementRequest {
+export interface PromptEnhancementRequestOptions {
+  level?: 'faithful' | 'cinematic';
+}
+
+/** Uploaded https frame URLs the enhancer LLM may be pointed at as vision input. */
+function enhancerFrameImageUrls(draft: VideoCreationDraft, usesReusableReferences: boolean): string[] {
+  if (usesReusableReferences) return [];
+  return [draft.startFrame?.url, draft.endFrame?.url]
+    .filter((url): url is string => typeof url === 'string' && url.startsWith('https://'));
+}
+
+export function buildPromptEnhancementRequest(
+  draft: CreationDraft,
+  options: PromptEnhancementRequestOptions = {},
+): PromptEnhancementRequest {
+  const level = options.level && options.level !== 'cinematic' ? options.level : undefined;
   if (draft.tool === 'image') {
     const references = namedReferences(draft.references);
     return {
@@ -1669,6 +1684,7 @@ export function buildPromptEnhancementRequest(draft: CreationDraft): PromptEnhan
           handle: reference.handle ?? '',
           displayName: reference.displayName,
         })),
+        ...(level ? { enhancementLevel: level } : {}),
       },
     };
   }
@@ -1676,6 +1692,7 @@ export function buildPromptEnhancementRequest(draft: CreationDraft): PromptEnhan
   if (draft.tool === 'video') {
     const usesReusableReferences = draft.referenceMode === 'elements';
     const references = namedReferences(usesReusableReferences ? draft.references : []);
+    const frameImageUrls = enhancerFrameImageUrls(draft, usesReusableReferences);
     return {
       medium: 'video',
       selectedModel: draft.model,
@@ -1693,6 +1710,8 @@ export function buildPromptEnhancementRequest(draft: CreationDraft): PromptEnhan
           handle: reference.handle ?? '',
           displayName: reference.displayName,
         })),
+        ...(frameImageUrls.length > 0 ? { frameImageUrls } : {}),
+        ...(level ? { enhancementLevel: level } : {}),
       },
     };
   }
@@ -1705,6 +1724,7 @@ export function buildPromptEnhancementRequest(draft: CreationDraft): PromptEnhan
       duration: getMotionDuration(draft),
       hasReferenceVideo: Boolean(draft.referenceVideo),
       referenceImageCount: draft.characterImage ? 1 : 0,
+      ...(level ? { enhancementLevel: level } : {}),
     },
   };
 }
@@ -1757,3 +1777,15 @@ export function applyModelDefaults(draft: CreationDraft): CreationDraft {
     characterOrientation: asStringList(config.characterOrientations).includes(draft.characterOrientation) ? draft.characterOrientation : 'video',
   };
 }
+
+/**
+ * Video models whose provider generates an audio track unconditionally. There
+ * is no sound toggle for these; the prompt (or the enhancer) must script the
+ * soundscape or explicitly ask for "no music".
+ */
+export const ALWAYS_ON_AUDIO_VIDEO_MODELS: ReadonlySet<string> = new Set([
+  'wan-2.7',
+  'grok-imagine-video',
+  'minimax-h3',
+  'happyhorse-1.1',
+]);

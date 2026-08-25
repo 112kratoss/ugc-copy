@@ -32,6 +32,17 @@ export interface PersistedMediaRecord {
   durationSeconds: number | null;
 }
 
+/**
+ * A named multi-image subject (Kling O3): one identity backed by several
+ * images. Grouped rather than flat because the provider fuses the whole set,
+ * so a partially-restored subject would silently change what it depicts.
+ */
+export interface PersistedSubjectRecord {
+  id: string;
+  displayName: string;
+  images: Array<{ id: string; file: File }>;
+}
+
 interface StoredImageElementRecord {
   id: string;
   displayName: string;
@@ -43,6 +54,12 @@ interface StoredMediaRecord {
   displayName: string;
   durationSeconds?: number | null;
   file: StoredMediaFile | File | Blob;
+}
+
+interface StoredSubjectRecord {
+  id: string;
+  displayName: string;
+  images: Array<{ id: string; file: StoredMediaFile | File | Blob }>;
 }
 
 export const PERSISTED_MEDIA_KEYS = {
@@ -58,6 +75,7 @@ export const PERSISTED_MEDIA_KEYS = {
   createVideoReferenceVideos: 'create-video:reference-videos',
   createVideoReferenceAudios: 'create-video:reference-audios',
   createVideoKlingVideoElements: 'create-video:kling-video-elements',
+  createVideoKlingSubjects: 'create-video:kling-subjects',
   createVideoSeedanceAssets: 'create-video:seedance-assets',
 } as const;
 
@@ -84,6 +102,19 @@ function isStoredImageElementRecord(value: unknown): value is StoredImageElement
     'displayName' in value &&
     typeof value.displayName === 'string' &&
     'file' in value
+  );
+}
+
+function isStoredSubjectRecord(value: unknown): value is StoredSubjectRecord {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'id' in value &&
+    typeof value.id === 'string' &&
+    'displayName' in value &&
+    typeof value.displayName === 'string' &&
+    'images' in value &&
+    Array.isArray(value.images)
   );
 }
 
@@ -200,6 +231,66 @@ export async function setPersistedImageElementRecords(
       id: element.id,
       displayName: element.displayName,
       file: toStoredMediaFile(element.file),
+    }))
+  );
+}
+
+export async function getPersistedSubjectRecords(key: string): Promise<PersistedSubjectRecord[]> {
+  const value = await getPersistedItem<StoredSubjectRecord[]>(key);
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item, index) => {
+      if (!isStoredSubjectRecord(item)) {
+        return null;
+      }
+
+      const images = item.images
+        .map((image, imageIndex) => {
+          const restoredFile = restoreFile(image?.file, `${key}-${index + 1}-${imageIndex + 1}`);
+          if (!restoredFile) {
+            return null;
+          }
+          return {
+            id: typeof image?.id === 'string' && image.id ? image.id : `${item.id}-image-${imageIndex + 1}`,
+            file: restoredFile,
+          };
+        })
+        .filter((image): image is { id: string; file: File } => image !== null);
+
+      // A subject whose images did not all survive would depict something other
+      // than what the user grouped, so drop it rather than restore it partially.
+      if (images.length !== item.images.length || images.length === 0) {
+        return null;
+      }
+
+      return {
+        id: item.id,
+        displayName: item.displayName,
+        images,
+      } satisfies PersistedSubjectRecord;
+    })
+    .filter((item): item is PersistedSubjectRecord => item !== null);
+}
+
+export async function setPersistedSubjectRecords(
+  key: string,
+  subjects: PersistedSubjectRecord[]
+): Promise<void> {
+  if (subjects.length === 0) {
+    await removePersistedItem(key);
+    return;
+  }
+
+  await persistedMediaStore.setItem(
+    key,
+    subjects.map((subject) => ({
+      id: subject.id,
+      displayName: subject.displayName,
+      images: subject.images.map((image) => ({
+        id: image.id,
+        file: toStoredMediaFile(image.file),
+      })),
     }))
   );
 }

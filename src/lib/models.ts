@@ -187,6 +187,11 @@ export const IMAGE_MODELS = {
         outputFormats: ['jpg'] as const,
         pricing: { '1K': 12, '2K': 12, '4K': 12 },
     },
+    // Imagen 4 family: DISABLED in the production catalog since release
+    // imagen-family-disable-20260824 — Google sunset the upstream Imagen API on
+    // 2026-08-17 and live Kie probes fail with provider 500s (see the release
+    // manifest's changeNote for task ids). Kept here for code-source
+    // environments and a clean re-enable if Kie restores fulfillment.
     'imagen-4-fast': {
         id: 'imagen-4-fast' as const,
         displayName: 'Imagen 4 Fast',
@@ -339,7 +344,7 @@ export const IMAGE_MODELS = {
         badge: 'Value',
         badgeColor: 'from-emerald-500 to-teal-500',
         accentColor: 'blue',
-        maxImages: 10,
+        maxImages: 3,
         supportsGoogleSearch: false,
         supportsOutputFormat: true,
         aspectRatios: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9'] as const,
@@ -361,7 +366,7 @@ export const IMAGE_MODELS = {
         badge: 'Pro',
         badgeColor: 'from-teal-500 to-cyan-500',
         accentColor: 'blue',
-        maxImages: 10,
+        maxImages: 3,
         supportsGoogleSearch: false,
         supportsOutputFormat: true,
         aspectRatios: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9'] as const,
@@ -382,7 +387,7 @@ export const IMAGE_MODELS = {
         badge: 'Character',
         badgeColor: 'from-fuchsia-500 to-violet-500',
         accentColor: 'amber',
-        maxImages: 4,
+        maxImages: 1,
         supportsGoogleSearch: false,
         supportsOutputFormat: false,
         aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'] as const,
