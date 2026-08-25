@@ -18,7 +18,6 @@ type SaveRefreshWork = Promise<unknown> | unknown;
 export interface ShowcaseSaveCompletionEffects {
   postId: string;
   userId?: string;
-  hapticFeedback?: () => SaveRefreshWork;
   invalidateQueries: (filters: SaveRefreshQueryFilters) => SaveRefreshWork;
 }
 
@@ -58,18 +57,29 @@ function ignoreRejectedBackgroundWork(work: SaveRefreshWork) {
   }
 }
 
+/**
+ * Refreshes only what the optimistic write could not reach.
+ *
+ * The feed caches are deliberately absent. Every save already reconciles the
+ * server's own `isSaved`/`saveCount` into each `showcase-feed` entry, so
+ * invalidating that key re-downloaded a feed it had just been told about — and
+ * because the key is matched by prefix it hit every mounted infinite feed,
+ * refetching all of their loaded pages. On iOS that turned the resulting
+ * `isRefetching` window into a visible defect: `RefreshControl` shifted the
+ * scroll view down by its own height for a refresh nobody asked for, and never
+ * put it back (see the comment on the home feed's spinner). The refetch also
+ * re-ran ranking, where an already-seen post is a hard demotion tier, so the
+ * post the viewer had just saved could come back further down the feed.
+ *
+ * The viewer's saved collection is a real gap — no surface writes it
+ * optimistically from the feed — so it stays.
+ */
 export function scheduleShowcaseSaveCompletionEffects({
   postId,
   userId,
-  hapticFeedback,
   invalidateQueries,
 }: ShowcaseSaveCompletionEffects): void {
-  if (hapticFeedback) {
-    ignoreRejectedBackgroundWork(hapticFeedback());
-  }
-
   for (const queryKey of [
-    ['showcase-feed'],
     ['showcase-post', postId],
     ['profile-saved-media', userId],
   ] as const) {

@@ -62,6 +62,7 @@ import {
   scheduleShowcaseSaveCompletionEffects,
   type ShowcaseSaveStateResult,
 } from '@/lib/showcase-save-cache';
+import { SHOWCASE_SAVE_MUTATION_SCOPE, showcaseSaveIntents } from '@/lib/showcase-save-intent';
 import { IMMERSIVE_HORIZONTAL_LIST_TUNING, IMMERSIVE_VERTICAL_LIST_TUNING } from '@/lib/media-performance';
 import {
   SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY,
@@ -115,6 +116,8 @@ type SaveMutationVariables = {
   shouldSave: boolean;
   sourceSurface: string;
   trigger: 'double-tap' | 'rail';
+  /** Which tap this was, per post. See `showcaseSaveIntents`. */
+  intentSeq: number;
 };
 
 type SaveItemHandler = (
@@ -406,7 +409,14 @@ export default function ImmersivePreviewViewerScreen() {
     );
   }, [queryClient, sourceQueryKey, user?.id, viewerFeedQueryKey]);
 
+  // The rail and the details button already refuse a second tap while one is in
+  // flight, so the viewer never raced itself. It raced the *feed*: a card saved
+  // on the way in can still be on the wire when the viewer it opened into is
+  // tapped, and those are two mutations with two independent pending flags. The
+  // shared scope puts both surfaces in one queue; the shared ledger keeps the
+  // overtaken one from reconciling a truth the viewer has already replaced.
   const saveMutation = useMutation({
+    scope: SHOWCASE_SAVE_MUTATION_SCOPE,
     mutationFn: ({ postId, shouldSave, sourceSurface }: SaveMutationVariables) =>
       api.saveShowcasePost(postId, { shouldSave, sourceSurface }),
     onMutate: async (variables) => {
@@ -421,6 +431,7 @@ export default function ImmersivePreviewViewerScreen() {
       });
     },
     onError: (_error, variables) => {
+      if (showcaseSaveIntents.isOvertaken(variables.postId, variables.intentSeq)) return;
       reconcileShowcaseSave({
         postId: variables.postId,
         isSaved: !variables.shouldSave,
@@ -434,6 +445,10 @@ export default function ImmersivePreviewViewerScreen() {
       );
     },
     onSuccess: (result, variables) => {
+      // Guards the feed event and the saved-collection removal too: an overtaken
+      // tap should neither report itself to ranking nor pull a card out from
+      // under a viewer who has since put it back.
+      if (showcaseSaveIntents.isOvertaken(variables.postId, variables.intentSeq)) return;
       reconcileShowcaseSave({
         postId: variables.postId,
         isSaved: result.isSaved,
@@ -444,9 +459,6 @@ export default function ImmersivePreviewViewerScreen() {
       scheduleShowcaseSaveCompletionEffects({
         postId: variables.postId,
         userId: user?.id,
-        hapticFeedback: variables.trigger === 'double-tap'
-          ? undefined
-          : Haptics.selectionAsync,
         invalidateQueries: (filters) => queryClient.invalidateQueries(filters),
       });
       void AccessibilityInfo.announceForAccessibility(
@@ -456,6 +468,9 @@ export default function ImmersivePreviewViewerScreen() {
         recordViewerFeedEvent(variables.item, result.isSaved ? 'save' : 'unsave');
       }
     },
+    onSettled: (_result, _error, variables) => {
+      showcaseSaveIntents.close(variables.postId, variables.intentSeq);
+    },
   });
 
   const saveItem: SaveItemHandler = (item, trigger = 'rail') => {
@@ -464,6 +479,9 @@ export default function ImmersivePreviewViewerScreen() {
       router.push('/auth');
       return;
     }
+    // The rail button owns its tick the way the double-tap gesture already
+    // does — at the tap, not a round trip later.
+    if (trigger !== 'double-tap') haptic.light();
     saveMutation.mutate({
       item,
       postId: item.showcasePostId,
@@ -471,6 +489,7 @@ export default function ImmersivePreviewViewerScreen() {
       shouldSave: !item.isSaved,
       sourceSurface: source === 'profile-saved' ? 'mobile-profile-saved' : 'mobile-viewer',
       trigger,
+      intentSeq: showcaseSaveIntents.open(item.showcasePostId),
     });
   };
 

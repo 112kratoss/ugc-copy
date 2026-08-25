@@ -342,6 +342,11 @@ export default function ShowcaseScreen() {
   const hasItems = cards.length > 0;
   const isFirstLoad = showcaseQuery.isLoading && !hasItems;
   const isRefreshing = showcaseQuery.isRefetching && !showcaseQuery.isFetchingNextPage;
+  // The spinner tracks the viewer's own pull only. See the home feed's note:
+  // on iOS a programmatic `refreshing` shifts the scroll view down and does not
+  // put it back unless the list is at the top, so a background refetch — a save
+  // used to fire one — walks the feed downward a notch at a time.
+  const [pullRefreshing, setPullRefreshing] = useState(false);
   const endMessage = activeToolLabel
     ? `You've reached the end of ${activeToolLabel}.`
     : activeFilterId === 'all'
@@ -427,6 +432,7 @@ export default function ShowcaseScreen() {
 
   const handleRefresh = () => {
     haptic.light();
+    setPullRefreshing(true);
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
     queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
@@ -436,7 +442,7 @@ export default function ShowcaseScreen() {
         pageParams: current.pageParams.slice(0, 1),
       };
     });
-    void showcaseQuery.refetch();
+    void showcaseQuery.refetch().finally(() => setPullRefreshing(false));
   };
 
   const openPost = (item: ShowcaseFeedItem) => {
@@ -673,7 +679,7 @@ export default function ShowcaseScreen() {
         // prefetching as aggressively as the temporary filtered-feed tuning.
         onEndReachedThreshold={0.5}
         onRefresh={handleRefresh}
-        refreshing={isRefreshing}
+        refreshing={pullRefreshing}
         renderItem={renderCard}
         scrollEnabled={!isSwipingMedia}
         showsVerticalScrollIndicator={false}
