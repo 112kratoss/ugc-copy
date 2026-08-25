@@ -89,7 +89,7 @@ import {
 } from '@/lib/showcase-media-progress';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { PostResourceKind, ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
-import { canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, getViewerActionSlots, getViewerShareIntent, getViewerShareSourceSurface, getViewerStateChip, type SaveHeartTapAnimationSpec, type ViewerStateTone } from '@/lib/viewer-actions';
+import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE, canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRailActionOpacity, getSaveHeartIconProps, getSaveHeartTapAnimationSpec, getViewerActionSlots, getViewerShareIntent, getViewerShareSourceSurface, getViewerStateChip, type SaveHeartTapAnimationSpec, type ViewerStateTone } from '@/lib/viewer-actions';
 import {
   changePostVisibility,
   pickPostVisibility,
@@ -523,7 +523,20 @@ export default function ImmersivePreviewViewerScreen() {
 
   const recreateItem = async (item: ImmersivePreviewItem) => {
     if (!user) {
-      router.push('/auth');
+      // Send them back to this exact item, so signing in does not cost them
+      // their place in the reel and a second hunt for the post.
+      router.push({
+        pathname: '/auth',
+        params: {
+          returnTo: immersiveViewerReturnPath({
+            source,
+            initialId: item.id,
+            feedSessionId,
+            algorithmVersion,
+            creatorUsername,
+          }),
+        },
+      } as never);
       return;
     }
 
@@ -544,7 +557,12 @@ export default function ImmersivePreviewViewerScreen() {
           return;
         }
         if (response.redirectTo) {
-          await Linking.openURL(`${env.siteUrl}${response.redirectTo}`);
+          // Leaving the app is the viewer's call, not a silent hand-off.
+          const webUrl = `${env.siteUrl}${response.redirectTo}`;
+          Alert.alert(REMIX_NEEDS_WEB_TITLE, REMIX_NEEDS_WEB_BODY, [
+            { text: 'Not now', style: 'cancel' },
+            { text: 'Open web', onPress: () => { void Linking.openURL(webUrl); } },
+          ]);
           return;
         }
       } catch (error) {
@@ -884,6 +902,13 @@ export default function ImmersivePreviewViewerScreen() {
         />
       ) : null}
       <UnlockRemixPrompt
+        authReturnTo={unlockRemixSheetItem ? immersiveViewerReturnPath({
+          source,
+          initialId: unlockRemixSheetItem.id,
+          feedSessionId,
+          algorithmVersion,
+          creatorUsername,
+        }) : undefined}
         bottomInset={bottomInset}
         item={unlockRemixSheetItem}
         onClose={() => setUnlockRemixOpenItemId(null)}

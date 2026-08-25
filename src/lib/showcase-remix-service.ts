@@ -4,6 +4,8 @@ import { logBackendError } from '@/lib/backend-logger';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { sanitizeWorkflowSettingsForRemix } from '@/lib/generation-input-media';
+import { isAudioModel } from '@/lib/models';
+import { remixCreatePathForCategory } from '@/lib/remix-tools';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { notifyPostSocialActivity } from '@/lib/mobile-notifications';
 import { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
@@ -21,6 +23,7 @@ type GenerationRow = {
   is_public?: boolean | null;
   share_input_media_for_remix?: boolean | null;
   category?: string | null;
+  model?: string | null;
   prompt?: string | null;
   workflow_settings?: unknown;
 };
@@ -89,24 +92,6 @@ async function isPostInteractionUnavailable({
   }
 }
 
-function getRedirectPathForCategory(category: string | null | undefined): string {
-  switch (category) {
-    case 'image':
-      return '/create-image';
-    case 'video':
-    case 'ugc-ad':
-      return '/create-video';
-    case 'motion':
-      return '/create-motion';
-    default:
-      // Remixes only exist for generation-backed posts, and neither client can
-      // carry the remix params through the bare /create hub — the web page
-      // takes no searchParams and the mobile mapper has no tool for it. The
-      // image tool is the safe landing that keeps the prefill alive.
-      return '/create-image';
-  }
-}
-
 export async function remixShowcasePostForRoute({
   actorUserId,
   dependencies,
@@ -158,7 +143,7 @@ export async function remixShowcasePostForRoute({
   // generation must still be public and belong to the post's creator.
   const { data: generation, error: generationError } = await serviceClient
     .from('generations')
-    .select('id, user_id, is_public, share_input_media_for_remix, category, prompt, workflow_settings')
+    .select('id, user_id, is_public, share_input_media_for_remix, category, model, prompt, workflow_settings')
     .eq('id', post.generation_id)
     .maybeSingle();
 
@@ -180,6 +165,20 @@ export async function remixShowcasePostForRoute({
     };
   }
 
+  // No create tool takes audio, and the prefill endpoint answers 400 for an
+  // audio source. Refuse here, with a reason, rather than emitting a redirect
+  // to the image tool for the viewer to discover it there. Publishing blocks
+  // audio today (showcase-publish-service), so this guards against that gate
+  // moving rather than a live path — and it refuses before the remix is
+  // counted, so a refusal never inflates the creator's remix count.
+  if (generationRow.category === 'audio' || isAudioModel(generationRow.model ?? '')) {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: 'Audio creations cannot be remixed yet' },
+    };
+  }
+
   const { error: rpcError } = await serviceClient.rpc('increment_post_remix_count', {
     p_post_id: post.id,
   });
@@ -195,7 +194,7 @@ export async function remixShowcasePostForRoute({
     postId: post.id,
   });
 
-  const redirectPath = getRedirectPathForCategory(generationRow.category ?? post.category);
+  const redirectPath = remixCreatePathForCategory(generationRow.category ?? post.category);
   const rawSettings =
     generationRow.workflow_settings && typeof generationRow.workflow_settings === 'object'
       ? generationRow.workflow_settings as Record<string, unknown>

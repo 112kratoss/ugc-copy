@@ -20,6 +20,7 @@ import {
   AccessibilityInfo,
   ActivityIndicator,
   Alert,
+  Linking,
   Pressable,
   RefreshControl,
   Share,
@@ -42,6 +43,7 @@ import { TopScrim } from '@/components/top-scrim';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
+import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE } from '@/lib/viewer-actions';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import {
   HOME_FEED_CHIPS,
@@ -498,7 +500,9 @@ export function HomeDashboard() {
 
   const remixItem = async (item: ShowcaseFeedItem) => {
     if (!user) {
-      router.push('/auth' as never);
+      // The post page is where the Remix button lives, so land them on it
+      // rather than the tab root they started from.
+      router.push({ pathname: '/auth', params: { returnTo: `/post/${item.id}` } } as never);
       return;
     }
     setRemixingItemId(item.id);
@@ -512,6 +516,12 @@ export function HomeDashboard() {
       });
       if (href) {
         router.push(href as never);
+      } else if (result.redirectTo) {
+        const webUrl = `${env.siteUrl}${result.redirectTo}`;
+        Alert.alert(REMIX_NEEDS_WEB_TITLE, REMIX_NEEDS_WEB_BODY, [
+          { text: 'Not now', style: 'cancel' },
+          { text: 'Open web', onPress: () => { void Linking.openURL(webUrl); } },
+        ]);
       } else {
         Alert.alert('Could not start remix', 'This post cannot be opened in the creator tools right now.');
       }

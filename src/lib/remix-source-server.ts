@@ -91,6 +91,12 @@ async function isRemixSourceBlockedForViewer({
   }
 }
 
+/**
+ * What kind of media the source *result* is — not which tool made it. Motion
+ * output is a video, so motion answers 'video' here on purpose. The tool
+ * question is resolveRemixTool in remix-tools; the two look similar and are
+ * not interchangeable.
+ */
 function normalizeCategory(category: string | null, model: string | null): ShowcaseItemCategory | null {
   if (category === 'motion' || category === 'ugc-ad') return 'video';
   if (category === 'image' || category === 'video') return category;

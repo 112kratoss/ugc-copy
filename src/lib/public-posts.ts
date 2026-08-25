@@ -12,6 +12,7 @@ import {
   type PostRemixTarget,
 } from '@/lib/post-resource-bundles';
 import { getPublicGenerationDetail } from '@/lib/public-generations';
+import { resolveRemixTool } from '@/lib/remix-tools';
 import {
   deriveTitleFromBody,
   isMissingPostReviewStatusColumnError,
@@ -319,7 +320,7 @@ export async function getPublicPostDetail(
       resourceBundle: null,
       canRemix: true,
       remixCapability: 'public',
-      remixTarget: generation.category === 'video' ? 'video' : 'image',
+      remixTarget: resolveRemixTool(generation.category),
     };
   }
 
