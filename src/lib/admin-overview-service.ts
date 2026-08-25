@@ -12,8 +12,16 @@ import { collectBackendOpsDashboard, type BackendOpsDashboard } from '@/lib/back
  */
 
 export type AdminOverviewCounters = {
+  /**
+   * Registered accounts only. `profiles` holds one row per auth identity, and
+   * most of those are anonymous guests — the app mints one on first launch, and
+   * a reinstall mints another — so counting the table wholesale reported 93
+   * users against a true 28. Guests are surfaced separately rather than dropped.
+   */
   totalUsers: number;
   newUsers7d: number;
+  guestSessions: number;
+  newGuestSessions7d: number;
   totalPosts: number;
   newPosts7d: number;
   generations24h: number;
@@ -54,8 +62,7 @@ export async function collectAdminOverview(
 
   const [
     dashboardResult,
-    totalUsers,
-    newUsers7d,
+    population,
     totalPosts,
     newPosts7d,
     generations24h,
@@ -73,8 +80,10 @@ export async function collectAdminOverview(
         error: error instanceof Error ? error.message : String(error),
       }),
     ),
-    countSince(client, 'profiles', null, null),
-    countSince(client, 'profiles', 'created_at', weekAgo),
+    // `is_anonymous` lives on auth.users, which PostgREST does not expose, so
+    // the registered/guest split comes from a SECURITY DEFINER function rather
+    // than a count over `profiles`.
+    client.rpc('admin_user_population_counts', { p_since: weekAgo }),
     countSince(client, 'posts', null, null),
     countSince(client, 'posts', 'created_at', weekAgo),
     countSince(client, 'generations', 'created_at', dayAgo),
@@ -95,16 +104,20 @@ export async function collectAdminOverview(
       .gte('created_at', monthAgo),
   ]);
 
-  for (const result of [failedGenerations24h, openPostReports, openSubjectReports, paidOrders30d]) {
+  for (const result of [population, failedGenerations24h, openPostReports, openSubjectReports, paidOrders30d]) {
     if (result.error) throw result.error;
   }
+
+  const populationCounts = (population.data ?? {}) as Record<string, number | undefined>;
 
   return {
     dashboard: dashboardResult.dashboard,
     dashboardError: dashboardResult.error,
     counters: {
-      totalUsers,
-      newUsers7d,
+      totalUsers: populationCounts.registered_total ?? 0,
+      newUsers7d: populationCounts.registered_since ?? 0,
+      guestSessions: populationCounts.guest_total ?? 0,
+      newGuestSessions7d: populationCounts.guest_since ?? 0,
       totalPosts,
       newPosts7d,
       generations24h,
