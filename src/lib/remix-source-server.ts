@@ -13,7 +13,9 @@ import {
   toRemixImageElement,
   type GenerationInputMediaItem,
 } from '@/lib/generation-input-media';
+import { REMIX_SOURCE_RATE_LIMIT, enforceBackendRateLimit } from '@/lib/backend-rate-limit';
 import { isAudioModel, isImageModel, isMotionModel } from '@/lib/models';
+import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import {
   type RemixMediaAssetDescriptor,
   normalizeRemixMediaAssetDescriptor,
@@ -59,6 +61,33 @@ export class RemixSourceError extends Error {
     super(message);
     this.name = 'RemixSourceError';
     this.status = status;
+  }
+}
+
+/**
+ * Mirrors the block gate on POST /api/showcase/remix. Failure is treated as
+ * blocked, because a moderation check that errors open is not a gate.
+ */
+async function isRemixSourceBlockedForViewer({
+  adminSupabase,
+  ownerUserId,
+  viewerUserId,
+}: {
+  adminSupabase: ReturnType<typeof createServiceClient>;
+  ownerUserId: string | null;
+  viewerUserId: string;
+}): Promise<boolean> {
+  if (!ownerUserId || ownerUserId === viewerUserId) return false;
+
+  try {
+    return await isUserRelationshipBlocked({
+      adminSupabase,
+      firstUserId: viewerUserId,
+      secondUserId: ownerUserId,
+    });
+  } catch (error) {
+    logBackendError('failed_to_verify_block_state_before_loading_remix_source', { error: error });
+    return true;
   }
 }
 
@@ -201,6 +230,14 @@ export async function loadRemixSourceBundle(
   }
 
   const adminSupabase = createServiceClient();
+
+  // Enforced here rather than in the adapter because this is the first point
+  // where the caller is known. Everything below is service-role work.
+  await enforceBackendRateLimit(adminSupabase, {
+    ...REMIX_SOURCE_RATE_LIMIT,
+    key: user.id,
+  });
+
   const { data: generation, error } = await adminSupabase
     .from('generations')
     .select(GENERATION_SELECT)
@@ -219,6 +256,20 @@ export async function loadRemixSourceBundle(
   const typedGeneration = generation as RemixSourceGenerationRow;
   const isOwner = typedGeneration.user_id === user.id;
   if (!isOwner && !typedGeneration.is_public) {
+    throw new RemixSourceError('Remix source not found', 404);
+  }
+
+  // A create page reaches this loader straight from its own URL, so without
+  // the same block gate the remix endpoint enforces, a block is one hop from
+  // being bypassed: prompt, settings and shared media come back regardless.
+  // 404 rather than 403, matching the line above — the gate should not
+  // confirm that the source exists.
+  const blocked = await isRemixSourceBlockedForViewer({
+    adminSupabase,
+    ownerUserId: typedGeneration.user_id,
+    viewerUserId: user.id,
+  });
+  if (!isOwner && blocked) {
     throw new RemixSourceError('Remix source not found', 404);
   }
 

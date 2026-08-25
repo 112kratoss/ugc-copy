@@ -1,5 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const gateState = vi.hoisted(() => ({
+  rateLimitAllowed: true,
+  blocked: false,
+  blockCheckThrows: false,
+}));
+
+vi.mock('@/lib/moderation-service', () => ({
+  isUserRelationshipBlocked: vi.fn(async () => {
+    if (gateState.blockCheckThrows) throw new Error('moderation lookup failed');
+    return gateState.blocked;
+  }),
+}));
+
 type GenerationRow = {
   id: string;
   user_id: string | null;
@@ -73,6 +86,19 @@ function createRouteRequest(url: string) {
 
 function createAdminClientMock() {
   return {
+    rpc: vi.fn(async (fn: string) => {
+      if (fn !== 'check_backend_rate_limit') return { data: null, error: null };
+      return {
+        data: {
+          allowed: gateState.rateLimitAllowed,
+          limit: 60,
+          remaining: gateState.rateLimitAllowed ? 59 : 0,
+          retryAfterSeconds: gateState.rateLimitAllowed ? 0 : 42,
+          resetAt: '2026-01-01T00:00:00.000Z',
+        },
+        error: null,
+      };
+    }),
     from: vi.fn((table: string) => {
       if (table === 'post_resource_bundles') {
         const query = {
@@ -264,6 +290,9 @@ describe('/api/remix-source route', () => {
     postRows = new Map();
     signedUploads = new Map();
     inputMediaRows = [];
+    gateState.rateLimitAllowed = true;
+    gateState.blocked = false;
+    gateState.blockCheckThrows = false;
   });
 
   afterEach(() => {
@@ -655,5 +684,99 @@ describe('/api/remix-source route', () => {
     const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=private-1'));
 
     expect(response.status).toBe(404);
+  });
+
+  it('hides a public remix source from a viewer on either side of a block', async () => {
+    gateState.blocked = true;
+    generationRows.set('public-1', {
+      id: 'public-1',
+      user_id: 'creator-9',
+      is_public: true,
+      share_input_media_for_remix: true,
+      output_url: 'generated_images/creator-9/public.png',
+      showcase_asset_path: null,
+      category: 'image',
+      model: 'nano-banana-2',
+      prompt: 'Public prompt',
+      title: 'Public source',
+      workflow_settings: {},
+    });
+
+    const { GET } = await import('@/app/api/remix-source/route');
+    const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=public-1'));
+
+    // 404 rather than 403: the gate must not confirm the source exists.
+    expect(response.status).toBe(404);
+    expect((await response.json()).error).toBe('Remix source not found');
+  });
+
+  it('fails closed when the block lookup itself errors', async () => {
+    gateState.blockCheckThrows = true;
+    generationRows.set('public-1', {
+      id: 'public-1',
+      user_id: 'creator-9',
+      is_public: true,
+      share_input_media_for_remix: true,
+      output_url: 'generated_images/creator-9/public.png',
+      showcase_asset_path: null,
+      category: 'image',
+      model: 'nano-banana-2',
+      prompt: 'Public prompt',
+      title: 'Public source',
+      workflow_settings: {},
+    });
+
+    const { GET } = await import('@/app/api/remix-source/route');
+    const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=public-1'));
+
+    expect(response.status).toBe(404);
+  });
+
+  it('still serves the owner their own source across a block record', async () => {
+    gateState.blocked = true;
+    currentUserId = 'creator-9';
+    generationRows.set('mine-1', {
+      id: 'mine-1',
+      user_id: 'creator-9',
+      is_public: false,
+      share_input_media_for_remix: false,
+      output_url: 'generated_images/creator-9/mine.png',
+      showcase_asset_path: null,
+      category: 'image',
+      model: 'nano-banana-2',
+      prompt: 'My own prompt',
+      title: 'My source',
+      workflow_settings: {},
+    });
+
+    const { GET } = await import('@/app/api/remix-source/route');
+    const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=mine-1'));
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).generation.prompt).toBe('My own prompt');
+  });
+
+  it('rate limits the hydration endpoint the way its paired remix endpoint is limited', async () => {
+    gateState.rateLimitAllowed = false;
+    generationRows.set('public-1', {
+      id: 'public-1',
+      user_id: 'creator-9',
+      is_public: true,
+      share_input_media_for_remix: true,
+      output_url: 'generated_images/creator-9/public.png',
+      showcase_asset_path: null,
+      category: 'image',
+      model: 'nano-banana-2',
+      prompt: 'Public prompt',
+      title: 'Public source',
+      workflow_settings: {},
+    });
+
+    const { GET } = await import('@/app/api/remix-source/route');
+    const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=public-1'));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('42');
+    expect((await response.json()).code).toBe('RATE_LIMITED');
   });
 });

@@ -5,6 +5,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
 import { createPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
+import { BackendRateLimitError, createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
 import { loadRemixSourceBundle, RemixSourceError } from '@/lib/remix-source-server';
 
 type RemixSourceRouteDependencies = {
@@ -43,6 +44,10 @@ export async function getRemixSourceRouteResponse({
     const bundle = await resolvedDependencies.loadRemixSourceBundle(request, generationId, { postId });
     return remixSourceJsonResponse(request, bundle);
   } catch (error) {
+    if (error instanceof BackendRateLimitError) {
+      return createBackendRateLimitResponse(error);
+    }
+
     if (error instanceof RemixSourceError) {
       return remixSourceJsonResponse(request, { error: error.message }, error.status);
     }
