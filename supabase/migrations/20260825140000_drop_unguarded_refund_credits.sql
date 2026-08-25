@@ -1,0 +1,26 @@
+-- Drop the last primitive that could mint credits from nothing.
+--
+-- `refund_credits(p_user_id uuid, p_amount integer)` credited an arbitrary user
+-- an arbitrary amount: no idempotency key, no source row, no upper bound, and no
+-- check that the amount corresponded to anything the user had actually spent.
+-- Its two siblings were dropped for exactly this class of problem in
+-- 20260725232000 (`deduct_credits` for a read-then-write with no row lock,
+-- `refund_generation` alongside it). This one survived because a single caller
+-- still referenced it.
+--
+-- That caller was rolling-deploy compatibility in
+-- `settleTemplateGenerationStartFailureQuietly`: if
+-- `settle_template_generation_start_failed` came back PGRST202/42883 — function
+-- not found — it fell back to refunding by hand. The branch cannot fire.
+-- `production-release.yml` migrates, then stages, then verifies, then promotes,
+-- so the database is never behind the code that calls it, and the RPC has been
+-- live since 20260711201026. The fallback is removed in the same change as this
+-- migration.
+--
+-- Every remaining refund path settles against its own source row and is
+-- idempotent through a `refunded` flag or a status transition:
+-- settle_generation_failed, settle_generation_start_failed,
+-- settle_template_generation_start_failed, settle_ai_usage_event and
+-- refund_creation_credit_reservation. Nothing else called this function.
+
+DROP FUNCTION IF EXISTS public.refund_credits(uuid, integer);
