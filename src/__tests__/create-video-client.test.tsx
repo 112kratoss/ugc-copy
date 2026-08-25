@@ -288,6 +288,25 @@ describe('CreateVideoClient Kling video elements', () => {
     });
   });
 
+  it('sends remixPost to the remix-source request so unlocked bundle media can restore', async () => {
+    render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input]) => String(input).includes('/api/remix-source'))
+      ).toBe(true);
+    });
+
+    const remixCall = fetchMock.mock.calls.find(([input]) =>
+      String(input).includes('/api/remix-source')
+    );
+    const url = new URL(String(remixCall![0]), 'https://magicbooklet.test');
+    expect(url.searchParams.get('id')).toBe('gen-1');
+    // Without postId the server cannot reach loadGenerationRecipeRemixInputMediaByPostId,
+    // so a viewer who unlocked the bundle silently gets no restored media.
+    expect(url.searchParams.get('postId')).toBe('post-1');
+  });
+
   it('keeps active video element URLs alive when a frame changes', async () => {
     const view = render(<CreateVideoClient prefill={{}} />);
     const videoFile = new File(['video-bytes'], 'active-reference.mp4', { type: 'video/mp4' });

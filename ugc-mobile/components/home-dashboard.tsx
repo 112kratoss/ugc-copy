@@ -169,6 +169,9 @@ export function HomeDashboard() {
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsItem, setCommentsItem] = useState<ShowcaseFeedItem | null>(null);
   const [commentsReplyToId, setCommentsReplyToId] = useState<string | null>(null);
+  // The remix request runs before we know where it lands, so the tapped card
+  // owns the spinner until navigation takes over.
+  const [remixingItemId, setRemixingItemId] = useState<string | null>(null);
   // Held by the list, not the card: FlashList recycles card views, and local
   // expansion state would follow a recycled view onto an unrelated post.
   const [expandedBodyIds, setExpandedBodyIds] = useState<string[]>([]);
@@ -498,6 +501,7 @@ export function HomeDashboard() {
       router.push('/auth' as never);
       return;
     }
+    setRemixingItemId(item.id);
     try {
       const result = await api.remixShowcasePost(item.id);
       recordFeedEvent(item, 'remix_start');
@@ -513,6 +517,8 @@ export function HomeDashboard() {
       }
     } catch (error) {
       Alert.alert('Could not start remix', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      setRemixingItemId(null);
     }
   };
 
@@ -675,10 +681,11 @@ export function HomeDashboard() {
           setCommentsItem(card.item);
         }}
         onRemix={() => void remixItem(card.item)}
+        remixLoading={remixingItemId === card.item.id}
         onShare={() => void shareItem(card.item)}
       />
     </Reveal>
-  ), [contentWidth, expandedBodyIds, horizontalPadding, visibleActiveVideoIds, toggleSave]);
+  ), [contentWidth, expandedBodyIds, horizontalPadding, remixingItemId, visibleActiveVideoIds, toggleSave]);
 
   return (
     <View style={{ flex: 1, backgroundColor: DASHBOARD_COLORS.background }}>

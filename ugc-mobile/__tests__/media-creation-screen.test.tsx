@@ -609,6 +609,72 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(tree!.root.findByProps({ accessibilityLabel: 'Reference name for Hero Product' }).props.value).toBe('Hero Product');
   });
 
+  it('shows the restore as in flight and keeps a prompt typed while it was still running', async () => {
+    let releaseBundle: (bundle: unknown) => void = () => {};
+    authState.api.getRemixSourceBundle.mockReturnValue(
+      new Promise((resolve) => {
+        releaseBundle = resolve;
+      })
+    );
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    await renderer.act(async () => {
+      tree = renderer.create(
+        <MediaCreationScreen
+          initialTool="image"
+          remixSource={{ generationId: 'gen-1', postId: 'post-1' }}
+        />
+      );
+    });
+
+    // The screen is fully interactive while the bundle is still in flight, so it
+    // has to say so rather than look like a finished empty form.
+    expect(collectText(tree!.root)).toContain('Restoring the original prompt, settings, and references…');
+
+    const promptInput = () => tree!.root.findAll((node) => String(node.type) === 'textinput')[0];
+    renderer.act(() => {
+      promptInput().props.onChangeText('my own idea, typed while waiting');
+    });
+
+    await renderer.act(async () => {
+      releaseBundle({
+        generation: {
+          id: 'gen-1',
+          title: 'Original source',
+          prompt: 'Restore this exact remix prompt.',
+          category: 'image',
+          model: 'nano-banana-2',
+        },
+        result: null,
+        inputs: {
+          image: {
+            elements: [
+              {
+                id: 'element-1',
+                displayName: 'Hero Product',
+                handle: '@hero_product',
+                url: 'https://cdn.example.com/hero.png',
+                storagePath: 'inputs/hero.png',
+                sourceGenerationId: 'gen-1',
+              },
+            ],
+          },
+        },
+        workflowSettings: { model: 'nano-banana-2', aspectRatio: '9:16', resolution: '2K' },
+        restoreIssues: [],
+      });
+      await Promise.resolve();
+    });
+
+    // Their words win over the restore...
+    expect(promptInput().props.value).toBe('my own idea, typed while waiting');
+    // ...but everything else the restore carried still lands, and the in-flight
+    // notice goes away.
+    const settled = collectText(tree!.root);
+    expect(settled).toContain('1 / 14');
+    expect(settled).not.toContain('Restoring the original prompt, settings, and references…');
+  });
+
   it('prefills prompt-only create deep links without remix hydration', async () => {
     let tree: renderer.ReactTestRenderer | undefined;
 

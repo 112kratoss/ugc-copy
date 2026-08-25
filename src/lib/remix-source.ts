@@ -62,6 +62,26 @@ export interface RemixSourceBundle {
   restoreIssues: string[];
 }
 
+/**
+ * Whether the creator typed a prompt of their own while a remix restore was
+ * still in flight.
+ *
+ * Restoring a remix is fire-and-forget: the studio paints an interactive form
+ * immediately and the bundle lands whenever /api/remix-source answers, so an
+ * unconditional write silently discards anything typed in between. Their words
+ * win over the restore.
+ *
+ * Both halves matter. A tool whose prompt has a non-empty default (motion) must
+ * not read that default as creator input, so the value also has to have changed
+ * since the restore began.
+ */
+export function hasCreatorEditedPromptDuringRemix(
+  currentPrompt: string,
+  promptWhenRemixStarted: string
+): boolean {
+  return currentPrompt.trim().length > 0 && currentPrompt !== promptWhenRemixStarted;
+}
+
 export function normalizeRemixMediaAssetDescriptor(
   value: unknown,
   expectedKind?: RemixAssetKind

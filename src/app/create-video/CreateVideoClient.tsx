@@ -12,6 +12,7 @@ import {
     StudioBackgroundProcessingNotice,
     StudioGenerationStatus,
     StudioMediaPreviewModal,
+    StudioRemixHydrationNotice,
     StudioRemixNotice,
     StudioRunPanel,
     StudioUploadedMediaPreview,
@@ -33,6 +34,7 @@ import {
 } from '@/lib/generation-model-client';
 import { useAuth } from '@/app/components/AuthProvider';
 import type { RemixMediaAssetDescriptor, RemixSourceBundle } from '@/lib/remix-source';
+import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import {
     createRemixElementSeeds,
     createRestoredRemixAssetState,
@@ -594,6 +596,7 @@ async function readVideoDurationSeconds(file: File): Promise<number | null> {
 
 export interface CreateVideoPrefill {
     remixId?: string | null;
+    remixPostId?: string | null;
     prompt?: string | null;
     model?: string | null;
     aspectRatio?: string | null;
@@ -606,6 +609,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const modelCatalog = useWebGenerationModelCatalog();
     const refetchModelCatalog = modelCatalog.refetch;
     const remixId = prefill.remixId ?? null;
+    const remixPostId = prefill.remixPostId ?? null;
     const prefillPrompt = prefill.prompt ?? null;
     const prefillModel = prefill.model ?? null;
     const prefillAspectRatio = prefill.aspectRatio ?? null;
@@ -614,6 +618,13 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
     const [selectedModel, setSelectedModel] = useState<VideoModelId>('kling-3.0-video');
     const [isMultiShot, setIsMultiShot] = useState(false);
     const [prompt, setPrompt] = useState('');
+
+    // Mirrors the live prompt so the remix restore below can tell whether the
+    // creator typed while /api/remix-source was still in flight.
+    const promptRef = useRef(prompt);
+    useEffect(() => {
+        promptRef.current = prompt;
+    }, [prompt]);
     const [singleDuration, setSingleDuration] = useState(5);
     const [multiPrompts, setMultiPrompts] = useState<MultiShot[]>([
         { id: '1', prompt: '', duration: 5 },
@@ -1298,10 +1309,16 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         if (!session?.access_token) return;
 
         let isCancelled = false;
+        const promptWhenRemixStarted = promptRef.current;
 
         const fetchRemixData = async () => {
             try {
-                const response = await fetch(`/api/remix-source?id=${remixId}`, {
+                const remixSourceParams = new URLSearchParams({ id: remixId });
+                if (remixPostId) {
+                    remixSourceParams.set('postId', remixPostId);
+                }
+
+                const response = await fetch(`/api/remix-source?${remixSourceParams.toString()}`, {
                     headers: {
                         Authorization: `Bearer ${session.access_token}`,
                     },
@@ -1342,7 +1359,9 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                         duration: shot.duration,
                     })));
                 } else {
-                    setPrompt(bundle.generation.prompt);
+                    if (!hasCreatorEditedPromptDuringRemix(promptRef.current, promptWhenRemixStarted)) {
+                        setPrompt(bundle.generation.prompt);
+                    }
                     if (settings?.duration) setSingleDuration(settings.duration);
                 }
 
@@ -1520,7 +1539,7 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
         return () => {
             isCancelled = true;
         };
-    }, [remixId, session?.access_token]);
+    }, [remixId, remixPostId, session?.access_token]);
 
     useEffect(() => {
         if (remixId) {
@@ -3219,6 +3238,15 @@ export default function CreateVideoClient({ prefill }: { prefill: CreateVideoPre
                 controls={
                     <>
                         <AnimatePresence>
+                            {remixId && isRemixLoading && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 12 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: -12 }}
+                                >
+                                    <StudioRemixHydrationNotice />
+                                </motion.div>
+                            )}
                             {remixId && !isRemixLoading && (
                                 <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioRemixNotice

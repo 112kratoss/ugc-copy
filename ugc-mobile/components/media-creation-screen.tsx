@@ -59,6 +59,7 @@ import {
   buildUnifiedCatalogGenerationRequest,
   getCatalogCreationSectionSummary,
   getCatalogDraftSettings,
+  hasCreatorEditedPromptDuringRemix,
   hydrateCatalogCreationDraftFromRemixSource,
   reconcileCreationDraftWithCatalog,
   validateCatalogCreationDraft,
@@ -485,6 +486,18 @@ export function MediaCreationScreen({
   const [isReferenceMentionActive, setIsReferenceMentionActive] = useState(false);
   const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
   const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
+  // The screen is interactive from mount, so the restore needs its own visible
+  // in-flight state — an empty form reads as finished, not as loading.
+  const [isRestoringRemix, setIsRestoringRemix] = useState(false);
+  // Mirrors each draft's prompt so the restore can tell whether the creator
+  // typed while the bundle was still in flight.
+  // Seeded from the drafts themselves, not from blanks: the restore effect below
+  // is declared first, so on mount it reads this ref before the sync effect runs.
+  const draftPromptsRef = useRef({
+    image: imageDraft.prompt,
+    video: videoDraft.prompt,
+    motion: motionDraft.prompt,
+  });
   const [modelPickerVisible, setModelPickerVisible] = useState(false);
   const [parametersVisible, setParametersVisible] = useState(false);
   const [workspaceVisible, setWorkspaceVisible] = useState(false);
@@ -786,6 +799,8 @@ export function MediaCreationScreen({
     setMessage(null);
     setPromptMessage(null);
     remixHydrationKeyRef.current = generationId;
+    setIsRestoringRemix(true);
+    const promptWhenRemixStarted = draftPromptsRef.current[targetTool];
 
     void api.getRemixSourceBundle(generationId, { postId: remixSource?.postId ?? null })
       .then((bundle) => {
@@ -797,15 +812,23 @@ export function MediaCreationScreen({
             ? createDefaultCreationDraft('video')
             : createDefaultCreationDraft('motion');
         const restored = hydrateCatalogCreationDraftFromRemixSource(baseDraft, bundle, catalog);
-        if (restored.draft.tool === 'image') setImageDraft(restored.draft);
-        if (restored.draft.tool === 'video') setVideoDraft(restored.draft);
-        if (restored.draft.tool === 'motion') setMotionDraft(restored.draft);
+        const creatorPrompt = draftPromptsRef.current[targetTool];
+        const prompt = hasCreatorEditedPromptDuringRemix(creatorPrompt, promptWhenRemixStarted)
+          ? creatorPrompt
+          : restored.draft.prompt;
+        if (restored.draft.tool === 'image') setImageDraft({ ...restored.draft, prompt });
+        if (restored.draft.tool === 'video') setVideoDraft({ ...restored.draft, prompt });
+        if (restored.draft.tool === 'motion') setMotionDraft({ ...restored.draft, prompt });
         setRemixRestoreWarning(restored.warning);
       })
       .catch((error) => {
         if (isCancelled) return;
         remixHydrationKeyRef.current = null;
         setRemixRestoreWarning(error instanceof Error ? error.message : REMIX_RESTORE_WARNING_MESSAGE);
+      })
+      .finally(() => {
+        if (isCancelled) return;
+        setIsRestoringRemix(false);
       });
 
     return () => {
@@ -819,6 +842,14 @@ export function MediaCreationScreen({
     if (activeTool === 'motion') setMotionDraft((draft) => ({ ...draft, prompt }));
     if (promptMessage) setPromptMessage(null);
   };
+
+  useEffect(() => {
+    draftPromptsRef.current = {
+      image: imageDraft.prompt,
+      video: videoDraft.prompt,
+      motion: motionDraft.prompt,
+    };
+  }, [imageDraft.prompt, videoDraft.prompt, motionDraft.prompt]);
 
   const uploadImageReferences = async (tool: 'image' | 'video') => {
     setMessage(null);
@@ -1410,6 +1441,13 @@ export function MediaCreationScreen({
           {catalogNotice ? (
             <SlimCreatorBanner label="Model updated" body={catalogNotice} onDismiss={() => setCatalogNotice(null)} />
           ) : null}
+          {isRestoringRemix ? (
+            <SlimCreatorBanner
+              label="Remix source"
+              body="Restoring the original prompt, settings, and references…"
+              loading
+            />
+          ) : null}
           {remixRestoreWarning ? (
             <SlimCreatorBanner label="Remix source" body={remixRestoreWarning} onDismiss={() => setRemixRestoreWarning(null)} />
           ) : null}
@@ -1629,6 +1667,13 @@ export function MediaCreationScreen({
 
           {catalogNotice ? (
             <SlimCreatorBanner label="Model updated" body={catalogNotice} onDismiss={() => setCatalogNotice(null)} />
+          ) : null}
+          {isRestoringRemix ? (
+            <SlimCreatorBanner
+              label="Remix source"
+              body="Restoring the original prompt, settings, and references…"
+              loading
+            />
           ) : null}
           {remixRestoreWarning ? (
             <SlimCreatorBanner label="Remix source" body={remixRestoreWarning} onDismiss={() => setRemixRestoreWarning(null)} />
@@ -2027,7 +2072,7 @@ function GuidedPromptChips({
   );
 }
 
-function SlimCreatorBanner({ label, body, onDismiss }: { label: string; body: string; onDismiss: () => void }) {
+function SlimCreatorBanner({ label, body, loading, onDismiss }: { label: string; body: string; loading?: boolean; onDismiss?: () => void }) {
   return (
     <View
       style={{
@@ -2048,9 +2093,15 @@ function SlimCreatorBanner({ label, body, onDismiss }: { label: string; body: st
         <Text style={{ color: appTheme.colors.primary, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>{label}</Text>
         <Text numberOfLines={2} style={{ color: appTheme.colors.textSecondary, fontSize: 12, lineHeight: 16 }}>{body}</Text>
       </View>
-      <Pressable accessibilityRole="button" accessibilityLabel={`Dismiss ${label}`} onPress={onDismiss} style={{ width: 48, height: 48, alignItems: 'center', justifyContent: 'center' }}>
-        <X size={17} color={appTheme.colors.muted} />
-      </Pressable>
+      {loading ? (
+        <View style={{ width: 48, height: 48, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator color={appTheme.colors.primary} size="small" />
+        </View>
+      ) : onDismiss ? (
+        <Pressable accessibilityRole="button" accessibilityLabel={`Dismiss ${label}`} onPress={onDismiss} style={{ width: 48, height: 48, alignItems: 'center', justifyContent: 'center' }}>
+          <X size={17} color={appTheme.colors.muted} />
+        </Pressable>
+      ) : null}
     </View>
   );
 }

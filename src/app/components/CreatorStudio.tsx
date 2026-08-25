@@ -422,6 +422,38 @@ export function StudioRemixNotice({
   );
 }
 
+/**
+ * Occupies the same slot as StudioRemixNotice while /api/remix-source is still
+ * resolving. Without it the studio paints its default empty form immediately,
+ * which reads as finished rather than loading — and the restored prompt then
+ * lands on top of whatever the creator had started typing in the meantime.
+ */
+export function StudioRemixHydrationNotice({
+  label = 'Remixing Community Creation',
+  description = 'Restoring the original prompt, settings, and references…',
+}: {
+  label?: string;
+  description?: string;
+}) {
+  return (
+    <StudioPanel className="p-4">
+      <div className="flex items-start gap-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-[var(--ui-primary)]/25 bg-[var(--ui-primary-soft)] text-[var(--ui-primary-strong)]">
+          <Loader2 className="h-4 w-4 animate-spin" />
+        </div>
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.22em] text-[var(--ui-primary-strong)]">
+            {label}
+          </div>
+          <p className="mt-1 text-sm text-zinc-300" role="status" aria-live="polite">
+            {description}
+          </p>
+        </div>
+      </div>
+    </StudioPanel>
+  );
+}
+
 export function StudioRunPanel({
   title,
   summary,

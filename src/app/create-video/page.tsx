@@ -16,6 +16,7 @@ export default async function CreateVideoPage({
   const resolvedSearchParams = searchParams ? await searchParams : {};
   const prefill: CreateVideoPrefill = {
     remixId: getFirstValue(resolvedSearchParams.remix),
+    remixPostId: getFirstValue(resolvedSearchParams.remixPost),
     prompt: getFirstValue(resolvedSearchParams.prompt),
     model: getFirstValue(resolvedSearchParams.model),
     aspectRatio: getFirstValue(resolvedSearchParams.aspectRatio),
@@ -23,6 +24,7 @@ export default async function CreateVideoPage({
   };
   const returnParams = new URLSearchParams();
   if (prefill.remixId) returnParams.set('remix', prefill.remixId);
+  if (prefill.remixPostId) returnParams.set('remixPost', prefill.remixPostId);
   if (prefill.prompt) returnParams.set('prompt', prefill.prompt);
   if (prefill.model) returnParams.set('model', prefill.model);
   if (prefill.aspectRatio) returnParams.set('aspectRatio', prefill.aspectRatio);

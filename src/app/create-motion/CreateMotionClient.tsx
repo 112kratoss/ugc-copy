@@ -13,6 +13,7 @@ import {
     MediaStudioShell,
     StudioControlCard,
     StudioMediaPreviewModal,
+    StudioRemixHydrationNotice,
     StudioRemixNotice,
     StudioRunPanel,
     StudioUploadedMediaPreview,
@@ -24,6 +25,7 @@ import PublishToShowcaseModal from '@/app/components/PublishToShowcaseModal';
 import EnhancePromptButton from '@/app/components/EnhancePromptButton';
 import { useAuth } from '@/app/components/AuthProvider';
 import type { RemixMediaAssetDescriptor, RemixSourceBundle } from '@/lib/remix-source';
+import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import {
     createRestoredRemixAssetState,
     getRemixRestoreWarning,
@@ -77,6 +79,7 @@ interface MotionWorkflowSettings {
 
 export interface CreateMotionPrefill {
     remixId?: string | null;
+    remixPostId?: string | null;
     prompt?: string | null;
     model?: string | null;
 }
@@ -123,11 +126,19 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
     const [characterOrientation, setCharacterOrientation] = useState<'video' | 'image'>('video');
     const [mode, setMode] = useState<'720p' | '1080p'>('720p');
     const [prompt, setPrompt] = useState<string>("No distortion, the character's movements are consistent with the video.");
+
+    // Mirrors the live prompt so the remix restore below can tell whether the
+    // creator typed while /api/remix-source was still in flight.
+    const promptRef = useRef(prompt);
+    useEffect(() => {
+        promptRef.current = prompt;
+    }, [prompt]);
     const [isDraggingImage, setIsDraggingImage] = useState(false);
     const [isDraggingVideo, setIsDraggingVideo] = useState(false);
 
     // Remix State
     const remixId = prefill.remixId ?? null;
+    const remixPostId = prefill.remixPostId ?? null;
     const prefillPrompt = prefill.prompt ?? null;
     const prefillModel = prefill.model ?? null;
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
@@ -266,10 +277,16 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         if (!session?.access_token) return;
 
         let isCancelled = false;
+        const promptWhenRemixStarted = promptRef.current;
 
         const fetchRemixData = async () => {
             try {
-                const response = await fetch(`/api/remix-source?id=${remixId}`, {
+                const remixSourceParams = new URLSearchParams({ id: remixId });
+                if (remixPostId) {
+                    remixSourceParams.set('postId', remixPostId);
+                }
+
+                const response = await fetch(`/api/remix-source?${remixSourceParams.toString()}`, {
                     headers: {
                         Authorization: `Bearer ${session.access_token}`,
                     },
@@ -287,7 +304,9 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
 
                 setRemixSourceBundle(bundle);
                 setRemixTitle(bundle.generation.title);
-                setPrompt(bundle.generation.prompt);
+                if (!hasCreatorEditedPromptDuringRemix(promptRef.current, promptWhenRemixStarted)) {
+                    setPrompt(bundle.generation.prompt);
+                }
                 setRemixVideoUrl(bundle.result?.mediaType === 'video' ? bundle.result.url : null);
                 setRemixRestoreWarning(getRemixRestoreWarning(bundle.restoreIssues));
 
@@ -331,7 +350,7 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
         return () => {
             isCancelled = true;
         };
-    }, [remixId, session?.access_token]);
+    }, [remixId, remixPostId, session?.access_token]);
 
     const handleUseOriginalResultAsReferenceVideo = () => {
         if (remixSourceBundle?.result?.mediaType !== 'video' || !remixSourceBundle.result.url) {
@@ -776,6 +795,15 @@ export default function CreateMotionClient({ prefill }: { prefill: CreateMotionP
                                     <StudioRemixNotice description={catalogNotice} />
                                 </motion.div>
                             ) : null}
+                            {remixId && isRemixLoading && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 12 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: -12 }}
+                                >
+                                    <StudioRemixHydrationNotice />
+                                </motion.div>
+                            )}
                             {remixId && !isRemixLoading && (
                                 <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioRemixNotice
