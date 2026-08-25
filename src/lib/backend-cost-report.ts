@@ -1116,7 +1116,9 @@ export async function collectBackendCostReport(
 
   let uploadCapacityHealth: UploadCapacityHealth | null = null;
   try {
-    uploadCapacityHealth = await collectUploadCapacityHealth(client, now);
+    uploadCapacityHealth = await collectUploadCapacityHealth(client, now, {
+      environment: options.environment,
+    });
     for (const issue of uploadCapacityHealth.issues) {
       issues.push({
         severity: issue.severity,
