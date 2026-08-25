@@ -29,6 +29,10 @@ function createClient(rows: TableRows, filterLog: Record<string, string[]> = {})
           filterLog[table].push(`neq:${column}=${String(value)}`);
           return builder;
         },
+        eq: (column: string, value: unknown) => {
+          filterLog[table].push(`eq:${column}=${String(value)}`);
+          return builder;
+        },
       };
       return builder;
     },
@@ -67,6 +71,9 @@ describe('admin revenue report', () => {
     const mobile = report.rails.find((rail) => rail.key === 'mobile-iap');
 
     expect(filterLog.transactions).toContain('is:mobile_product_id=null');
+    // Dev-era test-mode purchases charged 1–5 rupees for a full credit pack and
+    // are indistinguishable from real sales without this filter.
+    expect(filterLog.transactions).toContain('eq:is_test=false');
     // App Review / TestFlight settlements grant credits but are not money.
     expect(filterLog.mobile_store_transactions).toContain('neq:provider=sandbox');
     expect(web?.totalsByCurrency).toEqual([]);

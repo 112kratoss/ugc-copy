@@ -160,16 +160,32 @@ select is(
 );
 
 -- ─── Refund helper ───────────────────────────────────────────────────────────
-
-select lives_ok(
-  $$select public.refund_credits('00000000-0000-4000-8000-0000000000c1'::uuid, 50)$$,
-  'the refund helper credits an account'
-);
+--
+-- These two used to call `refund_credits` and assert it added exactly the amount
+-- asked for. That was the problem: it credited an arbitrary account an arbitrary
+-- amount with no idempotency key and no source row, which made it the one
+-- remaining way to mint credits from nothing. It was dropped in 20260825140000
+-- along with its only caller. The assertions now guard against it coming back
+-- and confirm the guarded path that replaced it is in place.
 
 select is(
-  (select credits from public.profiles where id = '00000000-0000-4000-8000-0000000000c1'::uuid),
-  650,
-  'the refund helper adds exactly the requested amount'
+  (
+    select count(*)
+    from pg_catalog.pg_proc
+    where proname = 'refund_credits' and pronamespace = 'public'::regnamespace
+  ),
+  0::bigint,
+  'no unguarded refund helper exists to mint credits from nothing'
+);
+
+select isnt(
+  (
+    select count(*)
+    from pg_catalog.pg_proc
+    where proname = 'settle_generation_failed' and pronamespace = 'public'::regnamespace
+  ),
+  0::bigint,
+  'refunds go through settlement, which is bound to a generation row and idempotent'
 );
 
 select * from finish();

@@ -175,6 +175,9 @@ export async function collectAdminRevenueReport(
       // Mobile purchases also land here; they are reported on the mobile rail
       // from `mobile_store_transactions` instead. See the module comment.
       .is('mobile_product_id', null)
+      // Dev-era test-mode purchases charged 1–5 rupees for a full credit pack.
+      // The mobile rail already drops its sandbox equivalent just below.
+      .eq('is_test', false)
       .gte('created_at', since)
       .order('created_at', { ascending: false })
       .limit(RAIL_FETCH_LIMIT),

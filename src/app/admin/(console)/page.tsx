@@ -36,7 +36,12 @@ export default async function AdminOverviewPage() {
       />
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Users" value={counters.totalUsers} hint={`+${counters.newUsers7d} in 7 days`} icon={Users} />
+        <StatCard
+          label="Registered users"
+          value={counters.totalUsers}
+          hint={`+${counters.newUsers7d} in 7 days · ${counters.guestSessions} guest sessions`}
+          icon={Users}
+        />
         <StatCard label="Posts" value={counters.totalPosts} hint={`+${counters.newPosts7d} in 7 days`} icon={FileImage} />
         <StatCard
           label="Generations 24h"

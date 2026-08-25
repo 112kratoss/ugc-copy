@@ -100,7 +100,7 @@ export interface OnboardingStateResponse {
 
 export interface WelcomeCreditResponse {
   programKey: string;
-  status: 'eligible' | 'claimed' | 'already_claimed' | 'legacy_ineligible' | 'not_eligible' | 'unavailable';
+  status: 'eligible' | 'claimed' | 'already_claimed' | 'legacy_ineligible' | 'requires_account' | 'not_eligible' | 'unavailable';
   amount: number;
   promotionalAmount: number;
   credits: number;

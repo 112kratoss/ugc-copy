@@ -220,19 +220,6 @@ export interface PersistedGenerationOutputListResult {
 
 
 
-async function refundCreditsQuietly(creditSupabase: SupabaseClient, userId: string, amount: number): Promise<boolean> {
-  try {
-    const { error } = await creditSupabase.rpc('refund_credits', { p_user_id: userId, p_amount: amount });
-    if (error) {
-      logBackendError('generation_credit_refund_failed', { userId, amount, error });
-      return false;
-    }
-    return true;
-  } catch (error) {
-    logBackendError('generation_credit_refund_failed', { userId, amount, error });
-    return false;
-  }
-}
 
 export async function attachGenerationProviderTask(
   supabase: SupabaseClient,
@@ -528,33 +515,6 @@ async function markGenerationProviderStarted(
   throw new GenerationServiceError('Failed to attach provider task to generation.', 500);
 }
 
-async function markGenerationStartFailedQuietly(
-  supabase: SupabaseClient,
-  generationId: string | null,
-  options: { errorMessage?: string; refunded?: boolean } = {},
-) {
-  if (!generationId) return;
-
-  try {
-    const { error } = await supabase
-      .from('generations')
-      .update({
-        status: 'failed',
-        ...(options.errorMessage ? { error_message: options.errorMessage } : {}),
-        ...(options.refunded !== undefined ? { refunded: options.refunded } : {}),
-        completed_at: new Date().toISOString(),
-        client_request_key_hash: null,
-      })
-      .eq('id', generationId);
-
-    if (error) {
-      logBackendError('generation_start_failure_mark_failed', { generationId, error });
-    }
-  } catch (error) {
-    logBackendError('generation_start_failure_mark_failed', { generationId, error });
-  }
-}
-
 async function settleTemplateGenerationStartFailureQuietly(params: {
   creditSupabase: SupabaseClient;
   error: unknown;
@@ -605,28 +565,20 @@ async function settleTemplateGenerationStartFailureQuietly(params: {
       return;
     }
 
-    const errorCode = error && typeof error === 'object' && 'code' in error
-      ? String((error as { code?: unknown }).code ?? '')
-      : '';
-    const missingRpc = errorCode === 'PGRST202' || errorCode === '42883';
-    if (!missingRpc) {
-      logBackendError(TEMPLATE_START_FAILED_EVENT, {
-        ...logEntry,
-        settlement: 'failed',
-        settlementError: supabaseErrorMessage(error, `Unexpected settlement status: ${String(status)}`),
-      });
-      return;
-    }
-
-    // Rolling-deploy compatibility only: older databases do not have the
-    // atomic settlement RPC yet. Mark the row as refunded when this fallback
-    // succeeds so later reconciliation cannot refund it twice.
-    const refunded = await refundCreditsQuietly(params.creditSupabase, params.userId, params.cost);
-    await markGenerationStartFailedQuietly(params.creditSupabase, params.generationId, {
-      errorMessage: failure.message,
-      refunded,
+    // Every settlement failure now reports the same way. This used to branch on
+    // a missing RPC (PGRST202/42883) and fall back to `refund_credits` — an
+    // unguarded primitive that credited an arbitrary user an arbitrary amount
+    // with no idempotency key and no source row, the only function left that
+    // could mint credits from nothing. The branch was rolling-deploy
+    // compatibility for a database older than the code, which
+    // production-release.yml makes impossible: it migrates, then stages, then
+    // promotes, so the database is never behind. The RPC has been live since
+    // 20260711201026.
+    logBackendError(TEMPLATE_START_FAILED_EVENT, {
+      ...logEntry,
+      settlement: 'failed',
+      settlementError: supabaseErrorMessage(error, `Unexpected settlement status: ${String(status)}`),
     });
-    logBackendError(TEMPLATE_START_FAILED_EVENT, { ...logEntry, settlement: refunded ? 'legacy_fallback' : 'legacy_fallback_failed' });
   } catch (settlementError) {
     logBackendError(TEMPLATE_START_FAILED_EVENT, {
       ...logEntry,

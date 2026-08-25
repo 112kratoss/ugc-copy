@@ -1,0 +1,45 @@
+/*
+ * Creator Pack claim celebration (/welcome-reward).
+ *
+ * Named classes in their own file rather than inline utilities: the keyframes
+ * have to travel with the route whose CSS gets inlined, and `globals.css` is
+ * public-route CSS that this authenticated page never loads. The count-up
+ * itself is driven in JS because the animated value is text content, not a
+ * style — only the pop and the burst are CSS.
+ */
+.welcome-reward-count.is-celebrating > div {
+  animation: welcome-reward-pop 520ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes welcome-reward-pop {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.18); }
+  100% { transform: scale(1); }
+}
+
+.welcome-reward-confetti {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  opacity: 0;
+  transform: rotate(var(--angle)) translateY(0) scale(0.4);
+  animation: welcome-reward-burst 900ms ease-out forwards;
+  animation-delay: var(--delay);
+}
+
+@keyframes welcome-reward-burst {
+  0% { opacity: 0; transform: rotate(var(--angle)) translateY(0) scale(0.4); }
+  12% { opacity: 1; }
+  /* Hold full opacity through most of the travel. Fading from 18% onward made
+   * the ring invisible by the time it cleared the number. */
+  62% { opacity: 1; }
+  100% { opacity: 0; transform: rotate(var(--angle)) translateY(-118px) scale(0.9); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .welcome-reward-count.is-celebrating > div { animation: none; }
+  .welcome-reward-confetti { animation: none; opacity: 0; }
+}

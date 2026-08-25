@@ -20,10 +20,12 @@ describe('drop legacy credit functions migration', () => {
     expect(migration).toContain('DROP FUNCTION IF EXISTS public.refund_generation(text)');
   });
 
-  it('keeps refund_credits, which generation-services still calls', () => {
+  it('left refund_credits behind, because it still had a caller at the time', () => {
+    // This migration deliberately spared it: generation-services still called it
+    // from a rolling-deploy fallback. That caller and the function itself went in
+    // 20260825140000 — asserted there, not here, since this file must keep
+    // describing the migration as applied.
     expect(migration).not.toMatch(/DROP FUNCTION IF EXISTS public\.refund_credits/i);
-    expect(readServerSource('src/lib/generation-services.ts'))
-      .toContain("creditSupabase.rpc('refund_credits'");
   });
 
   it('leaves no server caller of the dropped RPCs behind', () => {

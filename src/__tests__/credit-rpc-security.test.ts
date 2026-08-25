@@ -130,7 +130,12 @@ describe('credit mutation security boundary', () => {
     expect(generationServices).toContain("templateContext ? 'start_template_generation' : 'start_generation'");
     expect(generationServices).toContain('supabase.rpc(rpcName, rpcArgs)');
     expect(generationServices).toContain("supabase.rpc('attach_generation_provider_task'");
-    expect(generationServices).toContain("creditSupabase.rpc('refund_credits'");
+    // `refund_credits` is deliberately absent: it credited an arbitrary user an
+    // arbitrary amount with no idempotency key and no source row, and was
+    // dropped in 20260825140000 along with its only caller — a rolling-deploy
+    // fallback that production-release.yml makes unreachable by migrating before
+    // it promotes. Every refund now settles against its own source row.
+    expect(generationServices).not.toContain("rpc('refund_credits'");
     expect(generationServices).toContain("params.creditSupabase.rpc('settle_generation_start_failed'");
     expect(generationSettlement).toContain("creditSupabase.rpc('settle_generation_failed'");
     expect(generationSettlement).toContain("settlementSupabase.rpc('settle_generation_succeeded'");

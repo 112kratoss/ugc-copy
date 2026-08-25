@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/auth';
 import { haptic } from '@/lib/haptics';
 import { MotionView, usePressMotion } from '@/lib/motion';
 import { useOnboarding } from '@/lib/onboarding';
+import { isWelcomeRewardPending } from '@/lib/onboarding-state';
 import { appTheme } from '@/lib/theme';
 import type { WelcomeCreditResponse } from '@/lib/types';
 import { AppText, Card, Kicker } from './ui';
@@ -30,7 +31,7 @@ export function OnboardingResumeCard({ compact = false }: { compact?: boolean })
     };
   }, [api, state.status, user]);
 
-  const rewardPending = welcome?.status === 'eligible' || welcome?.status === 'unavailable';
+  const rewardPending = isWelcomeRewardPending(welcome?.status);
   const showOptionalIntro = Boolean(user) && state.status === 'not_started';
   const showResume = state.status === 'skipped' || state.status === 'in_progress';
   if (!rewardPending && !showOptionalIntro && !showResume) return null;
