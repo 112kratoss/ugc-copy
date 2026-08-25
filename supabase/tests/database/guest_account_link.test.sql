@@ -209,8 +209,16 @@ select is(
 );
 
 -- ─── Settlement recorded under a guest UUID ──────────────────────────────────
+--
+-- These used to go through `refund_credits`, dropped in 20260825140000 as the
+-- last unguarded way to mint credits. A raw balance update is the more faithful
+-- stand-in anyway: `forward_linked_account_credit_change` is a trigger on
+-- `profiles`, so what it must survive is *any* write to the column, whichever of
+-- the nineteen credit functions made it.
 
-select public.refund_credits('a1a1a1a1-0000-4000-8000-000000000001', 285);
+update public.profiles
+set credits = coalesce(credits, 0) + 285
+where id = 'a1a1a1a1-0000-4000-8000-000000000001';
 
 select is(
   (select credits from public.profiles where id = 'b1b1b1b1-0000-4000-8000-000000000001'),
@@ -224,7 +232,9 @@ select is(
   'the refund does not resurrect a balance on the guest row'
 );
 
-select public.refund_credits('a1a1a1a1-0000-4000-8000-000000000001', -100);
+update public.profiles
+set credits = coalesce(credits, 0) - 100
+where id = 'a1a1a1a1-0000-4000-8000-000000000001';
 
 select is(
   (select credits from public.profiles where id = 'b1b1b1b1-0000-4000-8000-000000000001'),
