@@ -50,7 +50,7 @@ jobs:
           remote_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
           test "$release_sha" = "$remote_sha"
           app_version="$(node -p "require('./ugc-mobile/app.json').expo.version")"
-          test "$app_version" = "0.1.0"
+          test "$app_version" = "0.1.1"
           successful_runs="$(
             gh api \
               "repos/${GITHUB_REPOSITORY}/actions/workflows/quality.yml/runs?head_sha=${release_sha}&status=completed&per_page=100" \
