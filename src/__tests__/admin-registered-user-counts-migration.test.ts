@@ -8,7 +8,11 @@ const read = (file: string) => fs.readFileSync(
   'utf8',
 );
 
-const migration = read('20260825120000_admin_registered_user_counts.sql');
+// Renamed off 20260825120000: main landed
+// `scope_upload_reclaim_health_to_drainable_work` on that exact version while
+// this branch was open, and the migration ledger keys on the timestamp, so the
+// two would have collided.
+const migration = read('20260826100000_admin_registered_user_counts.sql');
 
 describe('admin registered user counts migration', () => {
   it('splits the population on auth.users.is_anonymous', () => {
