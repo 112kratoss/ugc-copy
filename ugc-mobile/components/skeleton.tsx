@@ -193,3 +193,161 @@ export function CommentListSkeleton({ rows = 4 }: { rows?: number }) {
     </View>
   );
 }
+/**
+ * A list of card rows: leading tile, a title line, a shorter meta line.
+ *
+ * Stands in for the unlock library and the seller listings, which previously
+ * announced themselves with a text card ("Loading unlocks") that vanished and
+ * let the real rows jump into place.
+ */
+export function CardListSkeleton({
+  rows = 3,
+  label,
+}: {
+  rows?: number;
+  /** What is loading, for assistive technology. */
+  label: string;
+}) {
+  return (
+    <View accessibilityRole="progressbar" accessibilityLabel={label} style={{ gap: 12 }}>
+      {Array.from({ length: rows }, (_, index) => (
+        <View
+          key={index}
+          style={{
+            flexDirection: 'row',
+            gap: 12,
+            alignItems: 'center',
+            borderWidth: 1,
+            borderColor: appTheme.colors.borderSubtle,
+            backgroundColor: appTheme.colors.panel,
+            borderRadius: appTheme.radii.xl,
+            borderCurve: 'continuous',
+            padding: appTheme.spacing.card,
+          }}
+        >
+          <SkeletonBone width={56} height={56} radius={14} strong />
+          <View style={{ flex: 1, gap: 8 }}>
+            {/* Uneven widths so the stack reads as content rather than a pattern. */}
+            <SkeletonBone width={index % 2 === 0 ? '72%' : '58%'} height={13} radius={6} strong />
+            <SkeletonBone width={index % 3 === 0 ? '44%' : '36%'} height={11} radius={5} />
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/**
+ * A detail panel: a heading line, a few body lines, then an action bar.
+ *
+ * Stands in for the marketplace and unlock detail screens, which announced
+ * themselves with a text card that vanished and let the panel jump in.
+ */
+export function DetailSkeleton({ label }: { label: string }) {
+  return (
+    <View
+      accessibilityRole="progressbar"
+      accessibilityLabel={label}
+      style={{
+        gap: 14,
+        borderWidth: 1,
+        borderColor: appTheme.colors.borderSubtle,
+        backgroundColor: appTheme.colors.panel,
+        borderRadius: appTheme.radii.xl,
+        borderCurve: 'continuous',
+        padding: appTheme.spacing.panel,
+      }}
+    >
+      <SkeletonBone width="62%" height={18} radius={8} strong />
+      <View style={{ gap: 9 }}>
+        <SkeletonBone width="100%" height={12} radius={5} />
+        <SkeletonBone width="88%" height={12} radius={5} />
+        <SkeletonBone width="54%" height={12} radius={5} />
+      </View>
+      <SkeletonBone width="100%" height={appTheme.touch.default} radius={appTheme.radii.pill} strong />
+    </View>
+  );
+}
+
+/**
+ * A row of stat tiles: the invite metrics grid, which loads as a unit.
+ */
+export function MetricGridSkeleton({ tiles = 4, label }: { tiles?: number; label: string }) {
+  return (
+    <View
+      accessibilityRole="progressbar"
+      accessibilityLabel={label}
+      style={{ flexDirection: 'row', flexWrap: 'wrap', gap: appTheme.spacing.gap }}
+    >
+      {Array.from({ length: tiles }, (_, index) => (
+        <View
+          key={index}
+          style={{
+            flexGrow: 1,
+            flexBasis: '44%',
+            gap: 10,
+            borderWidth: 1,
+            borderColor: appTheme.colors.borderSubtle,
+            backgroundColor: appTheme.colors.panel,
+            borderRadius: appTheme.radii.lg,
+            borderCurve: 'continuous',
+            padding: appTheme.spacing.card,
+          }}
+        >
+          <SkeletonBone width={22} height={22} radius={11} />
+          <SkeletonBone width="46%" height={20} radius={8} strong />
+          <SkeletonBone width="70%" height={11} radius={5} />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/**
+ * A creator page: identity header, stat row, then a grid of work.
+ *
+ * Replaces a lone spinner on an empty screen. HIG is explicit that showing
+ * nothing while loading reads as a broken app rather than a busy one, and a
+ * blank page with a small spinner in the middle is the version of that mistake
+ * that is easiest to ship.
+ */
+export function CreatorProfileSkeleton({ label = 'Loading creator' }: { label?: string }) {
+  return (
+    <View
+      accessibilityRole="progressbar"
+      accessibilityLabel={label}
+      style={{ flex: 1, gap: appTheme.spacing.section, padding: appTheme.spacing.screen }}
+    >
+      <View style={{ gap: appTheme.spacing.gap }}>
+        <SkeletonBone width="100%" height={104} radius={appTheme.radii.xl} />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.gap }}>
+          <SkeletonBone width={64} height={64} radius={32} strong />
+          <View style={{ flex: 1, gap: 8 }}>
+            <SkeletonBone width="54%" height={18} radius={8} strong />
+            <SkeletonBone width="34%" height={12} radius={5} />
+          </View>
+        </View>
+        <View style={{ flexDirection: 'row', gap: appTheme.spacing.section }}>
+          {Array.from({ length: 3 }, (_, index) => (
+            <View key={index} style={{ gap: 6 }}>
+              <SkeletonBone width={34} height={16} radius={6} strong />
+              <SkeletonBone width={46} height={10} radius={4} />
+            </View>
+          ))}
+        </View>
+      </View>
+
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: appTheme.spacing.gap }}>
+        {Array.from({ length: 4 }, (_, index) => (
+          <SkeletonBone
+            key={index}
+            width="47%"
+            height={index % 2 === 0 ? 210 : 168}
+            radius={appTheme.radii.lg}
+            strong={index === 0}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}

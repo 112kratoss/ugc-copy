@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { AccessibilityInfo, FlatList, Platform, Pressable, Text, View } from 'react-native';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
+import { appTheme } from '@/lib/theme';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { IMMERSIVE_HORIZONTAL_LIST_TUNING } from '@/lib/media-performance';
 import {
@@ -129,7 +130,7 @@ function ShowcaseMediaCarousel({
           );
 
           return onPress ? (
-            <Pressable onPress={onPress} style={{ width, height }}>
+            <Pressable onPress={onPress} style={({ pressed }) => ({ width, height, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
               {slide}
             </Pressable>
           ) : (
@@ -168,7 +169,7 @@ function ShowcaseMediaCarousel({
         }}
       >
         <Images size={12} color="#ffffff" />
-        <Text style={{ color: '#ffffff', fontSize: 10, fontWeight: '800' }}>
+        <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '800' }}>
           {currentIndex + 1}/{mediaItems.length}
         </Text>
       </View>

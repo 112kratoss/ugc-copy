@@ -7,6 +7,7 @@ import {
   Animated,
   ScrollView,
   Text,
+  type TextInput,
   View,
   useWindowDimensions,
 } from 'react-native';
@@ -21,6 +22,7 @@ import { trackOnboardingEvent, useOnboarding } from '@/lib/onboarding';
 import { appTheme } from '@/lib/theme';
 import type { OnboardingGoal, ProfileResponse, WelcomeCreditResponse } from '@/lib/types';
 import { AppText, AppTextInput, Card, Kicker, PrimaryButton, SecondaryButton } from '@/components/ui';
+import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import {
   OnboardingBookletGoal,
   OnboardingBookletHeader,
@@ -117,6 +119,7 @@ export default function OnboardingScreen() {
   const rewardScale = useRef(new Animated.Value(1)).current;
   const authSucceededTracked = useRef(false);
   const rewardViewedTracked = useRef(false);
+  const handleRef = useRef<TextInput | null>(null);
   const cardWidth = Math.min(520, width - 32);
   const isWelcome = stage === 'intro' && step === 0;
   const topPadding = Math.max(insets.top, 16) + 8;
@@ -197,11 +200,20 @@ export default function OnboardingScreen() {
     await update({ status: 'in_progress', lastStep: nextStep, goal });
   };
 
-  const exploreAsGuest = async () => {
+  /**
+   * Leave onboarding without finishing it.
+   *
+   * `skip()` marks the flow skipped rather than complete, which is what keeps
+   * the "Finish your creator setup" card on Home and in Settings — so stepping
+   * out here is deferring the step, not losing it.
+   */
+  const leaveForNow = async (fromStep: string) => {
     await skip();
-    void trackOnboardingEvent(api, 'skipped', { goal, step: stage === 'intro' ? (step === 0 ? 'welcome' : 'goal') : stage });
+    void trackOnboardingEvent(api, 'skipped', { goal, step: fromStep });
     router.replace('/(tabs)' as never);
   };
+
+  const exploreAsGuest = () => leaveForNow(stage === 'intro' ? (step === 0 ? 'welcome' : 'goal') : stage);
 
   const continueToAuth = async () => {
     await update({ status: 'in_progress', lastStep: 4, goal });
@@ -338,7 +350,9 @@ export default function OnboardingScreen() {
         locations={[0, 0.55, 1]}
         style={{ position: 'absolute', inset: 0 }}
       />
+      <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
       <ScrollView
+        automaticallyAdjustKeyboardInsets
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{
@@ -349,7 +363,11 @@ export default function OnboardingScreen() {
           alignItems: 'center',
         }}
       >
-        <View style={{ width: cardWidth, flex: 1, gap: isWelcome ? 0 : 14 }}>
+        {/* `flexGrow` rather than `flex`: inside a scroll view `flex: 1` pins
+            this to exactly the viewport height, so a stage taller than the
+            screen is clipped instead of scrolled. The welcome stage still
+            fills the screen, and the taller identity stage can now scroll. */}
+        <View style={{ width: cardWidth, flexGrow: 1, gap: isWelcome ? 0 : 14 }}>
           {isWelcome ? (
             <OnboardingWelcome
               availableHeight={height - topPadding - bottomPadding}
@@ -405,6 +423,10 @@ export default function OnboardingScreen() {
                   onChangeText={setDisplayName}
                   autoCapitalize="words"
                   autoComplete="name"
+                  textContentType="name"
+                  returnKeyType="next"
+                  submitBehavior="submit"
+                  onSubmitEditing={() => handleRef.current?.focus()}
                   maxLength={60}
                   placeholder="Your creator name"
                 />
@@ -414,11 +436,15 @@ export default function OnboardingScreen() {
                       <AtSign size={18} color={appTheme.colors.muted} />
                     </View>
                     <AppTextInput
+                      inputRef={handleRef}
                       label="Unique handle"
                       value={username}
                       onChangeText={(value) => setUsername(value.toLowerCase().replace(/^@+/, '').replace(/[^a-z0-9-]/g, ''))}
                       autoCapitalize="none"
                       autoCorrect={false}
+                      spellCheck={false}
+                      textContentType="nickname"
+                      returnKeyType="done"
                       maxLength={24}
                       placeholder="your-name"
                       style={{ paddingLeft: 38 }}
@@ -438,6 +464,15 @@ export default function OnboardingScreen() {
                   loading={busy}
                   disabled={!displayName.trim() || !/^[a-z0-9-]{3,24}$/.test(username) || usernameState === 'error'}
                   onPress={() => void saveIdentity()}
+                />
+                {/* The flow has to stay optional: this stage offered no skip and
+                    the route disables the back gesture, so a signed-in creator
+                    was held here until they picked a handle. A generated one
+                    already exists to fall back on. */}
+                <SecondaryButton
+                  label="Choose a name later"
+                  disabled={busy}
+                  onPress={() => void leaveForNow('identity')}
                 />
               </Card>
             </>
@@ -476,6 +511,7 @@ export default function OnboardingScreen() {
           ) : null}
         </View>
       </ScrollView>
+      </KeyboardAvoidingArea>
     </View>
   );
 }

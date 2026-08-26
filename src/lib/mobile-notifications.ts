@@ -1299,7 +1299,9 @@ export async function notifyMobileCreditPurchase(
     category: 'commerce',
     title: 'Credits added',
     body: typeof params.credits === 'number'
-      ? `Your balance is now ${params.credits} credits.`
+      // Grouped: balances run to five figures, and an ungrouped run of digits
+      // in a push notification reads as noise rather than a number.
+      ? `Your balance is now ${params.credits.toLocaleString('en-IN')} credits.`
       : 'Your credit purchase is complete.',
     deepLink: '/profile',
     objectType: 'credits',
@@ -1329,8 +1331,8 @@ export async function notifyReferralReward(
     category: 'commerce',
     title: reversed ? 'Referral reward reversed' : 'Referral credits earned',
     body: reversed
-      ? `${credits} referral ${credits === 1 ? 'credit was' : 'credits were'} removed after a payment reversal.`
-      : `You earned ${credits} bonus ${credits === 1 ? 'credit' : 'credits'} from Invite & Earn.`,
+      ? `${credits.toLocaleString('en-IN')} referral ${credits === 1 ? 'credit was' : 'credits were'} removed after a payment reversal.`
+      : `You earned ${credits.toLocaleString('en-IN')} bonus ${credits === 1 ? 'credit' : 'credits'} from Invite & Earn.`,
     deepLink: '/invite',
     objectType: 'referral_reward',
     objectId: params.rewardId,
@@ -1476,6 +1478,18 @@ export async function notifyPostSocialActivity(
         ? 'remixed'
         : 'shared';
 
+  // The title already states what happened, so the body says what it means for
+  // the creator. It used to be one boilerplate line about notifications being
+  // grouped — the same sentence under every social alert, which made a busy
+  // list read as if nothing in it was worth reading. Grouping is already shown
+  // by the update-count chip on the row.
+  const body =
+    params.type === 'post_saved'
+      ? 'It is in their saved media now.'
+      : params.type === 'post_remixed'
+        ? 'They started a new creation from it.'
+        : 'They passed it on outside the app.';
+
   return createMobileNotificationSafely({
     adminSupabase,
     userId: params.recipientUserId,
@@ -1483,7 +1497,7 @@ export async function notifyPostSocialActivity(
     type: params.type,
     category: 'social',
     title: `Someone ${verb} your post`,
-    body: 'Creator activity is grouped here to keep your phone quiet.',
+    body,
     deepLink: buildMobileNotificationDeepLink({ kind: 'showcasePost', postId: params.postId }),
     objectType: 'post',
     objectId: params.postId,

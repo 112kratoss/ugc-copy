@@ -24,6 +24,10 @@ import {
 import type { PostResourceKind } from '@/lib/types';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
+import { verticalHitSlop } from '@/lib/hit-target';
+
+/** The creator byline reads as a single line of text; its reach is widened rather than its height. */
+const CREATOR_ROW_HEIGHT = 36;
 
 /**
  * The details behind a post: who made it, the prompt, the caption, and the
@@ -192,11 +196,12 @@ export function PostDetailsPage({
             accessibilityLabel={canOpenCreator ? `Open ${meta.creatorLabel} profile` : undefined}
             disabled={!canOpenCreator}
             onPress={() => onCreatorOpen?.(item)}
+            hitSlop={verticalHitSlop(CREATOR_ROW_HEIGHT)}
             style={({ pressed }) => ({
               flexDirection: 'row',
               alignItems: 'center',
               gap: 9,
-              minHeight: 36,
+              minHeight: CREATOR_ROW_HEIGHT,
               alignSelf: 'flex-start',
               opacity: pressed ? appTheme.opacity.pressed : 1,
             })}

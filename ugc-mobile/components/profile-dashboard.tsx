@@ -66,6 +66,7 @@ import {
 import { flattenShowcaseFeedPages } from '@/lib/showcase-feed-query';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
+import { formatCreditAmount } from '@/lib/pricing';
 import { appTheme } from '@/lib/theme';
 import type {
   GenerationListResponse,
@@ -417,7 +418,7 @@ export function ProfileDashboard({
             <BalanceCard
               icon={<Crown size={19} color="#fbbf24" />}
               label="Credits"
-              value={String(credits ?? profile?.credits ?? 0)}
+              value={formatCreditAmount(credits ?? profile?.credits)}
               onPress={() => router.push('/pricing' as never)}
             />
             <BalanceCard
@@ -741,7 +742,7 @@ function ProfileHeroCard({
           {stats.map((stat) => (
             <View key={stat.label} style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'baseline', justifyContent: 'center', gap: 5 }}>
               <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: PROFILE_COLORS.text, fontSize: 16, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{stat.value}</Text>
-              <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={{ color: PROFILE_COLORS.muted, fontSize: 10, fontWeight: '700' }}>{stat.label}</Text>
+              <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.72} style={{ color: PROFILE_COLORS.muted, fontSize: 11, fontWeight: '700' }}>{stat.label}</Text>
             </View>
           ))}
         </View>
@@ -807,7 +808,7 @@ function BalanceCard({
         {icon}
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-        <Text numberOfLines={1} style={{ color: PROFILE_COLORS.muted, fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</Text>
+        <Text numberOfLines={1} style={{ color: PROFILE_COLORS.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</Text>
         <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.74} style={{ color: PROFILE_COLORS.text, fontSize: 17, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{value}</Text>
       </View>
       <ChevronRight size={16} color={PROFILE_COLORS.faint} strokeWidth={2.3} />
@@ -1201,10 +1202,10 @@ function ProfileSavedFeedOverlay({
           {avatarUrl ? (
             <Image source={{ uri: avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
           ) : (
-            <Text style={{ color: '#fff', fontSize: 8, fontWeight: '800' }}>{avatarInitials}</Text>
+            <Text style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>{avatarInitials}</Text>
           )}
         </View>
-        <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, color: '#ffffff', fontSize: 10, fontWeight: '800' }}>
+        <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, color: '#ffffff', fontSize: 11, fontWeight: '800' }}>
           {item.avatarLabel || item.meta}
         </Text>
       </View>
@@ -1341,7 +1342,7 @@ function ProfileTextPreview({ item, height }: { item: ProfileMediaCard; height: 
             marginBottom: 8,
           }}
         >
-          <Text numberOfLines={1} style={{ color: accent, fontSize: 9, fontWeight: '800' }}>{label}</Text>
+          <Text numberOfLines={1} style={{ color: accent, fontSize: 11, fontWeight: '800' }}>{label}</Text>
         </View>
         <Text numberOfLines={5} style={{ color: '#ffffff', fontSize: 13, lineHeight: 16, fontWeight: '800' }}>
           {item.previewText || item.title}
@@ -1375,7 +1376,7 @@ function ProfileVideoFallback({ item, height }: { item: ProfileMediaCard; height
         <Text style={{ marginTop: 10, color: '#ffffff', fontSize: 12, fontWeight: '800' }}>{label}</Text>
         <Text
           numberOfLines={1}
-          style={{ marginTop: 3, color: 'rgba(255,255,255,0.66)', fontSize: 9, fontWeight: '800' }}
+          style={{ marginTop: 3, color: 'rgba(255,255,255,0.66)', fontSize: 11, fontWeight: '800' }}
         >
           {statusLabel}
         </Text>
@@ -1423,7 +1424,7 @@ function ProfileUnavailableFallback({
         ) : null}
         <Text
           numberOfLines={1}
-          style={{ marginTop: showTitle ? 4 : 10, color: 'rgba(255,255,255,0.66)', fontSize: 9, fontWeight: '800' }}
+          style={{ marginTop: showTitle ? 4 : 10, color: 'rgba(255,255,255,0.66)', fontSize: 11, fontWeight: '800' }}
         >
           {statusLabel ?? item.previewStatusLabel ?? 'Preview unavailable'}
         </Text>

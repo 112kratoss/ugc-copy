@@ -29,6 +29,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppText, ChoiceChip, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
 import { ComposerMediaLightbox, getComposerMediaLabel } from '@/components/composer-media-lightbox';
+import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { StableMediaImage } from '@/components/media-preview';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
@@ -1217,11 +1218,7 @@ function ResourceComposerSheet({
 
   return (
     <Modal visible={visible} transparent animationType="slide" presentationStyle="overFullScreen" onRequestClose={onRequestClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={0}
-        style={{ flex: 1, justifyContent: 'flex-end' }}
-      >
+      <KeyboardAvoidingArea iosScrollViewAdjustsInsets style={{ justifyContent: 'flex-end' }}>
         <Pressable accessible={false} onPress={onRequestClose} style={{ position: 'absolute', inset: 0, backgroundColor: appTheme.colors.overlayStrong }} />
         <View
           accessibilityViewIsModal
@@ -1370,7 +1367,7 @@ function ResourceComposerSheet({
                       <View key={attachment.id} style={{ minHeight: 50, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 14, backgroundColor: appTheme.colors.surfaceInset, paddingHorizontal: 11 }}>
                         <FileText size={17} color={appTheme.colors.textSecondary} />
                         <AppText variant="caption" numberOfLines={1} style={{ flex: 1 }}>{attachment.label}</AppText>
-                        <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${attachment.label}`} onPress={() => onRemoveAttachment(attachment.id)} style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}>
+                        <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${attachment.label}`} onPress={() => onRemoveAttachment(attachment.id)} style={({ pressed }) => ({ width: 44, height: 44, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                           <X size={17} color={appTheme.colors.danger} />
                         </Pressable>
                       </View>
@@ -1487,7 +1484,7 @@ function ResourceComposerSheet({
             </>
           ) : null}
         </View>
-      </KeyboardAvoidingView>
+      </KeyboardAvoidingArea>
     </Modal>
   );
 }
@@ -4891,13 +4888,13 @@ function UnlockFields({
     <View style={{ gap: 10 }}>
       <ComposerInput value={resource.previewText} onChangeText={(previewText) => onChange({ previewText })} placeholder="Buyer preview: what is inside the unlock?" minHeight={64} multiline />
       {accessMode === 'paid' ? (
-        <ComposerInput value={resource.priceUsd} onChangeText={(priceUsd) => onChange({ priceUsd })} placeholder="Price in USD, e.g. 9" />
+        <ComposerInput value={resource.priceUsd} onChangeText={(priceUsd) => onChange({ priceUsd })} placeholder="Price in USD, e.g. 9" keyboardType="decimal-pad" />
       ) : null}
       {resource.selectedKinds.prompt ? (
         <ComposerInput value={resource.promptText} onChangeText={(promptText) => onChange({ promptText })} placeholder="Exact prompt or prompt pack" minHeight={80} multiline />
       ) : null}
       {resource.selectedKinds.workflow ? (
-        <ComposerInput value={resource.workflowShareUrl} onChangeText={(workflowShareUrl) => onChange({ workflowShareUrl })} placeholder="Workflow/setup URL" />
+        <ComposerInput value={resource.workflowShareUrl} onChangeText={(workflowShareUrl) => onChange({ workflowShareUrl })} placeholder="Workflow/setup URL" keyboardType="url" textContentType="URL" autoCapitalize="none" autoCorrect={false} spellCheck={false} />
       ) : null}
       {resource.selectedKinds.notes ? (
         <ComposerInput value={resource.notesMarkdown} onChangeText={(notesMarkdown) => onChange({ notesMarkdown })} placeholder="Notes, steps, or usage guide" minHeight={84} multiline />
@@ -4912,9 +4909,9 @@ function UnlockFields({
             <View key={attachment.id} style={{ gap: appTheme.spacing.compact }}>
               <ComposerInput value={attachment.label} onChangeText={(label) => onUpdateAttachment(attachment.id, { label })} placeholder="Attachment label" />
               {attachment.kind === 'file' ? (
-                <ComposerInput value={attachment.storagePath ?? ''} onChangeText={(storagePath) => onUpdateAttachment(attachment.id, { storagePath })} placeholder="Uploaded file path" />
+                <ComposerInput value={attachment.storagePath ?? ''} onChangeText={(storagePath) => onUpdateAttachment(attachment.id, { storagePath })} placeholder="Uploaded file path" autoCapitalize="none" autoCorrect={false} spellCheck={false} />
               ) : (
-                <ComposerInput value={attachment.url ?? ''} onChangeText={(url) => onUpdateAttachment(attachment.id, { url })} placeholder="File or reference link" />
+                <ComposerInput value={attachment.url ?? ''} onChangeText={(url) => onUpdateAttachment(attachment.id, { url })} placeholder="File or reference link" keyboardType="url" textContentType="URL" autoCapitalize="none" autoCorrect={false} spellCheck={false} />
               )}
               <SegmentedRow wrap>
                 {(['external_link', 'source_file', 'reference_image', 'preset', 'settings'] as const).map((type) => (

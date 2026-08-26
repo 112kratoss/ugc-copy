@@ -147,7 +147,10 @@ export default function StudioScreen() {
         contentContainerStyle={{
           paddingTop: topInset + 18,
           paddingHorizontal: horizontalPadding,
-          paddingBottom: tabBarMetrics.contentBottomOverlapPadding,
+          // Every row here is a tap target, so the list clears the raised
+          // Create button rather than ending under it — the overlap variant
+          // only accounts for the bar, and the button sits proud of it.
+          paddingBottom: tabBarMetrics.contentBottomPadding,
           gap: 18,
         }}
       >
@@ -265,7 +268,10 @@ function NotificationHeader({
         </AppText>
         <AppText variant="bodySm" color="muted" style={{ fontWeight: '700' }}>
           {signedIn
-            ? `${unreadCount} unread | ${alertLabel} | ${deliveryLabel}`
+            // Middle dots, matching the metadata separator used on feed rows
+            // and post details. A pipe reads as a table rule rather than as
+            // punctuation between related facts.
+            ? `${unreadCount} unread · ${alertLabel} · ${deliveryLabel}`
             : 'Sign in to view alerts'}
         </AppText>
       </View>

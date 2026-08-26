@@ -6,10 +6,11 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { ArrowLeft, Camera, Check, ImageIcon } from 'lucide-react-native';
 import type { ComponentProps } from 'react';
-import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Keyboard, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { PrimaryButton, SecondaryButton, StatusBlock } from '@/components/ui';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
@@ -50,8 +51,7 @@ export function EditProfileScreen() {
   const { width } = useWindowDimensions();
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
-  const keyboardHeight = useKeyboardHeight();
-  const scrollBottomPadding = getEditProfileScrollPadding({ bottomInset, keyboardHeight });
+  const scrollBottomPadding = getEditProfileScrollPadding({ bottomInset });
   const pageWidth = Math.min(width, 430);
   const isCompact = pageWidth < 390;
   const horizontalPadding = isCompact ? 16 : 20;
@@ -64,6 +64,9 @@ export function EditProfileScreen() {
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [message, setMessage] = useState<string | null>(null);
   const [progressMessage, setProgressMessage] = useState<string | null>(null);
+  // Return advances through the form rather than dismissing the keyboard.
+  const usernameRef = useRef<TextInput | null>(null);
+  const bioRef = useRef<TextInput | null>(null);
 
   const profileQuery = useQuery({
     queryKey: ['profile', user?.id],
@@ -351,6 +354,11 @@ export function EditProfileScreen() {
               error={fieldErrors.displayName}
               placeholder="LunaDreams"
               maxLength={MAX_DISPLAY_NAME_LENGTH}
+              autoCapitalize="words"
+              textContentType="name"
+              returnKeyType="next"
+              submitBehavior="submit"
+              onSubmitEditing={() => usernameRef.current?.focus()}
             />
             <ProfileTextField
               label="Username"
@@ -363,6 +371,12 @@ export function EditProfileScreen() {
               placeholder="@lunadreams"
               autoCapitalize="none"
               autoCorrect={false}
+              spellCheck={false}
+              textContentType="nickname"
+              returnKeyType="next"
+              submitBehavior="submit"
+              onSubmitEditing={() => bioRef.current?.focus()}
+              inputRef={usernameRef}
             />
             <ProfileTextField
               label="Bio"
@@ -376,6 +390,7 @@ export function EditProfileScreen() {
               multiline
               maxLength={MAX_BIO_LENGTH}
               footer={`${bioCount}/${MAX_BIO_LENGTH}`}
+              inputRef={bioRef}
             />
           </GlassForm>
 
@@ -407,8 +422,10 @@ function EditProfileShell({
 }) {
   return (
     <View style={{ flex: 1, backgroundColor: appTheme.colors.background, paddingTop: topInset }}>
+      <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
       <ScrollView
         contentInsetAdjustmentBehavior="never"
+        automaticallyAdjustKeyboardInsets
         keyboardDismissMode="on-drag"
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
@@ -422,28 +439,9 @@ function EditProfileShell({
       >
         {children}
       </ScrollView>
+      </KeyboardAvoidingArea>
     </View>
   );
-}
-
-function useKeyboardHeight() {
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
-
-  useEffect(() => {
-    const showSubscription = Keyboard.addListener('keyboardDidShow', (event) => {
-      setKeyboardHeight(event.endCoordinates.height);
-    });
-    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
-      setKeyboardHeight(0);
-    });
-
-    return () => {
-      showSubscription.remove();
-      hideSubscription.remove();
-    };
-  }, []);
-
-  return keyboardHeight;
 }
 
 function EditHeader({
@@ -523,11 +521,13 @@ function ProfileTextField({
   error,
   footer,
   multiline,
+  inputRef,
   ...props
 }: ComponentProps<typeof TextInput> & {
   label: string;
   error?: string;
   footer?: string;
+  inputRef?: React.RefObject<TextInput | null>;
 }) {
   return (
     <View style={{ gap: 8 }}>
@@ -536,6 +536,7 @@ function ProfileTextField({
         {footer ? <Text style={{ color: appTheme.colors.faint, fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] }}>{footer}</Text> : null}
       </View>
       <TextInput
+        ref={inputRef}
         accessibilityLabel={label}
         aria-invalid={Boolean(error)}
         placeholderTextColor={appTheme.colors.faint}

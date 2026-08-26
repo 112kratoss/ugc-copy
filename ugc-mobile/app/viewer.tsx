@@ -98,6 +98,10 @@ import {
 } from '@/lib/post-lifecycle';
 import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
 import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
+import { verticalHitSlop } from '@/lib/hit-target';
+
+/** The creator byline reads as a single line of text; its reach is widened rather than its height. */
+const CREATOR_ROW_HEIGHT = 34;
 
 type ViewerParams = {
   algorithmVersion?: string | string[];
@@ -566,6 +570,7 @@ export default function ImmersivePreviewViewerScreen() {
           return;
         }
       } catch (error) {
+        haptic.error();
         Alert.alert('Could not start remix', error instanceof Error ? error.message : 'Please try again.');
         return;
       } finally {
@@ -931,7 +936,7 @@ function ViewerShell({ topInset, bottomInset, children }: { topInset: number; bo
         accessibilityRole="button"
         accessibilityLabel="Go back"
         onPress={leaveViewer}
-        style={{ position: 'absolute', left: 16, top: topInset + 10, width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.3)' }}
+        style={({ pressed }) => ({ position: 'absolute', left: 16, top: topInset + 10, width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.3)', opacity: pressed ? appTheme.opacity.pressed : 1 })}
       >
         <IconShadow><ArrowLeft size={30} color="#ffffff" strokeWidth={2.4} /></IconShadow>
       </Pressable>
@@ -1312,11 +1317,13 @@ function ImmersiveSlide({
               accessibilityLabel={`Open ${item.creatorLabel} profile`}
               disabled={!canOpenCreator}
               onPress={() => onCreatorOpen(item)}
+              hitSlop={verticalHitSlop(CREATOR_ROW_HEIGHT)}
               style={({ pressed }) => ({
                 flexDirection: 'row',
                 alignItems: 'center',
                 gap: 9,
                 flexShrink: 1,
+                minHeight: CREATOR_ROW_HEIGHT,
                 opacity: pressed ? 0.72 : canOpenCreator ? 1 : 0.86,
               })}
             >
@@ -1338,7 +1345,7 @@ function ImmersiveSlide({
               accessibilityRole="button"
               accessibilityLabel={captionExpanded ? 'Collapse caption' : 'Expand caption'}
               onPress={() => setCaptionExpanded((current) => !current)}
-              style={{ gap: 3 }}
+              style={({ pressed }) => ({ gap: 3, opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
               {reelCaption.title ? (
                 <Text numberOfLines={captionExpanded ? 4 : 1} style={{ color: '#fff', fontSize: 16, lineHeight: 21, fontWeight: '700', ...REEL_TEXT_SHADOW }}>
@@ -1959,6 +1966,7 @@ function TextSlide({ item, width, height }: { item: ImmersivePreviewItem; width:
             accessibilityRole="button"
             accessibilityLabel={`Read the full post ${item.title}`}
             onPress={() => router.push(`/post/${item.showcasePostId}` as never)}
+            hitSlop={verticalHitSlop(32)}
             style={({ pressed }) => ({
               alignSelf: 'flex-start',
               minHeight: 32,

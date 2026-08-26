@@ -268,7 +268,13 @@ export function MagicTabBar({
           })}
         >
           <Plus size={isCompact ? 23 : 25} color={ON_PRIMARY} strokeWidth={2.7} />
-          <Text style={{ color: ON_PRIMARY, fontSize: 9, lineHeight: 11, fontWeight: '800' }}>Create</Text>
+          <Text
+            numberOfLines={1}
+            maxFontSizeMultiplier={1.4}
+            style={{ color: ON_PRIMARY, fontSize: 11, lineHeight: 13, fontWeight: '800' }}
+          >
+            Create
+          </Text>
         </Pressable>
       </AnimatedView>
     </View>
@@ -407,7 +413,19 @@ function TabButton({
         <AnimatedView style={{ transform: [{ scale: iconScale ?? 1 }] }}>
           <Icon size={iconSize} color={color} strokeWidth={active ? 2.5 : 2.1} />
         </AnimatedView>
-        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.76} style={{ color, fontSize: labelSize, fontWeight: active ? '800' : '600' }}>{item.label}</Text>
+        {/* Capped scaling: the bar is a fixed-height row of five slots around a
+            raised centre button, so unbounded Dynamic Type ran the labels into
+            it. They still grow for legibility, just not past what the slot can
+            hold — the icon above carries the meaning at extreme sizes. */}
+        <Text
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.76}
+          maxFontSizeMultiplier={1.4}
+          style={{ color, fontSize: labelSize, fontWeight: active ? '800' : '600' }}
+        >
+          {item.label}
+        </Text>
       </AnimatedView>
     </Pressable>
   );

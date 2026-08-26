@@ -33,7 +33,7 @@ import {
   resolvePurchaseGate,
   resolveSelectedPricingPlan,
 } from '@/lib/pricing-view-model';
-import { MOBILE_PRICING_PLANS, type MobilePricingPlan, type PricingPlanId } from '@/lib/pricing';
+import { MOBILE_PRICING_PLANS, formatCreditAmount, type MobilePricingPlan, type PricingPlanId } from '@/lib/pricing';
 import { appTheme } from '@/lib/theme';
 
 function packageProductId(item: PurchasesPackage) {
@@ -58,7 +58,7 @@ function PricingPlanCard({
   return (
     <Pressable
       accessibilityRole="radio"
-      accessibilityLabel={`${plan.name}, ${plan.credits.toLocaleString('en-IN')} credits, ${price}`}
+      accessibilityLabel={`${plan.name}, ${formatCreditAmount(plan.credits)} credits, ${price}`}
       accessibilityState={{ selected }}
       onPress={onPress}
       style={({ pressed }) => ({
@@ -94,7 +94,7 @@ function PricingPlanCard({
           variant="sectionTitle"
           style={{ fontSize: 28, fontVariant: ['tabular-nums'] }}
         >
-          {plan.credits.toLocaleString('en-IN')} credits
+          {formatCreditAmount(plan.credits)} credits
         </AppText>
         <AppText variant="bodySm" color="muted" numberOfLines={2}>
           {plan.description}
@@ -267,7 +267,7 @@ export default function PricingScreen() {
         entitlement,
       });
       await refreshProfile();
-      setNotice(`${entitlement.credits} credits are synced to your account.`);
+      setNotice(`${formatCreditAmount(entitlement.credits)} credits are synced to your account.`);
       setNoticeTone('success');
     } catch (error) {
       if (isUserCancelledPurchase(error)) {
@@ -342,7 +342,7 @@ export default function PricingScreen() {
           <View style={{ flex: 1, gap: 4 }}>
             <Kicker color="commerce">Available balance</Kicker>
             <AppText variant="sectionTitle" style={{ fontVariant: ['tabular-nums'] }}>
-              {(credits ?? 0).toLocaleString('en-IN')} credits
+              {formatCreditAmount(credits)} credits
             </AppText>
           </View>
           <Pill

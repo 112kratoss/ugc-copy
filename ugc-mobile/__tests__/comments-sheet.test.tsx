@@ -73,6 +73,22 @@ let replyQueryState: Record<string, unknown> = {};
 vi.mock('react-native', () => ({
   ActivityIndicator: (props: MockProps) => React.createElement('spinner', props),
   Alert: { alert: mocks.alert },
+  Animated: {
+    View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
+    Value: class {
+      constructor(private value: number) {}
+      setValue(next: number) { this.value = next; }
+      interpolate() { return this.value; }
+    },
+    timing: () => ({ start: (done?: (r: { finished: boolean }) => void) => done?.({ finished: true }), stop: () => {} }),
+    spring: () => ({ start: () => {}, stop: () => {} }),
+    // The sheet composes its slide with the drag offset.
+    add: (a: unknown, _b: unknown) => a,
+  },
+  Easing: { in: (fn: unknown) => fn, out: (fn: unknown) => fn, cubic: 'cubic' },
+  // The sheet's grabber owns a swipe-to-dismiss responder; the double only
+  // needs to hand back inert pan handlers so the tree renders.
+  PanResponder: { create: () => ({ panHandlers: {} }) },
   FlatList: React.forwardRef(({
     data,
     renderItem,
@@ -99,7 +115,6 @@ vi.mock('react-native', () => ({
     return React.createElement('list', props, children);
   }),
   KeyboardAvoidingView: ({ children, ...props }: MockProps) => React.createElement('kav', props, children),
-  Modal: ({ children, ...props }: MockProps) => React.createElement('modal', props, children),
   Platform: { OS: 'ios' },
   Pressable: ({ children, style, ...props }: MockProps) => React.createElement('pressable', {
     ...props,
@@ -112,6 +127,7 @@ vi.mock('react-native', () => ({
     return React.createElement('textinput', props);
   }),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
+  useWindowDimensions: () => ({ width: 390, height: 844 }),
 }));
 
 vi.mock('@/lib/motion', () => ({ useReducedMotion: () => false }));

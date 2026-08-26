@@ -1,4 +1,4 @@
-import { MOBILE_PRICING_PLANS, type MobilePricingPlan, type PricingPlanId } from './pricing';
+import { MOBILE_PRICING_PLANS, formatCreditAmount, type MobilePricingPlan, type PricingPlanId } from './pricing';
 
 export const DEFAULT_MOBILE_PRICING_PLAN_ID =
   MOBILE_PRICING_PLANS.find((plan) => plan.popular)?.id ?? MOBILE_PRICING_PLANS[0].id;
@@ -68,7 +68,7 @@ export function getPurchaseButtonLabel({
 }) {
   if (processing) return 'Processing purchase...';
   if (loading) return 'Loading store price...';
-  return `Buy ${plan.credits.toLocaleString('en-IN')} credits - ${price}`;
+  return `Buy ${formatCreditAmount(plan.credits)} credits - ${price}`;
 }
 
 export function getPricingPlanIdForCarouselOffset(

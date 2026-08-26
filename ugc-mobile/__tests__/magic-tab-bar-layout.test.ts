@@ -10,7 +10,8 @@ describe('magic tab bar layout', () => {
       barHeight: 66,
       centerGap: 68,
       tabIconSize: 22,
-      tabLabelSize: 10,
+      // Apple's minimum iOS type size; the bar shows it on every screen.
+      tabLabelSize: 11,
       horizontalPadding: 14,
       bottomInset: 48,
       bottomPadding: 48,
@@ -27,7 +28,8 @@ describe('magic tab bar layout', () => {
       barHeight: 62,
       centerGap: 62,
       tabIconSize: 21,
-      tabLabelSize: 10,
+      // Apple's minimum iOS type size; the bar shows it on every screen.
+      tabLabelSize: 11,
       horizontalPadding: 10,
       bottomInset: 0,
       bottomPadding: 10,

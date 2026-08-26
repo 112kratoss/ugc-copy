@@ -403,3 +403,19 @@ function getEmailLocalPart(email?: string | null) {
   const localPart = email?.split('@')[0]?.trim();
   return localPart || null;
 }
+
+/**
+ * First character to show when a creator has no avatar image.
+ *
+ * Callers pass whatever label they have — sometimes a display name, often a
+ * handle. A handle leads with `@`, so taking `name[0]` blindly badges every
+ * avatar-less creator with the same "@" instead of their own initial.
+ *
+ * Only *leading* punctuation is stripped, and any letter is kept whatever the
+ * script, so non-Latin names still get their own initial rather than a
+ * placeholder.
+ */
+export function getAvatarInitial(name: string) {
+  const cleaned = name.trim().replace(/^[@#~!?.,:;'"`^*_+=\-\/\\|()[\]{}<>\s]+/, '');
+  return cleaned[0]?.toUpperCase() || 'C';
+}

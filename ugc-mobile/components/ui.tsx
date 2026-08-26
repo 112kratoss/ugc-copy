@@ -18,6 +18,8 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
+import { getAvatarInitial } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { haptic } from '@/lib/haptics';
@@ -70,16 +72,28 @@ export function Screen({
   children,
   scroll = true,
   insideTab = false,
+  keyboardAware = false,
 }: {
   children: React.ReactNode;
   scroll?: boolean;
   insideTab?: boolean;
+  /**
+   * Shrinks the scroll area with the keyboard so the focused field is scrolled
+   * into view instead of being covered. Opt-in: it adds a wrapper view, and
+   * only screens that actually take text input need it.
+   */
+  keyboardAware?: boolean;
 }) {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const topPadding = appTheme.spacing.screen + (insideTab ? resolvedTopInset(insets.top) : 0);
+  // `contentBottomPadding` clears the raised centre button as well as the bar;
+  // the overlap variant only clears the bar, which leaves the last control
+  // under the Create button — it is opaque and takes the tap regardless of the
+  // bar's blur. Feeds want that overlap so media runs to the edge, but `Screen`
+  // is always a gutter-padded container, never edge-to-edge media.
   const bottomPadding = insideTab
-    ? getMagicTabBarMetrics(width, resolvedBottomInset(insets.bottom)).contentBottomOverlapPadding
+    ? getMagicTabBarMetrics(width, resolvedBottomInset(insets.bottom)).contentBottomPadding
     : 36;
 
   if (!scroll) {
@@ -98,9 +112,10 @@ export function Screen({
     );
   }
 
-  return (
+  const scroller = (
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
+      automaticallyAdjustKeyboardInsets
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
       style={{ flex: 1, backgroundColor: appTheme.colors.background }}
@@ -114,24 +129,39 @@ export function Screen({
       {children}
     </ScrollView>
   );
+
+  if (!keyboardAware) return scroller;
+
+  return (
+    <KeyboardAvoidingArea iosScrollViewAdjustsInsets style={{ backgroundColor: appTheme.colors.background }}>
+      {scroller}
+    </KeyboardAvoidingArea>
+  );
 }
 
 export function AppText({
   children,
   variant = 'body',
   color = 'text',
-  selectable = true,
+  selectable,
   style,
   numberOfLines,
   heading = false,
   accessibilityRole,
   ...textProps
 }: AppTextProps) {
+  // Android drops `numberOfLines` truncation when the text is selectable: it
+  // lays the full string out and draws the extra lines past the single-line box
+  // it measured, so a long title spills over whatever sits beneath it instead
+  // of ellipsizing. Truncation is a layout guarantee and selection is a nicety,
+  // so capped text stops being selectable unless a caller insists.
+  const isSelectable = selectable ?? numberOfLines === undefined;
+
   return (
     <Text
       {...textProps}
       accessibilityRole={accessibilityRole ?? (heading || isHeadingVariant(variant) ? 'header' : undefined)}
-      selectable={selectable}
+      selectable={isSelectable}
       numberOfLines={numberOfLines}
       style={[textRole(variant), { color: colorValue(color) }, style]}
     >
@@ -821,6 +851,7 @@ export function AppTextInput({
   accessibilityLabelledBy,
   accessibilityState,
   editable,
+  inputRef,
   onBlur,
   onFocus,
   placeholderTextColor = appTheme.colors.faint,
@@ -828,6 +859,8 @@ export function AppTextInput({
   ...props
 }: TextInputProps & {
   label: string;
+  /** Lets a caller move focus to this field, e.g. from the previous field's Return key. */
+  inputRef?: React.RefObject<TextInput | null>;
 }) {
   const generatedId = useId();
   const labelId = `field-label-${generatedId.replace(/:/g, '')}`;
@@ -846,6 +879,7 @@ export function AppTextInput({
       </AppText>
       <TextInput
         {...props}
+        ref={inputRef}
         accessibilityLabel={accessibilityLabel ?? label}
         accessibilityLabelledBy={accessibilityLabelledBy ?? labelId}
         accessibilityState={{ ...accessibilityState, disabled }}
@@ -865,8 +899,14 @@ export function AppTextInput({
         style={[
           {
             minHeight: multiline ? 120 : appTheme.touch.default,
-            borderWidth: focused ? appTheme.state.focus.width : 1,
+            // Border width stays put and the focus ring is drawn as an outline
+            // outside the box. Growing the border on focus instead would resize
+            // the field and nudge its text by a pixel on every tap.
+            borderWidth: 1,
             borderColor: focused ? appTheme.state.focus.color : appTheme.colors.border,
+            outlineStyle: 'solid',
+            outlineColor: appTheme.state.focus.color,
+            outlineWidth: focused ? appTheme.state.focus.width : 0,
             borderRadius: appTheme.radii.md,
             borderCurve: 'continuous',
             backgroundColor: disabled ? appTheme.colors.surface : appTheme.colors.surfaceInset,
@@ -1103,7 +1143,7 @@ export function CreatorAvatar({
   name: string;
   size?: number;
 }) {
-  const initial = name.trim()[0]?.toUpperCase() || 'C';
+  const initial = getAvatarInitial(name);
 
   return (
     <View

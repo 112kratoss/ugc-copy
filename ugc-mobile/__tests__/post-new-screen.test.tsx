@@ -636,9 +636,12 @@ describe('mobile external post composer', () => {
     renderer.act(() => findPressableByText(tree.root, 'Prompt or script').props.onPress());
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'This content is revealed only after unlock').props.onChangeText('Unsaved prompt'));
 
-    const keyboardContainer = tree.root.findAll((node) => String(node.type) === 'keyboard-avoiding-view')[0];
+    // The resource editor has to give way to the keyboard on both platforms.
+    // It used to rely on KeyboardAvoidingView, which was configured for iOS
+    // only and so did nothing on Android once edge-to-edge stopped the window
+    // resizing; KeyboardAvoidingArea shrinks the surface on either platform.
+    const keyboardContainer = tree.root.findAll((node) => node.props?.testID === 'keyboard-avoiding-area')[0];
     expect(keyboardContainer).toBeTruthy();
-    expect(keyboardContainer.props.behavior).toBe('padding');
     const keyboardScroll = tree.root.findAll((node) => String(node.type) === 'scrollview' && node.props.automaticallyAdjustKeyboardInsets)[0];
     expect(keyboardScroll).toBeTruthy();
 

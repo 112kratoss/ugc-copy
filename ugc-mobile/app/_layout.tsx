@@ -13,6 +13,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-url-polyfill/auto';
 
+import { OverlayHost } from '@/components/overlay-host';
 import { setUpgradeRequiredHandler } from '@/lib/api-client';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
@@ -93,6 +94,11 @@ function RootLayoutNav() {
               <GestureHandlerRootView style={{ flex: 1 }}>
               <View style={{ flex: 1, backgroundColor: appTheme.colors.app }}>
                 <StatusBar style="light" backgroundColor={appTheme.colors.background} translucent={false} />
+                {/* Above the navigator so a hosted surface can cover the tab
+                    bar, and inside the app's own window so keyboard avoidance
+                    reaches it — which a React Native Modal cannot offer on
+                    Android. */}
+                <OverlayHost>
                 <Stack
                 screenOptions={{
                   animation: reducedMotion ? 'none' : 'default',
@@ -158,6 +164,7 @@ function RootLayoutNav() {
                 <Stack.Screen name="delete-account" options={{ title: 'Delete Account' }} />
                 <Stack.Screen name="help" options={{ title: 'Help & Support' }} />
                 </Stack>
+                </OverlayHost>
               </View>
               </GestureHandlerRootView>
             </ThemeProvider>

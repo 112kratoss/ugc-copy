@@ -38,7 +38,7 @@ export default function DeleteAccountScreen() {
   };
 
   return (
-    <Screen>
+    <Screen keyboardAware>
       <SectionTitle
         eyebrow="Account"
         title="Delete your account"

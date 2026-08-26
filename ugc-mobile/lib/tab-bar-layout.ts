@@ -28,7 +28,8 @@ export function getMagicTabBarMetrics(windowWidth: number, bottomInset: number):
     barHeight,
     centerGap: isCompact ? 62 : 68,
     tabIconSize: isCompact ? 21 : 22,
-    tabLabelSize: 10,
+    // 11pt is Apple's minimum iOS type size; the tab bar shows it everywhere.
+    tabLabelSize: 11,
     horizontalPadding: isCompact ? 10 : 14,
     bottomInset,
     bottomPadding,

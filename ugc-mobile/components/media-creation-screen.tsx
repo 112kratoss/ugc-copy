@@ -35,6 +35,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { MediaPreview, StableMediaImage } from '@/components/media-preview';
 import {
   AppText,
@@ -105,10 +106,12 @@ import {
   normalizeTextSelection,
   type TextSelection,
 } from '@/lib/reference-mentions';
+import { formatCreditAmount } from '@/lib/pricing';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel } from '@/lib/types';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
+import { verticalHitSlop } from '@/lib/hit-target';
 
 const TOOL_META: Record<CreatorToolId, { title: string; accent: ToolAccent; subtitle: string }> = {
   image: {
@@ -1362,7 +1365,7 @@ export function MediaCreationScreen({
         <View style={{ flexDirection: 'row', gap: appTheme.spacing.gap }}>
           <MetricCard
             label="Credits"
-            value={String(credits ?? 0)}
+            value={formatCreditAmount(credits)}
             body="available"
             accent="amber"
             compact
@@ -1412,9 +1415,11 @@ export function MediaCreationScreen({
 
     return (
       <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+        <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
         <ScrollView
           ref={scrollRef}
           contentInsetAdjustmentBehavior="never"
+          automaticallyAdjustKeyboardInsets
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
           style={{ flex: 1 }}
@@ -1502,6 +1507,7 @@ export function MediaCreationScreen({
             />
           )}
         </ScrollView>
+        </KeyboardAvoidingArea>
 
         <CreatorPersistentBar
           bottom={bottomInset + 8}
@@ -1639,9 +1645,11 @@ export function MediaCreationScreen({
 
     return (
       <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+        <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
         <ScrollView
           ref={scrollRef}
           contentInsetAdjustmentBehavior="never"
+          automaticallyAdjustKeyboardInsets
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
           style={{ flex: 1 }}
@@ -1733,6 +1741,7 @@ export function MediaCreationScreen({
             onMentionStateChange={setIsReferenceMentionActive}
           />
         </ScrollView>
+        </KeyboardAvoidingArea>
 
         <CreatorPersistentBar
           bottom={bottomInset + 8}
@@ -1840,9 +1849,11 @@ export function MediaCreationScreen({
     <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
       <View style={{ position: 'absolute', inset: 0, backgroundColor: appTheme.colors.background }} />
       {insideTab ? <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: topInset, backgroundColor: appTheme.colors.background, zIndex: 3 }} /> : null}
+      <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
       <ScrollView
         ref={scrollRef}
         contentInsetAdjustmentBehavior="never"
+          automaticallyAdjustKeyboardInsets
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         style={{ flex: 1 }}
@@ -1941,6 +1952,7 @@ export function MediaCreationScreen({
           </SurfaceSection>
         ) : null}
       </ScrollView>
+      </KeyboardAvoidingArea>
       {showFloatingReviewBar ? (
         <FloatingGenerateReviewBar
           bottom={bottomInset + 8}
@@ -2098,7 +2110,12 @@ function SlimCreatorBanner({ label, body, loading, onDismiss }: { label: string;
           <ActivityIndicator color={appTheme.colors.primary} size="small" />
         </View>
       ) : onDismiss ? (
-        <Pressable accessibilityRole="button" accessibilityLabel={`Dismiss ${label}`} onPress={onDismiss} style={{ width: 48, height: 48, alignItems: 'center', justifyContent: 'center' }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Dismiss ${label}`}
+          onPress={onDismiss}
+          style={({ pressed }) => ({ width: 48, height: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+        >
           <X size={17} color={appTheme.colors.muted} />
         </Pressable>
       ) : null}
@@ -2344,7 +2361,7 @@ function ImagePromptComposer({
         >
           <View style={{ paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
             <Text style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700' }}>Reference images</Text>
-            <Text style={{ color: appTheme.colors.faint, fontSize: 10, fontWeight: '700' }}>{draft.references.length} / {maxReferences}</Text>
+            <Text style={{ color: appTheme.colors.faint, fontSize: 11, fontWeight: '700' }}>{draft.references.length} / {maxReferences}</Text>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 9, paddingHorizontal: 16, paddingRight: 16 }}>
             {draft.references.map((media) => (
@@ -2451,17 +2468,17 @@ function CompactReferenceSlot({
     >
       <View style={{ minHeight: required ? 29 : 16, alignItems: 'flex-start', justifyContent: 'flex-start', gap: 1 }}>
         <Text numberOfLines={1} style={{ width: '100%', color: appTheme.colors.text, fontSize: 12, fontWeight: '800' }}>{title}</Text>
-        {required ? <Text style={{ color: appTheme.colors.primary, fontSize: 8, fontWeight: '900', textTransform: 'uppercase' }}>Required</Text> : null}
+        {required ? <Text style={{ color: appTheme.colors.primary, fontSize: 11, fontWeight: '900', textTransform: 'uppercase' }}>Required</Text> : null}
       </View>
       {media ? (
         <>
           <ReferenceMediaPreview media={media} size={78} />
-          <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 10, fontWeight: '700' }}>{media.displayName}</Text>
+          <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700' }}>{media.displayName}</Text>
         </>
       ) : (
         <View style={{ flex: 1, minHeight: 82, alignItems: 'center', justifyContent: 'center', gap: 7 }}>
           {isUploading ? <ActivityIndicator color={appTheme.colors.image} size="small" /> : <Plus size={23} color={appTheme.colors.image} />}
-          <Text numberOfLines={2} style={{ color: appTheme.colors.muted, fontSize: 10, lineHeight: 14, textAlign: 'center' }}>{helper ?? 'Tap to add media'}</Text>
+          <Text numberOfLines={2} style={{ color: appTheme.colors.muted, fontSize: 11, lineHeight: 14, textAlign: 'center' }}>{helper ?? 'Tap to add media'}</Text>
         </View>
       )}
     </Pressable>
@@ -2501,7 +2518,7 @@ function CompactShotEditor({
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
         <View style={{ gap: 2 }}>
           <Text style={{ color: appTheme.colors.video, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Multi-shot story</Text>
-          <Text style={{ color: appTheme.colors.muted, fontSize: 10 }}>{draft.multiPrompts.length} shots · {totalDuration}s total</Text>
+          <Text style={{ color: appTheme.colors.muted, fontSize: 11 }}>{draft.multiPrompts.length} shots · {totalDuration}s total</Text>
         </View>
         <Pressable
           accessibilityRole="button"
@@ -2530,7 +2547,7 @@ function CompactShotEditor({
               style={({ pressed }) => ({ minWidth: 76, minHeight: 48, borderRadius: 16, borderWidth: 1, borderColor: active ? 'rgba(115,191,242,0.55)' : appTheme.colors.border, backgroundColor: active ? 'rgba(115,191,242,0.12)' : appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', gap: 2, opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
               <Text style={{ color: active ? appTheme.colors.text : appTheme.colors.muted, fontSize: 11, fontWeight: '900' }}>Shot {index + 1}</Text>
-              <Text style={{ color: appTheme.colors.faint, fontSize: 9 }}>{shot.duration}s</Text>
+              <Text style={{ color: appTheme.colors.faint, fontSize: 11 }}>{shot.duration}s</Text>
             </Pressable>
           );
         })}
@@ -2552,7 +2569,7 @@ function CompactShotEditor({
             style={{ height: 154, color: appTheme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 15, paddingTop: 15, paddingBottom: 22 }}
           />
           <View style={{ paddingHorizontal: 12, paddingBottom: 12, gap: 8 }}>
-            <Text style={{ color: appTheme.colors.muted, fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>Shot duration</Text>
+            <Text style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>Shot duration</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 7 }}>
               {[3, 4, 5, 6, 8, 10, 12].map((duration) => (
                 <Chip key={duration} label={`${duration}s`} active={selectedShot.duration === duration} accent="video" onPress={() => updateSelected({ duration })} />
@@ -2831,6 +2848,7 @@ function VideoCreatorComposer({
               accessibilityLabel={option.label}
               accessibilityState={{ selected: draft.isMultiShot === option.value }}
               onPress={() => onChange({ ...draft, isMultiShot: option.value, referenceMode: option.value ? 'frames' : draft.referenceMode })}
+              hitSlop={verticalHitSlop(40)}
               style={({ pressed }) => ({ flex: 1, minHeight: 40, borderRadius: 14, backgroundColor: draft.isMultiShot === option.value ? 'rgba(115,191,242,0.14)' : pressed ? appTheme.colors.pressed : 'transparent', alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
               <Text style={{ color: draft.isMultiShot === option.value ? appTheme.colors.text : appTheme.colors.muted, fontSize: 12, fontWeight: '800' }}>{option.label}</Text>
@@ -2909,7 +2927,7 @@ function VideoCreatorComposer({
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
           <View style={{ gap: 2 }}>
             <Text style={{ color: appTheme.colors.text, fontSize: 12, fontWeight: '800' }}>{draft.isMultiShot ? 'Story inputs' : 'Visual inputs'}</Text>
-            <Text style={{ color: appTheme.colors.muted, fontSize: 10 }}>
+            <Text style={{ color: appTheme.colors.muted, fontSize: 11 }}>
               {referenceMode === 'frames' ? draft.isMultiShot ? 'Start frame for the story' : 'Start and end frames' : 'Reusable references'}
             </Text>
           </View>
@@ -2922,9 +2940,10 @@ function VideoCreatorComposer({
                   accessibilityLabel={mode === 'frames' ? frameModeLabel : reusableModeLabel}
                   accessibilityState={{ selected: referenceMode === mode }}
                   onPress={() => onChange({ ...draft, referenceMode: mode })}
+                  hitSlop={verticalHitSlop(42)}
                   style={({ pressed }) => ({ minHeight: 42, borderRadius: 11, paddingHorizontal: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: referenceMode === mode ? 'rgba(115,191,242,0.14)' : pressed ? appTheme.colors.pressed : 'transparent', opacity: pressed ? appTheme.opacity.pressed : 1 })}
                 >
-                  <Text style={{ color: referenceMode === mode ? appTheme.colors.text : appTheme.colors.muted, fontSize: 10, fontWeight: '800' }}>{mode === 'frames' ? frameModeLabel : reusableModeLabel}</Text>
+                  <Text style={{ color: referenceMode === mode ? appTheme.colors.text : appTheme.colors.muted, fontSize: 11, fontWeight: '800' }}>{mode === 'frames' ? frameModeLabel : reusableModeLabel}</Text>
                 </Pressable>
               ))}
             </View>
@@ -2959,20 +2978,20 @@ function VideoCreatorComposer({
               {draft.references.map((media) => (
                 <Pressable key={media.id} accessibilityRole="button" accessibilityLabel={`Open details for ${mediaAccessibleName(media)}`} onPress={() => setReferenceId(media.id)} style={({ pressed }) => ({ width: 72, gap: 5, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                   <ReferenceMediaPreview media={media} size={72} />
-                  <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 9, fontWeight: '700', textAlign: 'center' }}>{media.displayName}</Text>
+                  <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700', textAlign: 'center' }}>{media.displayName}</Text>
                 </Pressable>
               ))}
               {draft.referenceVideos.map((media) => (
                 <Pressable key={media.id} accessibilityRole="button" accessibilityLabel={`Open details for ${mediaAccessibleName(media)}`} onPress={() => setReferenceId(media.id)} style={({ pressed }) => ({ width: 72, gap: 5, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                   <ReferenceMediaPreview media={media} size={72} />
-                  <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 9, fontWeight: '700', textAlign: 'center' }}>{media.displayName}</Text>
+                  <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700', textAlign: 'center' }}>{media.displayName}</Text>
                 </Pressable>
               ))}
               {draft.referenceAudios.map((media) => (
                 <View key={media.id} style={{ width: 72, gap: 4 }}>
                   <ReferenceMediaPreview media={media} size={72} />
-                  <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${mediaAccessibleName(media)}`} onPress={() => onChange({ ...draft, referenceAudios: draft.referenceAudios.filter((item) => item.id !== media.id) })} style={{ minHeight: 48, alignItems: 'center', justifyContent: 'center' }}>
-                    <Text style={{ color: appTheme.colors.danger, fontSize: 9, fontWeight: '800' }}>Remove</Text>
+                  <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${mediaAccessibleName(media)}`} onPress={() => onChange({ ...draft, referenceAudios: draft.referenceAudios.filter((item) => item.id !== media.id) })} style={({ pressed }) => ({ minHeight: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+                    <Text style={{ color: appTheme.colors.danger, fontSize: 11, fontWeight: '800' }}>Remove</Text>
                   </Pressable>
                 </View>
               ))}
@@ -3028,7 +3047,7 @@ function CompactRailAddButton({ label, icon = 'image', onPress, disabled }: { la
       style={({ pressed }) => ({ width: 80, minHeight: 96, borderRadius: 16, borderWidth: 1, borderStyle: 'dashed', borderColor: 'rgba(115,191,242,0.38)', backgroundColor: 'rgba(115,191,242,0.055)', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 6, opacity: disabled ? 0.38 : pressed ? appTheme.opacity.pressed : 1 })}
     >
       {icon === 'video' ? <Video size={20} color={appTheme.colors.video} /> : icon === 'audio' ? <AudioLines size={20} color={appTheme.colors.motion} /> : <Plus size={21} color={appTheme.colors.image} />}
-      <Text numberOfLines={2} style={{ color: appTheme.colors.muted, fontSize: 9, fontWeight: '800', lineHeight: 12, textAlign: 'center' }}>{label}</Text>
+      <Text numberOfLines={2} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '800', lineHeight: 14, textAlign: 'center' }}>{label}</Text>
     </Pressable>
   );
 }
@@ -3092,16 +3111,16 @@ function MotionCreatorComposer({
           {supportsMotion ? <CompactReferenceSlot testID="motion-video-slot" title={motionSlot?.label ?? 'Motion video'} helper="How should they move?" media={draft.referenceVideo} required={(motionSlot?.min ?? 1) > 0} isUploading={isUploading} onAdd={onUploadMotion} onOpen={() => setSelectedRole('motion')} /> : null}
         </View>
         <View style={{ gap: 4 }}>
-          {characterError ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.amber, fontSize: 10, fontWeight: '700' }}>{characterError}</Text> : null}
-          {motionError ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.amber, fontSize: 10, fontWeight: '700' }}>{motionError}</Text> : null}
-          {duration ? <Text style={{ color: appTheme.colors.textSecondary, fontSize: 10, fontWeight: '700' }}>Detected motion length · {duration}s</Text> : null}
+          {characterError ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.amber, fontSize: 11, fontWeight: '700' }}>{characterError}</Text> : null}
+          {motionError ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.amber, fontSize: 11, fontWeight: '700' }}>{motionError}</Text> : null}
+          {duration ? <Text style={{ color: appTheme.colors.textSecondary, fontSize: 11, fontWeight: '700' }}>Detected motion length · {duration}s</Text> : null}
         </View>
       </View> : null}
 
       <View style={{ borderRadius: 26, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(240,171,252,0.16)', backgroundColor: appTheme.colors.panel, overflow: 'hidden' }}>
         <View style={{ paddingHorizontal: 16, paddingTop: 15, paddingBottom: 7, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
           <Text style={{ color: appTheme.colors.motion, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Optional direction</Text>
-          <Text style={{ color: appTheme.colors.faint, fontSize: 9, fontWeight: '800' }}>Optional</Text>
+          <Text style={{ color: appTheme.colors.faint, fontSize: 11, fontWeight: '800' }}>Optional</Text>
         </View>
         <TextInput
           testID="motion-prompt-input"
@@ -3219,7 +3238,7 @@ function ReferenceMentionSuggestions({
                 {used ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                     <Check size={14} color={appTheme.colors.image} />
-                    <Text style={{ color: appTheme.colors.muted, fontSize: 10, fontWeight: '800' }}>Added</Text>
+                    <Text style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '800' }}>Added</Text>
                   </View>
                 ) : null}
               </Pressable>
@@ -3286,15 +3305,20 @@ function EnhanceControlsRow({
             accessibilityState={{ selected: level === value, disabled }}
             disabled={disabled}
             onPress={() => onLevelChange(value)}
-            style={{
+            hitSlop={verticalHitSlop(32)}
+            // A press state as well as the selected state: without one, tapping
+            // the option you are already on gives no feedback at all.
+            style={({ pressed }) => ({
               minHeight: 32,
               paddingHorizontal: 12,
               borderRadius: appTheme.radii.pill,
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: level === value ? 'rgba(255,122,89,0.18)' : 'transparent',
-              opacity: disabled ? 0.5 : 1,
-            }}
+              backgroundColor: level === value
+                ? 'rgba(255,122,89,0.18)'
+                : pressed ? appTheme.colors.surfaceStrong : 'transparent',
+              opacity: disabled ? 0.5 : pressed ? appTheme.opacity.pressed : 1,
+            })}
           >
             <Text style={{ color: level === value ? '#FFB09C' : '#8E918C', fontWeight: '700', fontSize: 12 }}>{label}</Text>
           </Pressable>
@@ -3305,15 +3329,15 @@ function EnhanceControlsRow({
           accessibilityRole="button"
           accessibilityLabel="Undo enhancement"
           onPress={onUndo}
-          style={{
+          hitSlop={verticalHitSlop(32)}
+          style={({ pressed }) => ({
             minHeight: 32,
             paddingHorizontal: 12,
             borderRadius: appTheme.radii.pill,
             borderWidth: 1,
             borderColor: 'rgba(255,255,255,0.12)',
             alignItems: 'center',
-            justifyContent: 'center',
-          }}
+            justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
           <Text style={{ color: '#B9BDB7', fontWeight: '700', fontSize: 12 }}>Undo</Text>
         </Pressable>
@@ -3414,7 +3438,7 @@ function ReferenceDetailsOverlay({
           <SheetDragHandle label="Dismiss reference details" onDismiss={onClose} />
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
             <Text style={{ color: appTheme.colors.text, fontSize: 20, fontWeight: '800' }}>Reference details</Text>
-            <Pressable accessibilityRole="button" accessibilityLabel="Close reference details" onPress={onClose} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Close reference details" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
               <X size={20} color={appTheme.colors.text} />
             </Pressable>
           </View>
@@ -3437,7 +3461,7 @@ function ReferenceDetailsOverlay({
             ) : null}
           </View>
           {media.handle && onUseHandle ? <SecondaryButton label={`Insert ${media.handle}`} onPress={() => onUseHandle(media.handle!)} /> : null}
-          <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${accessibleName}`} onPress={confirmRemove} style={{ minHeight: 52, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: 'rgba(251,113,133,0.34)', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 }}>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${accessibleName}`} onPress={confirmRemove} style={({ pressed }) => ({ minHeight: 52, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: 'rgba(251,113,133,0.34)', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
             <Trash2 size={17} color={appTheme.colors.danger} />
             <Text style={{ color: appTheme.colors.danger, fontSize: 13, fontWeight: '800' }}>Remove reference</Text>
           </Pressable>
@@ -3546,13 +3570,13 @@ function SearchableModelPickerModal({
               <Text style={{ color: appTheme.colors.text, fontSize: 21, fontWeight: '800' }}>Choose model</Text>
               <Text style={{ color: appTheme.colors.muted, fontSize: 12 }}>Defaults and quote update after selection.</Text>
             </View>
-            <Pressable accessibilityRole="button" accessibilityLabel="Close model picker" onPress={onClose} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Close model picker" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
               <X size={20} color={appTheme.colors.text} />
             </Pressable>
           </View>
           <View style={{ minHeight: 52, borderRadius: 17, borderWidth: 1, borderColor: appTheme.colors.borderStrong, backgroundColor: appTheme.colors.surfaceInset, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 9 }}>
             <Search size={18} color={appTheme.colors.muted} />
-            <TextInput accessibilityLabel="Search model names" value={query} onChangeText={setQuery} placeholder="Search models" placeholderTextColor={appTheme.colors.faint} autoCapitalize="none" autoCorrect={false} style={{ flex: 1, color: appTheme.colors.text, fontSize: 14, paddingVertical: 12 }} />
+            <TextInput accessibilityLabel="Search model names" value={query} onChangeText={setQuery} placeholder="Search models" placeholderTextColor={appTheme.colors.faint} autoCapitalize="none" autoCorrect={false} spellCheck={false} returnKeyType="search" clearButtonMode="while-editing" style={{ flex: 1, color: appTheme.colors.text, fontSize: 14, paddingVertical: 12 }} />
           </View>
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 8, paddingBottom: 28 }}>
             {filteredItems.map((item) => {
@@ -3572,7 +3596,7 @@ function SearchableModelPickerModal({
                   <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
                       <Text numberOfLines={1} style={{ flexShrink: 1, color: appTheme.colors.text, fontSize: 14, fontWeight: '800' }}>{item.displayName}</Text>
-                      {item.badge ? <Text style={{ color: appTheme.colors.image, fontSize: 10, fontWeight: '800' }}>{item.badge}</Text> : null}
+                      {item.badge ? <Text style={{ color: appTheme.colors.image, fontSize: 11, fontWeight: '800' }}>{item.badge}</Text> : null}
                     </View>
                     <Text numberOfLines={2} style={{ color: appTheme.colors.muted, fontSize: 11, lineHeight: 15 }}>{item.description}</Text>
                   </View>
@@ -3628,7 +3652,7 @@ function CreatorParameterSheet({
   const reducedMotion = useReducedMotion();
   const quoteLabel = quoteStatus === 'ready' ? `${cost ?? 0} credits` : quoteStatus === 'error' ? 'Unavailable' : 'Calculating…';
   const balanceLabel = typeof availableCredits === 'number'
-    ? `${availableCredits.toLocaleString('en-IN')} credits`
+    ? `${formatCreditAmount(availableCredits)} credits`
     : 'Unavailable';
   return (
     <Modal visible={visible} transparent statusBarTranslucent animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose}>
@@ -3641,7 +3665,7 @@ function CreatorParameterSheet({
               <Text style={{ color: appTheme.colors.text, fontSize: 21, fontWeight: '800' }}>Generation parameters</Text>
               <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 12 }}>{model?.displayName ?? `${TOOL_META[draft.tool].title} settings`}</Text>
             </View>
-            <Pressable accessibilityRole="button" accessibilityLabel="Close generation parameters" onPress={onClose} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Close generation parameters" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
               <X size={20} color={appTheme.colors.text} />
             </Pressable>
           </View>
@@ -3752,7 +3776,7 @@ function GenerationWorkspace({
             </Text>
             <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11 }}>{settingsSummary}</Text>
           </View>
-          <Pressable accessibilityRole="button" accessibilityLabel={succeeded || failed ? 'Back to creator' : 'Minimize generation'} onPress={onMinimize} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
+          <Pressable accessibilityRole="button" accessibilityLabel={succeeded || failed ? 'Back to creator' : 'Minimize generation'} onPress={onMinimize} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
             <X size={20} color={appTheme.colors.text} />
           </Pressable>
         </View>
@@ -4021,25 +4045,25 @@ function FloatingGenerateReviewBar({
         <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
           <Text style={{ color: '#ffffff', fontSize: 14, fontWeight: '800' }}>Review and generate</Text>
           <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 12, fontWeight: '700' }}>
-            {credits} credits · {costLabel} cost · {status}
+            {formatCreditAmount(credits)} credits · {costLabel} cost · {status}
           </Text>
         </View>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={isGenerating ? `Generating ${toolTitle}` : `Generate ${toolTitle}`}
-          accessibilityHint={`${credits} credits available. ${costLabel} credits required.`}
+          accessibilityHint={`${formatCreditAmount(credits)} credits available. ${costLabel} credits required.`}
           accessibilityState={{ disabled }}
           disabled={disabled}
           onPress={onGenerate}
-          style={{
+          style={({ pressed }) => ({
             minHeight: 48,
             borderRadius: appTheme.radii.pill,
             backgroundColor: disabled ? appTheme.colors.surfaceStrong : appTheme.colors.primary,
             paddingHorizontal: 18,
             alignItems: 'center',
             justifyContent: 'center',
-            opacity: disabled ? 0.62 : 1,
-          }}
+            opacity: pressed ? appTheme.opacity.pressed : (disabled ? 0.62 : 1),
+          })}
         >
           <Text style={{ color: disabled ? appTheme.colors.muted : appTheme.colors.onPrimary, fontSize: 13, fontWeight: '800' }}>
             {isGenerating ? 'Generating...' : `Generate ${toolTitle}`}
@@ -4161,7 +4185,7 @@ function PromptPanel({
           accessibilityState={{ disabled: isEnhancing, busy: isEnhancing }}
           onPress={onEnhance}
           disabled={isEnhancing}
-          style={{
+          style={({ pressed }) => ({
             minHeight: 48,
             borderRadius: appTheme.radii.pill,
             borderWidth: 1,
@@ -4172,8 +4196,8 @@ function PromptPanel({
             flexDirection: 'row',
             gap: 7,
             flexShrink: 0,
-            opacity: isEnhancing ? 0.6 : 1,
-          }}
+            opacity: pressed ? appTheme.opacity.pressed : (isEnhancing ? 0.6 : 1),
+          })}
         >
           {isEnhancing ? <ActivityIndicator color="#F6F3EC" size="small" /> : <Wand2 size={16} color="#FF7A59" />}
           <Text style={{ color: '#F6F3EC', fontWeight: '700', fontSize: 13 }}>Enhance</Text>
@@ -4699,10 +4723,13 @@ function PreparedReferenceIds({
           value={draft}
           onChangeText={setDraft}
           onSubmitEditing={add}
+          submitBehavior="submit"
+          returnKeyType="done"
           placeholder={placeholder}
           placeholderTextColor={appTheme.colors.faint}
           autoCapitalize="none"
           autoCorrect={false}
+          spellCheck={false}
           style={{
             flex: 1,
             minHeight: appTheme.touch.default,
@@ -4721,7 +4748,7 @@ function PreparedReferenceIds({
           accessibilityLabel={`Add ${title.toLowerCase()}`}
           onPress={add}
           disabled={items.length >= max}
-          style={{
+          style={({ pressed }) => ({
             minWidth: 64,
             minHeight: appTheme.touch.default,
             borderRadius: 16,
@@ -4731,8 +4758,8 @@ function PreparedReferenceIds({
             backgroundColor: 'rgba(255,122,89,0.16)',
             borderWidth: 1,
             borderColor: 'rgba(255,122,89,0.38)',
-            opacity: items.length >= max ? 0.45 : 1,
-          }}
+            opacity: pressed ? appTheme.opacity.pressed : (items.length >= max ? 0.45 : 1),
+          })}
         >
           <AppText variant="label">Add</AppText>
         </Pressable>
@@ -4740,7 +4767,7 @@ function PreparedReferenceIds({
       {items.map((item) => (
         <View key={item} style={{ minHeight: 46, borderRadius: 15, borderCurve: 'continuous', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', backgroundColor: 'rgba(255,255,255,0.035)', paddingLeft: 12, paddingRight: 6, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <Text selectable numberOfLines={1} style={{ flex: 1, color: appTheme.colors.textSecondary, fontFamily: 'monospace', fontSize: 12 }}>{item}</Text>
-          <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item}`} onPress={() => onChange(items.filter((value) => value !== item))} hitSlop={8} style={{ padding: 9 }}>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item}`} onPress={() => onChange(items.filter((value) => value !== item))} hitSlop={8} style={({ pressed }) => ({ padding: 9, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
             <Trash2 size={16} color={appTheme.colors.muted} />
           </Pressable>
         </View>
@@ -4922,14 +4949,14 @@ function ModelPicker({
           accessibilityLabel={`Selected model ${selected.displayName}. ${expanded ? 'Hide model choices' : 'Change model'}`}
           accessibilityState={{ expanded }}
           onPress={toggleExpanded}
-          style={{ flex: 1, minWidth: 0, gap: 3, alignSelf: 'stretch', justifyContent: 'center' }}
+          style={({ pressed }) => ({ flex: 1, minWidth: 0, gap: 3, alignSelf: 'stretch', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <Text style={{ color: accentColor(accent), fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>
               Selected model
             </Text>
             {selected.badge ? (
-              <Text style={{ color: accentColor(accent), fontSize: 10, fontWeight: '800' }}>{selected.badge}</Text>
+              <Text style={{ color: accentColor(accent), fontSize: 11, fontWeight: '800' }}>{selected.badge}</Text>
             ) : null}
           </View>
           <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 16, fontWeight: '800' }}>
@@ -4942,7 +4969,7 @@ function ModelPicker({
           accessibilityState={{ expanded }}
           onPress={toggleExpanded}
           hitSlop={10}
-          style={{
+          style={({ pressed }) => ({
             minHeight: appTheme.touch.compact,
             borderRadius: appTheme.radii.pill,
             backgroundColor: `${accentColor(accent)}22`,
@@ -4950,8 +4977,7 @@ function ModelPicker({
             alignItems: 'center',
             justifyContent: 'center',
             flexDirection: 'row',
-            gap: 5,
-          }}
+            gap: 5, opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
           <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '800' }}>{expanded ? 'Hide' : 'Change'}</Text>
           <ChevronDown size={14} color="#ffffff" style={{ transform: [{ rotate: expanded ? '180deg' : '0deg' }] }} />
@@ -4993,6 +5019,9 @@ function ModelPicker({
               placeholderTextColor={appTheme.colors.faint}
               autoCapitalize="none"
               autoCorrect={false}
+              spellCheck={false}
+              returnKeyType="search"
+              clearButtonMode="while-editing"
               style={{
                 flex: 1,
                 color: '#ffffff',
@@ -5040,7 +5069,7 @@ function ModelPicker({
                     {item.displayName}
                   </Text>
                   {item.badge ? (
-                    <Text style={{ color: accentColor(accent), fontSize: 10, fontWeight: '800' }}>{item.badge}</Text>
+                    <Text style={{ color: accentColor(accent), fontSize: 11, fontWeight: '800' }}>{item.badge}</Text>
                   ) : null}
                   {active ? (
                     <View style={{ width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: `${accentColor(accent)}20` }}>
@@ -5474,7 +5503,7 @@ function UploadBlock({
         accessibilityLabel={actionLabel}
         disabled={disabled}
         onPress={onPress}
-        style={{
+        style={({ pressed }) => ({
           minHeight: appTheme.touch.compact,
           borderRadius: appTheme.radii.pill,
           paddingHorizontal: 12,
@@ -5482,8 +5511,8 @@ function UploadBlock({
           justifyContent: 'center',
           alignSelf: 'flex-start',
           backgroundColor: 'rgba(255,255,255,0.09)',
-          opacity: disabled ? 0.5 : 1,
-        }}
+          opacity: pressed ? appTheme.opacity.pressed : (disabled ? 0.5 : 1),
+        })}
       >
         <Text style={{ color: '#ffffff', fontWeight: '800', fontSize: 12 }}>{actionLabel}</Text>
       </Pressable>
@@ -5563,7 +5592,7 @@ function MediaList({
               accessibilityRole="button"
               accessibilityLabel={`Use ${media.handle}`}
               onPress={() => onUseHandle(media.handle!)}
-              style={{ minHeight: appTheme.touch.compact, borderRadius: appTheme.radii.pill, backgroundColor: `${appTheme.colors.image}1f`, paddingHorizontal: 9, alignItems: 'center', justifyContent: 'center' }}
+              style={({ pressed }) => ({ minHeight: appTheme.touch.compact, borderRadius: appTheme.radii.pill, backgroundColor: `${appTheme.colors.image}1f`, paddingHorizontal: 9, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
               <Text style={{ color: '#7dd3fc', fontSize: 11, fontWeight: '800' }}>{media.handle}</Text>
             </Pressable>
@@ -5572,7 +5601,7 @@ function MediaList({
             accessibilityRole="button"
             accessibilityLabel={`Remove ${media.displayName}`}
             onPress={() => onRemove(media.id)}
-            style={{ width: appTheme.touch.compact, height: appTheme.touch.compact, alignItems: 'center', justifyContent: 'center' }}
+            style={({ pressed }) => ({ width: appTheme.touch.compact, height: appTheme.touch.compact, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
           >
             <Trash2 size={17} color={appTheme.colors.muted} />
           </Pressable>
@@ -5632,14 +5661,13 @@ function ReferencePreviewModal({ media, onClose }: { media: MediaDraft | null; o
               accessibilityRole="button"
               accessibilityLabel="Close reference preview"
               onPress={onClose}
-              style={{
+              style={({ pressed }) => ({
                 minHeight: appTheme.touch.compact,
                 borderRadius: appTheme.radii.pill,
                 alignItems: 'center',
                 justifyContent: 'center',
                 backgroundColor: 'rgba(255,255,255,0.09)',
-                paddingHorizontal: 14,
-              }}
+                paddingHorizontal: 14, opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
               <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '800' }}>Close</Text>
             </Pressable>
@@ -5699,7 +5727,7 @@ function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: numb
         }}
       >
         <AudioLines size={22} color={appTheme.colors.motion} />
-        <Text style={{ color: '#f5d0fe', fontSize: 10, fontWeight: '800' }}>Audio</Text>
+        <Text style={{ color: '#f5d0fe', fontSize: 11, fontWeight: '800' }}>Audio</Text>
       </View>
     );
   }
@@ -5768,7 +5796,7 @@ function SecondaryAction({
   return (
     <Pressable
       onPress={onPress}
-      style={{
+      style={({ pressed }) => ({
         minHeight: compact ? 34 : 46,
         borderRadius: appTheme.radii.pill,
         borderWidth: 1,
@@ -5777,8 +5805,7 @@ function SecondaryAction({
         alignItems: 'center',
         justifyContent: 'center',
         flexDirection: 'row',
-        gap: 6,
-      }}
+        gap: 6, opacity: pressed ? appTheme.opacity.pressed : 1 })}
     >
       <Text style={{ color: '#ffffff', fontWeight: '800', fontSize: compact ? 12 : 14 }}>{label}</Text>
       <ChevronRight size={compact ? 14 : 16} color="#ffffff" />

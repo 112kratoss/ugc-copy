@@ -101,6 +101,7 @@ import {
   getShowcaseFeedSessionContext,
   type ShowcaseFeedPageParam,
 } from '@/lib/showcase-feed-query';
+import { formatCreditAmount } from '@/lib/pricing';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type {
@@ -523,9 +524,11 @@ export function HomeDashboard() {
           { text: 'Open web', onPress: () => { void Linking.openURL(webUrl); } },
         ]);
       } else {
+        haptic.error();
         Alert.alert('Could not start remix', 'This post cannot be opened in the creator tools right now.');
       }
     } catch (error) {
+      haptic.error();
       Alert.alert('Could not start remix', error instanceof Error ? error.message : 'Please try again.');
     } finally {
       setRemixingItemId(null);
@@ -571,6 +574,7 @@ export function HomeDashboard() {
         cachedFeeds.forEach(([cachedQueryKey, cachedData]) => {
           queryClient.setQueryData(cachedQueryKey, cachedData);
         });
+        haptic.error();
         Alert.alert('Couldn’t update your feed', 'The post was restored. Check your connection and try again.');
       });
   };
@@ -606,6 +610,7 @@ export function HomeDashboard() {
               );
               void AccessibilityInfo.announceForAccessibility('Content reported and removed from your feed.');
             } catch (error) {
+              haptic.error();
               Alert.alert('Could not report content', error instanceof Error ? error.message : 'Please try again.');
             }
           },
@@ -632,6 +637,7 @@ export function HomeDashboard() {
               await api.reportUser(creatorId, { reason: 'harassment', sourceSurface: 'showcase' });
               void AccessibilityInfo.announceForAccessibility('Creator reported.');
             } catch (error) {
+              haptic.error();
               Alert.alert('Could not report user', error instanceof Error ? error.message : 'Please try again.');
             }
           },
@@ -662,6 +668,7 @@ export function HomeDashboard() {
               );
               void AccessibilityInfo.announceForAccessibility('Creator blocked.');
             } catch (error) {
+              haptic.error();
               Alert.alert('Could not block user', error instanceof Error ? error.message : 'Please try again.');
             }
           },
@@ -873,7 +880,7 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <Crown size={15} color="#fbbf24" fill="rgba(251,191,36,0.2)" />
-            <Text style={{ color: DASHBOARD_COLORS.text, fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{credits}</Text>
+            <Text style={{ color: DASHBOARD_COLORS.text, fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatCreditAmount(credits)}</Text>
             <Plus size={14} color={DASHBOARD_COLORS.coral} strokeWidth={2.5} />
           </View>
         </TopBarControl>
@@ -958,7 +965,12 @@ function TopSlider({
   slideWidth: number;
 }) {
   const slides = useMemo(() => getHomeFeedSlides(), []);
-  const gap = 10;
+  // Matching the gap to the screen gutter is what squares the rail's edges.
+  // With a smaller gap the previous card's right edge lands `gutter - gap`
+  // inside the screen, leaving a sliver of image bleeding off the left that
+  // reads as a clipping bug rather than a peek. Equal values park it exactly on
+  // the edge, so only the next card peeks — on the side you are scrolling to.
+  const gap = horizontalPadding;
   // Laid out three times, with the carousel parked in the middle pass, so it
   // can travel off either end into more of the same rail rather than reversing.
   const loopedSlides = useMemo(() => buildLoopedHomeSlides(slides), [slides]);
@@ -1251,7 +1263,7 @@ function TopSlide({
             icon={<Icon size={18} color="#ffffff" fill={slide.id === 'video' ? 'transparent' : 'rgba(255,255,255,0.14)'} />}
           />
         ) : null}
-        <View style={{ gap: 4, paddingHorizontal: 12, paddingBottom: 11, paddingTop: 10 }}>
+        <View style={{ gap: 4, flexShrink: 0, paddingHorizontal: 12, paddingBottom: 11, paddingTop: 10 }}>
           <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={{ color: appTheme.colors.text, fontSize: 16, fontWeight: '800' }}>
             {slide.title}
           </Text>
@@ -1275,7 +1287,11 @@ function ToolPreview({
   icon: ReactNode;
 }) {
   return (
-    <View style={{ height: 82, overflow: 'hidden', backgroundColor: DASHBOARD_COLORS.surfaceRaised }}>
+    // `flexShrink` so the artwork yields height to the caption at large Dynamic
+    // Type sizes. The card height is fixed so every slide in the rail matches,
+    // and without this the caption was the child that lost the space race — its
+    // second line was sliced in half at 1.5x text.
+    <View style={{ height: 82, flexShrink: 1, overflow: 'hidden', backgroundColor: DASHBOARD_COLORS.surfaceRaised }}>
       <Image source={TOOL_PREVIEW_IMAGES[variant]} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
       {previewUrl ? (
         <Image
@@ -1314,7 +1330,7 @@ function FeedChips({
             accessibilityState={{ selected: active }}
             accessibilityLabel={chip.label}
             onPress={() => onSelect(chip.id)}
-            style={{ minHeight: 44, justifyContent: 'center', gap: 6 }}
+            style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', gap: 6, opacity: pressed ? appTheme.opacity.pressed : 1 })}
           >
             <Text style={{ color: active ? DASHBOARD_COLORS.text : DASHBOARD_COLORS.faint, fontSize: 15, fontWeight: '800' }}>
               {chip.label}

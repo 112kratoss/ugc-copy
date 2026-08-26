@@ -35,6 +35,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { formatUsdCents } from '@/lib/home-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
+import { formatCreditAmount } from '@/lib/pricing';
 import { appTheme } from '@/lib/theme';
 import type { ProfileResponse } from '@/lib/types';
 
@@ -268,7 +269,7 @@ export function HomeSideMenu({
 
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`${credits} credits. Open credits`}
+              accessibilityLabel={`${formatCreditAmount(credits)} credits. Open credits`}
               onPress={() => navigateAndClose('/pricing')}
               style={({ pressed }) => ({
                 minHeight: 68,
@@ -290,7 +291,7 @@ export function HomeSideMenu({
                   <Crown size={21} color={appTheme.colors.amber} />
                 </View>
                 <View style={{ gap: 1, minWidth: 0, flex: 1 }}>
-                  <Text style={{ color: appTheme.colors.text, fontSize: 18, lineHeight: 23, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{credits} Credits</Text>
+                  <Text style={{ color: appTheme.colors.text, fontSize: 18, lineHeight: 23, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatCreditAmount(credits)} Credits</Text>
                   <Text style={{ color: appTheme.colors.muted, fontSize: 12, lineHeight: 16, fontWeight: '600' }}>View balance and packs</Text>
                 </View>
               </View>

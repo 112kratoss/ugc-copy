@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AlertCircle, ArrowLeft, Eye, LockKeyhole, Mail, Sparkles, X } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { useAuth } from '@/lib/auth';
 import { isAppleAuthCanceled } from '@/lib/apple-auth';
 import { isGoogleAuthCanceled } from '@/lib/google-auth';
@@ -112,8 +113,10 @@ export default function AuthScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: workspace.background }}>
+      <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
+        automaticallyAdjustKeyboardInsets
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         style={{ flex: 1 }}
@@ -154,6 +157,7 @@ export default function AuthScreen() {
           />
         </View>
       </ScrollView>
+      </KeyboardAvoidingArea>
 
       {error ? <ErrorToast message={error} bottomInset={insets.bottom} onDismiss={() => setError(null)} /> : null}
     </View>
@@ -229,6 +233,8 @@ function AuthPanel({
   showAppleSignIn: boolean;
   showGoogleSignIn: boolean;
 }) {
+  const passwordRef = useRef<TextInput | null>(null);
+
   return (
     <View
       style={{
@@ -266,20 +272,47 @@ function AuthPanel({
               icon={<Mail size={19} color={workspace.primary} />}
               accessibilityLabel="Email"
               autoCapitalize="none"
+              autoCorrect={false}
+              spellCheck={false}
               keyboardType="email-address"
+              // `username` rather than `emailAddress`: paired with the
+              // `password` field below it, this is what makes iCloud Keychain
+              // and Google Password Manager offer a saved login above the
+              // keyboard instead of only contact-card autofill.
+              textContentType="username"
+              autoComplete="username"
+              returnKeyType="next"
+              // Keep the keyboard up while focus moves to the password field.
+              submitBehavior="submit"
+              onSubmitEditing={() => passwordRef.current?.focus()}
               value={email}
               onChangeText={onEmailChange}
               placeholder="you@example.com"
             />
             <WorkspaceInput
+              inputRef={passwordRef}
               icon={<LockKeyhole size={19} color={workspace.primary} />}
               accessibilityLabel="Password"
               secureTextEntry={!showPassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+              textContentType="password"
+              autoComplete="current-password"
+              returnKeyType="go"
+              onSubmitEditing={() => {
+                if (canSubmit) onSubmit?.();
+              }}
               value={password}
               onChangeText={onPasswordChange}
               placeholder="Minimum 6 characters"
               trailingIcon={
-                <Pressable accessibilityRole="button" accessibilityLabel={showPassword ? 'Hide password' : 'Show password'} onPress={onTogglePassword} hitSlop={10}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+                  onPress={onTogglePassword}
+                  hitSlop={10}
+                  style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
+                >
                   <Eye size={18} color={showPassword ? workspace.primary : workspace.muted} />
                 </Pressable>
               }
@@ -386,6 +419,7 @@ function AuthPanel({
             accessibilityLabel="Open privacy policy"
             onPress={() => void Linking.openURL(`${env.siteUrl}/privacy`)}
             hitSlop={8}
+            style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
           >
             <Text style={{ color: workspace.primary, fontSize: 12, fontWeight: '700' }}>Privacy Policy</Text>
           </Pressable>
@@ -394,6 +428,7 @@ function AuthPanel({
             accessibilityLabel="Open terms of service"
             onPress={() => void Linking.openURL(`${env.siteUrl}/terms`)}
             hitSlop={8}
+            style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
           >
             <Text style={{ color: workspace.primary, fontSize: 12, fontWeight: '700' }}>Terms of Service</Text>
           </Pressable>
@@ -440,10 +475,12 @@ function ModeTabs({ mode, onChange }: { mode: 'login' | 'signup'; onChange: (mod
 function WorkspaceInput({
   icon,
   trailingIcon,
+  inputRef,
   ...props
 }: TextInputProps & {
   icon: React.ReactNode;
   trailingIcon?: React.ReactNode;
+  inputRef?: React.RefObject<TextInput | null>;
 }) {
   return (
     <View
@@ -465,6 +502,7 @@ function WorkspaceInput({
         {icon}
       </View>
       <TextInput
+        ref={inputRef}
         placeholderTextColor={workspace.faint}
         selectionColor={workspace.primary}
         cursorColor={workspace.primary}

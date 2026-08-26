@@ -7,6 +7,10 @@ import { haptic } from '@/lib/haptics';
 import { MotionView, usePressMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
 
+/** The creator byline reads as a single line of text; its reach is widened rather than its height. */
+const CREATOR_ROW_HEIGHT = 32;
+import { verticalHitSlop } from '@/lib/hit-target';
+
 /**
  * The card chrome shared by the Home feed and the Profile media feed: a thin
  * attribution line, then the media as the loudest thing on the card, the
@@ -113,12 +117,13 @@ export function FeedCardShell({
           accessibilityLabel={onCreatorPress ? `Open ${creatorLabel}` : undefined}
           disabled={!onCreatorPress}
           onPress={onCreatorPress}
+          hitSlop={verticalHitSlop(CREATOR_ROW_HEIGHT)}
           style={({ pressed }) => ({
             flexDirection: 'row',
             alignItems: 'center',
             gap: 7,
             flex: 1,
-            minHeight: 32,
+            minHeight: CREATOR_ROW_HEIGHT,
             opacity: pressed && onCreatorPress ? appTheme.opacity.pressed : 1,
           })}
         >
@@ -150,7 +155,7 @@ export function FeedCardShell({
           accessibilityLabel={moreAccessibilityLabel}
           hitSlop={10}
           onPress={onMorePress}
-          style={{ width: 28, height: 32, alignItems: 'flex-end', justifyContent: 'center' }}
+          style={({ pressed }) => ({ width: 28, height: 32, alignItems: 'flex-end', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
           <MoreVertical size={17} color={appTheme.colors.faint} />
         </Pressable>

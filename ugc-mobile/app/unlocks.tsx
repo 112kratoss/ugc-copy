@@ -1,8 +1,10 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { router } from 'expo-router';
 import { PackageOpen } from 'lucide-react-native';
 import { Image, Pressable, View } from 'react-native';
 
+import { CardListSkeleton } from '@/components/skeleton';
 import { AppText, Card, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { appTheme } from '@/lib/theme';
@@ -23,6 +25,7 @@ export default function UnlocksScreen() {
     hasNextPage,
     isFetchingNextPage,
     isLoading,
+    refetch,
   } = useInfiniteQuery({
     queryKey: ['viewer-unlocks', user?.id],
     enabled: Boolean(user),
@@ -59,13 +62,17 @@ export default function UnlocksScreen() {
         <SecondaryButton label="Back to profile" onPress={() => router.replace('/(tabs)/profile' as never)} />
       ) : null}
 
-      {isLoading ? <StatusBlock title="Loading unlocks" body="Fetching everything you have unlocked." /> : null}
+      {isLoading ? <CardListSkeleton label="Loading unlocks" /> : null}
 
       {error ? (
-        <StatusBlock
-          title="Could not load your unlocks"
-          body={error instanceof Error ? error.message : 'Please try again in a moment.'}
-        />
+        <View style={{ gap: appTheme.spacing.gap }}>
+          <StatusBlock
+            tone="danger"
+            title="Could not load your unlocks"
+            body={error instanceof Error ? error.message : 'Your unlocks are safe. Check your connection, then retry.'}
+          />
+          <SecondaryButton label="Retry unlocks" onPress={() => void refetch()} />
+        </View>
       ) : null}
 
       {!isLoading && !error && items.length === 0 ? (
@@ -94,25 +101,7 @@ export default function UnlocksScreen() {
           >
             <Card style={{ marginBottom: 12 }}>
               <View style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start' }}>
-                {item.post?.mediaUrl ? (
-                  <Image
-                    source={{ uri: item.post.mediaUrl }}
-                    style={{ width: 56, height: 56, borderRadius: 14 }}
-                  />
-                ) : (
-                  <View
-                    style={{
-                      width: 56,
-                      height: 56,
-                      borderRadius: 14,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: appTheme.colors.panelSoft,
-                    }}
-                  >
-                    <PackageOpen size={20} color={appTheme.colors.muted} />
-                  </View>
-                )}
+                <UnlockThumbnail uri={item.post?.mediaUrl ?? null} />
 
                 <View style={{ flex: 1, gap: 4 }}>
                   <AppText color="text">{item.title}</AppText>
@@ -150,5 +139,48 @@ export default function UnlocksScreen() {
         />
       ) : null}
     </Screen>
+  );
+}
+const THUMBNAIL_SIZE = 56;
+
+/**
+ * Unlock thumbnail that always occupies its slot.
+ *
+ * A plain `Image` whose source fails renders nothing at all, and the row still
+ * reserves the space — so a broken link left a transparent hole beside the
+ * title that read as a layout bug. Falling back to the same placeholder used
+ * when there is no media keeps the row looking deliberate either way, and the
+ * placeholder colour sits behind the image so a slow load is never a hole.
+ */
+function UnlockThumbnail({ uri }: { uri: string | null }) {
+  const [failed, setFailed] = useState(false);
+  const showPlaceholder = !uri || failed;
+
+  return (
+    <View
+      style={{
+        width: THUMBNAIL_SIZE,
+        height: THUMBNAIL_SIZE,
+        borderRadius: 14,
+        borderCurve: 'continuous',
+        overflow: 'hidden',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: appTheme.colors.panelSoft,
+      }}
+    >
+      {/* The icon is the base layer rather than an either/or branch: an image
+          that is still loading — or one that quietly resolves to nothing
+          without ever firing onError — would otherwise leave a blank tile. */}
+      <PackageOpen size={20} color={appTheme.colors.muted} />
+      {showPlaceholder ? null : (
+        <Image
+          accessibilityIgnoresInvertColors
+          source={{ uri }}
+          onError={() => setFailed(true)}
+          style={{ position: 'absolute', inset: 0 }}
+        />
+      )}
+    </View>
   );
 }
