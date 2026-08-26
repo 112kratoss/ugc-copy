@@ -58,6 +58,7 @@ import { resolvedBottomInset } from '@/lib/safe-area';
 import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia, hasShowcaseVideoWithoutPreview } from '@/lib/showcase-media';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from '@/lib/showcase-display';
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
+import { CreatorProfileSkeleton } from '@/components/skeleton';
 import { accentColor, appTheme } from '@/lib/theme';
 import type { CreatorProfileResponse, ShowcaseFeedItem } from '@/lib/types';
 import { buildShareUrl } from '@/lib/viewer-actions';
@@ -221,8 +222,10 @@ export function CreatorProfileScreen({
                 sourceSurface: 'creator-profile',
                 details: `Reported from @${data.profile.username}'s mobile creator profile.`,
               });
+              haptic.success();
               Alert.alert('Report received', 'Thank you. Our moderation team will review this user.');
             } catch (error) {
+              haptic.error();
               Alert.alert('Could not report user', error instanceof Error ? error.message : 'Please try again.');
             }
           },
@@ -251,6 +254,7 @@ export function CreatorProfileScreen({
               ]);
               router.replace('/(tabs)/showcase' as never);
             } catch (error) {
+              haptic.error();
               Alert.alert('Could not block user', error instanceof Error ? error.message : 'Please try again.');
             }
           },
@@ -317,9 +321,9 @@ export function CreatorProfileScreen({
   const notFound = isNotFoundError(profileQuery.error);
   if (profileQuery.isLoading && !data) {
     return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.background }}>
+      <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
         <Stack.Screen options={{ title: 'Creator' }} />
-        <ActivityIndicator color={appTheme.colors.primary} />
+        <CreatorProfileSkeleton />
       </View>
     );
   }
@@ -334,7 +338,7 @@ export function CreatorProfileScreen({
           body={profileQuery.error instanceof Error ? profileQuery.error.message : 'Try again from Showcase.'}
         />
         {!notFound ? (
-          <Pressable onPress={() => void profileQuery.refetch()} style={{ minHeight: 48, alignItems: 'center', justifyContent: 'center' }}>
+          <Pressable onPress={() => void profileQuery.refetch()} style={({ pressed }) => ({ minHeight: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
             <Text style={{ color: appTheme.colors.text, ...appTheme.type.button }}>Retry</Text>
           </Pressable>
         ) : null}

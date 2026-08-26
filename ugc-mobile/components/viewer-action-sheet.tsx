@@ -16,6 +16,7 @@ import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
 import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
 import { immersiveViewerHref, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
+import { haptic } from '@/lib/haptics';
 import { appTheme } from '@/lib/theme';
 import type { OwnerPostsResponse } from '@/lib/types';
 import { getViewerActionGroupLabel, getViewerActionLabel, isDestructiveViewerAction } from '@/lib/viewer-actions';
@@ -132,6 +133,7 @@ export function ViewerActionSheet({
             await mutation();
             await refreshMedia();
           } catch {
+            haptic.error();
             Alert.alert('Could not update media', 'Please try again.');
           }
         },
@@ -168,6 +170,7 @@ export function ViewerActionSheet({
           }
           await refreshMedia();
         } catch {
+          haptic.error();
           Alert.alert('Could not update media', 'Please try again.');
         }
       })();
@@ -289,8 +292,10 @@ export function ViewerActionSheet({
                   reason: 'unsafe_content',
                   details: 'Reported from the mobile Showcase viewer.',
                 });
+                haptic.success();
                 Alert.alert('Report received', 'Thank you. Our moderation team will review this content.');
               } catch (error) {
+                haptic.error();
                 Alert.alert('Could not report content', error instanceof Error ? error.message : 'Please try again.');
               }
             },
@@ -316,8 +321,10 @@ export function ViewerActionSheet({
                   sourceSurface: 'showcase-reel',
                   details: item.showcasePostId ? `Reported from post ${item.showcasePostId}.` : undefined,
                 });
+                haptic.success();
                 Alert.alert('Report received', 'Thank you. Our moderation team will review this user.');
               } catch (error) {
+                haptic.error();
                 Alert.alert('Could not report user', error instanceof Error ? error.message : 'Please try again.');
               }
             },
@@ -343,6 +350,7 @@ export function ViewerActionSheet({
                 await refreshMedia();
                 onBlocked?.(creatorId);
               } catch (error) {
+                haptic.error();
                 Alert.alert('Could not block user', error instanceof Error ? error.message : 'Please try again.');
               }
             },
@@ -368,8 +376,10 @@ export function ViewerActionSheet({
                   sourceSurface: 'generation-viewer',
                   details: 'Reported from the mobile generated-media viewer.',
                 });
+                haptic.success();
                 Alert.alert('Report received', 'Thank you. The generated output was sent to the safety team.');
               } catch (error) {
+                haptic.error();
                 Alert.alert('Could not report AI output', error instanceof Error ? error.message : 'Please try again.');
               }
             },

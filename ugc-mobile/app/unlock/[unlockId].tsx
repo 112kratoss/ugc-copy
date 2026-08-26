@@ -6,6 +6,7 @@ import { Linking, Pressable, View } from 'react-native';
 
 import { MediaPreview } from '@/components/media-preview';
 import { PostResourceBundleContent } from '@/components/post-resource-bundle-content';
+import { DetailSkeleton } from '@/components/skeleton';
 import { AppText, Card, Pill, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { appTheme } from '@/lib/theme';
@@ -74,7 +75,7 @@ export default function ViewerUnlockScreen() {
         body={detail ? `by ${detail.creatorDisplayName}` : 'Loading your purchased resources.'}
       />
 
-      {detailQuery.isLoading ? <StatusBlock title="Loading unlock" body="Fetching your retained purchase." /> : null}
+      {detailQuery.isLoading ? <DetailSkeleton label="Loading your unlock" /> : null}
       {detailQuery.error ? (
         <View style={{ gap: appTheme.spacing.gap }}>
           <StatusBlock tone="danger" title="Unlock unavailable" body="It may have been removed by moderation, or belong to another account." />

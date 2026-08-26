@@ -4,6 +4,7 @@ import { Linking, Pressable, View } from 'react-native';
 
 import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
 import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
+import { formatCreditAmount } from '@/lib/pricing';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { appTheme } from '@/lib/theme';
@@ -31,7 +32,7 @@ export default function SettingsScreen() {
       <SettingsCard
         icon={<CreditCard size={22} color="#fbbf24" />}
         title="Credits"
-        body={`${credits ?? 0} credits available on this account.`}
+        body={`${formatCreditAmount(credits)} credits available on this account.`}
         onPress={() => router.push('/pricing' as never)}
       />
 

@@ -6,16 +6,17 @@ import type React from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   FlatList,
-  KeyboardAvoidingView,
   type LayoutChangeEvent,
-  Modal,
-  type ModalProps,
+  PanResponder,
   Platform,
   Pressable,
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -48,7 +49,11 @@ import {
   type PostCommentSort,
 } from '@/lib/comments-view-model';
 import { useReducedMotion } from '@/lib/motion';
+import { useHardwareBack } from '@/lib/use-hardware-back';
 import { resolvedBottomInset } from '@/lib/safe-area';
+import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
+import { Overlay } from '@/components/overlay-host';
+import { haptic } from '@/lib/haptics';
 import { appTheme } from '@/lib/theme';
 import type { CommentReportReason } from '@/lib/api-client';
 import type {
@@ -60,9 +65,6 @@ import type {
 } from '@/lib/types';
 import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
 
-const IS_TEST_ENVIRONMENT = typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
-const FallbackModal = ({ children, visible }: ModalProps) => (visible ? <>{children}</> : null);
-const ModalSurface: React.ComponentType<ModalProps> = IS_TEST_ENVIRONMENT ? FallbackModal : Modal;
 const REPORT_REASONS: Array<{ label: string; value: CommentReportReason }> = [
   { label: 'Spam or misleading', value: 'spam' },
   { label: 'Harassment or bullying', value: 'harassment' },
@@ -126,6 +128,93 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   const commentsListRef = useRef<FlatList<PostComment>>(null);
   const composerRef = useRef<TextInput>(null);
   const commentsOffsetRef = useRef(0);
+
+  // A visible Modal used to consume the back key before any listener ran. The
+  // sheet is an ordinary view now, so it has to claim the key itself — gated on
+  // being open so the screen underneath keeps it the rest of the time.
+  useHardwareBack(visible && presentation === 'sheet', onClose);
+
+  // The Modal this replaced animated itself with `animationType="slide"`. An
+  // overlay is an ordinary view, so the sheet owns that motion now — including
+  // staying mounted through its exit, which a bare `visible` unmount would cut
+  // off mid-flight.
+  const { height: windowHeight } = useWindowDimensions();
+  const [presented, setPresented] = useState(visible);
+  const slide = useRef(new Animated.Value(visible ? 1 : 0)).current;
+
+  useEffect(() => {
+    if (visible) setPresented(true);
+  }, [visible]);
+
+  useEffect(() => {
+    if (!presented || presentation !== 'sheet') return;
+
+    if (reducedMotion) {
+      slide.setValue(visible ? 1 : 0);
+      if (!visible) setPresented(false);
+      return;
+    }
+
+    const animation = Animated.timing(slide, {
+      toValue: visible ? 1 : 0,
+      duration: visible ? 280 : 200,
+      // Decelerate in, accelerate out: the sheet arrives settling and leaves
+      // like it was let go.
+      easing: visible ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    });
+    animation.start(({ finished }) => {
+      if (finished && !visible) setPresented(false);
+    });
+
+    return () => animation.stop();
+  }, [presentation, presented, reducedMotion, slide, visible]);
+
+  // The sheet shows a grabber, which on iOS promises swipe-to-dismiss. It had
+  // no gesture behind it, so the affordance was a lie — dragging it did
+  // nothing. The drag rides on top of the slide translation and springs back
+  // when released short of the threshold.
+  const dragY = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) dragY.setValue(0);
+  }, [dragY, visible]);
+
+  const dismissThreshold = Math.min(120, windowHeight * 0.12);
+
+  // Read through refs: the responder is created once, and would otherwise
+  // capture the first render's close handler and threshold forever.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const dismissThresholdRef = useRef(dismissThreshold);
+  dismissThresholdRef.current = dismissThreshold;
+  const sheetDrag = useRef(
+    PanResponder.create({
+      // Only claim clearly downward drags, so a horizontal swipe or a tap on
+      // the header still behaves normally.
+      onMoveShouldSetPanResponder: (_event, gesture) => gesture.dy > 6 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
+      onPanResponderMove: (_event, gesture) => {
+        dragY.setValue(Math.max(0, gesture.dy));
+      },
+      onPanResponderRelease: (_event, gesture) => {
+        const flung = gesture.vy > 0.6;
+        if (flung || gesture.dy > dismissThresholdRef.current) {
+          onCloseRef.current();
+          return;
+        }
+        Animated.spring(dragY, {
+          toValue: 0,
+          useNativeDriver: true,
+          tension: 190,
+          friction: 13,
+        }).start();
+      },
+      onPanResponderTerminate: () => {
+        dragY.setValue(0);
+      },
+    }),
+  ).current;
+
 
   const commentsQueryKey = createPostCommentsQueryKey(postId, sort, user?.id);
 
@@ -301,6 +390,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
 
       publishCommentCount(response.commentCount);
     } catch (error) {
+      haptic.error();
       Alert.alert('Could not post comment', error instanceof Error ? error.message : 'Please try again.');
     } finally {
       setSubmitting(false);
@@ -357,6 +447,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
               void commentsQuery.refetch();
               publishCommentCount(response.commentCount);
             } catch (error) {
+              haptic.error();
               Alert.alert('Could not remove comment', error instanceof Error ? error.message : 'Please try again.');
             }
           },
@@ -376,8 +467,10 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     try {
       await api.reportComment(reportingComment.id, { reason });
       setReportingComment(null);
+      haptic.success();
       Alert.alert('Thanks for the report', 'Our moderation team will take a look.');
     } catch (error) {
+      haptic.error();
       Alert.alert('Could not report comment', error instanceof Error ? error.message : 'Please try again.');
     } finally {
       setReporting(false);
@@ -604,7 +697,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
             accessibilityRole="button"
             accessibilityLabel="Cancel reply"
             onPress={() => setReplyTo(null)}
-            style={{ minWidth: 48, minHeight: 48, alignItems: 'flex-end', justifyContent: 'center' }}
+            style={({ pressed }) => ({ minWidth: 48, minHeight: 48, alignItems: 'flex-end', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
           >
             <Text style={{ color: appTheme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>Cancel</Text>
           </Pressable>
@@ -674,8 +767,17 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   ) : null;
 
   const panel = (
-    <View
+    <Animated.View
       style={presentation === 'sheet' ? {
+        // The slide lives on the panel rather than a wrapper: an extra view in
+        // between would become the percentage height's containing block, and an
+        // auto-sized parent leaves `78%` with nothing to resolve against.
+        transform: [{
+          translateY: Animated.add(
+            slide.interpolate({ inputRange: [0, 1], outputRange: [windowHeight, 0] }),
+            dragY,
+          ),
+        }],
         height: '78%',
         borderTopLeftRadius: appTheme.radii.xl,
         borderTopRightRadius: appTheme.radii.xl,
@@ -692,16 +794,20 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     >
       {presentation === 'sheet' ? (
         <>
-          <View
-            style={{
-              width: 42,
-              height: 4,
-              borderRadius: 2,
-              backgroundColor: appTheme.colors.borderStrong,
-              alignSelf: 'center',
-              marginBottom: appTheme.spacing.gap,
-            }}
-          />
+          {/* The grab area is the full width and taller than the pill itself:
+              a 4pt target would be unusable, and the whole header reads as
+              draggable to anyone who has used a sheet before. */}
+          <View {...sheetDrag.panHandlers} style={{ paddingVertical: 8, marginTop: -8, marginBottom: appTheme.spacing.gap - 8 }}>
+            <View
+              style={{
+                width: 42,
+                height: 4,
+                borderRadius: 2,
+                backgroundColor: appTheme.colors.borderStrong,
+                alignSelf: 'center',
+              }}
+            />
+          </View>
           {commentsHeader}
         </>
       ) : null}
@@ -717,40 +823,37 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
           onSelect={(reason) => void submitReport(reason)}
         />
       ) : null}
-    </View>
+    </Animated.View>
   );
 
+  // In `sheet` presentation this surface is rendered through `OverlayHost`
+  // rather than a `Modal`. That is load-bearing: a Modal is a separate window
+  // on Android and receives neither the WindowInsetsAnimation the animated
+  // tracker reads nor the JS `Keyboard` events — both measured returning
+  // nothing from inside one — so the composer sat under the keyboard while you
+  // typed into it. In the app's own window the avoidance below applies
+  // normally.
   const keyboardSurface = (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={0}
-      style={{ flex: 1, justifyContent: presentation === 'sheet' ? 'flex-end' : 'flex-start' }}
+    <KeyboardAvoidingArea
+      style={{ justifyContent: presentation === 'sheet' ? 'flex-end' : 'flex-start' }}
     >
       {presentation === 'sheet' ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Close comments"
-          onPress={onClose}
-          style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.58)' }}
-        />
+        <Animated.View style={{ position: 'absolute', inset: 0, opacity: slide }}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close comments"
+            onPress={onClose}
+            style={({ pressed }) => ({ flex: 1, backgroundColor: 'rgba(0,0,0,0.58)', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+          />
+        </Animated.View>
       ) : null}
       {panel}
-    </KeyboardAvoidingView>
+    </KeyboardAvoidingArea>
   );
 
   if (presentation === 'inline') return keyboardSurface;
 
-  return (
-    <ModalSurface
-      animationType={reducedMotion ? 'none' : 'slide'}
-      accessibilityViewIsModal
-      onRequestClose={onClose}
-      transparent
-      visible={visible}
-    >
-      {keyboardSurface}
-    </ModalSurface>
-  );
+  return <Overlay visible={presented}>{keyboardSurface}</Overlay>;
 });
 
 export function CommentsSheet(props: Omit<PostCommentsProps, 'presentation' | 'enabled' | 'contentHeader' | 'unavailableMessage'> & {
@@ -915,7 +1018,7 @@ function CommentRowView({
             accessibilityRole="button"
             accessibilityLabel={`Reply to ${display.authorLabel}`}
             onPress={() => onReply(comment)}
-            style={{ minHeight: 48, alignSelf: 'flex-start', justifyContent: 'center' }}
+            style={({ pressed }) => ({ minHeight: 48, alignSelf: 'flex-start', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
           >
             <Text style={{ color: appTheme.colors.faint, ...appTheme.type.caption, fontWeight: '800' }}>Reply</Text>
           </Pressable>
@@ -926,7 +1029,7 @@ function CommentRowView({
           accessibilityRole="button"
           accessibilityLabel={`Options for ${display.authorLabel}'s comment`}
           onPress={() => onActions(comment)}
-          style={{ width: 48, height: 48, alignItems: 'center', justifyContent: 'center' }}
+          style={({ pressed }) => ({ width: 48, height: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
           <MoreHorizontal size={16} color={appTheme.colors.faint} />
         </Pressable>

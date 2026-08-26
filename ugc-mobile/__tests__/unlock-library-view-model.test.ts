@@ -69,9 +69,9 @@ describe('unlock library view model', () => {
     expect(getUnlockStateBadge(createUnlock())).toBeNull();
   });
 
-  it('prices unlocks in tokens with the dollar equivalent', () => {
-    expect(formatUnlockPrice(500)).toBe('500 tokens ($5.00)');
-    expect(formatUnlockPrice(10)).toBe('10 tokens ($0.10)');
+  it('prices unlocks in credits, matching what the buyer spent', () => {
+    expect(formatUnlockPrice(500)).toBe('500 credits ($5.00)');
+    expect(formatUnlockPrice(10)).toBe('10 credits ($0.10)');
   });
 
   it('labels a free unlock rather than showing zero', () => {

@@ -63,6 +63,7 @@ import {
   loadActiveTemplateRunId,
   rememberActiveTemplateRun,
 } from '@/lib/template-run-resume';
+import { formatCreditAmount } from '@/lib/pricing';
 import { appTheme } from '@/lib/theme';
 import type {
   MediaTemplateDetail,
@@ -634,14 +635,14 @@ function InputStage({
             <AppText variant="label">Estimated workflow total</AppText>
             <AppText variant="caption" color="muted">{creditLabel(estimatedTotalCredits)}</AppText>
           </View>
-          <AppText variant="caption" color="muted">{credits === null ? 'Balance loading…' : `${credits} available`}</AppText>
+          <AppText variant="caption" color="muted">{credits === null ? 'Balance loading…' : `${formatCreditAmount(credits)} available`}</AppText>
         </View>
       </Card>
       {!canAfford ? (
         <View style={{ gap: 10 }}>
           <StatusBlock
             title="More credits needed"
-            body={`This workflow is estimated at ${estimatedTotalCredits} credits, and your current balance is ${credits}.`}
+            body={`This workflow is estimated at ${estimatedTotalCredits} credits, and your current balance is ${formatCreditAmount(credits)}.`}
             tone="neutral"
           />
           <SecondaryButton label="Get credits" onPress={() => router.push('/pricing' as never)} />
@@ -749,7 +750,7 @@ function RunStepCard({
   const canRetry = canRetryTemplateRunStep(runStatus, step);
   const confirmRetry = () => {
     const cost = step.estimatedRetryCredits === null ? 'the current generation rate' : `${step.estimatedRetryCredits} credits`;
-    const balance = credits === null ? '' : ` You currently have ${credits} credits.`;
+    const balance = credits === null ? '' : ` You currently have ${formatCreditAmount(credits)} credits.`;
     if (
       credits !== null
       && step.estimatedRetryCredits !== null
@@ -757,7 +758,7 @@ function RunStepCard({
     ) {
       Alert.alert(
         'More credits needed',
-        `This retry costs ${step.estimatedRetryCredits} credits and your balance is ${credits}.`,
+        `This retry costs ${step.estimatedRetryCredits} credits and your balance is ${formatCreditAmount(credits)}.`,
         [
           { text: 'Not now', style: 'cancel' },
           { text: 'Get credits', onPress: () => router.push('/pricing' as never) },

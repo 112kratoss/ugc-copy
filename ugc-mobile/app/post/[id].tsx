@@ -426,7 +426,7 @@ function TextPostContent({
           accessibilityLabel={item.creatorUsername ? `Open ${content.handle}` : undefined}
           disabled={!item.creatorUsername}
           onPress={onCreatorOpen}
-          style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 32 }}
+          style={({ pressed }) => ({ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 32, opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
           <CreatorAvatar name={content.handle} uri={item.creatorAvatar} size={26} />
           <Text numberOfLines={1} style={{ color: appTheme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '800' }}>

@@ -43,11 +43,16 @@ export function OnboardingResumeCard({ compact = false }: { compact?: boolean })
       : user
         ? 'Finish your creator setup'
         : 'Claim your creator name and credits';
+  // Both call sites render this card compact, where the body gets a single
+  // line. These are written to fit that line: the previous copy ran to 68
+  // characters and was cut mid-sentence on every device — and Android drew the
+  // overflowing second line rather than ellipsizing it, so it read as broken
+  // rather than merely shortened.
   const body = rewardPending
-    ? 'Finish your welcome reward and jump back into creating.'
+    ? 'Claim your welcome credits.'
     : showOptionalIntro
-      ? 'Choose a goal and open a focused starter workspace. You can skip at any time.'
-      : 'Resume where you stopped without losing your selected creation goal.';
+      ? 'Choose a goal to open a workspace.'
+      : 'Pick up where you left off.';
 
   const iconSize = compact ? 34 : 48;
   const glyphSize = compact ? 17 : 23;
@@ -75,7 +80,7 @@ export function OnboardingResumeCard({ compact = false }: { compact?: boolean })
         <View style={{ flex: 1, gap: compact ? 2 : 4 }}>
           {compact ? null : <Kicker>Creator setup</Kicker>}
           <AppText variant={compact ? 'button' : 'cardTitle'}>{title}</AppText>
-          <AppText variant="caption" color="muted" numberOfLines={compact ? 1 : undefined}>{body}</AppText>
+          <AppText variant="caption" color="muted" numberOfLines={compact ? 1 : undefined} ellipsizeMode="tail">{body}</AppText>
         </View>
         <ArrowRight size={compact ? 18 : 20} color={appTheme.colors.primary} />
       </Card>

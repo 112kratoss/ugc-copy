@@ -150,7 +150,7 @@ export function FeedCardShell({
           accessibilityLabel={moreAccessibilityLabel}
           hitSlop={10}
           onPress={onMorePress}
-          style={{ width: 28, height: 32, alignItems: 'flex-end', justifyContent: 'center' }}
+          style={({ pressed }) => ({ width: 28, height: 32, alignItems: 'flex-end', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
           <MoreVertical size={17} color={appTheme.colors.faint} />
         </Pressable>

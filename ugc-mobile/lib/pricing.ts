@@ -43,3 +43,20 @@ export const MOBILE_PRICING_PLANS: MobilePricingPlan[] = [
 export const MOBILE_PRICING_BY_PRODUCT_ID = Object.fromEntries(
   MOBILE_PRICING_PLANS.map((plan) => [plan.productId, plan])
 ) as Record<string, MobilePricingPlan>;
+
+/**
+ * Locale used for every credit balance in the app.
+ *
+ * Pinned rather than device-derived so a balance reads identically wherever it
+ * appears — header, pricing, invite, the creation quote. Note that `en-IN`
+ * groups in lakhs (1,00,000 rather than 100,000), which is deliberate for the
+ * current audience; changing it is a one-line decision here rather than a sweep
+ * through every screen.
+ */
+const CREDIT_LOCALE = 'en-IN';
+
+/** Groups a credit balance so long numbers stay readable at a glance. */
+export function formatCreditAmount(value: number | null | undefined) {
+  const safeValue = Math.max(0, Math.trunc(value ?? 0));
+  return safeValue.toLocaleString(CREDIT_LOCALE);
+}

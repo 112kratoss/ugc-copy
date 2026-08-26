@@ -6,8 +6,10 @@ import { Linking, View } from 'react-native';
 
 import { MediaPreview } from '@/components/media-preview';
 import { PostResourceBundleContent } from '@/components/post-resource-bundle-content';
+import { DetailSkeleton } from '@/components/skeleton';
 import { AppText, Card, Pill, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
+import { formatCreditAmount } from '@/lib/pricing';
 import { appTheme, type ToolAccent } from '@/lib/theme';
 import type { MarketplaceResource, PostResourceKind } from '@/lib/types';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
@@ -115,7 +117,13 @@ export default function MarketplaceAssetScreen() {
       <SectionTitle
         eyebrow="Unlock detail"
         title={detail?.title ?? 'Creator unlock'}
-        body={detail ? `${resourceLabel(detail.resourceKinds)} · ${detail.seller?.name ?? detail.creator?.name ?? 'Creator'}` : 'Loading unlock details.'}
+        // Without the error branch this still read "Loading unlock details."
+        // directly above a failure notice, so the page contradicted itself.
+        body={detail
+          ? `${resourceLabel(detail.resourceKinds)} · ${detail.seller?.name ?? detail.creator?.name ?? 'Creator'}`
+          : detailQuery.isError
+            ? 'This unlock could not be opened.'
+            : 'Loading unlock details.'}
       />
 
       {detailQuery.error ? (
@@ -128,7 +136,7 @@ export default function MarketplaceAssetScreen() {
           <SecondaryButton label="Retry unlock" onPress={() => void detailQuery.refetch()} />
         </View>
       ) : null}
-      {detailQuery.isLoading ? <StatusBlock title="Loading unlock" body="Fetching the latest resource details." /> : null}
+      {detailQuery.isLoading ? <DetailSkeleton label="Loading unlock details" /> : null}
       {unlockMutation.error ? (
         <StatusBlock
           tone="danger"
@@ -206,7 +214,7 @@ export default function MarketplaceAssetScreen() {
                     Paid mobile unlocks use your Magicbooklet credit balance instead of a separate store checkout.
                   </AppText>
                   <AppText variant="label" color="success">
-                    Costs {detail.priceUsdCents ?? 0} credits • Balance {credits ?? 0}
+                    Costs {detail.priceUsdCents ?? 0} credits • Balance {formatCreditAmount(credits)}
                   </AppText>
                 </View>
                 <PrimaryButton

@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import { BarChart3, ChevronRight, DollarSign, PackageCheck } from 'lucide-react-native';
 import { Pressable, View } from 'react-native';
 
+import { CardListSkeleton } from '@/components/skeleton';
 import { AppText, Card, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { formatUsdCents, getOwnerPostSalesSummary } from '@/lib/home-view-model';
@@ -55,7 +56,7 @@ export default function SellerDashboardScreen() {
 
       {!router.canGoBack() ? <SecondaryButton label="Back to profile" onPress={() => router.replace('/(tabs)/profile' as never)} /> : null}
 
-      {isLoading ? <StatusBlock title="Loading sales" body="Fetching your current listings and unlock totals." /> : null}
+      {isLoading ? <CardListSkeleton label="Loading your listings" /> : null}
 
       {error ? (
         <View style={{ gap: appTheme.spacing.gap }}>

@@ -16,7 +16,9 @@ import {
   SectionTitle,
   StatusBlock,
 } from '@/components/ui';
+import { MetricGridSkeleton } from '@/components/skeleton';
 import { useAuth } from '@/lib/auth';
+import { formatCreditAmount } from '@/lib/pricing';
 import { normalizeReferralCode } from '@/lib/referral-attribution';
 import { appTheme } from '@/lib/theme';
 import type { ReferralReward, ReferralStats } from '@/lib/types';
@@ -136,9 +138,7 @@ export default function InviteScreen() {
 
       {notice ? <StatusBlock tone={notice.tone} title={notice.title} body={notice.body} /> : null}
 
-      {overviewQuery.isLoading ? (
-        <StatusBlock title="Loading invite activity" body="Fetching your visits, signups, rewards, and personal link." />
-      ) : null}
+      {overviewQuery.isLoading ? <MetricGridSkeleton label="Loading invite activity" /> : null}
 
       {overviewQuery.error ? (
         <View style={{ gap: appTheme.spacing.gap }}>
@@ -181,7 +181,7 @@ function SignedOutInvite() {
   };
 
   return (
-    <Screen>
+    <Screen keyboardAware>
       <SectionTitle
         eyebrow="Invite & Earn"
         title="Share creativity. Earn credits."
@@ -246,7 +246,7 @@ function ReferralMetrics({ stats }: { stats: ReferralStats }) {
             <View key={metric.label} style={{ width: '48%', flexGrow: 1 }}>
               <Card variant="soft" padding="sm" style={{ minHeight: 112 }}>
                 <Icon size={20} color={metric.color} />
-                <AppText variant="sectionTitle" style={{ fontVariant: ['tabular-nums'] }}>{metric.value.toLocaleString('en-IN')}</AppText>
+                <AppText variant="sectionTitle" style={{ fontVariant: ['tabular-nums'] }}>{formatCreditAmount(metric.value)}</AppText>
                 <AppText variant="caption" color="muted">{metric.label}</AppText>
               </Card>
             </View>
@@ -254,7 +254,7 @@ function ReferralMetrics({ stats }: { stats: ReferralStats }) {
         })}
       </View>
       {stats.creditsReversed > 0 ? (
-        <StatusBlock tone="warning" title={`${stats.creditsReversed.toLocaleString('en-IN')} credits reversed`} body="A referred purchase was refunded or disputed." />
+        <StatusBlock tone="warning" title={`${formatCreditAmount(stats.creditsReversed)} credits reversed`} body="A referred purchase was refunded or disputed." />
       ) : null}
     </View>
   );
@@ -270,7 +270,7 @@ function RewardActivity({ rewards }: { rewards: ReferralReward[] }) {
         <Card variant="soft" padding="sm">
           {rewards.map((reward, index) => (
             <View key={reward.id}>
-              <View accessible accessibilityLabel={`${reward.status === 'reversed' ? 'Reversed' : 'Earned'} ${reward.credits} credits`} style={{ minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 }}>
+              <View accessible accessibilityLabel={`${reward.status === 'reversed' ? 'Reversed' : 'Earned'} ${formatCreditAmount(reward.credits)} credits`} style={{ minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 }}>
                 <View style={{ width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: reward.status === 'reversed' ? appTheme.semantic.warning.background : appTheme.semantic.success.background }}>
                   {reward.status === 'reversed'
                     ? <RotateCcw size={18} color={appTheme.colors.warning} />
@@ -281,7 +281,7 @@ function RewardActivity({ rewards }: { rewards: ReferralReward[] }) {
                   <AppText variant="caption" color="muted">{formatRewardDate(reward.createdAt)}</AppText>
                 </View>
                 <AppText variant="label" color={reward.status === 'reversed' ? 'warning' : 'success'} style={{ fontVariant: ['tabular-nums'] }}>
-                  {reward.status === 'reversed' ? '-' : '+'}{reward.credits}
+                  {reward.status === 'reversed' ? '-' : '+'}{formatCreditAmount(reward.credits)}
                 </AppText>
               </View>
               {index < rewards.length - 1 ? <View style={{ height: 1, backgroundColor: appTheme.colors.borderSubtle }} /> : null}

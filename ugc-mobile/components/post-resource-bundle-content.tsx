@@ -266,7 +266,7 @@ function ResourceMediaSelector({
             >
               <MediaScopeThumbnail item={item} />
               <View style={{ position: 'absolute', right: 3, bottom: 3, minWidth: 17, height: 17, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.72)', paddingHorizontal: 4 }}>
-                <Text style={{ color: '#fff', fontSize: 9, lineHeight: 11, fontWeight: '900' }}>{index + 1}</Text>
+                <Text style={{ color: '#fff', fontSize: 11, lineHeight: 14, fontWeight: '900' }}>{index + 1}</Text>
               </View>
             </Pressable>
           );

@@ -31,8 +31,14 @@ export function formatUnlockPrice(priceUsdCents: number): string {
     return 'Free';
   }
 
+  // "credits", not "tokens": this is a buyer-facing surface, and the buyer
+  // spent credits — the unlock runs through `unlockBundleWithCredits` and
+  // decrements the credit balance. The list previously said "900 tokens" for
+  // an item the detail screen one tap away called "900 credits paid", which
+  // read as two different currencies. Seller-side pricing copy still says
+  // tokens; sellers are paid in USD, so that split is left alone.
   const usd = (priceUsdCents / 100).toFixed(2);
-  return `${priceUsdCents} tokens ($${usd})`;
+  return `${priceUsdCents} credits ($${usd})`;
 }
 
 export function formatUnlockDate(value: string): string {

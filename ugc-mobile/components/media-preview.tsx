@@ -60,7 +60,10 @@ export function MediaPreview({
         borderRadius: radius,
         borderWidth: 1,
         borderColor: appTheme.colors.border,
-        backgroundColor: '#050506',
+        // A neutral tile rather than near-black: while a large preview loads,
+        // #050506 is indistinguishable from the page behind it, so the card
+        // reads as a hole punched in the layout instead of media on its way.
+        backgroundColor: appTheme.colors.panelSoft,
       }}
     />
   );
@@ -208,7 +211,7 @@ function MediaFallback({
       accessibilityRole="button"
       accessibilityLabel="Retry loading media"
       onPress={onRetry}
-      style={frameStyle}
+      style={({ pressed }) => [frameStyle, { opacity: pressed ? appTheme.opacity.pressed : 1 }]}
     >
       {content}
     </Pressable>

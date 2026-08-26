@@ -547,6 +547,7 @@ export default function ShowcaseScreen() {
               );
               void AccessibilityInfo.announceForAccessibility('Content reported and removed from your Showcase.');
             } catch (error) {
+              haptic.error();
               Alert.alert('Could not report content', error instanceof Error ? error.message : 'Please try again.');
             }
           },
@@ -576,6 +577,7 @@ export default function ShowcaseScreen() {
               });
               void AccessibilityInfo.announceForAccessibility('User reported to the moderation team.');
             } catch (error) {
+              haptic.error();
               Alert.alert('Could not report user', error instanceof Error ? error.message : 'Please try again.');
             }
           },
@@ -611,6 +613,7 @@ export default function ShowcaseScreen() {
               ]);
               void AccessibilityInfo.announceForAccessibility(`${creatorLabel} blocked.`);
             } catch (error) {
+              haptic.error();
               Alert.alert('Could not block user', error instanceof Error ? error.message : 'Please try again.');
             }
           },
