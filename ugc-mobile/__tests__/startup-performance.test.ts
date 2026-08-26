@@ -14,7 +14,7 @@ describe('mobile startup performance contracts', () => {
     const layoutSource = readProjectFile('app/_layout.tsx');
     const packageJson = JSON.parse(readProjectFile('package.json'));
 
-    expect(packageJson.dependencies['expo-observe']).toBe('~0.2.5');
+    expect(packageJson.dependencies['expo-observe']).toBe('~0.2.6');
     expect(layoutSource).toContain('AppMetricsRoot.wrap(RootLayout)');
     expect(layoutSource).toContain('STARTUP_VERSION_CHECK_FALLBACK_MS');
     expect(layoutSource).not.toContain('AppMetrics.markInteractive');
