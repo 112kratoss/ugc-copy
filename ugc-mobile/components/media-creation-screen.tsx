@@ -111,6 +111,7 @@ import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel } from '@/lib/types';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
+import { verticalHitSlop } from '@/lib/hit-target';
 
 const TOOL_META: Record<CreatorToolId, { title: string; accent: ToolAccent; subtitle: string }> = {
   image: {
@@ -2847,6 +2848,7 @@ function VideoCreatorComposer({
               accessibilityLabel={option.label}
               accessibilityState={{ selected: draft.isMultiShot === option.value }}
               onPress={() => onChange({ ...draft, isMultiShot: option.value, referenceMode: option.value ? 'frames' : draft.referenceMode })}
+              hitSlop={verticalHitSlop(40)}
               style={({ pressed }) => ({ flex: 1, minHeight: 40, borderRadius: 14, backgroundColor: draft.isMultiShot === option.value ? 'rgba(115,191,242,0.14)' : pressed ? appTheme.colors.pressed : 'transparent', alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
               <Text style={{ color: draft.isMultiShot === option.value ? appTheme.colors.text : appTheme.colors.muted, fontSize: 12, fontWeight: '800' }}>{option.label}</Text>
@@ -2938,6 +2940,7 @@ function VideoCreatorComposer({
                   accessibilityLabel={mode === 'frames' ? frameModeLabel : reusableModeLabel}
                   accessibilityState={{ selected: referenceMode === mode }}
                   onPress={() => onChange({ ...draft, referenceMode: mode })}
+                  hitSlop={verticalHitSlop(42)}
                   style={({ pressed }) => ({ minHeight: 42, borderRadius: 11, paddingHorizontal: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: referenceMode === mode ? 'rgba(115,191,242,0.14)' : pressed ? appTheme.colors.pressed : 'transparent', opacity: pressed ? appTheme.opacity.pressed : 1 })}
                 >
                   <Text style={{ color: referenceMode === mode ? appTheme.colors.text : appTheme.colors.muted, fontSize: 11, fontWeight: '800' }}>{mode === 'frames' ? frameModeLabel : reusableModeLabel}</Text>
@@ -3302,6 +3305,7 @@ function EnhanceControlsRow({
             accessibilityState={{ selected: level === value, disabled }}
             disabled={disabled}
             onPress={() => onLevelChange(value)}
+            hitSlop={verticalHitSlop(32)}
             // A press state as well as the selected state: without one, tapping
             // the option you are already on gives no feedback at all.
             style={({ pressed }) => ({
@@ -3325,6 +3329,7 @@ function EnhanceControlsRow({
           accessibilityRole="button"
           accessibilityLabel="Undo enhancement"
           onPress={onUndo}
+          hitSlop={verticalHitSlop(32)}
           style={({ pressed }) => ({
             minHeight: 32,
             paddingHorizontal: 12,

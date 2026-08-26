@@ -98,6 +98,10 @@ import {
 } from '@/lib/post-lifecycle';
 import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
 import { refreshViewerMediaCaches } from '@/lib/viewer-media-cache';
+import { verticalHitSlop } from '@/lib/hit-target';
+
+/** The creator byline reads as a single line of text; its reach is widened rather than its height. */
+const CREATOR_ROW_HEIGHT = 34;
 
 type ViewerParams = {
   algorithmVersion?: string | string[];
@@ -1313,11 +1317,13 @@ function ImmersiveSlide({
               accessibilityLabel={`Open ${item.creatorLabel} profile`}
               disabled={!canOpenCreator}
               onPress={() => onCreatorOpen(item)}
+              hitSlop={verticalHitSlop(CREATOR_ROW_HEIGHT)}
               style={({ pressed }) => ({
                 flexDirection: 'row',
                 alignItems: 'center',
                 gap: 9,
                 flexShrink: 1,
+                minHeight: CREATOR_ROW_HEIGHT,
                 opacity: pressed ? 0.72 : canOpenCreator ? 1 : 0.86,
               })}
             >
@@ -1960,6 +1966,7 @@ function TextSlide({ item, width, height }: { item: ImmersivePreviewItem; width:
             accessibilityRole="button"
             accessibilityLabel={`Read the full post ${item.title}`}
             onPress={() => router.push(`/post/${item.showcasePostId}` as never)}
+            hitSlop={verticalHitSlop(32)}
             style={({ pressed }) => ({
               alignSelf: 'flex-start',
               minHeight: 32,

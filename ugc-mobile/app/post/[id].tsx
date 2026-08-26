@@ -47,6 +47,10 @@ import type { ShowcasePostResponse } from '@/lib/types';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
 import { getSaveHeartIconProps, getViewerActionSlots, getViewerShareIntent, getViewerStateChip } from '@/lib/viewer-actions';
+import { verticalHitSlop } from '@/lib/hit-target';
+
+/** The creator byline reads as a single line of text; its reach is widened rather than its height. */
+const CREATOR_ROW_HEIGHT = 32;
 
 /**
  * A written post, read as a page.
@@ -426,7 +430,8 @@ function TextPostContent({
           accessibilityLabel={item.creatorUsername ? `Open ${content.handle}` : undefined}
           disabled={!item.creatorUsername}
           onPress={onCreatorOpen}
-          style={({ pressed }) => ({ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 32, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+          hitSlop={verticalHitSlop(CREATOR_ROW_HEIGHT)}
+          style={({ pressed }) => ({ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: CREATOR_ROW_HEIGHT, opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
           <CreatorAvatar name={content.handle} uri={item.creatorAvatar} size={26} />
           <Text numberOfLines={1} style={{ color: appTheme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '800' }}>
