@@ -2,11 +2,11 @@ import { router, useLocalSearchParams } from 'expo-router';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { ActivityIndicator, Image, Linking, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Eye, EyeOff, LockKeyhole, Mail, Sparkles, X } from 'lucide-react-native';
+import { Eye, EyeOff, LockKeyhole, Mail, X } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
-import { PrimaryButton } from '@/components/ui';
+import { BrandLockup, PrimaryButton } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import {
   describePasswordSignInError,
@@ -222,9 +222,8 @@ function AuthHeader() {
       >
         <CloseGlyph size={appTheme.icon.feature} color={workspace.text} />
       </Pressable>
-      <View style={{ flex: 1, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 7 }}>
-        <Sparkles size={appTheme.icon.default} color={workspace.primary} />
-        <Text numberOfLines={1} style={{ color: workspace.text, fontSize: 19, fontWeight: '700' }}>Magicbooklet</Text>
+      <View style={{ flex: 1, alignItems: 'center', flexDirection: 'row', justifyContent: 'center' }}>
+        <BrandLockup />
       </View>
       <View style={{ width: 48, height: 48 }} />
     </View>

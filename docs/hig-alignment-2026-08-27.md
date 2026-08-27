@@ -112,10 +112,8 @@ re-read the codebase broadly or ask for past-chat context.
   branch from it rather than from `main`, do not offer to merge mid-phase, and expect the question
   again at the Phase 4/5 boundary. (Checked when asking, and worth re-checking next time: no
   `mobile-store-release` run was in flight, so a push would have been safe - that is the gate, not
-  the size of the diff.) The next `todo` on the board is **S3 (onboarding)**, which S2 left three
-  things pointed at: the wordmark lockup differs between onboarding and auth (F6 counted three
-  surfaces; there are four - see the S2 log), onboarding is the screen that hands people to auth, and
-  a fresh-install simulator boots straight into it. Carrying further: the composer's 21 off-ramp icon
+  the size of the diff.) **S2 and S3 are both done**; the next `todo` on the board is **S15 (edit profile)**,
+  which inherits `BrandLockup` and the `AppTextInput` label idiom S2 leaned on. Carrying further: the composer's 21 off-ramp icon
   sizes are the largest budget in `hig-icon-size.test.ts`, with the home side menu's 11 next; F3 owns
   the bounce-disabled pair (`home-dashboard`, the alerts list) plus the 17 hidden scroll indicators;
   the workspace menu's absence from Alerts and Profile needs the gesture layer lifted into the tabs
@@ -410,7 +408,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S4 home | 3 | done | 3V/1D/4P | the front door stops introducing itself; four slides now say they are four |
 | S13/S14 profiles | 3 | done | 4V/4D/5P | a private post says so with a padlock, not a hue; the profile's own title is in the app's typeface on Android; a creator profile leads with the creator |
 | S2 auth | 4 | done | 4V/6D/4P | the way in is not painted as a failure; a mistake is answered in the app's words, above the keyboard |
-| S3 onboarding | 4 | todo | — | |
+| S3 onboarding | 4 | done | 3V/3D/3P | the product's name is drawn once, in its own typeface; the flow can be left from the screen that opens it |
 | S15 edit profile | 4 | todo | — | |
 | S16 settings/help | 4 | todo | — | |
 | S17(+a) pricing/IAP/ratings | 4 | todo | — | |
@@ -2332,3 +2330,99 @@ invocation and is swallowed on Android when the app is already foregrounded, so 
 points are faster than deep links here; and `simctl`'s text injection types through the hardware
 keyboard, which drops `@` and `.` and never raises the software keyboard — when a finding is about
 what the IME covers, capture it on the emulator.
+
+### S3 onboarding — audited 2026-08-27 · AND-pass: 2026-08-27
+Chapters read: Onboarding (`onboarding`); Managing accounts, Branding, Design principles, Feedback
+and Color were read earlier in the program and are reused.
+
+Two intro screens, then three authenticated stages (identity, reward, and the loading step between
+them). The chapter is short and its demands are blunt — fast, fun, **optional**, and focused on the
+product rather than the system — and the flow failed the third one twice: on the first screen it
+showed, and in the state it lands in when the network is unkind. The other cluster is the one S2
+handed over: this is where the product's name and its typeface are introduced, and both were
+introduced differently on every screen.
+
+- [V][both] **The two screens that introduce the product were the only ones not in its typeface.**
+  "Create. Share. Earn." was `fontSize: 32, fontWeight: '900'` and "What will you create first?" was
+  `34/900`, both on an `AppText` with no `variant` — which means the *system* font, the face
+  Branding reserves for body copy and captions, at a weight it was never given. Every other title in
+  the app is `pageTitle`, which is Bricolage. F6 verified that split held app-wide; it did not hold
+  on the two screens a new install sees first → **fixed**: both are `variant="pageTitle"`, with the
+  hand-set size and weight removed (a display variant that keeps its own weight is the S13 rule, and
+  the Android capture confirms the family survives — Bricolage on the Pixel_9a, not Roboto).
+  - The welcome headline's `maxWidth: 312` went with them: it was a measure cut for 32pt system
+    text, and it broke the display face mid-phrase. It fits on one line on both platforms now.
+- [V][both] **The flow was not optional on the screen that opens it.** Onboarding is verbatim:
+  "if onboarding is necessary, design a flow that's fast, fun, and **optional**." The Skip control
+  lived in the goal screen's header, so the first thing a fresh install showed offered only *Get
+  started* and *Sign in* — a person who wanted to look around first had to enter the flow to find
+  the way out of it → **fixed**: one `OnboardingHeader` carries the lockup and the Skip, and both
+  intro steps render it.
+- [V][both] **A creator whose setup failed was held in onboarding with no way out.** When
+  `loadAuthenticatedStage` throws, the screen sits on a card with a spinner, the API's own error
+  string, and a *Try again* — while the header offers Skip only during `intro` and the route sets
+  `gestureEnabled: false`. On iOS that is a closed room. Design principles' Agency, and Feedback's
+  "help them understand why" → **fixed**: the failure now says what happened in the app's words
+  (offline is named separately, via the same `isNetworkRequestFailedError` the auth copy uses) and
+  offers **Skip for now** beside *Try again*, which routes through the same `leaveForNow` that keeps
+  "Finish your creator setup" waiting on Home.
+- [D][both] **One wordmark, four drawings.** The welcome screen drew a 29pt glyph beside 25pt/800
+  text; the goal header 26 beside 23/800; the home side menu 24 *filled* beside 20/800; auth 20
+  beside 19/700. Walking welcome → goal → auth meant meeting the product's name at three sizes in
+  three taps. Design principles/Familiarity → **fixed**: `BrandLockup` in `components/ui.tsx`, two
+  documented sizes (`hero` for the welcome, where the name is the content; `compact` everywhere
+  else), both on the icon and type ramps, both in the display face. The side menu's `fill` went with
+  it — F4 settled one treatment for the icon set.
+- [D][both] **Two controls, one action, one screen.** The goal screen offered *Skip* in its header
+  and *Explore as guest* in its footer, both calling `exploreAsGuest`, under two names. The same
+  duplication S2 removed from the auth footer, and here the two were visible at once → **fixed**:
+  the header control is the escape on both steps, the footer keeps *Back* alone, and
+  `onExploreAsGuest` is gone from the component's contract.
+- [D][both] **Icon ratchet: 1 → 0, 2 → 0, 1 → 0.** The two lockup sparkles went with `BrandLockup`;
+  the reward card's 34pt sparkle became `icon.hero`; and the selected goal card's 11pt check moved
+  to `icon.xs` in a 20pt badge, which reads at arm's length where the 11pt one did not. Three more
+  files at zero.
+- [P][both] **Sign-in is still asked for before anything is made.** The main path is welcome → pick
+  a format → *Continue to account setup*, and Managing accounts asks the opposite: "delay sign-in
+  for as long as possible … give people a chance to get a sense of what your app or game does before
+  asking them to make a commitment." The mitigation is real and now reachable from both steps —
+  Skip drops straight into the app as a guest, and guests can browse, buy and generate — so this is
+  recorded rather than changed: moving account setup after a first creation is a product decision
+  about where credits and identity attach, not an alignment fix. Worth putting to the user if
+  onboarding completion ever looks like a funnel problem.
+- [P][both] Verified clean, and each was checked rather than assumed: Reduce Motion is honoured in
+  both animations (the welcome reveal short-circuits, and the reward's credit count-up sets the
+  final number instead of ticking); the goal picker is a real `radiogroup` of `radio`s with
+  `checked` state, and its selection is carried by a border, a fill *and* a check glyph rather than
+  colour alone; the flow's later stages were already optional ("Choose a name later", "Claim
+  later"); no permission is requested during onboarding, which is what the chapter prefers; and the
+  licensing line lives on the auth screen, small and at the bottom — "integrated in a balanced way
+  that doesn't disrupt the experience", which is the chapter's own escape clause.
+- [P][both] Noted for **F3**: the onboarding scroll view hides its vertical indicator. One more of
+  the 17 F3 owns; not flipped here, because Scroll views is an app-wide call.
+
+Guard added: `__tests__/hig-onboarding.test.ts` (9 cases) — no file outside `components/ui.tsx`
+draws the wordmark itself, every surface that used to now mounts `BrandLockup`, and the lockup takes
+the display face from the ramp at both sizes; both intro steps render the same escape control and no
+screen offers a second one; the failure branch keeps a way out and says so in the app's words; and
+both intro titles use `pageTitle` with no hand-rolled heavy type left in the flow. Extended:
+`hig-icon-size.test.ts` (three budgets to zero) and `hig-home.test.ts`, whose S4-era assertion read
+auth's own `>Magicbooklet</Text>` markup and now reads the control it mounts. `onboarding-welcome`
+and `onboarding-booklet` gained cases for the new Skip and the removed footer control.
+
+**AND-pass 2026-08-27.** Pixel_9a, Android 16, dev client on this session's Metro. Captured both
+intro steps: the shared lockup **rendering in Bricolage on Android** (the S13 hazard's control case
+— a display variant that is never re-weighted keeps its family), the `pageTitle` headlines, Skip
+present on the welcome step, the footer reduced to *Back*, and the enlarged selection check.
+Hardware back from the flow's root leaves the app rather than dead-ending, and the process survives
+it; `logcat` clear of `FATAL`/`SIGSEGV`/`libhwui`. Edge-to-edge unchanged. This unit changes no
+keyboard, blur, gesture or tab-bar behaviour, but the Android pass was run in full because the
+typeface finding is one only a device can settle.
+
+**Mechanics.** The Expo dev-launcher overlay sits on the Skip control on **both** platforms — the
+Android bubble swallowed a tap 140px below its visible circle and opened the dev menu instead
+(memory `android-dev-launcher-bubble-blocks-top-right-taps`, and iOS's floating gear does the same
+thing on the simulator), so a top-right control in a dev build cannot be verified by injected taps
+on either. Both are unit-tested instead, which is the standing practice. Reaching the intro steps
+needs a signed-out session **and** an onboarding state below step 4; the S2 log's two safe
+signed-out recipes both produce that.

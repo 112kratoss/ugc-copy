@@ -47,7 +47,10 @@ describe('the home top bar', () => {
    * incorporates your branding content at the beginning of your experience".
    */
   it('keeps the wordmark where the chapter endorses it', () => {
-    expect(authScreen).toContain('>Magicbooklet</Text>');
+    // S3 gave the four surfaces that drew this lockup by hand — at four sizes —
+    // one `BrandLockup`, so the assertion moved from auth's own markup to the
+    // control it mounts. The name itself is asserted in hig-onboarding.
+    expect(authScreen).toContain('<BrandLockup />');
   });
 
   /**

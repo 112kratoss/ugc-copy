@@ -16,6 +16,7 @@ import { AtSign, Clapperboard, ImageIcon, Sparkles, WandSparkles } from 'lucide-
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '@/lib/api-client';
+import { isNetworkRequestFailedError } from '@/lib/supabase-auth-recovery';
 import { useAuth } from '@/lib/auth';
 import { useReducedMotion } from '@/lib/motion';
 import { trackOnboardingEvent, useOnboarding } from '@/lib/onboarding';
@@ -25,9 +26,9 @@ import { AppText, AppTextInput, Card, Kicker, PrimaryButton, SecondaryButton } f
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import {
   OnboardingBookletGoal,
-  OnboardingBookletHeader,
   type BookletGoal,
 } from '@/components/onboarding-booklet';
+import { OnboardingHeader } from '@/components/onboarding-header';
 import { OnboardingWelcome } from '@/components/onboarding-welcome';
 
 import imagePreview from '../assets/images/onboarding-pages/image.jpg';
@@ -148,7 +149,9 @@ export default function OnboardingScreen() {
         void trackOnboardingEvent(api, 'auth_succeeded', { goal, step: 'auth' });
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Could not continue onboarding.');
+      setMessage(isNetworkRequestFailedError(error)
+        ? 'You appear to be offline. Check your connection and try again.'
+        : 'We could not load your creator setup. Try again, or skip it for now — you can finish from Home.');
       setStage('loading');
     }
   }, [api, goal, resume, update, user]);
@@ -377,9 +380,10 @@ export default function OnboardingScreen() {
                 void moveToStep(1);
               }}
               onSignIn={() => void signInFromWelcome()}
+              onSkip={() => void exploreAsGuest()}
             />
           ) : (
-            <OnboardingBookletHeader
+            <OnboardingHeader
               onSkip={stage === 'intro' ? () => void exploreAsGuest() : undefined}
             />
           )}
@@ -394,7 +398,6 @@ export default function OnboardingScreen() {
                 void update({ goal: nextGoal, status: 'in_progress', lastStep: 1 });
               }}
               onContinue={() => void continueToAuth()}
-              onExploreAsGuest={() => void exploreAsGuest()}
               onBack={() => void moveToStep(0)}
             />
           ) : null}
@@ -404,8 +407,13 @@ export default function OnboardingScreen() {
               <ActivityIndicator color={appTheme.colors.primary} />
               <AppText variant="cardTitle">Preparing your creator setup</AppText>
               <AppText variant="bodySm" color="muted">Checking your profile and Creator Pack.</AppText>
-              {message ? <Text accessibilityRole="alert" style={{ color: appTheme.colors.danger, textAlign: 'center' }}>{message}</Text> : null}
+              {message ? <Text accessibilityRole="alert" accessibilityLiveRegion="assertive" style={{ color: appTheme.colors.danger, textAlign: 'center' }}>{message}</Text> : null}
               {message ? <SecondaryButton label="Try again" onPress={() => void loadAuthenticatedStage()} /> : null}
+              {/* Onboarding must stay optional even when it breaks. Without
+                  this the stage has no Skip (the header only offers one during
+                  `intro`) and the route disables the back gesture, so a failed
+                  profile fetch held a signed-in creator on this card. */}
+              {message ? <SecondaryButton label="Skip for now" onPress={() => void leaveForNow('loading')} /> : null}
             </Card>
           ) : null}
 
@@ -483,7 +491,7 @@ export default function OnboardingScreen() {
               <Animated.View style={{ transform: [{ scale: rewardScale }] }}>
                 <Card accent="primary" padding="lg" style={{ alignItems: 'center', paddingVertical: 34, gap: 16 }}>
                   <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.selectedStrong }}>
-                    <Sparkles size={34} color={appTheme.colors.primary} />
+                    <Sparkles size={appTheme.icon.hero} color={appTheme.colors.primary} />
                   </View>
                   <View style={{ alignItems: 'center', gap: 8 }}>
                     <Kicker color="primary">Creator Pack</Kicker>

@@ -54,6 +54,8 @@ vi.mock('@/lib/motion', () => ({
 }));
 
 vi.mock('@/components/ui', () => ({
+  BrandLockup: (props: MockProps) =>
+    React.createElement('view', { accessibilityRole: 'header', accessibilityLabel: 'Magicbooklet', ...props }),
   AppText: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   PrimaryButton: ({ label, onPress, ...props }: MockProps) => React.createElement(
     'pressable',
@@ -86,6 +88,7 @@ describe('OnboardingWelcome', () => {
           availableWidth={358}
           onGetStarted={vi.fn()}
           onSignIn={vi.fn()}
+          onSkip={vi.fn()}
         />
       );
     });
@@ -94,18 +97,20 @@ describe('OnboardingWelcome', () => {
     expect(text).not.toContain('Welcome to Magicbooklet');
     expect(text).toContain('Create. Share. Earn.');
     expect(text).toContain('Turn ideas into polished images, video, and motion—then share what you create.');
-    expect(tree!.root.findAll((node) => (
-      node.props.accessibilityRole === 'header' && node.props.style?.fontSize === 32
-    )).length).toBeGreaterThan(0);
+    // The headline is the `pageTitle` token now, not a hand-set 32pt/900 in
+    // the system font — so it carries the display face the rest of the app's
+    // titles use, and cannot re-weight it (hig-type-and-contrast).
+    expect(tree!.root.findAllByProps({ variant: 'pageTitle', heading: true })).not.toHaveLength(0);
     expect(tree!.root.findByProps({ accessibilityLabel: 'Get started' }).props.accessibilityRole).toBe('button');
     expect(
       tree!.root.findByProps({ accessibilityLabel: 'Already have an account? Sign in' }).props.accessibilityRole
     ).toBe('button');
   });
 
-  it('calls the supplied callbacks from Get started and Sign in', () => {
+  it('calls the supplied callbacks from Get started, Sign in and Skip', () => {
     const onGetStarted = vi.fn();
     const onSignIn = vi.fn();
+    const onSkip = vi.fn();
     let tree: renderer.ReactTestRenderer | undefined;
 
     renderer.act(() => {
@@ -115,6 +120,7 @@ describe('OnboardingWelcome', () => {
           availableWidth={358}
           onGetStarted={onGetStarted}
           onSignIn={onSignIn}
+        onSkip={onSkip}
         />
       );
     });
@@ -122,9 +128,12 @@ describe('OnboardingWelcome', () => {
     renderer.act(() => {
       tree!.root.findByProps({ accessibilityLabel: 'Get started' }).props.onPress();
       tree!.root.findByProps({ accessibilityLabel: 'Already have an account? Sign in' }).props.onPress();
+      // Onboarding asks for an optional flow; the first screen had no way past it.
+      tree!.root.findByProps({ accessibilityLabel: 'Skip onboarding and explore as guest' }).props.onPress();
     });
 
     expect(onGetStarted).toHaveBeenCalledTimes(1);
     expect(onSignIn).toHaveBeenCalledTimes(1);
+    expect(onSkip).toHaveBeenCalledTimes(1);
   });
 });

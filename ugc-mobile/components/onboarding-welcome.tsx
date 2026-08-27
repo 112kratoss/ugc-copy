@@ -1,9 +1,9 @@
 import { Image } from 'expo-image';
-import { Sparkles } from 'lucide-react-native';
 import { useEffect, useRef } from 'react';
 import { Animated, Pressable, Text, View } from 'react-native';
 
 import { AppText, PrimaryButton } from '@/components/ui';
+import { OnboardingHeader } from '@/components/onboarding-header';
 import { useReducedMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
 
@@ -14,6 +14,12 @@ type OnboardingWelcomeProps = {
   availableWidth: number;
   onGetStarted: () => void;
   onSignIn: () => void;
+  /**
+   * Onboarding: "design a flow that's fast, fun, and optional". The escape used
+   * to appear only on the second screen, so the first thing a new install
+   * showed had no way past it.
+   */
+  onSkip: () => void;
 };
 
 export function OnboardingWelcome({
@@ -21,6 +27,7 @@ export function OnboardingWelcome({
   availableWidth,
   onGetStarted,
   onSignIn,
+  onSkip,
 }: OnboardingWelcomeProps) {
   const reducedMotion = useReducedMotion();
   const reveal = useRef(new Animated.Value(reducedMotion ? 1 : 0)).current;
@@ -44,22 +51,7 @@ export function OnboardingWelcome({
 
   return (
     <View style={{ flex: 1, width: '100%', paddingTop: 10 }}>
-      <View
-        accessibilityRole="header"
-        accessibilityLabel="Magicbooklet"
-        style={{
-          minHeight: 40,
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 9,
-        }}
-      >
-        <Sparkles size={29} color={appTheme.colors.primary} />
-        <AppText selectable={false} style={{ fontSize: 25, lineHeight: 31, fontWeight: '800', letterSpacing: -0.35 }}>
-          Magicbooklet
-        </AppText>
-      </View>
+      <OnboardingHeader size="hero" onSkip={onSkip} />
 
       <Animated.View
         style={{
@@ -97,7 +89,6 @@ export function OnboardingWelcome({
         style={{
           gap: 8,
           marginHorizontal: 16,
-          maxWidth: 312,
           opacity: reveal,
           transform: [{
             translateY: reveal.interpolate({
@@ -107,15 +98,15 @@ export function OnboardingWelcome({
           }],
         }}
       >
-        <Text
-          accessibilityRole="header"
-          selectable
-          style={{ fontSize: 32, lineHeight: 38, fontWeight: '900', letterSpacing: -0.65 }}
-        >
+        {/* The product's own headline, in the product's own typeface: this and
+            the goal screen's title were the two places that hand-rolled a size
+            and a weight in the system font, which is the face Branding reserves
+            for body copy. `pageTitle` is what every other screen's title uses. */}
+        <AppText heading variant="pageTitle" selectable>
           <Text style={{ color: appTheme.colors.primary }}>Create. </Text>
           <Text style={{ color: appTheme.colors.image }}>Share. </Text>
           <Text style={{ color: appTheme.colors.motion }}>Earn.</Text>
-        </Text>
+        </AppText>
 
         <AppText variant="body" color="textSecondary" style={{ maxWidth: 290 }}>
           Turn ideas into polished images, video, and motion—then share what you create.

@@ -62,7 +62,7 @@ const LEGACY_SIZES: Record<string, number> = {
   'app/auth.tsx': 0,
   'app/help.tsx': 3,
   'app/invite.tsx': 5,
-  'app/onboarding.tsx': 1,
+  'app/onboarding.tsx': 0,
   'app/post/[id].tsx': 0,
   'app/post/new.tsx': 21,
   'app/r/[code].tsx': 5,
@@ -83,8 +83,8 @@ const LEGACY_SIZES: Record<string, number> = {
   // 6 → 8 in S8, same cause: an aliased `OutputIcon` at 42 and `SlotIcon` at
   // 34. S19's pass ratchets them down.
   'components/media-template-screens.tsx': 8,
-  'components/onboarding-booklet.tsx': 2,
-  'components/onboarding-welcome.tsx': 1,
+  'components/onboarding-booklet.tsx': 0,
+  'components/onboarding-welcome.tsx': 0,
   'components/post-details-page.tsx': 0,
   'components/post-resource-references.tsx': 0,
   'components/profile-dashboard.tsx': 0,

@@ -17,6 +17,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Sparkles } from 'lucide-react-native';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { getAvatarInitial } from '@/lib/profile-view-model';
@@ -167,6 +168,51 @@ export function AppText({
     >
       {children}
     </Text>
+  );
+}
+
+/**
+ * The product's name, drawn once.
+ *
+ * Before S3 this lockup existed four times — the onboarding welcome (29pt
+ * glyph beside 25pt/800 text), the onboarding goal header (26/23), the home
+ * side menu (24 filled, beside 20/800) and the auth screen (20/19/700) — so a
+ * person moving welcome → goal → auth met the app's name at three sizes in
+ * three taps. Design principles/Familiarity: "once you establish a behavior or
+ * appearance for an element, apply it throughout your design."
+ *
+ * Two sizes, both on the icon and type ramps: `compact` for chrome that has
+ * other work to do, `hero` for the welcome screen, where the name is the
+ * content. The wordmark takes the display face, which is what Branding asks a
+ * custom font to carry — and, being a display variant, it must never be given a
+ * `fontWeight` (see `hig-type-and-contrast.test.ts`).
+ */
+export function BrandLockup({ size = 'compact' }: { size?: 'compact' | 'hero' }) {
+  const hero = size === 'hero';
+
+  return (
+    <View
+      accessibilityRole="header"
+      accessibilityLabel="Magicbooklet"
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: hero ? appTheme.spacing.compact : 7,
+        flexShrink: 1,
+        minWidth: 0,
+      }}
+    >
+      <Sparkles size={hero ? appTheme.icon.hero : appTheme.icon.feature} color={appTheme.colors.primary} />
+      <AppText
+        selectable={false}
+        numberOfLines={1}
+        variant={hero ? 'pageTitle' : 'sectionTitle'}
+        accessibilityRole="none"
+        style={{ flexShrink: 1 }}
+      >
+        Magicbooklet
+      </AppText>
+    </View>
   );
 }
 

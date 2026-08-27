@@ -1,6 +1,6 @@
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Check, Sparkles } from 'lucide-react-native';
+import { Check } from 'lucide-react-native';
 import type { ComponentType } from 'react';
 import { Pressable, View } from 'react-native';
 
@@ -24,65 +24,12 @@ export type BookletGoal = {
   icon: IconComponent;
 };
 
-export function OnboardingBookletHeader({
-  onSkip,
-}: {
-  onSkip?: () => void;
-}) {
-  return (
-    <View
-      style={{
-        minHeight: 48,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        position: 'relative',
-      }}
-    >
-      <View
-        accessibilityRole="header"
-        accessibilityLabel="Magicbooklet"
-        style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
-      >
-        <Sparkles size={26} color={appTheme.colors.primary} />
-        <AppText
-          selectable={false}
-          style={{ fontSize: 23, lineHeight: 29, fontWeight: '800', letterSpacing: -0.35 }}
-        >
-          Magicbooklet
-        </AppText>
-      </View>
-
-      {onSkip ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Skip onboarding and explore as guest"
-          hitSlop={8}
-          onPress={onSkip}
-          style={({ pressed }) => ({
-            position: 'absolute',
-            right: 0,
-            minWidth: 48,
-            minHeight: 48,
-            alignItems: 'flex-end',
-            justifyContent: 'center',
-            opacity: pressed ? appTheme.opacity.pressed : 1,
-          })}
-        >
-          <AppText selectable={false} variant="label" color="textSecondary">Skip</AppText>
-        </Pressable>
-      ) : null}
-    </View>
-  );
-}
-
 export function OnboardingBookletGoal({
   goals,
   selectedGoal,
   availableWidth,
   onSelect,
   onContinue,
-  onExploreAsGuest,
   onBack,
 }: {
   goals: BookletGoal[];
@@ -90,7 +37,6 @@ export function OnboardingBookletGoal({
   availableWidth: number;
   onSelect: (goal: OnboardingGoal) => void;
   onContinue: () => void;
-  onExploreAsGuest: () => void;
   onBack: () => void;
 }) {
   const selected = goals.find((item) => item.id === selectedGoal) ?? goals[0];
@@ -101,10 +47,7 @@ export function OnboardingBookletGoal({
     <View style={{ flex: 1 }}>
       <View style={{ marginHorizontal: 16, paddingTop: 8, gap: 8 }}>
         <Kicker color="primary">Make your first page</Kicker>
-        <AppText
-          heading
-          style={{ fontSize: 34, lineHeight: 39, fontWeight: '900', letterSpacing: -0.7 }}
-        >
+        <AppText heading variant="pageTitle">
           What will you create first?
         </AppText>
         <AppText variant="bodySm" color="muted" style={{ maxWidth: 330 }}>
@@ -168,17 +111,17 @@ export function OnboardingBookletGoal({
                     <View
                       style={{
                         position: 'absolute',
-                        right: -10,
-                        top: -8,
-                        width: 16,
-                        height: 16,
-                        borderRadius: 8,
+                        right: -12,
+                        top: -9,
+                        width: 20,
+                        height: 20,
+                        borderRadius: 10,
                         backgroundColor: item.color,
                         alignItems: 'center',
                         justifyContent: 'center',
                       }}
                     >
-                      <Check size={11} color={appTheme.colors.onPrimary} />
+                      <Check size={appTheme.icon.xs} color={appTheme.colors.onPrimary} />
                     </View>
                   ) : null}
                 </View>
@@ -211,33 +154,19 @@ export function OnboardingBookletGoal({
           accessibilityHint={`Continue with ${selected.label.toLowerCase()} as your first format`}
           onPress={onContinue}
         />
-        <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+        <View style={{ minHeight: appTheme.touch.default, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Back"
             onPress={onBack}
             style={({ pressed }) => ({
-              minHeight: 48,
+              minHeight: appTheme.touch.default,
               justifyContent: 'center',
               paddingHorizontal: 12,
               opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
             <AppText selectable={false} variant="bodySm" color="muted">Back</AppText>
-          </Pressable>
-          <View style={{ width: 3, height: 3, borderRadius: 2, backgroundColor: appTheme.colors.faint }} />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Explore as guest"
-            onPress={onExploreAsGuest}
-            style={({ pressed }) => ({
-              minHeight: 48,
-              justifyContent: 'center',
-              paddingHorizontal: 12,
-              opacity: pressed ? appTheme.opacity.pressed : 1,
-            })}
-          >
-            <AppText selectable={false} variant="bodySm" color="muted">Explore as guest</AppText>
           </Pressable>
         </View>
       </View>

@@ -39,6 +39,8 @@ vi.mock('lucide-react-native', () => ({
 
 vi.mock('@/components/ui', () => ({
   AppText: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
+  BrandLockup: (props: MockProps) =>
+    React.createElement('view', { accessibilityRole: 'header', accessibilityLabel: 'Magicbooklet', ...props }),
   Kicker: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   PrimaryButton: ({ label, onPress, ...props }: MockProps) => React.createElement(
     'pressable',
@@ -54,9 +56,9 @@ vi.mock('@/components/ui', () => ({
 
 import {
   OnboardingBookletGoal,
-  OnboardingBookletHeader,
   type BookletGoal,
 } from '../components/onboarding-booklet';
+import { OnboardingHeader } from '../components/onboarding-header';
 
 function collectText(node: renderer.ReactTestRendererJSON | renderer.ReactTestRendererJSON[] | string | null): string {
   if (node === null) return '';
@@ -103,7 +105,7 @@ describe('Onboarding booklet components', () => {
     let tree: renderer.ReactTestRenderer | undefined;
 
     renderer.act(() => {
-      tree = renderer.create(<OnboardingBookletHeader onSkip={onSkip} />);
+      tree = renderer.create(<OnboardingHeader onSkip={onSkip} />);
     });
 
     expect(tree!.root.findByProps({ accessibilityLabel: 'Magicbooklet' }).props.accessibilityRole).toBe('header');
@@ -117,7 +119,6 @@ describe('Onboarding booklet components', () => {
   it('exposes goal selection state and connects every goal action', () => {
     const onSelect = vi.fn();
     const onContinue = vi.fn();
-    const onExploreAsGuest = vi.fn();
     const onBack = vi.fn();
     let tree: renderer.ReactTestRenderer | undefined;
 
@@ -129,7 +130,6 @@ describe('Onboarding booklet components', () => {
           availableWidth={358}
           onSelect={onSelect}
           onContinue={onContinue}
-          onExploreAsGuest={onExploreAsGuest}
           onBack={onBack}
         />
       );
@@ -155,21 +155,21 @@ describe('Onboarding booklet components', () => {
 
     const continueButton = tree!.root.findByProps({ accessibilityLabel: 'Continue to account setup' });
     const backButton = tree!.root.findByProps({ accessibilityLabel: 'Back' });
-    const exploreButton = tree!.root.findByProps({ accessibilityLabel: 'Explore as guest' });
     expect(continueButton.props.accessibilityHint).toBe('Continue with video as your first format');
+    // The escape lives in the header (`OnboardingSkip`), once. This footer used
+    // to carry a second control calling the same function under another name.
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Explore as guest' })).toHaveLength(0);
 
     renderer.act(() => {
       motionChoice.props.onPress();
       continueButton.props.onPress();
       backButton.props.onPress();
-      exploreButton.props.onPress();
     });
 
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onSelect).toHaveBeenCalledWith('motion');
     expect(onContinue).toHaveBeenCalledTimes(1);
     expect(onBack).toHaveBeenCalledTimes(1);
-    expect(onExploreAsGuest).toHaveBeenCalledTimes(1);
 
     renderer.act(() => {
       tree!.update(
@@ -179,7 +179,6 @@ describe('Onboarding booklet components', () => {
           availableWidth={358}
           onSelect={onSelect}
           onContinue={onContinue}
-          onExploreAsGuest={onExploreAsGuest}
           onBack={onBack}
         />
       );

@@ -34,6 +34,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SHEET_DISMISS_DISTANCE, SHEET_DISMISS_VELOCITY } from '@/components/sheet-chrome';
+import { BrandLockup } from '@/components/ui';
 import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { formatUsdCents } from '@/lib/home-view-model';
@@ -235,15 +236,8 @@ export function HomeSideMenu({
             }}
           >
             <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
-                <Sparkles size={24} color={PRIMARY} fill={appTheme.colors.pressed} />
-                <Text
-                  accessibilityRole="header"
-                  numberOfLines={1}
-                  style={{ color: appTheme.colors.text, fontSize: 20, lineHeight: 26, fontWeight: '800', flexShrink: 1 }}
-                >
-                  Magicbooklet
-                </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, minWidth: 0 }}>
+                <BrandLockup />
               </View>
               <Pressable
                 accessibilityRole="button"
