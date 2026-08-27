@@ -45,6 +45,12 @@ const panResponderApi = optionalNativeExport(() => ReactNative.PanResponder);
 export const SHEET_DISMISS_DISTANCE = 100;
 /** A flick releases early: past this downward velocity, distance stops mattering. */
 export const SHEET_DISMISS_VELOCITY = 0.6;
+/**
+ * The drawer reuses both numbers on its own axis (`home-side-menu`). Its
+ * geometry is different enough to need its own responder — horizontal, no
+ * grabber, over a scrolling body — but a sheet and a drawer disagreeing about
+ * how far is far enough would be the same drift this module exists to stop.
+ */
 /** Below this the drag is still ambiguous with a scroll, so the sheet does not claim it. */
 const SHEET_DRAG_CLAIM_DISTANCE = 6;
 

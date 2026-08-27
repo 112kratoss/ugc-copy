@@ -260,3 +260,94 @@ describe('HIG status bars', () => {
     expect(offenders.map(relative)).toEqual([]);
   });
 });
+
+/**
+ * N3 — the side menu and the shell's motion. Sidebars, Motion.
+ */
+describe('HIG sidebars — the workspace menu', () => {
+  const gestureLayer = readFileSync(
+    path.join(mobileRoot, 'components/workspace-side-menu-gesture-layer.tsx'),
+    'utf8'
+  );
+
+  it('never lets the edge swipe be the only way in', () => {
+    // Gestures: "Use shortcut gestures to supplement standard gestures, not
+    // replace them ... people also need simple, familiar ways to navigate and
+    // perform actions, even if it means an extra tap or two." Sidebars:
+    // "Avoid hiding the sidebar by default to ensure that it remains
+    // discoverable." Showcase mounted the layer and offered no control at all.
+    const hosts = files
+      .filter((file) => relative(file) !== 'components/workspace-side-menu-gesture-layer.tsx')
+      .filter((file) => readFileSync(file, 'utf8').includes('<WorkspaceSideMenuGestureLayer'));
+
+    expect(hosts.map(relative)).not.toEqual([]);
+
+    const withoutControl = hosts
+      .filter((file) => !readFileSync(file, 'utf8').includes('useWorkspaceSideMenu'))
+      .map(relative);
+
+    expect(withoutControl).toEqual([]);
+  });
+
+  it('opens the menu with one glyph and one label everywhere', () => {
+    // Two screens now offer the same menu; a hamburger on one and something
+    // else on the other is the Familiarity problem in miniature.
+    const openers = files
+      .filter((file) => relative(file) !== 'components/workspace-side-menu-gesture-layer.tsx')
+      .filter((file) => readFileSync(file, 'utf8').includes('WORKSPACE_SIDE_MENU_LABEL'))
+      .map(relative);
+
+    expect(openers.sort()).toEqual([
+      'app/(tabs)/showcase.tsx',
+      'components/home-dashboard.tsx',
+    ]);
+
+    const rogue = openers.filter((name) => (
+      !readFileSync(path.join(mobileRoot, name), 'utf8').includes('WorkspaceSideMenuGlyph')
+    ));
+    expect(rogue).toEqual([]);
+  });
+
+  it('closes the drawer with the gesture that opened it', () => {
+    // Motion: "if someone reveals a view by sliding it down from the top, they
+    // don't expect to dismiss the view by sliding it to the side." The drawer
+    // is revealed by dragging in from the left edge, so it closes by dragging
+    // back to it — on the same distance and velocity a sheet uses.
+    const drawer = readFileSync(path.join(mobileRoot, 'components/home-side-menu.tsx'), 'utf8');
+
+    expect(drawer).toContain('onMoveShouldSetPanResponderCapture');
+    expect(drawer).toContain('SHEET_DISMISS_DISTANCE');
+    expect(drawer).toContain('SHEET_DISMISS_VELOCITY');
+    // Opened from the left edge, so only a leftward drag may close it.
+    expect(drawer).toMatch(/gesture\.dx < -DRAWER_DRAG_CLAIM_DISTANCE/);
+  });
+
+  it('keeps the drawer one level deep', () => {
+    // Sidebars: "In general, show no more than two levels of hierarchy in a
+    // sidebar." Every row navigates; none of them expands in place.
+    const drawer = readFileSync(path.join(mobileRoot, 'components/home-side-menu.tsx'), 'utf8');
+
+    expect(drawer).not.toContain('DisclosureSection');
+    expect(gestureLayer).not.toContain('DisclosureSection');
+  });
+});
+
+describe('HIG motion — the shell', () => {
+  it('routes every shell transition through the Reduce Motion preference', () => {
+    // Motion: "Make motion optional. Not everyone can or wants to experience
+    // the motion in your app." A screen that names an animation without asking
+    // is a transition that plays regardless of the setting.
+    const layouts = ['app/_layout.tsx', 'app/(tabs)/_layout.tsx'];
+    const unguarded = layouts.flatMap((name) => {
+      const source = readFileSync(path.join(mobileRoot, name), 'utf8');
+      return [...source.matchAll(/animation: ([^,\n]+)/g)]
+        // The value runs to the comma or the end of the options object, so trim
+        // the closing braces a single-line `options={{ … }}` leaves behind.
+        .map((match) => match[1].replace(/[}/>\s]+$/, '').trim())
+        .filter((value) => !value.startsWith('reducedMotion ?') && value !== "'none'")
+        .map((value) => `${name}: ${value}`);
+    });
+
+    expect(unguarded).toEqual([]);
+  });
+});

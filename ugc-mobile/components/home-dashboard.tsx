@@ -8,7 +8,6 @@ import {
   Bell,
   Crown,
   ImageIcon,
-  Menu,
   Play,
   Plus,
   Rocket,
@@ -36,6 +35,7 @@ import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
 import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { HomeFeedCardView } from '@/components/home-feed-card';
 import { HomeSideMenu } from '@/components/home-side-menu';
+import { WorkspaceSideMenuGlyph, WORKSPACE_SIDE_MENU_LABEL } from '@/components/workspace-side-menu-gesture-layer';
 import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
 import { Reveal } from '@/components/reveal';
 import { HomeFeedSkeleton } from '@/components/skeleton';
@@ -852,14 +852,14 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
   return (
     <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
       <TopBarControl
-        accessibilityLabel="Open menu"
+        accessibilityLabel={WORKSPACE_SIDE_MENU_LABEL}
         onPress={() => {
           haptic.select();
           onMenuPress();
         }}
         style={{ width: 48 }}
       >
-        <Menu size={22} color={DASHBOARD_COLORS.text} />
+        <WorkspaceSideMenuGlyph size={appTheme.icon.default} color={DASHBOARD_COLORS.text} />
       </TopBarControl>
 
       <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, minWidth: 0 }}>

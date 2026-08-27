@@ -175,6 +175,7 @@ applied everywhere or it's a bug, not a choice.
 | DV5 | The tab bar hides on the Create tab | Tab bars | `creator` is a tab that presents as a modal — full-screen, self-contained, a standard Close rather than a back control — which is the exception Tab bars names ("a modal is temporary and self-contained") | only tab that hides the bar; verify in Phase 6 |
 | DV6 | The raised centre control opens a menu instead of switching tabs | Tab bars | "Use a tab bar to support navigation, not to provide actions" — both menu entries navigate to sections (create tab, post composer), so it is navigation via a menu, in the platform-common shape for a creation affordance | single control, app-wide |
 | DV7 | The three creation surfaces are full-screen modals in substance but declared a tab and two pushes | Modality | The create tab, `create/[tool]` and `post/new` are each full-screen, self-contained and closed rather than backed out of. The create tab cannot become a modal route — it is a tab (DV5) — so promoting one of the other two would split a family the same menu opens. What Modality asks for, an obvious way out, each of them has, and all three now draw the same `CloseGlyph`. Pinned by `post-new-screen.test.ts` | all three creation surfaces |
+| DV9 | Tab switches cross-fade; iOS switches tabs instantly | Motion, Tab bars | Motion asks you to "generally avoid adding motion to UI interactions that occur frequently", and a tab switch is the app's most frequent. The bar is a custom component (DV3) on two platforms, where a shared cross-fade reads as one product rather than two; it is already routed through Reduce Motion, so the setting turns it off. Revisit in X1 with the rest of the motion inventory | all four tabs |
 | DV8 | A `cancel`-styled alert button titled "Keep …" rather than "Cancel" | Alerts | Four alerts confirm cancelling something ("Cancel upload", "Cancel creation"), where a button titled "Cancel" would collide with the action's own name. The decline says what keeping means instead. The three that do *not* have that collision ("Not now" ×3) are a real miss → X3 | 4 of 7; the other 3 are open |
 
 ## HIG coverage matrix
@@ -365,7 +366,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | F6 branding boundary | 1 | done | 1V/1D/3P | the product now spells its own name one way |
 | N1 tab bar/toolbars/status bar | 2 | done | 3V/2D/5P | Alerts badge; one Back glyph per platform; every view title bounded and static |
 | N2 modality map/sheets/alerts/gestures | 2 | done | 4V/4D/4P | one sheet grabber that actually drags; menus off `Alert`; one Close control |
-| N3 side menus/shell motion | 2 | todo | — | |
+| N3 side menus/shell motion | 2 | done | 1V/2D/4P | the menu has a visible way in on every screen that offers it, and closes the way it opened |
 | S5 showcase feed | 3 | todo | — | |
 | S6+S6a/b/c viewer & sheets | 3 | todo | — | |
 | S9 creation tool | 3 | todo | — | |
@@ -815,3 +816,96 @@ unchanged; nothing in this unit touches the keyboard.
 
 **Open remainder**: the three "Not now" cancel titles and alert-title casing go to X3; context menus
 go to the Phase 3 surface passes; edit-profile's duplicate cancel goes to S15.
+
+### N3 side menus & shell motion — audited 2026-08-27 · AND-pass: 2026-08-27
+Chapters read: Sidebars (`sidebars`), Motion (`motion`).
+
+Rules in checkable form: a sidebar wants space, so on a phone prefer the tab bar and keep the sidebar
+for what the bar cannot hold · let people hide and show it with the interactions the platform already
+uses (on touch, the edge swipe) · avoid hiding it by default so it stays discoverable · no more than
+two levels of hierarchy, and short group labels if there are two · familiar symbols for the rows ·
+sidebar icon colours must serve a purpose · add motion purposefully and never for its own sake ·
+make motion optional · feedback motion follows people's gestures and expectations — a view revealed
+by sliding one way is not dismissed by sliding another · generally avoid adding motion to
+interactions that occur frequently · let people cancel motion.
+
+- [V][both] **On Showcase the edge swipe was the only way into the workspace menu.** One drawer, two
+  hosts, and they disagreed completely: Home draws a hamburger in its top bar and has no edge swipe;
+  Showcase mounts the edge-swipe layer and drew no control at all. Alerts and Profile offer neither.
+  So the app's account, credits, unlocks, sales, settings and help lived behind an invisible 24pt
+  gesture on the screen most likely to be someone's first. Gestures: "Use shortcut gestures to
+  supplement standard gestures, not replace them … people also need simple, familiar ways to navigate
+  and perform actions, even if it means an extra tap or two", and "not the only way to perform an
+  important action in your app"; Sidebars: "Avoid hiding the sidebar by default to ensure that it
+  remains discoverable" → **fixed**: the gesture layer now publishes its opener through context
+  (`useWorkspaceSideMenu`) plus one glyph and one label (`WorkspaceSideMenuGlyph`,
+  `WORKSPACE_SIDE_MENU_LABEL`), and Showcase renders the control on its leading edge, where Home's
+  already sits. Home's raw `Menu` at 22 moved to the same glyph at `appTheme.icon.default`, so the two
+  cannot drift — and its F4 budget came down with it (4→3).
+  - **The edge swipe stays on Showcase only, deliberately.** Home's top card is a horizontally
+    scrolling carousel, and the layer observes touches through `onTouchStart`/`onTouchEnd` rather than
+    claiming them — so a rightward swipe beginning within 24pt of the left edge would both scroll the
+    carousel and open the menu. A shortcut may exist on one screen and not another; what the chapter
+    forbids is a gesture being the only way, and now it never is.
+  - Alerts and Profile still offer no route to the menu. Left open for their Phase 3 passes (S10,
+    S13) — Profile in particular duplicates much of the drawer's content, so "add the menu" may be
+    the wrong answer there.
+- [D][both] **The drawer opened by gesture and closed only by tap.** Motion: "Strive for realistic
+  feedback motion that follows people's gestures and expectations … if someone reveals a view by
+  sliding it down from the top, they don't expect to dismiss the view by sliding it to the side."
+  You drag the drawer in from the left edge; nothing dragged it back → **fixed**: a leftward drag on
+  the drawer panel dismisses it, at the same distance and velocity a sheet uses
+  (`SHEET_DISMISS_DISTANCE` / `SHEET_DISMISS_VELOCITY`, imported rather than re-picked). The backdrop
+  tap, the Close button and Android back all still work — this is the shortcut, not the only way.
+  - It claims in the **capture** phase, which is the difference between this and the sheets: the
+    drawer's body is a `ScrollView` that would otherwise own every move, and capture is what lets the
+    panel take a horizontal drag back from it without touching vertical scrolling or taps.
+  - **This also sharpens N2's Modal finding.** The drawer is a `Modal`, and claiming on *move* works
+    here — where it could not in the create menu. The difference is what happens to the touch-down:
+    in the create menu nothing consumed it, so the move phase never reached JS at all; here the
+    ScrollView consumes it and the moves keep flowing. So the rule is not "a Modal never delivers
+    moves" but "a Modal never delivers moves for a gesture nothing consumed". Verified on the
+    emulator both ways.
+- [D][both] **Tab switches cross-fade; iOS switches tabs instantly.** Motion: "generally avoid adding
+  motion to UI interactions that occur frequently", and a tab switch is the most frequent interaction
+  in the app; UIKit's own tab controller does not animate. The bar is custom on two platforms (DV3),
+  the fade is what makes them read as one product, and it is already routed through Reduce Motion →
+  **intentional (→ ledger DV9)**, with the caveat that this codebase has been bitten by that fade
+  before (bottom-tabs detaching the focused scene mid-fade), so X1 should look again with the whole
+  motion inventory in hand.
+- [P][both] Verified clean, now guarded: **every shell transition asks the Reduce Motion preference
+  first.** Both navigators name their animation as `reducedMotion ? 'none' : …`, with the single
+  exception of `update-required`, which is `'none'` unconditionally. Motion: "Make motion optional."
+- [P][both] Verified clean: **the drawer is one level deep.** Eleven rows, all of which navigate;
+  nothing expands in place, so Sidebars' two-level ceiling is not approached and no group labels are
+  needed. Guarded so a disclosure section cannot appear without the depth question being asked.
+- [P][both] Verified clean: **familiar symbols on every row** — Crown for credits, Wallet for sales,
+  Gift for invite, Layers for templates, PackageOpen for unlocks, Settings, CircleHelp — and icon
+  colour is used sparingly and with meaning (coral for the brand rows, semantic colour on the two
+  money rows), which is what Sidebars asks of sidebar icon colours.
+- [P][both] Verified clean: **the drawer is dismissible three ways and traps focus.** Backdrop tap,
+  Close button and Android hardware back all close it; `accessibilityViewIsModal` is set and the
+  backdrop is hidden from the reader.
+- [P][both] Noted, not fixed: **the drawer travels 40pt, not its own width.** It fades in from
+  `translateX: -40` while a 280–360pt panel arrives — so it materialises rather than sliding in from
+  the edge the gesture came from. Motion's "realistic feedback motion that follows people's gestures"
+  argues for the full travel, but this is the shell's feel rather than a rule break, and the viewer's
+  entrance was deliberately settled the same way (a plain fade beat a fancier one). Left for X1 to
+  take with the rest of the motion inventory rather than changed here on one unit's judgement.
+
+Guard added to `__tests__/hig-navigation-chrome.test.ts` (5 new cases, 24 total) — a screen that
+mounts the gesture layer must also reach for `useWorkspaceSideMenu`, so the swipe can never again be
+the only way in; the two openers must use the shared glyph and label; the drawer must claim a
+leftward drag in the capture phase against the shared thresholds; the drawer must stay one level
+deep; and every `animation:` in both navigators must be routed through `reducedMotion`.
+
+**AND-pass 2026-08-27** (mandatory: this unit touches navigation and gestures). Pixel_9a, dev client
+on the worktree's Metro (restarted via the new `metro-hig` entry in the worktree's
+`.claude/launch.json`). The Showcase header renders the menu control on its leading edge exactly as
+Home does; the drawer opens from it; a leftward drag from the middle of the drawer closes it, with
+`logcat` clear of `FATAL`/`SIGSEGV`; hardware back still closes it; the edge swipe still opens it.
+Same two checks on the iOS simulator, where the drag also closes the drawer. Nothing in this unit
+touches the keyboard, blur or the tab bar itself.
+
+**Open remainder**: Alerts and Profile still have no route to the workspace menu (S10, S13); the
+drawer's 40pt entrance travel and the tab cross-fade both go to X1.

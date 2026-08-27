@@ -17,13 +17,14 @@ import {
   Wallet,
   X,
 } from 'lucide-react-native';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import {
   AccessibilityInfo,
   Animated,
   BackHandler,
   Modal,
+  PanResponder,
   type ModalProps,
   Pressable,
   ScrollView,
@@ -33,6 +34,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { SHEET_DISMISS_DISTANCE, SHEET_DISMISS_VELOCITY } from '@/components/sheet-chrome';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { formatUsdCents } from '@/lib/home-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -44,6 +46,8 @@ const PRIMARY = appTheme.colors.primary;
 const PRIMARY_STRONG = appTheme.colors.primaryStrong;
 const PRIMARY_PRESSED = appTheme.colors.pressed;
 const ON_PRIMARY = appTheme.colors.onPrimary;
+/** Below this the drag is still ambiguous with a tap or a vertical scroll. */
+const DRAWER_DRAG_CLAIM_DISTANCE = 8;
 const IS_TEST_ENVIRONMENT = typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
 const FallbackModal = ({ children, visible }: ModalProps) => (
   visible ? <>{children}</> : null
@@ -127,15 +131,61 @@ export function HomeSideMenu({
     router.push('/auth' as never);
   };
 
+  // Revealed by dragging in from the left edge, so it closes by dragging back
+  // to it. Motion: "Strive for realistic feedback motion that follows people's
+  // gestures and expectations … if someone reveals a view by sliding it down
+  // from the top, they don't expect to dismiss the view by sliding it to the
+  // side." Tapping the backdrop or Close still works; this is the shortcut.
+  //
+  // Claimed in the capture phase, and only for a drag that is dominantly
+  // leftward: the drawer's body is a ScrollView that would otherwise own every
+  // move, and capture is what lets the parent take a horizontal drag back from
+  // it without touching vertical scrolling or taps.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const dragX = useRef(createAnimatedValue(0)).current;
+
+  useEffect(() => {
+    if (visible) dragX?.setValue(0);
+  }, [dragX, visible]);
+
+  const closeDrag = useMemo(() => PanResponder?.create?.({
+    onMoveShouldSetPanResponderCapture: (_event, gesture) => (
+      gesture.dx < -DRAWER_DRAG_CLAIM_DISTANCE && Math.abs(gesture.dx) > Math.abs(gesture.dy)
+    ),
+    onPanResponderMove: (_event, gesture) => {
+      dragX?.setValue(Math.min(0, gesture.dx));
+    },
+    onPanResponderRelease: (_event, gesture) => {
+      if (gesture.vx < -SHEET_DISMISS_VELOCITY || gesture.dx < -SHEET_DISMISS_DISTANCE) {
+        onCloseRef.current();
+        return;
+      }
+      if (dragX && Animated?.spring) {
+        Animated.spring(dragX, { toValue: 0, useNativeDriver: true, tension: 190, friction: 13 }).start();
+      } else {
+        dragX?.setValue(0);
+      }
+    },
+    onPanResponderTerminate: () => {
+      dragX?.setValue(0);
+    },
+  }), [dragX]);
+
   const backdropOpacity = progress
     ? progress.interpolate({ inputRange: [0, 1], outputRange: [0, 0.64] })
     : 0.64;
   const drawerOpacity = progress
     ? progress.interpolate({ inputRange: [0, 1], outputRange: [0.86, 1] })
     : 1;
-  const drawerTranslateX = progress
+  const entryTranslateX = progress
     ? progress.interpolate({ inputRange: [0, 1], outputRange: [-40, 0] })
     : 0;
+  // Folded into one transform entry rather than stacked: a JS-driven value
+  // beside a native-driven one on the same view does not compose.
+  const drawerTranslateX = progress && dragX
+    ? Animated.add(entryTranslateX, dragX)
+    : entryTranslateX;
 
   return (
     <ModalSurface
@@ -161,6 +211,7 @@ export function HomeSideMenu({
         </AnimatedView>
 
         <AnimatedView
+          {...(closeDrag?.panHandlers ?? {})}
           accessibilityViewIsModal
           importantForAccessibility="yes"
           style={{

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
+import { Menu } from 'lucide-react-native';
 import type React from 'react';
-import { useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useMemo, useRef, useState } from 'react';
 import { type GestureResponderEvent, useWindowDimensions, View } from 'react-native';
 
 import { HomeSideMenu } from '@/components/home-side-menu';
@@ -14,6 +15,27 @@ import {
 } from '@/lib/workspace-side-menu-gesture';
 
 export const DEFAULT_WORKSPACE_SIDE_MENU_EDGE_WIDTH = EDGE_SWIPE_START_WIDTH;
+
+/**
+ * The one glyph and the one label for "open the workspace menu", so the screens
+ * that offer it cannot drift apart. Sidebars: "Avoid hiding the sidebar by
+ * default to ensure that it remains discoverable"; Gestures: "Use shortcut
+ * gestures to supplement standard gestures, not replace them ... people also
+ * need simple, familiar ways to navigate and perform actions, even if it means
+ * an extra tap or two."
+ */
+export const WorkspaceSideMenuGlyph = Menu;
+export const WORKSPACE_SIDE_MENU_LABEL = 'Open menu';
+
+const WorkspaceSideMenuContext = createContext<{ open: () => void } | null>(null);
+
+/**
+ * The layer's opener, for a header control inside it. Null when no layer is
+ * mounted above — a screen without the menu should render no button for it.
+ */
+export function useWorkspaceSideMenu() {
+  return useContext(WorkspaceSideMenuContext);
+}
 
 interface WorkspaceSideMenuGestureLayerProps {
   bottomOffset?: number;
@@ -84,8 +106,10 @@ export function WorkspaceSideMenuGestureLayer({
     touchStartRef.current = null;
   };
 
+  const menuApi = useMemo(() => ({ open: () => setMenuVisible(true) }), []);
+
   return (
-    <>
+    <WorkspaceSideMenuContext.Provider value={menuApi}>
       {children ? (
         <View
           onTouchStart={handleTouchStart}
@@ -106,6 +130,6 @@ export function WorkspaceSideMenuGestureLayer({
         totalSalesLoading={Boolean(user) && sellerPostsQuery.isLoading}
         onSignOut={signOut}
       />
-    </>
+    </WorkspaceSideMenuContext.Provider>
   );
 }

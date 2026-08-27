@@ -22,7 +22,12 @@ import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { TopScrim } from '@/components/top-scrim';
 import { CreatorAvatar, SecondaryButton, StatusBlock } from '@/components/ui';
-import { WorkspaceSideMenuGestureLayer } from '@/components/workspace-side-menu-gesture-layer';
+import {
+  WorkspaceSideMenuGestureLayer,
+  WorkspaceSideMenuGlyph,
+  WORKSPACE_SIDE_MENU_LABEL,
+  useWorkspaceSideMenu,
+} from '@/components/workspace-side-menu-gesture-layer';
 import { useAuth } from '@/lib/auth';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
@@ -699,7 +704,11 @@ export default function ShowcaseScreen() {
           <View style={{ gap: 14, paddingBottom: 16 }}>
             <View style={{ gap: 10 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                <Text accessibilityRole="header" selectable style={{ color: appTheme.colors.text, ...appTheme.type.pageTitle }}>
+                {/* The edge swipe used to be the only way into the workspace
+                    menu from here, which Gestures forbids — a shortcut gesture
+                    supplements a control, it never replaces one. */}
+                <WorkspaceMenuButton />
+                <Text accessibilityRole="header" selectable style={{ flex: 1, color: appTheme.colors.text, ...appTheme.type.pageTitle }}>
                   Showcase
                 </Text>
                 <IconButton
@@ -823,6 +832,17 @@ function MasonryCardCell({ children, layout, index = 0 }: { children: React.Reac
     <Reveal index={index} enabled={index < SHOWCASE_REVEAL_COUNT} style={{ paddingHorizontal: layout.columnGap / 2, paddingBottom: layout.pinGap }}>
       {children}
     </Reveal>
+  );
+}
+
+function WorkspaceMenuButton() {
+  const sideMenu = useWorkspaceSideMenu();
+  if (!sideMenu) return null;
+
+  return (
+    <IconButton label={WORKSPACE_SIDE_MENU_LABEL} onPress={sideMenu.open}>
+      <WorkspaceSideMenuGlyph size={appTheme.icon.default} color={appTheme.colors.text} />
+    </IconButton>
   );
 }
 

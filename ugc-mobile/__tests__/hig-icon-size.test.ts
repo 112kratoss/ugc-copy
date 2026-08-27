@@ -45,7 +45,8 @@ const ICON_RAMP = new Set<number>([
  * being counted here at 20/21/22/26/30; and again by N2, when the Close
  * controls on eleven modal surfaces moved to `CloseGlyph` at the same size
  * (create menu 1→0, home side menu 12→11, unlock prompt 3→2, composer 22→21,
- * creator screen 25→24).
+ * creator screen 25→24), and by N3 when the workspace-menu control moved to one
+ * shared glyph at one size (home dashboard 4→3).
  */
 const LEGACY_SIZES: Record<string, number> = {
   'app/(tabs)/showcase.tsx': 3,
@@ -65,7 +66,7 @@ const LEGACY_SIZES: Record<string, number> = {
   'components/feed-card-shell.tsx': 1,
   'components/feed-pagination-footer.tsx': 1,
   'components/feed-video-preview.tsx': 1,
-  'components/home-dashboard.tsx': 4,
+  'components/home-dashboard.tsx': 3,
   'components/home-feed-card.tsx': 2,
   'components/home-side-menu.tsx': 11,
   'components/media-creation-screen.tsx': 24,
