@@ -420,7 +420,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S16 settings/help | 4 | done | 1V/3D/4P | rows that leave the app say so; help is findable from settings; the destructive row wears its color |
 | S17(+a) pricing/IAP/ratings | 4 | done | 0V/1D/2P | a restricted device gets an explanation, not a store that cannot sell; prices verified honest; ratings prompts absent by design |
 | S7 unlocks | 4 | done | 0V/1D/4P | the remix prompt is the tenth sheet on sheet-chrome; rows are labelled buttons; one price vocabulary |
-| S18 marketplace | 4 | todo | — | |
+| S18 marketplace | 4 | done | 0V/2D/1P | a paid unlock confirms before it spends; a short balance is told, not failed; one price vocabulary |
 | S19 templates | 4 | todo | — | |
 | S20 seller dashboard | 4 | todo | — | |
 | S21 invite | 4 | todo | — | |
@@ -2677,3 +2677,26 @@ pass-through when idle (`box-none` / null), and the same rows ship in the live 0
 is a dev-client input artifact, not a user-facing defect. Drive navigation by deep link
 (`magicbooklet:///…`), assert press *wiring* in unit tests, and spend zero further time trying to
 synthetically tap list rows.
+
+### S18 marketplace — audited 2026-08-28 · AND-pass: 2026-08-28
+Chapters read: In-app purchase, Feedback, Loading, Modality (this session's distillations); S12's
+logged rules for text/image/collection anatomy.
+- [D][both] A paid unlock spent credits on one tap with no confirmation and no undo — the system
+  purchase sheet exists precisely to stop accidental real-money buys, and a credit spend of up to
+  hundreds of credits deserves the same shape (Modality: confirmation for significant actions) →
+  fix: paid unlocks confirm through the app's own action sheet ("900 credits ($9.00) comes off your
+  credit balance right away."); free unlocks stay one tap.
+- [D][both] An insufficient balance was discovered only by failing the purchase — In-app purchase:
+  prompt at relevant moments → fix: the screen now computes the shortfall up front, says
+  "You need N more credits", disables the buy, and offers "Get credits" into the pricing screen.
+- [P][both] Inline price strings (`900 credits`) while the unlock surfaces one tap away use
+  `formatUnlockPrice` ("900 credits ($9.00)") → fix: shared formatter on the pill and the Costs
+  line; the "•" separator became the app's "·".
+- Left alone deliberately: unlocks require a signed-in account (guests are sent to auth) — matches
+  the remix prompt's existing policy, a product rule rather than an alignment one.
+Guard: `marketplace-asset-screen.test.tsx` — confirm-before-spend (sheet presented, mutation only
+on the confirmed action), shortfall path (disabled buy + Get credits → /pricing), free unlocks
+stay one tap with no sheet.
+iOS + AND-pass: owned-state pages verified on both platforms with the formatter pill live; the
+unowned buy panel is unit-guarded (reaching it on-device would spend real credits — the test
+account owns all three paid listings).

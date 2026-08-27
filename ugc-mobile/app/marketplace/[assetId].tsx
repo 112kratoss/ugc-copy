@@ -7,12 +7,14 @@ import { MediaPreview } from '@/components/media-preview';
 import { PostResourceBundleContent } from '@/components/post-resource-bundle-content';
 import { DetailSkeleton } from '@/components/skeleton';
 import { AppText, Card, Pill, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
+import { showActionSheet } from '@/lib/action-sheet';
 import { useAuth } from '@/lib/auth';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
 import { formatCreditAmount } from '@/lib/pricing';
 import { appTheme, type ToolAccent } from '@/lib/theme';
 import type { MarketplaceResource, PostResourceKind } from '@/lib/types';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
+import { formatUnlockPrice } from '@/lib/unlock-library-view-model';
 
 function resourceLabel(kinds?: PostResourceKind[]) {
   if (!kinds || kinds.length === 0) return 'Creator unlock';
@@ -24,7 +26,7 @@ function marketplaceAccent(accessMode?: MarketplaceResource['accessMode']): Tool
 }
 
 function marketplacePriceLabel(detail: MarketplaceResource) {
-  return detail.accessMode === 'free' ? 'Free unlock' : `${detail.priceUsdCents ?? 0} credits`;
+  return detail.accessMode === 'free' ? 'Free unlock' : formatUnlockPrice(detail.priceUsdCents ?? 0);
 }
 
 export default function MarketplaceAssetScreen() {
@@ -67,6 +69,22 @@ export default function MarketplaceAssetScreen() {
 
   const detail = detailQuery.data;
   const resources = detail?.resources;
+  const unlockPrice = detail?.priceUsdCents ?? 0;
+  const creditShortfall = Math.max(0, unlockPrice - (credits ?? 0));
+
+  // A paid unlock spends the balance immediately and cannot be undone, so it
+  // gets the confirmation step the system purchase sheet gives real-money
+  // buys. Free unlocks stay one tap.
+  const confirmPaidUnlock = () => {
+    showActionSheet({
+      title: 'Unlock this resource?',
+      message: `${formatUnlockPrice(unlockPrice)} comes off your credit balance right away.`,
+      actions: [{
+        label: `Unlock for ${unlockPrice} credits`,
+        onPress: () => unlockMutation.mutate(),
+      }],
+    });
+  };
   const resourceMediaItems = useMemo(() => {
     if (!detail?.post) return [];
     if (detail.post.mediaItems?.length) return detail.post.mediaItems;
@@ -211,22 +229,25 @@ export default function MarketplaceAssetScreen() {
                   <AppText variant="bodySm" color="muted">
                     Paid mobile unlocks use your Magicbooklet credit balance instead of a separate store checkout.
                   </AppText>
-                  <AppText variant="label" color="success">
-                    Costs {detail.priceUsdCents ?? 0} credits • Balance {formatCreditAmount(credits)}
+                  <AppText variant="label" color={creditShortfall > 0 ? 'warning' : 'success'}>
+                    Costs {formatUnlockPrice(unlockPrice)} · Balance {formatCreditAmount(credits)}
                   </AppText>
+                  {creditShortfall > 0 ? (
+                    <AppText variant="bodySm" color="muted">
+                      You need {formatCreditAmount(creditShortfall)} more credits for this unlock.
+                    </AppText>
+                  ) : null}
                 </View>
                 <PrimaryButton
-                  label={unlockMutation.isPending ? 'Unlocking...' : `Unlock for ${detail.priceUsdCents ?? 0} credits`}
+                  label={unlockMutation.isPending ? 'Unlocking...' : `Unlock for ${unlockPrice} credits`}
                   loading={unlockMutation.isPending}
-                  onPress={() => {
-                    if (!user) {
-                      router.push('/auth');
-                      return;
-                    }
-                    unlockMutation.mutate();
-                  }}
+                  disabled={creditShortfall > 0 || unlockMutation.isPending}
+                  onPress={confirmPaidUnlock}
                   accent="primary"
                 />
+                {creditShortfall > 0 ? (
+                  <SecondaryButton label="Get credits" onPress={() => router.push('/pricing' as never)} />
+                ) : null}
               </View>
             )}
           </Card>
