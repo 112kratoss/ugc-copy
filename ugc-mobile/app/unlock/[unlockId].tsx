@@ -10,6 +10,7 @@ import { AppText, Card, Pill, PrimaryButton, Screen, SecondaryButton, SectionTit
 import { useAuth } from '@/lib/auth';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
 import { appTheme } from '@/lib/theme';
+import { formatUnlockPrice } from '@/lib/unlock-library-view-model';
 
 export default function ViewerUnlockScreen() {
   const { unlockId: routeUnlockId } = useLocalSearchParams<{ unlockId: string }>();
@@ -38,7 +39,7 @@ export default function ViewerUnlockScreen() {
     || 'Reusable creator resources.';
   const activeAccessMode = selectedRevision?.accessMode ?? detail?.accessMode ?? 'free';
   const activePriceUsdCents = selectedRevision?.priceUsdCents ?? detail?.priceUsdCents ?? 0;
-  const activeVersionPrice = activeAccessMode === 'free' ? 'Free' : `${activePriceUsdCents} credits`;
+  const activeVersionPrice = activeAccessMode === 'free' ? 'Free' : formatUnlockPrice(activePriceUsdCents);
   const activeMediaItems = selectedRevision?.mediaItems ?? detail?.mediaItems ?? [];
 
   const resolveResourceFileUrl = async (storagePath: string) => {
@@ -89,7 +90,7 @@ export default function ViewerUnlockScreen() {
             <MediaPreview url={detail.post?.mediaUrl ?? null} kind={detail.post?.mediaKind ?? null} />
             <View style={{ gap: appTheme.spacing.compact }}>
               <Pill
-                label={detail.purchasePriceUsdCents > 0 ? `${detail.purchasePriceUsdCents} credits paid` : 'Free unlock'}
+                label={detail.purchasePriceUsdCents > 0 ? `${formatUnlockPrice(detail.purchasePriceUsdCents)} paid` : 'Free unlock'}
                 accent={activeAccessMode === 'free' ? 'workflow' : 'commerce'}
               />
               <AppText variant="caption" color="faint">

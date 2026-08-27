@@ -60,6 +60,8 @@ const ICON_RAMP = new Set<number>([
  * to `icon.sm` beside its own label. S16 took settings and help to zero: the
  * account hub's nine 22s and help's three moved to `icon.feature`, and the two
  * trailing glyphs the unit added (external-link arrows) arrived on the ramp.
+ * S7 retired the unlock prompt's last two (the CTA lock to `icon.default`, the
+ * resource-kind glyph to `icon.xs`).
  */
 const LEGACY_SIZES: Record<string, number> = {
   'app/(tabs)/showcase.tsx': 0,
@@ -95,7 +97,7 @@ const LEGACY_SIZES: Record<string, number> = {
   'components/profile-dashboard.tsx': 0,
   'components/profile-feed-card.tsx': 0,
   'components/showcase-media-preview.tsx': 0,
-  'components/unlock-remix-prompt.tsx': 2,
+  'components/unlock-remix-prompt.tsx': 0,
 };
 
 /** Names imported from lucide-react-native here, aliases resolved to the local name. */

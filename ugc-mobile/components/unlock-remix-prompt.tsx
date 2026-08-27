@@ -5,6 +5,7 @@ import { FileText, Lock } from 'lucide-react-native';
 import { useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, Text, View } from 'react-native';
 
+import { SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { useAuth } from '@/lib/auth';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
@@ -33,6 +34,7 @@ export function UnlockRemixPrompt({
   const [unlocking, setUnlocking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const reducedMotion = useReducedMotion();
+  const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
   const unlock = item?.details?.unlock ?? null;
   const accent: ToolAccent = unlock?.accessMode === 'free' ? 'workflow' : 'commerce';
   const accentValue = accentColor(accent);
@@ -74,6 +76,7 @@ export function UnlockRemixPrompt({
 
   return (
     <Modal
+      accessibilityViewIsModal
       animationType={reducedMotion ? 'none' : 'fade'}
       onRequestClose={onClose}
       statusBarTranslucent
@@ -87,21 +90,24 @@ export function UnlockRemixPrompt({
           onPress={onClose}
           style={{ position: 'absolute', inset: 0 }}
         />
-        <View
-          style={{
-            borderTopLeftRadius: 26,
-            borderTopRightRadius: 26,
-            borderCurve: 'continuous',
-            borderWidth: 1,
-            borderBottomWidth: 0,
-            borderColor: `${accentValue}55`,
-            backgroundColor: appTheme.colors.app,
-            paddingHorizontal: 22,
-            paddingTop: 18,
-            paddingBottom: bottomInset + 24,
-            gap: appTheme.spacing.gap,
-          }}
+        <SheetPanel
+          style={[
+            {
+              borderTopLeftRadius: appTheme.radii.xl,
+              borderTopRightRadius: appTheme.radii.xl,
+              borderCurve: 'continuous',
+              borderWidth: 1,
+              borderBottomWidth: 0,
+              borderColor: `${accentValue}55`,
+              backgroundColor: appTheme.colors.app,
+              paddingHorizontal: 22,
+              paddingBottom: bottomInset + 24,
+              gap: appTheme.spacing.gap,
+            },
+            drag.dragStyle,
+          ]}
         >
+          <SheetGrabber drag={drag} />
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 14 }}>
             <View style={{ flex: 1, gap: 5 }}>
               <Text style={{ color: appTheme.colors.faint, ...appTheme.type.label, textTransform: 'uppercase' }}>
@@ -151,7 +157,7 @@ export function UnlockRemixPrompt({
             <ResourceKindRow kinds={resourceKinds} />
           </View>
 
-          {error ? <Text selectable style={{ color: '#ff8a9a', fontSize: 13, fontWeight: '800' }}>{error}</Text> : null}
+          {error ? <Text selectable style={{ color: appTheme.colors.danger, ...appTheme.type.caption, fontWeight: '800' }}>{error}</Text> : null}
 
           <Pressable
             accessibilityRole="button"
@@ -175,13 +181,13 @@ export function UnlockRemixPrompt({
             {unlocking ? (
               <ActivityIndicator color={appTheme.colors.textInverse} />
             ) : (
-              <Lock size={19} color={appTheme.colors.textInverse} />
+              <Lock size={appTheme.icon.default} color={appTheme.colors.textInverse} />
             )}
             <Text style={{ color: appTheme.colors.textInverse, ...appTheme.type.bodySm, fontWeight: '800' }}>
               {unlocking ? 'Unlocking...' : ctaLabel}
             </Text>
           </Pressable>
-        </View>
+        </SheetPanel>
       </View>
     </Modal>
   );
@@ -194,7 +200,7 @@ function ResourceKindRow({ kinds }: { kinds: PostResourceKind[] }) {
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
       {kinds.map((kind) => (
         <View key={kind} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.surface, paddingHorizontal: 10, paddingVertical: 6 }}>
-          <FileText size={13} color={appTheme.colors.textSecondary} />
+          <FileText size={appTheme.icon.xs} color={appTheme.colors.textSecondary} />
           <Text style={{ color: appTheme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>{resourceKindLabel(kind)}</Text>
         </View>
       ))}

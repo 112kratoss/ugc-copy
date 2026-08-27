@@ -419,7 +419,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S15 edit profile | 4 | done | 5V/4D/4P | the username is checked before the photos upload, not after; the form is the app's form; leaving no longer throws the work away in silence |
 | S16 settings/help | 4 | done | 1V/3D/4P | rows that leave the app say so; help is findable from settings; the destructive row wears its color |
 | S17(+a) pricing/IAP/ratings | 4 | done | 0V/1D/2P | a restricted device gets an explanation, not a store that cannot sell; prices verified honest; ratings prompts absent by design |
-| S7 unlocks | 4 | todo | — | |
+| S7 unlocks | 4 | done | 0V/1D/4P | the remix prompt is the tenth sheet on sheet-chrome; rows are labelled buttons; one price vocabulary |
 | S18 marketplace | 4 | todo | — | |
 | S19 templates | 4 | todo | — | |
 | S20 seller dashboard | 4 | todo | — | |
@@ -2647,3 +2647,33 @@ registration pitch, outranks no_identity, fail-open default).
 iOS + AND-pass: the dev build carries no store keys, which exercises the degraded path end to end
 on both platforms — honest Unavailable pill, explanatory block, "Store price unavailable" in cards
 and in the disabled buy label; no invented prices anywhere; no status-bar bleed.
+
+### S7 unlocks — audited 2026-08-28 · AND-pass: 2026-08-28
+Chapters read: In-app purchase, Feedback, Loading (all this session), Modality (`modality`).
+- [D][both] The unlock remix prompt was the one bottom sheet in the app without a grabber or a
+  swipe-to-dismiss — N2's rule, missed because the prompt lives inside the viewer flow → fix: tenth
+  adopter of `sheet-chrome` (`useSheetDismissDrag` + `SheetGrabber`), plus `accessibilityViewIsModal`
+  and the panel radius moved from a literal 26 to `radii.xl` like every other sheet.
+- [P][both] Library rows were bare `Pressable`s: no role, no label, no press feedback — every other
+  row in the app has all three → fix: button role, "title, by creator, price" label, pressed opacity.
+- [P][both] Raw 11/12pt inline styles in the rows → `caption` variants and color props.
+- [P][both] The detail screen formatted prices by hand (`900 credits`) while the list used
+  `formatUnlockPrice` (`900 credits ($9.00)`) — one tap apart, two vocabularies → fix: the shared
+  formatter everywhere (paid pill + version line).
+- [P][both] Remix prompt: raw `#ff8a9a` error color → `danger` token; its last two off-ramp icons to
+  the ramp (budget 2→0).
+- Already right: loading skeleton, error + retry, empty state, signed-out state, the deep-link
+  "Back to profile" fallback, and the thumbnail that never leaves a hole (base-layer placeholder).
+Guard: `unlocks-screen.test.tsx` (row wiring: labelled button pushes its unlock; placeholder holds
+the empty thumbnail slot).
+iOS + AND-pass: library verified on both (real data, three unlocks; Android also caught the
+skeleton state); detail verified on both by deep link — shared formatter strings on the pill and
+version line; hardware back clean.
+**Mechanics note for every remaining unit (rediscovered the hard way):** taps injected by tooling —
+simctl-driven MCP `tap`/`touch_path`, adb `input tap`/`swipe`-tap/`motionevent` — do not reach
+`Pressable`s inside `Screen`'s ScrollView on either dev client, while native chrome (headers, tab
+bar) and scroll gestures work; a bisect proved it pre-dates this branch, every overlay host renders
+pass-through when idle (`box-none` / null), and the same rows ship in the live 0.0.5 build, so this
+is a dev-client input artifact, not a user-facing defect. Drive navigation by deep link
+(`magicbooklet:///…`), assert press *wiring* in unit tests, and spend zero further time trying to
+synthetically tap list rows.

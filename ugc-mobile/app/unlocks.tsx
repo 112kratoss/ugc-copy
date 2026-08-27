@@ -83,7 +83,7 @@ export default function UnlocksScreen() {
       ) : null}
 
       {items.length > 0 ? (
-        <AppText style={{ color: appTheme.colors.muted, marginBottom: 12 }}>
+        <AppText color="muted" style={{ marginBottom: 12 }}>
           {summarizeUnlockCount(total)}
         </AppText>
       ) : null}
@@ -95,9 +95,12 @@ export default function UnlocksScreen() {
         return (
           <Pressable
             key={item.unlockId}
+            accessibilityRole="button"
+            accessibilityLabel={`${item.title}, by ${item.creator.displayName}. ${formatUnlockPrice(item.purchasePriceUsdCents)}.`}
             onPress={() => {
               router.push(destination as never);
             }}
+            style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
           >
             <Card style={{ marginBottom: 12 }}>
               <View style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start' }}>
@@ -105,24 +108,20 @@ export default function UnlocksScreen() {
 
                 <View style={{ flex: 1, gap: 4 }}>
                   <AppText color="text">{item.title}</AppText>
-                  <AppText style={{ color: appTheme.colors.muted, fontSize: 12 }}>
+                  <AppText variant="caption" color="muted">
                     by {item.creator.displayName}
                   </AppText>
 
                   {badge ? (
                     <AppText
-                      style={{
-                        fontSize: 11,
-                        color: badge.tone === 'updated'
-                          ? appTheme.colors.commerce
-                          : appTheme.colors.muted,
-                      }}
+                      variant="caption"
+                      color={badge.tone === 'updated' ? 'commerce' : 'muted'}
                     >
                       {badge.label}
                     </AppText>
                   ) : null}
 
-                  <AppText style={{ color: appTheme.colors.muted, fontSize: 11 }}>
+                  <AppText variant="caption" color="muted">
                     {formatUnlockPrice(item.purchasePriceUsdCents)} · {formatUnlockDate(item.purchasedAt)}
                   </AppText>
                 </View>
