@@ -25,6 +25,7 @@ import {
   getPostResourceBundlePriceQuote,
 } from '@/lib/post-resource-bundles-server';
 import { resolvePostRemixCapability } from '@/lib/post-resource-bundles';
+import { toUsablePreviewSize, type PreviewSize } from '@/lib/preview-dimensions';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   isGenerationRecipeAssetId,
@@ -546,7 +547,12 @@ export async function resolvePostRowsToFeedItems(
   };
 
   const loadGenerationInfo = async () => {
-    const generationInfoMap = new Map<string, { model: string; previewUrl: string | null }>();
+    const generationInfoMap = new Map<string, {
+      model: string;
+      previewUrl: string | null;
+      previewWidth: number | null;
+      previewHeight: number | null;
+    }>();
     if (generationIds.length === 0) return generationInfoMap;
 
     type GenerationInfoRow = {
@@ -554,12 +560,14 @@ export async function resolvePostRowsToFeedItems(
       user_id: string | null;
       model: string;
       preview_url?: string | null;
+      preview_width?: number | null;
+      preview_height?: number | null;
       category?: string | null;
     };
 
     const modelsWithPreviewResult = await adminSupabase
       .from('generations')
-      .select('id, user_id, model, preview_url, category')
+      .select('id, user_id, model, preview_url, preview_width, preview_height, category')
       .in('id', generationIds);
     const models = modelsWithPreviewResult.data as GenerationInfoRow[] | null;
     const modelsError = modelsWithPreviewResult.error;
@@ -576,7 +584,13 @@ export async function resolvePostRowsToFeedItems(
         return [Promise.resolve(previewSource && generation.user_id
           ? resolveOwnedStoredMediaUrl(adminSupabase, previewSource, generation.user_id)
           : null)
-          .then((previewUrl) => [generation.id, { model: generation.model, previewUrl }] as const)];
+          .then((previewUrl) => [generation.id, {
+            model: generation.model,
+            previewUrl,
+            // One rule for a usable size, shared with the backfill that writes
+            // the column and the pipeline that measures it.
+            ...previewSizeFields(toUsablePreviewSize(generation.preview_width, generation.preview_height)),
+          }] as const)];
       }));
       for (const [generationId, generationInfo] of entries) {
         generationInfoMap.set(generationId, generationInfo);
@@ -652,17 +666,27 @@ export async function resolvePostRowsToFeedItems(
       const generationInfo = post.generation_id ? generationInfoMap.get(post.generation_id) : null;
       if (generationInfo?.previewUrl && mediaItems[0] && !mediaItems[0].previewUrl) {
         const previewUrl = generationInfo.previewUrl;
+        const cover = mediaItems[0];
+        // Covers that predate `post_media` are synthesised with no dimensions,
+        // and the grid needs an aspect ratio to lay a card out at its real
+        // height instead of resizing it once the image has been measured. Only
+        // filled in where nothing already knows better — a real media row's own
+        // dimensions describe the source and always win.
+        const previewWidth = cover.preview?.width ?? generationInfo.previewWidth;
+        const previewHeight = cover.preview?.height ?? generationInfo.previewHeight;
         mediaItems = [
           {
-            ...mediaItems[0],
+            ...cover,
             previewUrl,
             previewStatus: 'ready',
             gridReady: true,
             preview: {
-              ...mediaItems[0].preview,
+              ...cover.preview,
               previewUrl,
               status: 'ready',
               gridReady: true,
+              width: previewWidth,
+              height: previewHeight,
             },
           },
           ...mediaItems.slice(1),
@@ -902,6 +926,11 @@ async function getShowcaseFeedPageBase(
       offset,
     },
   };
+}
+
+
+function previewSizeFields(size: PreviewSize | null) {
+  return { previewWidth: size?.width ?? null, previewHeight: size?.height ?? null };
 }
 
 async function fetchLegacyGenerationRows(

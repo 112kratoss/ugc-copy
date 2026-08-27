@@ -2,7 +2,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import sharp from 'sharp';
 
 import { getMediaContentHash, getPreviewThumbhash } from '@/lib/media-preview-metadata';
+import { toUsablePreviewSize } from '@/lib/preview-dimensions';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
+import { getStorageLocation } from '@/lib/storage-path';
 import { toStorageUploadBody } from '@/lib/storage-upload-body';
 
 const PREVIEW_MAX_SIZE = 720;
@@ -112,11 +114,35 @@ export async function uploadGenerationPreview({
 
   await assertStoredPreviewIsIntact({ supabase, location, expected: preview });
 
+  const { width, height } = await readPreviewDimensions(preview);
+
   return {
     previewStoragePath,
     previewThumbhash: await getPreviewThumbhash(preview),
     previewStatus: 'ready' as const,
+    /**
+     * The preview's own pixel size, not the source output's. Previews are a
+     * `fit: inside` resize, so the ratio is faithful while the absolute numbers
+     * are the preview's — and ratio is all the showcase grid asks of them, to
+     * size a card before the image arrives instead of resizing it afterwards.
+     */
+    previewWidth: width,
+    previewHeight: height,
   };
+}
+
+async function readPreviewDimensions(preview: Buffer) {
+  try {
+    const metadata = await sharp(preview).metadata();
+    const size = toUsablePreviewSize(metadata.width, metadata.height);
+    return { width: size?.width ?? null, height: size?.height ?? null };
+  } catch {
+    // A preview whose header sharp cannot read is still a preview: the bytes
+    // round-tripped intact through the check above, so a missing ratio must not
+    // fail the upload and burn the row's retry budget. The client falls back to
+    // measuring, exactly as it did before these columns existed.
+    return { width: null, height: null };
+  }
 }
 
 /** A WebP file is a RIFF container: "RIFF" at byte 0 and "WEBP" at byte 8. */
@@ -177,15 +203,3 @@ async function assertStoredPreviewIsIntact({
   throw new Error(`Preview ${location.filePath} ${mismatch}`);
 }
 
-function getStorageLocation(storagePath: string) {
-  const normalized = storagePath.replace(/^\/+/, '');
-  const slashIndex = normalized.indexOf('/');
-  if (slashIndex <= 0 || slashIndex === normalized.length - 1) {
-    return null;
-  }
-
-  return {
-    bucket: normalized.slice(0, slashIndex),
-    filePath: normalized.slice(slashIndex + 1),
-  };
-}

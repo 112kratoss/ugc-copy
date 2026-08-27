@@ -60,6 +60,8 @@ type GenerationModelRow = {
   prompt?: string | null;
   title?: string | null;
   preview_url?: string | null;
+  preview_width?: number | null;
+  preview_height?: number | null;
   thumbnail_url?: string | null;
   save_count?: number | null;
   remix_count?: number | null;
@@ -927,6 +929,8 @@ describe('showcase feed', () => {
       id: 'gen-video',
       model: 'kling-3.0-video',
       preview_url: 'generated_videos/user-1/generated-video.preview.webp',
+      preview_width: 720,
+      preview_height: 1280,
       category: 'video',
       user_id: 'user-1',
     }];
@@ -949,7 +953,51 @@ describe('showcase feed', () => {
         previewUrl: 'https://proxy.example.com/generated_videos/user-1/generated-video.preview.webp',
         status: 'ready',
         gridReady: true,
+        // The shape travels with the URL. Without it the masonry grid lays this
+        // card out at a guessed height and resizes it once the client has
+        // measured the image — under the reader, which Collections forbids.
+        width: 720,
+        height: 1280,
       },
+    });
+  });
+
+  it('sends no shape rather than a broken one when the generation has no recorded size', async () => {
+    postsState = [
+      createPostRow({
+        id: 'unmeasured-post',
+        created_at: '2026-03-20T11:00:00.000Z',
+        output_url: 'generated_images/user-1/unmeasured.png',
+        category: 'image',
+        generation_id: 'gen-unmeasured',
+      }),
+    ];
+    postMediaState = [];
+    generationModelsState = [{
+      id: 'gen-unmeasured',
+      model: 'seedream-4',
+      preview_url: 'generated_images/user-1/unmeasured.preview.webp',
+      // A zero is not a flatter picture, it is a broken one, and dividing a
+      // column width by it would produce an infinite card.
+      preview_width: 0,
+      preview_height: 512,
+      category: 'image',
+      user_id: 'user-1',
+    }];
+    resourceBundlesState = [];
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+    });
+
+    expect(page.items[0].mediaItems?.[0].preview).toMatchObject({
+      previewUrl: 'https://proxy.example.com/generated_images/user-1/unmeasured.preview.webp',
+      width: null,
+      height: null,
     });
   });
 

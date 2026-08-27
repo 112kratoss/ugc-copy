@@ -329,6 +329,11 @@ async function repairGeneration(
       preview_url: preview.previewStoragePath,
       preview_thumbhash: preview.previewThumbhash,
       preview_status: 'ready',
+      // The showcase grid sizes a card from this before the image arrives; see
+      // the 20260827090000 migration for why it is the preview's size and not
+      // the source output's.
+      preview_width: preview.previewWidth,
+      preview_height: preview.previewHeight,
       preview_attempt_count: attempts + 1,
       preview_error: null,
       preview_generated_at: new Date().toISOString(),
