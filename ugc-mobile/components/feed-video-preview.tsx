@@ -203,6 +203,11 @@ function FeedVideoPlayerLayer({
     instance.volume = 0;
     instance.showNowPlayingNotification = false;
     instance.staysActiveInBackground = false;
+    // Playing audio: "don't make people stop listening to music from another app
+    // if you don't need to." These previews are silent by construction, and
+    // `auto` keeps them out of the audio session; expo-video's iOS default
+    // (`doNotMix`) would seize it anyway, while its Android default is `auto`.
+    instance.audioMixingMode = 'auto';
     // Assigned as a whole object: the individual fields are readonly.
     instance.bufferOptions = {
       preferredForwardBufferDuration: FEED_PREVIEW_FORWARD_BUFFER_SECONDS,

@@ -177,6 +177,9 @@ function LightboxVideo({ url, height }: { url: string; height: number }) {
   const player = useVideoPlayer(url, (instance) => {
     instance.loop = true;
     instance.muted = false;
+    // Holds the audio session only while it is actually making a sound — see
+    // the note in `feed-video-preview`.
+    instance.audioMixingMode = 'auto';
     instance.play();
   });
 

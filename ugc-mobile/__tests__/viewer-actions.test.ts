@@ -169,8 +169,11 @@ describe('immersive viewer actions', () => {
     expect(getViewerActionLabel('recreate')).toBe('Recreate');
   });
 
+  // HIG Action sheets: the destructive style is for buttons that perform
+  // destructive actions. Saving and unsaving are the two halves of one
+  // reversible toggle, so neither of them qualifies (S6).
   it('marks only removal-style commands as destructive', () => {
-    expect(isDestructiveViewerAction('unsave')).toBe(true);
+    expect(isDestructiveViewerAction('unsave')).toBe(false);
     expect(isDestructiveViewerAction('save')).toBe(false);
     expect(isDestructiveViewerAction('archive')).toBe(true);
     expect(isDestructiveViewerAction('delete-post')).toBe(true);

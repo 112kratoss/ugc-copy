@@ -108,9 +108,18 @@ re-read the codebase broadly or ask for past-chat context.
 - **Where the work currently sits (2026-08-27):** Phases 1–2 are closed on the `hig-alignment`
   branch and **deliberately not merged** — `main` does not have F4, F6, N1, N2, N3 or S5. The user's
   call at the Phase 2 boundary was to keep accumulating on the branch, so branch from it rather than
-  from `main`, and expect the merge question again at the next boundary. Phase 3 has opened: S5 is
-  closed, and the next `todo` on the board is **S6 + S6a/b/c, the immersive viewer and its sheets** —
-  the deepest surface in the programme.
+  from `main`, and expect the merge question again at the next boundary. Phase 3 is under way: S5 and
+  S6 (+S6a/b/c) are closed, and the next `todo` on the board is **S9, the creation tool** — after
+  which the phase order is S8 → S11 → S12 → S10 → S4 → S13/S14.
+- **Device mechanics learned in S6, for whoever drives them next:** the Simulator MCP's `tap` works
+  headless on this Mac as well as `swipe`, so iOS is fully drivable; a surface is reachable by post
+  id with `magicbooklet:///post/<id>`, and the live data has exactly one multi-media post
+  (`181ca120…`, two items) and several single-video ones (`9cb3692f…`), which is faster than swiping
+  a ranked feed looking for a case. The iOS Simulator does **not** enforce cross-app audio-session
+  interruption — verified with a control that was required to interrupt and didn't — so any finding
+  about stopping other apps' audio has to wait for a physical device. On Android the dev-launcher
+  bubble owns the whole top-right corner including taps outside its visible circle; move the control
+  under test, or unit-test it.
 - **Merging**: at phase boundaries, after `npm test` + `npm run typecheck` pass in the worktree's
   `ugc-mobile/`, ask the user before merging `hig-alignment` → `main` (and never push to `main`
   during an in-flight mobile store release). Store delivery rides the next release train
@@ -378,7 +387,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | N2 modality map/sheets/alerts/gestures | 2 | done | 4V/4D/4P | one sheet grabber that actually drags; menus off `Alert`; one Close control |
 | N3 side menus/shell motion | 2 | done | 1V/2D/4P | the menu has a visible way in on every screen that offers it, and closes the way it opened |
 | S5 showcase feed | 3 | done | 2V/3D/7P | the grid holds still while you read it; the play badge means "not playing" |
-| S6+S6a/b/c viewer & sheets | 3 | todo | — | |
+| S6+S6a/b/c viewer & sheets | 3 | done | 3V/2D/3P | the clock survives the picture; the reel can be silenced without leaving it |
 | S9 creation tool | 3 | todo | — | |
 | S8 create hub | 3 | todo | — | |
 | S11 post composer | 3 | todo | — | |
@@ -1088,3 +1097,166 @@ tab bar.
 module for every surface; long prompt-derived accessibility labels and the filter row's `button`
 role → X5; supplying preview dimensions from the API for the covers that predate `post_media`,
 which removes the measure step for the cards that still take it → `feed-media-dimensions`.
+
+### S6 + S6a/b/c immersive viewer & sheets — audited 2026-08-27 · AND-pass: 2026-08-27
+Chapters read: Going full screen (`going-full-screen`), Playing video (`playing-video`), Playing audio
+(`playing-audio`), Page controls (`page-controls`), Status bars (`status-bars`), Gestures (`gestures`),
+Action sheets (`action-sheets`, re-read for what the destructive style is for). Carrying N2's rulings
+on this surface: the More sheet is a menu, not an action sheet, and context menus wait for the phase
+that can settle a native module.
+
+Rules in checkable form: a full-screen experience continues to provide access to essential features
+and controls, so people never have to leave it to do something ordinary · prioritise content by
+hiding chrome, but let a familiar gesture bring it back · obscure content under the status bar, keep
+it readable, and never hide it permanently · reference the system video player, because a slight
+divergence leaves people unsure which habits still apply · always display video at its original
+aspect ratio · choose an audio category that fits how the app uses sound, and don't stop other
+apps' audio if you don't need to · a page control is centred near the bottom, is tapped or scrubbed,
+and stops being the right control past about ten pages · handle gestures as responsively as possible,
+with feedback that helps people predict the result · use the destructive style for buttons that
+perform destructive actions.
+
+- [V][both] **The reel put the system clock on the picture.** The viewer is the app's one full-bleed
+  screen, and the strip behind the status bar is not the media — it is the `blurRadius: 24`, `cover`
+  crop of the same image that `FeedMediaFrame` paints as a backdrop, at full brightness. Four
+  screens already draw `TopScrim` for exactly this reason; the screen that actually needs it did not.
+  Measured on the simulator at the rows the clock is drawn on (80–120px of a 1206×2622 capture,
+  27–40pt), in a glyph-free column, on an ordinary indoor photo: **white-on-background 4.42:1** —
+  under the 4.5:1 floor PR #83 set for body text, and unbounded downward, because a white product
+  shot puts a white strip behind white glyphs.
+  Status bars: "Obscure content under the status bar … Be sure to keep the status bar readable."
+  → **fixed**: the viewer draws `TopScrim`, and `TopScrim` gained an `over="media"` variant.
+  - The existing gradient was not enough on its own. `background → transparent` across the whole
+    inset is already half-faded by the rows the glyphs occupy: adopting it as-is moved the same
+    measurement from 4.42:1 to only **8.01:1**, and on white media it would still land near 2:1. The
+    `media` variant holds full opacity to `MEDIA_SCRIM_HOLD` (0.6) of the inset and fades over the
+    rest, which puts the glyph band on opaque ground: **18.46:1 on iOS, 20.14:1 on Android**, and
+    those numbers no longer depend on the picture. Verified on Android against a white dinner plate.
+  - **Not hidden instead**, though Status bars suggests that first ("Consider temporarily hiding the
+    status bar when displaying full-screen media") — because the same chapter requires a way to bring
+    it back, "a simple, discoverable gesture", and Photos' is a single tap. The reel has already spent
+    that tap on play/pause and the double-tap on save. A third meaning for a tap here is exactly the
+    divergence Playing video warns about, so the scrim is the option this surface can actually afford.
+  - Cost, stated plainly: the top ~60% of the safe-area inset is now opaque over the media rather
+    than showing a blurred sliver of it. On a full-bleed slide it reads as a vignette; on a
+    letterboxed one it merges with the black ground.
+- [V][both] **The two halves of the top strip were drawn on top of each other.** The reel's refresh
+  spinner sat at `topInset + 24` and each slide's media counter at a flat `top: 68` with no safe area
+  at all — different components, neither able to see the other's frame. On an iPhone 17 Pro
+  (`topInset` 72) the spinner occupies 96–116pt and the chip 68–94pt, so a refetch on a multi-media
+  post paints a spinner through the counter; on a short inset the chip rides into the status bar.
+  Layout's safe-area rule, and Design principles/Familiarity for the two conventions.
+  → **fixed**: `lib/viewer-chrome.ts` derives every offset in the strip from the resolved inset —
+  Back leading and mute trailing on the control row, the spinner leading and the counter trailing on
+  the badge row beneath it. The guard proves the rows cannot overlap at any inset from 0 to 62
+  rather than trusting the arithmetic.
+- [V][both] **The reel could not be silenced without leaving it.** The showcase grid autoplays muted
+  at `volume = 0`; the viewer's player was constructed `muted = false, volume = 1.0`, so tapping a
+  card was the moment sound started — and there was no mute control anywhere on the surface. The only
+  ways to stop it were the hardware volume keys, pausing the video (which stops the thing you came
+  for), or leaving. Going full screen: "Continue to provide access to essential features and controls
+  so people can complete their task without exiting full-screen mode. For example, a full-screen
+  media experience needs to make playback controls persistently available."
+  → **fixed**: a mute toggle on the trailing edge of the control row, mirroring Back, shown on any
+  slide whose post carries a video (`hasImmersiveAudibleMedia` — the cover can be an image while page
+  three is the video, and the control has to be there before the reader swipes onto it, not appear
+  under their thumb). State lives in `lib/viewer-audio.ts`, one `useSyncExternalStore` for the
+  process in the same shape `lib/motion` uses, persisted through AsyncStorage so the choice outlives
+  the visit. Verified end-to-end on **both** platforms including a full app restart.
+  - **The default is still unmuted**, which is what the surface did before. Adopting the control is
+    the HIG requirement; changing what happens before anyone touches it is a product call, and it is
+    the open question this unit hands back (see *Open remainder*).
+- [D][ios] **The two platforms disagreed about the audio session, silently, because of a library
+  default.** expo-video's iOS `VideoPlayer.swift:18` defaults `audioMixingMode` to `.doNotMix`, and
+  `VideoManager.swift:75–118` then removes `.mixWithOthers` from the category and calls
+  `setActive(true)` whenever *any* player is playing — the muted feed previews included, since the
+  override is keyed on the mode rather than on whether sound is coming out. Android's default is
+  already `AUTO` (`VideoPlayer.kt:197`) and its `anyPlayerRequiresFocus` is
+  `(!muted && playing && volume > 0) || mode == DO_NOT_MIX`, so a silent preview never takes focus
+  there. Playing audio: "don't make people stop listening to music from another app if you don't
+  need to." → **fixed**: `audioMixingMode = 'auto'` declared at all four player sites (viewer, feed
+  preview, lightbox, media preview), which holds the session only while a player is actually
+  outputting audio and makes the platforms agree explicitly instead of inheriting two defaults.
+  **Android counterpart**: not a no-op and not a dialect split — it is Android's existing behaviour,
+  written down so iOS matches it.
+  - **Filed as a deviation, not a violation, because this Mac cannot demonstrate the user-visible
+    half.** A 60s tone was served to the simulator's Safari from a local HTTP server, with a page
+    that logs every `play`/`pause` to `localStorage` so the record survives being backgrounded. The
+    silent feed previews did not pause it. Neither did the **control**: an unmuted, playing video in
+    the immersive viewer, which is required to interrupt, also left Safari playing. The simulator
+    does not enforce cross-app audio-session interruption at all, so the experiment can neither
+    confirm nor refute the effect on a device, and the finding rests on the two libraries' source.
+    The fix cannot regress anything either way. Re-check on a physical iPhone at the next store build.
+- [D][both] **`Unsave` wore the destructive style.** Six actions were classed destructive; `unsave` is
+  a one-tap toggle whose own row re-reads "Save" the moment it is used, and nothing is destroyed.
+  Action sheets: "Use the destructive style for buttons that perform destructive actions." Spending
+  the danger colour on the sheet's cheapest action devalues the rows that are genuinely dangerous
+  (delete, block, report), which sit in the same sheet → **fixed**: dropped from
+  `isDestructiveViewerAction`; `viewer-actions.test.ts` updated in the same commit.
+- [P][both] **One play badge, three treatments.** Four inline copies in `viewer.tsx` — 72pt circle
+  with a hairline border and without, glyph at 34 with an optical `marginLeft: 4` on one of them and
+  no nudge on the rest, one on a white-alpha plate instead of black. Icons' consistency rule, the
+  same one F4 applied to the icon set → **fixed**: `ViewerPlayBadge`, one treatment, glyph on the
+  ramp at `icon.hero` (32) rather than the off-ramp 34, optically centred once.
+- [P][both] **The counter lied under the finger, and the pill was off the type ramp.** It updated only
+  on `onMomentumScrollEnd`, so a slow drag showed the page you were leaving until it landed, and it
+  set a raw `fontSize: 11`. Gestures: "Handle gestures as responsively as possible … provide feedback
+  that helps them predict its results" → **fixed**: a second index tracked from `onScroll` feeds the
+  counter, while the settled index — which also gates video playback and the hardware-back
+  interception — still moves only when a page lands. The chip moves to `type.caption` with
+  `paddingVertical` 5→3 so its height is unchanged, the same trade S5 made on the feed's counter.
+- [P][both] **The two Back buttons pressed differently.** The reel's used a literal `opacity: 0.7`
+  where its twin in `ViewerShell` used `appTheme.opacity.pressed` (0.88) → **fixed**: both on the
+  token.
+- [P][both] Verified clean: **video plays at its own aspect ratio and the reel does not mix audio.**
+  `FeedMediaFrame` renders `contentFit: 'contain'` over a blurred `cover` backdrop, so nothing is
+  letterboxed into the frame itself, which is what Playing video's padding warning is about; and one
+  player is elected at a time (`selectActiveImmersiveVideoId`), blocked while any sheet or the details
+  page is open (`getImmersiveVideoBlockerId`), with `staysActiveInBackground` off.
+- [P][both] Verified clean: **a counter rather than a page control is the right call here, and stays.**
+  Page controls wants dots centred near the bottom, but it also says a page control "doesn't represent
+  hierarchical or nonsequential page relationships" — and this pager is media pages *plus* a details
+  page, which is exactly such a relationship. Nothing caps a post's media count either (the composer
+  passes `allowsMultipleSelection` with no limit), and the chapter stops recommending dots past about
+  ten. The counter counts only media and hides itself on the details page, which is the honest
+  reading. Live data has one multi-media post, with two.
+- [P][both] Noted, deferred: **the More sheet scrolls.** Action sheets: "Avoid letting an action sheet
+  scroll … scrolling an action sheet can be hard to do without inadvertently tapping a button." It is
+  `maxHeight: '62%'` over a `ScrollView`, and an owner's own post can fill five groups. N2 classified
+  this surface as a menu rather than an action sheet — the rule quoted is an action-sheet rule and
+  the classification is not being re-opened here — but the hazard it describes is real on the longest
+  variant → X4, which owns what a surface does when its content outgrows it.
+- [P][both] Noted for X4: **the viewer's loading state is a bare spinner** with an accessibility
+  label and no visible text, and the reel's own refresh spinner carries no label at all.
+
+Guard added: `__tests__/hig-full-screen.test.ts` (25 cases) — the viewer draws the `media` variant of
+the scrim, in the one position in the tree that is after the scroller and before the sheets; the two
+top-strip rows cannot overlap at any inset, and no element in the strip may be placed by a literal
+again; the mute control is labelled both ways, is gated on `hasImmersiveAudibleMedia`, and the player
+reads the shared store rather than a hard-coded `false`; the store notifies once per real change and
+survives a rehydrate; every file that creates a video player declares a mixing mode, and no file
+outside the known four may create one at all; the play badge is drawn from one component and the
+glyph appears once; `unsave` is not destructive while delete/block/report still are; and the counter
+reads the dragged index while the settled index keeps its own setter.
+
+**AND-pass 2026-08-27** (mandatory: this unit touches gestures and media/audio). Pixel_9a, dev client
+on the worktree's Metro. The scrim renders correctly under Android's forced edge-to-edge — measured
+20.14:1 white-on-background at the status-bar rows over a white dinner plate, where iOS measures
+18.46:1 — and the mute control, the counter and the two glyph swaps (`BackGlyph` → Material arrow,
+`ShareGlyph` → Material share) all render at their intended positions. Horizontal paging still pages,
+and the counter tracked 1/2 → 2/2 through an `adb input swipe`. Hardware back leaves the reel with no
+dead end, and returned to the previous viewer instance with the mute state restored from storage.
+`logcat` clear of `FATAL`/`SIGSEGV` across the pass. Nothing in this unit touches the keyboard, the
+tab bar or blur.
+- **The mute toggle needed a probe to tap.** The Expo dev-launcher bubble owns the top-right corner
+  on the Android dev client and swallowed every `adb` tap aimed at the control, including taps
+  outside its visible circle — the hazard `android-dev-launcher-bubble-blocks-top-right-taps`
+  records, and dragging it away pulled the notification shade instead. The control was moved 300pt
+  down for one run, tapped, confirmed to flip the glyph and to survive a force-stop and relaunch,
+  and then moved back; its production position is verified by capture in the same pass.
+
+**Open remainder**: whether the reel should *start* muted rather than unmuted — the control now
+exists either way, and the default is a product decision → back to the user; the More sheet's
+scrolling and the unlabelled spinners → X4; "Comments" as a menu label where Menus asks for verbs →
+X3, which already owns button copy; re-checking the audio-session interruption on a physical iPhone,
+which no simulator on this Mac can show → next store build.

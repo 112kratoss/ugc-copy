@@ -343,9 +343,15 @@ export function getViewerActionLabel(action: string, sourceType?: ImmersivePrevi
   }
 }
 
+/**
+ * Action sheets: "Use the destructive style for buttons that perform destructive
+ * actions." `unsave` is not one — it is a one-tap toggle whose own row re-reads
+ * "Save" the moment it is used, and nothing is destroyed by it. Dressing it in
+ * the danger colour spends the app's loudest signal on its cheapest action, so
+ * the sheet's remaining red rows (delete, block, report) stop meaning anything.
+ */
 export function isDestructiveViewerAction(action: string) {
-  return action === 'unsave'
-    || action === 'archive'
+  return action === 'archive'
     || action === 'delete-post'
     || action === 'hide-creator'
     || action === 'report-content'

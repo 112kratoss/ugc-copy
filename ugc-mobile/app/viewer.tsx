@@ -5,7 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer } from 'expo-video';
-import { Copy, FileText, Globe, Heart, ImageOff, Images, Lock, LockKeyhole, MessageCircle, MoreHorizontal, Play, Repeat2, Wand2 } from 'lucide-react-native';
+import { Copy, FileText, Globe, Heart, ImageOff, Images, Lock, LockKeyhole, MessageCircle, MoreHorizontal, Play, Repeat2, Volume2, VolumeX, Wand2 } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { cloneElement, useCallback, useEffect, useId, useMemo, useRef, useState, type MutableRefObject, type ReactElement } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
@@ -23,13 +23,17 @@ import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { useAuth } from '@/lib/auth';
 import { applyCommentCountToSourceData } from '@/lib/comments-view-model';
 import { env } from '@/lib/env';
+import { TopScrim } from '@/components/top-scrim';
 import {
   getImmersiveInitialIndex,
+  hasImmersiveAudibleMedia,
   hasImmersiveDetailsPage,
   immersiveViewerReturnPath,
   selectActiveImmersiveVideoId,
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
+import { hydrateViewerAudioMuted, isViewerAudioMuted, toggleViewerAudioMuted, useViewerAudioMuted } from '@/lib/viewer-audio';
+import { viewerTopBadgeTop, viewerTopControlTop, VIEWER_TOP_CONTROL_SIZE } from '@/lib/viewer-chrome';
 import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
 import { createShowcaseFeedViewerQueryKey } from '@/lib/showcase-feed-query';
 import {
@@ -136,6 +140,7 @@ type DoubleTapSavePosition = {
 };
 
 const DOUBLE_TAP_SAVE_HEART_SIZE = 90;
+const VIEWER_PLAY_BADGE_SIZE = 72;
 
 export default function ImmersivePreviewViewerScreen() {
   const params = useLocalSearchParams<ViewerParams>();
@@ -153,6 +158,10 @@ export default function ImmersivePreviewViewerScreen() {
   const insets = useSafeAreaInsets();
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
+  const audioMuted = useViewerAudioMuted();
+  useEffect(() => {
+    void hydrateViewerAudioMuted();
+  }, []);
   const listRef = useRef<FlatList<ImmersivePreviewItem>>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [initialPositionReady, setInitialPositionReady] = useState(false);
@@ -814,6 +823,13 @@ export default function ImmersivePreviewViewerScreen() {
         style={{ flex: 1, backgroundColor: '#000' }}
         windowSize={IMMERSIVE_VERTICAL_LIST_TUNING.windowSize}
       />
+      {/* Status bars: "Obscure content under the status bar ... Be sure to keep
+          the status bar readable." The reel is the app's one full-bleed screen,
+          and the strip behind the clock is a blurred *cover* crop of the media,
+          so on bright media it is white on white. Same scrim the four scrolling
+          screens draw, in the same place in the tree: after the scroller, before
+          any sheet. */}
+      <TopScrim topInset={topInset} over="media" />
       {/* The details page draws its own header with its own way back; the
           reel's arrow would be a second back button that leaves the reel. */}
       {detailsOpenForActive ? null : (
@@ -824,17 +840,50 @@ export default function ImmersivePreviewViewerScreen() {
           style={({ pressed }) => ({
             position: 'absolute',
             left: 16,
-            top: topInset + 10,
-            width: 48,
-            height: 48,
+            top: viewerTopControlTop(topInset),
+            width: VIEWER_TOP_CONTROL_SIZE,
+            height: VIEWER_TOP_CONTROL_SIZE,
             alignItems: 'center',
             justifyContent: 'center',
-            borderRadius: 24,
+            borderRadius: VIEWER_TOP_CONTROL_SIZE / 2,
             backgroundColor: 'rgba(0,0,0,0.3)',
-            opacity: pressed ? 0.7 : 1,
+            opacity: pressed ? appTheme.opacity.pressed : 1,
           })}
         >
           <IconShadow><BackGlyph size={appTheme.icon.feature} color="#ffffff" /></IconShadow>
+        </Pressable>
+      )}
+      {/* Going full screen: "Continue to provide access to essential features and
+          controls so people can complete their task without exiting full-screen
+          mode." The reel is entered from a silent grid and is the only surface
+          that makes a sound, so silencing it must not mean leaving it. */}
+      {detailsOpenForActive || !hasImmersiveAudibleMedia(activeItem) ? null : (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={audioMuted ? 'Unmute video' : 'Mute video'}
+          accessibilityState={{ selected: audioMuted }}
+          onPress={() => {
+            haptic.select();
+            toggleViewerAudioMuted();
+          }}
+          style={({ pressed }) => ({
+            position: 'absolute',
+            right: 16,
+            top: viewerTopControlTop(topInset),
+            width: VIEWER_TOP_CONTROL_SIZE,
+            height: VIEWER_TOP_CONTROL_SIZE,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: VIEWER_TOP_CONTROL_SIZE / 2,
+            backgroundColor: 'rgba(0,0,0,0.3)',
+            opacity: pressed ? appTheme.opacity.pressed : 1,
+          })}
+        >
+          <IconShadow>
+            {audioMuted
+              ? <VolumeX size={appTheme.icon.feature} color="#ffffff" />
+              : <Volume2 size={appTheme.icon.feature} color="#ffffff" />}
+          </IconShadow>
         </Pressable>
       )}
       {activeItem ? (
@@ -921,8 +970,11 @@ export default function ImmersivePreviewViewerScreen() {
         onUnlocked={(item) => recreateItem(item)}
         visible={Boolean(unlockRemixOpenItemId)}
       />
+      {/* Leading side, under Back: the trailing side of the badge row belongs to
+          the slide's media counter, and the two used to be drawn on top of each
+          other — the spinner from `topInset + 24`, the counter from a flat 68. */}
       {sourceQuery.isFetching && activeItem ? (
-        <View style={{ position: 'absolute', top: topInset + 24, right: 20 }}>
+        <View style={{ position: 'absolute', top: viewerTopBadgeTop(topInset), left: 30 }}>
           <ActivityIndicator color="rgba(255,255,255,0.72)" />
         </View>
       ) : null}
@@ -937,7 +989,7 @@ function ViewerShell({ topInset, bottomInset, children }: { topInset: number; bo
         accessibilityRole="button"
         accessibilityLabel="Go back"
         onPress={leaveViewer}
-        style={({ pressed }) => ({ position: 'absolute', left: 16, top: topInset + 10, width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.3)', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+        style={({ pressed }) => ({ position: 'absolute', left: 16, top: viewerTopControlTop(topInset), width: VIEWER_TOP_CONTROL_SIZE, height: VIEWER_TOP_CONTROL_SIZE, borderRadius: VIEWER_TOP_CONTROL_SIZE / 2, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.3)', opacity: pressed ? appTheme.opacity.pressed : 1 })}
       >
         <IconShadow><BackGlyph size={appTheme.icon.feature} color="#ffffff" /></IconShadow>
       </Pressable>
@@ -1010,6 +1062,11 @@ function ImmersiveSlide({
 }) {
   const horizontalRef = useRef<FlatList<ImmersiveSlidePage>>(null);
   const [currentHorizontalIndex, setCurrentHorizontalIndex] = useState(0);
+  // The settled index drives what the *reel* believes — which page blocks video,
+  // which one hardware back returns from — so it may only move once a page has
+  // landed. The counter is feedback for the finger and has to answer sooner;
+  // Gestures asks for feedback that "helps them predict its results".
+  const [draggedPageIndex, setDraggedPageIndex] = useState(0);
   const [saveHeartPopTrigger, setSaveHeartPopTrigger] = useState(0);
   const prevActiveRef = useRef(active);
   const doubleTapHeart = useDoubleTapSaveHeartAnimation({ height, width });
@@ -1037,6 +1094,7 @@ function ImmersiveSlide({
   const canOpenCreator = Boolean(item.creatorUsername);
   const updateCurrentHorizontalIndex = useCallback((pageIndex: number) => {
     setCurrentHorizontalIndex(pageIndex);
+    setDraggedPageIndex(pageIndex);
     onDetailsPageOpenChange(isImmersiveDetailsSlidePageIndex(pages, pageIndex));
   }, [onDetailsPageOpenChange, pages]);
 
@@ -1125,14 +1183,17 @@ function ImmersiveSlide({
           style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: scrimHeight }}
         />
 
-        {/* Media count indicator */}
+        {/* Media count indicator. The trailing half of the viewer's badge row —
+            the leading half is the reel's refresh spinner, and both are placed
+            from the safe-area inset by `lib/viewer-chrome` so they cannot be
+            drawn over each other again. */}
         {!isTextPost && mediaCount > 1 ? (
           <View
             pointerEvents="none"
             style={{
               position: 'absolute',
               right: 18,
-              top: 68,
+              top: viewerTopBadgeTop(topInset),
               flexDirection: 'row',
               alignItems: 'center',
               gap: 5,
@@ -1141,12 +1202,15 @@ function ImmersiveSlide({
               borderColor: 'rgba(255,255,255,0.14)',
               backgroundColor: 'rgba(3,3,6,0.68)',
               paddingHorizontal: 10,
-              paddingVertical: 5,
+              // `caption` carries a 17pt line box against the 11pt raw size this
+              // chip used to set, so the padding comes down to keep the pill the
+              // height it was — same trade S5 made on the feed's counter.
+              paddingVertical: 3,
             }}
           >
-            <Images size={14} color="#ffffff" />
-            <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '800' }}>
-              {Math.min(currentHorizontalIndex + 1, mediaCount)} / {mediaCount}
+            <Images size={appTheme.icon.xs} color="#ffffff" />
+            <Text style={{ color: '#ffffff', ...appTheme.type.caption, fontWeight: '800' }}>
+              {Math.min(draggedPageIndex + 1, mediaCount)} / {mediaCount}
             </Text>
           </View>
         ) : null}
@@ -1408,8 +1472,13 @@ function ImmersiveSlide({
         initialScrollIndex={0}
         keyExtractor={(page, index) => page.type === 'media' ? `media-${page.mediaItem.id}` : `${page.type}-${index}`}
         maxToRenderPerBatch={IMMERSIVE_HORIZONTAL_LIST_TUNING.maxToRenderPerBatch}
+        onScroll={(event) => {
+          const page = Math.round(event.nativeEvent.contentOffset.x / width);
+          setDraggedPageIndex(Math.max(0, Math.min(pages.length - 1, page)));
+        }}
         onScrollBeginDrag={() => onHorizontalScrollToggle?.(true)}
         onScrollEndDrag={() => onHorizontalScrollToggle?.(false)}
+        scrollEventThrottle={16}
         onMomentumScrollEnd={(event) => {
           const page = Math.round(event.nativeEvent.contentOffset.x / width);
           updateCurrentHorizontalIndex(Math.max(0, Math.min(pages.length - 1, page)));
@@ -1698,6 +1767,35 @@ function viewerStateChipStyle(tone: ViewerStateTone) {
 }
 
 
+/**
+ * The reel's "this is not playing" mark. It was drawn inline four times in this
+ * file at three different treatments — with a hairline border and without, and
+ * with an optical nudge on one of them — which Icons rules out: "all interface
+ * icons in your app need to use a consistent size, level of detail, stroke
+ * thickness (or weight), and perspective". The glyph is centred optically here,
+ * once, because a triangle's visual centre is left of its bounding box.
+ */
+function ViewerPlayBadge() {
+  return (
+    <View pointerEvents="none" style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
+      <View
+        style={{
+          width: VIEWER_PLAY_BADGE_SIZE,
+          height: VIEWER_PLAY_BADGE_SIZE,
+          borderRadius: VIEWER_PLAY_BADGE_SIZE / 2,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: 'rgba(0,0,0,0.42)',
+          borderWidth: 1,
+          borderColor: 'rgba(255,255,255,0.15)',
+        }}
+      >
+        <Play size={appTheme.icon.hero} color="#fff" fill="#fff" style={{ marginLeft: 3 }} />
+      </View>
+    </View>
+  );
+}
+
 function ImmersiveMedia({
   mediaItem,
   active,
@@ -1747,11 +1845,7 @@ function ImmersiveMedia({
             recyclingKey={`viewer:${mediaItem.id}`}
             style={{ width, height }}
           />
-          <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
-            <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.42)' }}>
-              <Play size={34} color="#fff" fill="#fff" />
-            </View>
-          </View>
+          <ViewerPlayBadge />
         </DoubleTapPressable>
       );
     }
@@ -1769,11 +1863,7 @@ function ImmersiveMedia({
           radius={0}
           accent="#ffffff"
         />
-        <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
-          <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.42)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)' }}>
-            <Play size={34} color="#fff" fill="#fff" />
-          </View>
-        </View>
+        <ViewerPlayBadge />
       </DoubleTapPressable>
     ) : (
       <DoubleTapPressable
@@ -1781,9 +1871,7 @@ function ImmersiveMedia({
         onDoublePress={handleDoublePress}
         style={{ width, height, alignItems: 'center', justifyContent: 'center', backgroundColor: '#020203' }}
       >
-        <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.16)' }}>
-          <Play size={34} color="#fff" fill="#fff" />
-        </View>
+        <ViewerPlayBadge />
       </DoubleTapPressable>
     );
   }
@@ -1842,14 +1930,25 @@ function ActiveVideo({
   const [hasFrame, setHasFrame] = useState(false);
   const [hasError, setHasError] = useState(false);
   const reducedMotion = useReducedMotion();
+  const audioMuted = useViewerAudioMuted();
   const player = useVideoPlayer({ uri: url, useCaching: true }, (instance) => {
     instance.loop = true;
-    instance.muted = false;
+    instance.muted = isViewerAudioMuted();
     instance.volume = 1.0;
     instance.showNowPlayingNotification = false;
     instance.staysActiveInBackground = false;
     instance.timeUpdateEventInterval = 0.25;
+    // Playing audio: "don't make people stop listening to music from another app
+    // if you don't need to." `auto` holds the session only while a player is
+    // actually outputting sound; expo-video's iOS default is `doNotMix`, which
+    // takes it the moment anything plays — muted previews included — while its
+    // Android default is already `auto`. Setting it makes the platforms agree.
+    instance.audioMixingMode = 'auto';
   });
+
+  useEffect(() => {
+    player.muted = audioMuted;
+  }, [audioMuted, player]);
 
   // Optimistic: playback is requested below, and the native player reports
   // `playing` only once it is actually rendering — often a frame or two after
@@ -1930,13 +2029,7 @@ function ActiveVideo({
           }}
           style={{ width, height }}
         />
-        {!isPlaying && hasFrame && !hasError ? (
-          <View pointerEvents="none" style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
-            <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.42)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)' }}>
-              <Play size={34} color="#fff" fill="#fff" style={{ marginLeft: 4 }} />
-            </View>
-          </View>
-        ) : null}
+        {!isPlaying && hasFrame && !hasError ? <ViewerPlayBadge /> : null}
       </DoubleTapPressable>
     </View>
   );

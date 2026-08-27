@@ -17,10 +17,24 @@ import { appTheme } from '@/lib/theme';
  * dependency out of the primitives barrel means a test for, say, a button never
  * has to mock a gradient library it has nothing to do with.
  */
-export function TopScrim({ topInset }: { topInset: number }) {
+/**
+ * Fraction of the top inset the `media` variant holds at full opacity before it
+ * starts to fade. The system draws the clock and the status icons in roughly the
+ * middle of the inset — measured at 27–40pt of a 72pt inset on an iPhone 17 Pro —
+ * so a gradient that is already half-faded there protects nothing on bright
+ * content. Holding to 0.6 covers that band on a notched device and most of a
+ * short inset, and the remaining 40% is what keeps it from reading as a bar.
+ */
+const MEDIA_SCRIM_HOLD = 0.6;
+
+export function TopScrim({ topInset, over = 'app' }: { topInset: number; over?: 'app' | 'media' }) {
+  const ground = appTheme.colors.background;
   return (
     <LinearGradient
-      colors={[appTheme.colors.background, `${appTheme.colors.background}00`]}
+      colors={over === 'media'
+        ? [ground, ground, `${ground}00`]
+        : [ground, `${ground}00`]}
+      locations={over === 'media' ? [0, MEDIA_SCRIM_HOLD, 1] : undefined}
       pointerEvents="none"
       style={{ position: 'absolute', top: 0, left: 0, right: 0, height: topInset }}
     />

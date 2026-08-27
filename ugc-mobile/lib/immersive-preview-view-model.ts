@@ -299,6 +299,19 @@ export function isImmersiveVideoItem(item: ImmersivePreviewItem) {
   return item.mediaKind === 'video' && Boolean(item.mediaUrl);
 }
 
+/**
+ * Whether this slide can make a sound — the cover may be an image while a later
+ * page of the same post is a video, and the reel's mute control has to be there
+ * before the reader swipes onto it rather than appearing under their thumb.
+ */
+export function hasImmersiveAudibleMedia(item: ImmersivePreviewItem | undefined) {
+  if (!item) return false;
+  if (isImmersiveVideoItem(item)) return true;
+  return (item.mediaItems ?? []).some((mediaItem) => (
+    mediaItem.mediaKind === 'video' && Boolean(mediaItem.url)
+  ));
+}
+
 export function hasImmersiveDetailsPage(item: ImmersivePreviewItem) {
   // Generations were excluded while they rendered in the separate card screen, which
   // showed their model/cost metadata inline. Now that every source opens the reel,
