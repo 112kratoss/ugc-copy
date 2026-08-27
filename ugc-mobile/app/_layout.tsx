@@ -18,9 +18,10 @@ import { ActionSheetHost } from '@/components/action-sheet';
 import { OverlayHost } from '@/components/overlay-host';
 import { setUpgradeRequiredHandler } from '@/lib/api-client';
 import { AuthProvider, useAuth } from '@/lib/auth';
+import { notificationBadgeQueryKey } from '@/lib/notification-badge';
 import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
 import { useReducedMotion } from '@/lib/motion';
-import { navigateToNotificationDeepLink, subscribeToNotificationResponses } from '@/lib/notifications';
+import { navigateToNotificationDeepLink, subscribeToNotificationResponses, subscribeToNotificationsReceived } from '@/lib/notifications';
 import { OnboardingProvider, useOnboarding } from '@/lib/onboarding';
 import { STARTUP_VERSION_CHECK_FALLBACK_MS, type StartupVersionCheckStatus } from '@/lib/startup-readiness';
 import { appTheme } from '@/lib/theme';
@@ -311,6 +312,15 @@ function NotificationResponseCoordinator() {
       return true;
     },
   }), [api, queryClient, user?.id]);
+
+  // An alert that arrives while the app is in front no longer always draws a
+  // banner (HIG Notifications asks for "discoverable but not distracting"), so
+  // the app has to be the one that shows it: the tab badge and the Alerts list
+  // refresh the moment it lands rather than on the badge's next poll.
+  useEffect(() => subscribeToNotificationsReceived(() => {
+    void queryClient.invalidateQueries({ queryKey: notificationBadgeQueryKey(user?.id) });
+    void queryClient.invalidateQueries({ queryKey: ['mobile-notifications', user?.id] });
+  }), [queryClient, user?.id]);
 
   return null;
 }

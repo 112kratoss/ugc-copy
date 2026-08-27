@@ -20,14 +20,67 @@ export type MobileNotificationResponseHandler = (
   event: MobileNotificationResponseEvent
 ) => boolean | Promise<boolean>;
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldPlaySound: true,
+/** The route the Alerts tab occupies. Named here because deep links carry it. */
+export const ALERTS_ROUTE = '/studio';
+
+let alertsScreenFocused = false;
+
+/** The Alerts screen reports itself in and out of view; the handler below reads it. */
+export function setAlertsScreenFocused(focused: boolean) {
+  alertsScreenFocused = focused;
+}
+
+/**
+ * How an alert should present itself while the app is already in front.
+ *
+ * HIG Notifications: "Handle notifications gracefully when your app is in the
+ * foreground … present the information in a way that's discoverable but not
+ * distracting or invasive … For example, when a new message arrives in a
+ * mailbox that people are currently viewing, Mail simply adds it to the list
+ * of unread messages because sending a notification about it would be
+ * unnecessary and distracting."
+ *
+ * So: never a sound over the app you are holding, and no banner at all while
+ * the reader is looking at the list the alert is about to join. Elsewhere in
+ * the app the banner stays — a finished render is worth surfacing — and the
+ * alert always joins Notification Center for when the app is put down.
+ */
+export function resolveForegroundPresentation(options: { alertsScreenFocused: boolean }) {
+  return {
+    shouldPlaySound: false,
     shouldSetBadge: true,
-    shouldShowBanner: true,
+    shouldShowBanner: !options.alertsScreenFocused,
     shouldShowList: true,
-  }),
+  };
+}
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => resolveForegroundPresentation({ alertsScreenFocused }),
 });
+
+/**
+ * Suppressing the banner only stays honest if the app shows the alert itself.
+ * Nothing listened for an arrival before this, so the tab badge learned about
+ * one on its next poll — up to a minute later.
+ */
+export function subscribeToNotificationsReceived(onReceived: () => void) {
+  const subscription = Notifications.addNotificationReceivedListener(() => onReceived());
+  return () => subscription.remove();
+}
+
+/**
+ * True when a deep link's destination is the Alerts screen itself.
+ *
+ * Two of this account's live rows carry `/studio` — "New follower", whose real
+ * destination is a profile the server does not name yet — and the screen's own
+ * fallback for an unresolvable link was the same route. Tapping any of them
+ * asked the router for the screen the reader was already on.
+ */
+export function deepLinkTargetsAlertsScreen(deepLink: unknown) {
+  if (typeof deepLink !== 'string') return false;
+  const path = deepLink.trim().split(/[?#]/, 1)[0].replace(/\/+$/, '');
+  return path === ALERTS_ROUTE || path === '/(tabs)/studio';
+}
 
 function isNativeMobile() {
   return Platform.OS === 'ios' || Platform.OS === 'android';

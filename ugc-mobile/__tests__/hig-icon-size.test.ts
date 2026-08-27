@@ -53,10 +53,7 @@ const ICON_RAMP = new Set<number>([
  */
 const LEGACY_SIZES: Record<string, number> = {
   'app/(tabs)/showcase.tsx': 0,
-  // 2 → 4 in S8: the sweep started seeing icons rendered through a local
-  // alias, which is how two 21pt glyphs here had gone uncounted. Pre-existing
-  // sizes, newly visible; S10's pass ratchets them down.
-  'app/(tabs)/studio.tsx': 4,
+  'app/(tabs)/studio.tsx': 0,
   'app/auth.tsx': 3,
   'app/help.tsx': 3,
   'app/invite.tsx': 5,

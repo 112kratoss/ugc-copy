@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useScrollToTop } from '@react-navigation/native';
+import { useFocusEffect, useScrollToTop } from '@react-navigation/native';
 import { router } from 'expo-router';
 import {
   BellRing,
@@ -13,16 +13,23 @@ import {
   ToggleRight,
   WandSparkles,
 } from 'lucide-react-native';
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { TopScrim } from '@/components/top-scrim';
 import { AppText, Card, IconButton, PrimaryButton, SecondaryButton, StatusBlock } from '@/components/ui';
 import { haptic } from '@/lib/haptics';
+import { formatRelativeTime } from '@/lib/home-view-model';
 import { useAuth } from '@/lib/auth';
 import { publishUnreadCount } from '@/lib/notification-badge';
-import { navigateToNotificationDeepLink, registerForMobilePushNotifications, type MobilePushRegistrationResult } from '@/lib/notifications';
+import {
+  deepLinkTargetsAlertsScreen,
+  navigateToNotificationDeepLink,
+  registerForMobilePushNotifications,
+  setAlertsScreenFocused,
+  type MobilePushRegistrationResult,
+} from '@/lib/notifications';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { appTheme } from '@/lib/theme';
@@ -118,6 +125,14 @@ export default function StudioScreen() {
     },
   });
 
+  // While this list is on screen, an arriving alert is announced by the list
+  // itself — a banner over it would repeat what the reader is already looking
+  // at. `lib/notifications.ts` reads this when the system asks how to present.
+  useFocusEffect(useCallback(() => {
+    setAlertsScreenFocused(true);
+    return () => setAlertsScreenFocused(false);
+  }, []));
+
   const notifications = notificationsQuery.data?.notifications ?? [];
   const unreadCount = notificationsQuery.data?.unreadCount
     ?? notifications.filter((notification) => !notification.isRead).length;
@@ -138,9 +153,12 @@ export default function StudioScreen() {
       markReadMutation.mutate(notification.id);
     }
 
-    if (!navigateToNotificationDeepLink(notification.deepLink)) {
-      router.push('/studio' as never);
-    }
+    // Marking it read is the whole of the response when there is nowhere else
+    // to go. The row's own destination can be this very screen — "New follower"
+    // still carries `/studio` — and the old fallback for an unresolvable link
+    // asked the router for this screen too.
+    if (deepLinkTargetsAlertsScreen(notification.deepLink)) return;
+    navigateToNotificationDeepLink(notification.deepLink);
   };
 
   return (
@@ -204,7 +222,7 @@ export default function StudioScreen() {
             {actionError ? (
               <StatusBlock
                 tone="danger"
-                title="That notification change did not save"
+                title="That alert change did not save"
                 body={actionError instanceof Error ? actionError.message : 'Try again.'}
               />
             ) : null}
@@ -212,7 +230,7 @@ export default function StudioScreen() {
               <LoadingState />
             ) : notificationsQuery.isError ? (
               <View style={{ gap: appTheme.spacing.gap }}>
-                <StatusBlock tone="danger" title="Could not load notifications" body="Check your connection, then try again." />
+                <StatusBlock tone="danger" title="Could not load alerts" body="Check your connection, then try again." />
                 <SecondaryButton label="Retry notifications" onPress={() => void notificationsQuery.refetch()} />
               </View>
             ) : notifications.length > 0 ? (
@@ -272,7 +290,7 @@ function NotificationHeader({
           variant="pageTitle"
           accessibilityRole="header"
         >
-          Notifications
+          Alerts
         </AppText>
         <AppText variant="bodySm" color="muted" style={{ fontWeight: '700' }}>
           {signedIn
@@ -285,9 +303,9 @@ function NotificationHeader({
       </View>
       {signedIn ? (
         <View style={{ flexDirection: 'row', gap: 9 }}>
-          <IconButton icon={RefreshCw} label="Refresh notifications" disabled={isRefreshing} onPress={onRefresh} accent="motion" />
+          <IconButton icon={RefreshCw} label="Refresh alerts" disabled={isRefreshing} onPress={onRefresh} accent="motion" />
           {unreadCount > 0 ? (
-            <IconButton icon={CheckCheck} label="Mark all notifications read" disabled={!canMarkAllRead} onPress={onMarkAllRead} accent="workflow" />
+            <IconButton icon={CheckCheck} label="Mark all alerts read" disabled={!canMarkAllRead} onPress={onMarkAllRead} accent="workflow" />
           ) : null}
         </View>
       ) : null}
@@ -308,7 +326,7 @@ function CaughtUpState() {
   return (
     <Card accent="workflow" variant="soft" style={{ minHeight: 156, justifyContent: 'center' }}>
       <View style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(52,211,153,0.13)', borderWidth: 1, borderColor: 'rgba(52,211,153,0.28)' }}>
-        <CheckCircle2 size={24} color="#6ee7b7" />
+        <CheckCircle2 size={appTheme.icon.feature} color={appTheme.colors.success} />
       </View>
       <View style={{ gap: 6 }}>
         <AppText variant="cardTitle">You are all caught up.</AppText>
@@ -399,7 +417,7 @@ function NotificationPreferences({
                 <AppText variant="body" style={{ fontWeight: '700' }}>{row.title}</AppText>
                 <AppText variant="caption" color="muted">{row.body}</AppText>
               </View>
-              <Icon size={32} color={enabled ? '#6ee7b7' : appTheme.colors.faint} />
+              <Icon size={appTheme.icon.hero} color={enabled ? appTheme.colors.success : appTheme.colors.faint} />
             </Pressable>
           );
         })}
@@ -486,7 +504,7 @@ function PushControlCard({
       }}
     >
       <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${iconColor}1f`, borderWidth: 1, borderColor: `${iconColor}55` }}>
-        <BellRing size={20} color={iconColor} />
+        <BellRing size={appTheme.icon.default} color={iconColor} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
         <AppText variant="body" style={{ fontWeight: '700' }}>{title}</AppText>
@@ -508,9 +526,9 @@ function PushControlCard({
           })}
         >
           {pushEnabled ? (
-            <ToggleRight size={34} color="#6ee7b7" />
+            <ToggleRight size={appTheme.icon.hero} color={appTheme.colors.success} />
           ) : (
-            <ToggleLeft size={34} color={appTheme.colors.faint} />
+            <ToggleLeft size={appTheme.icon.hero} color={appTheme.colors.faint} />
           )}
         </Pressable>
       ) : action || isPending ? (
@@ -576,7 +594,7 @@ function NotificationRow({ notification, onPress }: { notification: MobileNotifi
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${notification.isRead ? '' : 'Unread. '}${notification.title}. ${notification.body}. ${formatNotificationTime(notification.updatedAt)}`}
+      accessibilityLabel={`${notification.isRead ? '' : 'Unread. '}${notification.title}. ${notification.body}. ${formatRelativeTime(notification.updatedAt)}`}
       onPress={onPress}
       style={({ pressed }) => ({
         flexDirection: 'row',
@@ -592,7 +610,7 @@ function NotificationRow({ notification, onPress }: { notification: MobileNotifi
       })}
     >
       <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${meta.color}1c`, borderWidth: 1, borderColor: `${meta.color}4a` }}>
-        <Icon size={21} color={meta.color} />
+        <Icon size={appTheme.icon.default} color={meta.color} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 6 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -608,7 +626,7 @@ function NotificationRow({ notification, onPress }: { notification: MobileNotifi
           <Badge label={meta.label} color={meta.color} />
           {notification.eventCount > 1 ? <Badge label={`${notification.eventCount} updates`} color={appTheme.colors.primary} /> : null}
           <AppText variant="caption" color="faint" style={{ fontWeight: '800' }}>
-            {formatNotificationTime(notification.updatedAt)}
+            {formatRelativeTime(notification.updatedAt)}
           </AppText>
         </View>
       </View>
@@ -654,7 +672,7 @@ function NotificationCategoryList() {
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <AppText variant="cardTitle">What shows here</AppText>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-          <Clock3 size={14} color={appTheme.colors.faint} />
+          <Clock3 size={appTheme.icon.xs} color={appTheme.colors.faint} />
           <AppText variant="caption" color="faint" style={{ fontWeight: '800' }}>History</AppText>
         </View>
       </View>
@@ -672,7 +690,7 @@ function NotificationCategoryList() {
             }}
           >
             <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${item.color}1c`, borderWidth: 1, borderColor: `${item.color}4a` }}>
-              <Icon size={21} color={item.color} />
+              <Icon size={appTheme.icon.default} color={item.color} />
             </View>
             <View style={{ flex: 1, minWidth: 0, gap: 5 }}>
               <AppText variant="body" style={{ fontWeight: '800' }}>{item.title}</AppText>
@@ -685,19 +703,3 @@ function NotificationCategoryList() {
   );
 }
 
-function formatNotificationTime(value: string) {
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) {
-    return 'Just now';
-  }
-
-  const diffMs = Date.now() - timestamp;
-  const minute = 60 * 1000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-
-  if (diffMs < minute) return 'Just now';
-  if (diffMs < hour) return `${Math.floor(diffMs / minute)}m ago`;
-  if (diffMs < day) return `${Math.floor(diffMs / hour)}h ago`;
-  return `${Math.floor(diffMs / day)}d ago`;
-}

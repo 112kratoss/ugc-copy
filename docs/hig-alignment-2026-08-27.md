@@ -109,14 +109,15 @@ re-read the codebase broadly or ask for past-chat context.
   branch and **deliberately not merged** — `main` does not have F4, F6, N1, N2, N3 or S5. The user's
   call at the Phase 2 boundary was to keep accumulating on the branch, so branch from it rather than
   from `main`, and expect the merge question again at the next boundary. Phase 3 is under way: S5,
-  S6 (+S6a/b/c), S9, S8, S11 and S12 are closed, and the next `todo` on the board is **S10, studio**
-  — after which the phase order is S4 → S13/S14, which closes Phase 3. Three things carry into it:
-  the composer's 21 off-ramp icon sizes are still the largest budget left in
-  `hig-icon-size.test.ts`; S12 found that a generation whose title is its whole prompt is a
-  Studio-side data shape, so **S10 owns it**; and S11's iOS 26 gesture hazard is narrower than it
-  was written — S12 verified that a **native** horizontal scroll view (a pager, a carousel) wins the
-  full-screen back pan and needs nothing, while a **JS** `PanResponder` drag loses it and needs
-  `fullScreenGestureEnabled: false` on its own route.
+  S6 (+S6a/b/c), S9, S8, S11, S12 and S10 are closed, and the next `todo` on the board is **S4,
+  home** — after which S13/S14 closes Phase 3. Four things carry into it: the composer's 21 off-ramp
+  icon sizes are still the largest budget left in `hig-icon-size.test.ts`; S11's iOS 26 gesture
+  hazard is narrower than it was written — S12 verified that a **native** horizontal scroll view (a
+  pager, a carousel) wins the full-screen back pan and needs nothing, while a **JS** `PanResponder`
+  drag loses it and needs `fullScreenGestureEnabled: false` on its own route; **S13 inherits the
+  creations grid** that S10's board row wrongly named (and the generation-titled-with-its-prompt
+  data shape that S12 handed on with it); and `home-dashboard.tsx` is the other half of the
+  bounce-disabled pair S10 handed to F3, so **S4 should not settle it alone either**.
 - **Device mechanics learned in S6, for whoever drives them next:** the Simulator MCP's `tap` works
   headless on this Mac as well as `swipe`, so iOS is fully drivable; a surface is reachable by post
   id with `magicbooklet:///post/<id>`, and the live data has exactly one multi-media post
@@ -296,7 +297,7 @@ Shell: `app/_layout.tsx`, `app/(tabs)/_layout.tsx`, `components/magic-tab-bar.ts
 | S7 | Unlock screen + remix prompt | `app/unlock/[unlockId].tsx`, `app/unlocks.tsx`, `unlock-remix-prompt` |
 | S8 | Create hub | `app/(tabs)/creator.tsx`, `magic-create-menu` |
 | S9 | Creation tool | `app/create/[tool].tsx`, `media-creation-screen`, `media-preview`, `composer-media-lightbox` |
-| S10 | Studio | `app/(tabs)/studio.tsx`, `studio-feed-view-model` |
+| S10 | Alerts (the `studio` route is the notifications inbox — see the S12/S10 log) | `app/(tabs)/studio.tsx`, `lib/notifications.ts`, `lib/notification-badge.ts` |
 | S11 | Post composer | `app/post/new.tsx` |
 | S12 | Post details | `app/post/[id].tsx`, `post-details-page`, `post-text-block`, `post-resource-*` |
 | S13 | Profile tab | `app/(tabs)/profile.tsx`, `profile-dashboard`, `profile-feed-card`, `app/profile-media-feed.tsx` |
@@ -398,7 +399,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S8 create hub | 3 | done | 1V/1D/2P | a first creation is told what it costs; the icon ratchet can see a whole idiom it was blind to |
 | S11 post composer | 3 | done | 3V/2D/3P | the reorder can be finished, seen, and reached; a removal can be taken back |
 | S12 post details | 3 | done | 5V/2D/4P | a post that cannot load says so and offers a way on; copying says it copied, everywhere; a video says what it cost |
-| S10 studio | 3 | todo | — | |
+| S10 alerts | 3 | done | 3V/2D/4P | the screen answers to the name on the tab; an alert stops shouting over the app you are holding |
 | S4 home | 3 | todo | — | |
 | S13/S14 profiles | 3 | todo | — | |
 | S2 auth | 4 | todo | — | |
@@ -1788,3 +1789,120 @@ have, and it is the last file with that literal → whichever unit owns the feed
 details page hides its vertical scroll indicator (`showsVerticalScrollIndicator={false}`) on a page
 that can run several screens, which is Scroll views' business and F3's to settle app-wide rather
 than one screen's to flip.
+
+### S10 alerts — audited 2026-08-27 · AND-pass: 2026-08-27
+Chapters read: Managing notifications (`managing-notifications`), Notifications (`notifications`),
+Toggles (`toggles`), Scroll views (`scroll-views`); Feedback and Loading were read earlier the same
+day for S12 and are reused rather than refetched.
+
+**The board was wrong about what this unit is.** The inventory called S10 "Studio —
+`app/(tabs)/studio.tsx`, `studio-feed-view-model`". The route named `studio` renders the
+**notifications inbox**, which the tab bar labels *Alerts*; the creations grid it was named for has
+moved to the profile tab (S13). `lib/studio-feed-view-model.ts` — the masonry builder for that grid —
+is imported by nothing but its own test: **dead code, deleted here with its test**. That is the
+fourth dead-code find in this tree (S9's unreachable tail, S8's `TemplateCatalogEntry`, S11's five
+never-rendered components), and the first that was load-bearing in the *plan* rather than the code.
+The inventory row now names the surface that exists.
+
+- [V][both] **The screen and the tab that opens it called the destination two different things.**
+  The tab bar's label, the navigator's `title` and the badge's screen-reader announcement
+  ("Alerts, 3 unread") all say *Alerts*; the screen titled itself **Notifications** and named four of
+  its controls to match ("Refresh notifications", "Mark all notifications read", "Could not load
+  notifications", "That notification change did not save"). Design principles' Familiarity: "once
+  you establish a behavior or appearance for an element, apply it throughout" — F6 applied exactly
+  this rule to the product's own name → **fixed**: the screen and its controls say *Alerts*. One
+  string deliberately keeps the platform's word — "Notifications are disabled for this device.
+  Re-enable them in system settings" points at iOS Settings ▸ Notifications, and has to name what
+  the reader will find there.
+- [V][both] **An arriving alert shouted over the app you were already holding — including over the
+  list it was about to join.** `setNotificationHandler` returned the background presentation
+  verbatim: `shouldShowBanner: true, shouldPlaySound: true`, unconditionally. Notifications is
+  explicit, and gives the exact case: "Handle notifications gracefully when your app is in the
+  foreground … present the information in a way that's discoverable but not distracting or
+  invasive … when a new message arrives in a mailbox that people are currently viewing, Mail simply
+  adds it to the list of unread messages because sending a notification about it would be
+  unnecessary and distracting." → **fixed**: `resolveForegroundPresentation` never plays a sound
+  over the foregrounded app, and drops the banner only while the Alerts screen is the one on screen
+  (the screen reports itself in and out of view through `useFocusEffect`). Everywhere else the
+  banner stays — a finished render is worth surfacing — and the alert always joins Notification
+  Center for when the phone is put down.
+  - **Suppressing a banner is only honest if the app shows the alert itself**, and nothing listened
+    for an arrival: the tab badge learned about one on its next poll, up to a minute later. A
+    received-listener now refreshes the badge and the list the moment one lands. That is the second
+    half of the chapter's sentence — "subtly inserting new data into the current view" — and it is
+    what makes the first half safe.
+- [V][both] **Two live rows sent the reader to the screen they were already on.** "New follower"
+  carries `deep_link: '/studio'` in production (2 of this account's 47 rows), and the screen's
+  fallback for an unresolvable link was `router.push('/studio')` — the same route. Notifications:
+  "When people tap a notification … they expect your app to display related content"; a follow
+  notification landing on the notification list displays none. → **fixed** on the client:
+  `deepLinkTargetsAlertsScreen` recognises a link pointing back at this screen, and such a row is
+  marked read and left at that; the fallback is gone. Verified on the emulator by tapping the
+  `@hello-athul followed you.` row: the list did not move. The root layout keeps its own `/studio`
+  fallback, and should — a tap from outside the app has to land somewhere.
+  - The other half is the server's: a follow's destination should be the follower's profile. → S26.
+- [D][both] **The screen kept its own clock, and it got worse exactly where the shared one gets
+  better.** `formatNotificationTime` stopped at days, so alerts read "51d ago", "57d ago", "78d ago";
+  `formatRelativeTime` — the feed, post details and every card — continues into weeks and then an
+  absolute date. Below seven days the two produce identical strings, so adopting the shared one
+  changes nothing recent and turns the tail into "Jul 7 · Jul 1 · Jun 10". Captured before and after
+  → **fixed**.
+- [D][both] **The list hides its own scroll indicator, and its bounce.** 47 rows in a `ScrollView`
+  with `showsVerticalScrollIndicator={false}`, `bounces={false}` and `overScrollMode="never"`. Scroll
+  views: the indicator exists to show "whether the currently visible content is near the beginning,
+  middle, or end", and "if you build custom scrolling for a view, make sure your scroll indicators
+  use the elastic behavior that people expect" → **deferred to F3, deliberately, with counts**: the
+  hidden indicator is app-wide (17 call sites) and the disabled bounce is two files (this screen and
+  `home-dashboard`). A bounce policy that differs per screen is exactly what the program's own
+  ordering rule says to settle once in the system layer rather than screen by screen.
+- [P][both] **Icon ratchet: 4 → 0.** The same toggle was drawn at 34pt in the push card and 32pt in
+  the preference rows — one control, two sizes on one screen; both are `icon.hero` now. The two 21pt
+  category glyphs moved to `icon.default`. The toggle's "on" green was a one-off `#6ee7b7` where the
+  palette has `colors.success`.
+- [P][both] Verified clean: **the permission ask explains itself before the system asks.** The push
+  card names what the reader would get ("Get finished renders, creator activity, and unlock updates
+  as native alerts") and only then triggers the OS prompt, and the denied state routes to Settings
+  rather than re-prompting — the pre-permission pattern Managing notifications and Privacy both ask
+  for.
+- [P][both] Verified clean: **settings are changeable in the app.** Managing notifications:
+  "you must also provide an in-app settings screen that lets people change their choice." The Alert
+  types card does, per category, and each row is a `switch` with `accessibilityState`.
+- [P][both] Verified clean: **the toggles carry state in shape as well as colour.** Toggles: "Avoid
+  relying solely on different colors to communicate state" — the Lucide glyph moves its knob too.
+- [P][both] Noted, not chased: **the category palette is private to this screen.** Four raw hexes
+  (`#a78bfa`, `#fb7185`, `#fbbf24`, `#67e8f9`) in a design system that already has accent tokens —
+  three map cleanly (`motion`, `commerce`, `info`) and the fourth, for creator activity, has no
+  token at all. Changing three and leaving one would make the screen *less* internally consistent
+  than it is → **F2**, with that mapping.
+
+Guard added: `__tests__/hig-alerts-screen.test.ts` (16 cases) — the screen is titled the way the tab
+that opens it is labelled and names its own controls the same, while the copy that points at the
+platform keeps the platform's word; a foreground alert never plays a sound and drops its banner only
+where it would repeat what is on screen, still filing itself in Notification Center; the screen
+reports itself in and out of view, and the badge and list refresh the moment an alert lands; a link
+that points back at this screen is recognised (with or without a query, trailing slash, or the
+`(tabs)` prefix) and every other destination is left alone; such a row is marked read and nothing is
+pushed; the root layout keeps the fallback that is still right; times read through the shared
+formatter; the toggles carry state in shape, at one size, in the app's own green.
+
+**AND-pass 2026-08-27** (mandatory: this unit changes navigation behaviour and notification
+presentation). Pixel_9a, Android 16, dev client on the worktree's Metro after a forced reload. The
+screen reads *Alerts*; a row with a real destination still opens the viewer and hardware back
+returns to the list intact; the `@hello-athul followed you.` row was tapped and the list did not
+move. Edge-to-edge unchanged. `logcat` clear of `FATAL`/`SIGSEGV`, app process alive throughout.
+
+**Hand-offs to S26 (server-side, deliberately not on this mobile branch):**
+- **Neither platform's per-category delivery control exists.** iOS: the Expo payload sets a
+  transport `priority` but no `interruptionLevel`, where Managing notifications says "you need to
+  specify a system-defined interruption level for each noncommunication notification you send" —
+  the app's three categories map to it directly (generation and commerce *active*, social
+  *passive*). Android: `lib/notifications.ts` registers exactly one channel, named "Default", so a
+  user cannot silence creator activity in system settings without silencing finished renders, even
+  though the in-app card already models those three categories. The channel half is client-side but
+  pointless until the server sends a `channelId`, so both halves belong to one change.
+- **Row bodies describe the app's policy instead of the event.** Every social row reads "Creator
+  activity is grouped here to keep your phone quiet" — the same sentence under "Someone remixed your
+  post" and "Someone saved your post", where the chapter asks for "concise, informative"
+  content and the row has room to say *which* post. "Your image is ready / Open it in your mobile
+  history" is the other shape the chapter warns about: "avoid sending a notification that tells
+  people to perform specific tasks within your app". → X3 owns the words, S26 the payload.
