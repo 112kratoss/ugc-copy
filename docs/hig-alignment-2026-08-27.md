@@ -422,7 +422,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S7 unlocks | 4 | done | 0V/1D/4P | the remix prompt is the tenth sheet on sheet-chrome; rows are labelled buttons; one price vocabulary |
 | S18 marketplace | 4 | done | 0V/2D/1P | a paid unlock confirms before it spends; a short balance is told, not failed; one price vocabulary |
 | S19 templates | 4 | done | 0V/0D/3P | already the app's best-behaved commerce surface; icons and tokens snapped to the ramp |
-| S20 seller dashboard | 4 | todo | — | |
+| S20 seller dashboard | 4 | done | 0V/0D/3P | numbers over charts (verified right); metrics readable by VoiceOver; enums stopped talking like the database |
 | S21 invite | 4 | todo | — | |
 | S24 delete account | 4 | todo | — | |
 | S26 notifications | 4 | todo | — | |
@@ -2717,3 +2717,19 @@ session's Loading/Feedback/IAP distillations.
 iOS + AND-pass: production currently has no published templates, so both platforms render the
 honest empty state ("No templates yet") — which is itself the Feedback rule at work; poster and
 run stages are covered by the vm suites and the token swaps typecheck-verified.
+
+### S20 seller dashboard — audited 2026-08-28 · AND-pass: 2026-08-28
+Chapters read: Charting data (`charting-data`), plus Lists/Feedback distillations.
+- Already right: two plain-number metric cards instead of a chart (Charting data: don't chart when
+  numbers carry it), labelled listing rows with chevrons and press feedback, load-more, an empty
+  state that offers "Create a listing", error + retry, deep-link fallback.
+- [P][both] Metric cards were invisible to VoiceOver as units → grouped (`accessible` +
+  "Total sales: $0" labels).
+- [P][both] Raw enum captions ("published · public") read as developer vocabulary → sentence-cased
+  ("Published · Public").
+- [P][both] Three 22pt icons → `icon.feature` (budget 3→0); the metric circle's raw white rgba →
+  `colors.surface`.
+- Noted for X4: the "Refresh dashboard" button stands where iOS offers pull-to-refresh — the
+  refresh-control question belongs to the app-wide feedback pass, not one screen.
+iOS + AND-pass: verified on both with live data (12 unlocks sold, three listings); the skeleton
+state was also captured on iOS mid-load.

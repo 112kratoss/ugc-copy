@@ -75,7 +75,7 @@ const LEGACY_SIZES: Record<string, number> = {
   'app/post/[id].tsx': 0,
   'app/post/new.tsx': 21,
   'app/r/[code].tsx': 5,
-  'app/seller-dashboard.tsx': 3,
+  'app/seller-dashboard.tsx': 0,
   'app/settings.tsx': 0,
   'app/viewer.tsx': 14,
   'components/creator-profile-screen.tsx': 0,

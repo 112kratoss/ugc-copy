@@ -68,8 +68,8 @@ export default function SellerDashboardScreen() {
       {!isLoading && !error ? (
         <>
           <View style={{ flexDirection: 'row', gap: 12 }}>
-            <MetricCard icon={<DollarSign size={22} color={appTheme.colors.info} />} label="Total sales" value={formatUsdCents(summary.earningsUsdCents)} />
-            <MetricCard icon={<BarChart3 size={22} color={appTheme.colors.primary} />} label="Unlocks sold" value={String(summary.salesCount)} />
+            <MetricCard icon={<DollarSign size={appTheme.icon.feature} color={appTheme.colors.info} />} label="Total sales" value={formatUsdCents(summary.earningsUsdCents)} />
+            <MetricCard icon={<BarChart3 size={appTheme.icon.feature} color={appTheme.colors.primary} />} label="Unlocks sold" value={String(summary.salesCount)} />
           </View>
 
           <SecondaryButton label="Refresh dashboard" onPress={() => void refetch()} />
@@ -85,7 +85,7 @@ export default function SellerDashboardScreen() {
               >
                 <Card accent={item.bundle?.accessMode === 'free' ? 'workflow' : 'amber'}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                    <PackageCheck size={22} color={item.bundle?.accessMode === 'free' ? appTheme.colors.success : appTheme.colors.commerce} />
+                    <PackageCheck size={appTheme.icon.feature} color={item.bundle?.accessMode === 'free' ? appTheme.colors.success : appTheme.colors.commerce} />
                     <AppText numberOfLines={1} variant="cardTitle" style={{ flex: 1 }}>
                       {item.title || 'Untitled listing'}
                     </AppText>
@@ -95,7 +95,7 @@ export default function SellerDashboardScreen() {
                     {item.bundle?.salesCount ?? 0} sales · {formatUsdCents(item.bundle?.earningsUsdCents)} tracked earnings
                   </AppText>
                   <AppText variant="caption" color="faint">
-                    {item.bundle?.status ?? 'draft'} · {item.visibility}
+                    {sentenceLabel(item.bundle?.status ?? 'draft')} · {sentenceLabel(item.visibility)}
                   </AppText>
                 </Card>
               </Pressable>
@@ -122,12 +122,17 @@ export default function SellerDashboardScreen() {
   );
 }
 
+/** Raw enum values ("draft", "public") read as developer vocabulary in a caption. */
+function sentenceLabel(value: string) {
+  return value ? value[0].toUpperCase() + value.slice(1).replaceAll('_', ' ') : value;
+}
+
 function MetricCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
-    <View style={{ flex: 1 }}>
+    <View accessible accessibilityLabel={`${label}: ${value}`} style={{ flex: 1 }}>
       <Card>
         <View style={{ gap: 10 }}>
-          <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.07)', alignItems: 'center', justifyContent: 'center' }}>
+          <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: appTheme.colors.surface, alignItems: 'center', justifyContent: 'center' }}>
             {icon}
           </View>
           <AppText variant="caption" color="faint">{label}</AppText>
