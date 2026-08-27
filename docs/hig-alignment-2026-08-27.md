@@ -934,16 +934,23 @@ a button displays an interactive image · a custom video experience must referen
 interface of the system player, because a slight divergence leaves people unsure which habits still
 apply · always display video at its original aspect ratio · never let audio from two sources mix.
 
-- [V][both] **The feed resized itself under a stationary reader.** Roughly a third of the live grid
-  reaches the client with no media dimensions — every legacy generation cover is serialised with
-  `width: null` (19 of them against 32 public posts, of which 25 of 26 media rows do carry
-  dimensions), so those cards are laid out at a hash-picked placeholder height from
-  `[218, 248, 284]` and measured afterwards with `Image.loadAsync`. The measurement was applied the
-  moment it landed, including to cards already on screen. Caught on the Pixel_9a by capturing the
-  same resting scroll position twice a second apart: one card grew, another shrank ~80px, and both
-  columns beneath them moved. The 50ms coalescing added earlier reduced the number of reflows but
-  not the class — the code's own comment ("cards visibly jumping as you scrolled into them") is a
-  record of the same thing.
+- [V][both] **The feed resized itself under a stationary reader.** About a sixth of the live grid
+  reaches the client with no media dimensions, so those cards are laid out at a hash-picked
+  placeholder height from `[218, 248, 284]` and measured afterwards with `Image.loadAsync`. The
+  measurement was applied the moment it landed, including to cards already on screen. Caught on the
+  Pixel_9a by capturing the same resting scroll position twice a second apart: one card grew,
+  another shrank ~80px, and both columns beneath them moved. The 50ms coalescing added earlier
+  reduced the number of reflows but not the class — the code's own comment ("cards visibly jumping
+  as you scrolled into them") is a record of the same thing.
+  - **Corrected 2026-08-27, after this entry was first written.** The original text blamed legacy
+    generation covers (`showcase-feed.ts`'s `width: null`) and counted 19 of them. That path is a
+    *fallback*, reached only when the posts read returns null, so it is not normally in the feed at
+    all. The real source is `buildLegacyPostMediaItems`: 8 public posts predate `post_media` and have
+    no row there, 3 of them text (which the masonry drops), leaving **5 of the 29 media cards** — and
+    every `post_media` row that does exist carries dimensions. Those 5 each have a generation with a
+    ready preview, which `resolvePostRowsToFeedItems` grafts onto the cover; it grafts the preview
+    *URL* but not the preview's dimensions, which is precisely the gap. Same defect, same fix, right
+    mechanism.
   Collections, iOS: "Use caution when making dynamic layout changes … If possible, try to avoid
   changing the layout while people are viewing and interacting with it, unless it's in response to
   an explicit action." → **fixed**: `partitionAspectRatioUpdates` splits each flush into ratios that
@@ -956,9 +963,11 @@ apply · always display video at its original aspect ratio · never let audio fr
     away keeps its placeholder height, so its media stays `cover`-cropped for that visit. A wrong
     crop is a smaller harm than a moving page, and the crop corrects itself the moment the card
     leaves the viewport.
-  - The root cause is a payload gap, not a client bug: `showcase-feed.ts` has no dimensions to send
-    for a legacy cover because `generations` has no width/height columns. Filling them would retire
-    this machinery — **out of scope here** (a web/API change plus a backfill), worth its own pass.
+  - The root cause is a payload gap, not a client bug: the graft has no dimensions to send because
+    `generations` carries none. Filling them removes the measure step for the cards that still take
+    it — **out of scope here** (a web/API change plus a backfill), taken up immediately afterwards on
+    `feed-media-dimensions`. The client-side hold stays regardless: it is what protects any card
+    whose measurement lands late, whatever the reason.
 - [V][both] **The play badge stayed up while the video played.** `VideoCornerPlay` rendered on any
   video card, elected or not, so a tile running its muted looping preview still wore a filled
   triangle in a circle — the shape of the system's play control — inviting you to start something
@@ -1077,5 +1086,5 @@ tab bar.
 
 **Open remainder**: card removal animation → X4; context menus → the phase that can settle a native
 module for every surface; long prompt-derived accessibility labels and the filter row's `button`
-role → X5; supplying dimensions for legacy generation covers from the API, which would retire the
-measure-and-hold machinery entirely → a web-side pass of its own.
+role → X5; supplying preview dimensions from the API for the covers that predate `post_media`,
+which removes the measure step for the cards that still take it → `feed-media-dimensions`.
