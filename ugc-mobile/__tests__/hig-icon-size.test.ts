@@ -46,10 +46,12 @@ const ICON_RAMP = new Set<number>([
  * controls on eleven modal surfaces moved to `CloseGlyph` at the same size
  * (create menu 1→0, home side menu 12→11, unlock prompt 3→2, composer 22→21,
  * creator screen 25→24), and by N3 when the workspace-menu control moved to one
- * shared glyph at one size (home dashboard 4→3).
+ * shared glyph at one size (home dashboard 4→3). S5 took the showcase feed's
+ * four files to zero: one `FeedMediaPlate` replaced four hand-drawn placeholder
+ * circles, and the surface's remaining literals moved onto the ramp.
  */
 const LEGACY_SIZES: Record<string, number> = {
-  'app/(tabs)/showcase.tsx': 3,
+  'app/(tabs)/showcase.tsx': 0,
   'app/(tabs)/studio.tsx': 2,
   'app/auth.tsx': 3,
   'app/help.tsx': 3,
@@ -64,8 +66,8 @@ const LEGACY_SIZES: Record<string, number> = {
   'components/creator-profile-screen.tsx': 11,
   'components/edit-profile-screen.tsx': 2,
   'components/feed-card-shell.tsx': 1,
-  'components/feed-pagination-footer.tsx': 1,
-  'components/feed-video-preview.tsx': 1,
+  'components/feed-pagination-footer.tsx': 0,
+  'components/feed-video-preview.tsx': 0,
   'components/home-dashboard.tsx': 3,
   'components/home-feed-card.tsx': 2,
   'components/home-side-menu.tsx': 11,
@@ -79,7 +81,7 @@ const LEGACY_SIZES: Record<string, number> = {
   'components/post-resource-references.tsx': 3,
   'components/profile-dashboard.tsx': 12,
   'components/profile-feed-card.tsx': 6,
-  'components/showcase-media-preview.tsx': 2,
+  'components/showcase-media-preview.tsx': 0,
   'components/unlock-remix-prompt.tsx': 2,
 };
 

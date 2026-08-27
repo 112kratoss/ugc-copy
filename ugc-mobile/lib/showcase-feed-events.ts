@@ -13,6 +13,20 @@ export const SHOWCASE_PLAYBACK_VIEWABILITY = Object.freeze({
   minimumViewTime: 180,
 });
 
+/**
+ * "Any pixel of this card is on screen." Deliberately the loosest of the three
+ * configs: it answers whether resizing a card would move something the reader
+ * can see, and a card scrolled almost out of the top still shifts the whole
+ * column beneath it when it changes height.
+ *
+ * `1` rather than `0` because a zero threshold counts an item with none of
+ * itself on screen as viewable, which would hold every rendered card forever.
+ */
+export const SHOWCASE_ONSCREEN_VIEWABILITY = Object.freeze({
+  itemVisiblePercentThreshold: 1,
+  minimumViewTime: 0,
+});
+
 export const SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY = Object.freeze({
   itemVisiblePercentThreshold: 50,
   minimumViewTime: 1000,

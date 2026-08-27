@@ -39,10 +39,6 @@ vi.mock('@/components/feed-video-preview', () => ({
   FeedVideoPreview: (props: MockProps) => React.createElement('feed-video-preview', props),
 }));
 
-vi.mock('@/lib/theme', () => ({
-  appTheme: {},
-}));
-
 import {
   ShowcaseMediaPreview,
 } from '../components/showcase-media-preview';
@@ -253,6 +249,60 @@ describe('ShowcaseMediaPreview', () => {
     expect(list.props.initialNumToRender).toBe(1);
     expect(list.props.maxToRenderPerBatch).toBe(2);
     expect(list.props.windowSize).toBe(3);
+  });
+
+  /**
+   * The feed suspends its own vertical scrolling while a card's media is swiped
+   * sideways, so these reports are a lock on the whole list. Gestures: "if you
+   * don't clearly communicate why a gesture doesn't work, people might think
+   * your app has frozen" — and a lock that is taken and never given back is
+   * exactly that, with the feed unable to scroll at all.
+   */
+  describe('reporting a sideways drag to the feed', () => {
+    function renderCarousel(onScrollToggle: (scrolling: boolean) => void) {
+      const tree = renderPreview(
+        <ShowcaseMediaPreview
+          accent="#60a5fa"
+          height={180}
+          mediaItems={[
+            media({ id: 'image-1', previewUrl: 'https://cdn.example.com/image-1.preview.webp' }),
+            media({ id: 'image-2', previewUrl: 'https://cdn.example.com/image-2.preview.webp' }),
+          ]}
+          onScrollToggle={onScrollToggle}
+          radius={12}
+          recyclingKey="showcase:post-1"
+          width={160}
+        />
+      );
+      const [list] = findAllByNodeType(tree, 'flat-list');
+      return { tree, list };
+    }
+
+    it('reports one release for a drag that ends and then runs out of momentum', () => {
+      const onScrollToggle = vi.fn();
+      const { list } = renderCarousel(onScrollToggle);
+
+      renderer.act(() => {
+        list.props.onScrollBeginDrag();
+        list.props.onScrollEndDrag();
+        list.props.onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 160 } } });
+      });
+
+      // Two `false`s from one drag would take the feed's counter below zero.
+      expect(onScrollToggle.mock.calls.map(([scrolling]) => scrolling)).toEqual([true, false]);
+    });
+
+    it('releases the lock when the cell is torn down mid-drag', () => {
+      const onScrollToggle = vi.fn();
+      const { tree, list } = renderCarousel(onScrollToggle);
+
+      renderer.act(() => { list.props.onScrollBeginDrag(); });
+      expect(onScrollToggle).toHaveBeenLastCalledWith(true);
+
+      renderer.act(() => { tree.unmount(); });
+
+      expect(onScrollToggle).toHaveBeenLastCalledWith(false);
+    });
   });
 
   it('does not disguise a legacy post-level source URL as an image preview', () => {

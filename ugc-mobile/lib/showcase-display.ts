@@ -1,3 +1,4 @@
+import { getShowcaseFeedStreamUrl, getShowcasePreviewMediaItems } from '@/lib/showcase-media';
 import type { ShowcaseFeedItem } from '@/lib/types';
 
 export function isTextOnlyShowcasePost(item: ShowcaseFeedItem) {
@@ -10,6 +11,30 @@ export function getShowcasePostDisplayText(item: ShowcaseFeedItem) {
 
 export function isShowcaseVideoPreviewCandidate(item: ShowcaseFeedItem) {
   return Boolean(item.mediaUrl) && (item.mediaKind === 'video' || item.category === 'video');
+}
+
+/**
+ * Whether a feed tile's cover is actually streaming rather than showing its
+ * poster — which is what decides if the corner play badge still belongs.
+ *
+ * The badge wears the system's play control: a filled triangle in a circle.
+ * Playing video asks a custom player to "reference the behavior and interface
+ * of the system video player", because "a custom experience that diverges
+ * slightly from the system-provided experience can cause frustration". A play
+ * control drawn over a video that is already playing is exactly that divergence
+ * — so the badge marks a poster, and disappears once the poster does.
+ *
+ * Election is not enough on its own: a card can win the autoplay slot and still
+ * show its poster forever when the server decided this item is poster-only
+ * (`feedStreamUrl` null), and Reduce Motion turns every activation off. Both
+ * cases have to keep the badge, which is why the caller passes `active` already
+ * resolved against the motion preference.
+ */
+export function isShowcaseCoverVideoStreaming(item: ShowcaseFeedItem, active: boolean) {
+  if (!active) return false;
+
+  const cover = getShowcasePreviewMediaItems(item)[0];
+  return Boolean(cover && cover.mediaKind === 'video' && getShowcaseFeedStreamUrl(cover));
 }
 
 export function selectActiveShowcaseVideoId(items: ShowcaseFeedItem[]) {

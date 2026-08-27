@@ -136,6 +136,62 @@ export function getShowcaseMediaHeight(
   ));
 }
 
+/**
+ * Splits freshly measured aspect ratios into the ones that may be applied now
+ * and the ones that have to wait.
+ *
+ * A resolved ratio changes a card's height, and Collections is explicit about
+ * what that costs: "If possible, try to avoid changing the layout while people
+ * are viewing and interacting with it, unless it's in response to an explicit
+ * action." Roughly a third of the live feed reaches the grid without media
+ * dimensions — every legacy generation cover carries `width: null` — so those
+ * cards are laid out at a placeholder height and measured afterwards. Applying
+ * the measurement the moment it lands is what makes a resting feed resize
+ * itself under the reader.
+ *
+ * So a ratio for a card that is currently on screen is held, and released the
+ * next time viewability reports that the card has left. The cost of the rule is
+ * that such a card keeps its placeholder height, and therefore a cover crop,
+ * until it scrolls away — a wrong crop is a smaller harm than a moving page.
+ */
+export function partitionAspectRatioUpdates(
+  updates: Record<string, number>,
+  onScreenCardIds: ReadonlySet<string>,
+): { apply: Record<string, number>; hold: Record<string, number> } {
+  const apply: Record<string, number> = {};
+  const hold: Record<string, number> = {};
+
+  for (const [cardId, aspectRatio] of Object.entries(updates)) {
+    if (onScreenCardIds.has(cardId)) {
+      hold[cardId] = aspectRatio;
+    } else {
+      apply[cardId] = aspectRatio;
+    }
+  }
+
+  return { apply, hold };
+}
+
+/**
+ * Folds resolved ratios into the committed map, returning the *same* object
+ * when nothing actually changed so the screen can skip a re-render of every
+ * mounted cell on a pointer comparison.
+ */
+export function mergeAspectRatios(
+  current: Record<string, number>,
+  updates: Record<string, number>,
+): Record<string, number> {
+  let next: Record<string, number> | null = null;
+
+  for (const [cardId, aspectRatio] of Object.entries(updates)) {
+    if (current[cardId] === aspectRatio) continue;
+    next = next ?? { ...current };
+    next[cardId] = aspectRatio;
+  }
+
+  return next ?? current;
+}
+
 function cardBadge(item: ShowcaseFeedItem) {
   if (item.asset?.accessMode === 'free') return 'Free unlock';
   if (item.asset?.priceQuote?.formatted) return item.asset.priceQuote.formatted;

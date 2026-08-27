@@ -1,12 +1,14 @@
 import { Images } from 'lucide-react-native';
 import { Image } from 'expo-image';
-import { useEffect, useState } from 'react';
-import { AccessibilityInfo, FlatList, Platform, Pressable, Text, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { FlatList, Platform, Pressable, Text, View } from 'react-native';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
+import { FeedMediaPlate } from '@/components/feed-media-plate';
 import { appTheme } from '@/lib/theme';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { IMMERSIVE_HORIZONTAL_LIST_TUNING } from '@/lib/media-performance';
+import { useReducedMotion } from '@/lib/motion';
 import {
   getShowcaseFeedStreamUrl,
   getShowcaseMediaPreviewUrl,
@@ -49,7 +51,7 @@ export function ShowcaseMediaPreview({
   videoContentFit = 'contain',
   width,
 }: ShowcaseMediaPreviewProps) {
-  const reduceMotionEnabled = useReduceMotionEnabled();
+  const reduceMotionEnabled = useReducedMotion();
   const resolvedVideoActivation = reduceMotionEnabled ? 'never' : videoActivation;
 
   if (!mediaItems.length) return null;
@@ -101,6 +103,7 @@ function ShowcaseMediaCarousel({
   width,
 }: ShowcaseMediaPreviewProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
+  const reportDragging = useCarouselDragReporter(onScrollToggle);
 
   return (
     <View style={{ height, width, overflow: 'hidden' }}>
@@ -140,12 +143,12 @@ function ShowcaseMediaCarousel({
           );
         }}
         showsHorizontalScrollIndicator={false}
-        onScrollBeginDrag={() => onScrollToggle?.(true)}
-        onScrollEndDrag={() => onScrollToggle?.(false)}
+        onScrollBeginDrag={() => reportDragging(true)}
+        onScrollEndDrag={() => reportDragging(false)}
         onMomentumScrollEnd={(event) => {
           const index = Math.round(event.nativeEvent.contentOffset.x / width);
           setCurrentIndex(Math.max(0, Math.min(mediaItems.length - 1, index)));
-          onScrollToggle?.(false);
+          reportDragging(false);
         }}
         style={{ flex: 1 }}
         windowSize={IMMERSIVE_HORIZONTAL_LIST_TUNING.windowSize}
@@ -165,11 +168,11 @@ function ShowcaseMediaCarousel({
           borderColor: 'rgba(255,255,255,0.1)',
           backgroundColor: 'rgba(3,3,6,0.68)',
           paddingHorizontal: 8,
-          paddingVertical: 4,
+          paddingVertical: 1,
         }}
       >
-        <Images size={12} color="#ffffff" />
-        <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '800' }}>
+        <Images size={appTheme.icon.xs} color={appTheme.colors.text} />
+        <Text style={{ color: appTheme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>
           {currentIndex + 1}/{mediaItems.length}
         </Text>
       </View>
@@ -280,20 +283,7 @@ function ShowcaseMediaSlide({
             style={{ position: 'absolute', inset: 0 }}
           />
         ) : (
-          <View
-            style={{
-              width: 46,
-              height: 46,
-              borderRadius: 23,
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderWidth: 1,
-              borderColor: `${accent}66`,
-              backgroundColor: `${accent}22`,
-            }}
-          >
-            <Images size={19} color="#ffffff" />
-          </View>
+          <FeedMediaPlate accent={accent} glyph={Images} />
         )}
       </View>
     );
@@ -330,20 +320,34 @@ function ShowcaseMediaSlide({
   );
 }
 
-function useReduceMotionEnabled() {
-  const [enabled, setEnabled] = useState(false);
+/**
+ * Reports this carousel's drag state to the feed, exactly once per transition.
+ *
+ * The feed suspends its own vertical scrolling while a card's media is being
+ * swiped sideways, so the report is a lock, and two things about the raw
+ * handlers make a naive lock unsafe. A single drag emits `false` twice — once
+ * at `onScrollEndDrag` and again when momentum expires — so a feed that counts
+ * concurrent drags would count past the floor. And a cell recycled or refetched
+ * out from under a finger emits the opening `true` and never its `false`, which
+ * leaves the feed permanently unable to scroll: Gestures' "if you don't clearly
+ * communicate why a gesture doesn't work, people might think your app has
+ * frozen", except here it really is stuck.
+ *
+ * So transitions are deduplicated per carousel, and unmounting releases a lock
+ * this instance still holds.
+ */
+function useCarouselDragReporter(onScrollToggle?: (scrolling: boolean) => void) {
+  const draggingRef = useRef(false);
+  const toggleRef = useRef(onScrollToggle);
+  toggleRef.current = onScrollToggle;
 
-  useEffect(() => {
-    let mounted = true;
-    void AccessibilityInfo.isReduceMotionEnabled().then((value) => {
-      if (mounted) setEnabled(value);
-    });
-    const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setEnabled);
-    return () => {
-      mounted = false;
-      subscription.remove();
-    };
+  const report = useCallback((dragging: boolean) => {
+    if (draggingRef.current === dragging) return;
+    draggingRef.current = dragging;
+    toggleRef.current?.(dragging);
   }, []);
 
-  return enabled;
+  useEffect(() => () => report(false), [report]);
+
+  return report;
 }

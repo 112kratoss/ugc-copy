@@ -52,9 +52,13 @@ home-indicator treatment · interrupted transition (navigate mid-animation) · A
 
 ### Mechanics
 
-- Captures: `xcrun simctl io booted screenshot <file>` (the Simulator MCP panel doesn't attach on this
-  Mac — memory `ios-simulator-panel-attach-fails`); drive interactions by hand or MCP tap if it works
-  headless. Android mechanics: see *Android parity protocol*.
+- Captures: `xcrun simctl io booted screenshot <absolute path>` — a relative path fails with a bogus
+  "volume is read only"; the Simulator MCP panel still doesn't attach on this Mac (memory
+  `ios-simulator-panel-attach-fails`). **Driving iOS headless (settled in S5):** the Simulator MCP's
+  `swipe` works without the panel, so scrolling and gestures are automatable; routes are reachable
+  by deep link — `xcrun simctl openurl booted "magicbooklet:///(tabs)/showcase?filter=all"` (the
+  app's own scheme, once the dev client has the bundle; the `exp+…` URL only loads Metro). Android
+  mechanics: see *Android parity protocol*.
 - Settings toggles: `xcrun simctl ui booted appearance …` is N/A (app is dark-only); Dynamic Type via
   Settings app in simulator, or `simctl status_bar` for bar states.
 - Many behaviors are pinned by vitest (`__tests__/motion.test.tsx`, `magic-tab-bar*`, showcase cadence
@@ -102,10 +106,11 @@ re-read the codebase broadly or ask for past-chat context.
   `ugc-mobile/` has `.env.local` copied and `npm install` run; if "Cannot find module" ever appears
   inside packages there, run `npm ci` (corrupt worktree copy).
 - **Where the work currently sits (2026-08-27):** Phases 1–2 are closed on the `hig-alignment`
-  branch and **deliberately not merged** — `main` does not have F4, F6, N1, N2 or N3. The user's call
-  at the Phase 2 boundary was to keep accumulating on the branch, so branch from it rather than from
-  `main`, and expect the merge question again at the next boundary. Next `todo` on the board: **S5
-  showcase feed**, which opens Phase 3.
+  branch and **deliberately not merged** — `main` does not have F4, F6, N1, N2, N3 or S5. The user's
+  call at the Phase 2 boundary was to keep accumulating on the branch, so branch from it rather than
+  from `main`, and expect the merge question again at the next boundary. Phase 3 has opened: S5 is
+  closed, and the next `todo` on the board is **S6 + S6a/b/c, the immersive viewer and its sheets** —
+  the deepest surface in the programme.
 - **Merging**: at phase boundaries, after `npm test` + `npm run typecheck` pass in the worktree's
   `ugc-mobile/`, ask the user before merging `hig-alignment` → `main` (and never push to `main`
   during an in-flight mobile store release). Store delivery rides the next release train
@@ -366,13 +371,13 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | F1 typography | 1 | partial | — | 11pt floor + truncation guarded (PR #83); Dynamic Type policy open |
 | F2 color/dark/materials | 1 | partial | — | 4.5:1 body contrast guarded (PR #83); materials/elevation open |
 | F3 layout/safe areas | 1 | partial | — | keyboard avoidance rebuilt + guarded (PR #83); safe-area/grid sweep open |
-| F4 iconography/images | 1 | done | 1V/3D/4P | one stroke weight app-wide; share glyph per platform; size ramp on a ratchet |
+| F4 iconography/images | 1 | done | 1V/3D/4P | one stroke weight app-wide; share glyph per platform; size ramp on a ratchet (S5's four files are at zero) |
 | F5 controls/input | 1 | partial | — | ≥44pt hit regions guarded via lib/hit-target.ts (PR #83); non-geometric rules open |
 | F6 branding boundary | 1 | done | 1V/1D/3P | the product now spells its own name one way |
 | N1 tab bar/toolbars/status bar | 2 | done | 3V/2D/5P | Alerts badge; one Back glyph per platform; every view title bounded and static |
 | N2 modality map/sheets/alerts/gestures | 2 | done | 4V/4D/4P | one sheet grabber that actually drags; menus off `Alert`; one Close control |
 | N3 side menus/shell motion | 2 | done | 1V/2D/4P | the menu has a visible way in on every screen that offers it, and closes the way it opened |
-| S5 showcase feed | 3 | todo | — | |
+| S5 showcase feed | 3 | done | 2V/3D/7P | the grid holds still while you read it; the play badge means "not playing" |
 | S6+S6a/b/c viewer & sheets | 3 | todo | — | |
 | S9 creation tool | 3 | todo | — | |
 | S8 create hub | 3 | todo | — | |
@@ -914,3 +919,163 @@ touches the keyboard, blur or the tab bar itself.
 
 **Open remainder**: Alerts and Profile still have no route to the workspace menu (S10, S13); the
 drawer's 40pt entrance travel and the tab cross-fade both go to X1.
+
+### S5 showcase feed — audited 2026-08-27 · AND-pass: 2026-08-27
+Chapters read: Collections (`collections`), Image views (`image-views`), Playing video
+(`playing-video`). Carrying N2's deferral of context menus to the surface passes.
+
+Rules in checkable form: prefer the standard row or grid layout · a table, not a collection, for
+text · adequate padding around images so nothing overlaps · tap to select, touch and hold to edit,
+swipe to scroll are the defaults, add gestures only when the app needs them · consider animating
+insertions, deletions and reorders · **avoid changing the layout while people are viewing and
+interacting with it, unless it's in response to an explicit action** · take care overlaying text on
+images: contrast well, and give the text a shadow or background layer · an image view displays,
+a button displays an interactive image · a custom video experience must reference the behaviour and
+interface of the system player, because a slight divergence leaves people unsure which habits still
+apply · always display video at its original aspect ratio · never let audio from two sources mix.
+
+- [V][both] **The feed resized itself under a stationary reader.** Roughly a third of the live grid
+  reaches the client with no media dimensions — every legacy generation cover is serialised with
+  `width: null` (19 of them against 32 public posts, of which 25 of 26 media rows do carry
+  dimensions), so those cards are laid out at a hash-picked placeholder height from
+  `[218, 248, 284]` and measured afterwards with `Image.loadAsync`. The measurement was applied the
+  moment it landed, including to cards already on screen. Caught on the Pixel_9a by capturing the
+  same resting scroll position twice a second apart: one card grew, another shrank ~80px, and both
+  columns beneath them moved. The 50ms coalescing added earlier reduced the number of reflows but
+  not the class — the code's own comment ("cards visibly jumping as you scrolled into them") is a
+  record of the same thing.
+  Collections, iOS: "Use caution when making dynamic layout changes … If possible, try to avoid
+  changing the layout while people are viewing and interacting with it, unless it's in response to
+  an explicit action." → **fixed**: `partitionAspectRatioUpdates` splits each flush into ratios that
+  may land now and ratios whose card is on screen; the held ones are released the next time
+  viewability reports the card has left. A third viewability pair
+  (`SHOWCASE_ONSCREEN_VIEWABILITY`, threshold 1%) answers "any pixel visible" — the playback
+  config's 55% would have missed a card scrolled almost out of the top, which is the one whose
+  resize moves the most.
+  - **Cost of the rule, stated plainly**: a card that resolves while on screen and never scrolls
+    away keeps its placeholder height, so its media stays `cover`-cropped for that visit. A wrong
+    crop is a smaller harm than a moving page, and the crop corrects itself the moment the card
+    leaves the viewport.
+  - The root cause is a payload gap, not a client bug: `showcase-feed.ts` has no dimensions to send
+    for a legacy cover because `generations` has no width/height columns. Filling them would retire
+    this machinery — **out of scope here** (a web/API change plus a backfill), worth its own pass.
+- [V][both] **The play badge stayed up while the video played.** `VideoCornerPlay` rendered on any
+  video card, elected or not, so a tile running its muted looping preview still wore a filled
+  triangle in a circle — the shape of the system's play control — inviting you to start something
+  already running. Seen on both platforms before the fix (two cards mid-playback on the Pixel_9a,
+  the same on the simulator).
+  Playing video: "If your app truly requires a custom video player, reference the behavior and
+  interface of the system video player … A custom experience that diverges slightly from the
+  system-provided experience can cause frustration because people don't know which of their
+  habitual interactions they can continue to use." → **fixed**: `isShowcaseCoverVideoStreaming`
+  decides it, so the tile now reads badge (poster) → spinner (starting) → nothing (playing).
+  - Election alone would have been the wrong test twice over: a card can win the autoplay slot and
+    still show its poster forever when the server's `feedStreamUrl` is an explicit null
+    (poster-only), and Reduce Motion turns every activation off without changing the election. Both
+    keep the badge. Verified after the fix on **both** platforms by capturing the same tile twice —
+    different video frames, no badge.
+- [D][both] **One boolean locked the whole feed for any card's sideways drag.** A carousel's drag
+  suspends the feed's vertical scrolling and the workspace edge-swipe. Two faults: a cell torn down
+  mid-drag emitted the opening `true` and never its `false`, leaving the feed permanently unable to
+  scroll; and one shared boolean meant card A's expiring momentum cleared the lock card B's finger
+  was still holding. Gestures: "if you don't clearly communicate why a gesture doesn't work, people
+  might think your app has frozen" — here it would not be a misunderstanding.
+  → **fixed**: `useCarouselDragReporter` deduplicates each carousel's transitions (one drag reports
+  `false` twice — at drag end and again when momentum expires — so a counted lock is only sound once
+  transitions are deduplicated) and releases on unmount; the screen counts holders instead of
+  assigning a boolean. **Not reproduced on device**: the tear-down needs a refetch or recycle to land
+  under a finger, which the live feed did not offer. Pinned instead by two rendering cases that fire
+  the handlers and unmount mid-drag, both verified to fail without the fix.
+- [D][both] **Reduce Motion was asked once per card, on a private copy of the hook.**
+  `showcase-media-preview` re-implemented `useReducedMotion` with its own `AccessibilityInfo`
+  subscription, and the feed mounts one of those per visible card — a native listener each, each
+  starting at `false` and resolving a tick later, so with the preference **on** a video could mount
+  and start before the answer arrived. `home-side-menu` carried a second copy of the same hook.
+  Motion: "Make motion optional." → **fixed**: both use `lib/motion`'s shared
+  `useSyncExternalStore`, which holds one subscription for the process. Guarded by sweeping for the
+  listener, which may now appear only in `lib/motion.ts`.
+- [D][both] **The same placeholder plate was drawn four times, four ways.** The grid's video and
+  image fallbacks, the media preview's pending plate and the video preview's posterless plate are
+  one component's worth of markup at 46 and 48pt, over three background alphas and two border
+  alphas, with glyphs at 19, 19, 21 and 22, white on two and the accent on the other two.
+  Icons: "all interface icons in your app need to use a consistent size, level of detail, stroke
+  thickness (or weight), and perspective"; Design principles/Familiarity → **fixed**:
+  `components/feed-media-plate.tsx`. The glyph arrives as a component rather than an element, so a
+  call site passes neither a size nor a weight — the same discipline `LucideProvider` applies to the
+  stroke.
+  - **This closes F4's ratchet for S5.** `hig-icon-size.test.ts` budgets for
+    `app/(tabs)/showcase.tsx` (3), `showcase-media-preview.tsx` (2), `feed-video-preview.tsx` (1)
+    and `feed-pagination-footer.tsx` (1) are all **0**: the plate took four of them, the refresh
+    control moved to `icon.default` beside its row-mate, the pagination retry to `icon.sm` (the
+    ramp's "16 next to `label`"), and the carousel counter to `icon.xs`.
+- [P][both] **Two type overrides on the ramp, both removed.** The pin badge set `lineHeight: 12` on
+  12pt `caption` — a line box the size of the glyphs, which clips descenders on Android — and the
+  carousel counter set a raw `fontSize: 11`. Both now use `caption`, with `paddingVertical` reduced
+  (5→3 and 4→1) so the pills keep the heights they had. Typography/Labels.
+- [P][both] Verified clean, now guarded: **every mark the feed draws over media stays legible on the
+  brightest media it can cover.** Composited against pure white, the pin badge chip
+  (`rgba(5,5,7,0.78)`) carries every tool accent at 4.91:1 or better, the carousel counter reaches
+  7.60:1, and the corner play badge clears the 3:1 graphical floor at 3.04:1. Image views: "ensure
+  the text contrasts well with the image, and consider ways to make the text object stand out, like
+  adding a text shadow or background layer" — the chip *is* that layer, and the guard now computes
+  these rather than trusting them.
+- [P][both] Verified clean: **the grid is a standard grid.** Collections asks for "the standard row
+  or grid layout whenever possible" and warns off custom layouts that "draw undue attention"; a
+  two-column masonry is the platform-common shape for a media feed and does not. Text-only posts are
+  filtered out of it by `buildShowcaseMasonry`, which is Collections' "consider using a table
+  instead of a collection for text" — they render at full width in the home feed instead.
+- [P][both] Verified clean: **video plays at its own aspect ratio and cannot mix audio.** Each tile
+  is sized from its poster's ratio rather than a fixed box, no letterbox padding is composited into
+  the frame, and the player is created `muted`, at `volume = 0`, with `staysActiveInBackground`
+  and `showNowPlayingNotification` off.
+- [P][both] Noted, not fixed: **the filter row re-flows when you change filters.** The selected tab
+  is drawn one weight heavier, so every tab shifts horizontally on a tap. It is the same
+  don't-move-things instinct as the finding above, but Collections' rule carries its own escape —
+  "unless it's in response to an explicit action" — and a filter tap is exactly that. Dropping the
+  weight would also drop a selection signal. Left as is, deliberately.
+- [P][both] Noted, deferred: **a removed card vanishes without animation.** Collections: "Consider
+  using animations to provide feedback when people insert, delete, or reorder items." Hiding a post
+  or a creator mutates the query cache and the card disappears between frames; only a VoiceOver
+  announcement marks it. Layout animation over a recycling masonry is a known jank source and this
+  is one instance of an app-wide question → **X4**, which owns feedback.
+- [P][both] Noted, deferred: **still no context menus.** N2 left the decision to the surface passes,
+  and Collections names touch-and-hold among a collection's default interactions. Every action the
+  card offers is already reachable from its `⋮` control, and a real context menu needs a native
+  module (RN has no `UIContextMenuInteraction`) and therefore a native build — an app-wide call, not
+  one surface's → left for the phase that can make it once for every surface.
+- [P][both] Noted for X5: the feed's accessibility labels are built from `card.title`, which falls
+  back to the post's full prompt — so a card's label, and the `⋮` control's, can be a paragraph. The
+  filter tabs are `accessibilityRole="button"` where the row is a tab list. Both are role/label
+  questions the app answers in one place or not at all.
+
+Guard added: `__tests__/hig-collections.test.ts` (19 cases) — a measured ratio may only be applied
+to an off-screen card, and the screen's *only* two writes to that state must both go through the
+merge; the on-screen viewability config must ask for any visible pixel, not the playback threshold;
+the play badge is gated on real streaming, with the poster-only and Reduce Motion cases pinned; each
+carousel must deduplicate its drag transitions and release on unmount, and the feed must count
+holders; the reduce-motion listener may exist only in `lib/motion.ts`; and every overlay mark's
+contrast is computed against white media rather than asserted. `showcase-media-preview.test.tsx`
+gains the two rendering cases a sweep cannot see (one release per drag, and a release on unmount).
+
+Also fixed here: `hig-icon-weight.test.ts`'s provider case was timing out under the full suite —
+the first `import('lucide-react-native')` in a worker pulls ~1,600 icon modules through the
+transform and overran vitest's 5s default whenever the other 146 files ran alongside it. It is a
+pre-existing flake, not a regression, but a guard that goes red under load stops meaning anything,
+so that one case now has room.
+
+**AND-pass 2026-08-27** (mandatory: this unit touches gestures and video/animation). Pixel_9a, dev
+client on the worktree's Metro. The play badge disappears once a tile is streaming and returns when
+it is not — the same tile captured twice a second apart shows different video frames and no badge;
+the pin badges and the carousel counter render at their new metrics with the pills unchanged in
+height; the feed scrolls freely after repeated flings, so the media lock is not stuck; the Android
+predictive-back gesture leaves Showcase for Home with no dead end; edge-to-edge and the status bar
+are unchanged; `logcat` clear of `FATAL`/`SIGSEGV` across the pass (the historical
+BlurView-mid-tab-fade crash). Same badge and metric checks on the iOS simulator, driven with the
+Simulator MCP's swipe — which does work headless on this Mac, contrary to the earlier note, so later
+units can drive iOS rather than only capturing it. Nothing in this unit touches the keyboard or the
+tab bar.
+
+**Open remainder**: card removal animation → X4; context menus → the phase that can settle a native
+module for every surface; long prompt-derived accessibility labels and the filter row's `button`
+role → X5; supplying dimensions for legacy generation covers from the API, which would retire the
+measure-and-hold machinery entirely → a web-side pass of its own.

@@ -20,7 +20,6 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import {
-  AccessibilityInfo,
   Animated,
   BackHandler,
   Modal,
@@ -35,6 +34,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SHEET_DISMISS_DISTANCE, SHEET_DISMISS_VELOCITY } from '@/components/sheet-chrome';
+import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { formatUsdCents } from '@/lib/home-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -90,7 +90,7 @@ export function HomeSideMenu({
     ? `@${profile.username}`
     : user?.email ?? 'Sign in to save and sync your work';
   const initial = displayName.trim().charAt(0).toUpperCase() || 'A';
-  const reduceMotionEnabled = useReduceMotionEnabled();
+  const reduceMotionEnabled = useReducedMotion();
   const [rendered, setRendered] = useState(visible);
   const progress = useRef(createAnimatedValue(visible ? 1 : 0)).current;
 
@@ -479,28 +479,4 @@ function animateProgress(
   }).start(({ finished }) => {
     if (finished) onComplete();
   });
-}
-
-function useReduceMotionEnabled() {
-  const [enabled, setEnabled] = useState(false);
-
-  useEffect(() => {
-    if (IS_TEST_ENVIRONMENT) return;
-
-    let mounted = true;
-    const accessibilityInfo = AccessibilityInfo;
-    if (!accessibilityInfo?.isReduceMotionEnabled) return;
-
-    void accessibilityInfo.isReduceMotionEnabled().then((value) => {
-      if (mounted) setEnabled(value);
-    }).catch(() => undefined);
-    const subscription = accessibilityInfo.addEventListener?.('reduceMotionChanged', setEnabled);
-
-    return () => {
-      mounted = false;
-      subscription?.remove();
-    };
-  }, []);
-
-  return enabled;
 }

@@ -64,14 +64,6 @@ vi.mock('react-native', () => ({
     React.createElement('view', props, children),
 }));
 
-vi.mock('@/lib/theme', () => ({
-  appTheme: {
-    colors: {
-      background: '#03040d',
-    },
-  },
-}));
-
 import { FeedVideoPreview } from '../components/feed-video-preview';
 
 describe('FeedVideoPreview', () => {

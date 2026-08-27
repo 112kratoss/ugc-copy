@@ -59,13 +59,17 @@ describe('HIG icon weight — one weight, supplied once', () => {
     return (tree as renderer.ReactTestRenderer).root.findAll((node) => node.type === 'svg')[0].props.strokeWidth;
   }
 
+  // The first `import('lucide-react-native')` in a worker pulls ~1,600 icon
+  // modules through the transform, which overruns vitest's 5s default whenever
+  // the full suite is running the other 145 files alongside it. A guard that
+  // goes red under load stops meaning anything, so this one is given room.
   it('gives an icon the token weight through the provider', async () => {
     const { LucideProvider } = await import('lucide-react-native');
     const stroke = await renderCamera((icon) =>
       React.createElement(LucideProvider, { strokeWidth: appTheme.icon.stroke, children: icon }));
 
     expect(stroke).toBe(appTheme.icon.stroke);
-  });
+  }, 30000);
 
   it('renders lucide\'s own default without the provider, so the test above is proving the provider', async () => {
     // Also the canary for the packaging patch: lucide 1.14.0 re-exports a

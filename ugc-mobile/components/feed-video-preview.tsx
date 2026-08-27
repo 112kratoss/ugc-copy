@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 
 import { FEED_VIDEO_VIEW_PROPS } from '@/components/feed-media-frame';
+import { FeedMediaPlate } from '@/components/feed-media-plate';
 import { StableMediaImage } from '@/components/media-preview';
 import { FEED_PREVIEW_FORWARD_BUFFER_SECONDS } from '@/lib/media-performance';
 import { appTheme } from '@/lib/theme';
@@ -164,20 +165,7 @@ export function FeedVideoPreview({
 
       {posterless ? (
         <View pointerEvents="none" style={[absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
-          <View
-            style={{
-              width: 46,
-              height: 46,
-              borderRadius: 23,
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderWidth: 1,
-              borderColor: `${accent}66`,
-              backgroundColor: `${accent}22`,
-            }}
-          >
-            <Play size={19} color="#ffffff" fill="#ffffff" />
-          </View>
+          <FeedMediaPlate accent={accent} glyph={Play} filled />
         </View>
       ) : null}
 

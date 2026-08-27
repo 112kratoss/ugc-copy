@@ -22,7 +22,7 @@ export function FeedLoadMoreErrorFooter({
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
-      <RefreshCw size={17} color={appTheme.colors.danger} />
+      <RefreshCw size={appTheme.icon.sm} color={appTheme.colors.danger} />
       <Text style={{ color: appTheme.colors.danger, ...appTheme.type.label }}>
         Couldn&apos;t load more. Retry
       </Text>

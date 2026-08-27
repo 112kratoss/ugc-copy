@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
+import { FeedMediaPlate } from '@/components/feed-media-plate';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { TopScrim } from '@/components/top-scrim';
 import { CreatorAvatar, SecondaryButton, StatusBlock } from '@/components/ui';
@@ -33,7 +34,7 @@ import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { createSerializedImageLoader } from '@/lib/serialized-image-loader';
-import { isShowcaseVideoPreviewCandidate } from '@/lib/showcase-display';
+import { isShowcaseCoverVideoStreaming, isShowcaseVideoPreviewCandidate } from '@/lib/showcase-display';
 import {
   INITIAL_SHOWCASE_ACTIVATION_STATE,
   SHOWCASE_SETTLE_CONFIRM_MS,
@@ -57,6 +58,7 @@ import {
   type ShowcaseFeedPageParam,
 } from '@/lib/showcase-feed-query';
 import {
+  SHOWCASE_ONSCREEN_VIEWABILITY,
   SHOWCASE_PLAYBACK_VIEWABILITY,
   SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY,
   buildShowcaseFeedEventRequest,
@@ -77,6 +79,8 @@ import {
   buildShowcaseMasonry,
   getShowcaseGridLayout,
   getShowcaseMediaHeight,
+  mergeAspectRatios,
+  partitionAspectRatioUpdates,
   type ShowcaseGridLayout,
   type ShowcaseMasonryCard,
 } from '@/lib/showcase-feed-view-model';
@@ -86,7 +90,7 @@ import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia } from '@/lib/sho
 import { Reveal } from '@/components/reveal';
 import { SkeletonBone } from '@/components/skeleton';
 import { haptic } from '@/lib/haptics';
-import { MotionView, usePressMotion } from '@/lib/motion';
+import { MotionView, usePressMotion, useReducedMotion } from '@/lib/motion';
 import { accentColor, appTheme } from '@/lib/theme';
 import type { ShowcaseFeedEventType, ShowcaseFeedItem, ShowcaseFeedResponse, ShowcasePostResponse } from '@/lib/types';
 
@@ -182,6 +186,19 @@ export default function ShowcaseScreen() {
   const lastLoadMoreAtRef = useRef(0);
   const lastLoadMorePageCountRef = useRef<number | null>(null);
   const aspectRatioRequestsRef = useRef(new Set<string>());
+  // Which cards have any pixel on screen, and the ratios waiting for them to
+  // leave. See `partitionAspectRatioUpdates` for why a measurement cannot be
+  // applied to a card the reader is looking at.
+  const onScreenCardIdsRef = useRef<Set<string>>(new Set());
+  const heldAspectRatiosRef = useRef<Record<string, number>>({});
+  // One lock, many carousels: the feed stops scrolling vertically while any
+  // card's media is being swiped sideways, so it counts holders rather than
+  // trusting the last report to be the right one.
+  const mediaDragCountRef = useRef(0);
+  const handleMediaScrollToggle = useCallback((scrolling: boolean) => {
+    mediaDragCountRef.current = Math.max(0, mediaDragCountRef.current + (scrolling ? 1 : -1));
+    setIsSwipingMedia(mediaDragCountRef.current > 0);
+  }, []);
   // Scroll phase lives in a ref: these handlers fire continuously, and only a
   // committed election needs to reach React.
   const activationRef = useRef(INITIAL_SHOWCASE_ACTIVATION_STATE);
@@ -257,6 +274,26 @@ export default function ShowcaseScreen() {
    * produced a relayout per image — cards visibly jumping as you scrolled into
    * them, on top of a full-list re-render each time via extraData.
    */
+  const applyAspectRatios = useCallback((updates: Record<string, number>) => {
+    const { apply, hold } = partitionAspectRatioUpdates(updates, onScreenCardIdsRef.current);
+    if (Object.keys(hold).length) {
+      heldAspectRatiosRef.current = { ...heldAspectRatiosRef.current, ...hold };
+    }
+    if (!Object.keys(apply).length) return;
+    setResolvedAspectRatios((current) => mergeAspectRatios(current, apply));
+  }, []);
+
+  /** Lets go of every held ratio whose card has since left the screen. */
+  const releaseHeldAspectRatios = useCallback(() => {
+    const held = heldAspectRatiosRef.current;
+    if (!Object.keys(held).length) return;
+
+    const { apply, hold } = partitionAspectRatioUpdates(held, onScreenCardIdsRef.current);
+    heldAspectRatiosRef.current = hold;
+    if (!Object.keys(apply).length) return;
+    setResolvedAspectRatios((current) => mergeAspectRatios(current, apply));
+  }, []);
+
   const queueAspectRatio = useCallback((cardId: string, aspectRatio: number) => {
     pendingAspectRatiosRef.current[cardId] = aspectRatio;
     if (aspectRatioFlushRef.current) return;
@@ -265,18 +302,9 @@ export default function ShowcaseScreen() {
       aspectRatioFlushRef.current = null;
       const pending = pendingAspectRatiosRef.current;
       pendingAspectRatiosRef.current = {};
-
-      setResolvedAspectRatios((current) => {
-        let next: Record<string, number> | null = null;
-        for (const [cardId, ratio] of Object.entries(pending)) {
-          if (current[cardId] === ratio) continue;
-          next = next ?? { ...current };
-          next[cardId] = ratio;
-        }
-        return next ?? current;
-      });
+      applyAspectRatios(pending);
     }, SHOWCASE_ASPECT_RATIO_FLUSH_MS);
-  }, []);
+  }, [applyAspectRatios]);
 
   const onPlaybackViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<ShowcaseMasonryCard>> }) => {
     dispatchActivation({ type: 'viewableItemsChanged', items: getVisibleCardItems(viewableItems) });
@@ -304,7 +332,20 @@ export default function ShowcaseScreen() {
       });
     }
   }, [recordFeedEvent]);
+  const onScreenViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<ViewToken<ShowcaseMasonryCard>> }) => {
+    const onScreen = new Set<string>();
+    for (const token of viewableItems) {
+      if (!token.isViewable || !token.item) continue;
+      onScreen.add(token.item.id);
+    }
+    onScreenCardIdsRef.current = onScreen;
+    releaseHeldAspectRatios();
+  }, [releaseHeldAspectRatios]);
   const viewabilityConfigCallbackPairs = useRef([
+    {
+      viewabilityConfig: SHOWCASE_ONSCREEN_VIEWABILITY,
+      onViewableItemsChanged: onScreenViewableItemsChanged,
+    },
     {
       viewabilityConfig: SHOWCASE_PLAYBACK_VIEWABILITY,
       onViewableItemsChanged: onPlaybackViewableItemsChanged,
@@ -397,6 +438,11 @@ export default function ShowcaseScreen() {
     dispatchActivation({ type: 'reset' });
     setActiveVideoIds([]);
     setFeedbackItem(null);
+    // Every carousel is about to unmount; their releases would land after the
+    // new list has already opened locks of its own.
+    mediaDragCountRef.current = 0;
+    setIsSwipingMedia(false);
+    heldAspectRatiosRef.current = {};
     qualifiedImpressionsRef.current.clear();
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
@@ -652,7 +698,7 @@ export default function ShowcaseScreen() {
           onOpenCreator={openCreator}
           onFeedbackOpen={setFeedbackItem}
           onOpenPost={openPost}
-          onScrollToggle={setIsSwipingMedia}
+          onScrollToggle={handleMediaScrollToggle}
         />
       </MasonryCardCell>
     );
@@ -716,7 +762,7 @@ export default function ShowcaseScreen() {
                   label="Refresh Showcase"
                   onPress={handleRefresh}
                 >
-                  <RefreshCw size={19} color={appTheme.colors.text} />
+                  <RefreshCw size={appTheme.icon.default} color={appTheme.colors.text} />
                 </IconButton>
               </View>
 
@@ -979,6 +1025,10 @@ function MasonryPin({
   const accent = accentColor(card.accent);
   const isVideoCard = isShowcaseVideoPreviewCandidate(card.item);
   const showActiveVideo = isVideoCard && activeVideoIds.includes(card.id) && Boolean(card.mediaUrl);
+  // Reduce Motion turns every preview back into a poster without changing the
+  // election, so the badge asks the same question the tile does.
+  const reducedMotion = useReducedMotion();
+  const coverVideoStreaming = isShowcaseCoverVideoStreaming(card.item, showActiveVideo && !reducedMotion);
   const creatorLabel = formatCreatorLabel(card.creatorLabel);
   const signal = card.unlock;
   const pressMotion = usePressMotion(false, { scale: appTheme.motion.scale.pressed });
@@ -1023,7 +1073,7 @@ function MasonryPin({
           )
         )}
         {signal ? <PinBadge label={signal.label} accent={accentColor(signal.accent)} /> : null}
-        {isVideoCard ? <VideoCornerPlay /> : null}
+        {isVideoCard && !coverVideoStreaming ? <VideoCornerPlay /> : null}
       </Pressable>
       </MotionView>
 
@@ -1091,10 +1141,12 @@ function PinBadge({ label, accent }: { label: string; accent: string }) {
         borderRadius: appTheme.radii.pill,
         backgroundColor: 'rgba(5,5,7,0.78)',
         paddingHorizontal: 9,
-        paddingVertical: 5,
+        // The caption ramp's own line box is 17pt; the padding is what keeps the
+        // pill the height it has always been rather than an override on the type.
+        paddingVertical: 3,
       }}
     >
-      <Text numberOfLines={1} style={{ color: accent, ...appTheme.type.caption, lineHeight: 12, fontWeight: '800' }}>
+      <Text numberOfLines={1} style={{ color: accent, ...appTheme.type.caption, fontWeight: '800' }}>
         {label}
       </Text>
     </View>
@@ -1137,9 +1189,7 @@ function VisualFallbackPreview({ accent, height, radius }: { accent: string; hei
         justifyContent: 'center',
       }}
     >
-      <View style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: `${accent}1f`, borderWidth: 1, borderColor: `${accent}55` }}>
-        <ImageIcon size={22} color={accent} />
-      </View>
+      <FeedMediaPlate accent={accent} glyph={ImageIcon} />
     </View>
   );
 }
@@ -1160,20 +1210,7 @@ function VideoPinPreview({ accent, height, radius }: { accent: string; height: n
       }}
     >
       <View style={{ position: 'absolute', inset: 0, backgroundColor: `${accent}12` }} />
-      <View
-        style={{
-          width: 46,
-          height: 46,
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderRadius: 23,
-          backgroundColor: `${accent}24`,
-          borderWidth: 1,
-          borderColor: `${accent}66`,
-        }}
-      >
-        <Play size={21} color={accent} fill={accent} />
-      </View>
+      <FeedMediaPlate accent={accent} glyph={Play} filled />
     </View>
   );
 }
