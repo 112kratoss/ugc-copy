@@ -105,29 +105,29 @@ re-read the codebase broadly or ask for past-chat context.
   platforms verify against the same Metro, per the parity protocol below. The worktree's
   `ugc-mobile/` has `.env.local` copied and `npm install` run; if "Cannot find module" ever appears
   inside packages there, run `npm ci` (corrupt worktree copy).
-- **Where the work currently sits (2026-08-27):** Phases 1-3 are closed on the `hig-alignment`
-  branch and **deliberately not merged** - `main` has none of F4, F6, N1, N2, N3, any Phase 3
-  surface, or S2. **Phase 4 is open and S2 (auth) is done**; the merge question was last put at the
-  Phase 3 boundary and the user's answer, as at Phase 2, was to keep accumulating on the branch. So
-  branch from it rather than from `main`, do not offer to merge mid-phase, and expect the question
-  again at the Phase 4/5 boundary. (Checked when asking, and worth re-checking next time: no
-  `mobile-store-release` run was in flight, so a push would have been safe - that is the gate, not
-  the size of the diff.) **S2, S3 and S15 are done**; the next `todo` on the board is **S16 (settings + help)**,
-  which is a list-and-toggle screen rather than a form, though `AppTextInput` now carries the error,
-  counter, hint and clear control that S15 put into it, so S21 and S24 inherit a finished field.
-  Two things S15 leaves for whoever needs them: **`ActionSheetHost` cannot draw over a
-  `presentation: 'modal'` route** (it is an in-window overlay by design, so a native modal is
-  presented above it — use `Alert` there; guarded in `hig-edit-profile.test.ts`), and **a profile
-  photo still cannot be removed, only replaced**, which is a product decision rather than an
-  alignment fix. Carrying further: the composer's 21 off-ramp icon
-  sizes are the largest budget in `hig-icon-size.test.ts`, with the home side menu's 11 next; F3 owns
-  the bounce-disabled pair (`home-dashboard`, the alerts list) plus the 17 hidden scroll indicators;
-  the workspace menu's absence from Alerts and Profile needs the gesture layer lifted into the tabs
-  layout, which is shell work for **Phase 6** (see the S13/S14 log); and **the app has no password
-  recovery path at all** - a product gap S2 diagnosed but deliberately did not build (see its log),
-  worth closing before the next store release. S11's iOS 26 gesture hazard remains narrower than first written: a **native**
-  horizontal scroll view wins the full-screen back pan and needs nothing, while a **JS**
-  `PanResponder` drag loses it and needs `fullScreenGestureEnabled: false` on its own route.
+- **Where the work currently sits (2026-08-28): THE PROGRAM IS COMPLETE.** Every audit unit on the
+  status board is done — Phases 0–6, all foundations, every screen, every cross-cutting pass — on
+  the `hig-alignment` branch, **still deliberately unmerged** (the standing answer at every
+  boundary was "keep accumulating"; the merge question is now open at program end). The final gate
+  ran green: 161 test files, 1,560 tests, typecheck clean. What remains, all visibly on the board
+  or in these notes:
+  - **Merge + ship**: merging `hig-alignment` → `main` is the user's call; store delivery then
+    rides `mobile-store-release`, which must be a **full native build** (gesture-handler, and now
+    the splash color fix rides it too). Never push during an in-flight store run.
+  - **One deferred shell item**: lifting the workspace menu into `(tabs)/_layout` (its board row
+    carries the rationale — crash-documented shell + un-injectable verification here).
+  - **Physical-device items**: VoiceOver narration order; audio-session interruption (the
+    simulator does not enforce it — S6 note).
+  - **Release-eng notes**: strip Android's dependency-artifact `RECORD_AUDIO`/`SYSTEM_ALERT_WINDOW`
+    permissions with the next native build (X6); the app still has **no password recovery path**
+    (S2's diagnosed product gap, deliberately not built mid-program) — close it before the next
+    store release.
+  - Product decisions parked in units: profile photo removal (S15), ratings request +
+    the native-opportunity backlog above.
+  Still true and worth re-reading before touching code: `ActionSheetHost` cannot draw over a
+  `presentation: 'modal'` route (use `Alert` there; guarded); a JS `PanResponder` drag needs
+  `fullScreenGestureEnabled: false` on its route while a native horizontal scroll view needs
+  nothing (S11's iOS 26 hazard).
 - **Device mechanics learned in S6, for whoever drives them next:** the Simulator MCP's `tap` works
   headless on this Mac as well as `swipe`, so iOS is fully drivable; a surface is reachable by post
   id with `magicbooklet:///post/<id>`, and the live data has exactly one multi-media post
@@ -206,7 +206,7 @@ applied everywhere or it's a bug, not a choice.
 |---|---|---|---|---|
 | DV1 | Dark-only appearance (`userInterfaceStyle: dark`) | Dark Mode | Media-first canvas app; the dark palette itself is audited for correctness in F2 (elevation, contrast, materials) | app-wide |
 | DV2 | iPhone-only, portrait-only | Layout, Multitasking | Declared in app.json; product decision, revisit only if iPad/rotation becomes a goal | app-wide |
-| DV3 | Custom-branded components (tab bar, sheets, buttons) instead of stock controls | Branding + each component chapter | Branding chapter endorses identity; every custom component is still audited against its chapter's *behavior* rules; system surfaces adopted where the OS is better (share sheet, context menus, destructive-confirm alerts) | verify in Phase 6 |
+| DV3 | Custom-branded components (tab bar, sheets, buttons) instead of stock controls | Branding + each component chapter | Branding chapter endorses identity; every custom component is still audited against its chapter's *behavior* rules; system surfaces adopted where the OS is better (share sheet, context menus, destructive-confirm alerts) | verified 2026-08-28: every custom component passed its chapter's behavior audit (N1/N2 + surface units) |
 | DV4 | Lucide iconography instead of SF Symbols | SF Symbols, Icons | Cross-platform consistency (D1); glyphs that carry OS meaning (e.g. Share) may borrow the SF shape | app-wide |
 | DV5 | Scroll indicators hidden app-wide (32 sites) | Scroll views | The chapter permits it when scrollability is otherwise obvious; the compensating rule is that layouts let content peek past the fold — verified in every unit's captures. A screen whose content could end exactly at the fold must not hide them | app-wide |
 | DV6 | Compositional black scrims over media (viewer control backdrops, poster gradients, upload pills) | Materials, Color | These are the media-first app's material layer: legibility over unpredictable imagery. Palette tokens govern chrome; scrims govern media overlays. Never used over plain panels | media surfaces |
@@ -437,7 +437,8 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | X6 system integration pass | 5 | done | 0V/0D/0P | system share + in-context permissions verified; Android permission strip → release-eng note |
 | X7 android dialect sweep | 5 | done | — | five-tab walk clean, back drains to launcher, edge-to-edge everywhere; every unit carried its own AND gate |
 | Play submit path in mobile-store-release | — | blocked | — | release-eng, not HIG; unblocks when Play production access approves |
-| Phase 6 close-out | 6 | todo | — | |
+| Phase 6 close-out | 6 | done | — | ledger re-walked (DV1–DV6 all consistently applied); one shell item deferred visibly (below); final suite green |
+| Shell: lift workspace menu into (tabs)/_layout | — | todo | — | carried from S13/S14; deferred with rationale — the tab shell is the app's crash-documented zone and menu-open verification needs interactive input this environment cannot inject (S7 mechanics note); needs its own session with hands on a device |
 
 ## Finding log
 
