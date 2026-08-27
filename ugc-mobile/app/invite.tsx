@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { CheckCircle2, Copy, Gift, RotateCcw, ShoppingBag, UserPlus, UsersRound } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { Pressable, Share, View } from 'react-native';
+import { Platform, Share, View } from 'react-native';
 
 import {
   AppText,
@@ -66,7 +66,11 @@ export default function InviteScreen() {
         message: `Try Magicbooklet and get ${inviteePercent}% bonus credits on your first top-up. ${REFERRAL_DISCLOSURE}\n${url}`,
         url,
       });
-      if (result.action !== Share.dismissedAction) {
+      // Android's share intent cannot report a dismissal — it answers
+      // "shared" either way — so only iOS may claim success. Confirming an
+      // action that may not have happened is worse than staying quiet; on
+      // Android the share sheet itself is the feedback.
+      if (Platform.OS === 'ios' && result.action === Share.sharedAction) {
         setNotice({ tone: 'success', title: 'Invite ready', body: 'Your referral link was shared.' });
       }
     } catch (error) {
@@ -113,7 +117,7 @@ export default function InviteScreen() {
       <Card accent="commerce" padding="lg">
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
           <View style={{ width: 58, height: 58, borderRadius: 29, alignItems: 'center', justifyContent: 'center', backgroundColor: `${appTheme.colors.commerce}1f` }}>
-            <Gift size={28} color={appTheme.colors.commerce} />
+            <Gift size={appTheme.icon.feature} color={appTheme.colors.commerce} />
           </View>
           <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
             <Kicker color="commerce">Share the magic</Kicker>
@@ -157,10 +161,10 @@ export default function InviteScreen() {
 
       <Card variant="soft">
         <AppText variant="cardTitle">How rewards work</AppText>
-        <RuleRow icon={<UserPlus size={19} color={appTheme.colors.info} />} text={`A new friend joins within ${program?.attributionWindowDays ?? 30} days of opening your link.`} />
-        <RuleRow icon={<ShoppingBag size={19} color={appTheme.colors.commerce} />} text={`They receive ${inviteePercent}% bonus credits on their first verified credit-pack purchase.`} />
-        <RuleRow icon={<CheckCircle2 size={19} color={appTheme.colors.success} />} text={`You receive ${inviterPercent}% bonus credits on each verified credit-pack purchase they make.`} />
-        <RuleRow icon={<RotateCcw size={19} color={appTheme.colors.warning} />} text="Refunded or disputed purchases reverse the matching bonus credits." />
+        <RuleRow icon={<UserPlus size={appTheme.icon.compact} color={appTheme.colors.info} />} text={`A new friend joins within ${program?.attributionWindowDays ?? 30} days of opening your link.`} />
+        <RuleRow icon={<ShoppingBag size={appTheme.icon.compact} color={appTheme.colors.commerce} />} text={`They receive ${inviteePercent}% bonus credits on their first verified credit-pack purchase.`} />
+        <RuleRow icon={<CheckCircle2 size={appTheme.icon.compact} color={appTheme.colors.success} />} text={`You receive ${inviterPercent}% bonus credits on each verified credit-pack purchase they make.`} />
+        <RuleRow icon={<RotateCcw size={appTheme.icon.compact} color={appTheme.colors.warning} />} text="Refunded or disputed purchases reverse the matching bonus credits." />
         <AppText variant="caption" color="faint">Bonus credits are for creation tools, have no cash value, and cannot unlock marketplace resources.</AppText>
       </Card>
     </Screen>

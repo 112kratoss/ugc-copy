@@ -423,7 +423,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S18 marketplace | 4 | done | 0V/2D/1P | a paid unlock confirms before it spends; a short balance is told, not failed; one price vocabulary |
 | S19 templates | 4 | done | 0V/0D/3P | already the app's best-behaved commerce surface; icons and tokens snapped to the ramp |
 | S20 seller dashboard | 4 | done | 0V/0D/3P | numbers over charts (verified right); metrics readable by VoiceOver; enums stopped talking like the database |
-| S21 invite | 4 | todo | — | |
+| S21 invite | 4 | done | 0V/1D/1P | Android stops claiming a share it cannot see; disclosure verified in the shared text |
 | S24 delete account | 4 | todo | — | |
 | S26 notifications | 4 | todo | — | |
 | S0/S1/S27 launch/notfound/guest banner | 4 | todo | — | |
@@ -2733,3 +2733,20 @@ Chapters read: Charting data (`charting-data`), plus Lists/Feedback distillation
   refresh-control question belongs to the app-wide feedback pass, not one screen.
 iOS + AND-pass: verified on both with live data (12 unlocks sold, three listings); the skeleton
 state was also captured on iOS mid-load.
+
+### S21 invite — audited 2026-08-28 · AND-pass: 2026-08-28
+Chapters read: Collaboration and sharing (`collaboration-and-sharing`), plus Writing/Feedback
+distillations.
+- Already right: the system share sheet with title+message+url; the referral disclosure travels
+  inside the shared text and is shown on the screen; a Copy alternative with an announced
+  confirmation; reward rows grouped for VoiceOver; reversed rewards explained; the signed-out
+  screen takes a code or a full link through the finished `AppTextInput`.
+- [D][ios]/[and] The share-success notice fired whenever the sheet closed without an explicit
+  dismissal — but Android's share intent reports "shared" either way, so Android users were told
+  "Your referral link was shared." after cancelling (Feedback: never confirm what did not happen)
+  → fix: only iOS, which can tell, shows the success notice; on Android the sheet itself is the
+  feedback. (Android counterpart stated: deliberate no-op — the OS withholds the signal.)
+- [P][both] Five off-ramp icons → ramp (`feature` hero gift, `compact` rule rows); budget 5→0; two
+  dead imports dropped.
+iOS + AND-pass: verified on both with live zero-state metrics; the per-platform ShareGlyph renders
+its own shape on each OS (visible in the Link-visits card).
