@@ -425,7 +425,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S20 seller dashboard | 4 | done | 0V/0D/3P | numbers over charts (verified right); metrics readable by VoiceOver; enums stopped talking like the database |
 | S21 invite | 4 | done | 0V/1D/1P | Android stops claiming a share it cannot see; disclosure verified in the shared text |
 | S24 delete account | 4 | done | 0V/0D/2P | deletion says it is immediate; the goodbye alert now goes somewhere on purpose |
-| S26 notifications | 4 | todo | — | |
+| S26 notifications | 4 | done | 0V/1D/0P | permission asked only in context (verified); a badge that could only grow now retires when Alerts opens |
 | S0/S1/S27 launch/notfound/guest banner | 4 | todo | — | |
 | X1 motion pass | 5 | todo | — | |
 | X2 haptics pass | 5 | todo | — | |
@@ -2765,3 +2765,22 @@ Chapters read: Managing accounts (`managing-accounts`), Alerts (`alerts`).
   screen whose account no longer exists → the OK now routes to the app's root deliberately.
 Verification is visual-only on both platforms by design: exercising the form on-device would
 delete the live test account. The flow's logic is pinned by delete-account-screen.test.tsx.
+
+### S26 notifications & badging — audited 2026-08-28 · AND-pass: 2026-08-28
+Chapters read: Managing notifications (`managing-notifications`), Notifications (`notifications`).
+- Already right, much of it S10's work: permission is requested only in context — the moment a
+  generation starts ("watch for the notification"), or the Alerts screen's own "Enable push alerts"
+  card — never at launch; silent permission checks elsewhere never prompt. Foreground arrivals
+  follow the chapter's Mail example: no sound over the app you are holding, no banner while the
+  Alerts list itself is open (the list updates instead), always into Notification Center. Deep
+  links pass a strict allowlist; responses dedupe; Android has its channel.
+- [D][both] The app-icon badge was set on every arrival (`shouldSetBadge: true`) and cleared by
+  nothing — a badge that can only grow is a badge that lies (Badging: keep the count up to date;
+  update it when people open notifications) → fix: opening the Alerts list — the notification
+  list — retires the icon badge (`setBadgeCountAsync(0)` in `setAlertsScreenFocused`, defensive
+  against absent native module).
+Guard: notifications.test.ts — the badge clears when the Alerts list comes into view, and only
+then.
+iOS + AND-pass: Alerts screen verified on both with 47 live alerts — the in-context Enable card,
+grouped creator activity, categories; no crash from the badge call (logcat clean). A real push
+round-trip needs a store build with credentials; the badge logic is unit-guarded.

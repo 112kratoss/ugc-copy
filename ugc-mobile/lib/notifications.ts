@@ -28,6 +28,12 @@ let alertsScreenFocused = false;
 /** The Alerts screen reports itself in and out of view; the handler below reads it. */
 export function setAlertsScreenFocused(focused: boolean) {
   alertsScreenFocused = focused;
+  // Badging: "keep badges up to date — update the count when people open
+  // notifications." The Alerts screen is the notification list, so opening it
+  // retires the icon badge; nothing else ever cleared it.
+  if (focused) {
+    void Notifications.setBadgeCountAsync?.(0).catch(() => undefined);
+  }
 }
 
 /**

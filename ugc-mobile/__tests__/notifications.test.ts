@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const notificationsMocks = vi.hoisted(() => ({
   getPermissionsAsync: vi.fn(),
   requestPermissionsAsync: vi.fn(),
+  setBadgeCountAsync: vi.fn(async () => true),
   getExpoPushTokenAsync: vi.fn(),
   getLastNotificationResponseAsync: vi.fn(),
   clearLastNotificationResponseAsync: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock('expo-notifications', () => ({
   },
   getPermissionsAsync: notificationsMocks.getPermissionsAsync,
   requestPermissionsAsync: notificationsMocks.requestPermissionsAsync,
+  setBadgeCountAsync: notificationsMocks.setBadgeCountAsync,
   getExpoPushTokenAsync: notificationsMocks.getExpoPushTokenAsync,
   getLastNotificationResponseAsync: notificationsMocks.getLastNotificationResponseAsync,
   clearLastNotificationResponseAsync: notificationsMocks.clearLastNotificationResponseAsync,
@@ -328,5 +330,21 @@ describe('mobile notifications helper', () => {
     );
     unsubscribe();
     expect(remove).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('app icon badge (HIG S26)', () => {
+  it('retires the icon badge when the Alerts list comes into view, and only then', async () => {
+    // Badging: "keep badges up to date — update the count when people open
+    // notifications." Foreground arrivals set the badge; opening the Alerts
+    // screen is the moment it must return to zero.
+    const { setAlertsScreenFocused } = await import('../lib/notifications');
+
+    notificationsMocks.setBadgeCountAsync.mockClear();
+    setAlertsScreenFocused(false);
+    expect(notificationsMocks.setBadgeCountAsync).not.toHaveBeenCalled();
+
+    setAlertsScreenFocused(true);
+    expect(notificationsMocks.setBadgeCountAsync).toHaveBeenCalledWith(0);
   });
 });
