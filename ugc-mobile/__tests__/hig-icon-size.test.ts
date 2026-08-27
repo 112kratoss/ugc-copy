@@ -59,7 +59,7 @@ const ICON_RAMP = new Set<number>([
 const LEGACY_SIZES: Record<string, number> = {
   'app/(tabs)/showcase.tsx': 0,
   'app/(tabs)/studio.tsx': 0,
-  'app/auth.tsx': 3,
+  'app/auth.tsx': 0,
   'app/help.tsx': 3,
   'app/invite.tsx': 5,
   'app/onboarding.tsx': 1,

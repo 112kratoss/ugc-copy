@@ -247,8 +247,14 @@ describe('AuthScreen Apple sign-in', () => {
     expect(tree!.root.findAllByProps({ accessibilityLabel: 'Email' })).toHaveLength(0);
     expect(tree!.root.findAllByProps({ accessibilityLabel: 'Password' })).toHaveLength(0);
 
+    // One Google asset, one name: the artwork reads "Sign in with Google" in
+    // both modes, so the accessible name matches it and the hint carries the
+    // mode (see the comment on the control in app/auth.tsx).
     await renderer.act(async () => {
-      tree!.root.findByProps({ accessibilityLabel: 'Sign up with Google' }).props.onPress();
+      tree!.root.findByProps({
+        accessibilityLabel: 'Sign in with Google',
+        accessibilityHint: 'Creates your account with Google and returns to Magicbooklet',
+      }).props.onPress();
     });
 
     expect(authState.signInWithGoogle).toHaveBeenCalledTimes(1);

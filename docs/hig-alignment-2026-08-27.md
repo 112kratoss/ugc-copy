@@ -106,19 +106,22 @@ re-read the codebase broadly or ask for past-chat context.
   `ugc-mobile/` has `.env.local` copied and `npm install` run; if "Cannot find module" ever appears
   inside packages there, run `npm ci` (corrupt worktree copy).
 - **Where the work currently sits (2026-08-27):** Phases 1-3 are closed on the `hig-alignment`
-  branch and **deliberately not merged** - `main` has none of F4, F6, N1, N2, N3 or any Phase 3
-  surface. **Phase 3 closed with S13/S14**, and the merge question was put again at that boundary:
-  the user's answer, as at Phase 2, was to keep accumulating on the branch. So branch from it rather
-  than from `main`, do not offer to merge mid-phase, and expect the question again at the Phase 4/5
-  boundary. (Checked when asking, and worth re-checking next time: no `mobile-store-release` run was
-  in flight, so a push would have been safe - that is the gate, not the size of the diff.) The next
-  `todo` on the board is **Phase 4**, starting at S2 (auth). Three things carry into it: the composer's 21 off-ramp icon sizes are now the largest budget in
-  `hig-icon-size.test.ts`, with the home side menu's 11 next (S13/S14 took four files to zero and
-  retired the last of S12's handoffs); F3 owns the bounce-disabled pair (`home-dashboard`, the
-  alerts list) plus the 17 hidden scroll indicators, three of which are this unit's surfaces; and
-  the workspace menu's absence from Alerts and Profile is now diagnosed rather than open - it needs
-  the gesture layer lifted into the tabs layout, which is shell work for **Phase 6** (see the
-  S13/S14 log). S11's iOS 26 gesture hazard remains narrower than first written: a **native**
+  branch and **deliberately not merged** - `main` has none of F4, F6, N1, N2, N3, any Phase 3
+  surface, or S2. **Phase 4 is open and S2 (auth) is done**; the merge question was last put at the
+  Phase 3 boundary and the user's answer, as at Phase 2, was to keep accumulating on the branch. So
+  branch from it rather than from `main`, do not offer to merge mid-phase, and expect the question
+  again at the Phase 4/5 boundary. (Checked when asking, and worth re-checking next time: no
+  `mobile-store-release` run was in flight, so a push would have been safe - that is the gate, not
+  the size of the diff.) The next `todo` on the board is **S3 (onboarding)**, which S2 left three
+  things pointed at: the wordmark lockup differs between onboarding and auth (F6 counted three
+  surfaces; there are four - see the S2 log), onboarding is the screen that hands people to auth, and
+  a fresh-install simulator boots straight into it. Carrying further: the composer's 21 off-ramp icon
+  sizes are the largest budget in `hig-icon-size.test.ts`, with the home side menu's 11 next; F3 owns
+  the bounce-disabled pair (`home-dashboard`, the alerts list) plus the 17 hidden scroll indicators;
+  the workspace menu's absence from Alerts and Profile needs the gesture layer lifted into the tabs
+  layout, which is shell work for **Phase 6** (see the S13/S14 log); and **the app has no password
+  recovery path at all** - a product gap S2 diagnosed but deliberately did not build (see its log),
+  worth closing before the next store release. S11's iOS 26 gesture hazard remains narrower than first written: a **native**
   horizontal scroll view wins the full-screen back pan and needs nothing, while a **JS**
   `PanResponder` drag loses it and needs `fullScreenGestureEnabled: false` on its own route.
 - **Device mechanics learned in S6, for whoever drives them next:** the Simulator MCP's `tap` works
@@ -406,7 +409,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S10 alerts | 3 | done | 3V/2D/4P | the screen answers to the name on the tab; an alert stops shouting over the app you are holding |
 | S4 home | 3 | done | 3V/1D/4P | the front door stops introducing itself; four slides now say they are four |
 | S13/S14 profiles | 3 | done | 4V/4D/5P | a private post says so with a padlock, not a hue; the profile's own title is in the app's typeface on Android; a creator profile leads with the creator |
-| S2 auth | 4 | todo | — | |
+| S2 auth | 4 | done | 4V/6D/4P | the way in is not painted as a failure; a mistake is answered in the app's words, above the keyboard |
 | S3 onboarding | 4 | todo | — | |
 | S15 edit profile | 4 | todo | — | |
 | S16 settings/help | 4 | todo | — | |
@@ -2156,3 +2159,176 @@ its own separate `HomeSideMenu`), so a third tab would need a third mount with i
 its own drawer, or the layer lifted into `(tabs)/_layout.tsx`. Lifting it is a navigation-shell
 change with the Android blur/tab-fade hazard attached, which is N-track work, not a screen pass →
 **Phase 6**, with the Settings/Help reachability as the reason to do it.
+
+### S2 auth — audited 2026-08-27 · AND-pass: 2026-08-27
+Chapters read: Managing accounts (`managing-accounts`), Sign in with Apple (`sign-in-with-apple`),
+Text fields (`text-fields`), Buttons (`buttons`), Virtual keyboards (`virtual-keyboards`); Color,
+Feedback, Layout, Segmented controls and Design principles were read earlier and are reused.
+
+The app's front door, and the first surface in the program that turned out to sit **outside the
+design system** — its own button, its own segmented control, its own field, none of them the app's.
+That is why the findings cluster the way they do: almost every one is the screen doing by hand
+something the app already does elsewhere, differently. The three that matter most are about
+direction of travel: the only way to make an account was painted as a failure, the only way to
+recover from a mistake was in Supabase's words and behind the keyboard, and the button Apple asks
+you to make no smaller than your own was smaller than your own.
+
+- [V][ios] **The Sign in with Apple button was shorter than the screen's own sign-in button.** 48pt
+  against the email button's 56pt, one above the other with a divider between them. Sign in with
+  Apple is verbatim — "Make a Sign in with Apple button no smaller than other sign-in buttons" — and
+  Buttons puts the same rule the other way round: "Use style — not size — to visually distinguish
+  the preferred choice among multiple options … placing two buttons of different sizes near each
+  other can make the interface look confusing and inconsistent" → **fixed**: both are
+  `appTheme.touch.roomy`, and the Apple button takes the pill radius the app's primary button
+  already has (the chapter permits a capsule and asks the radius to "match the appearance of other
+  buttons in your app").
+  - **Android counterpart, and it had the same defect**: the Google button was a 216×48 image in a
+    48pt row beside the same 56pt primary. Google's artwork may not be distorted, so it is scaled on
+    its own aspect to 252×56 — same height as its neighbour on both platforms. Guarded by an aspect
+    assertion, so a later resize cannot squash the artwork to hit the number.
+- [V][both] **The one way to create an account was dressed as an error.** Choosing *Sign up* replaced
+  the form with a danger-red panel — red border, red fill, red title — reading "Choose a secure
+  sign-up option", above a divider reading *or continue with*, above the only control on the screen.
+  Nothing was wrong, and the same red panel is what a genuine misconfiguration uses, so the two were
+  indistinguishable. Color asks that colour carry consistent meaning; Sign in with Apple asks you to
+  "prominently display" the button rather than file it under an alternative → **fixed**: the notice
+  is gone, the Apple/Google button *is* the sign-up action, and the divider now renders only in sign
+  in, where there is genuinely something to be an alternative to.
+  - The sentence it carried was real information, so it moved rather than vanished: the sign-up
+    subtitle now reads "Start saving generations, unlocks, and profile work. New accounts are
+    created with Apple." — Managing accounts' "explain the benefits of creating an account **and how
+    to sign up** … display this message in your sign-in view", and its "refer only to authentication
+    methods that are available in the current context", in one line that names the platform's own.
+  - It also retired a variant mismatch: the body said "New accounts use *Sign in* with Apple" over a
+    button reading *Sign up with Apple*. The chapter asks you to pick a title variant "and use it
+    consistently"; the copy no longer names a variant at all.
+- [V][both] **A failed sign-in printed Supabase's words, at the bottom of the screen, behind the
+  keyboard.** The error was `error.message` verbatim ("Invalid login credentials") in a toast pinned
+  to `insets.bottom`. The password field's Return key is `go`, so the most likely failure path
+  submits *with the keyboard up* — and that is exactly where the toast rendered. Feedback: "show
+  people when a command can't be carried out and help them understand why" → **fixed** twice over:
+  the message became the app's own (`lib/auth-error-copy.ts` maps invalid credentials, unconfirmed
+  email, rate limiting and offline to copy that says what to do next; anything unrecognised gets a
+  generic line rather than leaking the provider's), and it renders *inside the panel, above the
+  action*, so it survives the keyboard. Captured on the Pixel_9a with the IME open: the notice is
+  fully visible where the toast would have been entirely hidden.
+- [V][both] **The button was disabled for a reason it could not state, and the field it guarded
+  accepted anything.** `canSubmit` required six password characters, and the only place that rule
+  appeared was a placeholder — "Minimum 6 characters" — which disappears on the first keystroke,
+  leaving a dead button and no explanation. Meanwhile the email field accepted `nobody2example`
+  and spent a round trip finding out. Text fields: "validate fields when it makes sense … when
+  entering an email address, it's best to validate when people switch to another field" →
+  **fixed**: the button enables as soon as both fields have something in them, and submit checks
+  the shape locally and names what is wrong ("Check the email address — enter it in full, as
+  name@example.com"), with no request sent. Verified on device: the notice appears, the API is
+  never called.
+- [D][both] **The app's only segmented control that was not the app's segmented control.** Selected
+  meant a tinted fill plus a coloured border here, and a solid coral fill with a dark label in
+  `profile-dashboard`, `creator-profile-screen` and `home-dashboard`; the role was `button` here and
+  `tab` in all three. Design principles/Familiarity — "once you establish a behavior or appearance
+  for an element, apply it throughout" → **fixed** to match the other three, role included.
+- [D][both] **Two controls for one switch.** The segment at the top and "Don't have an account?
+  Sign up" at the bottom did the same thing, 300pt apart, and the footer link set the mode without
+  the segment's selected state ever being the thing the eye went to → **fixed**: the footer link is
+  gone; the segment is above the fold and says which mode you are in.
+- [D][both] **Neither field said what it was once you started typing.** Both relied on placeholder
+  text plus a decorative glyph. Text fields: "because placeholder text disappears when people start
+  typing, it can also be useful to include a separate label describing the field to remind people of
+  its purpose" — and the app's own `AppTextInput` already draws exactly such a label → **fixed**:
+  EMAIL and PASSWORD labels in the shared uppercase idiom, and the password placeholder stopped
+  advertising a sign-up rule on a sign-in form ("Your password").
+- [D][both] **No way to clear the email field.** Text fields' iOS section is verbatim: "Display a
+  Clear button in the trailing end of a text field to help people erase their input." → **fixed**,
+  and deliberately *not* through `clearButtonMode`, which exists only on iOS: a drawn control gives
+  both platforms the same affordance rather than making Android the platform that has to hold the
+  backspace key. Both trailing controls are 44×44 (they were an 18pt glyph with 10pt of slop — 38pt,
+  under the floor, and invisible to `hit-target.ts` because they declared no height at all).
+- [D][both] **The password reveal was one glyph in two colours.** `Eye` throughout, tinted primary
+  when revealed and muted when not — the Color rule S13 applied to the profile grid, on a control
+  whose state matters more: "avoid relying solely on color to … communicate essential information"
+  → **fixed**: `Eye` / `EyeOff`.
+- [D][and] **The Google button's spoken name contradicted the name drawn on it.** Google ships one
+  asset, reading *Sign in with Google*, and the screen labelled it "Sign up with Google" in sign-up
+  mode — a control Voice Control cannot be asked for by the words on it, and the one thing this
+  pass made *more* visible by promoting the button to the primary action → **fixed**: the accessible
+  name matches the artwork in both modes and the mode moved into the hint. (Apple's button has no
+  such problem — the system swaps its own title, and the label follows it.)
+- [P][both] **The waiting button went blank.** Both the screen's private button and the shared
+  `PrimaryButton` replaced their label with a bare spinner. Buttons: "you can also configure the
+  button to display a different label alongside the activity indicator … the label 'Checkout' could
+  change to 'Checking out…'" → **fixed in the primitive**: `PrimaryButton` takes an optional
+  `loadingLabel` (absent, it still shows the bare spinner, so no existing call site changed), and
+  auth says "Signing in…".
+- [P][both] **The front door now uses the app's own front door.** The screen's private
+  `PrimaryButton` — no haptic, no press motion, no focus ring, an 18pt radius where the app uses a
+  pill — is replaced by the shared one. That is the finding under most of the others: a screen
+  outside the primitives drifts on every axis at once, and the guards that watch the primitives
+  cannot see it.
+- [P][both] **Icon ratchet: 3 → 0.** The header sparkle (22) and both field glyphs (19) snapped to
+  the ramp. `app/auth.tsx` leaves the budget list at zero; the composer's 21 and the home side
+  menu's 11 remain the only double-figure budgets.
+- [P][both] Verified clean, and worth recording because they are the parts most auth screens get
+  wrong: the email field is `textContentType="username"` **paired with** a `password` field, which
+  is what makes iCloud Keychain and Google Password Manager offer a saved login (the Passwords bar
+  is visible in the capture) rather than contact-card autofill; keyboard type is `email-address`;
+  Return keys are `next` then `go`, with `submitBehavior="submit"` keeping the keyboard up between
+  fields — Virtual keyboards' "consider customizing the Return key type", already done. Terms and
+  privacy are `role="link"`, the panel title is `role="header"`.
+- **Correction to F6.** That entry recorded the wordmark as text on "three shell surfaces (home
+  header, side menu, onboarding)". It is four — auth carries it too, and arriving from onboarding
+  you meet it twice in a row. It stays: on a modal that any screen can present, the wordmark answers
+  "which app is asking for my password", which is orientation rather than decoration. Worth
+  re-checking in Phase 6 that the four lockups agree with each other — they currently do not
+  (onboarding draws a 29pt glyph beside 25pt/800 text, auth a 20pt glyph beside 19pt/700).
+- **Deferred, and flagged rather than buried: there is no password recovery anywhere in the app.**
+  A person who forgets the password on the only email/password path has no route at all — no
+  "Forgot password?", no reset screen, and `supabase-auth-recovery.ts` is about refresh tokens, not
+  this. Design principles' Agency ("help people recover from mistakes") is the rule it fails, but
+  the fix is a feature — a reset screen, a deep link, and a Supabase email template — not an
+  alignment change, so it is not in this commit. The error copy now at least points at the third
+  party button as the way in for accounts made that way. **Recommend building it before the next
+  store release**; it is the largest remaining hole in Phase 4's territory.
+
+Guard added: `__tests__/hig-auth.test.tsx` (21 cases) plus `lib/auth-error-copy.ts` as a testable
+copy layer — both sign-in buttons are the height of the screen's own primary and Google's artwork
+keeps its aspect; a configured app shows no alert on the sign-up tab while a misconfigured one still
+does; the divider appears only where there is an alternative; no provider message reaches the
+screen; the failure renders inline (the source carries no `position: 'absolute'`) and clears on the
+next keystroke; a malformed email is named without calling the API; the button enables on content
+rather than on validity; the segment matches the app's fill, role and touch floor; both fields carry
+a visible label; the clear control appears only when there is something to clear; the reveal swaps
+glyph; every in-field control is 44pt; and the Google button's spoken name equals the name drawn on
+it. Extended: `hig-icon-size.test.ts` (auth to zero) and `auth-screen-apple.test.tsx` (the Google
+name change).
+
+**AND-pass 2026-08-27.** Pixel_9a, Android 16, dev client on this session's Metro. Captured: the
+resized Google button beside the primary, the app's segmented control, the field labels and the
+clear control, the sign-up mode with its Google-named subtitle and no divider, and — the capture
+that proves the toast finding — **the inline error fully visible with the IME open**, exactly where
+the old toast would have been behind it. Hardware back dismissed the keyboard and then left auth for
+Home with no dead end; `logcat` clear of `FATAL`/`SIGSEGV`/`libhwui`; app process alive. Edge-to-edge
+unchanged. This unit touches the keyboard and a form, so the Android pass was mandatory rather than
+a spot-check; it does not touch blur, transitions or the tab bar.
+
+**Mechanics worth keeping — how to reach a signed-out screen without signing anyone out.** This
+surface only renders when `user` is null, and both devices here were signed in as the real account.
+**Do not use the app's own Sign out to get here**: `signOut()` calls `supabase.auth.signOut()` at
+its default *global* scope and unregisters push first, so it revokes the account's refresh tokens on
+every device the person owns, phone included. Two safe routes were used instead, and both are
+repeatable:
+- **iOS** — `xcrun simctl create` a second device, then `simctl install` it with the `.app` taken
+  from the signed-in device's bundle container (`simctl get_app_container booted <id> app`). A fresh
+  simulator has a fresh keychain, so it boots signed out, and pointing it at Metro with the
+  `exp+magicbooklet-mobile://expo-development-client/?url=…` link is all the setup there is. Delete
+  the device afterwards. The first-run path also hands you onboarding for free, which is S3's
+  surface.
+- **Android** — the dev client is debuggable, so `adb shell run-as com.magicbooklet.mobile` reaches
+  the app's private data without root. Copy `shared_prefs/SecureStore.xml` aside, delete it,
+  force-stop and relaunch: expo-secure-store's ciphertext is gone, the app mints a guest, and the
+  Keystore key it was encrypted with is untouched — so putting the file back and relaunching
+  restores the original session exactly (verified: the account's credit balance returned).
+Two smaller ones: `magicbooklet:///auth` re-prompts *Open in "Magic Booklet"?* on every iOS
+invocation and is swallowed on Android when the app is already foregrounded, so the in-app entry
+points are faster than deep links here; and `simctl`'s text injection types through the hardware
+keyboard, which drops `@` and `.` and never raises the software keyboard — when a finding is about
+what the IME covers, capture it on the emulator.

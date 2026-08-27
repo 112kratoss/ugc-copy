@@ -739,6 +739,7 @@ export function BottomActionDock({
 
 export function PrimaryButton({
   label,
+  loadingLabel,
   onPress,
   disabled,
   loading,
@@ -747,6 +748,14 @@ export function PrimaryButton({
   accessibilityHint,
 }: {
   label: string;
+  /**
+   * What the button says while it waits. HIG Buttons: "you can also configure
+   * the button to display a different label alongside the activity indicator …
+   * the label 'Checkout' could change to 'Checking out…'". Without it the
+   * button falls back to a bare spinner, which is the older behaviour and
+   * still correct for actions too short to need narrating.
+   */
+  loadingLabel?: string;
   onPress?: () => void;
   disabled?: boolean;
   loading?: boolean;
@@ -790,8 +799,13 @@ export function PrimaryButton({
           paddingHorizontal: appTheme.spacing.panel,
         })}
       >
-        {loading ? (
+        {loading && !loadingLabel ? (
           <ActivityIndicator color={textColor} />
+        ) : loading ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact }}>
+            <ActivityIndicator color={textColor} />
+            <AppText selectable={false} variant="button" color={textColor}>{loadingLabel}</AppText>
+          </View>
         ) : (
           <AppText selectable={false} variant="button" color={textColor}>{label}</AppText>
         )}
