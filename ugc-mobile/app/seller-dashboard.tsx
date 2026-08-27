@@ -104,7 +104,7 @@ export default function SellerDashboardScreen() {
 
           {hasNextPage ? (
             <SecondaryButton
-              label={isFetchingNextPage ? 'Loading more listings...' : 'Load more listings'}
+              label={isFetchingNextPage ? 'Loading more listings…' : 'Load more listings'}
               disabled={isFetchingNextPage}
               onPress={() => void fetchNextPage()}
             />

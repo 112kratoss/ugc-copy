@@ -1,4 +1,3 @@
-import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import {
@@ -34,6 +33,7 @@ import { OnboardingWelcome } from '@/components/onboarding-welcome';
 import imagePreview from '../assets/images/onboarding-pages/image.jpg';
 import videoPreview from '../assets/images/onboarding-pages/video.jpg';
 import motionPreview from '../assets/images/onboarding-pages/motion.jpg';
+import { haptic } from '@/lib/haptics';
 
 const GOALS: BookletGoal[] = [
   {
@@ -295,7 +295,7 @@ export default function OnboardingScreen() {
         Animated.spring(rewardScale, { toValue: 1, useNativeDriver: true, speed: 18 }),
       ]).start();
     }
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+    haptic.success();
     AccessibilityInfo.announceForAccessibility(`${amount} creation credits added.`);
     setIsCelebrating(false);
   };
@@ -376,7 +376,7 @@ export default function OnboardingScreen() {
               availableHeight={height - topPadding - bottomPadding}
               availableWidth={cardWidth}
               onGetStarted={() => {
-                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+                haptic.light();
                 void moveToStep(1);
               }}
               onSignIn={() => void signInFromWelcome()}

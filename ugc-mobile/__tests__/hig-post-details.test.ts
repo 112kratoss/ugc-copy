@@ -108,7 +108,7 @@ describe('copying says that it copied', () => {
 
   it('reaches touch, sound and the screen reader in that helper', () => {
     expect(clipboard).toContain('Clipboard.setStringAsync(text)');
-    expect(clipboard).toContain('Haptics.selectionAsync()');
+    expect(clipboard).toContain('haptic.select()');
     expect(clipboard).toContain('AccessibilityInfo.announceForAccessibility?.(announcement)');
   });
 

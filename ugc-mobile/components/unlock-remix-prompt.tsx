@@ -1,5 +1,4 @@
 import { useQueryClient } from '@tanstack/react-query';
-import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import { FileText, Lock } from 'lucide-react-native';
 import { useState } from 'react';
@@ -13,6 +12,7 @@ import { CloseGlyph } from '@/lib/platform-glyphs';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { PostResourceKind } from '@/lib/types';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
+import { haptic } from '@/lib/haptics';
 
 export function UnlockRemixPrompt({
   bottomInset,
@@ -60,7 +60,7 @@ export function UnlockRemixPrompt({
       }
 
       await refreshUnlockedBundleCaches(queryClient, unlock);
-      await Haptics.selectionAsync();
+      haptic.select();
       setUnlocking(false);
       onClose();
       await onUnlocked(item);
@@ -184,7 +184,7 @@ export function UnlockRemixPrompt({
               <Lock size={appTheme.icon.default} color={appTheme.colors.textInverse} />
             )}
             <Text style={{ color: appTheme.colors.textInverse, ...appTheme.type.bodySm, fontWeight: '800' }}>
-              {unlocking ? 'Unlocking...' : ctaLabel}
+              {unlocking ? 'Unlocking…' : ctaLabel}
             </Text>
           </Pressable>
         </SheetPanel>

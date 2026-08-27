@@ -76,8 +76,8 @@ export function getPurchaseButtonLabel({
   loading?: boolean;
   processing?: boolean;
 }) {
-  if (processing) return 'Processing purchase...';
-  if (loading) return 'Loading store price...';
+  if (processing) return 'Processing purchase…';
+  if (loading) return 'Loading store price…';
   return `Buy ${formatCreditAmount(plan.credits)} credits - ${price}`;
 }
 

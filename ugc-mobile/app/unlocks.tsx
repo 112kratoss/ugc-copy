@@ -133,7 +133,7 @@ export default function UnlocksScreen() {
 
       {hasNextPage ? (
         <SecondaryButton
-          label={isFetchingNextPage ? 'Loading...' : 'Load more'}
+          label={isFetchingNextPage ? 'Loading…' : 'Load more'}
           onPress={() => fetchNextPage()}
         />
       ) : null}

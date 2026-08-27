@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query';
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
-import * as Haptics from 'expo-haptics';
 import type { ImagePickerAsset } from 'expo-image-picker';
 import { Check, ChevronDown, ChevronRight, FileText, Globe2, ImageIcon, Link2, Lock, Package, Play, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
@@ -131,6 +130,7 @@ import { appTheme, type ToolAccent } from '@/lib/theme';
 import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-file';
 import type { GenerationListItem, OwnerPostsResponse, PostResourceAttachment, PostResourceBundleAccessMode, PostResourceItemType, SourceToolOption } from '@/lib/types';
 import { buildShareUrl } from '@/lib/viewer-actions';
+import { haptic } from '@/lib/haptics';
 
 const getDefaultResourceDraft = () => ({
   accessMode: 'none' as const,
@@ -331,7 +331,7 @@ function PostDetailsPage({
         accessibilityHint="Write the main text people will read in this post."
         value={draft.contentText}
         onChangeText={(contentText) => onChange({ contentText: contentText.slice(0, BODY_MAX_LENGTH) })}
-        placeholder="Share a prompt, idea, breakdown, or useful note..."
+        placeholder="Share a prompt, idea, breakdown, or useful note…"
         multiline
         minHeight={170}
       />
@@ -422,7 +422,7 @@ function PostDetailsPage({
           accessibilityHint={`Share the idea, process, or story behind this post. Maximum ${BODY_MAX_LENGTH} characters.`}
           value={draft.caption}
           onChangeText={(caption) => onChange({ caption: caption.slice(0, BODY_MAX_LENGTH), description: caption.slice(0, BODY_MAX_LENGTH) })}
-          placeholder="Share the idea, process, or story behind it..."
+          placeholder="Share the idea, process, or story behind it…"
           multiline
           minHeight={150}
         />
@@ -3923,7 +3923,7 @@ function StorySection({
         <ComposerInput
           value={draft.proofMode === 'text' ? draft.contentText : draft.caption}
           onChangeText={(value) => onChange(draft.proofMode === 'text' ? { contentText: value } : { caption: value })}
-          placeholder={draft.proofMode === 'text' ? 'Write the post content...' : 'Write an optional caption...'}
+          placeholder={draft.proofMode === 'text' ? 'Write the post content…' : 'Write an optional caption…'}
           multiline
           minHeight={130}
           editable={!disabled}
@@ -4782,7 +4782,7 @@ function UploadContent({
           })}
         >
           <ImageIcon size={30} color={appTheme.colors.muted} />
-          <AppText variant="label" color="muted">{isPicking ? 'Preparing media...' : 'Add media'}</AppText>
+          <AppText variant="label" color="muted">{isPicking ? 'Preparing media…' : 'Add media'}</AppText>
         </Pressable>
       )}
       <FieldErrorText message={error} />
@@ -4845,7 +4845,7 @@ function AddMediaGalleryCard({
         >
           <Plus size={22} color={appTheme.colors.image} />
         </View>
-        <AppText variant="caption" color="muted">{isPicking ? 'Preparing...' : 'Add media'}</AppText>
+        <AppText variant="caption" color="muted">{isPicking ? 'Preparing…' : 'Add media'}</AppText>
       </View>
       <View style={{ padding: 9, gap: 7 }}>
         <Text numberOfLines={1} style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>
@@ -4936,7 +4936,7 @@ function MediaGalleryCard({
       // Frees the gesture from the native scroller so the pan below can take it,
       // and holds the navigator's swipe-back off for the length of the drag.
       onDragStart(index, item.id, grabOffsetRef.current);
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+      haptic.medium();
     }, MEDIA_DRAG_HOLD_MS);
   };
 

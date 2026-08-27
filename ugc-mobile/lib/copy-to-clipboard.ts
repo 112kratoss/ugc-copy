@@ -1,6 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
-import * as Haptics from 'expo-haptics';
 import { AccessibilityInfo } from 'react-native';
+
+import { haptic } from './haptics';
 
 /**
  * Copy, and say so on every channel.
@@ -18,6 +19,6 @@ import { AccessibilityInfo } from 'react-native';
  */
 export async function copyToClipboard(text: string, announcement = 'Copied') {
   await Clipboard.setStringAsync(text);
-  await Haptics.selectionAsync().catch(() => undefined);
+  haptic.select();
   AccessibilityInfo.announceForAccessibility?.(announcement);
 }

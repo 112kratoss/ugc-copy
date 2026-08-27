@@ -625,7 +625,7 @@ function InputStage({
               {preview ? <MediaPreview url={preview} kind={slot.kind} height={210} /> : <SlotIcon size={appTheme.icon.hero} color={appTheme.colors.faint} />}
               <View style={{ position: preview ? 'absolute' : 'relative', bottom: preview ? 14 : undefined, minWidth: 132, minHeight: 48, borderRadius: 24, paddingHorizontal: 16, backgroundColor: 'rgba(8,8,10,0.82)', flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center' }}>
                 {uploadingSlot === slot.key ? <ActivityIndicator color={appTheme.colors.primary} /> : <Upload size={18} color={appTheme.colors.primary} />}
-                <AppText variant="label">{uploadingSlot === slot.key ? 'Uploading...' : uploaded ? `Replace ${slot.kind}` : `Choose ${slot.kind}`}</AppText>
+                <AppText variant="label">{uploadingSlot === slot.key ? 'Uploading…' : uploaded ? `Replace ${slot.kind}` : `Choose ${slot.kind}`}</AppText>
               </View>
             </Pressable>
           </View>
@@ -820,11 +820,11 @@ function RunStepCard({
           tone="neutral"
         />
       ) : null}
-      {awaitingApproval ? <PrimaryButton label={approving ? 'Approving...' : 'Approve & continue'} loading={approving} disabled={disabled && !approving} onPress={onApprove} /> : null}
+      {awaitingApproval ? <PrimaryButton label={approving ? 'Approving…' : 'Approve & continue'} loading={approving} disabled={disabled && !approving} onPress={onApprove} /> : null}
       {canRetry ? (
         <SecondaryButton
           label={retrying
-            ? 'Retrying...'
+            ? 'Retrying…'
             : serviceMisconfigured
               ? step.estimatedRetryCredits === null
                 ? 'Retry after setup'
@@ -943,7 +943,7 @@ function ResultStage({
         <Download size={appTheme.icon.xs} color={appTheme.colors.muted} />
         <AppText variant="caption" color="muted">The original full-quality file opens outside the app.</AppText>
       </View>
-      <SecondaryButton label={startingAnother ? 'Starting...' : 'Create another version'} disabled={startingAnother} onPress={() => void createAnother()} />
+      <SecondaryButton label={startingAnother ? 'Starting…' : 'Create another version'} disabled={startingAnother} onPress={() => void createAnother()} />
     </View>
   );
 }

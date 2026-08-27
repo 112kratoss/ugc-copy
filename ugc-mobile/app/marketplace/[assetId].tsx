@@ -211,7 +211,7 @@ export default function MarketplaceAssetScreen() {
               </View>
             ) : detail.accessMode === 'free' ? (
               <PrimaryButton
-                label={unlockMutation.isPending ? 'Getting resources...' : 'Get resources — Free'}
+                label={unlockMutation.isPending ? 'Getting resources…' : 'Get resources — Free'}
                 loading={unlockMutation.isPending}
                 onPress={() => {
                   if (!user) {
@@ -239,7 +239,7 @@ export default function MarketplaceAssetScreen() {
                   ) : null}
                 </View>
                 <PrimaryButton
-                  label={unlockMutation.isPending ? 'Unlocking...' : `Unlock for ${unlockPrice} credits`}
+                  label={unlockMutation.isPending ? 'Unlocking…' : `Unlock for ${unlockPrice} credits`}
                   loading={unlockMutation.isPending}
                   disabled={creditShortfall > 0 || unlockMutation.isPending}
                   onPress={confirmPaidUnlock}

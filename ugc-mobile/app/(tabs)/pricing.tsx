@@ -476,7 +476,7 @@ export default function PricingScreen() {
         />
         </>) : null}
         <SecondaryButton
-          label={busyProductId === 'restore' ? 'Refreshing...' : 'Refresh credit balance'}
+          label={busyProductId === 'restore' ? 'Refreshing…' : 'Refresh credit balance'}
           onPress={() => void refreshBalance()}
           disabled={!identityUserId || busyProductId !== null}
           accessibilityHint="Checks your Magicbooklet account for previously credited purchases without opening the App Store restore flow"

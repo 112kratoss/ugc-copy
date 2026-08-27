@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import { Copy, FileText, Lock, MessageCircle, MoreVertical, Repeat2 } from 'lucide-react-native';
 import { useCallback, useState } from 'react';
@@ -27,6 +26,7 @@ import type { PostResourceKind } from '@/lib/types';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
 import { verticalHitSlop } from '@/lib/hit-target';
+import { haptic } from '@/lib/haptics';
 
 /** The creator byline reads as a single line of text; its reach is widened rather than its height. */
 const CREATOR_ROW_HEIGHT = 36;
@@ -115,7 +115,7 @@ export function PostDetailsPage({
     },
     onSuccess: async () => {
       if (unlock) await refreshUnlockedBundleCaches(queryClient, unlock);
-      await Haptics.selectionAsync();
+      haptic.select();
     },
   });
 

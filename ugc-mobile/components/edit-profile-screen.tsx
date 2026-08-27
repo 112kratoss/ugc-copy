@@ -1,6 +1,5 @@
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -36,6 +35,7 @@ import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
 import type { ProfileResponse } from '@/lib/types';
+import { haptic } from '@/lib/haptics';
 
 /** Debounce before the availability round trip. The endpoint is rate limited. */
 const USERNAME_CHECK_DELAY_MS = 400;
@@ -185,12 +185,12 @@ export function EditProfileScreen() {
     mutationFn: saveProfile,
     onMutate: () => {
       setMessage(null);
-      setProgressMessage('Preparing your changes...');
+      setProgressMessage('Preparing your changes…');
     },
     onSuccess: async () => {
       await refreshProfile();
       await queryClient.invalidateQueries({ queryKey: ['profile'] });
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      haptic.success();
       leaveWithChangesSettled();
     },
     onError: async (error) => {
@@ -202,7 +202,7 @@ export function EditProfileScreen() {
         }
       }
       setMessage(error instanceof Error ? error.message : 'Profile could not be saved.');
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      haptic.error();
     },
     onSettled: () => {
       setProgressMessage(null);
@@ -299,7 +299,7 @@ export function EditProfileScreen() {
     let coverUrl = form.coverUrl || null;
 
     if (avatarAsset) {
-      setProgressMessage('Uploading display photo...');
+      setProgressMessage('Uploading display photo…');
       avatarUrl = await uploadProfileImage(avatarAsset.uri, {
         api,
         role: 'avatar',
@@ -310,7 +310,7 @@ export function EditProfileScreen() {
     }
 
     if (coverAsset) {
-      setProgressMessage('Uploading background picture...');
+      setProgressMessage('Uploading background picture…');
       coverUrl = await uploadProfileImage(coverAsset.uri, {
         api,
         role: 'cover',
@@ -320,7 +320,7 @@ export function EditProfileScreen() {
       });
     }
 
-    setProgressMessage('Saving profile...');
+    setProgressMessage('Saving profile…');
     await api.updateProfile({
       username: normalizeUsername(form.username),
       displayName: form.displayName,

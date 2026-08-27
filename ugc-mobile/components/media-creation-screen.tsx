@@ -1,4 +1,3 @@
-import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import {
   AudioLines,
@@ -100,6 +99,7 @@ import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel } from '@/lib/types';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
 import { verticalHitSlop } from '@/lib/hit-target';
+import { haptic } from '@/lib/haptics';
 
 const TOOL_META: Record<CreatorToolId, { title: string; accent: ToolAccent; subtitle: string }> = {
   image: {
@@ -967,11 +967,11 @@ export function MediaCreationScreen({
       updatePrompt(result.enhancedPrompt);
       setEnhanceUndo({ previous: previousPrompt, enhanced: result.enhancedPrompt });
       if (typeof result.remainingCredits === 'number') updateCredits(result.remainingCredits);
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      haptic.success();
     } catch (error) {
       setPromptMessage(error instanceof Error ? error.message : 'Prompt enhancement failed.');
       setMessage(null);
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      haptic.error();
     } finally {
       setIsEnhancing(false);
     }
@@ -1003,12 +1003,12 @@ export function MediaCreationScreen({
     setLastPredictionId(null);
     if (finalStatus.status === 'failed') {
       setMessage(finalStatus.error?.trim() || 'Generation failed. Your inputs are still here, so you can adjust them and retry.');
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      haptic.error();
       return;
     }
 
     setMessage(null);
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    haptic.success();
     void clearPersistedCreationDrafts();
     if (guided) {
       setShowNotificationPrompt(true);
@@ -1136,7 +1136,7 @@ export function MediaCreationScreen({
       } else {
         setMessage(error instanceof Error ? error.message : 'Generation failed.');
       }
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      haptic.error();
     } finally {
       if (generationPollControllerRef.current === pollController) {
         generationPollControllerRef.current = null;
@@ -1962,7 +1962,7 @@ function ImagePromptComposer({
             multiline
             scrollEnabled
             textAlignVertical="top"
-            placeholder="Describe the subject, setting, lighting, composition, and style..."
+            placeholder="Describe the subject, setting, lighting, composition, and style…"
             placeholderTextColor={appTheme.colors.faint}
             onFocus={() => {
               clearPromptBlurTimer();
@@ -2241,7 +2241,7 @@ function CompactShotEditor({
             multiline
             scrollEnabled
             textAlignVertical="top"
-            placeholder="Describe action, camera movement, and the beat for this shot..."
+            placeholder="Describe action, camera movement, and the beat for this shot…"
             placeholderTextColor={appTheme.colors.faint}
             onFocus={onFocus}
             onBlur={onBlur}
@@ -2566,7 +2566,7 @@ function VideoCreatorComposer({
             multiline
             scrollEnabled
             textAlignVertical="top"
-            placeholder="Describe action, camera movement, lighting, pace, and sound..."
+            placeholder="Describe action, camera movement, lighting, pace, and sound…"
             placeholderTextColor={appTheme.colors.faint}
             onFocus={() => {
               if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
@@ -2809,7 +2809,7 @@ function MotionCreatorComposer({
           multiline
           scrollEnabled
           textAlignVertical="top"
-          placeholder="Add expression, timing, camera, or framing guidance..."
+          placeholder="Add expression, timing, camera, or framing guidance…"
           placeholderTextColor={appTheme.colors.faint}
           onFocus={onFocus}
           onBlur={onBlur}

@@ -367,10 +367,10 @@ describe('mobile external post composer', () => {
 
   it('uses header back to return to details and preserve state', async () => {
     const tree = await renderScreen();
-    renderer.act(() => findTextInputByPlaceholder(tree.root, 'Share the idea, process, or story behind it...').props.onChangeText('A concise story'));
+    renderer.act(() => findTextInputByPlaceholder(tree.root, 'Share the idea, process, or story behind it…').props.onChangeText('A concise story'));
     renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Back to post details').props.onPress());
-    expect(findTextInputByPlaceholder(tree.root, 'Share the idea, process, or story behind it...').props.value).toBe('A concise story');
+    expect(findTextInputByPlaceholder(tree.root, 'Share the idea, process, or story behind it…').props.value).toBe('A concise story');
   });
 
   it('opens directly on resources when focus=resources is requested', async () => {
@@ -421,7 +421,7 @@ describe('mobile external post composer', () => {
       .findAll((node) => String(node.type) === 'textinput' && ['Title, required', 'Post text, required'].includes(node.props.accessibilityLabel))
       .map((node) => node.props.accessibilityLabel);
     expect(labeledTextInputs).toEqual(['Title, required', 'Post text, required']);
-    renderer.act(() => findTextInputByPlaceholder(tree.root, 'Share a prompt, idea, breakdown, or useful note...').props.onChangeText('A useful text breakdown'));
+    renderer.act(() => findTextInputByPlaceholder(tree.root, 'Share a prompt, idea, breakdown, or useful note…').props.onChangeText('A useful text breakdown'));
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'What is this creation about?').props.onChangeText('Prompt teardown'));
     renderer.act(() => findPressableByText(tree.root, 'Review & publish').props.onPress());
     const text = collectText(tree.root);

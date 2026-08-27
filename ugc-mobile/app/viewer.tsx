@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
 import { Image } from 'expo-image';
-import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer } from 'expo-video';
@@ -454,7 +453,7 @@ export default function ImmersivePreviewViewerScreen() {
         isSaved: !variables.shouldSave,
         saveCount: variables.previousSaveCount,
       });
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
+      haptic.error();
       void AccessibilityInfo.announceForAccessibility(
         variables.shouldSave
           ? 'Could not save. Please try again.'
@@ -1149,7 +1148,7 @@ function ImmersiveSlide({
   const saveFromDoubleTap = useCallback((position: DoubleTapSavePosition) => {
     doubleTapHeart.play(position);
     setSaveHeartPopTrigger((current) => current + 1);
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    haptic.light();
     if (!canSaveViewerItemOnDoubleTap({
       canSave: item.canSave,
       isSaved: item.isSaved,

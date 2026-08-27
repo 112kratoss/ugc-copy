@@ -31,8 +31,8 @@ describe('mobile pricing selection', () => {
     const plan = resolveSelectedPricingPlan('creator');
 
     expect(getPurchaseButtonLabel({ plan, price: '₹1,799' })).toBe('Buy 2,000 credits - ₹1,799');
-    expect(getPurchaseButtonLabel({ plan, price: '₹1,799', loading: true })).toBe('Loading store price...');
-    expect(getPurchaseButtonLabel({ plan, price: '₹1,799', processing: true })).toBe('Processing purchase...');
+    expect(getPurchaseButtonLabel({ plan, price: '₹1,799', loading: true })).toBe('Loading store price…');
+    expect(getPurchaseButtonLabel({ plan, price: '₹1,799', processing: true })).toBe('Processing purchase…');
   });
 
   it('maps carousel positions to the nearest credit pack', () => {
