@@ -862,12 +862,13 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
         <WorkspaceSideMenuGlyph size={appTheme.icon.default} color={DASHBOARD_COLORS.text} />
       </TopBarControl>
 
-      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, minWidth: 0 }}>
-        <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: DASHBOARD_COLORS.coral }} />
-        <Text numberOfLines={1} style={{ color: DASHBOARD_COLORS.text, fontSize: 17, fontWeight: '800', letterSpacing: -0.2, flexShrink: 1 }}>
-          Magicbooklet
-        </Text>
-      </View>
+      {/* The title slot is deliberately empty. Toolbars: "Don't title windows
+          with your app name … it doesn't work well as a title", and Branding
+          agrees — "people seldom need to be reminded which app they're using,
+          and it's usually better to use the space to give people valuable
+          information and controls." The brand still opens the app, on the
+          onboarding and sign-in screens the chapter endorses. */}
+      <View style={{ flex: 1, minWidth: 0 }} />
 
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
         <TopBarControl
@@ -879,21 +880,21 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
           style={{ minWidth: 68, paddingHorizontal: 10 }}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Crown size={15} color="#fbbf24" fill="rgba(251,191,36,0.2)" />
+            <Crown size={appTheme.icon.sm} color={appTheme.colors.commerce} fill={`${appTheme.colors.commerce}33`} />
             <Text style={{ color: DASHBOARD_COLORS.text, fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatCreditAmount(credits)}</Text>
             <Plus size={14} color={DASHBOARD_COLORS.coral} />
           </View>
         </TopBarControl>
 
         <TopBarControl
-          accessibilityLabel="Open studio activity"
+          accessibilityLabel="Open alerts"
           onPress={() => {
             haptic.light();
             router.push('/studio' as never);
           }}
           style={{ width: 48 }}
         >
-          <Bell size={21} color={DASHBOARD_COLORS.text} />
+          <Bell size={appTheme.icon.default} color={DASHBOARD_COLORS.text} />
         </TopBarControl>
       </View>
     </View>
@@ -984,6 +985,9 @@ function TopSlider({
   const resumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const centerFrameRef = useRef<number | null>(null);
   const [isInteracting, setIsInteracting] = useState(false);
+  // The dots' own copy of the position. The ref above stays the timer's, so
+  // this render never restarts the interval — it is not in that effect's deps.
+  const [pageIndex, setPageIndex] = useState(0);
 
   const autoAdvance = shouldAutoAdvanceHomeSlides({
     slideCount: slides.length,
@@ -998,6 +1002,7 @@ function TopSlider({
     const timer = setInterval(() => {
       const nextIndex = advanceHomeSlide(slideIndexRef.current, slides.length);
       slideIndexRef.current = nextIndex;
+      setPageIndex(nextIndex % slides.length);
       listRef.current?.scrollToOffset({
         offset: getHomeSlideOffset(nextIndex, slideWidth, gap),
         animated: true,
@@ -1035,8 +1040,9 @@ function TopSlider({
         animated: false,
       });
       slideIndexRef.current = initialIndex;
+      setPageIndex(initialIndex % slides.length);
     });
-  }, [gap, initialIndex, slideWidth]);
+  }, [gap, initialIndex, slideWidth, slides.length]);
 
   const scheduleResume = useCallback(() => {
     if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
@@ -1064,10 +1070,12 @@ function TopSlider({
     }
 
     slideIndexRef.current = getHomeSlideIndexFromOffset(foldedOffset, slideWidth, gap, loopedSlides.length);
+    setPageIndex(slideIndexRef.current % slides.length);
     scheduleResume();
   }, [gap, loopedSlides.length, scheduleResume, slideWidth, slides.length]);
 
   return (
+    <View style={{ gap: 10 }}>
     <FlashList
       ref={listRef}
       data={loopedSlides}
@@ -1123,6 +1131,45 @@ function TopSlider({
         </View>
       )}
     />
+    <SlideDots count={slides.length} index={pageIndex} />
+    </View>
+  );
+}
+
+/**
+ * How many slides the rail holds, and which one is showing.
+ *
+ * Scroll views: "consider showing a page control when a scroll view is in
+ * page-by-page mode … If you show a page control with a scroll view, don't show
+ * the scrolling indicator on the same axis" — the rail's indicator is already
+ * off. It earns its place most with Reduce Motion on, where the rotation stops
+ * and a sliver of the next card was the only evidence that there was more.
+ *
+ * Uncoloured on purpose. Page controls: "Avoid coloring indicator images.
+ * Custom colors can reduce the contrast that differentiates the current-page
+ * indicator" — so the current dot is simply the brightest thing in the row.
+ */
+function SlideDots({ count, index }: { count: number; index: number }) {
+  if (count < 2) return null;
+
+  return (
+    <View
+      accessible
+      accessibilityLabel={`Slide ${Math.min(index + 1, count)} of ${count}`}
+      style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+    >
+      {Array.from({ length: count }, (_, dot) => (
+        <View
+          key={dot}
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: 3,
+            backgroundColor: dot === index % count ? DASHBOARD_COLORS.text : DASHBOARD_COLORS.border,
+          }}
+        />
+      ))}
+    </View>
   );
 }
 
@@ -1191,7 +1238,7 @@ function TopSlide({
             transform: reduceMotion ? undefined : [{ scale: pressed ? 0.985 : 1 }],
           })}
         >
-          <WandSparkles size={17} color={appTheme.colors.onPrimary} />
+          <WandSparkles size={appTheme.icon.compact} color={appTheme.colors.onPrimary} />
           <Text style={{ color: appTheme.colors.onPrimary, fontSize: 14, fontWeight: '800' }}>{slide.ctaLabel}</Text>
         </Pressable>
       </View>

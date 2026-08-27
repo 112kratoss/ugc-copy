@@ -114,20 +114,20 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
         <>
           <FeedCardAction
             accessibilityLabel={card.isSaved ? `Remove ${card.title} from saved` : `Save ${card.title}`}
-            icon={<SaveHeart saved={card.isSaved} size={19} />}
+            icon={<SaveHeart saved={card.isSaved} size={appTheme.icon.compact} />}
             label={card.saveLabel}
             onPress={onSave}
           />
           <FeedCardAction
             accessibilityLabel={`Comments on ${card.title}`}
-            icon={<MessageCircle size={19} color={appTheme.colors.faint} />}
+            icon={<MessageCircle size={appTheme.icon.compact} color={appTheme.colors.faint} />}
             label={card.commentLabel}
             onPress={onComments}
           />
           {card.canRemix ? (
             <FeedCardAction
               accessibilityLabel={`Remix ${card.title}`}
-              icon={<Repeat2 size={19} color={appTheme.colors.faint} />}
+              icon={<Repeat2 size={appTheme.icon.compact} color={appTheme.colors.faint} />}
               label={card.remixLabel}
               loading={remixLoading}
               onPress={onRemix}
@@ -135,7 +135,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
           ) : null}
           <FeedCardAction
             accessibilityLabel={`Share ${card.title}`}
-            icon={<ShareGlyph size={18} color={appTheme.colors.faint} />}
+            icon={<ShareGlyph size={appTheme.icon.compact} color={appTheme.colors.faint} />}
             onPress={onShare}
           />
         </>

@@ -109,15 +109,16 @@ re-read the codebase broadly or ask for past-chat context.
   branch and **deliberately not merged** — `main` does not have F4, F6, N1, N2, N3 or S5. The user's
   call at the Phase 2 boundary was to keep accumulating on the branch, so branch from it rather than
   from `main`, and expect the merge question again at the next boundary. Phase 3 is under way: S5,
-  S6 (+S6a/b/c), S9, S8, S11, S12 and S10 are closed, and the next `todo` on the board is **S4,
-  home** — after which S13/S14 closes Phase 3. Four things carry into it: the composer's 21 off-ramp
-  icon sizes are still the largest budget left in `hig-icon-size.test.ts`; S11's iOS 26 gesture
-  hazard is narrower than it was written — S12 verified that a **native** horizontal scroll view (a
-  pager, a carousel) wins the full-screen back pan and needs nothing, while a **JS** `PanResponder`
-  drag loses it and needs `fullScreenGestureEnabled: false` on its own route; **S13 inherits the
-  creations grid** that S10's board row wrongly named (and the generation-titled-with-its-prompt
-  data shape that S12 handed on with it); and `home-dashboard.tsx` is the other half of the
-  bounce-disabled pair S10 handed to F3, so **S4 should not settle it alone either**.
+  S6 (+S6a/b/c), S9, S8, S11, S12, S10 and S4 are closed, and the next `todo` on the board is
+  **S13/S14, profiles**, which closes Phase 3. Four things carry into it: the composer's 21 off-ramp
+  icon sizes are the largest budget left in `hig-icon-size.test.ts`, with the home side menu's 11
+  next; S11's iOS 26 gesture hazard is narrower than it was written — S12 verified that a **native**
+  horizontal scroll view (a pager, a carousel) wins the full-screen back pan and needs nothing,
+  while a **JS** `PanResponder` drag loses it and needs `fullScreenGestureEnabled: false` on its own
+  route; **S13 inherits the creations grid** that S10's board row wrongly named, and the
+  generation-titled-with-its-prompt data shape S12 handed on with it; and F3 now owns both halves of
+  the bounce-disabled pair (`home-dashboard`, the alerts list) plus the 17 hidden scroll
+  indicators.
 - **Device mechanics learned in S6, for whoever drives them next:** the Simulator MCP's `tap` works
   headless on this Mac as well as `swipe`, so iOS is fully drivable; a surface is reachable by post
   id with `magicbooklet:///post/<id>`, and the live data has exactly one multi-media post
@@ -400,7 +401,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S11 post composer | 3 | done | 3V/2D/3P | the reorder can be finished, seen, and reached; a removal can be taken back |
 | S12 post details | 3 | done | 5V/2D/4P | a post that cannot load says so and offers a way on; copying says it copied, everywhere; a video says what it cost |
 | S10 alerts | 3 | done | 3V/2D/4P | the screen answers to the name on the tab; an alert stops shouting over the app you are holding |
-| S4 home | 3 | todo | — | |
+| S4 home | 3 | done | 3V/1D/4P | the front door stops introducing itself; four slides now say they are four |
 | S13/S14 profiles | 3 | todo | — | |
 | S2 auth | 4 | todo | — | |
 | S3 onboarding | 4 | todo | — | |
@@ -1906,3 +1907,94 @@ move. Edge-to-edge unchanged. `logcat` clear of `FATAL`/`SIGSEGV`, app process a
   content and the row has room to say *which* post. "Your image is ready / Open it in your mobile
   history" is the other shape the chapter warns about: "avoid sending a notification that tells
   people to perform specific tasks within your app". → X3 owns the words, S26 the payload.
+
+### S4 home — audited 2026-08-27 · AND-pass: 2026-08-27
+Chapters read: Toolbars (`toolbars`), Branding (`branding`), Motion (`motion`); Page controls,
+Scroll views, Loading, Feedback and Layout were read earlier the same day for S12 and S10 and are
+reused rather than refetched.
+
+Home is a 1,400-line screen: a top bar, an auto-rotating rail of four slides, an onboarding resume
+card, three feed lanes, and the community feed with its own paging, telemetry and moderation sheets.
+Most of it is already careful — the findings are concentrated in the chrome above the feed.
+
+- [V][both] **The top bar titled the view with the app's name.** A coral dot and the wordmark
+  *Magicbooklet* sat in the title slot of every visit to the app's front door. Toolbars is verbatim:
+  "Don't title windows with your app name. Your app's name doesn't provide useful information about
+  your content hierarchy or any window or area in your app, so it doesn't work well as a title."
+  Branding says the same from the other side — "people seldom need to be reminded which app they're
+  using, and it's usually better to use the space to give people valuable information and controls",
+  and "ensure branding always defers to content" → **fixed**: the slot is empty, which Toolbars
+  explicitly allows ("if titling a toolbar seems redundant, you can leave the title area empty"),
+  and the tab bar below already names the screen.
+  - **This is the one finding in the unit that is a brand decision as much as a HIG one**, so it is
+    flagged rather than buried: D2 settled "keep the brand", and this removes the wordmark from the
+    one screen that showed it as chrome. What it does *not* do is remove the brand — the wordmark
+    still opens the app on onboarding and sign-in, which is exactly the placement Branding endorses
+    ("a welcome or onboarding screen that incorporates your branding content at the beginning of
+    your experience"). If the product wants it back on Home, it belongs in the divergence ledger
+    with a rationale that answers both chapters; it is a five-line revert either way.
+- [V][both] **The bell announced a screen the app no longer has.** Its accessibility label read
+  "Open studio activity" — a third name for the destination S10 renamed to *Alerts*, which is what
+  the tab, the screen title and the badge all say now. A screen-reader user heard one name and
+  landed on another → **fixed**: "Open alerts".
+- [V][both] **A four-slide carousel said nothing about being four slides.** The rail snaps
+  page-by-page, loops endlessly, and hides its scroll indicator; the only evidence that more existed
+  was a sliver of the next card. Scroll views: "Consider showing a page control when a scroll view
+  is in page-by-page mode … If you show a page control with a scroll view, don't show the scrolling
+  indicator on the same axis" (the indicator was already off) → **fixed**: a four-dot page control,
+  centred under the rail, current dot separated by contrast rather than hue (Page controls: "avoid
+  coloring indicator images … custom colors can reduce the contrast that differentiates the
+  current-page indicator"), announcing "Slide 2 of 4" to a screen reader, and drawing nothing at all
+  below two slides.
+  - **It earns its place most where nothing moves.** The rotation already stops for Reduce Motion,
+    for a blur and for a touch, so with that setting on there was previously *no* signal that the
+    rail had more in it. Motion asks exactly this: "make motion optional … avoid using it as the
+    only way to communicate important information."
+  - The timer's index stays a ref and the dots got their own state, so the dots never land in the
+    interval effect's dependencies and can never restart the rotation mid-cycle. All three things
+    that move the rail — the tick, a settled swipe, and the jump into the middle pass on load —
+    update it, or the dots would lie.
+- [D][both] **Icon ratchet: 3 → 0 on the dashboard, 2 → 0 on the feed card.** The crown at 15, the
+  bell at 21 and the workspace wand at 17 moved onto the ramp; the feed card's action row went to
+  one size, which is the same `icon.compact` row S12 settled for the identical actions on the post
+  page. The crown's hardcoded `#fbbf24` became `colors.commerce`, the token that already holds that
+  amber.
+- [P][both] Verified clean: **the feed answers for itself in every state.** First load draws a
+  skeleton, a failed load names itself with a Retry, an empty lane offers "Share the first post",
+  paging shows a footer spinner and a load-more error footer with its own retry, and the list has
+  pull-to-refresh. Loading ("show something as soon as possible … consider showing placeholder
+  text, graphics") and Feedback ("show people when a command can't be carried out and help them
+  understand why") are both met without changes.
+- [P][both] Verified clean: **the rotation can be stopped and is already optional.** Motion's "let
+  people cancel motion" and "make motion optional" are satisfied by
+  `shouldAutoAdvanceHomeSlides`, which halts for Reduce Motion, for a blur, for a touch and for a
+  single slide — pinned in `home-feed-view-model.test.ts`, so it is cited here rather than
+  re-verified on device.
+- [P][both] Noted for **Phase 6**: **two controls on one screen open Alerts, and only one of them
+  counts.** The top bar's bell and the Alerts tab are both visible on Home; the tab carries the
+  unread badge (N1) and the bell carries nothing. Badging a second control six inches from the
+  first would be worse, so the question is whether the bell earns its place at all — a consistency
+  call for the close-out walk rather than a fix to make mid-phase.
+- [P][both] Noted, not chased: **`home-side-menu.tsx` still carries 11 off-ramp icon sizes** — the
+  largest budget in the ratchet after the composer's 21. The menu is N3's surface and closed; the
+  sizes are pre-existing. Whichever unit next opens that file should take it down.
+
+Guard added: `__tests__/hig-home.test.ts` (11 cases) — the top bar does not title the view with the
+app name while the wordmark stays where the chapter endorses it; the bell names the destination the
+way the app names it; the rail shows a page control and keeps its scroll indicator off the same
+axis; there are few enough dots to count at a glance; the control draws nothing below two slides,
+separates the current dot by contrast rather than hue, and announces its position; the index follows
+the tick, the settle and the load, and the interval's dependencies are unchanged so the dots cannot
+restart it; the rotation stays gated on Reduce Motion.
+
+**AND-pass 2026-08-27.** Pixel_9a, Android 16, dev client on this session's Metro. The empty title
+slot, the four dots and the dot tracking a swipe were all captured; the auto-advance tracking was
+captured on iOS. Edge-to-edge unchanged. `logcat` clear of `FATAL`/`SIGSEGV`, app process alive.
+
+**Mechanic worth keeping:** the Metro this session inherited from another chat died mid-unit, which
+looks like a device failure ("No development servers found", then `ECONNREFUSED 10.0.2.2:8081`) and
+is not one. Check `lsof -nP -iTCP:8081 -sTCP:LISTEN` before debugging the app. Restarting it from
+this session via `preview_start metro-hig` also buys `preview_logs`, which an inherited server does
+not offer. Android reconnects with a force-stop and
+`am start -a android.intent.action.VIEW -d "exp+magicbooklet-mobile://expo-development-client/?url=http://10.0.2.2:8081"`;
+the plain `exp://10.0.2.2:8081` form does not resolve.
