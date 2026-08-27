@@ -196,6 +196,20 @@ export const appTheme = {
       letterSpacing: -0.3,
     },
   },
+  /**
+   * Dynamic Type policy (F1): text always follows the OS setting — opting out
+   * fails Typography ("all text styles scale") — but each tier caps how far it
+   * follows, the chapter's own hierarchy rule ("not all content scales
+   * equally — secondary items may remain smaller"). Titles keep hierarchy at
+   * 1.35×, controls and metadata stay tappable and quiet at 1.6×, running
+   * text follows furthest at 2×. `hig-dynamic-type.test.tsx` pins the caps
+   * and the no-opt-out rule.
+   */
+  typeScale: {
+    title: 1.35,
+    control: 1.6,
+    body: 2,
+  },
   icon: {
     /**
      * The icon size ramp, stepped to sit beside the type ramp above: 14 next to

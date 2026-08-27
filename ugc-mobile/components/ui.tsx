@@ -61,6 +61,17 @@ function textRole(variant: TextVariant): TextStyle {
   return appTheme.type[variant] as TextStyle;
 }
 
+/** Which Dynamic Type cap a variant follows — see `appTheme.typeScale`. */
+function variantScaleCap(variant: TextVariant): number {
+  if (variant === 'display' || variant === 'pageTitle' || variant === 'sectionTitle' || variant === 'metric') {
+    return appTheme.typeScale.title;
+  }
+  if (variant === 'body' || variant === 'bodySm') {
+    return appTheme.typeScale.body;
+  }
+  return appTheme.typeScale.control;
+}
+
 function colorValue(color: ThemeColor | string) {
   return color in appTheme.colors ? appTheme.colors[color as ThemeColor] : color;
 }
@@ -150,6 +161,7 @@ export function AppText({
   numberOfLines,
   heading = false,
   accessibilityRole,
+  maxFontSizeMultiplier,
   ...textProps
 }: AppTextProps) {
   // Android drops `numberOfLines` truncation when the text is selectable: it
@@ -163,6 +175,7 @@ export function AppText({
     <Text
       {...textProps}
       accessibilityRole={accessibilityRole ?? (heading || isHeadingVariant(variant) ? 'header' : undefined)}
+      maxFontSizeMultiplier={maxFontSizeMultiplier ?? variantScaleCap(variant)}
       selectable={isSelectable}
       numberOfLines={numberOfLines}
       style={[textRole(variant), { color: colorValue(color) }, style]}
@@ -984,6 +997,7 @@ export function AppTextInput({
           accessibilityLabelledBy={accessibilityLabelledBy ?? labelId}
           accessibilityState={{ ...accessibilityState, disabled }}
           aria-invalid={Boolean(error)}
+          maxFontSizeMultiplier={appTheme.typeScale.control}
           editable={editable}
           multiline={multiline}
           onBlur={(event) => {

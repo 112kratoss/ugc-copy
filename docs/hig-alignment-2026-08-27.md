@@ -396,7 +396,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 |---|---|---|---|---|
 | Phase 0 orientation | 0 | done | — | chapters read; baseline walk folded into the per-unit loop (see log) |
 | D1–D4 decisions | 0 | done | — | all four settled 2026-08-27 in the Decisions table |
-| F1 typography | 1 | partial | — | 11pt floor + truncation guarded (PR #83); Dynamic Type policy open |
+| F1 typography | 1 | done | 0V/1D/0P | Dynamic Type policy settled: never opt out, per-tier caps (1.35/1.6/2×) in appTheme.typeScale; verified at AX sizes on both platforms |
 | F2 color/dark/materials | 1 | partial | — | 4.5:1 body contrast guarded (PR #83); materials/elevation open |
 | F3 layout/safe areas | 1 | partial | — | keyboard avoidance rebuilt + guarded (PR #83); safe-area/grid sweep open |
 | F4 iconography/images | 1 | done | 1V/3D/4P | one stroke weight app-wide; share glyph per platform; size ramp on a ratchet (S5's four files are at zero) |
@@ -2804,3 +2804,20 @@ in this program); Feedback/Writing distillations.
   is genuinely strong (creation drafts, template runs, onboarding all resume).
 iOS + AND-pass: not-found verified on both via a deliberately bogus deep link; the splash change is
 build-time and rides the next native build.
+
+### F1 typography — Dynamic Type policy settled — audited 2026-08-28 · AND-pass: 2026-08-28
+Chapters read: Typography (`typography`).
+The open question from Phase 0 ("scale with getFontScale caps vs opt-out — an explicit call") is
+now settled as policy: **text always follows the OS setting — opting out fails Typography — and
+each tier caps how far it follows**, which is the chapter's own hierarchy rule ("not all content
+scales equally; secondary items may remain smaller"). The caps live in `appTheme.typeScale`:
+titles 1.35× (display, pageTitle, sectionTitle, metric — hierarchy survives giant sizes), controls
+and metadata 1.6× (cardTitle, label, caption, button, and `AppTextInput` — buttons keep their 48pt
+shape), running text 2× (body, bodySm — the reading surface follows furthest). `AppText` applies
+the cap per variant (callers may override deliberately); PR #83's 11pt floor already guards the
+other end.
+Guard: `hig-dynamic-type.test.tsx` — per-tier caps on rendered variants, the input cap, the button
+label cap, and a source scan that forbids `allowFontScaling={false}` anywhere.
+iOS AND-pass: verified live at accessibility-extra-extra-large — body text follows the reader,
+"Account settings." grows only to its cap, rows wrap rather than clip; Android verified at
+font_scale 1.6 with the same behavior; both reset afterwards.
