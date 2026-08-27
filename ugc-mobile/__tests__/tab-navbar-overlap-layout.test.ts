@@ -18,9 +18,12 @@ describe('tab navbar overlap layout', () => {
     const source = readSource('components/media-creation-screen.tsx');
 
     expect(source).not.toContain('contentBottomReserve');
-    expect(source).toMatch(
-      /const contentBottomPadding = insideTab\s*\?\s*bottomInset \+ appTheme\.spacing\.section \+ \(showFloatingReviewBar \? FLOATING_REVIEW_BAR_HEIGHT \+ appTheme\.spacing\.gap : 0\)\s*:\s*bottomInset \+ 36;/
-    );
+    // Both branches that can render pad off the safe-area inset alone, so a
+    // reintroduced reserve would show up as a tab-bar metric added here. This
+    // used to pin `contentBottomPadding`, which only the screen's unreachable
+    // third branch consumed — the guard was reading dead code.
+    expect(source).toMatch(/const contentBottom = bottomInset \+ 108;/);
+    expect(source).toMatch(/const imageContentBottom = bottomInset \+ 108;/);
     expect(source).toContain('bottom={bottomInset + 8}');
     expect(source).not.toContain('getMagicTabBarMetrics');
   });

@@ -1917,9 +1917,9 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     vi.useRealTimers();
   });
   it('offers enhancement level and undo on every prompt surface', async () => {
-    // Four separate prompt surfaces call enhancePrompt (three creator
-    // composers plus the guided PromptPanel); a device check caught the
-    // controls shipping on only one of them.
+    // Three separate prompt surfaces call enhancePrompt (one per creator
+    // composer); a device check caught the controls shipping on only one of
+    // them.
     authState.api.enhancePrompt.mockResolvedValue({ enhancedPrompt: 'Enhanced product prompt.', remainingCredits: 900 });
 
     let tree: renderer.ReactTestRenderer | undefined;
