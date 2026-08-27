@@ -3,7 +3,7 @@
 
 import React from 'react';
 import renderer from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Router mock
 const routerState = vi.hoisted(() => ({
@@ -125,7 +125,8 @@ vi.mock('@/components/fantasy-portal-art', () => ({
 
 // Auth mock
 const authState = vi.hoisted(() => ({
-  user: { id: 'user-123', email: 'user@example.com' },
+  // Nullable: the signed-out suite below clears it.
+  user: { id: 'user-123', email: 'user@example.com' } as null | { id: string; email: string },
   credits: 100,
   api: {
     getProfile: vi.fn(),
@@ -281,6 +282,7 @@ vi.mock('@tanstack/react-query', () => ({
 }));
 
 import { ProfileDashboard } from '../components/profile-dashboard';
+import { DEFAULT_PROFILE_MEDIA_TAB, PROFILE_MEDIA_TABS } from '../lib/profile-view-model';
 
 function findPressableByText(root: renderer.ReactTestInstance, text: string) {
   const textInstances = root.findAllByProps({ children: text });
@@ -297,6 +299,79 @@ function findPressableByText(root: renderer.ReactTestInstance, text: string) {
 function findViewByTestId(root: renderer.ReactTestInstance, testID: string) {
   return root.findAll((node) => String(node.type) === 'view' && node.props.testID === testID);
 }
+
+/**
+ * The signed-out profile had no coverage at all before S13/S14, and that pass
+ * changed three things it renders: the page title, the segmented control, and
+ * the refresh button (which the signed-out list mounts with no handler).
+ */
+describe('ProfileDashboard signed out', () => {
+  beforeEach(() => {
+    routerState.push.mockClear();
+    authState.user = null;
+  });
+
+  afterEach(() => {
+    authState.user = { id: 'user-123', email: 'user@example.com' };
+  });
+
+  it('offers a sign-in card instead of a hero card', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard />);
+    });
+
+    expect(findPressableByText(tree!.root, 'Sign in')).toBeTruthy();
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Edit profile' })).toHaveLength(0);
+  });
+
+  it('still titles and announces the page', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard />);
+    });
+
+    expect(tree!.root.findAllByProps({ children: 'Profile', accessibilityRole: 'header' }).length)
+      .toBeGreaterThan(0);
+  });
+
+  it('shows the segmented control with its refresh disabled', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard />);
+    });
+
+    // The tab it opens on, named in the refresh control the way it is when
+    // signed in -- but with nothing to refresh, so the control is disabled.
+    const refresh = tree!.root.findByProps({
+      accessibilityLabel: `Refresh ${DEFAULT_PROFILE_MEDIA_TAB}`,
+    });
+    expect(refresh.props.accessibilityState).toMatchObject({ disabled: true });
+
+    for (const tab of PROFILE_MEDIA_TABS) {
+      expect(findPressableByText(tree!.root, tab)).toBeTruthy();
+    }
+  });
+
+  /**
+   * The grid teases one placeholder tile per tab rather than going empty, which
+   * means the `emptyTitle` the signed-out branch passes ("Sign in to view saved
+   * media") can never render -- `signedOutPreviewCards` is never empty. The
+   * prompt people actually see is `SignedOutCard` above the grid. Pinned as the
+   * behaviour, so whoever removes the placeholder notices the copy behind it.
+   */
+  it('teases one placeholder tile rather than an empty grid', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Saved" />);
+    });
+
+    expect(tree!.root.findByProps({
+      accessibilityLabel: 'Saved, Saved Island, 0 likes',
+    })).toBeTruthy();
+    expect(tree!.root.findAllByProps({ children: 'Sign in to view saved media' })).toHaveLength(0);
+  });
+});
 
 describe('ProfileDashboard media tiles routing', () => {
   beforeEach(() => {

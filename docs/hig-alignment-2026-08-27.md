@@ -404,7 +404,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S12 post details | 3 | done | 5V/2D/4P | a post that cannot load says so and offers a way on; copying says it copied, everywhere; a video says what it cost |
 | S10 alerts | 3 | done | 3V/2D/4P | the screen answers to the name on the tab; an alert stops shouting over the app you are holding |
 | S4 home | 3 | done | 3V/1D/4P | the front door stops introducing itself; four slides now say they are four |
-| S13/S14 profiles | 3 | done | 4V/4D/4P | a private post says so with a padlock, not a hue; the profile's own title is in the app's typeface on Android; a creator profile leads with the creator |
+| S13/S14 profiles | 3 | done | 4V/4D/5P | a private post says so with a padlock, not a hue; the profile's own title is in the app's typeface on Android; a creator profile leads with the creator |
 | S2 auth | 4 | todo | — | |
 | S3 onboarding | 4 | todo | — | |
 | S15 edit profile | 4 | todo | — | |
@@ -2099,6 +2099,14 @@ and a header whose loudest controls are the ones nobody came for.
   carried out and help them understand why" → **fixed**: a missing creator says the handle may have
   changed and offers *Browse Showcase*; a failed load says to check the connection and offers
   *Try again*. A 404 is not retryable, so it is not offered a retry.
+- [P][both] **The signed-out profile had no test at all**, and this pass changed three things it
+  renders (the title, the segment, and a refresh control it mounts with no handler). Covered now —
+  four cases in `profile-dashboard.test.tsx`. Writing them surfaced a small dead end: the branch
+  passes an `emptyTitle` of "Sign in to view saved media", but `signedOutPreviewCards` always holds
+  exactly one placeholder per tab, so the grid is never empty and that copy can never render. The
+  prompt people actually see is `SignedOutCard` above the grid, so nothing is missing — the string
+  is just unreachable. Pinned as the behaviour rather than removed, so whoever drops the placeholder
+  finds the copy waiting behind it (S2/S3's neighbourhood in Phase 4).
 - [P][both] Verified clean: **the grid answers for itself in every state.** Skeleton on first load,
   a named error with a retry, a per-tab empty state, a footer spinner, a recoverable load-more
   footer, and pull-to-refresh — all already present on both surfaces, and all pinned by
@@ -2108,7 +2116,8 @@ and a header whose loudest controls are the ones nobody came for.
   of the 17 F3 already owns rather than new ones (the count is a tree-wide grep, unchanged by this
   unit); not flipped here, because Scroll views is an app-wide call.
 
-Guard added: `__tests__/hig-profile.test.ts` (18 cases) — the state badge draws a glyph and not a
+Guard added: `__tests__/hig-profile.test.ts` (18 cases), plus four signed-out cases in
+`profile-dashboard.test.tsx` for a path that had none — the state badge draws a glyph and not a
 bare dot; the badge and the spoken label read from one source; no owned tile is labelled without its
 state; no heading repeats the selected segment; the refresh control names its tab; the segment order
 equals the stats order and the default is the first segment; the segment count stays inside the
