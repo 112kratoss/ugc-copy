@@ -1,5 +1,6 @@
 import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
 
+import { SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { useReducedMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
 
@@ -29,6 +30,7 @@ export function FeedFeedbackSheet({
   visible: boolean;
 }) {
   const reducedMotion = useReducedMotion();
+  const drag = useSheetDismissDrag({ onDismiss: onClose });
 
   return (
     <Modal
@@ -45,30 +47,23 @@ export function FeedFeedbackSheet({
           onPress={onClose}
           style={{ position: 'absolute', inset: 0 }}
         />
-        <View
-          style={{
-            maxHeight: '84%',
-            borderTopLeftRadius: appTheme.radii.xl,
-            borderTopRightRadius: appTheme.radii.xl,
-            borderCurve: 'continuous',
-            borderWidth: 1,
-            borderBottomWidth: 0,
-            borderColor: appTheme.colors.borderStrong,
-            backgroundColor: appTheme.colors.panel,
-            paddingTop: appTheme.spacing.gap,
-            paddingBottom: 34,
-          }}
+        <SheetPanel
+          style={[
+            {
+              maxHeight: '84%',
+              borderTopLeftRadius: appTheme.radii.xl,
+              borderTopRightRadius: appTheme.radii.xl,
+              borderCurve: 'continuous',
+              borderWidth: 1,
+              borderBottomWidth: 0,
+              borderColor: appTheme.colors.borderStrong,
+              backgroundColor: appTheme.colors.panel,
+              paddingBottom: 34,
+            },
+            drag.dragStyle,
+          ]}
         >
-          <View
-            style={{
-              width: 42,
-              height: 4,
-              borderRadius: 2,
-              backgroundColor: appTheme.colors.borderStrong,
-              alignSelf: 'center',
-              marginBottom: appTheme.spacing.panel,
-            }}
-          />
+          <SheetGrabber drag={drag} />
           <ScrollView showsVerticalScrollIndicator={false}>
             <View style={{ gap: 5, paddingHorizontal: appTheme.spacing.panel, paddingBottom: appTheme.spacing.gap }}>
               <Text accessibilityRole="header" numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>
@@ -138,7 +133,7 @@ export function FeedFeedbackSheet({
               />
             ) : null}
           </ScrollView>
-        </View>
+        </SheetPanel>
       </View>
     </Modal>
   );

@@ -10,7 +10,6 @@ import {
   Easing,
   FlatList,
   type LayoutChangeEvent,
-  PanResponder,
   Platform,
   Pressable,
   Text,
@@ -22,6 +21,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentListSkeleton } from '@/components/skeleton';
 import { CreatorAvatar, StatusBlock } from '@/components/ui';
+import { showActionSheet, type ActionSheetAction } from '@/lib/action-sheet';
 import { useAuth } from '@/lib/auth';
 import {
   POST_COMMENTS_PAGE_SIZE,
@@ -53,6 +53,7 @@ import { useHardwareBack } from '@/lib/use-hardware-back';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { Overlay } from '@/components/overlay-host';
+import { SheetGrabber, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { haptic } from '@/lib/haptics';
 import { appTheme } from '@/lib/theme';
 import type { CommentReportReason } from '@/lib/api-client';
@@ -121,7 +122,6 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   const [replyTo, setReplyTo] = useState<PostComment | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
   const [pendingRepliesByParent, setPendingRepliesByParent] = useState<Record<string, PostComment[]>>({});
-  const [reportingComment, setReportingComment] = useState<PostComment | null>(null);
   const [reporting, setReporting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const restoredReplyIdRef = useRef<string | null>(null);
@@ -170,50 +170,9 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     return () => animation.stop();
   }, [presentation, presented, reducedMotion, slide, visible]);
 
-  // The sheet shows a grabber, which on iOS promises swipe-to-dismiss. It had
-  // no gesture behind it, so the affordance was a lie — dragging it did
-  // nothing. The drag rides on top of the slide translation and springs back
-  // when released short of the threshold.
-  const dragY = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    if (visible) dragY.setValue(0);
-  }, [dragY, visible]);
-
-  const dismissThreshold = Math.min(120, windowHeight * 0.12);
-
-  // Read through refs: the responder is created once, and would otherwise
-  // capture the first render's close handler and threshold forever.
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-  const dismissThresholdRef = useRef(dismissThreshold);
-  dismissThresholdRef.current = dismissThreshold;
-  const sheetDrag = useRef(
-    PanResponder.create({
-      // Only claim clearly downward drags, so a horizontal swipe or a tap on
-      // the header still behaves normally.
-      onMoveShouldSetPanResponder: (_event, gesture) => gesture.dy > 6 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
-      onPanResponderMove: (_event, gesture) => {
-        dragY.setValue(Math.max(0, gesture.dy));
-      },
-      onPanResponderRelease: (_event, gesture) => {
-        const flung = gesture.vy > 0.6;
-        if (flung || gesture.dy > dismissThresholdRef.current) {
-          onCloseRef.current();
-          return;
-        }
-        Animated.spring(dragY, {
-          toValue: 0,
-          useNativeDriver: true,
-          tension: 190,
-          friction: 13,
-        }).start();
-      },
-      onPanResponderTerminate: () => {
-        dragY.setValue(0);
-      },
-    }),
-  ).current;
+  // The drag rides on top of the slide translation, which is why this one folds
+  // the offset into its own transform instead of appending a second one.
+  const sheetDrag = useSheetDismissDrag({ onDismiss: onClose, visible });
 
 
   const commentsQueryKey = createPostCommentsQueryKey(postId, sort, user?.id);
@@ -239,7 +198,6 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     setReplyTo(null);
     setExpandedIds(new Set());
     setPendingRepliesByParent({});
-    setReportingComment(null);
     setReporting(false);
     restoredReplyIdRef.current = null;
   }, [postId]);
@@ -456,17 +414,10 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     );
   }, [api, commentsQuery, commentsQueryKey, postId, publishCommentCount, queryClient, user?.id]);
 
-  const reportComment = useCallback((comment: PostComment) => {
-    if (!requireSignIn()) return;
-    setReportingComment(comment);
-  }, [requireSignIn]);
-
-  const submitReport = useCallback(async (reason: CommentReportReason) => {
-    if (!reportingComment || reporting) return;
+  const submitReport = useCallback(async (comment: PostComment, reason: CommentReportReason) => {
     setReporting(true);
     try {
-      await api.reportComment(reportingComment.id, { reason });
-      setReportingComment(null);
+      await api.reportComment(comment.id, { reason });
       haptic.success();
       Alert.alert('Thanks for the report', 'Our moderation team will take a look.');
     } catch (error) {
@@ -475,23 +426,43 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     } finally {
       setReporting(false);
     }
-  }, [api, reporting, reportingComment]);
+  }, [api]);
+
+  const reportComment = useCallback((comment: PostComment) => {
+    if (!requireSignIn() || reporting) return;
+    // A second sheet, not a layer drawn inside the first: Action sheets is the
+    // component for choices that follow an intentional action, and Modality
+    // asks that the previous one be gone before this one arrives — the comment
+    // options sheet has already closed itself by the time this opens.
+    showActionSheet({
+      title: 'Why are you reporting this?',
+      message: 'Choose the closest reason so the moderation team can review it correctly.',
+      actions: REPORT_REASONS.map((reason) => ({
+        label: reason.label,
+        onPress: () => void submitReport(comment, reason.value),
+      })),
+    });
+  }, [reporting, requireSignIn, submitReport]);
 
   const openCommentActions = useCallback((comment: PostComment) => {
-    const options: Array<{ text: string; style?: 'cancel' | 'destructive'; onPress?: () => void }> = [];
+    const options: ActionSheetAction[] = [];
 
     if (canDeleteComment(comment, user?.id)) {
-      options.push({ text: 'Delete', style: 'destructive', onPress: () => removeComment(comment, false) });
+      options.push({ label: 'Delete', destructive: true, onPress: () => removeComment(comment, false) });
     }
     if (canRemoveComment(comment, resolvedPostCreatorId, user?.id)) {
-      options.push({ text: 'Remove from post', style: 'destructive', onPress: () => removeComment(comment, true) });
+      options.push({ label: 'Remove from post', destructive: true, onPress: () => removeComment(comment, true) });
     }
     if (canReportComment(comment, user?.id)) {
-      options.push({ text: 'Report', style: 'destructive', onPress: () => reportComment(comment) });
+      options.push({ label: 'Report', destructive: true, onPress: () => reportComment(comment) });
     }
     if (!options.length) return;
 
-    Alert.alert('Comment options', undefined, [...options, { text: 'Cancel', style: 'cancel' }]);
+    // Alerts caps at three buttons and is for problems, not choices; this list
+    // can reach four and follows straight from tapping the comment's own
+    // control (Alerts: "Use an action sheet — not an alert — to offer choices
+    // related to an intentional action").
+    showActionSheet({ title: 'Comment options', actions: options });
   }, [removeComment, reportComment, resolvedPostCreatorId, user?.id]);
 
   const hasCommentActions = useCallback((comment: PostComment) => (
@@ -773,10 +744,12 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
         // between would become the percentage height's containing block, and an
         // auto-sized parent leaves `78%` with nothing to resolve against.
         transform: [{
-          translateY: Animated.add(
-            slide.interpolate({ inputRange: [0, 1], outputRange: [windowHeight, 0] }),
-            dragY,
-          ),
+          translateY: sheetDrag.translateY
+            ? Animated.add(
+                slide.interpolate({ inputRange: [0, 1], outputRange: [windowHeight, 0] }),
+                sheetDrag.translateY,
+              )
+            : slide.interpolate({ inputRange: [0, 1], outputRange: [windowHeight, 0] }),
         }],
         height: '78%',
         borderTopLeftRadius: appTheme.radii.xl,
@@ -786,7 +759,6 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
         borderBottomWidth: 0,
         borderColor: appTheme.colors.borderStrong,
         backgroundColor: appTheme.colors.panel,
-        paddingTop: appTheme.spacing.gap,
       } : {
         flex: 1,
         backgroundColor: appTheme.colors.app,
@@ -794,35 +766,12 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     >
       {presentation === 'sheet' ? (
         <>
-          {/* The grab area is the full width and taller than the pill itself:
-              a 4pt target would be unusable, and the whole header reads as
-              draggable to anyone who has used a sheet before. */}
-          <View {...sheetDrag.panHandlers} style={{ paddingVertical: 8, marginTop: -8, marginBottom: appTheme.spacing.gap - 8 }}>
-            <View
-              style={{
-                width: 42,
-                height: 4,
-                borderRadius: 2,
-                backgroundColor: appTheme.colors.borderStrong,
-                alignSelf: 'center',
-              }}
-            />
-          </View>
+          <SheetGrabber drag={sheetDrag} />
           {commentsHeader}
         </>
       ) : null}
       {list}
       {composer}
-      {reportingComment ? (
-        <ReportReasonPicker
-          bottomInset={bottomInset}
-          loading={reporting}
-          onCancel={() => {
-            if (!reporting) setReportingComment(null);
-          }}
-          onSelect={(reason) => void submitReport(reason)}
-        />
-      ) : null}
     </Animated.View>
   );
 
@@ -1034,102 +983,6 @@ function CommentRowView({
           <MoreHorizontal size={16} color={appTheme.colors.faint} />
         </Pressable>
       ) : null}
-    </View>
-  );
-}
-
-function ReportReasonPicker({
-  bottomInset,
-  loading,
-  onCancel,
-  onSelect,
-}: {
-  bottomInset: number;
-  loading: boolean;
-  onCancel: () => void;
-  onSelect: (reason: CommentReportReason) => void;
-}) {
-  return (
-    <View
-      accessibilityViewIsModal
-      style={{
-        position: 'absolute',
-        inset: 0,
-        zIndex: 10,
-        justifyContent: 'flex-end',
-      }}
-    >
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Cancel report"
-        disabled={loading}
-        onPress={onCancel}
-        style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.64)' }}
-      />
-      <View
-        style={{
-          borderTopLeftRadius: appTheme.radii.xl,
-          borderTopRightRadius: appTheme.radii.xl,
-          borderWidth: 1,
-          borderColor: appTheme.colors.borderStrong,
-          backgroundColor: appTheme.colors.panel,
-          paddingHorizontal: appTheme.spacing.panel,
-          paddingTop: appTheme.spacing.panel,
-          paddingBottom: Math.max(bottomInset, appTheme.spacing.panel),
-          gap: appTheme.spacing.compact,
-        }}
-      >
-        <Text accessibilityRole="header" style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>
-          Why are you reporting this?
-        </Text>
-        <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm }}>
-          Choose the closest reason so the moderation team can review it correctly.
-        </Text>
-        {REPORT_REASONS.map((reason) => (
-          <Pressable
-            key={reason.value}
-            accessibilityRole="button"
-            accessibilityLabel={`Report as ${reason.label}`}
-            accessibilityState={{ disabled: loading }}
-            disabled={loading}
-            onPress={() => onSelect(reason.value)}
-            style={({ pressed }) => ({
-              minHeight: 48,
-              justifyContent: 'center',
-              borderRadius: appTheme.radii.md,
-              borderWidth: 1,
-              borderColor: appTheme.colors.borderStrong,
-              backgroundColor: appTheme.colors.surface,
-              paddingHorizontal: appTheme.spacing.gap,
-              opacity: pressed ? appTheme.opacity.pressed : 1,
-            })}
-          >
-            <Text style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
-              {reason.label}
-            </Text>
-          </Pressable>
-        ))}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Cancel report"
-          disabled={loading}
-          onPress={onCancel}
-          style={({ pressed }) => ({
-            minHeight: 48,
-            alignItems: 'center',
-            justifyContent: 'center',
-            opacity: pressed ? appTheme.opacity.pressed : 1,
-          })}
-        >
-          {loading ? (
-            <ActivityIndicator color={appTheme.colors.faint} />
-          ) : (
-            <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm, fontWeight: '800' }}>
-              Cancel
-            </Text>
-          )}
-        </Pressable>
-      </View>
     </View>
   );
 }

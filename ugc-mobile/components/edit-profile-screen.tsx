@@ -19,7 +19,7 @@ import { getEditProfileScrollPadding } from '@/lib/edit-profile-layout';
 import { uploadProfileImage } from '@/lib/media';
 import { getProfileHandle, getProfileInitials, getProfileName } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
-import { BackGlyph } from '@/lib/platform-glyphs';
+import { CloseGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
 import type { ProfileResponse } from '@/lib/types';
 
@@ -458,7 +458,7 @@ function EditHeader({
     <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Back"
+        accessibilityLabel="Cancel"
         disabled={isSaving}
         onPress={onBack}
         style={({ pressed }) => ({
@@ -471,7 +471,7 @@ function EditHeader({
           opacity: pressed ? 0.72 : isSaving ? 0.5 : 1,
         })}
       >
-        <BackGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
+        <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
       </Pressable>
       <Text accessibilityRole="header" style={{ flex: 1, textAlign: 'center', color: appTheme.colors.text, fontSize: 21, fontWeight: '700' }}>Edit Profile</Text>
       <Pressable

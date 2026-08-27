@@ -15,6 +15,7 @@ import {
   PostComments,
   type PostCommentsHandle,
 } from '../components/comments-sheet';
+import { registerActionSheetPresenter, type ActionSheetRequest } from '../lib/action-sheet';
 import type { PostComment, PostCommentsResponse } from '../lib/types';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
@@ -552,22 +553,53 @@ describe('comments sheet', () => {
   it('asks for a report reason instead of hardcoding harassment', async () => {
     pages = [page([comment()])];
     reportComment.mockResolvedValue({ success: true });
+    const presented: ActionSheetRequest[] = [];
+    const unregister = registerActionSheetPresenter((request) => presented.push(request));
     const tree = renderSheet();
 
-    renderer.act(() => {
-      pressable(tree.root, "Options for @batman's comment").props.onPress();
-    });
-    const optionButtons = alert.mock.calls.at(-1)?.[2] as Array<{
-      text: string;
-      onPress?: () => void;
-    }>;
-    renderer.act(() => {
-      optionButtons.find((option) => option.text === 'Report')?.onPress?.();
-    });
-    await renderer.act(async () => {
-      await pressable(tree.root, 'Report as Spam or misleading').props.onPress();
-    });
+    try {
+      renderer.act(() => {
+        pressable(tree.root, "Options for @batman's comment").props.onPress();
+      });
+      // Both steps are action sheets now: the options list can hold four
+      // entries where an alert caps at three, and the reason picker used to be
+      // a second sheet drawn inside the first one.
+      expect(presented[0].title).toBe('Comment options');
+      renderer.act(() => {
+        presented[0].actions.find((action) => action.label === 'Report')?.onPress?.();
+      });
+
+      expect(presented[1].title).toBe('Why are you reporting this?');
+      expect(presented[1].actions.map((action) => action.label)).toEqual([
+        'Spam or misleading',
+        'Harassment or bullying',
+        'Unsafe content',
+        'Something else',
+      ]);
+      await renderer.act(async () => {
+        presented[1].actions.find((action) => action.label === 'Spam or misleading')?.onPress?.();
+      });
+    } finally {
+      unregister();
+    }
 
     expect(reportComment).toHaveBeenCalledWith('comment-1', { reason: 'spam' });
+  });
+
+  it('marks every comment option destructive so the sheet leads with them', () => {
+    pages = [page([comment()])];
+    const presented: ActionSheetRequest[] = [];
+    const unregister = registerActionSheetPresenter((request) => presented.push(request));
+    const tree = renderSheet();
+
+    try {
+      renderer.act(() => {
+        pressable(tree.root, "Options for @batman's comment").props.onPress();
+      });
+    } finally {
+      unregister();
+    }
+
+    expect(presented[0].actions.every((action) => action.destructive)).toBe(true);
   });
 });

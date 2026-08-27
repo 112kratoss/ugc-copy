@@ -25,6 +25,8 @@ vi.mock('react-native', () => ({
 vi.mock('lucide-react-native', () => {
   const icon = (name: string) => (props: MockProps) => React.createElement(`${name}-icon`, props);
   return {
+    ArrowLeft: icon('arrowleft'),
+    X: icon('x'),
     ChevronLeft: icon('chevron-left'),
     Copy: icon('copy'),
     FileText: icon('file'),

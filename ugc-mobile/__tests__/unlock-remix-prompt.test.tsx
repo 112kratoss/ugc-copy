@@ -40,6 +40,10 @@ vi.mock('expo-router', () => ({
 }));
 
 vi.mock('lucide-react-native', () => ({
+  ArrowLeft: (props: MockProps) => React.createElement('icon', props),
+  ChevronLeft: (props: MockProps) => React.createElement('icon', props),
+  Share: (props: MockProps) => React.createElement('icon', props),
+  Share2: (props: MockProps) => React.createElement('icon', props),
   FileText: (props: MockProps) => React.createElement('icon', props),
   Lock: (props: MockProps) => React.createElement('icon', props),
   X: (props: MockProps) => React.createElement('icon', props),

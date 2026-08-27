@@ -1,13 +1,14 @@
 import { useQueryClient } from '@tanstack/react-query';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
-import { FileText, Lock, X } from 'lucide-react-native';
+import { FileText, Lock } from 'lucide-react-native';
 import { useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, Text, View } from 'react-native';
 
 import { useAuth } from '@/lib/auth';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
+import { CloseGlyph } from '@/lib/platform-glyphs';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { PostResourceKind } from '@/lib/types';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
@@ -124,7 +125,7 @@ export function UnlockRemixPrompt({
                 opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
-              <X size={21} color={appTheme.colors.text} />
+              <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
             </Pressable>
           </View>
 

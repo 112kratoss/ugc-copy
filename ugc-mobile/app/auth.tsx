@@ -11,7 +11,7 @@ import { isAppleAuthCanceled } from '@/lib/apple-auth';
 import { isGoogleAuthCanceled } from '@/lib/google-auth';
 import { completeAuthScreen, leaveAuthScreen } from '@/lib/auth-navigation';
 import { env } from '@/lib/env';
-import { BackGlyph } from '@/lib/platform-glyphs';
+import { CloseGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
 import googleSignInAndroid from '../assets/images/google-signin-android.png';
 
@@ -170,7 +170,7 @@ function AuthHeader() {
     <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Back to app"
+        accessibilityLabel="Close"
         onPress={() => leaveAuthScreen(router)}
         style={({ pressed }) => ({
           width: 48,
@@ -182,7 +182,7 @@ function AuthHeader() {
           opacity: pressed ? 0.74 : 1,
         })}
       >
-        <BackGlyph size={appTheme.icon.feature} color={workspace.text} />
+        <CloseGlyph size={appTheme.icon.feature} color={workspace.text} />
       </Pressable>
       <View style={{ flex: 1, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 7 }}>
         <Sparkles size={22} color={workspace.primary} />

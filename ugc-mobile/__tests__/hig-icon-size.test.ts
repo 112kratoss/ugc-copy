@@ -42,7 +42,10 @@ const ICON_RAMP = new Set<number>([
  * Off-ramp icon sizes each file still carries. Seeded by the F4 pass on
  * 2026-08-27; ratcheted down by N1 the same day, when the back controls on
  * seven screens moved to `BackGlyph` at `appTheme.icon.feature` and stopped
- * being counted here at 20/21/22/26/30.
+ * being counted here at 20/21/22/26/30; and again by N2, when the Close
+ * controls on eleven modal surfaces moved to `CloseGlyph` at the same size
+ * (create menu 1→0, home side menu 12→11, unlock prompt 3→2, composer 22→21,
+ * creator screen 25→24).
  */
 const LEGACY_SIZES: Record<string, number> = {
   'app/(tabs)/showcase.tsx': 3,
@@ -52,7 +55,7 @@ const LEGACY_SIZES: Record<string, number> = {
   'app/invite.tsx': 5,
   'app/onboarding.tsx': 1,
   'app/post/[id].tsx': 4,
-  'app/post/new.tsx': 22,
+  'app/post/new.tsx': 21,
   'app/r/[code].tsx': 5,
   'app/seller-dashboard.tsx': 3,
   'app/settings.tsx': 9,
@@ -64,9 +67,8 @@ const LEGACY_SIZES: Record<string, number> = {
   'components/feed-video-preview.tsx': 1,
   'components/home-dashboard.tsx': 4,
   'components/home-feed-card.tsx': 2,
-  'components/home-side-menu.tsx': 12,
-  'components/magic-create-menu.tsx': 1,
-  'components/media-creation-screen.tsx': 25,
+  'components/home-side-menu.tsx': 11,
+  'components/media-creation-screen.tsx': 24,
   'components/media-lightbox.tsx': 2,
   'components/media-preview.tsx': 1,
   'components/media-template-screens.tsx': 6,
@@ -77,7 +79,7 @@ const LEGACY_SIZES: Record<string, number> = {
   'components/profile-dashboard.tsx': 12,
   'components/profile-feed-card.tsx': 6,
   'components/showcase-media-preview.tsx': 2,
-  'components/unlock-remix-prompt.tsx': 3,
+  'components/unlock-remix-prompt.tsx': 2,
 };
 
 /** Names imported from lucide-react-native here, aliases resolved to the local name. */

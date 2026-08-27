@@ -5,7 +5,6 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  GripHorizontal,
   Image as ImageIcon,
   Layers,
   Plus,
@@ -49,7 +48,9 @@ import {
 } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { clearPersistedCreationDrafts, loadPersistedCreationDrafts, persistCreationDrafts } from '@/lib/creation-draft-resume';
+import { SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { useReducedMotion } from '@/lib/motion';
+import { CloseGlyph } from '@/lib/platform-glyphs';
 import { trackOnboardingEvent } from '@/lib/onboarding';
 import { getGenerationOutput, pollGenerationStatus } from '@/lib/generation';
 import {
@@ -2005,7 +2006,7 @@ function CompactCreatorHeader({
                 opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
-              <X size={20} color={appTheme.colors.textSecondary} />
+              <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.textSecondary} />
             </Pressable>
           ) : null}
           <AppText variant="pageTitle">Create</AppText>
@@ -3254,29 +3255,6 @@ function ReferenceMentionSuggestions({
   );
 }
 
-function SheetDragHandle({ label, onDismiss }: { label: string; onDismiss: () => void }) {
-  const panResponder = useMemo(() => PanResponder.create({
-    onMoveShouldSetPanResponder: (_, gestureState) => gestureState.dy > 8 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx),
-    onPanResponderRelease: (_, gestureState) => {
-      if (gestureState.dy > 48 || gestureState.vy > 0.8) onDismiss();
-    },
-  }), [onDismiss]);
-
-  return (
-    <Pressable
-      {...panResponder.panHandlers}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityHint="Swipe down or double tap to close"
-      onPress={onDismiss}
-      hitSlop={8}
-      style={({ pressed }) => ({ minHeight: 28, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
-    >
-      <GripHorizontal size={28} color={appTheme.colors.faint} />
-    </Pressable>
-  );
-}
-
 /**
  * Enhancement level + undo, shared by every prompt surface (the three creator
  * composers and the guided PromptPanel) so the controls cannot drift apart.
@@ -3391,6 +3369,7 @@ function ReferenceDetailsOverlay({
   onRemove: () => void;
 }) {
   const reducedMotion = useReducedMotion();
+  const drag = useSheetDismissDrag({ onDismiss: onClose });
   const [renameStatus, setRenameStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const renameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -3434,12 +3413,12 @@ function ReferenceDetailsOverlay({
     <Modal visible transparent statusBarTranslucent animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose}>
       <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.68)' }}>
         <Pressable accessible={false} onPress={onClose} style={{ position: 'absolute', inset: 0 }} />
-        <View accessibilityViewIsModal style={{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 30, gap: 14 }}>
-          <SheetDragHandle label="Dismiss reference details" onDismiss={onClose} />
+        <SheetPanel accessibilityViewIsModal style={[{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 30, gap: 14 }, drag.dragStyle]}>
+          <SheetGrabber drag={drag} />
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
             <Text style={{ color: appTheme.colors.text, fontSize: 20, fontWeight: '800' }}>Reference details</Text>
             <Pressable accessibilityRole="button" accessibilityLabel="Close reference details" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-              <X size={20} color={appTheme.colors.text} />
+              <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
             </Pressable>
           </View>
           <MediaPreview url={media.url} kind={media.kind === 'video' ? 'video' : 'image'} height={300} radius={22} />
@@ -3465,7 +3444,7 @@ function ReferenceDetailsOverlay({
             <Trash2 size={17} color={appTheme.colors.danger} />
             <Text style={{ color: appTheme.colors.danger, fontSize: 13, fontWeight: '800' }}>Remove reference</Text>
           </Pressable>
-        </View>
+        </SheetPanel>
       </View>
     </Modal>
   );
@@ -3554,6 +3533,7 @@ function SearchableModelPickerModal({
 }) {
   const [query, setQuery] = useState('');
   const reducedMotion = useReducedMotion();
+  const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
   const normalizedQuery = query.trim().toLowerCase();
   const filteredItems = useMemo(() => items.filter((item) => (
     !normalizedQuery || `${item.displayName} ${item.description} ${item.badge ?? ''}`.toLowerCase().includes(normalizedQuery)
@@ -3563,15 +3543,15 @@ function SearchableModelPickerModal({
     <Modal visible={visible} transparent statusBarTranslucent animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose} onDismiss={() => setQuery('')}>
       <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.7)' }}>
         <Pressable accessible={false} onPress={onClose} style={{ position: 'absolute', inset: 0 }} />
-        <View accessibilityViewIsModal style={{ height: '78%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 20, gap: 12 }}>
-          <SheetDragHandle label="Dismiss model picker" onDismiss={onClose} />
+        <SheetPanel accessibilityViewIsModal style={[{ height: '78%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 20, gap: 12 }, drag.dragStyle]}>
+          <SheetGrabber drag={drag} />
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <View style={{ flex: 1, gap: 2 }}>
               <Text style={{ color: appTheme.colors.text, fontSize: 21, fontWeight: '800' }}>Choose model</Text>
               <Text style={{ color: appTheme.colors.muted, fontSize: 12 }}>Defaults and quote update after selection.</Text>
             </View>
             <Pressable accessibilityRole="button" accessibilityLabel="Close model picker" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-              <X size={20} color={appTheme.colors.text} />
+              <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
             </Pressable>
           </View>
           <View style={{ minHeight: 52, borderRadius: 17, borderWidth: 1, borderColor: appTheme.colors.borderStrong, backgroundColor: appTheme.colors.surfaceInset, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 9 }}>
@@ -3606,7 +3586,7 @@ function SearchableModelPickerModal({
             })}
             {filteredItems.length === 0 ? <Text style={{ color: appTheme.colors.muted, textAlign: 'center', paddingVertical: 28 }}>No models found.</Text> : null}
           </ScrollView>
-        </View>
+        </SheetPanel>
       </View>
     </Modal>
   );
@@ -3650,6 +3630,7 @@ function CreatorParameterSheet({
   generateDisabled: boolean;
 }) {
   const reducedMotion = useReducedMotion();
+  const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
   const quoteLabel = quoteStatus === 'ready' ? `${cost ?? 0} credits` : quoteStatus === 'error' ? 'Unavailable' : 'Calculating…';
   const balanceLabel = typeof availableCredits === 'number'
     ? `${formatCreditAmount(availableCredits)} credits`
@@ -3658,15 +3639,15 @@ function CreatorParameterSheet({
     <Modal visible={visible} transparent statusBarTranslucent animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose}>
       <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.7)' }}>
         <Pressable accessible={false} onPress={onClose} style={{ position: 'absolute', inset: 0 }} />
-        <View testID="creator-parameter-sheet" accessibilityViewIsModal style={{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingTop: 6, paddingBottom: bottomInset + 12 }}>
-          <SheetDragHandle label="Dismiss generation parameters" onDismiss={onClose} />
+        <SheetPanel testID="creator-parameter-sheet" accessibilityViewIsModal style={[{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: appTheme.colors.panel, paddingTop: 6, paddingBottom: bottomInset + 12 }, drag.dragStyle]}>
+          <SheetGrabber drag={drag} />
           <View style={{ paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <View style={{ flex: 1, gap: 2 }}>
               <Text style={{ color: appTheme.colors.text, fontSize: 21, fontWeight: '800' }}>Generation parameters</Text>
               <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 12 }}>{model?.displayName ?? `${TOOL_META[draft.tool].title} settings`}</Text>
             </View>
             <Pressable accessibilityRole="button" accessibilityLabel="Close generation parameters" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-              <X size={20} color={appTheme.colors.text} />
+              <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
             </Pressable>
           </View>
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20, gap: 18 }}>
@@ -3713,7 +3694,7 @@ function CreatorParameterSheet({
               disabled={quoteStatus === 'error' ? false : generateDisabled}
             />
           </View>
-        </View>
+        </SheetPanel>
       </View>
     </Modal>
   );
@@ -3777,7 +3758,7 @@ function GenerationWorkspace({
             <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11 }}>{settingsSummary}</Text>
           </View>
           <Pressable accessibilityRole="button" accessibilityLabel={succeeded || failed ? 'Back to creator' : 'Minimize generation'} onPress={onMinimize} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-            <X size={20} color={appTheme.colors.text} />
+            <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
           </Pressable>
         </View>
 
@@ -3978,7 +3959,7 @@ function CreateHeader({
             onPress={onClose}
             style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: pressed ? appTheme.colors.pressed : appTheme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
           >
-            <X size={20} color={appTheme.colors.textSecondary} />
+            <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.textSecondary} />
           </Pressable>
         ) : null}
         <View style={{ flex: 1, gap: 4 }}>

@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { StableMediaImage } from '@/components/media-preview';
 import { AppText } from '@/components/ui';
+import { CloseGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
 
 export interface LightboxMediaItem {
@@ -125,7 +126,7 @@ function MediaLightboxContent({
               justifyContent: 'center',
             })}
           >
-            <X size={18} color={appTheme.colors.text} />
+            <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
           </Pressable>
         </View>
 

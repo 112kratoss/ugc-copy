@@ -169,7 +169,8 @@ describe('HIG standard icons — share speaks the platform dialect', () => {
   it('picks the platform shape in one place', () => {
     const glyphSource = readFileSync(path.join(mobileRoot, 'lib/platform-glyphs.ts'), 'utf8');
 
-    expect(glyphSource).toMatch(/Platform\.OS === 'ios' \? Share : Share2/);
+    expect(glyphSource).toMatch(/ReactNative\.Platform\.OS === 'ios'/);
+    expect(glyphSource).toMatch(/export const ShareGlyph = IS_IOS \? Share : Share2;/);
   });
 
   it('flags a screen that imports a share glyph itself', () => {

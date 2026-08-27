@@ -6,6 +6,7 @@ vi.mock('react-native', () => ({
   Alert: { alert: alertState.alert },
 }));
 
+import { registerActionSheetPresenter, type ActionSheetRequest } from '../lib/action-sheet';
 import { ApiError } from '../lib/api-client';
 import {
   archivePost,
@@ -113,19 +114,40 @@ describe('post lifecycle', () => {
     expect(describePostLifecycleError(new Error('   '), 'Please try again.')).toBe('Please try again.');
   });
 
-  it('offers the three states with the current one as the way out', () => {
+  it('offers the three states through an action sheet, with the current one shown as state', () => {
+    const presented: ActionSheetRequest[] = [];
+    const unregister = registerActionSheetPresenter((request) => presented.push(request));
+    const onPick = vi.fn();
+
+    try {
+      pickPostVisibility('unlisted', onPick);
+    } finally {
+      unregister();
+    }
+
+    // A picker is a set of choices following an intentional action, which is an
+    // action sheet's job — and not an alert's, which caps at three buttons and
+    // is why the current state used to have to double as the way out.
+    expect(alertState.alert).not.toHaveBeenCalled();
+    expect(presented).toHaveLength(1);
+    expect(presented[0].title).toBe('Change visibility');
+    expect(presented[0].actions.map((action) => action.label)).toEqual(['Public', 'Unlisted', 'Private']);
+
+    const current = presented[0].actions.find((action) => action.label === 'Unlisted');
+    expect(current?.detail).toBe('Current');
+    expect(current?.disabled).toBe(true);
+
+    presented[0].actions.find((action) => action.label === 'Private')?.onPress?.();
+    expect(onPick).toHaveBeenCalledWith('private');
+  });
+
+  it('falls back to the system dialog when no host is mounted, cancel last', () => {
     const onPick = vi.fn();
     pickPostVisibility('unlisted', onPick);
 
-    const actions = alertState.alert.mock.calls[0][2] as Array<{ text: string; style?: string; onPress?: () => void }>;
-    // Android shows at most three alert buttons, so there is no separate Cancel.
-    expect(actions.map((action) => action.text)).toEqual(['Public', 'Keep unlisted', 'Private']);
-    expect(getAlertAction('Keep unlisted').style).toBe('cancel');
-    expect(alertState.alert.mock.calls[0][3]).toEqual({ cancelable: true });
-    getAlertAction('Keep unlisted').onPress?.();
-    expect(onPick).not.toHaveBeenCalled();
-    getAlertAction('Private').onPress?.();
-    expect(onPick).toHaveBeenCalledWith('private');
+    const actions = alertState.alert.mock.calls[0][2] as Array<{ text: string; style?: string }>;
+    expect(actions.map((action) => action.text)).toEqual(['Public', 'Unlisted', 'Private', 'Cancel']);
+    expect(actions.at(-1)?.style).toBe('cancel');
   });
 
   it('confirms an archive and restores without asking', async () => {

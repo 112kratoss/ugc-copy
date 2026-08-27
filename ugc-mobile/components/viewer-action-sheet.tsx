@@ -2,6 +2,7 @@ import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { Alert, Linking, Modal, Pressable, ScrollView, View } from 'react-native';
 
+import { SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { AppText } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import {
@@ -53,6 +54,7 @@ export function ViewerActionSheet({
   const { api, user } = useAuth();
   const queryClient = useQueryClient();
   const reducedMotion = useReducedMotion();
+  const drag = useSheetDismissDrag({ onDismiss: onClose });
   const canModerateCreator = item.sourceType === 'showcase'
     && Boolean(item.creatorId)
     && item.creatorId !== user?.id;
@@ -402,30 +404,23 @@ export function ViewerActionSheet({
           onPress={onClose}
           style={{ position: 'absolute', inset: 0 }}
         />
-        <View
-          style={{
-            maxHeight: '62%',
-            borderTopLeftRadius: appTheme.radii.xl,
-            borderTopRightRadius: appTheme.radii.xl,
-            borderCurve: 'continuous',
-            borderWidth: 1,
-            borderBottomWidth: 0,
-            borderColor: appTheme.colors.borderStrong,
-            backgroundColor: appTheme.colors.panel,
-            paddingTop: appTheme.spacing.gap,
-            paddingBottom: 34,
-          }}
+        <SheetPanel
+          style={[
+            {
+              maxHeight: '62%',
+              borderTopLeftRadius: appTheme.radii.xl,
+              borderTopRightRadius: appTheme.radii.xl,
+              borderCurve: 'continuous',
+              borderWidth: 1,
+              borderBottomWidth: 0,
+              borderColor: appTheme.colors.borderStrong,
+              backgroundColor: appTheme.colors.panel,
+              paddingBottom: 34,
+            },
+            drag.dragStyle,
+          ]}
         >
-          <View
-            style={{
-              width: 42,
-              height: 4,
-              borderRadius: 2,
-              backgroundColor: appTheme.colors.borderStrong,
-              alignSelf: 'center',
-              marginBottom: appTheme.spacing.gap,
-            }}
-          />
+          <SheetGrabber drag={drag} />
           <ScrollView showsVerticalScrollIndicator={false}>
             {groupViewerActions(Array.from(new Set(actions))).map((group) => (
               <View key={group.label} style={{ paddingBottom: appTheme.spacing.compact }}>
@@ -481,7 +476,7 @@ export function ViewerActionSheet({
               </View>
             ))}
           </ScrollView>
-        </View>
+        </SheetPanel>
       </View>
     </Modal>
   );

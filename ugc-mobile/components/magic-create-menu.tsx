@@ -1,4 +1,4 @@
-import { FilePlus2, Sparkles, X } from 'lucide-react-native';
+import { FilePlus2, Sparkles } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import type React from 'react';
 import {
@@ -13,7 +13,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { SheetGrabber, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { CREATE_MENU_ACTIONS, type CreateMenuAction, type CreateMenuActionId } from '@/lib/create-menu-view-model';
+import { CloseGlyph } from '@/lib/platform-glyphs';
 import { useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
@@ -61,6 +63,7 @@ export function MagicCreateMenu({
   const panelWidth = Math.min(520, Math.max(0, width - panelInset * 2));
   const actionWidth = Math.max(116, (panelWidth - 52) / 2);
   const reduceMotionEnabled = useReducedMotion();
+  const drag = useSheetDismissDrag({ onDismiss: onClose });
   const [rendered, setRendered] = useState(visible);
   const [sheetHeight, setSheetHeight] = useState(0);
   const progress = useRef(createAnimatedValue(visible ? 1 : 0)).current;
@@ -104,9 +107,15 @@ export function MagicCreateMenu({
   // No cross-fade: the travel carries the entrance on its own, and fading a moving panel reads
   // as smearing. Opacity is only used to hold the sheet back for the frame before it is measured.
   const sheetOpacity = progress ? (measured ? 1 : 0) : 1;
-  const sheetTranslateY = progress
+  // The drag rides on top of the entry travel, added into the same transform
+  // entry: two translateY entries would put a JS-driven value beside a
+  // native-driven one on the same view.
+  const entryTranslateY = progress
     ? progress.interpolate({ inputRange: [0, 1], outputRange: [sheetHeight + SHEET_HIDDEN_SLOP, 0] })
     : 0;
+  const sheetTranslateY = progress && drag.translateY
+    ? Animated.add(entryTranslateY, drag.translateY)
+    : entryTranslateY;
 
   return (
     <ModalSurface
@@ -152,7 +161,7 @@ export function MagicCreateMenu({
             borderWidth: 1,
             borderBottomWidth: 0,
             borderColor: appTheme.colors.border,
-            paddingTop: 12,
+            paddingTop: 4,
             paddingHorizontal: 20,
             paddingBottom: safeBottom + 16,
             backgroundColor: appTheme.colors.panel,
@@ -161,17 +170,7 @@ export function MagicCreateMenu({
             boxShadow: '0 -16px 42px rgba(0,0,0,0.34)',
           }}
         >
-          <View
-            accessible={false}
-            style={{
-              width: 36,
-              height: 4,
-              borderRadius: 2,
-              alignSelf: 'center',
-              marginBottom: 8,
-              backgroundColor: appTheme.colors.borderStrong,
-            }}
-          />
+          <SheetGrabber drag={drag} />
 
           <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
             <View style={{ flex: 1, minWidth: 0 }}>
@@ -225,7 +224,7 @@ function CloseMenuButton({ onPress }: { onPress: () => void }) {
         opacity: pressed ? 0.78 : 1,
       })}
     >
-      <X size={22} color={appTheme.colors.text} />
+      <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
     </Pressable>
   );
 }

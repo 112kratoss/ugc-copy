@@ -33,6 +33,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { CloseGlyph } from '@/lib/platform-glyphs';
 import { formatUsdCents } from '@/lib/home-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { formatCreditAmount } from '@/lib/pricing';
@@ -210,7 +211,7 @@ export function HomeSideMenu({
                   opacity: pressed ? 0.76 : 1,
                 })}
               >
-                <X size={21} color={appTheme.colors.text} />
+                <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
               </Pressable>
             </View>
 

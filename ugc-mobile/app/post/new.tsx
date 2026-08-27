@@ -30,6 +30,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText, ChoiceChip, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
 import { ComposerMediaLightbox, getComposerMediaLabel } from '@/components/composer-media-lightbox';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
+import { SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
+import { showActionSheet } from '@/lib/action-sheet';
 import { StableMediaImage } from '@/components/media-preview';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
@@ -103,7 +105,7 @@ import {
   type PostComposerValidationResult,
 } from '@/lib/post-new-view-model';
 import { env } from '@/lib/env';
-import { BackGlyph } from '@/lib/platform-glyphs';
+import { BackGlyph, CloseGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme, type ToolAccent } from '@/lib/theme';
 import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-file';
@@ -236,7 +238,7 @@ function HeaderIconButton({ label, icon, onPress }: { label: string; icon: 'back
     >
       {icon === 'back'
         ? <BackGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
-        : <X size={22} color={appTheme.colors.text} />}
+        : <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />}
     </Pressable>
   );
 }
@@ -1109,26 +1111,29 @@ function VisibilitySheet({
     { id: 'unlisted', label: 'Unlisted', body: 'Only people with the link can open it.' },
     { id: 'private', label: 'Private', body: 'Only you can see it in Studio.' },
   ];
+  const drag = useSheetDismissDrag({ onDismiss: onClose, visible });
   return (
     <Modal visible={visible} transparent animationType="fade" presentationStyle="overFullScreen" onRequestClose={onClose}>
       <View style={{ flex: 1, justifyContent: 'flex-end' }}>
         <Pressable accessible={false} onPress={onClose} style={{ position: 'absolute', inset: 0, backgroundColor: appTheme.colors.overlayStrong }} />
-        <View
+        <SheetPanel
           accessibilityViewIsModal
-          style={{
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
-            borderWidth: 1,
-            borderBottomWidth: 0,
-            borderColor: appTheme.colors.border,
-            backgroundColor: appTheme.colors.panel,
-            paddingHorizontal: 18,
-            paddingTop: 12,
-            paddingBottom: bottomInset + 18,
-            gap: 12,
-          }}
+          style={[
+            {
+              borderTopLeftRadius: 28,
+              borderTopRightRadius: 28,
+              borderWidth: 1,
+              borderBottomWidth: 0,
+              borderColor: appTheme.colors.border,
+              backgroundColor: appTheme.colors.panel,
+              paddingHorizontal: 18,
+              paddingBottom: bottomInset + 18,
+              gap: 12,
+            },
+            drag.dragStyle,
+          ]}
         >
-          <View style={{ width: 36, height: 4, borderRadius: 2, alignSelf: 'center', backgroundColor: appTheme.colors.borderStrong }} />
+          <SheetGrabber drag={drag} />
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
             <AppText heading variant="sectionTitle" style={{ flex: 1 }}>Who can see this?</AppText>
             <HeaderIconButton label="Close visibility options" icon="close" onPress={onClose} />
@@ -1160,7 +1165,7 @@ function VisibilitySheet({
               </View>
             </Pressable>
           ))}
-        </View>
+        </SheetPanel>
       </View>
     </Modal>
   );
@@ -1216,26 +1221,33 @@ function ResourceComposerSheet({
     || Boolean(card?.attachments.length);
   const cardErrors = card ? getPostComposerResourceCardErrors(card) : {};
   const isReady = card ? isPostComposerResourceCardReady(card) : false;
+  // Dismissing by drag goes through the same handler as the Close button, so
+  // the unsaved-changes confirmation runs either way (Modality: get
+  // confirmation before closing a modal view, gesture or button).
+  const drag = useSheetDismissDrag({ onDismiss: onRequestClose, visible });
 
   return (
     <Modal visible={visible} transparent animationType="slide" presentationStyle="overFullScreen" onRequestClose={onRequestClose}>
       <KeyboardAvoidingArea iosScrollViewAdjustsInsets style={{ justifyContent: 'flex-end' }}>
         <Pressable accessible={false} onPress={onRequestClose} style={{ position: 'absolute', inset: 0, backgroundColor: appTheme.colors.overlayStrong }} />
-        <View
+        <SheetPanel
           accessibilityViewIsModal
-          style={{
-            maxHeight: Math.min(height * 0.9, 760),
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
-            borderWidth: 1,
-            borderBottomWidth: 0,
-            borderColor: appTheme.colors.border,
-            backgroundColor: appTheme.colors.panel,
-            overflow: 'hidden',
-          }}
+          style={[
+            {
+              maxHeight: Math.min(height * 0.9, 760),
+              borderTopLeftRadius: 28,
+              borderTopRightRadius: 28,
+              borderWidth: 1,
+              borderBottomWidth: 0,
+              borderColor: appTheme.colors.border,
+              backgroundColor: appTheme.colors.panel,
+              overflow: 'hidden',
+            },
+            drag.dragStyle,
+          ]}
         >
-          <View style={{ paddingTop: 11, paddingHorizontal: 18 }}>
-            <View style={{ width: 36, height: 4, borderRadius: 2, alignSelf: 'center', backgroundColor: appTheme.colors.borderStrong }} />
+          <View style={{ paddingHorizontal: 18 }}>
+            <SheetGrabber drag={drag} />
             <View style={{ minHeight: 62, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
               <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
                 <AppText heading variant="sectionTitle">{mode === 'type' ? 'Add a resource' : option?.label ?? 'Edit resource'}</AppText>
@@ -1484,7 +1496,7 @@ function ResourceComposerSheet({
               </View>
             </>
           ) : null}
-        </View>
+        </SheetPanel>
       </KeyboardAvoidingArea>
     </Modal>
   );
@@ -2063,39 +2075,41 @@ export default function NewPostScreen() {
     },
   });
 
+  // Leaving a composer with unsaved work is the case Action sheets names by
+  // example ("when people cancel the message they're editing in Mail ... an
+  // action sheet provides two choices: delete the draft, or save the draft"),
+  // and Sheets repeats it for the dismiss gesture. It was an alert, which the
+  // Alerts chapter reserves for problems — and its message existed only to
+  // explain the three buttons, which the same chapter tells you not to do.
   usePreventRemove(hasUnsavedChanges && !isNavigationAllowed, ({ data }) => {
-    Alert.alert(
-      'Leave this post?',
-      'Keep editing, save this draft on this device, or discard the changes.',
-      [
-        { text: 'Keep editing', style: 'cancel' },
+    const leave = (settle: () => Promise<unknown>) => {
+      void settle().finally(() => {
+        setIsNavigationAllowed(true);
+        setTimeout(() => navigation.dispatch(data.action), 0);
+      });
+    };
+
+    showActionSheet({
+      title: 'Leave this post?',
+      actions: [
         {
-          text: 'Save draft',
-          onPress: () => {
-            const save = draftStorageId
-              ? persistPostComposerDraft(draftStorageId, { draft, step: composerStep })
-              : Promise.resolve();
-            void save.finally(() => {
-              setIsNavigationAllowed(true);
-              setTimeout(() => navigation.dispatch(data.action), 0);
-            });
-          },
+          label: 'Discard changes',
+          destructive: true,
+          onPress: () => leave(() => (
+            draftStorageId ? clearPersistedPostComposerDraft(draftStorageId) : Promise.resolve()
+          )),
         },
         {
-          text: 'Discard',
-          style: 'destructive',
-          onPress: () => {
-            const clear = draftStorageId
-              ? clearPersistedPostComposerDraft(draftStorageId)
-              : Promise.resolve();
-            void clear.finally(() => {
-              setIsNavigationAllowed(true);
-              setTimeout(() => navigation.dispatch(data.action), 0);
-            });
-          },
+          label: 'Save draft',
+          detail: 'Kept on this device.',
+          onPress: () => leave(() => (
+            draftStorageId
+              ? persistPostComposerDraft(draftStorageId, { draft, step: composerStep })
+              : Promise.resolve()
+          )),
         },
       ],
-    );
+    });
   });
 
   if (authLoading) {

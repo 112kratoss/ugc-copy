@@ -38,6 +38,10 @@ vi.mock('react-native-safe-area-context', () => ({
 }));
 
 vi.mock('lucide-react-native', () => ({
+  ArrowLeft: (props: Record<string, unknown>) => React.createElement('glyph-icon', props),
+  ChevronLeft: (props: Record<string, unknown>) => React.createElement('glyph-icon', props),
+  Share: (props: Record<string, unknown>) => React.createElement('glyph-icon', props),
+  Share2: (props: Record<string, unknown>) => React.createElement('glyph-icon', props),
   FilePlus2: (props: Record<string, unknown>) => React.createElement('file-plus-icon', props),
   Sparkles: (props: Record<string, unknown>) => React.createElement('sparkles-icon', props),
   X: (props: Record<string, unknown>) => React.createElement('x-icon', props),
@@ -55,7 +59,9 @@ vi.mock('@/lib/theme', () => ({
   appTheme: {
     colors: {
       muted: '#a1a1aa',
+      borderStrong: 'rgba(255,248,237,0.22)',
     },
+    icon: { feature: 24 },
   },
 }));
 

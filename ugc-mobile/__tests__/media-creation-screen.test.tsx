@@ -104,6 +104,10 @@ vi.mock('expo-linear-gradient', () => ({
 }));
 
 vi.mock('lucide-react-native', () => ({
+  ArrowLeft: (props: MockProps) => React.createElement('glyph-icon', props),
+  ChevronLeft: (props: MockProps) => React.createElement('glyph-icon', props),
+  Share: (props: MockProps) => React.createElement('glyph-icon', props),
+  Share2: (props: MockProps) => React.createElement('glyph-icon', props),
   AudioLines: (props: MockProps) => React.createElement('audio-lines-icon', props),
   Check: (props: MockProps) => React.createElement('check-icon', props),
   ChevronDown: (props: MockProps) => React.createElement('chevron-down-icon', props),
@@ -1296,7 +1300,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
     expect(tree!.root.findByProps({ testID: 'read-only-parameter-value' }).props.accessibilityLabel).toBe('JPG. Fixed for this model');
     expect(tree!.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'JPG')).toHaveLength(0);
-    expect(tree!.root.findByProps({ accessibilityLabel: 'Dismiss generation parameters' })).toBeTruthy();
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Close generation parameters' })).toBeTruthy();
 
     const ratioLabels = tree!.root.findAll((node) => (
       String(node.type) === 'pressable'

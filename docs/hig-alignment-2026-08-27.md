@@ -174,6 +174,8 @@ applied everywhere or it's a bug, not a choice.
 | DV4 | Lucide iconography instead of SF Symbols | SF Symbols, Icons | Cross-platform consistency (D1); glyphs that carry OS meaning (e.g. Share) may borrow the SF shape | app-wide |
 | DV5 | The tab bar hides on the Create tab | Tab bars | `creator` is a tab that presents as a modal — full-screen, self-contained, a standard Close rather than a back control — which is the exception Tab bars names ("a modal is temporary and self-contained") | only tab that hides the bar; verify in Phase 6 |
 | DV6 | The raised centre control opens a menu instead of switching tabs | Tab bars | "Use a tab bar to support navigation, not to provide actions" — both menu entries navigate to sections (create tab, post composer), so it is navigation via a menu, in the platform-common shape for a creation affordance | single control, app-wide |
+| DV7 | The three creation surfaces are full-screen modals in substance but declared a tab and two pushes | Modality | The create tab, `create/[tool]` and `post/new` are each full-screen, self-contained and closed rather than backed out of. The create tab cannot become a modal route — it is a tab (DV5) — so promoting one of the other two would split a family the same menu opens. What Modality asks for, an obvious way out, each of them has, and all three now draw the same `CloseGlyph`. Pinned by `post-new-screen.test.ts` | all three creation surfaces |
+| DV8 | A `cancel`-styled alert button titled "Keep …" rather than "Cancel" | Alerts | Four alerts confirm cancelling something ("Cancel upload", "Cancel creation"), where a button titled "Cancel" would collide with the action's own name. The decline says what keeping means instead. The three that do *not* have that collision ("Not now" ×3) are a real miss → X3 | 4 of 7; the other 3 are open |
 
 ## HIG coverage matrix
 
@@ -362,7 +364,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | F5 controls/input | 1 | partial | — | ≥44pt hit regions guarded via lib/hit-target.ts (PR #83); non-geometric rules open |
 | F6 branding boundary | 1 | done | 1V/1D/3P | the product now spells its own name one way |
 | N1 tab bar/toolbars/status bar | 2 | done | 3V/2D/5P | Alerts badge; one Back glyph per platform; every view title bounded and static |
-| N2 modality map/sheets/alerts/gestures | 2 | todo | — | |
+| N2 modality map/sheets/alerts/gestures | 2 | done | 4V/4D/4P | one sheet grabber that actually drags; menus off `Alert`; one Close control |
 | N3 side menus/shell motion | 2 | todo | — | |
 | S5 showcase feed | 3 | todo | — | |
 | S6+S6a/b/c viewer & sheets | 3 | todo | — | |
@@ -657,3 +659,159 @@ samples the media behind it. Nothing in this unit touches keyboard or gestures.
 
 **Open remainder**: no app-icon badge (`setBadgeCountAsync`) — Tab bars only governs the in-app
 oval, and the icon badge belongs with the notification permission and badge-hygiene work in S26.
+
+### N2 modality map, sheets, alerts & gestures — audited 2026-08-27 · AND-pass: 2026-08-27
+Chapters read: Modality (`modality`), Sheets (`sheets`), Action sheets (`action-sheets`),
+Alerts (`alerts`), Menus (`menus`), Context menus (`context-menus`), Gestures (`gestures`).
+
+Rules in checkable form: present modally only with a clear benefit, and always give an obvious way
+out · confirm before closing a modal that would lose work, gesture or button · one modal at a time,
+one alert ever · a grabber means the sheet resizes or dismisses by drag · support swiping to dismiss ·
+Cancel/Close on the leading edge, Done on the trailing, and a Done button always paired with a Cancel
+— Back is for a previous step, never for dismissing · an action sheet, not an alert, for choices that
+follow an intentional action · destructive choices at the top in the destructive style, Cancel at the
+bottom · alerts hold at most three buttons, a destructive one always beside a Cancel, and a cancelling
+button is titled "Cancel" · don't explain the buttons in the message · use an alert to act, not to
+inform · menu labels are verbs, title-case, articles dropped, icons for all of a group or none ·
+context menus consistent app-wide, destructive last, every item also reachable in the main interface ·
+respond to gestures as people expect, and never let a gesture be the only way to do something.
+
+- [V][both] **Every swipe-to-dismiss in the app was dead, in three different ways.** Four sheets drew
+  the grabber pill (comments, viewer actions, feed feedback, create menu) and three more drew a
+  `GripHorizontal` handle (the creator's reference, model and parameter sheets); two more drew the
+  pill inside the composer (visibility, resource editor). Of the nine, *none* dismissed on a swipe.
+  Sheets: "Include a grabber in a resizable sheet — a grabber shows people that they can drag the
+  sheet"; "Support swiping to dismiss a sheet. People expect to swipe vertically to dismiss a sheet
+  instead of tapping a dismiss button." A pill with nothing behind it is worse than no pill: it
+  promises a gesture the sheet does not answer, which is what Gestures warns about — "if you don't
+  clearly communicate why a gesture doesn't work, people might think your app has frozen."
+  → **fixed**: `components/sheet-chrome.tsx` — `useSheetDismissDrag` + `SheetGrabber`, adopted by all
+  nine. Three separate causes, each found only on a device:
+  - **The pill was decorative.** Five of the nine had no responder at all.
+  - **`Pressable` silently eats spread pan handlers.** The creator sheets' `SheetDragHandle` was a
+    `Pressable` with `{...panResponder.panHandlers}` spread on it. `Pressable` renders
+    `{...restProps}` and *then* `{...eventHandlers}` from its own Pressability, so every responder
+    prop was overwritten and the drag had never once fired. The primitive is a plain `View`; the
+    guard sweeps for the pattern so it cannot come back.
+  - **A React Native `Modal` never delivers the move phase to a view that declined the start.**
+    Measured on the emulator with a temporary probe: on a Modal-hosted sheet
+    `onStartShouldSetPanResponder` fired on touch-down and `onMoveShouldSetPanResponder` never fired
+    at all, while the identical grabber hosted through `OverlayHost` received both. Four of the nine
+    sheets are Modals, so claiming the drag on the first qualifying *move* — the ordinary way to write
+    this — could never work there. The primitive claims the touch on **start** instead, which is safe
+    because the grabber is a dedicated strip and a touch that turns out not to be a drag springs back.
+  - Dragging is the only gesture on it. Tapping a grabber cycles detents on iOS and does not dismiss,
+    so the three sheets that dismissed on tap lost that; each has a Close button beside it. The
+    grabber is also `accessible={false}`: Gestures asks that a shortcut gesture never be the only way
+    to perform an action, and every sheet already answers that with a labelled backdrop or a Close
+    button — a second focus stop reading "Close model picker" next to the button that says so is
+    noise, not access.
+- [V][both] **Three menus were built out of `Alert`.** Comment options (`Delete` / `Remove from post` /
+  `Report` / `Cancel`), the post visibility picker, and leaving the composer with unsaved work.
+  Alerts: "Use an action sheet — not an alert — to offer choices related to an intentional action …
+  an alert is usually unexpected, generally telling people about a problem"; and an alert holds "up to
+  three buttons", which comment options could exceed. Leaving the composer is the case Action sheets
+  names by example — "when people cancel the message they're editing in Mail … an action sheet
+  provides two choices: delete the draft, or save the draft" — and Sheets repeats it for the dismiss
+  gesture. → **fixed**: `lib/action-sheet.ts` (renderless: types, the presenter registry,
+  `showActionSheet`, `orderActionSheetActions`) plus `components/action-sheet.tsx` (the surface,
+  mounted once inside `OverlayHost`). Split the way `lib/notification-badge.ts` is, so a renderless
+  module like `post-lifecycle` can present one without importing React.
+  - Ordering is the primitive's job, not the caller's: destructive first, Cancel last, so no call site
+    can get it backwards.
+  - The visibility picker previously spent its way out on the current state — `Keep private` styled
+    `cancel`, because Android caps an alert at three buttons and a fourth Cancel would only have
+    appeared on iOS. As a sheet the current state is shown *as* state (dimmed, "Current") and Cancel
+    is titled "Cancel", which Alerts requires.
+  - The composer's alert also carried "Keep editing, save this draft on this device, or discard the
+    changes" — a message whose only job was to explain the three buttons, against Alerts' "Avoid
+    explaining alert buttons". Gone; the labels say it.
+  - The comment report reason picker was a second sheet drawn *inside* the comments sheet
+    (`position: absolute`, `zIndex: 10`). It is now an action sheet presented after the options sheet
+    closes, which is the Modality rule ("let people dismiss a modal view before presenting another")
+    and the same shape Mail uses.
+- [V][both] **Two modal routes were dismissed with a Back chevron.** `auth` and `edit-profile` are
+  both `presentation: 'modal'` — they slide up from the bottom — and the only way out of each was a
+  `BackGlyph`. Sheets: "The Back button lets people navigate to a previous step in a multi-step flow
+  or to a parent view in a hierarchy. It isn't intended to dismiss a sheet." `edit-profile` was the
+  worse of the two: it has a **Save** (Done) button on the trailing edge, and "If you provide a Done
+  button, always pair it with a Cancel button … Relying solely on the Done button implies that
+  completing the task is the only way to exit the sheet" → **fixed**: both lead with `CloseGlyph`,
+  `edit-profile`'s labelled "Cancel", so the sheet now reads Cancel-leading / Done-trailing exactly as
+  the chapter asks. **Android counterpart**: not a no-op and not a dialect split — Close is the same
+  mark on both platforms (SF `xmark`, Material `close`), so this one glyph is shared. Verified on both.
+- [V][both] **Close was drawn at eight sizes across eleven modal surfaces.** Raw lucide `X` at
+  15/17/18/20/21/22/28, the same contradiction N1 found in Back and from the same sentence — Toolbars:
+  "Use the standard Back and Close buttons … ensure you consistently implement it throughout your
+  app." → **fixed**: `CloseGlyph` joins `BackGlyph` and `ShareGlyph` in `lib/platform-glyphs.ts`, at
+  one size (`appTheme.icon.feature`), adopted by the eleven controls that dismiss a modal surface. An
+  `X` that removes a chip, clears a field or dismisses an inline banner is a different action wearing
+  the same shape and keeps its own glyph. Side effect on F4's ratchet: five files shed off-ramp sizes
+  (create menu 1→0, home side menu 12→11, unlock prompt 3→2, composer 22→21, creator screen 25→24).
+  - `platform-glyphs` also stopped reading `Platform.OS` at module scope through a bare named import,
+    which threw in any test whose react-native mock omits `Platform` — adopting a shared glyph should
+    never force a test to widen its mock. Same guard as `lib/motion`.
+- [D][both] **The modality map: three creation surfaces, three different declarations.** The create
+  tab, `create/[tool]` and `post/new` are each full-screen, self-contained, and closed rather than
+  backed out of — modals in substance — while being declared a tab, a push, and a push. Promoting
+  `post/new` alone to `fullScreenModal` was tried and reverted: `post-new-screen.test.ts` pins it to
+  "the same full-screen push presentation as the media creator", and the create tab cannot become a
+  modal route at all, so the change would have split a family that one menu opens. What Modality
+  actually asks for — an obvious way out — each of them has → **intentional (→ ledger DV7)**.
+- [D][both] **A cancelling alert button that isn't titled "Cancel".** Seven alerts style a button
+  `cancel` and title it something else. Four of them confirm cancelling something — "Keep uploading"
+  beside "Cancel upload", "Keep creating" beside "Cancel creation" — where the required title would
+  collide with the action's own name, and saying what *keeping* means serves the rule's purpose
+  better → **intentional (→ ledger DV8)**. The other three ("Not now", beside "Open web" / "Get
+  credits" / "Retry") have no such defence and are a real miss → **deferred to X3**, which owns button
+  copy app-wide.
+- [D][both] **Alert titles are sentence case; the chapter asks for title case on fragments.** Alerts:
+  "If the title is a sentence fragment, use title-style capitalization." Every alert title in the app
+  is sentence case ("Could not report content", "Report received"), consistently → **deferred to X3**,
+  which the phase plan already gives casing to. Settling it in one place beats rewriting ~30 strings
+  here and having X3 reverse them.
+- [D][both] **The viewer's More sheet dims unavailable actions instead of hiding them.** Context menus:
+  "Hide unavailable menu items, don't dim them." It is closer to a menu than a context menu — it is
+  revealed on demand, and Menus says the opposite ("Show people when a menu item is unavailable") —
+  and each dimmed row prints *why* it is unavailable, which hiding would throw away
+  → **intentional**, no ledger row: it is one sheet, and the reason text is the point.
+- [P][both] **No context menus anywhere.** Zero `onLongPress` in the tree. Context menus asks for
+  consistency, and having none everywhere is consistent, so this is an opportunity rather than a
+  violation — but the chapter's own examples (a feed card, a comment) are exactly this app's content.
+  Deferred to the per-surface Phase 3 passes, where the item list can be drawn from what each surface
+  already offers ("Always make context menu items available in the main interface, too").
+- [P][both] Verified clean: **swipe-back is on everywhere it should be** — `gestureEnabled: true` in
+  the root `screenOptions`, disabled on exactly two screens, `onboarding` and `update-required`, which
+  are gates with nowhere to go back to. Gestures' "shortcut gestures supplement standard gestures, not
+  replace them" holds: every screen also has a visible Back or Close.
+- [P][both] Verified clean: **the workspace edge-swipe cannot fight the system back gesture.** The
+  left-edge menu (`EDGE_SWIPE_START_WIDTH` 24pt) is mounted only on `showcase`, a tab root, where
+  there is no swipe-back to conflict with.
+- [P][both] Verified clean: **one alert at a time, and none at launch.** No path presents two, and the
+  only startup-time modal is the version gate, which is a route rather than an alert — Alerts: "Avoid
+  showing an alert when your app starts."
+- [P][both] Noted for S15: **edit-profile now offers two cancels** — the header Close and a "Cancel"
+  button at the foot of the form. Not a rule break (Sheets asks for the toolbar one, which it lacked),
+  but the pair is redundant; the form-foot button is Phase 4's to settle.
+
+Guard added: `__tests__/hig-modality.test.ts` (12 cases) — only `sheet-chrome` may draw a grabber;
+every grabber has a drag and every drag moves its panel; no pan handlers spread onto a `Pressable`;
+no alert over three buttons; no destructive alert action without a cancel; the action-sheet host is
+mounted inside the overlay host; destructive-first ordering; every overlay-hosted surface claims
+Android back; no raw `X` on a control labelled Close; the modal-route set is pinned so a new modal
+route cannot be added without settling its dismiss control; and the three menus that were alerts stay
+gone. `post-lifecycle.test.ts` and `comments-sheet.test.tsx` now assert against the action sheet
+(including the no-host `Alert` fallback with Cancel last).
+
+**AND-pass 2026-08-27** (mandatory: this unit touches navigation, gestures and sheets). Pixel_9a, dev
+client on the worktree's Metro. Swipe-to-dismiss verified on both sheet hosts — the create menu (a
+`Modal`) and the comments sheet (`OverlayHost`) — and it was the Android probe that produced the
+Modal move-phase finding above. The visibility action sheet renders with the grabber, the current
+state dimmed as "Current", and Cancel last; **hardware back dismisses the sheet rather than popping
+the screen**, and returns to the surface underneath. Edit Profile shows Close-leading / Save-trailing
+identically to iOS. Home→Showcase→viewer→comments→profile cycled with `logcat` clear of
+`FATAL`/`SIGSEGV` (the historical BlurView-mid-tab-fade crash). Edge-to-edge and the status bar are
+unchanged; nothing in this unit touches the keyboard.
+
+**Open remainder**: the three "Not now" cancel titles and alert-title casing go to X3; context menus
+go to the Phase 3 surface passes; edit-profile's duplicate cancel goes to S15.

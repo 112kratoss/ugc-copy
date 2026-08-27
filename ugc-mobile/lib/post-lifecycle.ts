@@ -1,5 +1,6 @@
 import { Alert } from 'react-native';
 
+import { showActionSheet } from './action-sheet';
 import { ApiError, type MagicbookletApiClient } from './api-client';
 import {
   getPostLifecycleConfirmation,
@@ -74,18 +75,30 @@ export function confirmPostLifecycleAction(confirmation: PostLifecycleConfirmati
   });
 }
 
-/** The three-state picker every surface offers. */
+/**
+ * The three-state picker every surface offers.
+ *
+ * It was an alert, which the Alerts chapter reserves for problems and caps at
+ * three buttons — so the current state had to double as the way out ("Keep
+ * private"), against the rule that a button cancelling an action is titled
+ * "Cancel". An action sheet is the component for choices that follow an
+ * intentional action, has no button cap, and lets the current state be shown
+ * as state instead of spent as the exit.
+ */
 export function pickPostVisibility(
   current: PostLifecycleVisibility,
   onPick: (next: PostLifecycleVisibility) => void,
 ) {
-  // Android renders at most three alert buttons, so the current state doubles
-  // as the way out instead of a fourth Cancel button that only iOS would show.
-  Alert.alert('Change visibility', 'Choose who can see this post.', POST_VISIBILITY_OPTIONS.map((option) => (
-    option.value === current
-      ? { text: `Keep ${option.label.toLowerCase()}`, style: 'cancel' as const }
-      : { text: option.label, onPress: () => onPick(option.value) }
-  )), { cancelable: true });
+  showActionSheet({
+    title: 'Change visibility',
+    message: 'Choose who can see this post.',
+    actions: POST_VISIBILITY_OPTIONS.map((option) => ({
+      label: option.label,
+      detail: option.value === current ? 'Current' : undefined,
+      disabled: option.value === current,
+      onPress: () => onPick(option.value),
+    })),
+  });
 }
 
 export function describePostLifecycleError(error: unknown, fallback: string): string {

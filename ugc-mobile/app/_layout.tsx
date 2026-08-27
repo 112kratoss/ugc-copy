@@ -14,6 +14,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-url-polyfill/auto';
 
+import { ActionSheetHost } from '@/components/action-sheet';
 import { OverlayHost } from '@/components/overlay-host';
 import { setUpgradeRequiredHandler } from '@/lib/api-client';
 import { AuthProvider, useAuth } from '@/lib/auth';
@@ -103,6 +104,7 @@ function RootLayoutNav() {
                     reaches it — which a React Native Modal cannot offer on
                     Android. */}
                 <OverlayHost>
+                <ActionSheetHost />
                 <Stack
                 screenOptions={{
                   animation: reducedMotion ? 'none' : 'default',
@@ -132,6 +134,15 @@ function RootLayoutNav() {
                 <Stack.Screen name="templates/index" options={{ title: 'Templates', animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="templates/[slug]" options={{ title: 'Template', animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="template-runs/[runId]" options={{ title: 'Template Run', animation: reducedMotion ? 'none' : 'simple_push' }} />
+                {/* Declared a push while wearing a Close button — which reads
+                    as a contradiction until you look at the other two creation
+                    surfaces. The create tab, `create/[tool]` and this composer
+                    are all full-screen, self-contained, and closed rather than
+                    backed out of, and the create tab cannot become a modal
+                    route because it is a tab (divergence DV5/DV7). Presenting
+                    one of the three as a modal would split the family that the
+                    same menu opens. What Modality actually asks for — an
+                    obvious way out — each of them has. */}
                 <Stack.Screen
                   name="post/new"
                   options={{

@@ -1,5 +1,21 @@
-import { ArrowLeft, ChevronLeft, Share, Share2 } from 'lucide-react-native';
-import { Platform } from 'react-native';
+import { ArrowLeft, ChevronLeft, Share, Share2, X } from 'lucide-react-native';
+import * as ReactNative from 'react-native';
+
+/**
+ * Focused component tests mock react-native down to the exports they render,
+ * and reading a missing one off the mock namespace throws rather than yielding
+ * undefined — same guard as `lib/motion` and `lib/use-hardware-back`. Off iOS
+ * (and in such a test) the glyphs resolve to the Material dialect.
+ */
+function isIOS() {
+  try {
+    return ReactNative.Platform.OS === 'ios';
+  } catch {
+    return false;
+  }
+}
+
+const IS_IOS = isIOS();
 
 /**
  * Glyphs that carry an operating system's own meaning, in that system's shape.
@@ -12,7 +28,7 @@ import { Platform } from 'react-native';
  * iconography decision, D2a — Lucide everywhere, except where a glyph carries
  * OS meaning).
  */
-export const ShareGlyph = Platform.OS === 'ios' ? Share : Share2;
+export const ShareGlyph = IS_IOS ? Share : Share2;
 
 /**
  * Back is the second such glyph, and the case is stronger than Share's: this
@@ -30,4 +46,22 @@ export const ShareGlyph = Platform.OS === 'ios' ? Share : Share2;
  * screen away. Android's standard is Material's left arrow, which is what its
  * own navigator draws. One import, each platform's own shape.
  */
-export const BackGlyph = Platform.OS === 'ios' ? ChevronLeft : ArrowLeft;
+export const BackGlyph = IS_IOS ? ChevronLeft : ArrowLeft;
+
+/**
+ * Close: the control that dismisses a modal surface, and the one Toolbars names
+ * in the same breath as Back — "Use the standard Back and Close buttons ...
+ * ensure you consistently implement it throughout your app."
+ *
+ * Both platforms draw Close as the same mark (SF `xmark`, Material `close`), so
+ * unlike `BackGlyph` and `ShareGlyph` this one carries no platform dialect.
+ * What it carries is the other half of the rule: the app drew Close at eight
+ * different sizes across eleven modal surfaces. One import, one size at the call
+ * site (`appTheme.icon.feature`), so a sheet and the screen it opened from close
+ * with the same mark.
+ *
+ * Only for dismissing a modal surface. An X that removes a chip, clears a field
+ * or dismisses an inline banner is a different action wearing the same shape,
+ * and keeps its own `X`.
+ */
+export const CloseGlyph = X;

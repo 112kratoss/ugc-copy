@@ -29,6 +29,9 @@ vi.mock('expo-video', () => ({
 }));
 
 vi.mock('lucide-react-native', () => ({
+  ArrowLeft: (props: MockProps) => React.createElement('glyph-icon', props),
+  Share: (props: MockProps) => React.createElement('glyph-icon', props),
+  Share2: (props: MockProps) => React.createElement('glyph-icon', props),
   ChevronLeft: (props: MockProps) => React.createElement('chevron-left-icon', props),
   ChevronRight: (props: MockProps) => React.createElement('chevron-right-icon', props),
   X: (props: MockProps) => React.createElement('x-icon', props),
