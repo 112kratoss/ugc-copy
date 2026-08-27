@@ -109,10 +109,12 @@ re-read the codebase broadly or ask for past-chat context.
   branch and **deliberately not merged** — `main` does not have F4, F6, N1, N2, N3 or S5. The user's
   call at the Phase 2 boundary was to keep accumulating on the branch, so branch from it rather than
   from `main`, and expect the merge question again at the next boundary. Phase 3 is under way: S5,
-  S6 (+S6a/b/c), S9 and S8 are closed, and the next `todo` on the board is **S11, the post composer**
-  — after which the phase order is S12 → S10 → S4 → S13/S14. S11 inherits two things: the Drag and
-  drop chapter, which S9 established belongs wholly to the composer, and the composer's own 21
-  off-ramp icon sizes, the largest budget left in `hig-icon-size.test.ts`.
+  S6 (+S6a/b/c), S9, S8 and S11 are closed, and the next `todo` on the board is **S12, post details**
+  — after which the phase order is S10 → S4 → S13/S14. Two things carry into it: the composer's 21
+  off-ramp icon sizes are still the largest budget left in `hig-icon-size.test.ts` (S11 spent its
+  device time on gestures instead), and S11's iOS 26 finding — a full-screen back gesture that takes
+  any rightward drag and pops the screen — applies to **every** pushed screen, so any surface with a
+  horizontal drag needs `fullScreenGestureEnabled: false` on its own route.
 - **Device mechanics learned in S6, for whoever drives them next:** the Simulator MCP's `tap` works
   headless on this Mac as well as `swipe`, so iOS is fully drivable; a surface is reachable by post
   id with `magicbooklet:///post/<id>`, and the live data has exactly one multi-media post
@@ -392,7 +394,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S6+S6a/b/c viewer & sheets | 3 | done | 3V/2D/3P | the clock survives the picture; the reel can be silenced without leaving it |
 | S9 creation tool | 3 | done | 2V/2D/4P | every spend says its price; the wait says what it is doing and how long it has been |
 | S8 create hub | 3 | done | 1V/1D/2P | a first creation is told what it costs; the icon ratchet can see a whole idiom it was blind to |
-| S11 post composer | 3 | todo | — | |
+| S11 post composer | 3 | done | 3V/2D/3P | the reorder can be finished, seen, and reached; a removal can be taken back |
 | S12 post details | 3 | todo | — | |
 | S10 studio | 3 | todo | — | |
 | S4 home | 3 | todo | — | |
@@ -1492,3 +1494,145 @@ backdrop; hardware back dismisses the menu and leaves Home underneath. `logcat` 
 **Open remainder**: the unreachable tail is still there and now has one more reason to go —
 `GuidedCreatorIntro` is redundant as of this unit; the spun-out change covers it. Menu label casing
 and the `Create` control opening a menu whose first item is also `Create` → X3, which owns copy.
+
+### S11 post composer — audited 2026-08-27 · AND-pass: 2026-08-27
+Chapters read: Drag and drop (`drag-and-drop`), Undo and redo (`undo-and-redo`), Entering data
+(`entering-data`). Drag and drop was attached to "S9/S11" in the coverage matrix and S9 assigned it
+wholly here; this is where it lands.
+
+Rules in checkable form: offer alternative ways to accomplish drag-and-drop actions, including
+accessibility APIs that identify sources and destinations · provide clear and continuous feedback
+throughout the drag · show whether a destination can accept the content — an insertion point, a
+highlighted container · scroll the contents of a destination when necessary · prefer letting people
+undo a drag-and-drop operation · help people predict the result of an undo, and show the result so
+they do not think it did nothing · let people undo multiple times · provide undo and redo buttons
+only when necessary · be clear about the data you need · validate dynamically · make a Next button
+available only after the required data is there.
+
+- [V][ios] **Dragging a card to the right dismissed the composer.** iOS 26 turned the navigator's
+  back gesture into a *full-screen* pan — `fullScreenGestureEnabled` now defaults to `true` from that
+  OS "to match new native behavior" — and a native recognizer outranks the JS `PanResponder` the
+  reorder runs on. Instrumented on the simulator: `drag armed` → **one** `pan move` → the responder
+  was terminated and `{"type":"POP","payload":{"count":1},"source":"post/new-…"}` was dispatched. So
+  half the reorder never existed: leftward drags worked, every rightward drag closed the screen.
+  Worse, the composer's leave-guard could not save it — the pop had already committed, so the sheet
+  N2 built appeared *over Home*, and its Cancel had nothing to cancel. The draft survived only
+  because it auto-persists. Gestures and Drag and drop both assume a drag that starts is a drag that
+  finishes → **fixed**: `fullScreenGestureEnabled: false` on the `post/new` route.
+  - **`gestureEnabled: false` does not cover this**, which cost this unit two rounds. Verified on
+    iOS 26.4 with it set: a mid-screen drag *and* a plain left-edge swipe both still popped. Only
+    `fullScreenGestureEnabled` governs the new gesture. Recorded so nobody re-tries the obvious one.
+  - **A per-drag lock was tried first and abandoned.** `lib/use-navigation-gesture-lock.ts` set the
+    option through `navigation.setOptions` while a card was held, which would have kept iOS 26's
+    gesture everywhere else on the screen. It does not propagate: with the hook live the screen still
+    popped, because expo-router re-applies the layout's declarative `<Stack.Screen options>` on the
+    navigator re-render that `setOptions` itself triggers. The file was deleted rather than shipped
+    looking like it worked. The screen keeps its **edge** swipe, so the way out Modality requires is
+    intact — only the full-screen variant is off, and only here.
+  - **Android counterpart: a deliberate no-op.** The navigator has no swipe-back to suspend there;
+    Android's back is the hardware/predictive key, which `usePreventRemove` already guards. Verified
+    in the pass below — and verified working *better* than iOS's was: hardware back raised the leave
+    sheet **over** the composer, with Cancel returning to it intact. The drag worked in both
+    directions on Android before this fix and after it, which is what first localised the bug.
+- [V][both] **The drag showed nothing about where the card would land.** The dragged card followed
+  the finger; every other card held still; on release the order changed by `Math.round(dx / step)`.
+  Drag and drop: "it's crucial to provide clear and continuous feedback throughout … show people
+  whether a destination can accept dragged content … display an insertion point or highlight a
+  containing view." → **fixed**: the drag moved out of the card and into the row
+  (`UploadContent`), which now shifts every card between the origin and the destination by one slot
+  while the finger is down, and renames the held card to the slot it would take. Captured mid-drag on
+  the emulator: with `76.png` lifted from slot 2 and held over slot 3, `75.png` had already stepped
+  left into slot 2 and the held card read `Media 3`.
+- [V][both] **The far end of a full row could not be reached at all.** One slot costs 142pt of
+  finger travel and a phone offers about 370; slot 4 from slot 0 needs 568. The row is a horizontal
+  `ScrollView` that the pick-up *disables* (the Android fix that hands the gesture to JS), so the
+  destination could not come to the finger either. Drag and drop: "scroll the contents of a
+  destination when necessary … this behavior makes it easy for people to find the right place to drop
+  the item." → **fixed**: held within 56pt of either edge, the row scrolls itself at ~375pt/s and the
+  drop index is computed in the row's content space, so the scrolled distance counts. Verified on the
+  emulator: the cover was dragged to the last slot in a single gesture.
+  - The first pace, 12pt per 16ms tick (~750pt/s), crossed two cards before a finger could lift.
+    Halved to 6 after watching it on both platforms.
+- [D][both] **Nothing removed from the draft could be put back.** Six controls removed part of the
+  draft instantly and finally; the media one costs the most, because the file is already uploaded by
+  the time its card appears and removing it also strips that media from every resource card it was
+  attached to — links no amount of re-picking restores. Undo and redo exists for exactly this
+  ("reverse many types of actions … explore and experiment safely"), and Drag and drop repeats it for
+  the reorder ("prefer letting people undo a drag-and-drop operation") → **fixed**:
+  `lib/composer-undo.ts` plus a `ComposerUndoBar` above the footer. It names what comes back
+  (`Removed Cover`, and `Undo removing Cover` to a screen reader) rather than reporting after the
+  fact, appears only when there is something to undo — "provide undo and redo buttons only when
+  necessary" — and restores the scroll position the removal happened at, because the chapter is
+  explicit that a result nobody sees reads as an undo that did nothing.
+  - **Deliberately one step, not a stack.** Undo and redo asks for multiple undos. A draft-wide
+    snapshot only stays truthful while the screen is idle — uploads, the resource editor and the
+    publish mutation all run against the live draft — so a stack would hand back stale state. One
+    step, offered for eight seconds, is the reversal that can be kept honest; a real stack is a
+    draft-model change, not a screen change. Written into the module's header so the gap is a
+    decision on the record rather than an oversight.
+  - **Where the boundary is drawn.** The three removals that edit the draft (media, resource card,
+    made-with row) all record one, so the consistency rule holds. The attachment removal inside the
+    resource editor sheet does not, and does not need to: that sheet edits a copy and already
+    confirms a dirty discard on close, so it is reversible by leaving it.
+- [D][both] **The Next button is always available, where the app's other primary action is not.**
+  Entering data: "if you include a Next or Continue button after a set of text fields, make the
+  button available only after people enter the data you require." S9's Generate button does exactly
+  that — disabled, with an amber line naming the blocker. The composer's `Review & publish` is always
+  pressable and validates on press, then scrolls to and focuses the first invalid field.
+  → **intentional, and not moved to the ledger as a divergence**: the rule's stated purpose is that
+  "people understand that they must provide the required data before they can proceed", and this
+  surface meets it another way — `Required` sits beside every field label before anything is pressed,
+  and the press produces a specific error *plus* focus in the field that needs it, which a disabled
+  button cannot do. Recorded rather than changed because the two surfaces reading differently is a
+  real inconsistency; X3 owns the copy sweep and can settle which one the app adopts.
+- [P][both] Verified clean: **the drag already had a route that needs no drag.** Every card carries
+  `increment`/`decrement` accessibility actions labelled *Move right* / *Move left*, which is Drag
+  and drop's "offer alternative ways to accomplish drag-and-drop actions … use accessibility APIs to
+  identify sources and destinations." Kept and guarded. The card's label was conditional on being
+  draggable, so a lone media item had a hint and no name — that is now unconditional.
+- [P][both] Verified clean: **the upload says how long it will take and can be stopped.** Picking
+  five images showed `Uploading media · 79%` with `3 of 5 complete · 8.1 MB of 10 MB` and a
+  `Cancel upload` control — Drag and drop's "provide feedback when dropped content needs time to
+  transfer … display a progress indicator" and Progress indicators' halt rule, both already met.
+- [P][both] Noted, not chased: **five of the composer's 39 components are never rendered.**
+  `TitleSection`, `ProofSection`, `StorySection`, `UnlockSection`, `PublishSection` and
+  `SecondaryPickButton` appear in no JSX in the file. This is the third unit to trip over dead code
+  in this tree (S9's unreachable tail, S8's `TemplateCatalogEntry`), and it cost this one a false
+  finding — `onRemoveSection` looked like a sixth un-undoable removal until the component that
+  renders it turned out not to exist. Folded into the spun-out dead-code change, not this diff.
+
+Guard added: `__tests__/hig-post-composer.test.ts` (29 cases) — the composer route turns off the
+full-screen back gesture and keeps the edge swipe, and no other route is touched; the drop index
+takes a slot at the halfway mark and cannot leave the row; neighbours between origin and destination
+shift by exactly one slot and nothing else moves; a full row needs more travel than a phone has,
+which is why the row auto-scrolls, stopping exactly at each end and never on a row that fits; the row
+owns the drag, reads its landing slot from the gesture rather than render state, and releases the
+auto-scroll on unmount; the held card announces its target slot and wears its target name; the
+move-left/move-right actions survive; every card is named whether or not it can be dragged; the undo
+offer names what comes back, renders only when there is something to undo, sits outside the scroll
+it would otherwise ride away with, is recorded by every removal that edits the draft, and returns to
+where the removal happened. `post-new-screen.test.tsx` gains `NavigationContext` in its
+`@react-navigation/native` mock, in the same commit.
+
+**AND-pass 2026-08-27** (mandatory: this unit is gestures and input). Pixel_9a, Android 16, dev
+client on the worktree's Metro. Reorder verified in both directions with `input motionevent`
+press-hold-drag; the mid-drag capture shows the neighbour already stepped into the vacated slot and
+the held card renamed to its target; the cover reached the last slot of a five-card row in one
+gesture via auto-scroll; removing a card raised `Removed Media 2 · Undo`, and Undo restored both the
+card and the order. Hardware back raised the leave sheet over the composer and Cancel returned to it
+with the draft intact. `logcat` clear of `FATAL`/`SIGSEGV`. Edge-to-edge and keyboard insets are
+untouched by this unit.
+- **Cost of the pass, stated plainly:** ten images were uploaded to production storage (five per
+  platform) to have something to reorder. They belong to no post — the composer uploads at pick
+  time, which is also what makes the missing undo expensive enough to fix.
+- **Timing note for whoever drives iOS next:** the round trip between two tool calls here is
+  routinely longer than an eight-second window, so a transient control cannot be caught by
+  "act, then screenshot". Either start a screenshot burst in the background *before* acting, or use
+  Android, where `adb` input and `screencap` run in the same shell command and the timing is exact.
+  Two device rounds were lost to this before the undo bar was confirmed to render at all.
+
+**Open remainder**: a multi-step undo stack → draft-model change, out of a surface pass; the Next-
+button inconsistency with S9 → X3; the five dead components → the spun-out dead-code change; and one
+hazard for the units after this — **any screen that grows a horizontal drag inherits the iOS 26
+gesture conflict**, and the only thing that stops it is that route's own
+`fullScreenGestureEnabled: false`.

@@ -16,7 +16,7 @@ function resolvePressableStyle(style: unknown) {
 }
 
 const routerState = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn() }));
-const navigationState = vi.hoisted(() => ({ dispatch: vi.fn() }));
+const navigationState = vi.hoisted(() => ({ dispatch: vi.fn(), setOptions: vi.fn() }));
 const alertState = vi.hoisted(() => ({ alert: vi.fn() }));
 const storageState = vi.hoisted(() => ({ values: new Map<string, string>() }));
 const paramsState = vi.hoisted(() => ({ params: {} as { generationId?: string; postId?: string; focus?: string; shareAfterPublish?: string } }));
@@ -86,10 +86,17 @@ vi.mock('expo-router', () => ({
   useLocalSearchParams: () => paramsState.params,
 }));
 
-vi.mock('@react-navigation/native', () => ({
-  useNavigation: () => navigationState,
-  usePreventRemove: vi.fn(),
-}));
+vi.mock('@react-navigation/native', async () => {
+  const { createContext } = await import('react');
+  return {
+    useNavigation: () => navigationState,
+    usePreventRemove: vi.fn(),
+    // The media row locks the navigator's swipe-back while a card is held, and
+    // reads the navigator off this context so a card rendered outside one is
+    // inert rather than throwing.
+    NavigationContext: createContext(navigationState),
+  };
+});
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {

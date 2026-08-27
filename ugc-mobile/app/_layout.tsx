@@ -147,6 +147,15 @@ function RootLayoutNav() {
                   name="post/new"
                   options={{
                     headerShown: false,
+                    /* iOS 26 made the navigator's back gesture a full-screen pan
+                       (`fullScreenGestureEnabled` defaults to true from that OS),
+                       and a native recognizer always outranks the JS responder
+                       the composer's media reorder runs on — one pan frame in,
+                       the drag was terminated and the screen popped. Off here so
+                       a card can be dragged right; the edge swipe stays live, so
+                       the screen keeps the way out Modality asks for. Any other
+                       screen that grows a horizontal drag needs the same line. */
+                    fullScreenGestureEnabled: false,
                     presentation: 'card',
                     animation: reducedMotion ? 'none' : 'simple_push',
                     contentStyle: { backgroundColor: appTheme.colors.background },

@@ -4,7 +4,7 @@ import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import type { ImagePickerAsset } from 'expo-image-picker';
 import { Check, ChevronDown, ChevronRight, FileText, Globe2, ImageIcon, Link2, Lock, Package, Play, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react-native';
-import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import {
   AccessibilityInfo,
   ActivityIndicator,
@@ -104,7 +104,27 @@ import {
   type PostComposerResourceCardType,
   type PostComposerValidationResult,
 } from '@/lib/post-new-view-model';
+import {
+  COMPOSER_UNDO_WINDOW_MS,
+  describeComposerUndo,
+  describeComposerUndoAction,
+  type ComposerUndoEntry,
+} from '@/lib/composer-undo';
 import { env } from '@/lib/env';
+import {
+  MEDIA_CARD_GAP,
+  MEDIA_CARD_STEP,
+  MEDIA_CARD_WIDTH,
+  MEDIA_DRAG_HOLD_MS,
+  MEDIA_DRAG_SCROLL_INTERVAL_MS,
+  MEDIA_DRAG_SLOP,
+  MEDIA_MAX_ITEMS,
+  describeDropTarget,
+  resolveAutoScrollStep,
+  resolveDropIndex,
+  resolveNeighbourShift,
+  resolveRowContentWidth,
+} from '@/lib/media-reorder';
 import { BackGlyph, CloseGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme, type ToolAccent } from '@/lib/theme';
@@ -990,6 +1010,78 @@ function ResourceTypeIcon({ type, color, size = 20 }: { type: PostComposerResour
   return <Package size={size} color={color} />;
 }
 
+/**
+ * The offer to put back whatever was just removed. It sits directly above the
+ * footer rather than in the scroll, because Undo and redo asks that people can
+ * see the result of the reversal — an offer that scrolls out of reach with the
+ * form is an offer nobody takes.
+ */
+function ComposerUndoBar({
+  entry,
+  onUndo,
+  onDismiss,
+}: {
+  entry: ComposerUndoEntry<PostComposerDraft> | null;
+  onUndo: () => void;
+  onDismiss: () => void;
+}) {
+  if (!entry) return null;
+  return (
+    <View
+      accessibilityLiveRegion="polite"
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: appTheme.spacing.gap,
+        marginHorizontal: appTheme.spacing.screen,
+        marginBottom: appTheme.spacing.compact,
+        paddingLeft: appTheme.spacing.card,
+        paddingRight: appTheme.spacing.compact,
+        paddingVertical: appTheme.spacing.compact,
+        borderRadius: appTheme.radii.md,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: appTheme.colors.border,
+        backgroundColor: appTheme.colors.panelSoft,
+      }}
+    >
+      <AppText variant="label" color="text" style={{ flex: 1, minWidth: 0 }} numberOfLines={1}>
+        {describeComposerUndo(entry.label)}
+      </AppText>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={describeComposerUndoAction(entry.label)}
+        onPress={onUndo}
+        style={({ pressed }) => ({
+          minHeight: appTheme.touch.compact,
+          minWidth: 72,
+          paddingHorizontal: appTheme.spacing.gap,
+          alignItems: 'center',
+          justifyContent: 'center',
+          borderRadius: appTheme.radii.sm,
+          backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'transparent',
+        })}
+      >
+        <AppText variant="button" color="primary">Undo</AppText>
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Dismiss undo"
+        onPress={onDismiss}
+        style={({ pressed }) => ({
+          width: appTheme.touch.compact,
+          height: appTheme.touch.compact,
+          alignItems: 'center',
+          justifyContent: 'center',
+          opacity: pressed ? appTheme.opacity.pressed : 1,
+        })}
+      >
+        <X size={appTheme.icon.sm} color={appTheme.colors.muted} />
+      </Pressable>
+    </View>
+  );
+}
+
 function PostComposerFooter({
   step,
   bottomInset,
@@ -1672,7 +1764,12 @@ export default function NewPostScreen() {
   // other's banner (and its Cancel button) mid-transfer.
   const [recoveryUploadProgress, setRecoveryUploadProgress] = useState<MediaUploadBatchProgress | null>(null);
   const [pendingRetryMedia, setPendingRetryMedia] = useState<ImagePickerAsset[]>([]);
+  // Undo and redo: every removal below is instant, so each one leaves the draft
+  // it replaced here and offers it back for a moment.
+  const [undoEntry, setUndoEntry] = useState<ComposerUndoEntry<PostComposerDraft> | null>(null);
+  const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<ScrollView>(null);
+  const scrollYRef = useRef(0);
   const mediaControlRef = useRef<View>(null);
   const titleInputRef = useRef<TextInput>(null);
   const contentInputRef = useRef<TextInput>(null);
@@ -1748,6 +1845,10 @@ export default function NewPostScreen() {
         && getPostComposerDraftSignature(draft) !== initialDraftSignatureRef.current
       : isPostComposerDraftMeaningful(draft)
   );
+
+  useEffect(() => () => {
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+  }, []);
 
   // Prefill when generationId is provided and the creations list resolves.
   // A canonical template result may be selected before its grid derivative
@@ -2209,7 +2310,7 @@ export default function NewPostScreen() {
   const applyUploadedMedia = (uploadedItems: PostComposerMediaItem[]) => {
     if (uploadedItems.length === 0) return;
     setDraft((current) => {
-      const mediaItems = [...current.mediaItems, ...uploadedItems].slice(0, 5);
+      const mediaItems = [...current.mediaItems, ...uploadedItems].slice(0, MEDIA_MAX_ITEMS);
       const cover = mediaItems[0];
       return {
         ...current,
@@ -2517,7 +2618,7 @@ export default function NewPostScreen() {
       const picked = await pickMediaList(kind, { allowsMultipleSelection: true });
       const overlongCount = picked.filter(isPostVideoOverDurationLimit).length;
       const allowed = picked.filter((asset) => !isPostVideoOverDurationLimit(asset));
-      const availableSlots = Math.max(0, 5 - draft.mediaItems.length);
+      const availableSlots = Math.max(0, MEDIA_MAX_ITEMS - draft.mediaItems.length);
       const selected = allowed.slice(0, availableSlots);
       const overlongMessage = overlongCount > 0
         ? {
@@ -2573,7 +2674,42 @@ export default function NewPostScreen() {
     }));
   };
 
+  /**
+   * Hand the draft that is about to be destroyed to the undo offer, and start
+   * the clock on it. Everything that removes part of the draft goes through
+   * here, so the reversal is the same one everywhere rather than a courtesy on
+   * whichever control someone remembered.
+   */
+  const offerUndo = (label: string) => {
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    setUndoEntry({ label, snapshot: draft, scrollY: scrollYRef.current });
+    undoTimerRef.current = setTimeout(() => setUndoEntry(null), COMPOSER_UNDO_WINDOW_MS);
+  };
+
+  const dismissUndo = () => {
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    undoTimerRef.current = null;
+    setUndoEntry(null);
+  };
+
+  const applyUndo = () => {
+    if (!undoEntry) return;
+    const { snapshot, scrollY } = undoEntry;
+    dismissUndo();
+    setDraft(snapshot);
+    setDetailErrors((current) => (
+      Object.keys(current).length > 0
+        ? getPostComposerDetailErrors(snapshot, { grandfatheredTitle: initialTitleRef.current })
+        : current
+    ));
+    // Undo and redo: "it's crucial to highlight the result of each undo ... to
+    // keep people from thinking that the action had no effect."
+    scrollRef.current?.scrollTo({ y: scrollY, animated: true });
+  };
+
   const removeMadeWithRow = (id: string) => {
+    const row = draft.madeWithRows.find((candidate) => candidate.id === id);
+    offerUndo(row?.toolLabel.trim() || 'tool');
     setDraft((current) => ({
       ...current,
       madeWithRows: current.madeWithRows.filter((row) => row.id !== id).length > 0
@@ -2583,6 +2719,8 @@ export default function NewPostScreen() {
   };
 
   const removeMediaItem = (id: string) => {
+    const index = draft.mediaItems.findIndex((item) => item.id === id);
+    offerUndo(index >= 0 ? getComposerMediaLabel(index) : 'media');
     setDraft((current) => {
       const removed = current.mediaItems.find((item) => item.id === id);
       const mediaItems = current.mediaItems.filter((item) => item.id !== id);
@@ -2790,6 +2928,8 @@ export default function NewPostScreen() {
 
   const removeResourceCard = (id: string) => {
     if (hasPaidOrders || (isPickingResourceFile && editingResourceId === id)) return;
+    const card = draft.resource.cards.find((candidate) => candidate.id === id);
+    offerUndo(card?.title.trim() || 'resource');
     setDraft((current) => ({
       ...current,
       resource: {
@@ -2988,6 +3128,8 @@ export default function NewPostScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
+        scrollEventThrottle={16}
+        onScroll={(event) => { scrollYRef.current = event.nativeEvent.contentOffset.y; }}
         style={{ flex: 1, backgroundColor: appTheme.colors.background }}
         contentContainerStyle={{
           paddingHorizontal: horizontalPadding,
@@ -3068,6 +3210,8 @@ export default function NewPostScreen() {
           />
         )}
       </ScrollView>
+
+      <ComposerUndoBar entry={undoEntry} onUndo={applyUndo} onDismiss={dismissUndo} />
 
       <PostComposerFooter
         step={composerStep}
@@ -4409,14 +4553,23 @@ function SmallChip({ label, active, onPress, disabled = false }: { label: string
   );
 }
 
-const MEDIA_CARD_WIDTH = 132;
-const MEDIA_CARD_GAP = 10;
-const MEDIA_CARD_STEP = MEDIA_CARD_WIDTH + MEDIA_CARD_GAP;
-// How long a finger must rest on a card before it can be dragged. Long enough
-// that starting a scroll never picks a card up, short enough to not feel stuck.
-const MEDIA_DRAG_HOLD_MS = 300;
-// Movement past this many points before the hold completes counts as a scroll.
-const MEDIA_DRAG_SLOP = 8;
+/** What the row is showing right now: which card is up, and where it would land. */
+interface MediaDragState {
+  id: string;
+  from: number;
+  to: number;
+  translateX: number;
+}
+
+/** The same drag as the gesture sees it, before it becomes geometry. */
+interface ActiveMediaDrag {
+  id: string;
+  from: number;
+  /** Where inside the card the finger landed, so the row knows where the *finger* is. */
+  grabOffsetX: number;
+  dx: number;
+  startScrollX: number;
+}
 
 function UploadContent({
   draft,
@@ -4437,13 +4590,125 @@ function UploadContent({
   onReorderMedia: (id: string, targetIndex: number) => void;
   disabled?: boolean;
 }) {
-  // On Android the horizontal ScrollView intercepts touches natively, so a card
-  // can never win the gesture from JS once scrolling engages. Switching the
-  // ScrollView off the moment a card is picked up is what hands the drag over.
-  const [isReordering, setIsReordering] = useState(false);
+  // The whole drag lives here rather than inside a card, because Drag and drop
+  // asks the *row* to respond: the neighbours move aside to show where the card
+  // will land, and the row scrolls itself when the destination is off-screen.
+  // A card only reports its gesture upwards.
+  const [drag, setDrag] = useState<MediaDragState | null>(null);
   // Kept here rather than threaded down from the screen: a Modal renders into
   // its own native window, so the state only has to sit above the cards.
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+
+  const items = draft.mediaItems;
+  const itemCount = items.length;
+  const canAddMore = !disabled && itemCount < MEDIA_MAX_ITEMS;
+
+  // On Android the horizontal ScrollView intercepts touches natively, so a card
+  // can never win the gesture from JS once scrolling engages. Switching the
+  // ScrollView off the moment a card is picked up is what hands the drag over.
+  // iOS needs the other half of that, and it cannot be done from here: the
+  // navigator's own full-screen back gesture is native and takes the drag
+  // outright, so the route turns it off in `app/_layout.tsx`.
+
+  const rowRef = useRef<ScrollView>(null);
+  const scrollXRef = useRef(0);
+  const rowWidthRef = useRef(0);
+  const autoScrollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // The live drag, in a ref so the pan handlers stay stable across the frames
+  // the drag itself is causing.
+  const dragRef = useRef<ActiveMediaDrag | null>(null);
+  // Everything the stable handlers below need to read as of *this* render.
+  const latestRef = useRef({ itemCount, canAddMore, onReorderMedia });
+  latestRef.current = { itemCount, canAddMore, onReorderMedia };
+
+  const stopAutoScroll = useCallback(() => {
+    if (autoScrollRef.current) {
+      clearInterval(autoScrollRef.current);
+      autoScrollRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => stopAutoScroll, [stopAutoScroll]);
+
+  const readDragGeometry = useCallback((active: ActiveMediaDrag) => {
+    const { itemCount: count, canAddMore: hasAddCard } = latestRef.current;
+    const cardContentX = active.from * MEDIA_CARD_STEP + active.dx + (scrollXRef.current - active.startScrollX);
+    return {
+      cardContentX,
+      to: resolveDropIndex(cardContentX, count),
+      pointerViewportX: cardContentX + active.grabOffsetX - scrollXRef.current,
+      maxScrollX: Math.max(0, resolveRowContentWidth(count, hasAddCard) - rowWidthRef.current),
+    };
+  }, []);
+
+  const applyDragGeometry = useCallback(() => {
+    const active = dragRef.current;
+    if (!active) return;
+    const { cardContentX, to, pointerViewportX, maxScrollX } = readDragGeometry(active);
+    setDrag({
+      id: active.id,
+      from: active.from,
+      to,
+      translateX: cardContentX - active.from * MEDIA_CARD_STEP,
+    });
+
+    const step = resolveAutoScrollStep({
+      pointerViewportX,
+      rowWidth: rowWidthRef.current,
+      scrollX: scrollXRef.current,
+      maxScrollX,
+    });
+    if (step === 0) {
+      stopAutoScroll();
+      return;
+    }
+    if (autoScrollRef.current) return;
+    autoScrollRef.current = setInterval(() => {
+      const live = dragRef.current;
+      if (!live) {
+        stopAutoScroll();
+        return;
+      }
+      const tick = resolveAutoScrollStep({
+        pointerViewportX: readDragGeometry(live).pointerViewportX,
+        rowWidth: rowWidthRef.current,
+        scrollX: scrollXRef.current,
+        maxScrollX: readDragGeometry(live).maxScrollX,
+      });
+      if (tick === 0) {
+        stopAutoScroll();
+        return;
+      }
+      scrollXRef.current += tick;
+      rowRef.current?.scrollTo({ x: scrollXRef.current, animated: false });
+      applyDragGeometry();
+    }, MEDIA_DRAG_SCROLL_INTERVAL_MS);
+  }, [readDragGeometry, stopAutoScroll]);
+
+  const beginDrag = useCallback((index: number, id: string, grabOffsetX: number) => {
+    dragRef.current = { id, from: index, grabOffsetX, dx: 0, startScrollX: scrollXRef.current };
+    setDrag({ id, from: index, to: index, translateX: 0 });
+  }, []);
+
+  const moveDrag = useCallback((dx: number) => {
+    const active = dragRef.current;
+    if (!active) return;
+    active.dx = dx;
+    applyDragGeometry();
+  }, [applyDragGeometry]);
+
+  const endDrag = useCallback((commit: boolean) => {
+    stopAutoScroll();
+    const active = dragRef.current;
+    dragRef.current = null;
+    setDrag(null);
+    if (!active || !commit) return;
+    // Read the landing slot from the drag itself rather than from render state,
+    // so a release that arrives before the last frame still lands where the row
+    // was showing it would.
+    const { to } = readDragGeometry(active);
+    if (to !== active.from) latestRef.current.onReorderMedia(active.id, to);
+  }, [readDragGeometry, stopAutoScroll]);
 
   return (
     <View style={{ gap: 10 }}>
@@ -4452,35 +4717,42 @@ function UploadContent({
           Upload images or videos <AppText variant="caption" color="primary">Required</AppText>
         </AppText>
         <AppText variant="caption" color="muted">
-          {draft.mediaItems.length > 1
-            ? 'Cover first · max 5 · hold a card to reorder'
-            : 'Cover first · max 5'}
+          {itemCount > 1
+            ? `Cover first · max ${MEDIA_MAX_ITEMS} · hold a card to reorder`
+            : `Cover first · max ${MEDIA_MAX_ITEMS}`}
         </AppText>
       </View>
-      {draft.mediaItems.length > 0 ? (
+      {itemCount > 0 ? (
         <ScrollView
+          ref={rowRef}
           horizontal
           showsHorizontalScrollIndicator={false}
-          scrollEnabled={!isReordering}
-          contentContainerStyle={{ gap: 10 }}
+          scrollEnabled={drag === null}
+          scrollEventThrottle={16}
+          onScroll={(event) => { scrollXRef.current = event.nativeEvent.contentOffset.x; }}
+          onLayout={(event) => { rowWidthRef.current = event.nativeEvent.layout.width; }}
+          contentContainerStyle={{ gap: MEDIA_CARD_GAP }}
         >
-          {draft.mediaItems.map((item, index) => (
+          {items.map((item, index) => (
             <MediaGalleryCard
               key={item.id}
               item={item}
               index={index}
-              totalItems={draft.mediaItems.length}
+              totalItems={itemCount}
               disabled={disabled}
+              drag={drag}
               onRemoveMedia={onRemoveMedia}
               onReorderMedia={onReorderMedia}
-              onDragStateChange={setIsReordering}
+              onDragStart={beginDrag}
+              onDragMove={moveDrag}
+              onDragEnd={endDrag}
               onPreviewMedia={setPreviewIndex}
             />
           ))}
-          {!disabled && draft.mediaItems.length < 5 ? (
+          {canAddMore ? (
             <AddMediaGalleryCard
               isPicking={isPicking}
-              remainingSlots={5 - draft.mediaItems.length}
+              remainingSlots={MEDIA_MAX_ITEMS - itemCount}
               onPress={onPickMedia}
             />
           ) : null}
@@ -4592,32 +4864,47 @@ function MediaGalleryCard({
   index,
   totalItems,
   disabled,
+  drag,
   onRemoveMedia,
   onReorderMedia,
-  onDragStateChange,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
   onPreviewMedia,
 }: {
   item: PostComposerMediaItem;
   index: number;
   totalItems: number;
   disabled: boolean;
+  drag: MediaDragState | null;
   onRemoveMedia: (id: string) => void;
   onReorderMedia: (id: string, targetIndex: number) => void;
-  onDragStateChange: (dragging: boolean) => void;
+  onDragStart: (index: number, id: string, grabOffsetX: number) => void;
+  onDragMove: (dx: number) => void;
+  onDragEnd: (commit: boolean) => void;
   onPreviewMedia: (index: number) => void;
 }) {
-  const [dragOffset, setDragOffset] = useState(0);
-  const [isDragging, setIsDragging] = useState(false);
   const isDragArmedRef = useRef(false);
   const isResponderRef = useRef(false);
   const touchOriginRef = useRef<{ x: number; y: number } | null>(null);
   const dragTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const grabOffsetRef = useRef(0);
   // A touch on the card opens the preview on lift, unless it turns into a
   // scroll, a hold, or lands on the remove control that sits on top of it.
   const tapCandidateRef = useRef(false);
   const suppressTapRef = useRef(false);
   const label = getComposerMediaLabel(index);
   const canDrag = !disabled && totalItems > 1;
+
+  const isDragging = drag?.id === item.id;
+  // The card being dragged rides the finger; the rest step aside to open the
+  // slot it would land in. Drag and drop: "show people whether a destination
+  // can accept dragged content ... display an insertion point."
+  const translateX = isDragging
+    ? drag.translateX
+    : drag
+      ? resolveNeighbourShift(index, drag.from, drag.to)
+      : 0;
 
   const clearDragTimer = () => {
     if (dragTimerRef.current) {
@@ -4626,38 +4913,17 @@ function MediaGalleryCard({
     }
   };
 
-  const setDragArmed = (armed: boolean) => {
-    isDragArmedRef.current = armed;
-  };
-
-  const resetDrag = () => {
-    clearDragTimer();
-    setDragArmed(false);
-    setIsDragging(false);
-    setDragOffset(0);
-    onDragStateChange(false);
-  };
-
-  const finishDrag = (dx: number) => {
-    const wasArmed = isDragArmedRef.current;
-    resetDrag();
-    if (!wasArmed) return;
-    const slotDelta = Math.round(dx / MEDIA_CARD_STEP);
-    if (slotDelta === 0) return;
-    const targetIndex = Math.max(0, Math.min(index + slotDelta, totalItems - 1));
-    onReorderMedia(item.id, targetIndex);
-  };
-
   useEffect(() => () => clearDragTimer(), []);
 
   // Press-and-hold arms the reorder. Until it fires the card claims nothing, so
   // an ordinary swipe scrolls the row instead of fighting it.
   const handleTouchStart = (event: GestureResponderEvent) => {
-    const { pageX, pageY } = event.nativeEvent;
+    const { pageX, pageY, locationX } = event.nativeEvent;
     // Recorded ahead of the canDrag guard: a lone media item has nothing to
     // reorder but must still open its preview on tap.
     touchOriginRef.current = { x: pageX, y: pageY };
     tapCandidateRef.current = true;
+    grabOffsetRef.current = locationX;
 
     if (!canDrag) return;
 
@@ -4666,10 +4932,10 @@ function MediaGalleryCard({
       // The hold completed, so this is a deliberate pick-up — lifting in place
       // should settle the card rather than open a preview.
       tapCandidateRef.current = false;
-      setDragArmed(true);
-      setIsDragging(true);
-      // Frees the gesture from the native scroller so the pan below can take it.
-      onDragStateChange(true);
+      isDragArmedRef.current = true;
+      // Frees the gesture from the native scroller so the pan below can take it,
+      // and holds the navigator's swipe-back off for the length of the drag.
+      onDragStart(index, item.id, grabOffsetRef.current);
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
     }, MEDIA_DRAG_HOLD_MS);
   };
@@ -4690,11 +4956,18 @@ function MediaGalleryCard({
     }
   };
 
+  const releaseDrag = (commit: boolean) => {
+    const wasArmed = isDragArmedRef.current;
+    isDragArmedRef.current = false;
+    clearDragTimer();
+    if (wasArmed) onDragEnd(commit);
+  };
+
   const clearTouchState = () => {
     touchOriginRef.current = null;
     tapCandidateRef.current = false;
     suppressTapRef.current = false;
-    if (!isResponderRef.current) resetDrag();
+    if (!isResponderRef.current) releaseDrag(false);
   };
 
   // If the card armed but the finger lifted without ever moving, no responder
@@ -4713,28 +4986,31 @@ function MediaGalleryCard({
     onMoveShouldSetPanResponder: () => isDragArmedRef.current,
     onPanResponderGrant: () => {
       isResponderRef.current = true;
-      setDragOffset(0);
     },
     onPanResponderMove: (_event, gesture) => {
-      if (canDrag && isDragArmedRef.current) setDragOffset(gesture.dx);
+      if (isDragArmedRef.current) onDragMove(gesture.dx);
     },
-    onPanResponderRelease: (_event, gesture) => {
+    onPanResponderRelease: () => {
       isResponderRef.current = false;
-      finishDrag(gesture.dx);
+      releaseDrag(true);
     },
     onPanResponderTerminate: () => {
       isResponderRef.current = false;
-      resetDrag();
+      releaseDrag(false);
     },
     onPanResponderTerminationRequest: () => false,
-  }), [canDrag, index, item.id, onReorderMedia, totalItems]);
+  // The callbacks are stable by construction (the row memoises them), so the
+  // responder survives every frame the drag itself causes.
+  }), [onDragMove, onDragEnd]);
 
   return (
     <View
-      accessibilityRole={canDrag ? 'adjustable' : undefined}
-      accessibilityLabel={canDrag ? `${label}, ${index + 1} of ${totalItems}` : undefined}
+      accessibilityRole={canDrag ? 'adjustable' : 'image'}
+      accessibilityLabel={`${label}, ${index + 1} of ${totalItems}`}
       accessibilityHint="Opens a full preview of this media"
-      accessibilityValue={canDrag ? { text: `${index + 1} of ${totalItems}` } : undefined}
+      accessibilityValue={isDragging
+        ? { text: describeDropTarget(drag.to, totalItems) }
+        : canDrag ? { text: `${index + 1} of ${totalItems}` } : undefined}
       // The pointer path opens the preview on tap; this is the same action for
       // a screen reader, which never produces those raw touch events.
       onAccessibilityTap={() => onPreviewMedia(index)}
@@ -4762,7 +5038,7 @@ function MediaGalleryCard({
         borderColor: isDragging ? `${appTheme.colors.image}dd` : index === 0 ? `${appTheme.colors.image}aa` : appTheme.colors.border,
         backgroundColor: isDragging ? appTheme.colors.surfaceStrong : appTheme.colors.surfaceInset,
         overflow: 'hidden',
-        transform: [{ translateX: dragOffset }],
+        transform: [{ translateX }],
         zIndex: isDragging ? 10 : 0,
         opacity: isDragging ? 0.92 : 1,
       }}
@@ -4810,7 +5086,7 @@ function MediaGalleryCard({
       </View>
       <View style={{ padding: 9, gap: 7 }}>
         <Text numberOfLines={1} style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>
-          {label}
+          {isDragging ? getComposerMediaLabel(drag.to) : label}
         </Text>
         <Text numberOfLines={1} style={{ color: appTheme.colors.muted, fontSize: 11, fontWeight: '700' }}>
           {item.name}
