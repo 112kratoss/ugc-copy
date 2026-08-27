@@ -426,7 +426,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S21 invite | 4 | done | 0V/1D/1P | Android stops claiming a share it cannot see; disclosure verified in the shared text |
 | S24 delete account | 4 | done | 0V/0D/2P | deletion says it is immediate; the goodbye alert now goes somewhere on purpose |
 | S26 notifications | 4 | done | 0V/1D/0P | permission asked only in context (verified); a badge that could only grow now retires when Alerts opens |
-| S0/S1/S27 launch/notfound/guest banner | 4 | todo | — | |
+| S0/S1/S27 launch/notfound/guest banner | 4 | done | 1V/0D/1P | the launch flash is fixed at its source (next native build); 404 recovery verified live |
 | X1 motion pass | 5 | todo | — | |
 | X2 haptics pass | 5 | todo | — | |
 | X3 writing pass | 5 | todo | — | |
@@ -2784,3 +2784,23 @@ then.
 iOS + AND-pass: Alerts screen verified on both with 47 live alerts — the in-context Enable card,
 grouped creator activity, categories; no crash from the badge call (logcat clean). A real push
 round-trip needs a store build with credentials; the badge logic is unit-guarded.
+
+### S0/S1/S27 launch, not-found, guest banner — audited 2026-08-28 · AND-pass: 2026-08-28
+Chapters read: Launching (`launching`); App icons deferred to artwork review (no artwork changes
+in this program); Feedback/Writing distillations.
+- [V][both] The Phase-0 seed confirmed: the splash background was `#09090b` while the app's first
+  frame is `#000000` (`colors.app` on the root view) — exactly the "unpleasant flash between the
+  launch screen and the first screen" Launching bans → fix: splash to `#000000`. **Takes effect on
+  the next native build** (the splash is baked at build time; the coming store release is already a
+  full native build because of gesture-handler). The Android adaptive-icon backdrop stays `#09090b`
+  deliberately — that is icon identity, not a launch flash.
+- [P][both] The 404 screen's CTA was a raw `Text` with literal size/weight and a hand-rolled 0.82
+  pressed opacity, with no button role → `AppText` cardTitle, `opacity.pressed`, button role.
+- Already right: unknown deep links land on a 404 that names a way out ("Go to Create") with a
+  back control (verified live on both platforms with a bogus route); the update gate cannot be
+  escaped by gesture, sends to the right store per platform, and hides its decorative glyph from
+  screen readers; the guest-merge banner explains in-flight money instead of letting it look
+  vanished, never blocks, and surfaces nothing for users who were never guests; launch restoration
+  is genuinely strong (creation drafts, template runs, onboarding all resume).
+iOS + AND-pass: not-found verified on both via a deliberately bogus deep link; the splash change is
+build-time and rides the next native build.
