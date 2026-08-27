@@ -40,27 +40,27 @@ const NOTIFICATION_CATEGORIES = [
     title: 'Generation updates',
     body: 'Finished renders, failed runs, and long-running jobs land here first.',
     icon: WandSparkles,
-    color: '#a78bfa',
+    color: appTheme.colors.motion,
   },
   {
     title: 'Creator activity',
     body: 'New followers, saves, remixes, and authenticated shares are grouped into a quieter history.',
     icon: Heart,
-    color: '#fb7185',
+    color: appTheme.colors.danger,
   },
   {
     title: 'Unlocks & credits',
     body: 'Credit purchases, restores, and resource unlocks stay visible after the push fades.',
     icon: CreditCard,
-    color: '#fbbf24',
+    color: appTheme.colors.amber,
   },
 ] as const;
 
 const CATEGORY_META: Record<MobileNotificationCategory, { color: string; label: string; Icon: typeof BellRing }> = {
-  generation: { color: '#a78bfa', label: 'Generation', Icon: WandSparkles },
-  commerce: { color: '#fbbf24', label: 'Unlocks', Icon: CreditCard },
-  social: { color: '#fb7185', label: 'Creator', Icon: Heart },
-  system: { color: '#67e8f9', label: 'System', Icon: BellRing },
+  generation: { color: appTheme.colors.motion, label: 'Generation', Icon: WandSparkles },
+  commerce: { color: appTheme.colors.amber, label: 'Unlocks', Icon: CreditCard },
+  social: { color: appTheme.colors.danger, label: 'Creator', Icon: Heart },
+  system: { color: appTheme.colors.info, label: 'System', Icon: BellRing },
 };
 
 export default function StudioScreen() {
@@ -165,9 +165,7 @@ export default function StudioScreen() {
     <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
       <ScrollView
         ref={scrollRef}
-        bounces={false}
         contentInsetAdjustmentBehavior="never"
-        overScrollMode="never"
         showsVerticalScrollIndicator={false}
         style={{ flex: 1, backgroundColor: appTheme.colors.background }}
         contentContainerStyle={{
@@ -409,7 +407,7 @@ function NotificationPreferences({
                 paddingHorizontal: 14,
                 paddingVertical: 12,
                 borderTopWidth: index === 0 ? 0 : 1,
-                borderTopColor: 'rgba(255,255,255,0.08)',
+                borderTopColor: appTheme.colors.borderSubtle,
                 opacity: disabled ? 0.62 : pressed ? 0.78 : 1,
               })}
             >

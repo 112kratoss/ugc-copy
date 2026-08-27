@@ -208,6 +208,8 @@ applied everywhere or it's a bug, not a choice.
 | DV2 | iPhone-only, portrait-only | Layout, Multitasking | Declared in app.json; product decision, revisit only if iPad/rotation becomes a goal | app-wide |
 | DV3 | Custom-branded components (tab bar, sheets, buttons) instead of stock controls | Branding + each component chapter | Branding chapter endorses identity; every custom component is still audited against its chapter's *behavior* rules; system surfaces adopted where the OS is better (share sheet, context menus, destructive-confirm alerts) | verify in Phase 6 |
 | DV4 | Lucide iconography instead of SF Symbols | SF Symbols, Icons | Cross-platform consistency (D1); glyphs that carry OS meaning (e.g. Share) may borrow the SF shape | app-wide |
+| DV5 | Scroll indicators hidden app-wide (32 sites) | Scroll views | The chapter permits it when scrollability is otherwise obvious; the compensating rule is that layouts let content peek past the fold — verified in every unit's captures. A screen whose content could end exactly at the fold must not hide them | app-wide |
+| DV6 | Compositional black scrims over media (viewer control backdrops, poster gradients, upload pills) | Materials, Color | These are the media-first app's material layer: legibility over unpredictable imagery. Palette tokens govern chrome; scrims govern media overlays. Never used over plain panels | media surfaces |
 | DV5 | The tab bar hides on the Create tab | Tab bars | `creator` is a tab that presents as a modal — full-screen, self-contained, a standard Close rather than a back control — which is the exception Tab bars names ("a modal is temporary and self-contained") | only tab that hides the bar; verify in Phase 6 |
 | DV6 | The raised centre control opens a menu instead of switching tabs | Tab bars | "Use a tab bar to support navigation, not to provide actions" — both menu entries navigate to sections (create tab, post composer), so it is navigation via a menu, in the platform-common shape for a creation affordance | single control, app-wide |
 | DV7 | The three creation surfaces are full-screen modals in substance but declared a tab and two pushes | Modality | The create tab, `create/[tool]` and `post/new` are each full-screen, self-contained and closed rather than backed out of. The create tab cannot become a modal route — it is a tab (DV5) — so promoting one of the other two would split a family the same menu opens. What Modality asks for, an obvious way out, each of them has, and all three now draw the same `CloseGlyph`. Pinned by `post-new-screen.test.ts` | all three creation surfaces |
@@ -397,8 +399,8 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | Phase 0 orientation | 0 | done | — | chapters read; baseline walk folded into the per-unit loop (see log) |
 | D1–D4 decisions | 0 | done | — | all four settled 2026-08-27 in the Decisions table |
 | F1 typography | 1 | done | 0V/1D/0P | Dynamic Type policy settled: never opt out, per-tier caps (1.35/1.6/2×) in appTheme.typeScale; verified at AX sizes on both platforms |
-| F2 color/dark/materials | 1 | partial | — | 4.5:1 body contrast guarded (PR #83); materials/elevation open |
-| F3 layout/safe areas | 1 | partial | — | keyboard avoidance rebuilt + guarded (PR #83); safe-area/grid sweep open |
+| F2 color/dark/materials | 1 | done | 0V/0D/1P | elevation ramp verified as the base/elevated story; the last off-palette screen speaks tokens; scrims blessed as DV6 |
+| F3 layout/safe areas | 1 | done | 0V/1D/0P | safe areas verified across all units; alerts regains elastic scroll; the endless rail's exception stands; indicators blessed as DV5 |
 | F4 iconography/images | 1 | done | 1V/3D/4P | one stroke weight app-wide; share glyph per platform; size ramp on a ratchet (S5's four files are at zero) |
 | F5 controls/input | 1 | partial | — | ≥44pt hit regions guarded via lib/hit-target.ts (PR #83); non-geometric rules open |
 | F6 branding boundary | 1 | done | 1V/1D/3P | the product now spells its own name one way |
@@ -2821,3 +2823,29 @@ label cap, and a source scan that forbids `allowFontScaling={false}` anywhere.
 iOS AND-pass: verified live at accessibility-extra-extra-large — body text follows the reader,
 "Account settings." grows only to its cap, rows wrap rather than clip; Android verified at
 font_scale 1.6 with the same behavior; both reset afterwards.
+
+### F2 color, dark & materials — audited 2026-08-28 · AND-pass: 2026-08-28
+Chapters read: Materials (`materials`), Dark Mode (`dark-mode`).
+- Verified right: the elevation ramp (app → background → panel → panelSoft → surface ramp) is the
+  chapter's base/elevated story; 4.5:1 body contrast is guarded (PR #83); dark-only is DV1 and the
+  chapter's system-toggle rule is thereby out of scope; Liquid Glass is DV3 territory (custom
+  design language, system materials only where adopted — the tab bar blur).
+- [P][both] The alerts screen carried its own four-hex palette (`#a78bfa`, `#fb7185`, `#fbbf24`,
+  `#67e8f9`) and a raw white border — the only screen speaking its own color language → mapped to
+  `motion`, `danger`, `amber`, `info` tokens and `borderSubtle`.
+- Blessed with rules (→ DV6): compositional black scrims over media. Onboarding's gradient art
+  stays art.
+iOS + AND-pass: alerts verified on both with the token palette.
+
+### F3 layout, safe areas & scroll behavior — audited 2026-08-28 · AND-pass: 2026-08-28
+Chapters read: Layout (`layout`), Scroll views (`scroll-views`).
+- Verified right: safe areas ride `Screen`/tab-bar metrics (proven across every unit's captures on
+  both platforms); buttons are inset by screen gutters, never full-bleed to the edge; portrait-only
+  is DV2, so the orientation clauses are declared out of scope.
+- [D][both] The alerts list disabled elastic bounce with no stated reason — "use system-wide
+  elastic behavior" — while the home rail's identical flags carry a documented reason (an endless
+  carousel whose real ends must never be felt) → alerts restored to system scrolling; the rail's
+  exception stands as written in code.
+- Hidden scroll indicators (32 sites) → intentional, with the compensating peek-past-the-fold rule
+  (→ DV5).
+iOS + AND-pass: alerts scroll verified on both; Android overscroll now glows per platform default.
