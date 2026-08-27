@@ -15,7 +15,7 @@ export type PurchaseGate = {
   /** Offer registration, never require it. */
   showRegistrationOffer: boolean;
   /** Set only when purchase is genuinely unavailable, never to demand sign-up. */
-  blockedReason: 'no_identity' | null;
+  blockedReason: 'no_identity' | 'payments_restricted' | null;
 };
 
 /**
@@ -33,10 +33,20 @@ export type PurchaseGate = {
 export function resolvePurchaseGate({
   identityUserId,
   isGuest,
+  paymentsAllowed = true,
 }: {
   identityUserId: string | null;
   isGuest: boolean;
+  /** The store's canMakePayments answer; Screen Time or MDM can turn it off. */
+  paymentsAllowed?: boolean;
 }): PurchaseGate {
+  if (!paymentsAllowed) {
+    // A confirmed device restriction. Explain it instead of presenting a store
+    // that cannot complete a purchase — and never pitch registration as the
+    // way around it.
+    return { canPurchase: false, showRegistrationOffer: false, blockedReason: 'payments_restricted' };
+  }
+
   if (!identityUserId) {
     // Not "please register" — the guest bootstrap simply has not landed yet
     // (first launch, offline, or anonymous sign-ins disabled server-side). The

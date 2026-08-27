@@ -77,6 +77,19 @@ export async function configureIapForUser(userId: string | null, os: 'ios' | 'an
   return true;
 }
 
+/**
+ * Whether this device may take payments at all — Screen Time and MDM
+ * restrictions can forbid it. Fail open: an errored check means "unknown",
+ * and only a confirmed no may hide the store.
+ */
+export async function canDeviceMakePayments(): Promise<boolean> {
+  try {
+    return await Purchases.canMakePayments();
+  } catch {
+    return true;
+  }
+}
+
 export async function getCreditPackages(): Promise<PurchasesPackage[]> {
   const offerings = await Purchases.getOfferings();
   return offerings.current?.availablePackages ?? [];

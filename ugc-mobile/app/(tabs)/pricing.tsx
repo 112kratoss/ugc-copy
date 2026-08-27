@@ -17,6 +17,7 @@ import { AppText, Card, Kicker, Pill, PrimaryButton, Screen, SecondaryButton, Se
 import { GuestMergeBanner } from '@/components/guest-merge-banner';
 import { useAuth } from '@/lib/auth';
 import {
+  canDeviceMakePayments,
   configureIapForUser,
   getCreditPackages,
   isIapConfigured,
@@ -118,6 +119,7 @@ export default function PricingScreen() {
   // identity. `isGuest` only decides whether to offer registration.
   const { isGuest, identityUserId, api, credits, refreshProfile } = useAuth();
   const [isConfigured, setIsConfigured] = useState(false);
+  const [paymentsAllowed, setPaymentsAllowed] = useState(true);
   const [busyProductId, setBusyProductId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [noticeTone, setNoticeTone] = useState<'success' | 'danger' | 'neutral'>('neutral');
@@ -153,6 +155,12 @@ export default function PricingScreen() {
       if (!cancelled) {
         setIsConfigured(ready);
       }
+      if (ready) {
+        const allowed = await canDeviceMakePayments();
+        if (!cancelled) {
+          setPaymentsAllowed(allowed);
+        }
+      }
     }
 
     void syncIap();
@@ -177,11 +185,9 @@ export default function PricingScreen() {
     && packagesByProductId.size > 0;
   const storeStatus = packageQuery.isLoading
     ? 'Connecting'
-    : packageQuery.error
-      ? 'Needs setup'
-      : storeReady
-        ? 'Ready'
-        : 'Unavailable';
+    : storeReady && paymentsAllowed
+      ? 'Ready'
+      : 'Unavailable';
 
   const selectedPlan = resolveSelectedPricingPlan(selectedPlanId);
   const selectedNativePackage = packagesByProductId.get(selectedPlan.productId);
@@ -192,7 +198,7 @@ export default function PricingScreen() {
   const purchaseBusy = busyProductId === selectedPlan.productId;
   // The 5.1.1(v) rule, asserted in pricing-view-model.test.ts: purchase depends
   // on having a backend identity, not on being registered.
-  const purchaseGate = resolvePurchaseGate({ identityUserId, isGuest });
+  const purchaseGate = resolvePurchaseGate({ identityUserId, isGuest, paymentsAllowed });
   const purchaseDisabled =
     !isConfigured
     || packageQuery.isLoading
@@ -358,6 +364,13 @@ export default function PricingScreen() {
           title="Purchases are unavailable in this build"
           body="Your balance is safe. Update the app or try again later to buy a credit pack on this device."
         />
+      ) : purchaseGate.blockedReason === 'payments_restricted' ? (
+        // A confirmed canMakePayments() no — Screen Time or a device policy.
+        // The HIG asks for explanatory UI instead of a store that cannot sell.
+        <StatusBlock
+          title="Purchases are turned off on this device"
+          body="A device restriction such as Screen Time or parental controls is blocking payments here. Your balance and creations are not affected."
+        />
       ) : purchaseGate.showRegistrationOffer ? (
         // Offered, never required. This is the shape guideline 5.1.1(v) asks
         // for in as many words: "You may explain to the user that registering
@@ -397,6 +410,7 @@ export default function PricingScreen() {
       ) : null}
 
       <View style={{ gap: appTheme.spacing.gap }}>
+        {purchaseGate.blockedReason !== 'payments_restricted' ? (<>
         <View style={{ gap: appTheme.spacing.compact }}>
           <Kicker>Choose a pack</Kicker>
           <ScrollView
@@ -460,6 +474,7 @@ export default function PricingScreen() {
           disabled={purchaseDisabled}
           accent="primary"
         />
+        </>) : null}
         <SecondaryButton
           label={busyProductId === 'restore' ? 'Refreshing...' : 'Refresh credit balance'}
           onPress={() => void refreshBalance()}

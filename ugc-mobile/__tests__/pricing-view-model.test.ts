@@ -89,3 +89,34 @@ describe('guest purchase gate (App Review 5.1.1(v))', () => {
     expect(gate.showRegistrationOffer).toBe(false);
   });
 });
+
+describe('device payment restrictions (HIG In-app purchase)', () => {
+  it('hides the store behind an explanation when the device cannot make payments', () => {
+    // "Display store only when people can make payments. Hide store or display
+    // explanatory UI if parental restrictions prevent payment." A confirmed
+    // canMakePayments() no is Screen Time or a device policy, and registration
+    // must never be pitched as the way around it.
+    const gate = resolvePurchaseGate({ identityUserId: 'user-1', isGuest: false, paymentsAllowed: false });
+
+    expect(gate.canPurchase).toBe(false);
+    expect(gate.blockedReason).toBe('payments_restricted');
+    expect(gate.showRegistrationOffer).toBe(false);
+  });
+
+  it('reports the restriction even while the identity bootstrap is pending', () => {
+    // The restriction is the harder fact: a retry cannot lift it, so it wins
+    // over the retryable no_identity state.
+    const gate = resolvePurchaseGate({ identityUserId: null, isGuest: false, paymentsAllowed: false });
+
+    expect(gate.blockedReason).toBe('payments_restricted');
+  });
+
+  it('defaults to an open store when the check has not answered', () => {
+    // canDeviceMakePayments fails open: an errored or pending check is
+    // "unknown", and unknown must never hide the store.
+    const gate = resolvePurchaseGate({ identityUserId: 'user-1', isGuest: false });
+
+    expect(gate.canPurchase).toBe(true);
+    expect(gate.blockedReason).toBeNull();
+  });
+});

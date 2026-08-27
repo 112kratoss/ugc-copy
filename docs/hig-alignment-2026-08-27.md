@@ -387,7 +387,8 @@ consistently; no orphaned pre-alignment patterns; before/after gallery; final st
 ## Native opportunity backlog (from N/A-adjacent chapters; product decisions, not audit debt)
 Live Activity for generation progress · Widgets (latest creations / credit balance) · App Shortcuts &
 Siri · Home Screen quick actions (New creation) · Control Center control · Search surface (Searching
-chapter) · SharePlay co-creation · push-to-start Live Activity for template runs.
+chapter) · SharePlay co-creation · push-to-start Live Activity for template runs · system
+`requestReview` after a natural success moment (S17a; Ratings and reviews rules apply).
 
 ## Status board
 
@@ -417,7 +418,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S3 onboarding | 4 | done | 3V/3D/3P | the product's name is drawn once, in its own typeface; the flow can be left from the screen that opens it |
 | S15 edit profile | 4 | done | 5V/4D/4P | the username is checked before the photos upload, not after; the form is the app's form; leaving no longer throws the work away in silence |
 | S16 settings/help | 4 | done | 1V/3D/4P | rows that leave the app say so; help is findable from settings; the destructive row wears its color |
-| S17(+a) pricing/IAP/ratings | 4 | todo | — | |
+| S17(+a) pricing/IAP/ratings | 4 | done | 0V/1D/2P | a restricted device gets an explanation, not a store that cannot sell; prices verified honest; ratings prompts absent by design |
 | S7 unlocks | 4 | todo | — | |
 | S18 marketplace | 4 | todo | — | |
 | S19 templates | 4 | todo | — | |
@@ -2620,3 +2621,29 @@ the system-settings hand-off; help copy tone sweeps in X3.
 iOS: groups, arrows, danger row and help verified on the simulator. AND-pass: the same states on
 Pixel_9a; hardware back from Help returns to Settings with scroll position kept; no status-bar
 bleed.
+
+### S17(+a) pricing / IAP / ratings — audited 2026-08-28 · AND-pass: 2026-08-28
+Chapters read: In-app purchase (`in-app-purchase`), Ratings and reviews (`ratings-and-reviews`),
+Loading (`loading`), Feedback (`feedback`).
+- Already right, recorded so nobody "fixes" it: prices are only ever the store's localized
+  `priceString` or an honest "Store price unavailable" — never a hardcoded figure; purchase uses
+  the system confirmation sheet; a charged purchase can never be reported as failed (recovery
+  path); guests buy without registering (the 5.1.1(v) guard); restore exists as a server resync,
+  which is the right shape for consumable credits — the App Store restore flow is not owed for
+  consumables.
+- [D][both] No canMakePayments gate: a device with Screen Time or parental payment restrictions was
+  shown a full store that could only fail at the sheet — HIG: hide the store or explain when people
+  cannot make payments → fix: `canDeviceMakePayments()` in lib/iap.ts (fail-open on an errored
+  check), `resolvePurchaseGate` gains `payments_restricted` (it outranks the retryable
+  `no_identity`), a restricted device gets an explanation while the pack carousel and buy button do
+  not render; the balance card and restore stay.
+- [P][both] The store status pill said "Needs setup" on a store error — developer language → fix:
+  'Unavailable'; the error StatusBlock already explains and offers a retry.
+- [P][both] ASCII "..." in three progress labels → deferred to X3's app-wide writing sweep.
+- S17a ratings: the app never asks for ratings or reviews — compliant by absence; a system
+  `requestReview` after a natural success moment is a product opportunity → backlog.
+Guard: pricing-view-model.test.ts gained the restriction cases (blocks with explanation and no
+registration pitch, outranks no_identity, fail-open default).
+iOS + AND-pass: the dev build carries no store keys, which exercises the degraded path end to end
+on both platforms — honest Unavailable pill, explanatory block, "Store price unavailable" in cards
+and in the disabled buy label; no invented prices anywhere; no status-bar bleed.
