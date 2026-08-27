@@ -125,7 +125,7 @@ function MediaLightboxContent({
               justifyContent: 'center',
             })}
           >
-            <X size={18} color={appTheme.colors.text} strokeWidth={2.6} />
+            <X size={18} color={appTheme.colors.text} />
           </Pressable>
         </View>
 
@@ -220,9 +220,9 @@ function LightboxArrow({
       })}
     >
       {side === 'left' ? (
-        <ChevronLeft size={22} color="#fff" strokeWidth={2.6} />
+        <ChevronLeft size={22} color="#fff" />
       ) : (
-        <ChevronRight size={22} color="#fff" strokeWidth={2.6} />
+        <ChevronRight size={22} color="#fff" />
       )}
     </Pressable>
   );

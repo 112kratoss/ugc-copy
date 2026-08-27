@@ -957,7 +957,7 @@ export function Pill({
         style,
       ]}
     >
-      {Icon ? <Icon color={color} size={appTheme.icon.compact} strokeWidth={2.2} /> : null}
+      {Icon ? <Icon color={color} size={appTheme.icon.compact} /> : null}
       <AppText selectable={false} variant="label" color={color}>
         {label}
       </AppText>
@@ -1017,7 +1017,7 @@ export function IconButton({
           style,
         ]}
       >
-        <Icon color={color} size={appTheme.icon.default} strokeWidth={2.2} />
+        <Icon color={color} size={appTheme.icon.default} />
       </Pressable>
     </MotionView>
   );

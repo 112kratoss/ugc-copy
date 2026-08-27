@@ -1,15 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
-import {
-  ArrowLeft,
-  FileText,
-  Heart,
-  MessageCircle,
-  MoreVertical,
-  Repeat2,
-  Share2,
-} from 'lucide-react-native';
+import { ArrowLeft, FileText, Heart, MessageCircle, MoreVertical, Repeat2 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -38,6 +30,7 @@ import {
 } from '@/lib/immersive-preview-view-model';
 import { readCachedImmersiveSourceData, readCachedProfile } from '@/lib/immersive-preview-source-data';
 import { getCommentCountLabel } from '@/lib/comments-view-model';
+import { ShareGlyph } from '@/lib/platform-glyphs';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
@@ -514,7 +507,7 @@ function TextPostContent({
                 key={slot.id}
                 accessibilityLabel={slot.a11yLabel ?? slot.label}
                 disabled={saving}
-                icon={<Heart size={19} color={heart.color} fill={heart.fill} strokeWidth={2.2} />}
+                icon={<Heart size={19} color={heart.color} fill={heart.fill} />}
                 label={slot.label}
                 onPress={onSave}
               />
@@ -525,7 +518,7 @@ function TextPostContent({
               <FeedCardAction
                 key={slot.id}
                 accessibilityLabel={slot.a11yLabel ?? slot.label}
-                icon={<MessageCircle size={19} color={appTheme.colors.faint} strokeWidth={2.2} />}
+                icon={<MessageCircle size={19} color={appTheme.colors.faint} />}
                 label={slot.label}
                 onPress={onComments}
               />
@@ -536,7 +529,7 @@ function TextPostContent({
               <FeedCardAction
                 key={slot.id}
                 accessibilityLabel={slot.a11yLabel ?? slot.label}
-                icon={<Share2 size={18} color={appTheme.colors.faint} strokeWidth={2.2} />}
+                icon={<ShareGlyph size={18} color={appTheme.colors.faint} />}
                 label={slot.label}
                 onPress={onShare}
               />
@@ -547,7 +540,7 @@ function TextPostContent({
               <FeedCardAction
                 key={slot.id}
                 accessibilityLabel={slot.a11yLabel ?? slot.label}
-                icon={<FileText size={18} color={appTheme.colors.faint} strokeWidth={2.2} />}
+                icon={<FileText size={18} color={appTheme.colors.faint} />}
                 label={slot.label}
                 onPress={onDetails}
               />
@@ -558,7 +551,7 @@ function TextPostContent({
               <FeedCardAction
                 key={slot.id}
                 accessibilityLabel={slot.a11yLabel ?? slot.label}
-                icon={<Repeat2 size={19} color={appTheme.colors.primary} strokeWidth={2.2} />}
+                icon={<Repeat2 size={19} color={appTheme.colors.primary} />}
                 label={slot.label}
                 onPress={onActionsOpen}
                 tone="primary"

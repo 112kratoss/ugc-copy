@@ -171,7 +171,6 @@ export function getSaveHeartIconProps({
   return {
     color: activeColor,
     fill: isSaved ? SAVE_HEART_COLOR : 'transparent',
-    strokeWidth: 2.6,
   };
 }
 

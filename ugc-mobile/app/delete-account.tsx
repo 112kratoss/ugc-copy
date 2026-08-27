@@ -25,7 +25,7 @@ export default function DeleteAccountScreen() {
     setError(null);
     try {
       await deleteAccount(reauthentication);
-      Alert.alert('Account deleted', 'Your Magic Booklet account and personal data were permanently deleted.');
+      Alert.alert('Account deleted', 'Your Magicbooklet account and personal data were permanently deleted.');
     } catch (nextError) {
       if (isAccountReauthenticationRequired(nextError)) {
         setNeedsReauthentication(true);
@@ -42,7 +42,7 @@ export default function DeleteAccountScreen() {
       <SectionTitle
         eyebrow="Account"
         title="Delete your account"
-        body="This permanently removes your Magic Booklet account. This action cannot be undone."
+        body="This permanently removes your Magicbooklet account. This action cannot be undone."
       />
 
       <Card style={{ borderColor: appTheme.semantic.danger.border }}>
@@ -123,7 +123,7 @@ export default function DeleteAccountScreen() {
             <StatusBlock
               tone="warning"
               title="Use the original sign-in device"
-              body="Open Magic Booklet on the device used for this account, then try account deletion again."
+              body="Open Magicbooklet on the device used for this account, then try account deletion again."
             />
           ) : null}
         </Card>

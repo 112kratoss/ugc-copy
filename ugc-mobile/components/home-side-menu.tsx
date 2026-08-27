@@ -210,7 +210,7 @@ export function HomeSideMenu({
                   opacity: pressed ? 0.76 : 1,
                 })}
               >
-                <X size={21} color={appTheme.colors.text} strokeWidth={2.2} />
+                <X size={21} color={appTheme.colors.text} />
               </Pressable>
             </View>
 

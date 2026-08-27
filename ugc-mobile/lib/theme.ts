@@ -186,9 +186,29 @@ export const appTheme = {
     },
   },
   icon: {
+    /**
+     * The icon size ramp, stepped to sit beside the type ramp above: 14 next to
+     * `caption`, 16 next to `label`/`bodySm`, 18 next to `body`, 20 for a
+     * standalone control, 24 next to `sectionTitle`, 32 for hero and empty
+     * states. HIG Icons asks for a consistent size across the set; a screen
+     * that needs a size not on this ramp is choosing a new one, and
+     * `hig-icon-size.test.ts` will say so.
+     */
+    xs: 14,
+    sm: 16,
     compact: 18,
     default: 20,
     feature: 24,
+    hero: 32,
+    /**
+     * HIG Icons: "all interface icons in your app need to use a consistent
+     * size, level of detail, stroke thickness (or weight), and perspective."
+     * One weight for the whole set, supplied once by the LucideProvider in the
+     * root layout — call sites pass a size, never a stroke. 2.2 is the weight
+     * the shipped primitives (IconButton, Pill) already chose; it reads as a
+     * medium next to the label and caption weights icons usually sit beside.
+     */
+    stroke: 2.2,
   },
   touch: {
     compact: 48,

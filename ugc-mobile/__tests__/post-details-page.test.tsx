@@ -15,6 +15,7 @@ const { bundleContentProps, queryState, mutationState } = vi.hoisted(() => ({
 vi.mock('react-native', () => ({
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   Linking: { openURL: vi.fn() },
+  Platform: { OS: 'ios' },
   Pressable: ({ children, style: _style, ...props }: MockProps) => React.createElement('pressable', props, children),
   ScrollView: ({ children, ...props }: MockProps) => React.createElement('scroll-view', props, children),
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
@@ -31,6 +32,8 @@ vi.mock('lucide-react-native', () => {
     MessageCircle: icon('message'),
     MoreVertical: icon('more'),
     Repeat2: icon('repeat'),
+    // Both share dialects: ShareGlyph picks one per platform.
+    Share: icon('share'),
     Share2: icon('share'),
   };
 });

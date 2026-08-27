@@ -194,7 +194,7 @@ function MediaFallback({
           <View pointerEvents="none" style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(3,3,6,0.55)' }} />
         </>
       ) : null}
-      <ImageOff size={28} color={appTheme.colors.faint} strokeWidth={2.2} />
+      <ImageOff size={28} color={appTheme.colors.faint} />
       <Text style={{ color: appTheme.colors.textSecondary, fontSize: 12, fontWeight: '800' }}>{label}</Text>
       {onRetry ? (
         <Text style={{ color: appTheme.colors.faint, fontSize: 11, fontWeight: '700' }}>Tap to retry</Text>

@@ -44,7 +44,7 @@ export function OnboardingBookletHeader({
         accessibilityLabel="Magicbooklet"
         style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
       >
-        <Sparkles size={26} strokeWidth={2.5} color={appTheme.colors.primary} />
+        <Sparkles size={26} color={appTheme.colors.primary} />
         <AppText
           selectable={false}
           style={{ fontSize: 23, lineHeight: 29, fontWeight: '800', letterSpacing: -0.35 }}
@@ -163,7 +163,7 @@ export function OnboardingBookletGoal({
                 })}
               >
                 <View style={{ position: 'relative' }}>
-                  <Icon size={24} strokeWidth={2.2} color={isSelected ? item.color : appTheme.colors.muted} />
+                  <Icon size={24} color={isSelected ? item.color : appTheme.colors.muted} />
                   {isSelected ? (
                     <View
                       style={{
@@ -178,7 +178,7 @@ export function OnboardingBookletGoal({
                         justifyContent: 'center',
                       }}
                     >
-                      <Check size={11} strokeWidth={3} color={appTheme.colors.onPrimary} />
+                      <Check size={11} color={appTheme.colors.onPrimary} />
                     </View>
                   ) : null}
                 </View>

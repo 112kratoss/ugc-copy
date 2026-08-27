@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/reac
 import Constants from 'expo-constants';
 import { AppMetricsRoot } from 'expo-observe';
 import { Stack, router, usePathname } from 'expo-router';
+import { LucideProvider } from 'lucide-react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
@@ -84,6 +85,9 @@ function RootLayoutNav() {
 
   return (
     <QueryClientProvider client={queryClient}>
+      {/* One stroke weight for every interface icon in the app (HIG Icons).
+          Call sites choose a size; the weight is never passed per-icon. */}
+      <LucideProvider strokeWidth={appTheme.icon.stroke}>
       <AuthProvider>
         <OnboardingProvider>
           <NotificationResponseCoordinator />
@@ -171,6 +175,7 @@ function RootLayoutNav() {
           </SafeAreaProvider>
         </OnboardingProvider>
       </AuthProvider>
+      </LucideProvider>
     </QueryClientProvider>
   );
 }

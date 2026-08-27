@@ -811,7 +811,7 @@ function BalanceCard({
         <Text numberOfLines={1} style={{ color: PROFILE_COLORS.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</Text>
         <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.74} style={{ color: PROFILE_COLORS.text, fontSize: 17, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{value}</Text>
       </View>
-      <ChevronRight size={16} color={PROFILE_COLORS.faint} strokeWidth={2.3} />
+      <ChevronRight size={16} color={PROFILE_COLORS.faint} />
     </Pressable>
   );
 }
@@ -1137,7 +1137,7 @@ function ProfileMediaTile({
         />
         {item.mediaKind === 'video' ? (
           <View style={{ position: 'absolute', top: 8, right: 8, width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.38)' }}>
-            <Play size={15} color="#ffffff" fill="#ffffff" strokeWidth={2.4} />
+            <Play size={15} color="#ffffff" fill="#ffffff" />
           </View>
         ) : null}
         {isSavedTile ? (
@@ -1223,7 +1223,7 @@ function ProfileSavedFeedOverlay({
           gap: 4,
         }}
       >
-        <Heart size={14} color="#ffffff" fill="#ffffff" strokeWidth={2.2} />
+        <Heart size={14} color="#ffffff" fill="#ffffff" />
         <Text numberOfLines={1} style={{ color: '#ffffff', fontSize: 12, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
           {countLabel}
         </Text>
@@ -1235,10 +1235,10 @@ function ProfileSavedFeedOverlay({
 function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
   const accent = item.label === 'Creation' ? appTheme.colors.motion : appTheme.colors.image;
   const icon = item.label === 'Creation'
-    ? <Sparkles size={13} color={accent} strokeWidth={2.4} />
+    ? <Sparkles size={13} color={accent} />
     : item.mediaKind === 'video'
-      ? <Play size={13} color={accent} fill={accent} strokeWidth={2.4} />
-      : <ImageIcon size={13} color={accent} strokeWidth={2.4} />;
+      ? <Play size={13} color={accent} fill={accent} />
+      : <ImageIcon size={13} color={accent} />;
   const stateColor = item.label === 'Creation'
     ? item.linkedPostLabel && item.linkedPostLabel !== 'Not posted'
       ? appTheme.colors.success
@@ -1371,7 +1371,7 @@ function ProfileVideoFallback({ item, height }: { item: ProfileMediaCard; height
             borderColor: `${appTheme.colors.video}66`,
           }}
         >
-          <Play size={18} color="#ffffff" fill="#ffffff" strokeWidth={2.3} />
+          <Play size={18} color="#ffffff" fill="#ffffff" />
         </View>
         <Text style={{ marginTop: 10, color: '#ffffff', fontSize: 12, fontWeight: '800' }}>{label}</Text>
         <Text
@@ -1414,8 +1414,8 @@ function ProfileUnavailableFallback({
           }}
         >
           {item.label === 'Creation'
-            ? <Sparkles size={14} color={accent} strokeWidth={2.4} />
-            : <ImageIcon size={14} color={accent} strokeWidth={2.4} />}
+            ? <Sparkles size={14} color={accent} />
+            : <ImageIcon size={14} color={accent} />}
         </View>
         {showTitle ? (
           <Text numberOfLines={2} style={{ marginTop: 10, color: '#ffffff', fontSize: 11, lineHeight: 14, fontWeight: '800' }}>

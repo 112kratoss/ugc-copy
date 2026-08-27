@@ -707,7 +707,7 @@ export default function ShowcaseScreen() {
                   label="Refresh Showcase"
                   onPress={handleRefresh}
                 >
-                  <RefreshCw size={19} color={appTheme.colors.text} strokeWidth={2.4} />
+                  <RefreshCw size={19} color={appTheme.colors.text} />
                 </IconButton>
               </View>
 
@@ -1047,7 +1047,7 @@ function MasonryPin({
             opacity: pressed ? appTheme.opacity.pressed : 1,
           })}
         >
-          <MoreVertical size={18} color={appTheme.colors.muted} strokeWidth={2.4} />
+          <MoreVertical size={18} color={appTheme.colors.muted} />
         </Pressable>
       </View>
     </View>
@@ -1097,7 +1097,7 @@ function VideoCornerPlay() {
         backgroundColor: 'rgba(0,0,0,0.42)',
       }}
     >
-      <Play size={16} color="#ffffff" fill="#ffffff" strokeWidth={2.5} />
+      <Play size={16} color="#ffffff" fill="#ffffff" />
     </View>
   );
 }
@@ -1118,7 +1118,7 @@ function VisualFallbackPreview({ accent, height, radius }: { accent: string; hei
       }}
     >
       <View style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: `${accent}1f`, borderWidth: 1, borderColor: `${accent}55` }}>
-        <ImageIcon size={22} color={accent} strokeWidth={2} />
+        <ImageIcon size={22} color={accent} />
       </View>
     </View>
   );
@@ -1152,7 +1152,7 @@ function VideoPinPreview({ accent, height, radius }: { accent: string; height: n
           borderColor: `${accent}66`,
         }}
       >
-        <Play size={21} color={accent} fill={accent} strokeWidth={2.4} />
+        <Play size={21} color={accent} fill={accent} />
       </View>
     </View>
   );

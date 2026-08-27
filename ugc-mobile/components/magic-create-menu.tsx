@@ -225,7 +225,7 @@ function CloseMenuButton({ onPress }: { onPress: () => void }) {
         opacity: pressed ? 0.78 : 1,
       })}
     >
-      <X size={22} color={appTheme.colors.text} strokeWidth={2.2} />
+      <X size={22} color={appTheme.colors.text} />
     </Pressable>
   );
 }
@@ -268,7 +268,7 @@ function MenuActionButton({ action, width, onPress }: { action: CreateMenuAction
           backgroundColor: isCreate ? 'rgba(26,14,10,0.12)' : appTheme.colors.surfaceStrong,
         }}
       >
-        <Icon size={26} color={foreground} strokeWidth={2.2} />
+        <Icon size={26} color={foreground} />
       </View>
       <View style={{ gap: 4 }}>
         <Text style={{ color: foreground, fontSize: 17, lineHeight: 22, fontWeight: '800' }}>

@@ -38,7 +38,7 @@ export function getAccountReauthenticationMethods(
   ]);
 
   // Apple requires its own authorization code for token revocation, even when
-  // another identity is linked to the same Magic Booklet account.
+  // another identity is linked to the same Magicbooklet account.
   if (providers.has('apple')) {
     return platform === 'ios' ? ['apple'] : [];
   }

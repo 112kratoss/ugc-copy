@@ -1,4 +1,4 @@
-import { FileText, Globe, LockKeyhole, MessageCircle, Repeat2, Share2, Wand2 } from 'lucide-react-native';
+import { FileText, Globe, LockKeyhole, MessageCircle, Repeat2, Wand2 } from 'lucide-react-native';
 import { memo } from 'react';
 import { Text, View } from 'react-native';
 
@@ -10,6 +10,7 @@ import {
   getProfileFeedMediaHeight,
   type ProfileFeedCard,
 } from '@/lib/profile-feed-card-view-model';
+import { ShareGlyph } from '@/lib/platform-glyphs';
 import { accentColor, appTheme } from '@/lib/theme';
 import { getViewerActionSlots, type ViewerStateTone } from '@/lib/viewer-actions';
 
@@ -125,19 +126,19 @@ function profileActionIcon(
 ) {
   const muted = appTheme.colors.faint;
 
-  if (id === 'publish') return <Globe size={19} color={appTheme.colors.primary} strokeWidth={2.4} />;
-  if (id === 'unlock') return <Wand2 size={19} color={appTheme.colors.success} strokeWidth={2.4} />;
+  if (id === 'publish') return <Globe size={19} color={appTheme.colors.primary} />;
+  if (id === 'unlock') return <Wand2 size={19} color={appTheme.colors.success} />;
   if (id === 'visibility') {
     // The icon reports where the post (or the creation's linked post) sits now.
     const isPrivate = visibility === 'private' || visibility === 'unlisted';
     return isPrivate
-      ? <LockKeyhole size={19} color={appTheme.colors.warning} strokeWidth={2.3} />
-      : <Globe size={19} color={appTheme.colors.success} strokeWidth={2.3} />;
+      ? <LockKeyhole size={19} color={appTheme.colors.warning} />
+      : <Globe size={19} color={appTheme.colors.success} />;
   }
-  if (id === 'comment') return <MessageCircle size={19} color={muted} strokeWidth={2.2} />;
-  if (id === 'share') return <Share2 size={18} color={muted} strokeWidth={2.2} />;
-  if (id === 'details') return <FileText size={18} color={muted} strokeWidth={2.2} />;
-  return <Repeat2 size={19} color={appTheme.colors.primary} strokeWidth={2.3} />;
+  if (id === 'comment') return <MessageCircle size={19} color={muted} />;
+  if (id === 'share') return <ShareGlyph size={18} color={muted} />;
+  if (id === 'details') return <FileText size={18} color={muted} />;
+  return <Repeat2 size={19} color={appTheme.colors.primary} />;
 }
 
 function ProfileStateChip({ label, tone }: { label: string; tone: ViewerStateTone }) {

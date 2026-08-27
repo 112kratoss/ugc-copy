@@ -55,7 +55,7 @@ export function OnboardingWelcome({
           gap: 9,
         }}
       >
-        <Sparkles size={29} strokeWidth={2.5} color={appTheme.colors.primary} />
+        <Sparkles size={29} color={appTheme.colors.primary} />
         <AppText selectable={false} style={{ fontSize: 25, lineHeight: 31, fontWeight: '800', letterSpacing: -0.35 }}>
           Magicbooklet
         </AppText>

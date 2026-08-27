@@ -124,14 +124,14 @@ export function UnlockRemixPrompt({
                 opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
-              <X size={21} color={appTheme.colors.text} strokeWidth={2.5} />
+              <X size={21} color={appTheme.colors.text} />
             </Pressable>
           </View>
 
           <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: appTheme.colors.surfaceStrong, padding: appTheme.spacing.card, gap: appTheme.spacing.gap }}>
             <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
               <View style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: `${accentValue}22` }}>
-                <Lock size={20} color={accentValue} strokeWidth={2.6} />
+                <Lock size={20} color={accentValue} />
               </View>
               <View style={{ flex: 1, gap: 5 }}>
                 <Text style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
@@ -174,7 +174,7 @@ export function UnlockRemixPrompt({
             {unlocking ? (
               <ActivityIndicator color={appTheme.colors.textInverse} />
             ) : (
-              <Lock size={19} color={appTheme.colors.textInverse} strokeWidth={2.8} />
+              <Lock size={19} color={appTheme.colors.textInverse} />
             )}
             <Text style={{ color: appTheme.colors.textInverse, ...appTheme.type.bodySm, fontWeight: '800' }}>
               {unlocking ? 'Unlocking...' : ctaLabel}
@@ -193,7 +193,7 @@ function ResourceKindRow({ kinds }: { kinds: PostResourceKind[] }) {
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
       {kinds.map((kind) => (
         <View key={kind} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.surface, paddingHorizontal: 10, paddingVertical: 6 }}>
-          <FileText size={13} color={appTheme.colors.textSecondary} strokeWidth={2.5} />
+          <FileText size={13} color={appTheme.colors.textSecondary} />
           <Text style={{ color: appTheme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>{resourceKindLabel(kind)}</Text>
         </View>
       ))}

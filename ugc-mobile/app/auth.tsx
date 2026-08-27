@@ -372,7 +372,7 @@ function AuthPanel({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={mode === 'signup' ? 'Sign up with Google' : 'Sign in with Google'}
-            accessibilityHint="Opens Google authentication and returns to Magic Booklet"
+            accessibilityHint="Opens Google authentication and returns to Magicbooklet"
             accessibilityState={{ busy: isGoogleSubmitting, disabled: !isAuthConfigured || isGoogleSubmitting }}
             disabled={!isAuthConfigured || isGoogleSubmitting}
             onPress={onGoogleSignIn}
@@ -411,7 +411,7 @@ function AuthPanel({
 
       <View style={{ alignItems: 'center', gap: 6 }}>
         <Text style={{ color: workspace.faint, fontSize: 11, lineHeight: 17, textAlign: 'center' }}>
-          By continuing, you agree to the Magic Booklet terms and acknowledge the privacy policy.
+          By continuing, you agree to the Magicbooklet terms and acknowledge the privacy policy.
         </Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
           <Pressable
@@ -627,7 +627,7 @@ function ErrorToast({
           backgroundColor: appTheme.semantic.danger.background,
         }}
       >
-        <AlertCircle size={18} color={appTheme.colors.danger} strokeWidth={2.5} />
+        <AlertCircle size={18} color={appTheme.colors.danger} />
       </View>
       <Text selectable numberOfLines={2} style={{ flex: 1, color: workspace.text, fontSize: 13, lineHeight: 18, fontWeight: '800' }}>
         {message}
@@ -645,7 +645,7 @@ function ErrorToast({
           backgroundColor: pressed ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.08)',
         })}
       >
-        <X size={18} color={workspace.text} strokeWidth={2.4} />
+        <X size={18} color={workspace.text} />
       </Pressable>
     </View>
   );

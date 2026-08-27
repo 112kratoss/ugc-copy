@@ -53,7 +53,7 @@ export default function SettingsScreen() {
       <SettingsCard
         icon={<ShieldCheck size={22} color="#22d3ee" />}
         title="Privacy policy"
-        body="Review how Magic Booklet collects, uses, stores, and deletes data."
+        body="Review how Magicbooklet collects, uses, stores, and deletes data."
         onPress={() => void Linking.openURL(`${env.siteUrl}/privacy`)}
       />
 
@@ -82,7 +82,7 @@ export default function SettingsScreen() {
         <SettingsCard
           icon={<Trash2 size={22} color={appTheme.colors.danger} />}
           title="Account deletion"
-          body="See how to request deletion of an existing Magic Booklet account."
+          body="See how to request deletion of an existing Magicbooklet account."
           onPress={() => void Linking.openURL(`${env.siteUrl}/delete-account`)}
         />
       )}

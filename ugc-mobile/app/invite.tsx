@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
 import { router } from 'expo-router';
-import { CheckCircle2, Copy, Gift, RotateCcw, Share2, ShoppingBag, UserPlus, UsersRound } from 'lucide-react-native';
+import { CheckCircle2, Copy, Gift, RotateCcw, ShoppingBag, UserPlus, UsersRound } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { AccessibilityInfo, Pressable, Share, View } from 'react-native';
 
@@ -18,6 +18,7 @@ import {
 } from '@/components/ui';
 import { MetricGridSkeleton } from '@/components/skeleton';
 import { useAuth } from '@/lib/auth';
+import { ShareGlyph } from '@/lib/platform-glyphs';
 import { formatCreditAmount } from '@/lib/pricing';
 import { normalizeReferralCode } from '@/lib/referral-attribution';
 import { appTheme } from '@/lib/theme';
@@ -230,7 +231,7 @@ function SignedOutInvite() {
 
 function ReferralMetrics({ stats }: { stats: ReferralStats }) {
   const metrics = [
-    { label: 'Link visits', value: stats.visits, icon: Share2, color: appTheme.colors.info },
+    { label: 'Link visits', value: stats.visits, icon: ShareGlyph, color: appTheme.colors.info },
     { label: 'Friends joined', value: stats.signups, icon: UsersRound, color: appTheme.colors.primary },
     { label: 'Purchasers', value: stats.purchasers, icon: ShoppingBag, color: appTheme.colors.commerce },
     { label: 'Credits earned', value: stats.creditsEarned, icon: Gift, color: appTheme.colors.success },

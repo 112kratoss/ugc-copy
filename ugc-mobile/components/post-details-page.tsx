@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
-import { ChevronLeft, Copy, FileText, Lock, MessageCircle, MoreVertical, Repeat2, Share2 } from 'lucide-react-native';
+import { ChevronLeft, Copy, FileText, Lock, MessageCircle, MoreVertical, Repeat2 } from 'lucide-react-native';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from 'react-native';
 
@@ -21,6 +21,7 @@ import {
   getUnlockPriceLabel,
   prepareUnlockedResourcesForDetails,
 } from '@/lib/post-details-view-model';
+import { ShareGlyph } from '@/lib/platform-glyphs';
 import type { PostResourceKind } from '@/lib/types';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
@@ -245,7 +246,7 @@ export function PostDetailsPage({
             <DetailActionButton
               grow
               label={primaryAction.label}
-              icon={<Repeat2 size={18} color="#050505" strokeWidth={2.8} />}
+              icon={<Repeat2 size={18} color="#050505" />}
               primary
               loading={remixLoading}
               onPress={() => void onRecreate(item)}
@@ -264,7 +265,7 @@ export function PostDetailsPage({
               disabled={!item.canShare}
               grow
               label="Share"
-              icon={<Share2 size={18} color={item.canShare ? '#fff' : 'rgba(255,255,255,0.5)'} strokeWidth={2.5} />}
+              icon={<ShareGlyph size={18} color={item.canShare ? '#fff' : 'rgba(255,255,255,0.5)'} />}
               onPress={() => void onShare(item)}
             />
             {onComments && item.canComment ? (
@@ -272,7 +273,7 @@ export function PostDetailsPage({
                 accessibilityLabel="Comments"
                 grow
                 label={commentCount > 0 ? formatCompactCount(commentCount) : 'Comment'}
-                icon={<MessageCircle size={18} color="#fff" strokeWidth={2.5} />}
+                icon={<MessageCircle size={18} color="#fff" />}
                 onPress={onComments}
               />
             ) : null}
@@ -333,7 +334,7 @@ export function PostDetailsPage({
               ) : sectionState === 'error' ? (
                 <View style={{ gap: 10 }}>
                   <ErrorText message={resourceQuery.error instanceof Error ? resourceQuery.error.message : 'Could not load these resources.'} />
-                  <DetailActionButton label="Try again" icon={<FileText size={18} color="#fff" strokeWidth={2.5} />} onPress={() => void resourceQuery.refetch()} />
+                  <DetailActionButton label="Try again" icon={<FileText size={18} color="#fff" />} onPress={() => void resourceQuery.refetch()} />
                 </View>
               ) : (
                 <>
@@ -345,7 +346,7 @@ export function PostDetailsPage({
                   <View style={{ gap: 10 }}>
                     <DetailActionButton
                       label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Get resources — Free' : 'Unlock with credits'}
-                      icon={<Lock size={18} color="#050505" strokeWidth={2.8} />}
+                      icon={<Lock size={18} color="#050505" />}
                       loading={unlockMutation.isPending}
                       primary
                       onPress={() => {
@@ -400,7 +401,7 @@ function DetailsHeader({
     >
       {onBack ? (
         <HeaderButton accessibilityLabel={backLabel} onPress={onBack}>
-          <ChevronLeft size={26} color={appTheme.colors.text} strokeWidth={2.4} />
+          <ChevronLeft size={26} color={appTheme.colors.text} />
         </HeaderButton>
       ) : (
         <View style={{ width: 48, height: 48 }} />
@@ -410,7 +411,7 @@ function DetailsHeader({
       </Text>
       {onActionsOpen ? (
         <HeaderButton accessibilityLabel="More options" onPress={onActionsOpen}>
-          <MoreVertical size={22} color={appTheme.colors.text} strokeWidth={2.4} />
+          <MoreVertical size={22} color={appTheme.colors.text} />
         </HeaderButton>
       ) : (
         <View style={{ width: 48, height: 48 }} />
@@ -493,7 +494,7 @@ function CopyableText({ text, onCopy }: { text: string; onCopy: (text: string) =
       <Text selectable style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>{text}</Text>
       <View style={{ flexDirection: 'row' }}>
         <ResourceAction
-          icon={<Copy size={14} color={appTheme.colors.success} strokeWidth={2.5} />}
+          icon={<Copy size={14} color={appTheme.colors.success} />}
           label="Copy"
           onPress={() => onCopy(text)}
         />
@@ -554,7 +555,7 @@ function ResourceKindRow({ kinds }: { kinds: PostResourceKind[] }) {
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
       {kinds.map((kind) => (
         <View key={kind} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.surfaceStrong, paddingHorizontal: 10, paddingVertical: 6 }}>
-          <FileText size={13} color={appTheme.colors.textSecondary} strokeWidth={2.5} />
+          <FileText size={13} color={appTheme.colors.textSecondary} />
           <Text style={{ color: appTheme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>{resourceKindLabel(kind)}</Text>
         </View>
       ))}

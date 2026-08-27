@@ -234,8 +234,8 @@ function HeaderIconButton({ label, icon, onPress }: { label: string; icon: 'back
       })}
     >
       {icon === 'back'
-        ? <ArrowLeft size={22} color={appTheme.colors.text} strokeWidth={2.4} />
-        : <X size={22} color={appTheme.colors.text} strokeWidth={2.4} />}
+        ? <ArrowLeft size={22} color={appTheme.colors.text} />
+        : <X size={22} color={appTheme.colors.text} />}
     </Pressable>
   );
 }
@@ -677,7 +677,7 @@ function PostResourcesPage({
                   backgroundColor: pressed ? appTheme.colors.primaryStrong : appTheme.colors.primary,
                 })}
               >
-                <Plus size={17} color={appTheme.colors.onPrimary} strokeWidth={3} />
+                <Plus size={17} color={appTheme.colors.onPrimary} />
                 <AppText variant="label" color="onPrimary">Add</AppText>
               </Pressable>
             </View>
@@ -1038,7 +1038,7 @@ function PostComposerFooter({
           })}
         >
           <AppText variant="button" color="onPrimary">Review & publish</AppText>
-          <ChevronRight size={19} color={appTheme.colors.onPrimary} strokeWidth={2.8} />
+          <ChevronRight size={19} color={appTheme.colors.onPrimary} />
         </Pressable>
       ) : (
         <View style={{ flexDirection: 'row', gap: 10 }}>
@@ -1558,7 +1558,7 @@ function ResourceScopePicker({
                 )}
                 {selected ? (
                   <View style={{ position: 'absolute', top: 5, right: 5, width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.image }}>
-                    <Check size={13} color={appTheme.colors.textInverse} strokeWidth={3} />
+                    <Check size={13} color={appTheme.colors.textInverse} />
                   </View>
                 ) : null}
               </View>
@@ -3569,7 +3569,7 @@ function MobileCreatablePicker({
             opacity: pressed ? 0.72 : disabled ? 0.38 : 1,
           })}
         >
-          <ChevronDown size={16} color="rgba(255,255,255,0.58)" strokeWidth={2.6} />
+          <ChevronDown size={16} color="rgba(255,255,255,0.58)" />
         </Pressable>
       </View>
 
@@ -3606,7 +3606,7 @@ function MobileCreatablePicker({
                   })}
                 >
                   {entry.type === 'create' ? (
-                    <Plus size={15} color={appTheme.colors.image} strokeWidth={2.8} />
+                    <Plus size={15} color={appTheme.colors.image} />
                   ) : null}
                   <AppText
                     variant="bodySm"
@@ -4235,7 +4235,7 @@ function UnlockChecklistRow({
           justifyContent: 'center',
         }}
       >
-        {checked ? <Check size={13} color="#04130c" strokeWidth={3} /> : null}
+        {checked ? <Check size={13} color="#04130c" /> : null}
       </View>
       <AppText selectable={false} variant="label" color="text">
         {label}
@@ -4556,7 +4556,7 @@ function AddMediaGalleryCard({
             justifyContent: 'center',
           }}
         >
-          <Plus size={22} color={appTheme.colors.image} strokeWidth={2.8} />
+          <Plus size={22} color={appTheme.colors.image} />
         </View>
         <AppText variant="caption" color="muted">{isPicking ? 'Preparing...' : 'Add media'}</AppText>
       </View>
@@ -4789,7 +4789,7 @@ function MediaGalleryCard({
               opacity: pressed ? 0.72 : 1,
             })}
           >
-            <X size={15} color="#fff" strokeWidth={3} />
+            <X size={15} color="#fff" />
           </Pressable>
         ) : null}
       </View>

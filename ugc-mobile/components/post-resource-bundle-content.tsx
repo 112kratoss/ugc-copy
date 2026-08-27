@@ -458,7 +458,7 @@ function ResourceItemRow({
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           {textContent && onCopy ? (
             <ResourceAction
-              icon={<Copy size={14} color={appTheme.colors.success} strokeWidth={2.5} />}
+              icon={<Copy size={14} color={appTheme.colors.success} />}
               label="Copy"
               onPress={() => onCopy(textContent)}
             />
@@ -466,8 +466,8 @@ function ResourceItemRow({
           {externalUrl && onOpenUrl ? (
             <ResourceAction
               icon={item.type === 'remix_link'
-                ? <Repeat2 size={14} color={appTheme.colors.primary} strokeWidth={2.5} />
-                : <ExternalLink size={14} color={appTheme.colors.primary} strokeWidth={2.5} />}
+                ? <Repeat2 size={14} color={appTheme.colors.primary} />
+                : <ExternalLink size={14} color={appTheme.colors.primary} />}
               label={item.type === 'remix_link' ? 'Open remix' : item.type === 'workflow' ? 'Open workflow' : 'Open link'}
               onPress={() => onOpenUrl(externalUrl)}
             />
@@ -476,7 +476,7 @@ function ResourceItemRow({
             <ResourceAction
               icon={fileLoading
                 ? <ActivityIndicator color={appTheme.colors.primary} size="small" />
-                : <Download size={14} color={appTheme.colors.primary} strokeWidth={2.5} />}
+                : <Download size={14} color={appTheme.colors.primary} />}
               label={fileLoading ? 'Opening…' : 'Open file'}
               onPress={() => onOpenFile({ contentType: item.contentType, storagePath, title: item.title })}
             />
@@ -563,7 +563,7 @@ function MediaScopeThumbnail({ item }: { item: ShowcaseMediaItem }) {
   if (!url) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-        <FileText size={14} color={appTheme.colors.faint} strokeWidth={2.2} />
+        <FileText size={14} color={appTheme.colors.faint} />
       </View>
     );
   }
@@ -582,12 +582,12 @@ function MediaScopeThumbnail({ item }: { item: ShowcaseMediaItem }) {
 
 function ResourceTypeIcon({ type }: { type: PostResourceItemType }) {
   const icon = type === 'remix_link' || type === 'remix_access'
-    ? <Repeat2 size={18} color={appTheme.colors.primary} strokeWidth={2.5} />
+    ? <Repeat2 size={18} color={appTheme.colors.primary} />
     : type === 'workflow'
-      ? <Link2 size={18} color={appTheme.colors.primary} strokeWidth={2.5} />
+      ? <Link2 size={18} color={appTheme.colors.primary} />
       : type === 'settings' || type === 'preset'
-        ? <Settings2 size={18} color={appTheme.colors.primary} strokeWidth={2.5} />
-        : <FileText size={18} color={appTheme.colors.primary} strokeWidth={2.5} />;
+        ? <Settings2 size={18} color={appTheme.colors.primary} />
+        : <FileText size={18} color={appTheme.colors.primary} />;
   return (
     <View style={{ width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: `${appTheme.colors.primary}18` }}>
       {icon}

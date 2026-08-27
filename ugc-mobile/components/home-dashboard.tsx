@@ -859,7 +859,7 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
         }}
         style={{ width: 48 }}
       >
-        <Menu size={22} color={DASHBOARD_COLORS.text} strokeWidth={2.2} />
+        <Menu size={22} color={DASHBOARD_COLORS.text} />
       </TopBarControl>
 
       <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, minWidth: 0 }}>
@@ -881,7 +881,7 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <Crown size={15} color="#fbbf24" fill="rgba(251,191,36,0.2)" />
             <Text style={{ color: DASHBOARD_COLORS.text, fontSize: 14, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatCreditAmount(credits)}</Text>
-            <Plus size={14} color={DASHBOARD_COLORS.coral} strokeWidth={2.5} />
+            <Plus size={14} color={DASHBOARD_COLORS.coral} />
           </View>
         </TopBarControl>
 
@@ -893,7 +893,7 @@ function HomeTopBar({ credits, onMenuPress }: { credits: number; onMenuPress: ()
           }}
           style={{ width: 48 }}
         >
-          <Bell size={21} color={DASHBOARD_COLORS.text} strokeWidth={2.1} />
+          <Bell size={21} color={DASHBOARD_COLORS.text} />
         </TopBarControl>
       </View>
     </View>
@@ -1191,7 +1191,7 @@ function TopSlide({
             transform: reduceMotion ? undefined : [{ scale: pressed ? 0.985 : 1 }],
           })}
         >
-          <WandSparkles size={17} color={appTheme.colors.onPrimary} strokeWidth={2.5} />
+          <WandSparkles size={17} color={appTheme.colors.onPrimary} />
           <Text style={{ color: appTheme.colors.onPrimary, fontSize: 14, fontWeight: '800' }}>{slide.ctaLabel}</Text>
         </Pressable>
       </View>

@@ -4,25 +4,7 @@ import { useInfiniteQuery, useMutation, useQueryClient, type InfiniteData } from
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, router } from 'expo-router';
-import {
-  ChevronRight,
-  ExternalLink,
-  FileText,
-  Globe,
-  Heart,
-  ImageIcon,
-  Layers3,
-  Lock,
-  MapPin,
-  Pencil,
-  Play,
-  Repeat2,
-  Share2,
-  UserCheck,
-  UserPlus,
-  Ban,
-  Flag,
-} from 'lucide-react-native';
+import { ChevronRight, ExternalLink, FileText, Globe, Heart, ImageIcon, Layers3, Lock, MapPin, Pencil, Play, Repeat2, UserCheck, UserPlus, Ban, Flag } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
@@ -54,6 +36,7 @@ import {
 import { env } from '@/lib/env';
 import { formatCompactCount } from '@/lib/home-view-model';
 import { showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
+import { ShareGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia, hasShowcaseVideoWithoutPreview } from '@/lib/showcase-media';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from '@/lib/showcase-display';
@@ -487,7 +470,7 @@ function CreatorHeader({
               <FollowButton following={data.viewer.isFollowing} loading={isFollowLoading} onPress={onFollowPress} />
             )}
             <CircleAction label="Share profile" onPress={onShareProfile}>
-              <Share2 size={18} color={appTheme.colors.text} strokeWidth={2.4} />
+              <ShareGlyph size={18} color={appTheme.colors.text} />
             </CircleAction>
           </View>
         </View>
@@ -499,7 +482,7 @@ function CreatorHeader({
           <Text selectable numberOfLines={1} style={{ color: appTheme.colors.primary, ...appTheme.type.bodySm, fontWeight: '700' }}>@{profile.username}</Text>
           {profile.location ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-              <MapPin size={14} color={appTheme.colors.muted} strokeWidth={2.3} />
+              <MapPin size={14} color={appTheme.colors.muted} />
               <Text selectable numberOfLines={1} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{profile.location}</Text>
             </View>
           ) : null}
@@ -517,10 +500,10 @@ function CreatorHeader({
         {!data.viewer.isOwner ? (
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <SafetyAction label="Report user" onPress={onReportUser}>
-              <Flag size={16} color={appTheme.colors.danger} strokeWidth={2.3} />
+              <Flag size={16} color={appTheme.colors.danger} />
             </SafetyAction>
             <SafetyAction label="Block user" onPress={onBlockUser}>
-              <Ban size={16} color={appTheme.colors.danger} strokeWidth={2.3} />
+              <Ban size={16} color={appTheme.colors.danger} />
             </SafetyAction>
           </View>
         ) : null}

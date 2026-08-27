@@ -54,7 +54,7 @@ export function generationToStudioCreationCard(item: GenerationListItem): Studio
   return {
     id: item.id,
     title: item.title || item.prompt || 'Untitled creation',
-    prompt: item.prompt || item.description || 'A saved Magic Booklet generation.',
+    prompt: item.prompt || item.description || 'A saved Magicbooklet generation.',
     kind,
     label: getGenerationLabel(kind),
     badge: statusBadge(status, kind),

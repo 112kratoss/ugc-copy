@@ -5,7 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer } from 'expo-video';
-import { ArrowLeft, Copy, FileText, Globe, Heart, ImageOff, Images, Lock, LockKeyhole, MessageCircle, MoreHorizontal, Play, Repeat2, Share2, Wand2 } from 'lucide-react-native';
+import { ArrowLeft, Copy, FileText, Globe, Heart, ImageOff, Images, Lock, LockKeyhole, MessageCircle, MoreHorizontal, Play, Repeat2, Wand2 } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { cloneElement, useCallback, useEffect, useId, useMemo, useRef, useState, type MutableRefObject, type ReactElement } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
@@ -30,6 +30,7 @@ import {
   selectActiveImmersiveVideoId,
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
+import { ShareGlyph } from '@/lib/platform-glyphs';
 import { createShowcaseFeedViewerQueryKey } from '@/lib/showcase-feed-query';
 import {
   buildImmersiveSlidePages,
@@ -833,7 +834,7 @@ export default function ImmersivePreviewViewerScreen() {
             opacity: pressed ? 0.7 : 1,
           })}
         >
-          <IconShadow><ArrowLeft size={30} color="#ffffff" strokeWidth={2.4} /></IconShadow>
+          <IconShadow><ArrowLeft size={30} color="#ffffff" /></IconShadow>
         </Pressable>
       )}
       {activeItem ? (
@@ -938,7 +939,7 @@ function ViewerShell({ topInset, bottomInset, children }: { topInset: number; bo
         onPress={leaveViewer}
         style={({ pressed }) => ({ position: 'absolute', left: 16, top: topInset + 10, width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.3)', opacity: pressed ? appTheme.opacity.pressed : 1 })}
       >
-        <IconShadow><ArrowLeft size={30} color="#ffffff" strokeWidth={2.4} /></IconShadow>
+        <IconShadow><ArrowLeft size={30} color="#ffffff" /></IconShadow>
       </Pressable>
       {children}
     </View>
@@ -1194,7 +1195,7 @@ function ImmersiveSlide({
                   accessibilityLabel={item.commentCount > 0
                     ? `${item.commentCount} ${item.commentCount === 1 ? 'comment' : 'comments'}`
                     : 'Comment'}
-                  icon={<MessageCircle size={30} color="#ffffff" fill="transparent" strokeWidth={2.2} />}
+                  icon={<MessageCircle size={30} color="#ffffff" fill="transparent" />}
                   iconShadow={false}
                   label={getRailCountLabel(item.commentCount, formatCompactCount)}
                   onPress={onComments}
@@ -1207,7 +1208,7 @@ function ImmersiveSlide({
                 <RailActionButton
                   key={slot.id}
                   accessibilityLabel="Share"
-                  icon={<Share2 size={28} color="#ffffff" strokeWidth={2.2} />}
+                  icon={<ShareGlyph size={28} color="#ffffff" />}
                   label={null}
                   onPress={() => void onShare(item)}
                   variant="bare"
@@ -1218,7 +1219,7 @@ function ImmersiveSlide({
               return hasImmersiveDetailsPage(item) ? (
                 <RailActionButton
                   key={slot.id}
-                  icon={<FileText size={26} color="#ffffff" strokeWidth={2.4} />}
+                  icon={<FileText size={26} color="#ffffff" />}
                   label={slot.label}
                   onPress={openDetailsPage}
                 />
@@ -1229,7 +1230,7 @@ function ImmersiveSlide({
                 <RailActionButton
                   key={slot.id}
                   primary
-                  icon={<Repeat2 size={26} color="#050505" strokeWidth={2.8} />}
+                  icon={<Repeat2 size={26} color="#050505" />}
                   label={slot.label}
                   loading={slot.action === 'unlock-remix' ? false : remixLoading}
                   onPress={slot.action === 'unlock-remix' ? () => onUnlockRemix(item) : () => void onRecreate(item)}
@@ -1240,12 +1241,12 @@ function ImmersiveSlide({
             // Ownership slots — publish, visibility, unlock — all delegate to the
             // same action ids the More sheet uses, so there is one code path per action.
             const ownerIcon = slot.id === 'publish'
-              ? <Globe size={26} color="#050505" strokeWidth={2.6} />
+              ? <Globe size={26} color="#050505" />
               : slot.id === 'unlock'
-                ? <Wand2 size={26} color={appTheme.colors.success} strokeWidth={2.5} />
+                ? <Wand2 size={26} color={appTheme.colors.success} />
                 : (item.visibility ?? item.linkedPostVisibility) === 'private' || (item.visibility ?? item.linkedPostVisibility) === 'unlisted'
-                  ? <LockKeyhole size={26} color={appTheme.colors.warning} strokeWidth={2.5} />
-                  : <Globe size={26} color="#ffffff" strokeWidth={2.4} />;
+                  ? <LockKeyhole size={26} color={appTheme.colors.warning} />
+                  : <Globe size={26} color="#ffffff" />;
 
             return (
               <RailActionButton
@@ -1261,7 +1262,7 @@ function ImmersiveSlide({
           })}
           <RailActionButton
             accessibilityLabel="More options"
-            icon={<MoreHorizontal size={28} color="#ffffff" strokeWidth={2.4} />}
+            icon={<MoreHorizontal size={28} color="#ffffff" />}
             label={null}
             onPress={onActionsOpen}
             variant="bare"
@@ -1748,7 +1749,7 @@ function ImmersiveMedia({
           />
           <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
             <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.42)' }}>
-              <Play size={34} color="#fff" fill="#fff" strokeWidth={2.4} />
+              <Play size={34} color="#fff" fill="#fff" />
             </View>
           </View>
         </DoubleTapPressable>
@@ -1770,7 +1771,7 @@ function ImmersiveMedia({
         />
         <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
           <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.42)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)' }}>
-            <Play size={34} color="#fff" fill="#fff" strokeWidth={2.4} />
+            <Play size={34} color="#fff" fill="#fff" />
           </View>
         </View>
       </DoubleTapPressable>
@@ -1781,7 +1782,7 @@ function ImmersiveMedia({
         style={{ width, height, alignItems: 'center', justifyContent: 'center', backgroundColor: '#020203' }}
       >
         <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.16)' }}>
-          <Play size={34} color="#fff" fill="#fff" strokeWidth={2.4} />
+          <Play size={34} color="#fff" fill="#fff" />
         </View>
       </DoubleTapPressable>
     );
@@ -1932,7 +1933,7 @@ function ActiveVideo({
         {!isPlaying && hasFrame && !hasError ? (
           <View pointerEvents="none" style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
             <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.42)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)' }}>
-              <Play size={34} color="#fff" fill="#fff" strokeWidth={2.4} style={{ marginLeft: 4 }} />
+              <Play size={34} color="#fff" fill="#fff" style={{ marginLeft: 4 }} />
             </View>
           </View>
         ) : null}
@@ -2042,7 +2043,7 @@ function IconShadow({ children }: { children: ReactElement<ShadowableIconProps> 
   const shadow = cloneElement(children, {
     color: 'rgba(0,0,0,0.55)',
     fill: hasFill ? 'rgba(0,0,0,0.55)' : children.props.fill,
-    strokeWidth: (children.props.strokeWidth ?? 2) + 1.4,
+    strokeWidth: (children.props.strokeWidth ?? appTheme.icon.stroke) + 1.4,
   });
 
   return (

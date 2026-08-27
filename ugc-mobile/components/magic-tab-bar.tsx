@@ -267,7 +267,7 @@ export function MagicTabBar({
             boxShadow: '0 8px 20px rgba(0,0,0,0.36)',
           })}
         >
-          <Plus size={isCompact ? 23 : 25} color={ON_PRIMARY} strokeWidth={2.7} />
+          <Plus size={isCompact ? 23 : 25} color={ON_PRIMARY} />
           <Text
             numberOfLines={1}
             maxFontSizeMultiplier={1.4}
@@ -411,7 +411,7 @@ function TabButton({
       />
       <AnimatedView style={[{ alignItems: 'center', gap: 3 }, press.animatedStyle]}>
         <AnimatedView style={{ transform: [{ scale: iconScale ?? 1 }] }}>
-          <Icon size={iconSize} color={color} strokeWidth={active ? 2.5 : 2.1} />
+          <Icon size={iconSize} color={color} />
         </AnimatedView>
         {/* Capped scaling: the bar is a fixed-height row of five slots around a
             raised centre button, so unbounded Dynamic Type ran the labels into

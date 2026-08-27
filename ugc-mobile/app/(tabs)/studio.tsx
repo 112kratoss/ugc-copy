@@ -300,7 +300,7 @@ function CaughtUpState() {
   return (
     <Card accent="workflow" variant="soft" style={{ minHeight: 156, justifyContent: 'center' }}>
       <View style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(52,211,153,0.13)', borderWidth: 1, borderColor: 'rgba(52,211,153,0.28)' }}>
-        <CheckCircle2 size={24} color="#6ee7b7" strokeWidth={2.4} />
+        <CheckCircle2 size={24} color="#6ee7b7" />
       </View>
       <View style={{ gap: 6 }}>
         <AppText variant="cardTitle">You are all caught up.</AppText>
@@ -391,7 +391,7 @@ function NotificationPreferences({
                 <AppText variant="body" style={{ fontWeight: '700' }}>{row.title}</AppText>
                 <AppText variant="caption" color="muted">{row.body}</AppText>
               </View>
-              <Icon size={32} color={enabled ? '#6ee7b7' : appTheme.colors.faint} strokeWidth={2.2} />
+              <Icon size={32} color={enabled ? '#6ee7b7' : appTheme.colors.faint} />
             </Pressable>
           );
         })}
@@ -478,7 +478,7 @@ function PushControlCard({
       }}
     >
       <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${iconColor}1f`, borderWidth: 1, borderColor: `${iconColor}55` }}>
-        <BellRing size={20} color={iconColor} strokeWidth={2.4} />
+        <BellRing size={20} color={iconColor} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
         <AppText variant="body" style={{ fontWeight: '700' }}>{title}</AppText>
@@ -500,9 +500,9 @@ function PushControlCard({
           })}
         >
           {pushEnabled ? (
-            <ToggleRight size={34} color="#6ee7b7" strokeWidth={2.2} />
+            <ToggleRight size={34} color="#6ee7b7" />
           ) : (
-            <ToggleLeft size={34} color={appTheme.colors.faint} strokeWidth={2.2} />
+            <ToggleLeft size={34} color={appTheme.colors.faint} />
           )}
         </Pressable>
       ) : action || isPending ? (
@@ -584,7 +584,7 @@ function NotificationRow({ notification, onPress }: { notification: MobileNotifi
       })}
     >
       <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${meta.color}1c`, borderWidth: 1, borderColor: `${meta.color}4a` }}>
-        <Icon size={21} color={meta.color} strokeWidth={2.4} />
+        <Icon size={21} color={meta.color} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 6 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -646,7 +646,7 @@ function NotificationCategoryList() {
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <AppText variant="cardTitle">What shows here</AppText>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-          <Clock3 size={14} color={appTheme.colors.faint} strokeWidth={2.3} />
+          <Clock3 size={14} color={appTheme.colors.faint} />
           <AppText variant="caption" color="faint" style={{ fontWeight: '800' }}>History</AppText>
         </View>
       </View>
@@ -664,7 +664,7 @@ function NotificationCategoryList() {
             }}
           >
             <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${item.color}1c`, borderWidth: 1, borderColor: `${item.color}4a` }}>
-              <Icon size={21} color={item.color} strokeWidth={2.4} />
+              <Icon size={21} color={item.color} />
             </View>
             <View style={{ flex: 1, minWidth: 0, gap: 5 }}>
               <AppText variant="body" style={{ fontWeight: '800' }}>{item.title}</AppText>

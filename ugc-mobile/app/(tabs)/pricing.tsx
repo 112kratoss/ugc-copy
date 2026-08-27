@@ -85,7 +85,6 @@ function PricingPlanCard({
         <SelectionIcon
           color={selected ? appTheme.colors.commerce : appTheme.colors.faint}
           size={appTheme.icon.default}
-          strokeWidth={selected ? 2.5 : 2}
         />
       </View>
       <View style={{ gap: appTheme.spacing.compact }}>
@@ -319,7 +318,7 @@ export default function PricingScreen() {
     try {
       await api.restoreMobilePurchases();
       await refreshProfile();
-      setNotice('Your credit balance was refreshed from your Magic Booklet purchase history.');
+      setNotice('Your credit balance was refreshed from your Magicbooklet purchase history.');
       setNoticeTone('success');
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Credit balance refresh failed.');
@@ -465,7 +464,7 @@ export default function PricingScreen() {
           label={busyProductId === 'restore' ? 'Refreshing...' : 'Refresh credit balance'}
           onPress={() => void refreshBalance()}
           disabled={!identityUserId || busyProductId !== null}
-          accessibilityHint="Checks your Magic Booklet account for previously credited purchases without opening the App Store restore flow"
+          accessibilityHint="Checks your Magicbooklet account for previously credited purchases without opening the App Store restore flow"
         />
       </View>
     </Screen>

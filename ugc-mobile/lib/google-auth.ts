@@ -51,7 +51,7 @@ export async function signInWithGoogleOAuth(supabase: { auth: GoogleAuthClient }
     throw canceledError();
   }
   if (result.type !== 'success' || !result.url) {
-    throw new Error('Google sign-in did not return to Magic Booklet. Please try again.');
+    throw new Error('Google sign-in did not return to Magicbooklet. Please try again.');
   }
 
   const callback = new URL(result.url);

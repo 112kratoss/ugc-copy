@@ -440,7 +440,7 @@ function FeedTopBar({ title, topInset }: { title: string; topInset: number }) {
           opacity: pressed ? appTheme.opacity.pressed : 1,
         })}
       >
-        <ArrowLeft size={24} color={appTheme.colors.text} strokeWidth={2.3} />
+        <ArrowLeft size={24} color={appTheme.colors.text} />
       </Pressable>
       <Text style={{ color: appTheme.colors.text, ...appTheme.type.sectionTitle, fontWeight: '800' }}>
         {title}

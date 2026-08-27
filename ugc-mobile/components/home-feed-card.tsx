@@ -1,4 +1,4 @@
-import { MessageCircle, Repeat2, Share2 } from 'lucide-react-native';
+import { MessageCircle, Repeat2 } from 'lucide-react-native';
 import { memo } from 'react';
 import { Text, View } from 'react-native';
 
@@ -11,6 +11,7 @@ import {
   getHomeFeedMediaHeight,
   type HomeFeedCard,
 } from '@/lib/home-feed-view-model';
+import { ShareGlyph } from '@/lib/platform-glyphs';
 import { getShowcasePreviewMediaItems } from '@/lib/showcase-media';
 import { accentColor, appTheme } from '@/lib/theme';
 
@@ -119,14 +120,14 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
           />
           <FeedCardAction
             accessibilityLabel={`Comments on ${card.title}`}
-            icon={<MessageCircle size={19} color={appTheme.colors.faint} strokeWidth={2.2} />}
+            icon={<MessageCircle size={19} color={appTheme.colors.faint} />}
             label={card.commentLabel}
             onPress={onComments}
           />
           {card.canRemix ? (
             <FeedCardAction
               accessibilityLabel={`Remix ${card.title}`}
-              icon={<Repeat2 size={19} color={appTheme.colors.faint} strokeWidth={2.2} />}
+              icon={<Repeat2 size={19} color={appTheme.colors.faint} />}
               label={card.remixLabel}
               loading={remixLoading}
               onPress={onRemix}
@@ -134,7 +135,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
           ) : null}
           <FeedCardAction
             accessibilityLabel={`Share ${card.title}`}
-            icon={<Share2 size={18} color={appTheme.colors.faint} strokeWidth={2.2} />}
+            icon={<ShareGlyph size={18} color={appTheme.colors.faint} />}
             onPress={onShare}
           />
         </>

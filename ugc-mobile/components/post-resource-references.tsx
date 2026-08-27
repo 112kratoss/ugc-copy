@@ -166,9 +166,9 @@ export function PostResourceReferences({
                 ) : isLoading ? (
                   <ActivityIndicator color={appTheme.colors.primary} />
                 ) : isImage ? (
-                  <ImageIcon size={28} color={appTheme.colors.faint} strokeWidth={2} />
+                  <ImageIcon size={28} color={appTheme.colors.faint} />
                 ) : (
-                  <FileText size={28} color={appTheme.colors.faint} strokeWidth={2} />
+                  <FileText size={28} color={appTheme.colors.faint} />
                 )}
               </View>
               <View style={{ padding: 10, gap: 4 }}>
@@ -182,7 +182,7 @@ export function PostResourceReferences({
                 ) : null}
                 {!isImage && isOpenable ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                    <ExternalLink size={12} color={appTheme.colors.primary} strokeWidth={2.4} />
+                    <ExternalLink size={12} color={appTheme.colors.primary} />
                     <Text style={{ color: appTheme.colors.primary, fontSize: 11, fontWeight: '700' }}>{mediaLabel}</Text>
                   </View>
                 ) : null}
