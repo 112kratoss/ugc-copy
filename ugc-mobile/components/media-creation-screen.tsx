@@ -108,6 +108,8 @@ import {
   type TextSelection,
 } from '@/lib/reference-mentions';
 import { formatCreditAmount } from '@/lib/pricing';
+import { withCreditCost } from '@/lib/generation-action-label';
+import { generationWaitDetail, generationWaitPhase, generationWaitTitle } from '@/lib/generation-wait';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import type { CreatorToolId, GenerationStartResponse, GenerationStatusResponse, PromptEnhancementLevel } from '@/lib/types';
@@ -505,6 +507,7 @@ export function MediaCreationScreen({
   const [modelPickerVisible, setModelPickerVisible] = useState(false);
   const [parametersVisible, setParametersVisible] = useState(false);
   const [workspaceVisible, setWorkspaceVisible] = useState(false);
+  const [generationStartedAt, setGenerationStartedAt] = useState<number | null>(null);
   const modelSelectionTouched = useRef<Record<CreatorToolId, boolean>>({ image: false, video: false, motion: false });
   const activeGenerationRequestKeyRef = useRef<string | null>(null);
   const generationPollControllerRef = useRef<AbortController | null>(null);
@@ -1148,6 +1151,9 @@ export function MediaCreationScreen({
     setLastPredictionId(null);
     setPollingInterrupted(false);
     setGenerationTool(currentDraft.tool);
+    // Stamped here rather than when the workspace becomes visible: minimizing
+    // and coming back must not restart the clock the wait is reporting.
+    setGenerationStartedAt(Date.now());
     setWorkspaceVisible(true);
     const idempotencyKey = createMobileGenerationIdempotencyKey(currentDraft.tool);
     activeGenerationRequestKeyRef.current = idempotencyKey;
@@ -1406,7 +1412,11 @@ export function MediaCreationScreen({
       ?? message
       ?? (catalogUnavailable ? catalogQuery.error?.message : null)
       ?? (activeQuote.status === 'error' ? activeQuote.error : null)
-      ?? visibleValidationError) ?? null;
+      // Through the same mapper the Generate press uses: before this, the
+      // blocker stated the condition ("Prompt is required.") and pressing
+      // Generate restated it as an instruction ("Add a prompt before
+      // generating."), so one requirement had two voices.
+      ?? (visibleValidationError ? promptValidationMessage(visibleValidationError) ?? visibleValidationError : null)) ?? null;
     const persistentAction: 'generate' | 'progress' | 'result' = activeOutputUrl
       ? 'result'
       : isGenerating || activeGenerationStatus || (pollingInterrupted && generationTool === activeTool)
@@ -1574,6 +1584,8 @@ export function MediaCreationScreen({
           outputUrl={activeOutputUrl}
           generationId={generationTool === activeTool ? lastGenerationId : null}
           settingsSummary={`${selectedCreatorModel?.displayName ?? meta.title} · ${parameterSummary}`}
+          startedAt={generationStartedAt}
+          retryCost={activeQuote.status === 'ready' ? activeQuote.cost : null}
           error={activeGenerationStatus?.status === 'failed' ? activeGenerationStatus.error?.trim() || message : message}
           pollingInterrupted={pollingInterrupted && generationTool === activeTool}
           onResumePolling={() => void resumeGenerationPolling()}
@@ -1636,7 +1648,11 @@ export function MediaCreationScreen({
       ?? message
       ?? (catalogUnavailable ? catalogQuery.error?.message : null)
       ?? (activeQuote.status === 'error' ? activeQuote.error : null)
-      ?? visibleValidationError) ?? null;
+      // Through the same mapper the Generate press uses: before this, the
+      // blocker stated the condition ("Prompt is required.") and pressing
+      // Generate restated it as an instruction ("Add a prompt before
+      // generating."), so one requirement had two voices.
+      ?? (visibleValidationError ? promptValidationMessage(visibleValidationError) ?? visibleValidationError : null)) ?? null;
     const persistentAction: 'generate' | 'progress' | 'result' = activeOutputUrl
       ? 'result'
       : isGenerating || activeGenerationStatus || (pollingInterrupted && generationTool === 'image')
@@ -1801,6 +1817,8 @@ export function MediaCreationScreen({
           outputUrl={activeOutputUrl}
           generationId={generationTool === 'image' ? lastGenerationId : null}
           settingsSummary={`${selectedImageModel?.displayName ?? 'Image'} · ${parameterSummary || 'Default settings'}`}
+          startedAt={generationStartedAt}
+          retryCost={activeQuote.status === 'ready' ? activeQuote.cost : null}
           error={status?.status === 'failed' ? status.error?.trim() || message : message}
           pollingInterrupted={pollingInterrupted && generationTool === 'image'}
           onResumePolling={() => void resumeGenerationPolling()}
@@ -3482,7 +3500,10 @@ function CreatorPersistentBar({
       : quoteStatus === 'pending' || quoteStatus === 'idle'
         ? 'Calculating…'
         : quoteStatus === 'ready'
-          ? `Generate · ${cost ?? 0} credits`
+          // Shared with the workspace's Try again / Generate again, so the same
+          // spend is never announced two different ways — and so "1 credits"
+          // cannot come back.
+          ? withCreditCost('Generate', cost ?? 0)
           : retryLabel;
   const actionDisabled = disabled && !(action === 'generate' && quoteStatus === 'error');
   return (
@@ -3700,6 +3721,28 @@ function CreatorParameterSheet({
   );
 }
 
+/**
+ * Seconds since `startedAt`, ticking while the run is live and `null` when it
+ * is not. One interval, cleared the moment the wait ends — the workspace stays
+ * mounted after the run finishes, so a timer keyed on mount would never stop.
+ */
+function useGenerationElapsedSeconds(startedAt: number | null) {
+  const [elapsed, setElapsed] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (startedAt === null) {
+      setElapsed(null);
+      return;
+    }
+    const read = () => setElapsed(Math.max(0, (Date.now() - startedAt) / 1000));
+    read();
+    const timer = setInterval(read, 1000);
+    return () => clearInterval(timer);
+  }, [startedAt]);
+
+  return elapsed;
+}
+
 function GenerationWorkspace({
   visible,
   tool,
@@ -3708,6 +3751,8 @@ function GenerationWorkspace({
   outputUrl,
   generationId,
   settingsSummary,
+  startedAt,
+  retryCost,
   error,
   pollingInterrupted,
   onResumePolling,
@@ -3728,6 +3773,10 @@ function GenerationWorkspace({
   outputUrl: string | null;
   generationId: string | null;
   settingsSummary: string;
+  /** When the run started, so minimizing and returning does not restart the clock. */
+  startedAt: number | null;
+  /** What another run of the same draft costs, or null while the quote is unsettled. */
+  retryCost: number | null;
   error: string | null | undefined;
   pollingInterrupted: boolean;
   onResumePolling: () => void;
@@ -3747,6 +3796,11 @@ function GenerationWorkspace({
   const failed = status?.status === 'failed' || (!isGenerating && !succeeded && Boolean(error) && !pollingInterrupted);
   const medium = tool === 'image' ? 'image' : tool === 'video' ? 'video' : 'motion video';
   const previewKind = tool === 'image' ? 'image' : 'video';
+  const waiting = visible && !succeeded && !failed && !pollingInterrupted;
+  const elapsedSeconds = useGenerationElapsedSeconds(waiting ? startedAt : null);
+  const waitPhase = generationWaitPhase(status?.status);
+  const waitTitle = generationWaitTitle(waitPhase, medium);
+  const waitDetail = generationWaitDetail(waitPhase, elapsedSeconds);
   return (
     <Modal visible={visible} animationType={reducedMotion ? 'none' : 'slide'} presentationStyle="fullScreen" onRequestClose={onMinimize}>
       <View testID="generation-workspace" accessibilityViewIsModal style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
@@ -3780,7 +3834,12 @@ function GenerationWorkspace({
                   </View>
                 ) : null}
                 {generationId ? <PrimaryButton label="Post to feed" onPress={onPost} /> : null}
-                <SecondaryButton label="Create another" onPress={onCreateAnother} />
+                {/* Generative AI asks for controls like Edit, Undo, Retry or
+                    Adjust *near* generated content — the result had none, so
+                    running the same draft again meant leaving this view first.
+                    Priced, because it spends the same credits Generate does. */}
+                <SecondaryButton label={withCreditCost('Generate again', retryCost)} onPress={onRetry} />
+                <SecondaryButton label="Back to creator" onPress={onCreateAnother} />
                 <SecondaryButton label="Open Alerts" onPress={onOpenAlerts} />
               </View>
             </>
@@ -3807,18 +3866,25 @@ function GenerationWorkspace({
                 <Text style={{ color: appTheme.colors.text, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>We couldn’t create this {medium}</Text>
                 <Text accessibilityRole="alert" selectable style={{ color: appTheme.colors.muted, fontSize: 13, lineHeight: 19, textAlign: 'center' }}>{error || 'Your inputs are preserved. Try again when you’re ready.'}</Text>
               </View>
-              <PrimaryButton label="Retry" onPress={onRetry} />
+              {/* "Retry" ran a full new paid generation behind a bare verb,
+                  where every other route to that spend states the price. */}
+              <PrimaryButton label={withCreditCost('Try again', retryCost)} onPress={onRetry} />
               <SecondaryButton label="Back to creator" onPress={onBack} />
             </View>
           ) : (
             <View style={{ flex: 1, minHeight: 620, gap: 18 }}>
-              <View accessibilityRole="progressbar" accessibilityLabel={`${TOOL_META[tool].title} generation in progress`} accessibilityValue={{ text: status?.status ?? 'starting' }} style={{ flex: 1, minHeight: 430, borderRadius: 28, borderWidth: 1, borderColor: appTheme.colors.borderStrong, backgroundColor: appTheme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 18 }}>
+              <View accessibilityRole="progressbar" accessibilityLabel={`${TOOL_META[tool].title} generation in progress`} accessibilityValue={{ text: waitDetail }} style={{ flex: 1, minHeight: 430, borderRadius: 28, borderWidth: 1, borderColor: appTheme.colors.borderStrong, backgroundColor: appTheme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 18 }}>
                 <View style={{ width: 82, height: 82, borderRadius: 28, backgroundColor: 'rgba(255,122,89,0.12)', alignItems: 'center', justifyContent: 'center' }}>
                   <Sparkles size={38} color={appTheme.colors.primary} />
                 </View>
-                <Text style={{ color: appTheme.colors.text, fontSize: 21, fontWeight: '800' }}>{status?.status === 'processing' ? 'Generating' : `Preparing your ${medium}`}</Text>
+                <Text style={{ color: appTheme.colors.text, fontSize: 21, fontWeight: '800' }}>{waitTitle}</Text>
                 <ActivityIndicator color={appTheme.colors.primary} size="large" />
-                <Text style={{ color: appTheme.colors.muted, fontSize: 12, textAlign: 'center', paddingHorizontal: 40 }}>You can minimize this view. Generation will continue in the background.</Text>
+                {/* The one thing on screen that changes while nothing else does.
+                    Progress indicators: a vague status "seldom adds value", and
+                    knowing how long it has run is what lets someone decide
+                    whether to keep waiting when the provider reports no progress. */}
+                <Text accessibilityLiveRegion="polite" style={{ color: appTheme.colors.muted, fontSize: 12, textAlign: 'center', paddingHorizontal: 40, lineHeight: 18 }}>{waitDetail}</Text>
+                <Text style={{ color: appTheme.colors.faint, fontSize: 12, textAlign: 'center', paddingHorizontal: 40 }}>You can minimize this view. Generation will continue in the background.</Text>
               </View>
               <View style={{ flexDirection: 'row', gap: 10 }}>
                 <View style={{ flex: 1 }}><SecondaryButton label="Minimize" onPress={onMinimize} /></View>

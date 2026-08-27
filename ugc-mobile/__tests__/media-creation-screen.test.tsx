@@ -1866,12 +1866,14 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
     expect(collectText(tree!.root)).toContain('Generation failed');
     expect(collectText(tree!.root)).toContain('The image provider timed out.');
-    expect(collectText(tree!.root)).toContain('Retry');
+    // S9: every route to a paid generation states the price, so the failure
+    // panel's retry is no longer a bare verb.
+    expect(collectText(tree!.root)).toContain('Try again · 8 credits');
     expect(collectText(tree!.root)).toContain('Back to creator');
 
     authState.api.startImageGeneration.mockReturnValueOnce(new Promise(() => undefined));
     renderer.act(() => {
-      void findPressableByText(tree!.root, 'Retry').props.onPress();
+      void findPressableByText(tree!.root, 'Try again · 8 credits').props.onPress();
     });
     expect(authState.api.startImageGeneration).toHaveBeenCalledTimes(2);
     expect(promptInput.props.value).toBe('Create a dramatic studio portrait.');
@@ -1906,7 +1908,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       await findPressableByText(tree!.root, 'Generate · 8 credits').props.onPress();
     });
     renderer.act(() => {
-      findPressableByText(tree!.root, 'Create another').props.onPress();
+      findPressableByText(tree!.root, 'Back to creator').props.onPress();
     });
 
     expect(collectText(tree!.root)).not.toContain('Your image');

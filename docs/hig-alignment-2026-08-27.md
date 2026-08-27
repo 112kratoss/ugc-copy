@@ -108,9 +108,9 @@ re-read the codebase broadly or ask for past-chat context.
 - **Where the work currently sits (2026-08-27):** Phases 1–2 are closed on the `hig-alignment`
   branch and **deliberately not merged** — `main` does not have F4, F6, N1, N2, N3 or S5. The user's
   call at the Phase 2 boundary was to keep accumulating on the branch, so branch from it rather than
-  from `main`, and expect the merge question again at the next boundary. Phase 3 is under way: S5 and
-  S6 (+S6a/b/c) are closed, and the next `todo` on the board is **S9, the creation tool** — after
-  which the phase order is S8 → S11 → S12 → S10 → S4 → S13/S14.
+  from `main`, and expect the merge question again at the next boundary. Phase 3 is under way: S5,
+  S6 (+S6a/b/c) and S9 are closed, and the next `todo` on the board is **S8, the create hub** — after
+  which the phase order is S11 → S12 → S10 → S4 → S13/S14.
 - **Device mechanics learned in S6, for whoever drives them next:** the Simulator MCP's `tap` works
   headless on this Mac as well as `swipe`, so iOS is fully drivable; a surface is reachable by post
   id with `magicbooklet:///post/<id>`, and the live data has exactly one multi-media post
@@ -388,7 +388,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | N3 side menus/shell motion | 2 | done | 1V/2D/4P | the menu has a visible way in on every screen that offers it, and closes the way it opened |
 | S5 showcase feed | 3 | done | 2V/3D/7P | the grid holds still while you read it; the play badge means "not playing" |
 | S6+S6a/b/c viewer & sheets | 3 | done | 3V/2D/3P | the clock survives the picture; the reel can be silenced without leaving it |
-| S9 creation tool | 3 | todo | — | |
+| S9 creation tool | 3 | done | 2V/2D/4P | every spend says its price; the wait says what it is doing and how long it has been |
 | S8 create hub | 3 | todo | — | |
 | S11 post composer | 3 | todo | — | |
 | S12 post details | 3 | todo | — | |
@@ -1261,3 +1261,140 @@ label where Menus asks for verbs → X3, which already owns button copy; re-chec
 interruption on a physical iPhone, which no simulator on this Mac can show → next store build.
 The one question this unit put to the user — whether the reel should start muted — was answered
 **unmuted**, and is recorded above rather than left open.
+
+### S9 creation tool — audited 2026-08-27 · AND-pass: 2026-08-27
+Chapters read: Generative AI (`generative-ai`), Entering data (`entering-data`), Progress indicators
+(`progress-indicators`), Undo and redo (`undo-and-redo`), Machine learning (`machine-learning`).
+Drag and drop is attached to "S9/S11" in the coverage matrix but belongs wholly to **S11**: the
+creation screen imports `PanResponder` and never uses it, and the only reorder drag in the app is in
+`app/post/new.tsx`.
+
+Rules in checkable form: get permission before irreversible or costly actions, and ask for
+confirmation before doing something significant on someone's behalf · make it easy to refine, revert
+or retry generated results, with the controls *near* the generated content · give specific feedback
+during generation — "instead of 'Processing…', say 'Finding substitutions for ingredients'" · factor
+processing time into the design · offer curated example inputs for an open-ended prompt · coach
+people when a request is blocked · let people give feedback on outputs, voluntarily · avoid vague
+progress terms like *loading*, because they seldom add value · prefer a determinate indicator,
+because it lets people "decide whether to do something else while waiting … restart the task at a
+different time, or abandon the task" · halt processing where feasible, and say when halting costs
+something · be clear about the data you need, and keep the action unavailable until it is there.
+
+- [V][both] **One of the four ways to spend credits didn't say so.** The composer's button has always
+  read `Generate · 8 credits`. The workspace's failure panel offered a button labelled `Retry` — and
+  `onRetry` is `() => void generate()`, a full new paid generation. Same money, same model, same
+  draft, no price. Generative AI: "Consider consequences and get permission before performing
+  irreversible or potentially problematic tasks … Generally, ask for confirmation before performing a
+  significant action on someone's behalf" — and a button that states the price *is* that
+  confirmation, which is why the composer states it. → **fixed**: `lib/generation-action-label.ts`,
+  and both the composer and the workspace price their action through it. It also fixes an
+  off-by-plural: the old inline template produced "1 credits".
+- [V][both] **The hero wait could not be judged.** The app's longest, most expensive interaction
+  showed a sparkle, an indeterminate spinner, and one of two strings — `Preparing your image` before
+  the provider reported anything, `Generating` after. No phase, no elapsed time, nothing that changed
+  while you watched. Progress indicators names the failure twice: "avoid vague terms like *loading* …
+  they seldom add value", and a determinate indicator earns its place because it "can help people
+  decide whether to do something else while waiting for the task to complete, restart the task at a
+  different time, or abandon the task". Generative AI says the same thing in its own words.
+  → **fixed**: `lib/generation-wait.ts` — the title separates the two states the provider actually
+  reports (`Queued with the model` / `Making your image`), and the line beneath carries the phase plus
+  a running clock (`Waiting for the model to pick it up. Running for 0:44.`). The clock is also the
+  progressbar's `accessibilityValue` and a polite live region, replacing the raw provider status.
+  - **Not made determinate, and the reason matters.** The provider reports `waiting` → `processing`
+    and no percentage; `GenerationStatusResponse` has no progress field and the catalog carries no
+    expected duration. A determinate bar would have to be invented, and Progress indicators is
+    explicit that a fabricated pace is worse than none: "Showing 90 percent completion in five
+    seconds and the last 10 percent in 5 minutes … can even feel deceptive." Elapsed time is the
+    honest substitute — it answers the question the rule is really asking.
+  - The clock is stamped in `generate()`, not when the modal appears, so minimizing the wait and
+    coming back does not restart it. Verified live on the emulator: a queued run read 0:38 and 0:44
+    across a six-second gap.
+- [D][both] **The result had no way to run it again.** The success panel offered *Post to feed*,
+  *Create another* and *Open Alerts*. Generative AI: "Make it easy for people to refine or revert
+  generated results … surfacing controls like Edit, Undo, Retry, or Adjust near generated content
+  preserves people's agency." The nearest thing was *Create another*, which closes the workspace and
+  leaves you in the composer with the draft intact — an adjust path, named as though it were a reset.
+  → **fixed**: a `Generate again · 8 credits` control on the result itself, priced by the same helper
+  as everything else that spends. Verified end-to-end on the emulator: tapping it started a second
+  run of the same draft.
+- [D][both] **The same action had two names.** Closing the workspace and keeping the draft was
+  *Create another* on the success panel and *Back to creator* on the failure panel — identical
+  handlers, and now sitting one row apart from the new *Generate again*, where two synonyms would
+  have been actively confusing. Design principles/Familiarity: "once you establish a behavior or
+  appearance for an element, apply it throughout" → **fixed**: *Back to creator* on both.
+- [P][both] **One requirement, two voices.** With an empty prompt the blocker read `Prompt is
+  required.`; pressing Generate replaced it with `Add a prompt before generating.` — the same
+  condition stated as a fact before the press and as an instruction after it, because only the press
+  path went through `promptValidationMessage`. Entering data: "Be clear about the data you need."
+  → **fixed**: the blocker routes through the same mapper. Errors it does not map (an unknown
+  `@handle`, for instance) still pass through verbatim, which the Android pass confirmed.
+- [P][both] Verified clean: **the action is unavailable until the data is there.** `generateDisabled`
+  includes `validation.errors.length > 0`, and the amber blocker above the bar prints the reason, so
+  Entering data's "make the button available only after people enter the data you require" holds
+  along with the feedback that keeps a disabled control from being a mystery.
+- [P][both] Verified clean: **curated example inputs exist.** `GUIDED_PROMPTS` supplies three worked
+  prompts per tool through `GuidedPromptChips`, which is Generative AI's "offer diverse, predefined
+  example inputs that hint at what's possible" and Machine learning's *Limitations* pattern
+  ("demonstrate how to get the best results"). The prompt field's placeholder does the same job —
+  "Describe the subject, setting, lighting, composition, and style…".
+- [P][both] Noted, deferred: **a running generation cannot be cancelled, but a template run can.**
+  Progress indicators: "When it's feasible, let people halt processing … Let people know when halting
+  a process has a negative consequence." `api.cancelTemplateRun` exists and S19 offers *Cancel
+  creation* behind a confirm; there is no `cancelGeneration`, so S9 has no equivalent. Feasibility is
+  the open question and it is not a client one — it needs an API route, a provider cancel, and
+  settled refund semantics in the credit ledger → **backend, not this programme**. Logged so the
+  inconsistency is not mistaken for an oversight.
+- [P][both] Noted, deferred: **there is no feedback control on a generated result, and no way to keep
+  one.** Generative AI asks that people can "share feedback on outputs … a quick and easy way to give
+  positive and negative feedback"; the only route today is *Report AI output* in the viewer's More
+  sheet, on an already-posted item, which is moderation rather than quality. Saving a result to the
+  camera roll is absent app-wide — `expo-media-library` is not a dependency, so it needs a new
+  permission string and a native build → both are product calls sized well beyond a surface pass.
+- [P][both] Noted for X3/backend: **failure copy is passed through, not coached.** The panel says
+  "We couldn't create this {medium}" and prints the server's message, with the draft preserved and a
+  now-priced retry — which satisfies the recovery half. Generative AI's other half, "help people
+  improve requests when blocked … coaching people how to be more successful next time", depends on
+  what the API sends for a content-policy rejection, which this unit could not trigger without
+  deliberately generating blocked content.
+
+Guard added: `__tests__/hig-generative-creation.test.ts` (16 cases) — credits are counted in words
+with the singular right; an unsettled quote yields the bare verb rather than an invented price; both
+workspace controls that spend are priced and the bare `Retry` cannot come back; the composer button
+uses the same helper and no longer builds its own string; the wait separates queued from running,
+formats an uncapped clock, leaves no vague status behind, announces the detail rather than the raw
+provider status, runs the clock only while the run is live and from when it started, and receives a
+start time at both call sites; the result carries the retry control; and the blocker goes through the
+prompt mapper at both sites. The suite slices declarations by name rather than reading to end-of-file,
+after a first draft silently swept the whole tail of a 5,800-line file.
+`media-creation-screen.test.tsx` updated for the three renamed controls, in the same commit.
+
+**AND-pass 2026-08-27** (mandatory: this unit touches input and the app's hero wait). Pixel_9a, dev
+client on the worktree's Metro. A live generation showed `Queued with the model` with the clock
+advancing 0:38 → 0:44 across a six-second gap; `Generate again · 8 credits` started a second run of
+the same draft; the result panel reads identically to iOS; hardware back closed the workspace onto
+the composer with the draft intact and the bar switched to *View result*, no dead end. The blocker
+carried an unmapped validation error (`Unknown element mention: @…`) through verbatim, which is the
+regression the mapper change could have caused. `logcat` clear of `FATAL`/`SIGSEGV`. Nothing in this
+unit touches the tab bar, blur or gestures.
+- **Cost of the pass, stated plainly:** four real image generations were run against the production
+  account (two per platform, 8 credits each, 32 of ~26,800). The wait, the result panel and the new
+  retry control cannot be observed any other way.
+- **The `running` phase was not seen on device.** Both platforms went `waiting` → `succeeded` without
+  the provider ever reporting `processing` for a fast image model, so `Making your image` is covered
+  by unit test only; it should appear on a video run.
+- **The failure panel was not reached on device** either — `Try again · 8 credits` is covered by the
+  rendering test that drives the real component with a mocked failed status.
+
+**Open remainder**: generation cancel → backend; output feedback and save-to-library → product;
+blocked-request coaching → X3 and the API's error copy; the unreachable third layout below →
+spun out as its own change.
+
+- [P][both] **The screen's third layout is unreachable.** `MediaCreationScreen` branches
+  `if (activeTool !== 'image')` (line 1400, returns) then `if (activeTool === 'image')` (1634,
+  returns), and `CreatorToolId` is exactly `image | video | motion` — so the function's tail `return`
+  at 1867 can never run, along with `FloatingGenerateReviewBar` and the "Ready check" section only it
+  renders. Not a HIG defect, but it is an audit hazard: it cost this unit a false finding ("the app
+  has two competing generate bars") before the branch structure was checked, and a source-sweeping
+  guard that matched it would mean nothing. Left in place deliberately — deleting ~140 lines of JSX
+  plus its exclusive components from the app's largest file is a change that deserves its own diff
+  rather than riding inside a HIG commit → spun out.
