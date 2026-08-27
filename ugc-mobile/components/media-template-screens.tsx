@@ -148,13 +148,13 @@ export function MediaTemplateCatalogScreen() {
             borderRadius: appTheme.radii.xl,
             borderCurve: 'continuous',
             borderWidth: 1,
-            borderColor: 'rgba(255,122,89,0.4)',
+            borderColor: `${appTheme.colors.primary}66`,
             backgroundColor: appTheme.colors.surfaceInset,
             padding: 15,
             flexDirection: 'row',
             alignItems: 'center',
             gap: 12,
-            opacity: pressed ? 0.82 : 1,
+            opacity: pressed ? appTheme.opacity.pressed : 1,
           })}
         >
           <View style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.pressed }}>
@@ -196,14 +196,14 @@ function TemplatePoster({ template }: { template: MediaTemplateSummary }) {
       accessibilityLabel={`${template.name}. Use template by ${creatorName(template)}`}
       accessibilityHint="Opens template details"
       onPress={() => router.push(`/templates/${encodeURIComponent(template.slug)}` as never)}
-      style={({ pressed }) => ({ gap: 11, opacity: pressed ? 0.82 : 1 })}
+      style={({ pressed }) => ({ gap: 11, opacity: pressed ? appTheme.opacity.pressed : 1 })}
     >
       <View style={{ minHeight: 280, aspectRatio: 4 / 5, overflow: 'hidden', borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: appTheme.colors.surfaceInset }}>
         {template.thumbnailUrl ? (
           <Image source={{ uri: template.thumbnailUrl }} contentFit="cover" transition={160} style={{ position: 'absolute', inset: 0 }} />
         ) : (
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-            <OutputIcon size={42} color={appTheme.colors.faint} />
+            <OutputIcon size={appTheme.icon.hero} color={appTheme.colors.faint} />
           </View>
         )}
         <LinearGradient
@@ -299,7 +299,7 @@ function TemplateDetailContent({
         <Kicker color={appTheme.colors.primary}>{template.category}</Kicker>
         <AppText variant="pageTitle">{template.name}</AppText>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <CircleUserRound size={17} color={appTheme.colors.muted} />
+          <CircleUserRound size={appTheme.icon.sm} color={appTheme.colors.muted} />
           <AppText variant="bodySm" color="muted">by {creatorName(template)}</AppText>
           {template.useCount > 0 ? <AppText variant="caption" color="faint">· {template.useCount} uses</AppText> : null}
         </View>
@@ -617,12 +617,12 @@ function InputStage({
                 borderStyle: preview ? 'solid' : 'dashed',
                 borderColor: uploaded ? appTheme.colors.success : appTheme.colors.borderStrong,
                 backgroundColor: appTheme.colors.surfaceInset,
-                opacity: pressed ? 0.82 : 1,
+                opacity: pressed ? appTheme.opacity.pressed : 1,
                 alignItems: 'center',
                 justifyContent: 'center',
               })}
             >
-              {preview ? <MediaPreview url={preview} kind={slot.kind} height={210} /> : <SlotIcon size={34} color={appTheme.colors.faint} />}
+              {preview ? <MediaPreview url={preview} kind={slot.kind} height={210} /> : <SlotIcon size={appTheme.icon.hero} color={appTheme.colors.faint} />}
               <View style={{ position: preview ? 'absolute' : 'relative', bottom: preview ? 14 : undefined, minWidth: 132, minHeight: 48, borderRadius: 24, paddingHorizontal: 16, backgroundColor: 'rgba(8,8,10,0.82)', flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center' }}>
                 {uploadingSlot === slot.key ? <ActivityIndicator color={appTheme.colors.primary} /> : <Upload size={18} color={appTheme.colors.primary} />}
                 <AppText variant="label">{uploadingSlot === slot.key ? 'Uploading...' : uploaded ? `Replace ${slot.kind}` : `Choose ${slot.kind}`}</AppText>
@@ -784,7 +784,7 @@ function RunStepCard({
     <View style={{ gap: 10 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <View style={{ flex: 1, flexDirection: 'row', gap: 9, alignItems: 'center' }}>
-          {step.kind === 'approval' ? <ShieldCheck size={19} color={appTheme.colors.primary} /> : step.mediaKind === 'video' ? <Video size={19} color={appTheme.colors.video} /> : <ImageIcon size={19} color={appTheme.colors.image} />}
+          {step.kind === 'approval' ? <ShieldCheck size={appTheme.icon.default} color={appTheme.colors.primary} /> : step.mediaKind === 'video' ? <Video size={appTheme.icon.default} color={appTheme.colors.video} /> : <ImageIcon size={appTheme.icon.default} color={appTheme.colors.image} />}
           <AppText variant="cardTitle">{step.label}</AppText>
         </View>
         <Pill label={statusLabel} accent={statusAccent} />
@@ -793,7 +793,7 @@ function RunStepCard({
         <MediaPreview url={step.outputUrl} kind={step.mediaKind} height={step.mediaKind === 'video' ? 300 : 390} />
       ) : (
         <View style={{ minHeight: 220, borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: appTheme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-          {failed ? <RefreshCw size={30} color={appTheme.colors.danger} /> : <ActivityIndicator size="large" color={appTheme.colors.primary} />}
+          {failed ? <RefreshCw size={appTheme.icon.hero} color={appTheme.colors.danger} /> : <ActivityIndicator size="large" color={appTheme.colors.primary} />}
           <AppText variant="bodySm" color="muted">
             {needsReplacementInput
               ? 'This upload needs to be replaced'
@@ -940,7 +940,7 @@ function ResultStage({
         <SecondaryButton label="Publish & share" onPress={() => publishResult({ shareAfterPublish: true })} />
       ) : null}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-        <Download size={15} color={appTheme.colors.muted} />
+        <Download size={appTheme.icon.xs} color={appTheme.colors.muted} />
         <AppText variant="caption" color="muted">The original full-quality file opens outside the app.</AppText>
       </View>
       <SecondaryButton label={startingAnother ? 'Starting...' : 'Create another version'} disabled={startingAnother} onPress={() => void createAnother()} />

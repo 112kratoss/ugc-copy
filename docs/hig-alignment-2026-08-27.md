@@ -421,7 +421,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S17(+a) pricing/IAP/ratings | 4 | done | 0V/1D/2P | a restricted device gets an explanation, not a store that cannot sell; prices verified honest; ratings prompts absent by design |
 | S7 unlocks | 4 | done | 0V/1D/4P | the remix prompt is the tenth sheet on sheet-chrome; rows are labelled buttons; one price vocabulary |
 | S18 marketplace | 4 | done | 0V/2D/1P | a paid unlock confirms before it spends; a short balance is told, not failed; one price vocabulary |
-| S19 templates | 4 | todo | — | |
+| S19 templates | 4 | done | 0V/0D/3P | already the app's best-behaved commerce surface; icons and tokens snapped to the ramp |
 | S20 seller dashboard | 4 | todo | — | |
 | S21 invite | 4 | todo | — | |
 | S24 delete account | 4 | todo | — | |
@@ -2700,3 +2700,20 @@ stay one tap with no sheet.
 iOS + AND-pass: owned-state pages verified on both platforms with the formatter pill live; the
 unowned buy panel is unit-guarded (reaching it on-device would spend real credits — the test
 account owns all three paid listings).
+
+### S19 templates — audited 2026-08-28 · AND-pass: 2026-08-28
+Chapters read: Progress indicators (`progress-indicators`), Collections (`collections`), plus this
+session's Loading/Feedback/IAP distillations.
+- Already aligned, recorded so nobody "fixes" it: determinate segmented progress with
+  `accessibilityRole="progressbar"` and value; "N of M complete"; a Cancel that confirms and says
+  completed steps survive; per-step retries that state their price and route a short balance to
+  Get credits; polling that survives leaving the screen with a resume card in the catalog; the
+  publish-before-share rule on results; specific waiting labels rather than "Loading".
+- [P][both] Eight off-ramp icon literals → the ramp (empty states to `hero`, step glyphs to
+  `default`, byline/footnote to `sm`/`xs`); budget 8→0.
+- [P][both] Three hand-rolled `0.82` pressed opacities → `appTheme.opacity.pressed`; the resume
+  card's raw primary-tinted border rgba → `` `${colors.primary}66` ``.
+- [P][both] ASCII "..." in four progress labels → X3's sweep.
+iOS + AND-pass: production currently has no published templates, so both platforms render the
+honest empty state ("No templates yet") — which is itself the Feedback rule at work; poster and
+run stages are covered by the vm suites and the token swaps typecheck-verified.

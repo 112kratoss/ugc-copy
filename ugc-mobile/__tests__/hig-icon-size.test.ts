@@ -61,7 +61,9 @@ const ICON_RAMP = new Set<number>([
  * account hub's nine 22s and help's three moved to `icon.feature`, and the two
  * trailing glyphs the unit added (external-link arrows) arrived on the ramp.
  * S7 retired the unlock prompt's last two (the CTA lock to `icon.default`, the
- * resource-kind glyph to `icon.xs`).
+ * resource-kind glyph to `icon.xs`). S19 took the template screens' eight —
+ * poster and slot empty states to `hero`, the step glyphs to `default`, the
+ * byline and footnote glyphs to `sm`/`xs`.
  */
 const LEGACY_SIZES: Record<string, number> = {
   'app/(tabs)/showcase.tsx': 0,
@@ -89,7 +91,7 @@ const LEGACY_SIZES: Record<string, number> = {
   'components/media-preview.tsx': 1,
   // 6 → 8 in S8, same cause: an aliased `OutputIcon` at 42 and `SlotIcon` at
   // 34. S19's pass ratchets them down.
-  'components/media-template-screens.tsx': 8,
+  'components/media-template-screens.tsx': 0,
   'components/onboarding-booklet.tsx': 0,
   'components/onboarding-welcome.tsx': 0,
   'components/post-details-page.tsx': 0,
