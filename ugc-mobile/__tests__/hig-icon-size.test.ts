@@ -57,20 +57,22 @@ const ICON_RAMP = new Set<number>([
  * menu's 11 as the only budgets still in double figures. S15 took the edit
  * profile screen's 2 with it -- the empty cover's 26pt glyph to `icon.hero`,
  * which is what the ramp reserves for an empty state, and the cover pill's 17
- * to `icon.sm` beside its own label.
+ * to `icon.sm` beside its own label. S16 took settings and help to zero: the
+ * account hub's nine 22s and help's three moved to `icon.feature`, and the two
+ * trailing glyphs the unit added (external-link arrows) arrived on the ramp.
  */
 const LEGACY_SIZES: Record<string, number> = {
   'app/(tabs)/showcase.tsx': 0,
   'app/(tabs)/studio.tsx': 0,
   'app/auth.tsx': 0,
-  'app/help.tsx': 3,
+  'app/help.tsx': 0,
   'app/invite.tsx': 5,
   'app/onboarding.tsx': 0,
   'app/post/[id].tsx': 0,
   'app/post/new.tsx': 21,
   'app/r/[code].tsx': 5,
   'app/seller-dashboard.tsx': 3,
-  'app/settings.tsx': 9,
+  'app/settings.tsx': 0,
   'app/viewer.tsx': 14,
   'components/creator-profile-screen.tsx': 0,
   'components/edit-profile-screen.tsx': 0,

@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { Bell, ChevronRight, CreditCard, FileText, Gift, ShieldCheck, Trash2, UserRound } from 'lucide-react-native';
+import { ArrowUpRight, Bell, ChevronRight, CircleHelp, CreditCard, FileText, Gift, ShieldCheck, Trash2, UserRound } from 'lucide-react-native';
 import { Linking, Pressable, View } from 'react-native';
 
 import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
@@ -22,71 +22,95 @@ export default function SettingsScreen() {
 
       <OnboardingResumeCard compact />
 
+      <GroupLabel>Account</GroupLabel>
+
       <SettingsCard
-        icon={<UserRound size={22} color={appTheme.colors.primary} />}
+        icon={<UserRound size={appTheme.icon.feature} color={appTheme.colors.primary} />}
         title="Profile"
         body={user?.email ?? 'Sign in to connect your creator profile.'}
         onPress={() => router.push(user ? '/profile' as never : '/auth' as never)}
       />
 
       <SettingsCard
-        icon={<CreditCard size={22} color="#fbbf24" />}
+        icon={<CreditCard size={appTheme.icon.feature} color={appTheme.colors.amber} />}
         title="Credits"
         body={`${formatCreditAmount(credits)} credits available on this account.`}
         onPress={() => router.push('/pricing' as never)}
       />
 
       <SettingsCard
-        icon={<Gift size={22} color={appTheme.colors.commerce} />}
+        icon={<Gift size={appTheme.icon.feature} color={appTheme.colors.commerce} />}
         title="Invite & Earn"
         body={user ? 'Share your referral link and track bonus credits.' : 'Apply an invite code or sign in to share your link.'}
         onPress={() => router.push('/invite' as never)}
       />
 
       <SettingsCard
-        icon={<Bell size={22} color="#22d3ee" />}
-        title="Notifications"
-        body="Review mobile notification history and creator updates."
+        icon={<Bell size={appTheme.icon.feature} color={appTheme.colors.info} />}
+        title="Alerts"
+        body="Review your alerts history and creator updates."
         onPress={() => router.push('/studio' as never)}
       />
 
+      <GroupLabel>Support & legal</GroupLabel>
+
       <SettingsCard
-        icon={<ShieldCheck size={22} color="#22d3ee" />}
+        icon={<CircleHelp size={appTheme.icon.feature} color={appTheme.colors.text} />}
+        title="Help & support"
+        body="Find quick guidance for creations, unlocks, and contacting support."
+        onPress={() => router.push('/help' as never)}
+      />
+
+      <SettingsCard
+        icon={<ShieldCheck size={appTheme.icon.feature} color={appTheme.colors.info} />}
         title="Privacy policy"
         body="Review how Magicbooklet collects, uses, stores, and deletes data."
+        external
         onPress={() => void Linking.openURL(`${env.siteUrl}/privacy`)}
       />
 
       <SettingsCard
-        icon={<FileText size={22} color={appTheme.colors.muted} />}
+        icon={<FileText size={appTheme.icon.feature} color={appTheme.colors.muted} />}
         title="Terms of service"
         body="Review the terms that apply to accounts, credits, and creations."
+        external
         onPress={() => void Linking.openURL(`${env.siteUrl}/terms`)}
       />
 
       <SettingsCard
-        icon={<ShieldCheck size={22} color="#fbbf24" />}
+        icon={<ShieldCheck size={appTheme.icon.feature} color={appTheme.colors.warning} />}
         title="Child safety standards"
         body="Review our zero-tolerance policy and report child-safety concerns."
+        external
         onPress={() => void Linking.openURL(`${env.siteUrl}/child-safety`)}
       />
 
       {user ? (
         <SettingsCard
-          icon={<Trash2 size={22} color={appTheme.colors.danger} />}
+          icon={<Trash2 size={appTheme.icon.feature} color={appTheme.colors.danger} />}
           title="Delete account"
           body="Permanently delete your account and personal data."
+          destructive
           onPress={() => router.push('/delete-account' as never)}
         />
       ) : (
         <SettingsCard
-          icon={<Trash2 size={22} color={appTheme.colors.danger} />}
+          icon={<Trash2 size={appTheme.icon.feature} color={appTheme.colors.danger} />}
           title="Account deletion"
           body="See how to request deletion of an existing Magicbooklet account."
+          external
           onPress={() => void Linking.openURL(`${env.siteUrl}/delete-account`)}
         />
       )}
     </Screen>
+  );
+}
+
+function GroupLabel({ children }: { children: string }) {
+  return (
+    <View style={{ marginTop: appTheme.spacing.compact }}>
+      <AppText variant="label" color="muted">{children}</AppText>
+    </View>
   );
 }
 
@@ -95,16 +119,23 @@ function SettingsCard({
   title,
   body,
   onPress,
+  external,
+  destructive,
 }: {
   icon: React.ReactNode;
   title: string;
   body: string;
   onPress: () => void;
+  /** Leaves the app: link semantics and a trailing arrow instead of the drill-down chevron. */
+  external?: boolean;
+  destructive?: boolean;
 }) {
+  const Trailing = external ? ArrowUpRight : ChevronRight;
   return (
     <Pressable
-      accessibilityRole="button"
+      accessibilityRole={external ? 'link' : 'button'}
       accessibilityLabel={`${title}. ${body}`}
+      accessibilityHint={external ? 'Opens in your browser.' : undefined}
       onPress={onPress}
       style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
     >
@@ -113,10 +144,10 @@ function SettingsCard({
           {icon}
         </View>
         <View style={{ flex: 1, gap: 3 }}>
-          <AppText variant="cardTitle">{title}</AppText>
+          <AppText variant="cardTitle" color={destructive ? 'danger' : undefined}>{title}</AppText>
           <AppText variant="bodySm" color="muted">{body}</AppText>
         </View>
-        <ChevronRight size={20} color={appTheme.colors.faint} />
+        <Trailing size={appTheme.icon.default} color={appTheme.colors.faint} />
       </Card>
     </Pressable>
   );

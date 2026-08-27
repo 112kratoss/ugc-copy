@@ -1,4 +1,4 @@
-import { Mail, MessageCircle, ShieldCheck } from 'lucide-react-native';
+import { ArrowUpRight, Mail, MessageCircle, ShieldCheck } from 'lucide-react-native';
 import { Linking, Pressable, View } from 'react-native';
 
 import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
@@ -14,17 +14,17 @@ export default function HelpScreen() {
       />
 
       <HelpCard
-        icon={<MessageCircle size={22} color={appTheme.colors.primary} />}
+        icon={<MessageCircle size={appTheme.icon.feature} color={appTheme.colors.primary} />}
         title="Creation help"
         body="If a generation is processing, you can leave the screen and watch for the mobile notification when it finishes."
       />
       <HelpCard
-        icon={<ShieldCheck size={22} color="#22d3ee" />}
+        icon={<ShieldCheck size={appTheme.icon.feature} color={appTheme.colors.info} />}
         title="Unlocks and sales"
         body="Reusable resources appear after the public post and listing details pass the quality checks."
       />
       <HelpCard
-        icon={<Mail size={22} color="#fbbf24" />}
+        icon={<Mail size={appTheme.icon.feature} color={appTheme.colors.amber} />}
         title="Contact support"
         body="Email info@magicbooklet.com for account or purchase help."
         onPress={() => void Linking.openURL('mailto:info@magicbooklet.com?subject=Magicbooklet%20app%20support')}
@@ -44,13 +44,14 @@ function HelpCard({ icon, title, body, onPress }: { icon: React.ReactNode; title
           <AppText variant="cardTitle">{title}</AppText>
           <AppText variant="bodySm" color="muted">{body}</AppText>
         </View>
+        {onPress ? <ArrowUpRight size={appTheme.icon.default} color={appTheme.colors.faint} /> : null}
       </View>
     </Card>
   );
 
   if (!onPress) return content;
   return (
-    <Pressable accessibilityRole="link" accessibilityLabel={`${title}. ${body}`} onPress={onPress} style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+    <Pressable accessibilityRole="link" accessibilityLabel={`${title}. ${body}`} accessibilityHint="Opens your email app." onPress={onPress} style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}>
       {content}
     </Pressable>
   );

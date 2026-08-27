@@ -416,7 +416,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S2 auth | 4 | done | 4V/6D/4P | the way in is not painted as a failure; a mistake is answered in the app's words, above the keyboard |
 | S3 onboarding | 4 | done | 3V/3D/3P | the product's name is drawn once, in its own typeface; the flow can be left from the screen that opens it |
 | S15 edit profile | 4 | done | 5V/4D/4P | the username is checked before the photos upload, not after; the form is the app's form; leaving no longer throws the work away in silence |
-| S16 settings/help | 4 | todo | — | |
+| S16 settings/help | 4 | done | 1V/3D/4P | rows that leave the app say so; help is findable from settings; the destructive row wears its color |
 | S17(+a) pricing/IAP/ratings | 4 | todo | — | |
 | S7 unlocks | 4 | todo | — | |
 | S18 marketplace | 4 | todo | — | |
@@ -2590,3 +2590,33 @@ That runs the whole path — validation, request, refresh, navigation — on the
 with no visible edit. The emulator's Gboard also starts in floating one-handed mode, where it
 reports no height and covers nothing; `pm clear com.google.android.inputmethod.latin` docks it
 again, which is what makes a keyboard-inset capture meaningful.
+
+### S16 settings + help — audited 2026-08-28 · AND-pass: 2026-08-28
+Chapters read: Settings (`settings`), Toggles (`toggles`), Lists and tables (`lists-and-tables`),
+Offering help (`offering-help`).
+- [V][both] The row titled "Notifications" opened the screen the tab bar calls Alerts — a row must
+  wear the name its destination answers to (Familiarity; S10 renamed the screen) → fix: the row is
+  now "Alerts" and its body follows.
+- [D][both] The three legal rows and the guest deletion row leave the app for a browser but wore the
+  in-app drill-down chevron — the disclosure indicator promises hierarchy, not departure (Lists and
+  tables) → fix: rows that leave the app are links (`accessibilityRole="link"`, hint "Opens in your
+  browser.") with a trailing external arrow; in-app rows keep the chevron and the button role.
+- [D][both] Help was reachable only from the home side menu; the account hub never mentioned it
+  (Offering help: discoverability) → fix: a "Help & support" row under Support & legal.
+- [D][both] One flat stack of nine rows with no grouping (Lists and tables: grouped style) → fix:
+  "Account" and "Support & legal" group labels; the destructive row stands alone at the end.
+- [P][both] The destructive "Delete account" row was styled like every other row → fix: its title
+  renders in the danger color.
+- [P][both] Six raw hex icon colors (`#fbbf24`, `#22d3ee`) bypassed the palette → fix: `amber`,
+  `info`, `warning` tokens; the two shield rows stopped sharing one color.
+- [P][both] Twelve off-ramp 22pt icons across the two screens → fix: `icon.feature`; both files'
+  ratchet budgets are at zero.
+- [P][both] Help's one interactive card was indistinguishable from its two static ones → fix: a
+  trailing external arrow and an "Opens your email app." hint on Contact support only.
+Guard: `settings-screen.test.tsx` (row naming, link-vs-button semantics per row kind, help
+reachability, danger title, guest deletion as a web link); `hig-icon-size.test.ts` ratcheted
+settings 9→0 and help 3→0. Deliberately not done here: no notification-permission row — S26 owns
+the system-settings hand-off; help copy tone sweeps in X3.
+iOS: groups, arrows, danger row and help verified on the simulator. AND-pass: the same states on
+Pixel_9a; hardware back from Help returns to Settings with scroll position kept; no status-bar
+bleed.
