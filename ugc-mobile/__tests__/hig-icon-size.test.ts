@@ -49,7 +49,12 @@ const ICON_RAMP = new Set<number>([
  * shared glyph at one size (home dashboard 4→3). S5 took the showcase feed's
  * four files to zero: one `FeedMediaPlate` replaced four hand-drawn placeholder
  * circles, and the surface's remaining literals moved onto the ramp. S12 took
- * the post details surface's three files to zero the same way.
+ * the post details surface's three files to zero the same way. S13/S14 took
+ * four more: both profile surfaces, the card feed they share, and
+ * `feed-card-shell`'s lone 17pt overflow glyph -- the literal S12 handed to
+ * whichever unit owned the feed card next. Thirty off-ramp sizes retired in one
+ * unit, the largest drop so far; it leaves the composer's 21 and the home side
+ * menu's 11 as the only budgets still in double figures.
  */
 const LEGACY_SIZES: Record<string, number> = {
   'app/(tabs)/showcase.tsx': 0,
@@ -64,9 +69,9 @@ const LEGACY_SIZES: Record<string, number> = {
   'app/seller-dashboard.tsx': 3,
   'app/settings.tsx': 9,
   'app/viewer.tsx': 14,
-  'components/creator-profile-screen.tsx': 11,
+  'components/creator-profile-screen.tsx': 0,
   'components/edit-profile-screen.tsx': 2,
-  'components/feed-card-shell.tsx': 1,
+  'components/feed-card-shell.tsx': 0,
   'components/feed-pagination-footer.tsx': 0,
   'components/feed-video-preview.tsx': 0,
   'components/home-dashboard.tsx': 0,
@@ -82,8 +87,8 @@ const LEGACY_SIZES: Record<string, number> = {
   'components/onboarding-welcome.tsx': 1,
   'components/post-details-page.tsx': 0,
   'components/post-resource-references.tsx': 0,
-  'components/profile-dashboard.tsx': 12,
-  'components/profile-feed-card.tsx': 6,
+  'components/profile-dashboard.tsx': 0,
+  'components/profile-feed-card.tsx': 0,
   'components/showcase-media-preview.tsx': 0,
   'components/unlock-remix-prompt.tsx': 2,
 };

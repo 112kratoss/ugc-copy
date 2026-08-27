@@ -24,6 +24,68 @@ const files = ['app', 'components', 'lib'].flatMap((root) => sourceFiles(path.jo
 /** Apple's Accessibility guidance: iOS default type is 17pt, minimum 11pt. */
 const MIN_TYPE_PT = 11;
 
+/**
+ * The display face (`DISPLAY_FONT`) is registered as two single-weight families,
+ * so every `appTheme.type` variant that uses it pins `fontWeight: '400'`. A call
+ * site that overrides that weight does not get a heavier version of the face —
+ * captured on device in S13: iOS ignores the incompatible weight and keeps
+ * Bricolage, while **Android loses the family and falls back to the system
+ * sans**, so the same screen ships in two different typefaces.
+ *
+ * `components/profile-dashboard.tsx` was the only file in the tree doing it, and
+ * the screen it did it on was the profile tab's own page title.
+ */
+const DISPLAY_VARIANTS = Object.entries(appTheme.type)
+  .filter(([, value]) => 'fontFamily' in value)
+  .map(([name]) => name);
+
+describe('the display face keeps its own weight', () => {
+  it('names the variants that carry it', () => {
+    expect(DISPLAY_VARIANTS.length).toBeGreaterThan(0);
+    for (const name of DISPLAY_VARIANTS) {
+      expect(
+        appTheme.type[name as keyof typeof appTheme.type],
+        `${name} must pin fontWeight so Android keeps the family`
+      ).toMatchObject({ fontWeight: '400' });
+    }
+  });
+
+  it('is never re-weighted at a call site', () => {
+    const offenders = files.flatMap((filePath) => {
+      const source = readFileSync(filePath, 'utf8');
+      const hits: string[] = [];
+
+      for (const variant of DISPLAY_VARIANTS) {
+        // One JSX element at a time: from `variant="pageTitle"` to the `>` that
+        // closes its opening tag, so a `fontWeight` on the *next* element does
+        // not get attributed to this one.
+        const pattern = new RegExp(`variant="${variant}"`, 'g');
+        let match: RegExpExecArray | null;
+
+        while ((match = pattern.exec(source))) {
+          let depth = 0;
+          let end = -1;
+          for (let index = match.index; index < source.length; index += 1) {
+            const character = source[index];
+            if (character === '{' || character === '(') depth += 1;
+            else if (character === '}' || character === ')') depth -= 1;
+            else if (character === '>' && depth === 0) { end = index; break; }
+          }
+          if (end === -1) continue;
+          if (/fontWeight/.test(source.slice(match.index, end + 1))) {
+            hits.push(`${path.relative(mobileRoot, filePath)} (${variant})`);
+          }
+        }
+      }
+
+      return hits;
+    });
+
+    expect(offenders).toEqual([]);
+  });
+});
+
+
 describe('HIG type sizes', () => {
   it('keeps every hardcoded type size at or above the iOS minimum', () => {
     const undersized = files.flatMap((filePath) => readFileSync(filePath, 'utf8')

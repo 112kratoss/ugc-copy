@@ -32,6 +32,7 @@ vi.mock('expo-router', () => ({
 }));
 
 import ProfileScreen from '../app/(tabs)/profile';
+import { DEFAULT_PROFILE_MEDIA_TAB } from '../lib/profile-view-model';
 
 describe('profile screen', () => {
   beforeEach(() => {
@@ -86,7 +87,7 @@ describe('profile screen', () => {
     });
   });
 
-  it('defaults unknown profile tab params to Saved', () => {
+  it('defaults an unknown profile tab param to the screen\'s own default', () => {
     authState.user = { id: 'user-1', email: 'user@example.com' };
     paramsState.params = { tab: 'wat', postId: 'post-123' };
 
@@ -95,8 +96,19 @@ describe('profile screen', () => {
     });
 
     expect(dashboardPropsState.props).toMatchObject({
-      initialTab: 'Saved',
+      initialTab: DEFAULT_PROFILE_MEDIA_TAB,
       highlightedPostId: 'post-123',
     });
+  });
+
+  it('still honours an explicit saved tab param', () => {
+    authState.user = { id: 'user-1', email: 'user@example.com' };
+    paramsState.params = { tab: 'saved' };
+
+    renderer.act(() => {
+      renderer.create(<ProfileScreen />);
+    });
+
+    expect(dashboardPropsState.props).toMatchObject({ initialTab: 'Saved' });
   });
 });

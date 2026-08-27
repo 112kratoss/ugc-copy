@@ -105,20 +105,21 @@ re-read the codebase broadly or ask for past-chat context.
   platforms verify against the same Metro, per the parity protocol below. The worktree's
   `ugc-mobile/` has `.env.local` copied and `npm install` run; if "Cannot find module" ever appears
   inside packages there, run `npm ci` (corrupt worktree copy).
-- **Where the work currently sits (2026-08-27):** Phases 1–2 are closed on the `hig-alignment`
-  branch and **deliberately not merged** — `main` does not have F4, F6, N1, N2, N3 or S5. The user's
-  call at the Phase 2 boundary was to keep accumulating on the branch, so branch from it rather than
-  from `main`, and expect the merge question again at the next boundary. Phase 3 is under way: S5,
-  S6 (+S6a/b/c), S9, S8, S11, S12, S10 and S4 are closed, and the next `todo` on the board is
-  **S13/S14, profiles**, which closes Phase 3. Four things carry into it: the composer's 21 off-ramp
-  icon sizes are the largest budget left in `hig-icon-size.test.ts`, with the home side menu's 11
-  next; S11's iOS 26 gesture hazard is narrower than it was written — S12 verified that a **native**
-  horizontal scroll view (a pager, a carousel) wins the full-screen back pan and needs nothing,
-  while a **JS** `PanResponder` drag loses it and needs `fullScreenGestureEnabled: false` on its own
-  route; **S13 inherits the creations grid** that S10's board row wrongly named, and the
-  generation-titled-with-its-prompt data shape S12 handed on with it; and F3 now owns both halves of
-  the bounce-disabled pair (`home-dashboard`, the alerts list) plus the 17 hidden scroll
-  indicators.
+- **Where the work currently sits (2026-08-27):** Phases 1-3 are closed on the `hig-alignment`
+  branch and **deliberately not merged** - `main` has none of F4, F6, N1, N2, N3 or any Phase 3
+  surface. The user's call at the Phase 2 boundary was to keep accumulating on the branch, so branch
+  from it rather than from `main`. **Phase 3 closed with S13/S14**, so the next `todo` on the board
+  is **Phase 4**, starting at S2 (auth) - and this is a phase boundary, which per *Merging* below
+  means asking the user about `hig-alignment` -> `main` before starting it. Three things carry into
+  Phase 4: the composer's 21 off-ramp icon sizes are now the largest budget in
+  `hig-icon-size.test.ts`, with the home side menu's 11 next (S13/S14 took four files to zero and
+  retired the last of S12's handoffs); F3 owns the bounce-disabled pair (`home-dashboard`, the
+  alerts list) plus the 17 hidden scroll indicators, three of which are this unit's surfaces; and
+  the workspace menu's absence from Alerts and Profile is now diagnosed rather than open - it needs
+  the gesture layer lifted into the tabs layout, which is shell work for **Phase 6** (see the
+  S13/S14 log). S11's iOS 26 gesture hazard remains narrower than first written: a **native**
+  horizontal scroll view wins the full-screen back pan and needs nothing, while a **JS**
+  `PanResponder` drag loses it and needs `fullScreenGestureEnabled: false` on its own route.
 - **Device mechanics learned in S6, for whoever drives them next:** the Simulator MCP's `tap` works
   headless on this Mac as well as `swipe`, so iOS is fully drivable; a surface is reachable by post
   id with `magicbooklet:///post/<id>`, and the live data has exactly one multi-media post
@@ -350,7 +351,8 @@ non-geometric control rules (F5: keyboard types, return keys, edit menus, picker
 | N3 | Side menus (home + workspace edge-swipe) vs Sidebars guidance; transition motion of the shell (tab cross-fade, push timing) | Sidebars, Motion |
 
 ### Phase 3 — Core journey surfaces (audit+fix per surface)
-Order: S5 → S6/S6a/S6b/S6c → S9 → S8 → S11 → S12 → S10 → S4 → S13/S14. Each uses its chapter set
+Order: S5 → S6/S6a/S6b/S6c → S9 → S8 → S11 → S12 → S10 → S4 → S13/S14. **Complete 2026-08-27.**
+Each uses its chapter set
 from the coverage matrix. S6 is the deepest: full-screen rules, video (controls, audio interruption,
 mute state), page controls, gestures, scrims/legibility, share.
 
@@ -402,7 +404,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S12 post details | 3 | done | 5V/2D/4P | a post that cannot load says so and offers a way on; copying says it copied, everywhere; a video says what it cost |
 | S10 alerts | 3 | done | 3V/2D/4P | the screen answers to the name on the tab; an alert stops shouting over the app you are holding |
 | S4 home | 3 | done | 3V/1D/4P | the front door stops introducing itself; four slides now say they are four |
-| S13/S14 profiles | 3 | todo | — | |
+| S13/S14 profiles | 3 | done | 4V/4D/4P | a private post says so with a padlock, not a hue; the profile's own title is in the app's typeface on Android; a creator profile leads with the creator |
 | S2 auth | 4 | todo | — | |
 | S3 onboarding | 4 | todo | — | |
 | S15 edit profile | 4 | todo | — | |
@@ -1998,3 +2000,149 @@ this session via `preview_start metro-hig` also buys `preview_logs`, which an in
 not offer. Android reconnects with a force-stop and
 `am start -a android.intent.action.VIEW -d "exp+magicbooklet-mobile://expo-development-client/?url=http://10.0.2.2:8081"`;
 the plain `exp://10.0.2.2:8081` form does not resolve.
+
+### S13/S14 profiles — audited 2026-08-27 · AND-pass: 2026-08-27
+Chapters read: Segmented controls (`segmented-controls`), Color (`color`); Layout, Feedback,
+Toolbars, Branding, Collections, Loading, Action sheets, Design principles were read earlier in the
+program and are reused rather than refetched.
+
+Two surfaces and the card feed between them: the profile tab (a 1,400-line dashboard — hero card,
+balances, two navigation rows, a three-way media grid), the creator profile a visitor lands on from
+the feed, and `profile-media-feed`, which Creations and Posts open into. The findings cluster
+around three things: state told in colour alone, a control introduced by a heading that repeats it,
+and a header whose loudest controls are the ones nobody came for.
+
+- [V][both] **A private post and a public one differed by hue and nothing else.** Every Creations
+  and Posts tile drew a 10pt dot at its corner — green for Public, amber for Private, violet for
+  a creation that never became a post — with no glyph, no label, and no border to separate them by
+  shape. Color is verbatim: "Avoid relying solely on color to differentiate between objects,
+  indicate interactivity, or communicate essential information. When you use color to convey
+  information, be sure to provide the same information in alternative ways so people with color
+  blindness or other visual disabilities can understand it. For example, you can use text labels or
+  glyph shapes to identify objects or states" → **fixed**: the dot became a bordered badge carrying
+  a glyph — a globe for public, a padlock for private, a spark for a creation still unposted — so
+  the state survives greyscale. Captured on both platforms: two private posts among seventeen are
+  now the only padlocks on the grid.
+  - **The same screen already knew how to do this.** `profile-feed-card.tsx` — the card these tiles
+    open into — draws `ProfileStateChip`, a *labelled* pill in the same three tones. The grid was
+    the one place that dropped the label and kept the colour.
+- [V][both] **The tile never said the state out loud.** A Post tile's accessibility label was
+  `Post, <title>` — the badge in its corner reported who could see the post and the label reported
+  nothing, so the state was available to sighted users alone. → **fixed**: badge and label now read
+  from one `getProfileTileState`, so they cannot drift; the label ends `…, Public` or `…, Private`.
+- [V][and] **The profile's own title was the one title on Android not in the app's typeface.**
+  `ProfileTitle` took `variant="sectionTitle"` and then overrode `fontWeight` back to `'800'` — the
+  only place in the tree that overrode the weight on a display-face variant, and the exact thing
+  every such variant pins `'400'` to prevent.
+  - **The mechanism is not the one the token's comment predicts, and the A/B is why this is tagged
+    `and`.** The comment says a heavier weight makes Android "fake-bold" a single-weight face. What
+    actually happens is worse: captured at the same declaration on both platforms, **iOS keeps
+    Bricolage and ignores the incompatible weight, while Android loses the family altogether and
+    renders the system sans.** The before/after pair on the Pixel_9a is unambiguous — 24pt Roboto
+    becomes 30pt Bricolage ExtraBold — and the pre-fix iOS capture of the *same code* is Bricolage.
+    So one screen shipped in two typefaces depending on the platform. → **fixed**: `pageTitle`,
+    unmodified, which is what Showcase and Alerts already use.
+  - Guarded tree-wide, not on this screen: `hig-type-and-contrast.test.ts` now walks every JSX
+    element carrying a display-face variant and fails any that also sets `fontWeight`. Verified to
+    bite by reintroducing the override — it names the file and the variant.
+- [V][both] **The page title was not announced as a header.** Showcase and Alerts both carry
+  `accessibilityRole="header"` on their page titles; the profile tab did not, so the rotor skipped
+  the only landmark on a screen that runs several pages → **fixed**, and the guard asserts all three
+  together so the next tab root cannot be the odd one out.
+- [D][both] **A heading that named the selected segment, one line above it.** The media header
+  printed "Creations" over a pill reading *Creations*, and "Saved Media" over a pill reading
+  *Saved* — the same thing twice, in two spellings. Segmented controls: "A segmented control that
+  displays text labels doesn't need introductory text." → **fixed**: the heading is gone,
+  `getProfileMediaSectionTitle` went with it (dead on removal — the fifth dead-code find in this
+  tree), and the refresh control moved onto the segment's row as the shared `IconButton`, naming
+  the tab it refreshes the way Showcase's says "Refresh Showcase".
+- [D][both] **Two orders for the same three collections, six inches apart.** The hero card printed
+  *Creations · Posts · Saved* (pinned by `profile-view-model.test.ts`); the control that switches
+  between exactly those three listed *Saved · Creations · Posts*. Design principles' Familiarity —
+  "once you establish a behavior or appearance for an element, apply it throughout" → **fixed**:
+  `PROFILE_MEDIA_TABS` follows the stats.
+  - **This is the finding with a product-visible half, so it is flagged rather than buried.**
+    Reordering alone would have left the default tab (`Saved`) selecting the *last* segment, which
+    reads as a bug even though it is not — the reorder would have created an oddity that wasn't
+    there before. The default moved to `Creations` with it: the first stat, the first segment, and
+    the only one of the three that is the reader's own work. The profile tab used to open on media
+    saved from other people. Deep links still honour `?tab=saved|posts|creations`; it is a one-line
+    revert (`DEFAULT_PROFILE_MEDIA_TAB`) if the product wants the old landing back.
+- [D][both] **A stranger's profile led with two ways to accuse them.** `CreatorHeader` mounted
+  *Report user* and *Block user* permanently, as a full-width pair of danger-tinted buttons between
+  the stats and the work — larger and louder than Share (a bare glyph) and than the posts the
+  profile exists to show, which started below the fold. Layout: "make essential information easy to
+  find by giving it sufficient space … don't obscure it by crowding it with nonessential details.
+  You can make secondary information available in other parts of the window" → **fixed**: one `⋮`
+  control beside Share, opening the sheet N2 built. `showActionSheet` already sorts destructive
+  entries to the top and puts Cancel at the bottom, so neither ordering is this screen's to get
+  wrong. Two post tiles now sit above the fold on both platforms.
+  - They are not hidden, only one tap deeper, and the control renders for visitors only — you
+    cannot report yourself.
+- [D][both] **One account, two avatar shapes.** The creator profile drew a rounded square; the
+  profile tab, every feed row and the comments sheet draw a circle. → **fixed**: `borderRadius:
+  size / 2`, so the radius follows the size rather than being re-picked.
+- [D][both] **Icon ratchet: 12 → 0, 11 → 0, 6 → 0, 1 → 0.** Both profile surfaces, the card they
+  share, and `feed-card-shell`'s lone 17pt overflow glyph — the literal S12 handed to whichever unit
+  owned the feed card next. Thirty off-ramp sizes retired, the largest drop in the program so far;
+  the composer's 21 and the home side menu's 11 are the only budgets left in double figures. The
+  crown's hardcoded `#fbbf24` became `appTheme.colors.commerce`, the same substitution S4 made for
+  the identical glyph on Home.
+- [P][both] **The screen described itself to someone already looking at it.** Under the title sat
+  "Your identity, balance, and published work." — a list of the three things the card immediately
+  beneath it shows. Branding: "people seldom need to be reminded which app they're using, and it's
+  usually better to use the space to give people valuable information and controls." Alerts' own
+  subtitle is live data (`3 unread · …`); this one was a table of contents → **removed**.
+- [P][both] **A creator that cannot load printed the API's words.** The failure body was
+  `error.message` verbatim, and the not-found case offered no control at all — "Try again from
+  Showcase" as prose, with no way to get there. Feedback: "show people when a command can't be
+  carried out and help them understand why" → **fixed**: a missing creator says the handle may have
+  changed and offers *Browse Showcase*; a failed load says to check the connection and offers
+  *Try again*. A 404 is not retryable, so it is not offered a retry.
+- [P][both] Verified clean: **the grid answers for itself in every state.** Skeleton on first load,
+  a named error with a retry, a per-tab empty state, a footer spinner, a recoverable load-more
+  footer, and pull-to-refresh — all already present on both surfaces, and all pinned by
+  `profile-dashboard.test.tsx`. Cited rather than re-verified on device.
+- [P][both] Noted for **F3**: both profile surfaces and the card feed hide their vertical scroll
+  indicator (`showsVerticalScrollIndicator={false}`) on lists that run many screens. They are three
+  of the 17 F3 already owns rather than new ones (the count is a tree-wide grep, unchanged by this
+  unit); not flipped here, because Scroll views is an app-wide call.
+
+Guard added: `__tests__/hig-profile.test.ts` (18 cases) — the state badge draws a glyph and not a
+bare dot; the badge and the spoken label read from one source; no owned tile is labelled without its
+state; no heading repeats the selected segment; the refresh control names its tab; the segment order
+equals the stats order and the default is the first segment; the segment count stays inside the
+chapter's phone limit; the page title uses the token, keeps the display face's own weight, announces
+itself as a header alongside its two sibling tabs, and no longer describes the screen; the safety
+actions are out of the creator header and behind an overflow control that visitors alone see; the
+avatar is round; and the failure states neither print the API's error nor offer a retry that cannot
+work. Extended: `hig-type-and-contrast.test.ts` (+2, the tree-wide display-face weight rule) and
+`hig-icon-size.test.ts` (four budgets to zero).
+
+**AND-pass 2026-08-27.** Pixel_9a, Android 16, dev client on this session's Metro. Captured: the
+corrected page title (with the before/after pair that produced the `and` finding above), the
+reordered segment opening on Creations, the globe/padlock badges across a 19-post grid, the creator
+header with its overflow control and round avatar, the safety sheet rendering through OverlayHost
+with the grabber and correct insets, and **hardware back closing that sheet without popping the
+screen**. Edge-to-edge unchanged; `logcat` clear of `FATAL`/`SIGSEGV`/`libhwui`; app process alive.
+Nothing in this unit touches the keyboard, blur, transitions or the tab bar; the tab-swipe
+`PanResponder` was not modified.
+
+**Mechanics worth keeping.** The Android package is `com.magicbooklet.mobile`, not
+`com.magicbooklet.app` — `am force-stop com.magicbooklet.app` silently succeeds and stops nothing,
+so a "cold reload" done that way is really a warm one. What does reload the bundle is re-firing the
+dev-launcher intent. Related: **Fast Refresh is not reliable enough to A/B a rendering claim.** The
+first attempt at the typeface comparison produced two screenshots that differed in the grid and not
+in the title, which reads exactly like "no visual difference" and is not — the revert had not
+landed. Re-fire the dev-launcher intent between the two captures and confirm the change is visible
+in the capture itself (here, the 24pt→30pt size step) before comparing anything subtler.
+
+**Open remainder.** N3 left Alerts and Profile with no route to the workspace menu and guessed that
+Profile "duplicates much of the drawer, so add the menu may be the wrong answer". Half right: the
+overlap is two rows of six (Invite & Earn, Your Sales), and **Settings and Help & Support are
+reachable from no tab but Home and Showcase**. The reason not to add the control here is structural,
+not duplication — `WorkspaceSideMenuGestureLayer` is mounted *inside* `showcase.tsx` (Home carries
+its own separate `HomeSideMenu`), so a third tab would need a third mount with its own queries and
+its own drawer, or the layer lifted into `(tabs)/_layout.tsx`. Lifting it is a navigation-shell
+change with the Android blur/tab-fade hazard attached, which is N-track work, not a screen pass →
+**Phase 6**, with the Settings/Help reachability as the reason to do it.

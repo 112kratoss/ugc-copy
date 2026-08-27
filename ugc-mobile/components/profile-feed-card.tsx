@@ -126,19 +126,19 @@ function profileActionIcon(
 ) {
   const muted = appTheme.colors.faint;
 
-  if (id === 'publish') return <Globe size={19} color={appTheme.colors.primary} />;
-  if (id === 'unlock') return <Wand2 size={19} color={appTheme.colors.success} />;
+  if (id === 'publish') return <Globe size={appTheme.icon.default} color={appTheme.colors.primary} />;
+  if (id === 'unlock') return <Wand2 size={appTheme.icon.default} color={appTheme.colors.success} />;
   if (id === 'visibility') {
     // The icon reports where the post (or the creation's linked post) sits now.
     const isPrivate = visibility === 'private' || visibility === 'unlisted';
     return isPrivate
-      ? <LockKeyhole size={19} color={appTheme.colors.warning} />
-      : <Globe size={19} color={appTheme.colors.success} />;
+      ? <LockKeyhole size={appTheme.icon.default} color={appTheme.colors.warning} />
+      : <Globe size={appTheme.icon.default} color={appTheme.colors.success} />;
   }
-  if (id === 'comment') return <MessageCircle size={19} color={muted} />;
+  if (id === 'comment') return <MessageCircle size={appTheme.icon.default} color={muted} />;
   if (id === 'share') return <ShareGlyph size={18} color={muted} />;
   if (id === 'details') return <FileText size={18} color={muted} />;
-  return <Repeat2 size={19} color={appTheme.colors.primary} />;
+  return <Repeat2 size={appTheme.icon.default} color={appTheme.colors.primary} />;
 }
 
 function ProfileStateChip({ label, tone }: { label: string; tone: ViewerStateTone }) {

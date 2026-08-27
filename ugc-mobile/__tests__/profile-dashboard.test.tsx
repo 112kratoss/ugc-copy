@@ -98,8 +98,10 @@ vi.mock('lucide-react-native', () => ({
   ChevronRight: (props: Record<string, unknown>) => React.createElement('chevron-right-icon', props),
   Crown: (props: Record<string, unknown>) => React.createElement('crown-icon', props),
   Gift: (props: Record<string, unknown>) => React.createElement('gift-icon', props),
+  Globe: (props: Record<string, unknown>) => React.createElement('globe-icon', props),
   Heart: (props: Record<string, unknown>) => React.createElement('heart-icon', props),
   ImageIcon: (props: Record<string, unknown>) => React.createElement('image-icon', props),
+  LockKeyhole: (props: Record<string, unknown>) => React.createElement('lock-keyhole-icon', props),
   Pencil: (props: Record<string, unknown>) => React.createElement('pencil-icon', props),
   Play: (props: Record<string, unknown>) => React.createElement('play-icon', props),
   RefreshCw: (props: Record<string, unknown>) => React.createElement('refresh-cw-icon', props),
@@ -390,7 +392,7 @@ describe('ProfileDashboard media tiles routing', () => {
   it('routes to /viewer with correct source and initialId for Saved tiles', async () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
-      tree = renderer.create(<ProfileDashboard />);
+      tree = renderer.create(<ProfileDashboard initialTab="Saved" />);
     });
 
     // Saved tab is selected by default. Find the tile.
@@ -431,7 +433,7 @@ describe('ProfileDashboard media tiles routing', () => {
 
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
-      tree = renderer.create(<ProfileDashboard />);
+      tree = renderer.create(<ProfileDashboard initialTab="Saved" />);
     });
 
     const tile = tree!.root.findByProps({
@@ -466,7 +468,7 @@ describe('ProfileDashboard media tiles routing', () => {
     });
 
     const tile = tree!.root.findByProps({
-      accessibilityLabel: 'Post, Private note',
+      accessibilityLabel: 'Post, Private note, Private',
     });
     renderer.act(() => {
       tile.props.onPress();
@@ -743,10 +745,12 @@ describe('ProfileDashboard media tiles routing', () => {
   it('collapses a tab back to one page before refreshing it', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
-      tree = renderer.create(<ProfileDashboard />);
+      tree = renderer.create(<ProfileDashboard initialTab="Saved" />);
     });
 
-    const refresh = tree!.root.findByProps({ accessibilityLabel: 'Refresh media' });
+    // The control names the tab it refreshes now that the heading that used to
+    // name it is gone (segmented controls need no introductory text).
+    const refresh = tree!.root.findByProps({ accessibilityLabel: 'Refresh Saved' });
     renderer.act(() => {
       refresh.props.onPress();
     });
@@ -772,7 +776,7 @@ describe('ProfileDashboard media tiles routing', () => {
     queryState.savedMediaIsStale = true;
 
     renderer.act(() => {
-      renderer.create(<ProfileDashboard />);
+      renderer.create(<ProfileDashboard initialTab="Saved" />);
     });
 
     expect(queryState.refetchGenerations).not.toHaveBeenCalled();
@@ -782,7 +786,7 @@ describe('ProfileDashboard media tiles routing', () => {
 
   it('defers inactive Profile datasets until the visible dataset settles', () => {
     renderer.act(() => {
-      renderer.create(<ProfileDashboard />);
+      renderer.create(<ProfileDashboard initialTab="Saved" />);
     });
 
     expect(authState.api.listGenerations).not.toHaveBeenCalled();
@@ -796,7 +800,7 @@ describe('ProfileDashboard media tiles routing', () => {
     });
 
     expect(tree!.root.findByProps({
-      accessibilityLabel: 'Post, Post Title',
+      accessibilityLabel: 'Post, Post Title, Public',
     })).toBeTruthy();
     expect(findViewByTestId(tree!.root, 'profile-saved-overlay')).toHaveLength(0);
     expect(findViewByTestId(tree!.root, 'profile-minimal-overlay')).toHaveLength(1);
@@ -1082,10 +1086,10 @@ describe('ProfileDashboard media tiles routing', () => {
       tree = renderer.create(<ProfileDashboard initialTab="Posts" />);
     });
 
-    expect(tree!.root.findByProps({ accessibilityLabel: 'Post, Ready media post' })).toBeTruthy();
-    expect(tree!.root.findByProps({ accessibilityLabel: 'Post, Reusable note' })).toBeTruthy();
-    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Post, Empty media post' })).toHaveLength(0);
-    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Post, Archived post' })).toHaveLength(0);
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Post, Ready media post, Public' })).toBeTruthy();
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Post, Reusable note, Public' })).toBeTruthy();
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Post, Empty media post, Public' })).toHaveLength(0);
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Post, Archived post, Public' })).toHaveLength(0);
 
     // The scope control counts what each scope holds and swaps the grid.
     const archivedScope = tree!.root.findByProps({ accessibilityLabel: 'Archived (1)' });
@@ -1093,8 +1097,8 @@ describe('ProfileDashboard media tiles routing', () => {
     renderer.act(() => {
       archivedScope.props.onPress();
     });
-    expect(tree!.root.findByProps({ accessibilityLabel: 'Post, Archived post' })).toBeTruthy();
-    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Post, Ready media post' })).toHaveLength(0);
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Post, Archived post, Public' })).toBeTruthy();
+    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Post, Ready media post, Public' })).toHaveLength(0);
   });
 
   it('renders text posts as intentional text preview tiles', () => {
@@ -1125,7 +1129,7 @@ describe('ProfileDashboard media tiles routing', () => {
   it('keeps Saved feed cards but makes Creations and Posts grid tiles minimal', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
-      tree = renderer.create(<ProfileDashboard />);
+      tree = renderer.create(<ProfileDashboard initialTab="Saved" />);
     });
 
     expect(findViewByTestId(tree!.root, 'profile-saved-overlay')).toHaveLength(1);
@@ -1162,7 +1166,7 @@ describe('ProfileDashboard media tiles routing', () => {
 
     // Find the Posts tile.
     const tile = tree!.root.findByProps({
-      accessibilityLabel: 'Post, Post Title',
+      accessibilityLabel: 'Post, Post Title, Public',
     });
 
     renderer.act(() => {

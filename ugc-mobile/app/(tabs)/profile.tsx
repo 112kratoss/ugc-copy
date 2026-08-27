@@ -2,7 +2,7 @@ import { useLocalSearchParams } from 'expo-router';
 
 import { ProfileDashboard } from '@/components/profile-dashboard';
 import { useAuth } from '@/lib/auth';
-import type { ProfileMediaTab } from '@/lib/profile-view-model';
+import { DEFAULT_PROFILE_MEDIA_TAB, type ProfileMediaTab } from '@/lib/profile-view-model';
 
 type ProfileRouteParams = {
   tab?: string | string[];
@@ -17,7 +17,8 @@ function normalizeProfileTab(value: string | string[] | undefined): ProfileMedia
   const tab = normalizeParam(value).toLowerCase();
   if (tab === 'posts') return 'Posts';
   if (tab === 'creations') return 'Creations';
-  return 'Saved';
+  if (tab === 'saved') return 'Saved';
+  return DEFAULT_PROFILE_MEDIA_TAB;
 }
 
 export default function ProfileScreen() {

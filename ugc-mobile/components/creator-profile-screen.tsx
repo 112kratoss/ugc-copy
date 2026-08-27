@@ -4,7 +4,7 @@ import { useInfiniteQuery, useMutation, useQueryClient, type InfiniteData } from
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, router } from 'expo-router';
-import { ChevronRight, ExternalLink, FileText, Globe, Heart, ImageIcon, Layers3, Lock, MapPin, Pencil, Play, Repeat2, UserCheck, UserPlus, Ban, Flag } from 'lucide-react-native';
+import { ChevronRight, ExternalLink, FileText, Globe, Heart, ImageIcon, Layers3, Lock, MapPin, MoreVertical, Pencil, Play, Repeat2, UserCheck, UserPlus } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
@@ -20,7 +20,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
-import { AppText, StatusBlock } from '@/components/ui';
+import { AppText, SecondaryButton, StatusBlock } from '@/components/ui';
+import { showActionSheet } from '@/lib/action-sheet';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { haptic } from '@/lib/haptics';
 import { useAuth } from '@/lib/auth';
@@ -246,6 +247,31 @@ export function CreatorProfileScreen({
     );
   };
 
+  /**
+   * Report and Block used to sit in the header as two permanently mounted,
+   * danger-tinted, full-width buttons -- the loudest pair of controls on a
+   * stranger's profile, louder than the work the profile exists to show, and
+   * louder than Share, which is the one people actually reach for. Layout:
+   * "make essential information easy to find by giving it sufficient space ...
+   * don't obscure it by crowding it with nonessential details. You can make
+   * secondary information available in other parts of the window."
+   *
+   * They keep a control of their own (they must stay reachable), one tap deeper,
+   * through the sheet N2 built for exactly this: `showActionSheet` sorts
+   * destructive entries to the top and puts Cancel at the bottom, so neither
+   * ordering is this screen's to get wrong.
+   */
+  const handleSafetyOptions = () => {
+    if (!data || data.viewer.isOwner) return;
+    showActionSheet({
+      title: `@${data.profile.username}`,
+      actions: [
+        { label: 'Report user', destructive: true, onPress: handleReportUser },
+        { label: 'Block user', destructive: true, onPress: handleBlockUser },
+      ],
+    });
+  };
+
   const openProfileItem = (item: ShowcaseFeedItem) => {
     queryClient.setQueryData(createShowcasePostQueryKey(item.id, user?.id), { success: true, item });
     router.push(showcaseFeedItemOpenHref({
@@ -312,19 +338,28 @@ export function CreatorProfileScreen({
   }
 
   if (!data) {
+    // The body used to print `error.message` -- whatever the API happened to
+    // say, in the API's words, to someone who cannot act on it. Feedback:
+    // "show people when a command can't be carried out and help them
+    // understand why", which means copy that names the situation and a control
+    // that moves them on: a missing creator is not retryable, so it offers
+    // Showcase instead of a Retry that would fail the same way.
     return (
-      <View style={{ flex: 1, backgroundColor: appTheme.colors.background, paddingTop: 16, paddingHorizontal: 16 }}>
+      <View style={{ flex: 1, backgroundColor: appTheme.colors.background, paddingTop: 16, paddingHorizontal: 16, gap: appTheme.spacing.gap }}>
         <Stack.Screen options={{ title: 'Creator' }} />
         <StatusBlock
           tone={notFound ? 'neutral' : 'danger'}
           title={notFound ? 'Creator not found' : 'Could not load creator'}
-          body={profileQuery.error instanceof Error ? profileQuery.error.message : 'Try again from Showcase.'}
+          body={notFound
+            ? 'This profile may have been removed, or the handle may have changed.'
+            : 'Check your connection, then try again.'}
         />
-        {!notFound ? (
-          <Pressable onPress={() => void profileQuery.refetch()} style={({ pressed }) => ({ minHeight: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-            <Text style={{ color: appTheme.colors.text, ...appTheme.type.button }}>Retry</Text>
-          </Pressable>
-        ) : null}
+        <SecondaryButton
+          label={notFound ? 'Browse Showcase' : 'Try again'}
+          onPress={notFound
+            ? () => router.replace('/(tabs)/showcase' as never)
+            : () => void profileQuery.refetch()}
+        />
       </View>
     );
   }
@@ -339,8 +374,7 @@ export function CreatorProfileScreen({
             isFollowLoading={followMutation.isPending}
             onEditProfile={() => router.push('/edit-profile' as never)}
             onFollowPress={handleFollowPress}
-            onBlockUser={handleBlockUser}
-            onReportUser={handleReportUser}
+            onSafetyOptions={handleSafetyOptions}
             onShareProfile={handleShareProfile}
             socialLinks={socialLinks}
           />
@@ -360,7 +394,7 @@ export function CreatorProfileScreen({
     if (item.kind === 'empty') {
       return (
         <EmptyState
-          icon={item.tab === 'unlocks' ? <Lock size={28} color={appTheme.colors.faint} /> : item.tab === 'tools' ? <Layers3 size={28} color={appTheme.colors.faint} /> : <ImageIcon size={28} color={appTheme.colors.faint} />}
+          icon={item.tab === 'unlocks' ? <Lock size={appTheme.icon.hero} color={appTheme.colors.faint} /> : item.tab === 'tools' ? <Layers3 size={appTheme.icon.hero} color={appTheme.colors.faint} /> : <ImageIcon size={appTheme.icon.hero} color={appTheme.colors.faint} />}
           title={item.tab === 'unlocks' ? 'No recipes yet' : item.tab === 'tools' ? 'No tagged tools yet' : 'No posts yet'}
           body={item.tab === 'unlocks'
             ? 'Reusable prompts, files, notes, and remix access will appear here.'
@@ -434,8 +468,7 @@ function CreatorHeader({
   isFollowLoading,
   onEditProfile,
   onFollowPress,
-  onBlockUser,
-  onReportUser,
+  onSafetyOptions,
   onShareProfile,
   socialLinks,
 }: {
@@ -444,8 +477,7 @@ function CreatorHeader({
   isFollowLoading: boolean;
   onEditProfile: () => void;
   onFollowPress: () => void;
-  onBlockUser: () => void;
-  onReportUser: () => void;
+  onSafetyOptions: () => void;
   onShareProfile: () => void;
   socialLinks: Array<{ label: string; url: string }>;
 }) {
@@ -473,8 +505,13 @@ function CreatorHeader({
               <FollowButton following={data.viewer.isFollowing} loading={isFollowLoading} onPress={onFollowPress} />
             )}
             <CircleAction label="Share profile" onPress={onShareProfile}>
-              <ShareGlyph size={18} color={appTheme.colors.text} />
+              <ShareGlyph size={appTheme.icon.compact} color={appTheme.colors.text} />
             </CircleAction>
+            {!data.viewer.isOwner ? (
+              <CircleAction label="More options" onPress={onSafetyOptions}>
+                <MoreVertical size={appTheme.icon.default} color={appTheme.colors.text} />
+              </CircleAction>
+            ) : null}
           </View>
         </View>
 
@@ -500,16 +537,6 @@ function CreatorHeader({
         ) : null}
 
         <CreatorStats data={data} />
-        {!data.viewer.isOwner ? (
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <SafetyAction label="Report user" onPress={onReportUser}>
-              <Flag size={16} color={appTheme.colors.danger} />
-            </SafetyAction>
-            <SafetyAction label="Block user" onPress={onBlockUser}>
-              <Ban size={16} color={appTheme.colors.danger} />
-            </SafetyAction>
-          </View>
-        ) : null}
       </View>
     </View>
   );
@@ -577,22 +604,22 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
         <View style={{ height, backgroundColor: appTheme.colors.surfaceInset }}>
           {isTextPost ? (
             <View style={{ flex: 1, padding: 13, justifyContent: 'space-between', backgroundColor: appTheme.colors.panelSoft }}>
-              <FileText size={22} color={accent} />
+              <FileText size={appTheme.icon.feature} color={accent} />
               <Text numberOfLines={7} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>{displayText}</Text>
             </View>
           ) : hasShowcasePreviewMedia(item) ? (
             <ShowcaseMediaPreview accent={accent} height={height} mediaItems={getShowcasePreviewMediaItems(item)} onPress={onPress} radius={0} recyclingKey={`creator-profile:${item.id}`} videoActivation={activeVideoPreview ? 'when-poster-missing' : 'never'} width={width} />
           ) : (
-            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><ImageIcon size={30} color={appTheme.colors.faint} /></View>
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><ImageIcon size={appTheme.icon.hero} color={appTheme.colors.faint} /></View>
           )}
           {hasVideo ? (
             <View style={{ position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.overlay }}>
-              <Play size={15} color="#fff" fill="#fff" />
+              <Play size={appTheme.icon.sm} color="#fff" fill="#fff" />
             </View>
           ) : null}
           {item.asset ? (
             <View style={{ position: 'absolute', top: 8, left: 8, maxWidth: '72%', flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.overlayStrong, paddingHorizontal: 8, paddingVertical: 5 }}>
-              <Lock size={12} color={appTheme.colors.commerce} />
+              <Lock size={appTheme.icon.xs} color={appTheme.colors.commerce} />
               <Text numberOfLines={1} style={{ color: appTheme.colors.commerce, ...appTheme.type.caption, fontWeight: '700' }}>
                 {item.asset.accessMode === 'free' ? 'Free' : item.asset.priceQuote?.formatted ?? 'Unlock'}
               </Text>
@@ -606,8 +633,8 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
             {item.sourceTool ? `Made with ${item.sourceTool}` : ' '}
           </Text>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
-            <TileStat icon={<Heart size={13} color={appTheme.colors.muted} />} label={formatCompactCount(item.saveCount)} />
-            <TileStat icon={<Repeat2 size={13} color={appTheme.colors.muted} />} label={formatCompactCount(item.remixCount)} />
+            <TileStat icon={<Heart size={appTheme.icon.xs} color={appTheme.colors.muted} />} label={formatCompactCount(item.saveCount)} />
+            <TileStat icon={<Repeat2 size={appTheme.icon.xs} color={appTheme.colors.muted} />} label={formatCompactCount(item.remixCount)} />
           </View>
         </View>
       </View>
@@ -630,7 +657,7 @@ function CreatorToolRow({ tool }: { tool: CreatorTool }) {
         <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle }}>{tool.label}</Text>
         <Text numberOfLines={1} style={{ color: appTheme.colors.muted, ...appTheme.type.caption }}>{formatCompactCount(tool.count)} post{tool.count === 1 ? '' : 's'}</Text>
       </View>
-      <ChevronRight size={19} color={appTheme.colors.faint} />
+      <ChevronRight size={appTheme.icon.default} color={appTheme.colors.faint} />
     </Pressable>
   );
 }
@@ -638,7 +665,7 @@ function CreatorToolRow({ tool }: { tool: CreatorTool }) {
 function EditProfileButton({ onPress }: { onPress: () => void }) {
   return (
     <Pressable accessibilityRole="button" accessibilityLabel="Edit profile" onPress={onPress} style={({ pressed }) => ({ minHeight: 48, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 7, backgroundColor: appTheme.colors.primary, opacity: pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 15 })}>
-      <Pencil size={15} color={appTheme.colors.onPrimary} />
+      <Pencil size={appTheme.icon.sm} color={appTheme.colors.onPrimary} />
       <Text style={{ color: appTheme.colors.onPrimary, ...appTheme.type.label, fontWeight: '700' }}>Edit</Text>
     </Pressable>
   );
@@ -668,36 +695,15 @@ function CircleAction({ children, label, onPress }: { children: ReactNode; label
   );
 }
 
-function SafetyAction({ children, label, onPress }: { children: ReactNode; label: string; onPress: () => void }) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: appTheme.touch.default,
-        flex: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexDirection: 'row',
-        gap: 7,
-        borderRadius: appTheme.radii.pill,
-        borderWidth: 1,
-        borderColor: `${appTheme.colors.danger}66`,
-        backgroundColor: `${appTheme.colors.danger}12`,
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-      })}
-    >
-      {children}
-      <Text style={{ color: appTheme.colors.danger, ...appTheme.type.label, fontWeight: '800' }}>{label}</Text>
-    </Pressable>
-  );
-}
-
+/**
+ * Round, because the same person's avatar is round on the profile tab, on every
+ * feed row and in the comments sheet. A rounded square here made one account
+ * two shapes depending on which screen you reached it from.
+ */
 function CreatorAvatar({ avatarUrl, initial, size }: { avatarUrl: string | null; initial: string; size: number }) {
   return (
-    <View style={{ width: size, height: size, borderRadius: 24, padding: 3, backgroundColor: appTheme.colors.panel, borderWidth: 2, borderColor: appTheme.colors.primary }}>
-      <View style={{ flex: 1, overflow: 'hidden', borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.panelSoft }}>
+    <View style={{ width: size, height: size, borderRadius: size / 2, padding: 3, backgroundColor: appTheme.colors.panel, borderWidth: 2, borderColor: appTheme.colors.primary }}>
+      <View style={{ flex: 1, overflow: 'hidden', borderRadius: size / 2 - 5, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.panelSoft }}>
         {avatarUrl ? <Image source={{ uri: avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} /> : <Text selectable style={{ color: appTheme.colors.text, fontSize: 26, fontWeight: '800' }}>{initial}</Text>}
       </View>
     </View>

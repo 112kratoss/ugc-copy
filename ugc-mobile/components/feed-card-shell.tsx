@@ -157,7 +157,7 @@ export function FeedCardShell({
           onPress={onMorePress}
           style={({ pressed }) => ({ width: 28, height: 32, alignItems: 'flex-end', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
-          <MoreVertical size={17} color={appTheme.colors.faint} />
+          <MoreVertical size={appTheme.icon.compact} color={appTheme.colors.faint} />
         </Pressable>
       </View>
 

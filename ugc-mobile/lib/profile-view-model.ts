@@ -46,9 +46,24 @@ export interface ProfileStat {
 
 export type ProfileMediaTab = 'Saved' | 'Creations' | 'Posts';
 
+/**
+ * Where the profile tab opens with no route params. `Creations` because it is
+ * the first stat the hero card prints, the first segment of the control below
+ * it, and the only one of the three that is the reader's own work -- the screen
+ * used to open on media saved from other people.
+ */
+export const DEFAULT_PROFILE_MEDIA_TAB: ProfileMediaTab = 'Creations';
+
 export type ProfileMediaSwipeDirection = 'left' | 'right';
 
-export const PROFILE_MEDIA_TABS: ProfileMediaTab[] = ['Saved', 'Creations', 'Posts'];
+/**
+ * Same order as `getProfileStats` below, which the hero card prints directly
+ * above this control. Design principles' Consistency — "once you establish a
+ * behavior or appearance for an element, apply it throughout": the counts and
+ * the control that switches between the collections they count cannot list
+ * them two different ways.
+ */
+export const PROFILE_MEDIA_TABS: ProfileMediaTab[] = ['Creations', 'Posts', 'Saved'];
 
 export const FALLBACK_PROFILE_MEDIA: ProfileMediaCard[] = [
   {
@@ -155,11 +170,6 @@ export function getProfileStats({
     { label: 'Posts', value: profileStatValue(postsCount, postsHasMore) },
     { label: 'Saved', value: profileStatValue(savedCount, savedHasMore) },
   ];
-}
-
-export function getProfileMediaSectionTitle(tab: ProfileMediaTab) {
-  if (tab === 'Saved') return 'Saved Media';
-  return tab;
 }
 
 export type ProfilePostsScope = 'active' | 'archived';

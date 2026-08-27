@@ -8,8 +8,10 @@ import {
   ChevronRight,
   Crown,
   Gift,
+  Globe,
   Heart,
   ImageIcon,
+  LockKeyhole,
   Pencil,
   Play,
   RefreshCw,
@@ -27,7 +29,7 @@ import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { Reveal } from '@/components/reveal';
 import { ProfileGridSkeleton } from '@/components/skeleton';
 import { TopScrim } from '@/components/top-scrim';
-import { AppText, SecondaryButton, StatusBlock } from '@/components/ui';
+import { AppText, IconButton, SecondaryButton, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { formatUsdCents, getOwnerPostSalesSummary } from '@/lib/home-view-model';
@@ -35,11 +37,11 @@ import { haptic } from '@/lib/haptics';
 import { immersiveViewerHref, profileMediaFeedHref, textPostViewerHref } from '@/lib/immersive-preview-view-model';
 import { MotionView, usePressMotion } from '@/lib/motion';
 import {
+  DEFAULT_PROFILE_MEDIA_TAB,
   FALLBACK_PROFILE_MEDIA,
   PROFILE_MEDIA_TABS,
   generationToProfileMediaCard,
   getProfileMediaEmptyTitle,
-  getProfileMediaSectionTitle,
   getProfileMediaSwipeTarget,
   getProfileHandle,
   getProfileInitials,
@@ -98,7 +100,7 @@ const PROFILE_COLORS = {
 } as const;
 
 export function ProfileDashboard({
-  initialTab = 'Saved',
+  initialTab = DEFAULT_PROFILE_MEDIA_TAB,
   highlightedPostId = null,
 }: {
   initialTab?: ProfileMediaTab;
@@ -416,13 +418,13 @@ export function ProfileDashboard({
           />
           <View style={{ flexDirection: 'row', gap: 10 }}>
             <BalanceCard
-              icon={<Crown size={19} color="#fbbf24" />}
+              icon={<Crown size={appTheme.icon.default} color={appTheme.colors.commerce} />}
               label="Credits"
               value={formatCreditAmount(credits ?? profile?.credits)}
               onPress={() => router.push('/pricing' as never)}
             />
             <BalanceCard
-              icon={<Wallet size={19} color={PROFILE_COLORS.coral} />}
+              icon={<Wallet size={appTheme.icon.default} color={PROFILE_COLORS.coral} />}
               label="Wallet"
               value={formatUsdCents(salesSummary.earningsUsdCents)}
               onPress={() => router.push('/seller-dashboard' as never)}
@@ -444,7 +446,6 @@ export function ProfileDashboard({
       onRefresh={refreshActiveMedia}
       onSwipeTab={handleMediaSwipe}
       onTabChange={handleMediaTabChange}
-      title={getProfileMediaSectionTitle(activeTab)}
       topInset={topInset}
     />
   );
@@ -473,7 +474,6 @@ function ProfileMediaList({
   postsScope = 'active',
   postsScopeCounts,
   onPostsScopeChange,
-  title,
   topInset,
 }: {
   activeTab: ProfileMediaTab;
@@ -498,7 +498,6 @@ function ProfileMediaList({
   postsScope?: ProfilePostsScope;
   postsScopeCounts?: Record<ProfilePostsScope, number>;
   onPostsScopeChange?: (scope: ProfilePostsScope) => void;
-  title?: string;
   topInset: number;
 }) {
   const listRef = useRef<FlashListRef<ProfileMediaCard>>(null);
@@ -535,7 +534,6 @@ function ProfileMediaList({
               activeTab={activeTab}
               onRefresh={onRefresh}
               onTabChange={onTabChange}
-              title={title}
             />
             {activeTab === 'Posts' && onPostsScopeChange ? (
               <ProfilePostsScopeControl
@@ -606,13 +604,31 @@ function ProfileMediaList({
   );
 }
 
+/**
+ * `pageTitle` unmodified, and announced as a header — the same two things the
+ * other tab roots do (Showcase, Alerts).
+ *
+ * The old title took `sectionTitle` and then overrode `fontWeight` back to
+ * `'800'`, which is exactly what every display variant sets `'400'` to avoid.
+ * Captured on both platforms: iOS keeps the Bricolage face and ignores the
+ * incompatible weight, but **Android drops the face altogether** and renders
+ * the system sans — so the app's own front-door title was the one title on
+ * Android not in the app's typeface. The registered family carries a single
+ * weight, and asking Android for a heavier one loses the family rather than
+ * synthesizing within it.
+ *
+ * The strapline below it is gone. Branding: "people seldom need to be reminded
+ * which app they're using, and it's usually better to use the space to give
+ * people valuable information and controls" — and the card immediately beneath
+ * this title already shows the identity, the balance and the counts it was
+ * describing.
+ */
 function ProfileTitle() {
   return (
-    <View style={{ minHeight: 40, justifyContent: 'center', gap: 2 }}>
-      <AppText variant="sectionTitle" style={{ fontSize: 24, lineHeight: 29, fontWeight: '800', letterSpacing: -0.4 }}>
+    <View style={{ minHeight: 40, justifyContent: 'center' }}>
+      <AppText variant="pageTitle" accessibilityRole="header" numberOfLines={1}>
         Profile
       </AppText>
-      <AppText variant="caption" color="muted">Your identity, balance, and published work.</AppText>
     </View>
   );
 }
@@ -632,7 +648,7 @@ function SignedOutCard() {
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 13 }}>
         <View style={{ width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', backgroundColor: PROFILE_COLORS.surfaceRaised, borderWidth: 1, borderColor: PROFILE_COLORS.borderStrong }}>
-          <UserRound size={25} color={PROFILE_COLORS.muted} />
+          <UserRound size={appTheme.icon.feature} color={PROFILE_COLORS.muted} />
         </View>
         <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
           <AppText variant="cardTitle" style={{ fontSize: 19, lineHeight: 24 }}>Sign in to your creator profile</AppText>
@@ -720,7 +736,7 @@ function ProfileHeroCard({
               opacity: pressed ? 0.78 : 1,
             })}
           >
-            <Pencil size={15} color="#111114" />
+            <Pencil size={appTheme.icon.sm} color="#111114" />
             <Text style={{ color: '#111114', fontSize: 14, fontWeight: '800' }}>Edit Profile</Text>
           </Pressable>
         </View>
@@ -837,7 +853,7 @@ function SellerDashboardButton() {
       })}
     >
       <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: PROFILE_COLORS.coralSoft, alignItems: 'center', justifyContent: 'center' }}>
-        <Store size={19} color={PROFILE_COLORS.coral} />
+        <Store size={appTheme.icon.default} color={PROFILE_COLORS.coral} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
         <AppText variant="label" numberOfLines={1} style={{ fontSize: 14 }}>Your Sales</AppText>
@@ -869,7 +885,7 @@ function InviteAndEarnButton() {
       })}
     >
       <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: `${appTheme.colors.commerce}1f`, alignItems: 'center', justifyContent: 'center' }}>
-        <Gift size={19} color={appTheme.colors.commerce} />
+        <Gift size={appTheme.icon.default} color={appTheme.colors.commerce} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
         <AppText variant="label" numberOfLines={1} style={{ fontSize: 14 }}>Invite & Earn</AppText>
@@ -880,44 +896,33 @@ function InviteAndEarnButton() {
   );
 }
 
+/**
+ * The section title above this control used to name the selected tab -- literally
+ * "Creations" over a pill reading "Creations", and "Saved Media" over one reading
+ * "Saved". Segmented controls: "A segmented control that displays text labels
+ * doesn't need introductory text." The control keeps the naming; refresh moves
+ * onto its row rather than being left alone on a heading row with nothing to head.
+ */
 function ProfileMediaHeader({
   activeTab,
   onTabChange,
   onRefresh,
-  title,
 }: {
   activeTab: ProfileMediaTab;
   onTabChange: (tab: ProfileMediaTab) => void;
   onRefresh?: () => void;
-  title?: string;
 }) {
   return (
-    <View style={{ gap: 10 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-        <AppText variant="sectionTitle" numberOfLines={1} style={{ flex: 1, fontSize: 19, lineHeight: 24 }}>
-          {title ?? getProfileMediaSectionTitle(activeTab)}
-        </AppText>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Refresh media"
-          disabled={!onRefresh}
-          onPress={onRefresh}
-          style={({ pressed }) => ({
-            width: 48,
-            height: 48,
-            borderRadius: 24,
-            borderWidth: 1,
-            borderColor: PROFILE_COLORS.border,
-            backgroundColor: PROFILE_COLORS.surface,
-            alignItems: 'center',
-            justifyContent: 'center',
-            opacity: !onRefresh ? 0.45 : pressed ? 0.72 : 1,
-          })}
-        >
-          <RefreshCw size={19} color={PROFILE_COLORS.muted} />
-        </Pressable>
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <ProfileSegment value={activeTab} onChange={onTabChange} />
       </View>
-      <ProfileSegment value={activeTab} onChange={onTabChange} />
+      <IconButton
+        disabled={!onRefresh}
+        icon={RefreshCw}
+        label={`Refresh ${activeTab}`}
+        onPress={onRefresh}
+      />
     </View>
   );
 }
@@ -938,7 +943,7 @@ function ProfileMediaEmpty({ title }: { title: string }) {
         gap: 8,
       }}
     >
-      <ImageIcon size={30} color={appTheme.colors.faint} />
+      <ImageIcon size={appTheme.icon.hero} color={appTheme.colors.faint} />
       <AppText variant="cardTitle">{title}</AppText>
       <AppText variant="bodySm" color="muted" style={{ textAlign: 'center' }}>
         This section will fill as you save media, create generations, or publish posts.
@@ -1076,11 +1081,13 @@ function ProfileMediaTile({
   const countLabel = item.countLabel ?? '0';
   const isFallbackPreview = item.id.startsWith('preview-');
   const isSavedTile = item.label === 'Saved';
+  // A Post tile said only "Post, <title>" -- the badge in its corner reported
+  // Public or Private and the label reported neither, so the state was
+  // available to sighted users alone. Both tiles now read out the state their
+  // badge draws, from the one place that decides it.
   const accessibilityLabel = isSavedTile
     ? `${item.label}, ${item.title}, ${countLabel} likes`
-    : item.label === 'Creation'
-      ? `${item.label}, ${item.title}, ${item.linkedPostLabel ?? item.statusLabel ?? 'Status unavailable'}`
-    : `${item.label}, ${item.title}`;
+    : `${item.label}, ${item.title}, ${getProfileTileState(item).label}`;
   const motion = usePressMotion(false, { scale: appTheme.motion.scale.pressed });
 
   return (
@@ -1137,7 +1144,7 @@ function ProfileMediaTile({
         />
         {item.mediaKind === 'video' ? (
           <View style={{ position: 'absolute', top: 8, right: 8, width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.38)' }}>
-            <Play size={15} color="#ffffff" fill="#ffffff" />
+            <Play size={appTheme.icon.sm} color="#ffffff" fill="#ffffff" />
           </View>
         ) : null}
         {isSavedTile ? (
@@ -1232,22 +1239,42 @@ function ProfileSavedFeedOverlay({
   );
 }
 
+/**
+ * The state a Creations or Posts tile reports -- shared by the badge the tile
+ * draws and the label a screen reader hears, so the two cannot say different
+ * things. A creation reports whether it reached a post; a post reports who can
+ * see it.
+ */
+export function getProfileTileState(item: ProfileMediaCard): {
+  label: string;
+  color: string;
+  glyph: 'globe' | 'lock' | 'sparkles';
+} {
+  if (item.label === 'Creation') {
+    const posted = Boolean(item.linkedPostLabel && item.linkedPostLabel !== 'Not posted');
+    return posted
+      ? { label: item.linkedPostLabel ?? 'Posted', color: appTheme.colors.success, glyph: 'globe' }
+      : { label: 'Not posted', color: appTheme.colors.motion, glyph: 'sparkles' };
+  }
+  if (item.visibilityLabel === 'Public') {
+    return { label: 'Public', color: appTheme.colors.success, glyph: 'globe' };
+  }
+  return {
+    label: item.visibilityLabel ?? 'Private',
+    color: appTheme.colors.amber,
+    glyph: 'lock',
+  };
+}
+
 function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
   const accent = item.label === 'Creation' ? appTheme.colors.motion : appTheme.colors.image;
   const icon = item.label === 'Creation'
-    ? <Sparkles size={13} color={accent} />
+    ? <Sparkles size={appTheme.icon.xs} color={accent} />
     : item.mediaKind === 'video'
-      ? <Play size={13} color={accent} fill={accent} />
-      : <ImageIcon size={13} color={accent} />;
-  const stateColor = item.label === 'Creation'
-    ? item.linkedPostLabel && item.linkedPostLabel !== 'Not posted'
-      ? appTheme.colors.success
-      : appTheme.colors.motion
-    : item.visibilityLabel === 'Public'
-      ? appTheme.colors.success
-      : item.visibilityLabel === 'Private'
-        ? appTheme.colors.amber
-        : appTheme.colors.image;
+      ? <Play size={appTheme.icon.xs} color={accent} fill={accent} />
+      : <ImageIcon size={appTheme.icon.xs} color={accent} />;
+  const state = getProfileTileState(item);
+  const StateGlyph = state.glyph === 'globe' ? Globe : state.glyph === 'lock' ? LockKeyhole : Sparkles;
 
   return (
     <View testID="profile-minimal-overlay" pointerEvents="none" style={{ position: 'absolute', inset: 0 }}>
@@ -1269,19 +1296,32 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
         {icon}
       </View>
 
+      {/* Was a bare 10pt dot whose hue was the only thing separating a public
+          post from a private one. Color: "Avoid relying solely on color to
+          differentiate between objects, indicate interactivity, or communicate
+          essential information ... you can use text labels or glyph shapes to
+          identify objects or states." A tile is too small for the label, so the
+          glyph carries the state and the tile's accessibility label says it in
+          words -- the same pairing the card feed already uses for these posts
+          through `ProfileStateChip`. */}
       <View
+        testID="profile-tile-state-badge"
         style={{
           position: 'absolute',
           bottom: 8,
           left: 8,
-          width: 10,
-          height: 10,
-          borderRadius: 5,
-          backgroundColor: stateColor,
+          width: 22,
+          height: 22,
+          borderRadius: 11,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: 'rgba(3,4,13,0.62)',
           borderWidth: 1,
-          borderColor: 'rgba(255,255,255,0.72)',
+          borderColor: state.color,
         }}
-      />
+      >
+        <StateGlyph size={appTheme.icon.xs} color={state.color} />
+      </View>
     </View>
   );
 }
