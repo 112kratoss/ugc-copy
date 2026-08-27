@@ -172,6 +172,8 @@ applied everywhere or it's a bug, not a choice.
 | DV2 | iPhone-only, portrait-only | Layout, Multitasking | Declared in app.json; product decision, revisit only if iPad/rotation becomes a goal | app-wide |
 | DV3 | Custom-branded components (tab bar, sheets, buttons) instead of stock controls | Branding + each component chapter | Branding chapter endorses identity; every custom component is still audited against its chapter's *behavior* rules; system surfaces adopted where the OS is better (share sheet, context menus, destructive-confirm alerts) | verify in Phase 6 |
 | DV4 | Lucide iconography instead of SF Symbols | SF Symbols, Icons | Cross-platform consistency (D1); glyphs that carry OS meaning (e.g. Share) may borrow the SF shape | app-wide |
+| DV5 | The tab bar hides on the Create tab | Tab bars | `creator` is a tab that presents as a modal — full-screen, self-contained, a standard Close rather than a back control — which is the exception Tab bars names ("a modal is temporary and self-contained") | only tab that hides the bar; verify in Phase 6 |
+| DV6 | The raised centre control opens a menu instead of switching tabs | Tab bars | "Use a tab bar to support navigation, not to provide actions" — both menu entries navigate to sections (create tab, post composer), so it is navigation via a menu, in the platform-common shape for a creation affordance | single control, app-wide |
 
 ## HIG coverage matrix
 
@@ -359,7 +361,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | F4 iconography/images | 1 | done | 1V/3D/4P | one stroke weight app-wide; share glyph per platform; size ramp on a ratchet |
 | F5 controls/input | 1 | partial | — | ≥44pt hit regions guarded via lib/hit-target.ts (PR #83); non-geometric rules open |
 | F6 branding boundary | 1 | done | 1V/1D/3P | the product now spells its own name one way |
-| N1 tab bar/toolbars/status bar | 2 | todo | — | |
+| N1 tab bar/toolbars/status bar | 2 | done | 3V/2D/5P | Alerts badge; one Back glyph per platform; every view title bounded and static |
 | N2 modality map/sheets/alerts/gestures | 2 | todo | — | |
 | N3 side menus/shell motion | 2 | todo | — | |
 | S5 showcase feed | 3 | todo | — | |
@@ -539,3 +541,119 @@ or images.
 - [P][both] Verified clean: one accent colour. `colors.primary` (`#ff7a59`) is the single brand action
   colour, always a solid fill, with semantic colours deliberately distinct from it. React Native gets
   no system accent-colour hook, so the token *is* the accent; nothing to adopt.
+
+### N1 tab bar, toolbars & status bar — audited 2026-08-27 · AND-pass: 2026-08-27
+Chapters read: Tab bars (`tab-bars`), Tab views (`tab-views`), Toolbars (`toolbars`),
+Status bars (`status-bars`).
+
+Rules in checkable form: a tab bar navigates, it does not act · the bar stays visible when people
+move between sections, except under a modal · no overflow/More tab · never disable or hide an
+individual tab button · single-word tab labels · a badge is a red oval with white text carrying a
+number or an exclamation point, reserved for information that warrants attention · prefer a
+monochromatic bar over colourful content · use the standard Back and Close symbols, with no "Back"
+text label, and implement a custom one consistently everywhere · a view title is a word or short
+phrase, under 15 characters, never the app's name · one primary action, on the trailing side ·
+obscure content under the status bar (prefer a scroll edge effect) · never permanently hide the
+status bar. **Tab views is N/A** — the chapter is macOS/watchOS only ("Not supported in iOS"); its
+iOS pointer is Tab bars, already covered.
+
+- [V][both] **Nothing told you an alert had arrived.** The Studio screen fetched `unreadCount` and
+  printed it in its own header; the tab that leads there drew a bare bell, so from Home, Showcase or
+  Profile a new notification was invisible. There was no app-icon badge either.
+  Tab bars: "Use a badge to indicate that critical information is available … to indicate that
+  there's new or updated information in the section that warrants a person's attention" →
+  **fixed**: `lib/notification-badge.ts` (pure: cache key, `formatBadgeCount`, `publishUnreadCount`)
+  plus `lib/use-notification-badge.ts` (the hook), rendered by `TabBadge` in the tab bar as the
+  specified red oval with white text, capped at `99+`. Split in two the way `lib/*-view-model.ts`
+  modules are, because reaching `useAuth` drags expo-constants in and the sweep test has no business
+  booting Expo. The badge polls `limit: 1` on a 60s `staleTime` rather than sharing Studio's 50-item
+  query — the bar is mounted for the whole session, and re-fetching 50 rows from every tab for one
+  integer is exactly the idle egress this backend cannot spend (memory:
+  `supabase-egress-is-the-scaling-wall`); Studio pushes its own fresher count across on load and
+  after every mark-read, so the number drops while the user watches instead of a minute later.
+  - `appTheme.colors.badge` (`#ff3b30`) / `onBadge` are the one pair in the palette the platform
+    chooses rather than the brand: the badge only reads as a badge in the system's red, and drawing
+    it in coral would also make it vanish against the active tab, which is already coral. The app's
+    own `danger` (`#ff7c8b`) is too pale to carry white.
+  - The count is repeated in the tab's `accessibilityLabel` ("Alerts, 3 unread") and the oval itself
+    is hidden from the reader — a second focus stop reading a bare number says nothing.
+  - Placement was wrong on first render and caught only on device: inside the scaled icon wrapper the
+    oval grew with the selected-state spring, and its percentage offset resolved against the whole
+    tab slot, parking it between Alerts and Profile. It is now a sibling of the content column,
+    centred like the indicator bar and walked right by one icon width.
+- [V][both] **Back was drawn three different ways in one session.** The native stack header renders
+  the system chevron on 13 screens (`headerBackButtonDisplayMode: 'minimal'`); seven screens draw
+  their own header, and those used lucide `ArrowLeft` at 20/21/22/24/30 on six of them and
+  `ChevronLeft` at 26 on the seventh. On iOS 26 the native back button is a chevron in a glass
+  circle, so a full arrow on the next screen contradicts it directly.
+  Toolbars: "Use the standard Back and Close buttons … If you create a custom version of either,
+  make sure it still looks the same … and ensure you consistently implement it throughout your app"
+  → **fixed**: `BackGlyph` joins `ShareGlyph` in `lib/platform-glyphs.ts`, at one size
+  (`appTheme.icon.feature`). **Android counterpart**: not a no-op — `ArrowLeft` *is* Material's back
+  glyph, so Android keeps the arrow while iOS gets the chevron, one call site, each platform's own
+  dialect. Verified on both (iOS chevron / Android arrow in the immersive viewer).
+  - Side effect on F4's ratchet: five files shed off-ramp icon sizes, so their budgets in
+    `hig-icon-size.test.ts` came down with them (viewer 16→14, post/new 23→22, auth 4→3,
+    edit-profile 3→2, post-details 3→2).
+- [V][both] **Six view titles broke the Toolbars title rules, and three had no length bound at all.**
+  Static offenders: "Magicbooklet invite" (19 chars, and the app's own name — Toolbars forbids both),
+  "Template creation" (17), "Seller Dashboard" (16), "Not found" (sentence case among twelve
+  title-case siblings). Worse, three screens set their title at runtime from content:
+  `` `@${data.profile.username}` `` on the creator profile, and `template?.name` on both the template
+  detail and the template run — catalog and user strings with no length bound whatsoever.
+  Toolbars: "keep the title under 15 characters long so you leave enough room for other controls";
+  "Don't title windows with your app name" → **fixed**: "Your Invite", "Template Run", "Your Sales",
+  "Not Found", and the three dynamic titles made static ("Creator", "Template", "Template Run"). Each
+  of those screens already prints the entity's name as a `pageTitle` in its own body, so the bar now
+  says what the view *is* while the content says what it *contains* — and the title no longer
+  flickers from "Creator" to "@username" as the query lands.
+  - "Seller Dashboard" was also the label on the two affordances that lead there (side menu, profile
+    wallet card) and the screen's own eyebrow; all four moved to "Your Sales" together, which also
+    puts it beside "Your Unlocks" in the same menu. A destination whose title disagrees with the row
+    that opened it is the Familiarity problem in miniature.
+- [D][both] **The tab bar hides itself on the Create tab.** Tab bars: "Make sure the tab bar is
+  visible when people navigate to different sections … The exception is when a modal view covers the
+  tab bar, because a modal is temporary and self-contained." `creator` is a real tab, but it presents
+  as a modal: full-screen, self-contained, with a standard Close (X) rather than a back control, and
+  no way to wander deeper. The exception is satisfied in substance → **intentional (→ ledger DV5)**.
+  Note for N2: the same screen is *animated* as `simple_push` while wearing a Close button; push-vs-
+  modal wants settling in the modality map, not here.
+- [D][both] **The create control is an action in a navigation bar.** Tab bars: "Use a tab bar to
+  support navigation, not to provide actions." The raised centre button opens a menu rather than
+  switching tabs. Its two entries both navigate to sections (the create tab, the post composer), so
+  what it provides is navigation via a menu, in the platform-common shape for a creation affordance →
+  **intentional (→ ledger DV6)**.
+- [P][both] Verified clean: **four single-word tab labels** (Home, Showcase, Alerts, Profile), no
+  overflow/More tab possible at any supported width, and no tab button is ever disabled or hidden
+  individually. Now guarded, so a fifth tab fails the suite rather than silently creating a More tab.
+- [P][both] Verified clean: **reselect scrolls to top on every tab.** All four visible tabs mount
+  `useScrollToTop` (`home-dashboard`, `showcase`, `studio`, `profile-dashboard`), and the bar emits a
+  cancellable `tabPress` before navigating.
+- [P][both] Verified clean: **the bar is monochromatic against colourful content** — white/coral on a
+  glass or blurred surface, which is what Tab bars asks for when "your app already has bright,
+  colorful content in the content layer".
+- [P][both] Verified clean: **status bar treatment.** The four tab screens scroll content to the top
+  of the window and each renders `TopScrim`, which fades the strip back to the app ground — the
+  custom equivalent of the scroll edge effect the chapter asks for; pushed screens get the system's
+  own. Nothing hides the status bar anywhere, permanently or otherwise, so "avoid permanently hiding"
+  holds by construction. Both are now guarded.
+- [P][both] Verified clean: the native header carries no "Back" text label
+  (`headerBackButtonDisplayMode: 'minimal'`), which Toolbars asks for explicitly.
+
+Guard added: `__tests__/hig-navigation-chrome.test.ts` (19 cases) — title length, app-name, casing
+and the no-dynamic-titles rule swept across **every** `options={{ … }}` in the tree, not just the
+root layout (sweeping only the layout is exactly how a title bound to a catalog name survived);
+`BackGlyph` as the only back control and its single size; tab labels, count and badge rules; the
+status-bar scrim and no-hidden-status-bar rules. `magic-tab-bar.test.tsx` gains the two rendering
+cases the sweep cannot see (oval present/absent, and the count reaching the accessibility label).
+
+**AND-pass 2026-08-27** (mandatory: this unit touches the tab bar and navigation). Pixel_9a, dev
+client on the worktree's Metro. Badge renders identically to iOS at the bell's top-right corner; the
+back control correctly resolves to Material's arrow where iOS draws the chevron; Home→Showcase→
+Alerts→Profile cycled six times with `logcat` clear of `FATAL`/`SIGSEGV` (the historical
+BlurView-mid-tab-fade crash); hardware back from the immersive viewer returns through Showcase to
+Home with no dead end; edge-to-edge and the status bar are unchanged; the blurred bar surface still
+samples the media behind it. Nothing in this unit touches keyboard or gestures.
+
+**Open remainder**: no app-icon badge (`setBadgeCountAsync`) — Tab bars only governs the in-app
+oval, and the icon badge belongs with the notification permission and badge-hygiene work in S26.

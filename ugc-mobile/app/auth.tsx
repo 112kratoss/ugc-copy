@@ -2,7 +2,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { ActivityIndicator, Image, Linking, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { AlertCircle, ArrowLeft, Eye, LockKeyhole, Mail, Sparkles, X } from 'lucide-react-native';
+import { AlertCircle, Eye, LockKeyhole, Mail, Sparkles, X } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
@@ -11,6 +11,7 @@ import { isAppleAuthCanceled } from '@/lib/apple-auth';
 import { isGoogleAuthCanceled } from '@/lib/google-auth';
 import { completeAuthScreen, leaveAuthScreen } from '@/lib/auth-navigation';
 import { env } from '@/lib/env';
+import { BackGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
 import googleSignInAndroid from '../assets/images/google-signin-android.png';
 
@@ -181,7 +182,7 @@ function AuthHeader() {
           opacity: pressed ? 0.74 : 1,
         })}
       >
-        <ArrowLeft size={21} color={workspace.text} />
+        <BackGlyph size={appTheme.icon.feature} color={workspace.text} />
       </Pressable>
       <View style={{ flex: 1, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 7 }}>
         <Sparkles size={22} color={workspace.primary} />

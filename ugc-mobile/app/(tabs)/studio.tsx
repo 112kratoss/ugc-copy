@@ -13,7 +13,7 @@ import {
   ToggleRight,
   WandSparkles,
 } from 'lucide-react-native';
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -21,6 +21,7 @@ import { TopScrim } from '@/components/top-scrim';
 import { AppText, Card, IconButton, PrimaryButton, SecondaryButton, StatusBlock } from '@/components/ui';
 import { haptic } from '@/lib/haptics';
 import { useAuth } from '@/lib/auth';
+import { publishUnreadCount } from '@/lib/notification-badge';
 import { navigateToNotificationDeepLink, registerForMobilePushNotifications, type MobilePushRegistrationResult } from '@/lib/notifications';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
@@ -120,6 +121,13 @@ export default function StudioScreen() {
   const notifications = notificationsQuery.data?.notifications ?? [];
   const unreadCount = notificationsQuery.data?.unreadCount
     ?? notifications.filter((notification) => !notification.isRead).length;
+  // The tab bar polls for this number once a minute; this screen learns it
+  // first — on load, and again the moment a mark-read refetch lands. Pushing it
+  // across means the badge drops as the user watches rather than a minute later.
+  useEffect(() => {
+    if (notificationsQuery.data) publishUnreadCount(queryClient, user?.id, unreadCount);
+  }, [notificationsQuery.data, queryClient, user?.id, unreadCount]);
+
   const actionError = markReadMutation.error
     ?? markAllReadMutation.error
     ?? updatePreferenceMutation.error

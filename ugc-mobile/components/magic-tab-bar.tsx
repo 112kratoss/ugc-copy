@@ -12,6 +12,7 @@ import { MagicCreateMenu } from '@/components/magic-create-menu';
 import { getCreateMenuActionHref, type CreateMenuActionId } from '@/lib/create-menu-view-model';
 import { haptic } from '@/lib/haptics';
 import { usePressMotion, useSpringState } from '@/lib/motion';
+import { useTabBarBadge } from '@/lib/use-notification-badge';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { appTheme } from '@/lib/theme';
@@ -115,6 +116,9 @@ export function MagicTabBar({
   }, []);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const metrics = getMagicTabBarMetrics(width, bottomInset);
+  // The Alerts tab is the only one with anything to announce; a badge on a tab
+  // whose content has not changed is the dilution HIG warns about.
+  const alertsBadge = useTabBarBadge();
   const activeRoute = state.routes[state.index]?.name;
   const { isCompact, centerSize, barHeight, centerGap, tabIconSize, tabLabelSize } = metrics;
   // Any translucent surface needs the text to carry itself; only the opaque
@@ -225,7 +229,7 @@ export function MagicTabBar({
           <TabButton item={VISIBLE_TABS[0]} active={activeRoute === 'index'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('index')} />
           <TabButton item={VISIBLE_TABS[1]} active={activeRoute === 'showcase'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('showcase')} />
           <View style={{ width: centerGap, flexShrink: 0 }} />
-          <TabButton item={VISIBLE_TABS[2]} active={activeRoute === 'studio'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('studio')} />
+          <TabButton item={VISIBLE_TABS[2]} active={activeRoute === 'studio'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} badge={alertsBadge} onPress={() => navigateTo('studio')} />
           <TabButton item={VISIBLE_TABS[3]} active={activeRoute === 'profile'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('profile')} />
         </View>
       </TabBarSurface>
@@ -277,6 +281,52 @@ export function MagicTabBar({
           </Text>
         </Pressable>
       </AnimatedView>
+    </View>
+  );
+}
+
+/**
+ * Tab bars: "a badge — a red oval containing white text and either a number or
+ * an exclamation point". Pinned to the icon's top-right corner and out of the
+ * layout flow, so a tab that gains a badge does not shift its neighbours.
+ *
+ * `maxFontSizeMultiplier` is 1 on purpose where the rest of the bar scales to
+ * 1.4: the oval sizes itself off this text, and letting it grow pushes it over
+ * the tab beside it. The count is repeated in the tab's accessibility label,
+ * which is where a reader who needs larger type actually gets it.
+ */
+function TabBadge({ value, iconSize }: { value: string; iconSize: number }) {
+  return (
+    <View
+      pointerEvents="none"
+      // Announced through the tab's own label instead — a second focus stop
+      // reading a bare number tells a VoiceOver user nothing.
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={{
+        position: 'absolute',
+        // Centred by the Pressable's `alignItems`, exactly like the indicator
+        // bar, then walked right by half the icon so the oval overlaps the
+        // icon's top-right corner the way the system's badge does.
+        top: 4,
+        marginLeft: iconSize,
+        minWidth: 17,
+        height: 17,
+        paddingHorizontal: 4,
+        borderRadius: 9,
+        borderCurve: 'continuous',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: appTheme.colors.badge,
+      }}
+    >
+      <Text
+        numberOfLines={1}
+        maxFontSizeMultiplier={1}
+        style={{ color: appTheme.colors.onBadge, fontSize: 11, lineHeight: 13, fontWeight: '800' }}
+      >
+        {value}
+      </Text>
     </View>
   );
 }
@@ -347,6 +397,7 @@ function TabButton({
   iconSize,
   labelSize,
   inactiveColor,
+  badge = null,
   onPress,
 }: {
   item: (typeof VISIBLE_TABS)[number];
@@ -354,6 +405,8 @@ function TabButton({
   iconSize: number;
   labelSize: number;
   inactiveColor: string;
+  /** Pre-formatted by `formatBadgeCount`; null draws nothing. */
+  badge?: string | null;
   onPress: () => void;
 }) {
   const Icon = item.Icon;
@@ -371,7 +424,9 @@ function TabButton({
   return (
     <Pressable
       accessibilityRole="tab"
-      accessibilityLabel={item.label}
+      // The oval is a visual-only signal unless the label says it too: a
+      // VoiceOver user hears "Alerts" and learns nothing about the badge.
+      accessibilityLabel={badge ? `${item.label}, ${badge} unread` : item.label}
       accessibilityState={{ selected: active }}
       onPress={() => {
         haptic.select();
@@ -409,6 +464,11 @@ function TabButton({
           transform: [{ scaleX: progress ?? settled }],
         }}
       />
+      {/* A sibling of the content column, not a child of the scaled icon
+          wrapper: inside it the badge grew with the selected-state spring, and
+          its percentage offset resolved against the whole tab slot rather than
+          the 22pt icon, which parked the oval between two tabs. */}
+      {badge ? <TabBadge value={badge} iconSize={iconSize} /> : null}
       <AnimatedView style={[{ alignItems: 'center', gap: 3 }, press.animatedStyle]}>
         <AnimatedView style={{ transform: [{ scale: iconScale ?? 1 }] }}>
           <Icon size={iconSize} color={color} />

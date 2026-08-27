@@ -36,7 +36,7 @@ export default function SellerDashboardScreen() {
   if (!user) {
     return (
       <Screen>
-        <SectionTitle eyebrow="Seller Dashboard" title="Sign in to view sales." body="Your paid unlock earnings and seller listings appear here once you sign in." />
+        <SectionTitle eyebrow="Your Sales" title="Sign in to view sales." body="Your paid unlock earnings and seller listings appear here once you sign in." />
         <PrimaryButton label="Sign in" onPress={() => router.push('/auth')} accent="primary" />
       </Screen>
     );
@@ -49,7 +49,7 @@ export default function SellerDashboardScreen() {
   return (
     <Screen>
       <SectionTitle
-        eyebrow="Seller Dashboard"
+        eyebrow="Your Sales"
         title="Sales and unlocks."
         body="Track total sales from your reusable resources. Earnings are shown as lifetime tracked sales."
       />

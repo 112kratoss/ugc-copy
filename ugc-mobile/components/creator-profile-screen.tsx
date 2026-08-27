@@ -314,7 +314,7 @@ export function CreatorProfileScreen({
   if (!data) {
     return (
       <View style={{ flex: 1, backgroundColor: appTheme.colors.background, paddingTop: 16, paddingHorizontal: 16 }}>
-        <Stack.Screen options={{ title: notFound ? 'Not found' : 'Creator' }} />
+        <Stack.Screen options={{ title: 'Creator' }} />
         <StatusBlock
           tone={notFound ? 'neutral' : 'danger'}
           title={notFound ? 'Creator not found' : 'Could not load creator'}
@@ -385,7 +385,10 @@ export function CreatorProfileScreen({
 
   return (
     <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
-      <Stack.Screen options={{ title: `@${data.profile.username}` }} />
+      {/* The bar says what the view is, not who it contains: a username has no
+          length bound, the profile header already prints the display name, and a
+          title that changes as the query lands flickers on every open. */}
+      <Stack.Screen options={{ title: 'Creator' }} />
       <FlashList
         data={listItems}
         drawDistance={900}

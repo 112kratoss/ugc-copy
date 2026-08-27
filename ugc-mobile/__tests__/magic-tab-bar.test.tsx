@@ -91,8 +91,20 @@ vi.mock('@/lib/theme', () => ({
   appTheme: {
     colors: {
       muted: '#a1a1aa',
+      badge: '#ff3b30',
+      onBadge: '#ffffff',
     },
   },
+}));
+
+// The badge's own rules (red oval, white text, 99+ cap, one badged tab) are
+// swept in hig-navigation-chrome.test.ts. Here the count is just an input, so
+// the hook is stubbed rather than dragging an auth provider and a query client
+// into a test about tab presses. `badgeValue` lets a case opt into a badge.
+let badgeValue: string | null = null;
+vi.mock('@/lib/use-notification-badge', () => ({
+  useTabBarBadge: () => badgeValue,
+  useUnreadNotificationCount: () => 0,
 }));
 
 import { MagicTabBar } from '../components/magic-tab-bar';
@@ -150,6 +162,7 @@ describe('MagicTabBar', () => {
     routerState.push.mockClear();
     glassState.available = false;
     glassState.reduceTransparency = false;
+    badgeValue = null;
   });
 
   it('hides by going invisible and inert, never by unmounting the blur surface', async () => {
@@ -280,6 +293,31 @@ describe('MagicTabBar', () => {
     });
 
     expect(opaqueBottomFillers).toHaveLength(0);
+  });
+
+function findBadgeOvals(tree: ReturnType<typeof renderer.create>) {
+  return tree.root.findAll((node) => {
+    const style = node.props.style as Record<string, unknown> | undefined;
+    return node.type === 'view' && style?.backgroundColor === '#ff3b30';
+  });
+}
+
+  it('draws no badge on a tab with nothing unread', () => {
+    const { tree } = renderTabBar();
+
+    expect(tree.root.findByProps({ accessibilityLabel: 'Alerts' })).toBeTruthy();
+    expect(findBadgeOvals(tree)).toHaveLength(0);
+  });
+
+  it('badges the Alerts tab and says the count out loud', () => {
+    badgeValue = '3';
+    const { tree } = renderTabBar();
+
+    // HIG asks for a red oval containing the count; VoiceOver gets it through
+    // the tab's own label, because the oval itself is hidden from the reader.
+    expect(findBadgeOvals(tree)).toHaveLength(1);
+    expect(tree.root.findByProps({ accessibilityLabel: 'Alerts, 3 unread' })).toBeTruthy();
+    expect(tree.root.findAll((node) => node.props?.accessibilityLabel === 'Alerts')).toHaveLength(0);
   });
 
   it('emits tabPress before navigating when the active tab is pressed again', () => {

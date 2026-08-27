@@ -38,6 +38,17 @@ const colors = {
   success: '#67d6a7',
   warning: '#f2b95e',
 
+  /**
+   * The one colour in the palette the platform chooses, not the brand.
+   * Tab bars: "a badge — a red oval containing white text". A badge only reads
+   * as a badge in the system's red; drawing it in the brand coral would also
+   * make it vanish against the active tab, which is already coral. Softer
+   * `danger` (#ff7c8b) is the app's own error tone and is too pale to carry
+   * white — this is Apple's badge red with the white it is specified with.
+   */
+  badge: '#ff3b30',
+  onBadge: '#ffffff',
+
   // Tool accents remain available for categorisation, previews, and lightweight emphasis.
   image: '#73bff2',
   video: '#ff8e72',

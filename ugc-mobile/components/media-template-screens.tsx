@@ -267,7 +267,7 @@ export function MediaTemplateDetailScreen({ slug }: { slug: string }) {
 
   return (
     <Screen>
-      <Stack.Screen options={{ title: template?.name ?? 'Template' }} />
+      <Stack.Screen options={{ title: 'Template' }} />
       {templateQuery.isLoading ? (
         <LoadingState label="Loading template" />
       ) : templateQuery.isError || !template ? (
@@ -444,12 +444,12 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
   };
 
   if (isAuthLoading) {
-    return <Screen><Stack.Screen options={{ title: 'Template creation' }} /><LoadingState label="Restoring your account" /></Screen>;
+    return <Screen><Stack.Screen options={{ title: 'Template Run' }} /><LoadingState label="Restoring your account" /></Screen>;
   }
   if (!user) {
     return (
       <Screen>
-        <Stack.Screen options={{ title: 'Template creation' }} />
+        <Stack.Screen options={{ title: 'Template Run' }} />
         <StatusBlock title="Sign in to continue" body="Your template run is saved to your account." tone="neutral" />
         <PrimaryButton label="Sign in" onPress={() => router.replace({ pathname: '/auth', params: { returnTo: `/template-runs/${encodeURIComponent(runId)}` } } as never)} />
       </Screen>
@@ -458,7 +458,10 @@ export function MediaTemplateRunScreen({ runId }: { runId: string }) {
 
   return (
     <Screen>
-      <Stack.Screen options={{ title: template?.name ?? run?.templateTitle ?? 'Template creation' }} />
+      {/* The template's own name is unbounded catalog text; Toolbars caps a view
+          title at ~15 characters, and RunHeader already names the template in the
+          body, so the bar says what the view is instead of what it contains. */}
+      <Stack.Screen options={{ title: 'Template Run' }} />
       {runQuery.isLoading ? (
         <LoadingState label="Restoring your creation" />
       ) : runQuery.isError || !run ? (

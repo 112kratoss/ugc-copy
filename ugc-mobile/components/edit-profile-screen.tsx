@@ -4,7 +4,7 @@ import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
-import { ArrowLeft, Camera, Check, ImageIcon } from 'lucide-react-native';
+import { Camera, Check, ImageIcon } from 'lucide-react-native';
 import type { ComponentProps } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
@@ -19,6 +19,7 @@ import { getEditProfileScrollPadding } from '@/lib/edit-profile-layout';
 import { uploadProfileImage } from '@/lib/media';
 import { getProfileHandle, getProfileInitials, getProfileName } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
+import { BackGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
 import type { ProfileResponse } from '@/lib/types';
 
@@ -470,7 +471,7 @@ function EditHeader({
           opacity: pressed ? 0.72 : isSaving ? 0.5 : 1,
         })}
       >
-        <ArrowLeft size={22} color={appTheme.colors.text} />
+        <BackGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
       </Pressable>
       <Text accessibilityRole="header" style={{ flex: 1, textAlign: 'center', color: appTheme.colors.text, fontSize: 21, fontWeight: '700' }}>Edit Profile</Text>
       <Pressable

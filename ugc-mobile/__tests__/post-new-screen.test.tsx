@@ -170,6 +170,9 @@ vi.mock('lucide-react-native', () => {
   const icon = (name: string) => (props: MockProps) => React.createElement(name, props);
   return {
     ArrowLeft: icon('arrow-left-icon'),
+    ChevronLeft: icon('chevron-left-icon'),
+    Share: icon('share-icon'),
+    Share2: icon('share2-icon'),
     Check: icon('check-icon'),
     ChevronDown: icon('chevron-down-icon'),
     ChevronRight: icon('chevron-right-icon'),

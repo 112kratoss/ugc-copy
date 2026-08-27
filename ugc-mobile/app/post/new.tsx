@@ -3,7 +3,7 @@ import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import type { ImagePickerAsset } from 'expo-image-picker';
-import { ArrowLeft, Check, ChevronDown, ChevronRight, FileText, Globe2, ImageIcon, Link2, Lock, Package, Play, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react-native';
+import { Check, ChevronDown, ChevronRight, FileText, Globe2, ImageIcon, Link2, Lock, Package, Play, Plus, Sparkles, Trash2, Upload, X } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import {
   AccessibilityInfo,
@@ -103,6 +103,7 @@ import {
   type PostComposerValidationResult,
 } from '@/lib/post-new-view-model';
 import { env } from '@/lib/env';
+import { BackGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme, type ToolAccent } from '@/lib/theme';
 import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-file';
@@ -234,7 +235,7 @@ function HeaderIconButton({ label, icon, onPress }: { label: string; icon: 'back
       })}
     >
       {icon === 'back'
-        ? <ArrowLeft size={22} color={appTheme.colors.text} />
+        ? <BackGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
         : <X size={22} color={appTheme.colors.text} />}
     </Pressable>
   );

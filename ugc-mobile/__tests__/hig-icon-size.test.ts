@@ -38,22 +38,27 @@ const ICON_RAMP = new Set<number>([
   appTheme.icon.hero,
 ]);
 
-/** Off-ramp icon sizes each file still carries, as of the F4 pass on 2026-08-27. */
+/**
+ * Off-ramp icon sizes each file still carries. Seeded by the F4 pass on
+ * 2026-08-27; ratcheted down by N1 the same day, when the back controls on
+ * seven screens moved to `BackGlyph` at `appTheme.icon.feature` and stopped
+ * being counted here at 20/21/22/26/30.
+ */
 const LEGACY_SIZES: Record<string, number> = {
   'app/(tabs)/showcase.tsx': 3,
   'app/(tabs)/studio.tsx': 2,
-  'app/auth.tsx': 4,
+  'app/auth.tsx': 3,
   'app/help.tsx': 3,
   'app/invite.tsx': 5,
   'app/onboarding.tsx': 1,
   'app/post/[id].tsx': 4,
-  'app/post/new.tsx': 23,
+  'app/post/new.tsx': 22,
   'app/r/[code].tsx': 5,
   'app/seller-dashboard.tsx': 3,
   'app/settings.tsx': 9,
-  'app/viewer.tsx': 16,
+  'app/viewer.tsx': 14,
   'components/creator-profile-screen.tsx': 11,
-  'components/edit-profile-screen.tsx': 3,
+  'components/edit-profile-screen.tsx': 2,
   'components/feed-card-shell.tsx': 1,
   'components/feed-pagination-footer.tsx': 1,
   'components/feed-video-preview.tsx': 1,
@@ -67,7 +72,7 @@ const LEGACY_SIZES: Record<string, number> = {
   'components/media-template-screens.tsx': 6,
   'components/onboarding-booklet.tsx': 2,
   'components/onboarding-welcome.tsx': 1,
-  'components/post-details-page.tsx': 3,
+  'components/post-details-page.tsx': 2,
   'components/post-resource-references.tsx': 3,
   'components/profile-dashboard.tsx': 12,
   'components/profile-feed-card.tsx': 6,

@@ -2,7 +2,7 @@ import { FlashList, type FlashListRef, type ViewToken } from '@shopify/flash-lis
 import { useIsFocused } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ArrowLeft } from 'lucide-react-native';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -42,6 +42,7 @@ import {
 } from '@/lib/profile-feed-card-view-model';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
+import { BackGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
 import { getNativeRemixCreateHref, getViewerShareIntent, getViewerShareSourceSurface } from '@/lib/viewer-actions';
 import {
@@ -440,7 +441,7 @@ function FeedTopBar({ title, topInset }: { title: string; topInset: number }) {
           opacity: pressed ? appTheme.opacity.pressed : 1,
         })}
       >
-        <ArrowLeft size={24} color={appTheme.colors.text} />
+        <BackGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
       </Pressable>
       <Text style={{ color: appTheme.colors.text, ...appTheme.type.sectionTitle, fontWeight: '800' }}>
         {title}

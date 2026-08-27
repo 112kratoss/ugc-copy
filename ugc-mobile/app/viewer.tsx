@@ -5,7 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer } from 'expo-video';
-import { ArrowLeft, Copy, FileText, Globe, Heart, ImageOff, Images, Lock, LockKeyhole, MessageCircle, MoreHorizontal, Play, Repeat2, Wand2 } from 'lucide-react-native';
+import { Copy, FileText, Globe, Heart, ImageOff, Images, Lock, LockKeyhole, MessageCircle, MoreHorizontal, Play, Repeat2, Wand2 } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { cloneElement, useCallback, useEffect, useId, useMemo, useRef, useState, type MutableRefObject, type ReactElement } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Alert, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, ScrollView, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
@@ -30,7 +30,7 @@ import {
   selectActiveImmersiveVideoId,
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
-import { ShareGlyph } from '@/lib/platform-glyphs';
+import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
 import { createShowcaseFeedViewerQueryKey } from '@/lib/showcase-feed-query';
 import {
   buildImmersiveSlidePages,
@@ -834,7 +834,7 @@ export default function ImmersivePreviewViewerScreen() {
             opacity: pressed ? 0.7 : 1,
           })}
         >
-          <IconShadow><ArrowLeft size={30} color="#ffffff" /></IconShadow>
+          <IconShadow><BackGlyph size={appTheme.icon.feature} color="#ffffff" /></IconShadow>
         </Pressable>
       )}
       {activeItem ? (
@@ -939,7 +939,7 @@ function ViewerShell({ topInset, bottomInset, children }: { topInset: number; bo
         onPress={leaveViewer}
         style={({ pressed }) => ({ position: 'absolute', left: 16, top: topInset + 10, width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.3)', opacity: pressed ? appTheme.opacity.pressed : 1 })}
       >
-        <IconShadow><ArrowLeft size={30} color="#ffffff" /></IconShadow>
+        <IconShadow><BackGlyph size={appTheme.icon.feature} color="#ffffff" /></IconShadow>
       </Pressable>
       {children}
     </View>

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
-import { ArrowLeft, FileText, Heart, MessageCircle, MoreVertical, Repeat2 } from 'lucide-react-native';
+import { FileText, Heart, MessageCircle, MoreVertical, Repeat2 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -30,7 +30,7 @@ import {
 } from '@/lib/immersive-preview-view-model';
 import { readCachedImmersiveSourceData, readCachedProfile } from '@/lib/immersive-preview-source-data';
 import { getCommentCountLabel } from '@/lib/comments-view-model';
-import { ShareGlyph } from '@/lib/platform-glyphs';
+import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
@@ -363,7 +363,7 @@ export default function PostScreen() {
             opacity: pressed ? appTheme.opacity.pressed : 1,
           })}
         >
-          <ArrowLeft size={20} color={appTheme.colors.text} />
+          <BackGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
         </Pressable>
       )}
 

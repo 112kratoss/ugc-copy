@@ -122,7 +122,7 @@ function RootLayoutNav() {
                   name="auth"
                   options={{
                     headerShown: false,
-                    title: 'Sign in',
+                    title: 'Sign In',
                     presentation: 'modal',
                     animation: reducedMotion ? 'none' : 'fade_from_bottom',
                     contentStyle: { backgroundColor: appTheme.colors.background },
@@ -131,7 +131,7 @@ function RootLayoutNav() {
                 <Stack.Screen name="create/[tool]" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="templates/index" options={{ title: 'Templates', animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="templates/[slug]" options={{ title: 'Template', animation: reducedMotion ? 'none' : 'simple_push' }} />
-                <Stack.Screen name="template-runs/[runId]" options={{ title: 'Template creation', animation: reducedMotion ? 'none' : 'simple_push' }} />
+                <Stack.Screen name="template-runs/[runId]" options={{ title: 'Template Run', animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen
                   name="post/new"
                   options={{
@@ -160,10 +160,10 @@ function RootLayoutNav() {
                 <Stack.Screen name="marketplace/[assetId]" options={{ title: 'Unlock' }} />
                 <Stack.Screen name="unlock/[unlockId]" options={{ title: 'Your Unlock' }} />
                 <Stack.Screen name="edit-profile" options={{ headerShown: false, presentation: 'modal', animation: reducedMotion ? 'none' : 'slide_from_bottom' }} />
-                <Stack.Screen name="seller-dashboard" options={{ title: 'Seller Dashboard' }} />
+                <Stack.Screen name="seller-dashboard" options={{ title: 'Your Sales' }} />
                 <Stack.Screen name="unlocks" options={{ title: 'Your Unlocks' }} />
                 <Stack.Screen name="invite" options={{ title: 'Invite & Earn' }} />
-                <Stack.Screen name="r/[code]" options={{ title: 'Magicbooklet invite' }} />
+                <Stack.Screen name="r/[code]" options={{ title: 'Your Invite' }} />
                 <Stack.Screen name="settings" options={{ title: 'Settings' }} />
                 <Stack.Screen name="delete-account" options={{ title: 'Delete Account' }} />
                 <Stack.Screen name="help" options={{ title: 'Help & Support' }} />

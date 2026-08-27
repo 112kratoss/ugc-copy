@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
-import { ChevronLeft, Copy, FileText, Lock, MessageCircle, MoreVertical, Repeat2 } from 'lucide-react-native';
+import { Copy, FileText, Lock, MessageCircle, MoreVertical, Repeat2 } from 'lucide-react-native';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from 'react-native';
 
@@ -21,7 +21,7 @@ import {
   getUnlockPriceLabel,
   prepareUnlockedResourcesForDetails,
 } from '@/lib/post-details-view-model';
-import { ShareGlyph } from '@/lib/platform-glyphs';
+import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
 import type { PostResourceKind } from '@/lib/types';
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
@@ -401,7 +401,7 @@ function DetailsHeader({
     >
       {onBack ? (
         <HeaderButton accessibilityLabel={backLabel} onPress={onBack}>
-          <ChevronLeft size={26} color={appTheme.colors.text} />
+          <BackGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
         </HeaderButton>
       ) : (
         <View style={{ width: 48, height: 48 }} />

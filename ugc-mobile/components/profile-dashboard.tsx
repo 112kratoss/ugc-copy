@@ -840,7 +840,7 @@ function SellerDashboardButton() {
         <Store size={19} color={PROFILE_COLORS.coral} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-        <AppText variant="label" numberOfLines={1} style={{ fontSize: 14 }}>Seller Dashboard</AppText>
+        <AppText variant="label" numberOfLines={1} style={{ fontSize: 14 }}>Your Sales</AppText>
         <AppText variant="caption" color="muted" numberOfLines={1}>Sales, unlocks, and listings</AppText>
       </View>
       <ChevronRight size={20} color={PROFILE_COLORS.faint} />

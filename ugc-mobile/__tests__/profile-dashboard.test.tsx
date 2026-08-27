@@ -492,7 +492,7 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(routerState.push).toHaveBeenCalledWith('/pricing');
   });
 
-  it('opens Seller Dashboard from the Wallet card', () => {
+  it('opens Your Sales from the Wallet card', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<ProfileDashboard />);
@@ -509,13 +509,13 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(routerState.push).toHaveBeenCalledWith('/seller-dashboard');
   });
 
-  it('keeps Seller Dashboard routed to the seller earnings screen', () => {
+  it('keeps Your Sales routed to the seller earnings screen', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<ProfileDashboard />);
     });
 
-    const sellerDashboard = findPressableByText(tree!.root, 'Seller Dashboard');
+    const sellerDashboard = findPressableByText(tree!.root, 'Your Sales');
     renderer.act(() => {
       sellerDashboard.props.onPress();
     });

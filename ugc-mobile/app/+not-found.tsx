@@ -7,7 +7,7 @@ import { appTheme } from '@/lib/theme';
 export default function NotFoundScreen() {
   return (
     <>
-      <Stack.Screen options={{ title: 'Not found' }} />
+      <Stack.Screen options={{ title: 'Not Found' }} />
       <Screen>
         <SectionTitle eyebrow="404" title="That screen is not here." body="Jump back to the creator launchpad and keep moving." />
         <Link href="/creator" asChild>
