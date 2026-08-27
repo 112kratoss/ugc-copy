@@ -28,7 +28,7 @@ describe('post details navigation', () => {
   it('lets the page draw its own header instead of the hosts\' floating arrow', () => {
     expect(page).toContain('<DetailsHeader');
     expect(viewer).toContain('{detailsOpenForActive ? null : (');
-    expect(textPost).toContain('{onDetailsPage ? null : (');
+    expect(textPost).toContain('{onDetailsPage ? null : <BackControl topInset={topInset} />}');
   });
 
   it('reserves no room for the retired swipe hint', () => {

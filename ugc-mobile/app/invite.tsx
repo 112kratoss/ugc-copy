@@ -1,9 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import * as Clipboard from 'expo-clipboard';
 import { router } from 'expo-router';
 import { CheckCircle2, Copy, Gift, RotateCcw, ShoppingBag, UserPlus, UsersRound } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { AccessibilityInfo, Pressable, Share, View } from 'react-native';
+import { Pressable, Share, View } from 'react-native';
 
 import {
   AppText,
@@ -18,6 +17,7 @@ import {
 } from '@/components/ui';
 import { MetricGridSkeleton } from '@/components/skeleton';
 import { useAuth } from '@/lib/auth';
+import { copyToClipboard } from '@/lib/copy-to-clipboard';
 import { ShareGlyph } from '@/lib/platform-glyphs';
 import { formatCreditAmount } from '@/lib/pricing';
 import { normalizeReferralCode } from '@/lib/referral-attribution';
@@ -85,12 +85,12 @@ export default function InviteScreen() {
     setNotice(null);
     try {
       const url = await ensureShareUrl();
-      await Clipboard.setStringAsync(
-        `Try Magicbooklet and get ${inviteePercent}% bonus credits on your first top-up. ${REFERRAL_DISCLOSURE}\n${url}`
-      );
       const message = 'Invite message, referral disclosure, and link copied.';
+      await copyToClipboard(
+        `Try Magicbooklet and get ${inviteePercent}% bonus credits on your first top-up. ${REFERRAL_DISCLOSURE}\n${url}`,
+        message
+      );
       setNotice({ tone: 'success', title: 'Link copied', body: message });
-      AccessibilityInfo.announceForAccessibility?.(message);
     } catch (error) {
       setNotice({
         tone: 'danger',

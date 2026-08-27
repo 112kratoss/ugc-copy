@@ -1,5 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import * as Clipboard from 'expo-clipboard';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { Linking, Pressable, View } from 'react-native';
@@ -9,6 +8,7 @@ import { PostResourceBundleContent } from '@/components/post-resource-bundle-con
 import { DetailSkeleton } from '@/components/skeleton';
 import { AppText, Card, Pill, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
+import { copyToClipboard } from '@/lib/copy-to-clipboard';
 import { appTheme } from '@/lib/theme';
 
 export default function ViewerUnlockScreen() {
@@ -143,9 +143,7 @@ export default function ViewerUnlockScreen() {
             <PostResourceBundleContent
               fileLoadingPath={fileLoadingPath}
               mediaItems={activeMediaItems}
-              onCopy={async (text) => {
-                await Clipboard.setStringAsync(text);
-              }}
+              onCopy={(text) => copyToClipboard(text)}
               onError={setResourceError}
               onOpenFile={openResourceFile}
               onOpenUrl={(url) => Linking.openURL(url)}

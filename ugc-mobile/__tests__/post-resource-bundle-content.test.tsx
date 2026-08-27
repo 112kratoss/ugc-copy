@@ -22,6 +22,7 @@ vi.mock('react-native', () => ({
 }));
 
 vi.mock('lucide-react-native', () => ({
+  Check: (props: MockProps) => React.createElement('check-icon', props),
   Copy: (props: MockProps) => React.createElement('copy-icon', props),
   Download: (props: MockProps) => React.createElement('download-icon', props),
   ExternalLink: (props: MockProps) => React.createElement('external-link-icon', props),

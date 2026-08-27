@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import * as Clipboard from 'expo-clipboard';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { Linking, View } from 'react-native';
@@ -9,6 +8,7 @@ import { PostResourceBundleContent } from '@/components/post-resource-bundle-con
 import { DetailSkeleton } from '@/components/skeleton';
 import { AppText, Card, Pill, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
+import { copyToClipboard } from '@/lib/copy-to-clipboard';
 import { formatCreditAmount } from '@/lib/pricing';
 import { appTheme, type ToolAccent } from '@/lib/theme';
 import type { MarketplaceResource, PostResourceKind } from '@/lib/types';
@@ -169,9 +169,7 @@ export default function MarketplaceAssetScreen() {
               fileLoadingPath={fileLoadingPath}
               lockedPreview={detail.lockedPreview}
               mediaItems={resourceMediaItems}
-              onCopy={async (text) => {
-                await Clipboard.setStringAsync(text);
-              }}
+              onCopy={(text) => copyToClipboard(text)}
               onError={setResourceError}
               onOpenFile={openResourceFile}
               onOpenUrl={openResourceUrl}

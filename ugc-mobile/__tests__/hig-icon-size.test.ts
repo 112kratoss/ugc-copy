@@ -48,7 +48,8 @@ const ICON_RAMP = new Set<number>([
  * creator screen 25→24), and by N3 when the workspace-menu control moved to one
  * shared glyph at one size (home dashboard 4→3). S5 took the showcase feed's
  * four files to zero: one `FeedMediaPlate` replaced four hand-drawn placeholder
- * circles, and the surface's remaining literals moved onto the ramp.
+ * circles, and the surface's remaining literals moved onto the ramp. S12 took
+ * the post details surface's three files to zero the same way.
  */
 const LEGACY_SIZES: Record<string, number> = {
   'app/(tabs)/showcase.tsx': 0,
@@ -60,7 +61,7 @@ const LEGACY_SIZES: Record<string, number> = {
   'app/help.tsx': 3,
   'app/invite.tsx': 5,
   'app/onboarding.tsx': 1,
-  'app/post/[id].tsx': 4,
+  'app/post/[id].tsx': 0,
   'app/post/new.tsx': 21,
   'app/r/[code].tsx': 5,
   'app/seller-dashboard.tsx': 3,
@@ -82,8 +83,8 @@ const LEGACY_SIZES: Record<string, number> = {
   'components/media-template-screens.tsx': 8,
   'components/onboarding-booklet.tsx': 2,
   'components/onboarding-welcome.tsx': 1,
-  'components/post-details-page.tsx': 2,
-  'components/post-resource-references.tsx': 3,
+  'components/post-details-page.tsx': 0,
+  'components/post-resource-references.tsx': 0,
   'components/profile-dashboard.tsx': 12,
   'components/profile-feed-card.tsx': 6,
   'components/showcase-media-preview.tsx': 0,

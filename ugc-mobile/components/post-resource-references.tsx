@@ -111,7 +111,7 @@ export function PostResourceReferences({
 
   return (
     <View style={{ gap: 10 }}>
-      <Text selectable style={{ color: appTheme.colors.text, fontSize: 16, fontWeight: '700' }}>
+      <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>
         References
       </Text>
       <ScrollView
@@ -166,24 +166,24 @@ export function PostResourceReferences({
                 ) : isLoading ? (
                   <ActivityIndicator color={appTheme.colors.primary} />
                 ) : isImage ? (
-                  <ImageIcon size={28} color={appTheme.colors.faint} />
+                  <ImageIcon size={appTheme.icon.hero} color={appTheme.colors.faint} />
                 ) : (
-                  <FileText size={28} color={appTheme.colors.faint} />
+                  <FileText size={appTheme.icon.hero} color={appTheme.colors.faint} />
                 )}
               </View>
               <View style={{ padding: 10, gap: 4 }}>
-                <Text selectable numberOfLines={2} style={{ color: appTheme.colors.text, fontSize: 13, lineHeight: 17, fontWeight: '700' }}>
+                <Text selectable numberOfLines={2} style={{ color: appTheme.colors.text, ...appTheme.type.label }}>
                   {item.title}
                 </Text>
                 {item.description ? (
-                  <Text selectable numberOfLines={2} style={{ color: appTheme.colors.muted, fontSize: 11, lineHeight: 15 }}>
+                  <Text selectable numberOfLines={2} style={{ color: appTheme.colors.muted, ...appTheme.type.caption, fontWeight: '400' }}>
                     {item.description}
                   </Text>
                 ) : null}
                 {!isImage && isOpenable ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                    <ExternalLink size={12} color={appTheme.colors.primary} />
-                    <Text style={{ color: appTheme.colors.primary, fontSize: 11, fontWeight: '700' }}>{mediaLabel}</Text>
+                    <ExternalLink size={appTheme.icon.xs} color={appTheme.colors.primary} />
+                    <Text style={{ color: appTheme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>{mediaLabel}</Text>
                   </View>
                 ) : null}
               </View>

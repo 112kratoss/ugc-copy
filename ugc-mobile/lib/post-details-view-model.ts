@@ -1,4 +1,5 @@
 import { formatCompactCount, formatRelativeTime } from './home-view-model';
+import { formatCreditAmount } from './pricing';
 import type { ImmersivePostUnlockDetails, ImmersivePreviewItem } from './immersive-preview-view-model';
 import type { MarketplaceResourceDetail, PostResourceBundleResources } from './types';
 
@@ -60,6 +61,41 @@ export function buildPostDetailsMeta(item: ImmersivePreviewItem, now = new Date(
     timeLabel: item.createdAt ? formatRelativeTime(item.createdAt, now) : '',
     metaParts: parts,
   };
+}
+
+export interface PostDetailsStat {
+  label: string;
+  value: string;
+}
+
+/**
+ * The production facts of a creation, one tile each.
+ *
+ * The page used to show exactly two tiles — the model, then the duration *or*
+ * the cost — so a video, which always has a duration, never said what it had
+ * cost, and the cost an image did show was a bare number that Studio spells
+ * "285 credits" three screens away. Every fact that exists now gets its own
+ * tile, in the same words the rest of the app uses; a zero is left out, the
+ * way `buildPostDetailsMeta` leaves out "0 saves".
+ */
+export function buildGenerationStats(
+  info: { model?: string | null; duration?: number | null; cost?: number | null } | null | undefined
+): PostDetailsStat[] {
+  if (!info) return [];
+  const stats: PostDetailsStat[] = [];
+
+  const model = info.model?.trim();
+  if (model) stats.push({ label: 'Model', value: model });
+
+  const duration = info.duration ?? 0;
+  if (duration > 0) stats.push({ label: 'Duration', value: `${duration}s` });
+
+  const cost = info.cost ?? 0;
+  if (cost > 0) {
+    stats.push({ label: 'Cost', value: `${formatCreditAmount(cost)} ${cost === 1 ? 'credit' : 'credits'}` });
+  }
+
+  return stats;
 }
 
 export interface PostDetailsPrimaryAction {

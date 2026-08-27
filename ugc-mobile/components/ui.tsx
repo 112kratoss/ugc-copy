@@ -1157,13 +1157,16 @@ export function CreatorAvatar({
         backgroundColor: appTheme.colors.panelSoft,
       }}
     >
+      {/* The initial is drawn whether or not there is a photo, and the photo
+          covers it once it arrives. Rendered only in the photo's absence, a
+          cold post page showed a blank disc where a face was about to be —
+          HIG Images asks a placeholder to stand in while content loads. */}
+      <Text style={{ color: appTheme.colors.text, fontSize: Math.max(10, Math.round(size * 0.44)), fontWeight: '800' }}>
+        {initial}
+      </Text>
       {uri ? (
         <Image source={{ uri }} resizeMode="cover" style={{ position: 'absolute', inset: 0 }} />
-      ) : (
-        <Text style={{ color: appTheme.colors.text, fontSize: Math.max(10, Math.round(size * 0.44)), fontWeight: '800' }}>
-          {initial}
-        </Text>
-      )}
+      ) : null}
     </View>
   );
 }

@@ -1,4 +1,5 @@
 import {
+  Check,
   Copy,
   Download,
   ExternalLink,
@@ -8,7 +9,7 @@ import {
   Repeat2,
   Settings2,
 } from 'lucide-react-native';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { FeedMediaFrame } from '@/components/feed-media-frame';
@@ -458,7 +459,8 @@ function ResourceItemRow({
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           {textContent && onCopy ? (
             <ResourceAction
-              icon={<Copy size={14} color={appTheme.colors.success} />}
+              confirmLabel="Copied"
+              icon={<Copy size={appTheme.icon.xs} color={appTheme.colors.success} />}
               label="Copy"
               onPress={() => onCopy(textContent)}
             />
@@ -505,13 +507,50 @@ function GenerationSetupList({ entries }: { entries: GenerationSetup['entries'] 
   );
 }
 
-/** The one small bordered pill for "do something with this text or file". */
-export function ResourceAction({ icon, label, onPress }: { icon: React.ReactNode; label: string; onPress: () => Promise<void> | void }) {
+/** How long a completed action keeps saying so before the pill reads as itself again. */
+const CONFIRM_MS = 1800;
+
+/**
+ * The one small bordered pill for "do something with this text or file".
+ *
+ * `confirmLabel` is how a press that leaves no trace on screen proves it
+ * happened: copying used to fire a haptic and change nothing, which HIG
+ * Feedback rules out for anyone who has silenced the phone, looked away, or is
+ * listening to VoiceOver. The pill wears the result for a moment instead.
+ */
+export function ResourceAction({
+  confirmLabel,
+  icon,
+  label,
+  onPress,
+}: {
+  confirmLabel?: string;
+  icon: React.ReactNode;
+  label: string;
+  onPress: () => Promise<void> | void;
+}) {
+  const [confirmed, setConfirmed] = useState(false);
+  const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (confirmTimer.current) clearTimeout(confirmTimer.current);
+  }, []);
+
+  const press = async () => {
+    await onPress();
+    if (!confirmLabel) return;
+    setConfirmed(true);
+    if (confirmTimer.current) clearTimeout(confirmTimer.current);
+    confirmTimer.current = setTimeout(() => setConfirmed(false), CONFIRM_MS);
+  };
+
+  const showConfirmed = Boolean(confirmLabel) && confirmed;
+
   return (
     <Pressable
-      accessibilityLabel={label}
+      accessibilityLabel={showConfirmed ? confirmLabel : label}
       accessibilityRole="button"
-      onPress={() => void onPress()}
+      onPress={() => void press()}
       style={({ pressed }) => ({
         minHeight: 44,
         flexDirection: 'row',
@@ -520,14 +559,16 @@ export function ResourceAction({ icon, label, onPress }: { icon: React.ReactNode
         gap: 6,
         borderRadius: appTheme.radii.pill,
         borderWidth: 1,
-        borderColor: appTheme.colors.border,
-        backgroundColor: appTheme.colors.surface,
+        borderColor: showConfirmed ? appTheme.semantic.success.border : appTheme.colors.border,
+        backgroundColor: showConfirmed ? appTheme.semantic.success.background : appTheme.colors.surface,
         opacity: pressed ? appTheme.opacity.pressed : 1,
         paddingHorizontal: 12,
       })}
     >
-      {icon}
-      <Text style={{ color: appTheme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>{label}</Text>
+      {showConfirmed ? <Check size={appTheme.icon.xs} color={appTheme.colors.success} /> : icon}
+      <Text style={{ color: appTheme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>
+        {showConfirmed ? confirmLabel : label}
+      </Text>
     </Pressable>
   );
 }

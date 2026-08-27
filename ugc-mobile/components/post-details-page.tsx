@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import { Copy, FileText, Lock, MessageCircle, MoreVertical, Repeat2 } from 'lucide-react-native';
@@ -10,9 +9,11 @@ import { PostResourceBundleContent, ResourceAction } from '@/components/post-res
 import { CreatorAvatar, Pill } from '@/components/ui';
 import { SaveHeart } from '@/components/save-heart';
 import { useAuth } from '@/lib/auth';
+import { copyToClipboard } from '@/lib/copy-to-clipboard';
 import { formatCompactCount } from '@/lib/home-view-model';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import {
+  buildGenerationStats,
   buildPostDetailsMeta,
   getDetailsBackLabel,
   getDetailsPrimaryAction,
@@ -29,6 +30,17 @@ import { verticalHitSlop } from '@/lib/hit-target';
 
 /** The creator byline reads as a single line of text; its reach is widened rather than its height. */
 const CREATOR_ROW_HEIGHT = 36;
+
+/**
+ * A composed title is capped at 100 characters, which is five or six lines of
+ * the display face — so this bound never touches one. What it catches is a
+ * creation whose "title" is its whole prompt: a fifteen-line script set at 30pt
+ * pushed the creator, the facts and every action below the fold, and Layout is
+ * explicit that essential information must not be crowded out by a detail that
+ * is "available in other parts of the window" — this one is, in full, in the
+ * Prompt section directly beneath it.
+ */
+const DETAILS_TITLE_MAX_LINES = 6;
 
 /**
  * The details behind a post: who made it, the prompt, the caption, and the
@@ -119,7 +131,7 @@ export function PostDetailsPage({
   }, []);
 
   if (!details) {
-    return <View style={{ width, height, backgroundColor: '#000' }} />;
+    return <View style={{ width, height, backgroundColor: appTheme.colors.app }} />;
   }
 
   const bundle = resourceQuery.data?.bundle;
@@ -134,10 +146,7 @@ export function PostDetailsPage({
     ? prepareUnlockedResourcesForDetails(bundle.resources, { detailsPrompt: details.prompt })
     : null;
 
-  const copyText = async (text: string) => {
-    await Clipboard.setStringAsync(text);
-    await Haptics.selectionAsync();
-  };
+  const copyText = (text: string) => copyToClipboard(text);
 
   const openResourceFile = async ({ storagePath }: { storagePath: string; title: string; contentType: string | null }) => {
     try {
@@ -157,7 +166,7 @@ export function PostDetailsPage({
   const unlockAccent: ToolAccent = unlock?.accessMode === 'free' ? 'workflow' : 'commerce';
   const unlockPriceLabel = getUnlockPriceLabel(unlock, bundle);
   const primaryAction = getDetailsPrimaryAction(item, { canAccess });
-  const generationInfo = details.generationInfo ?? null;
+  const generationStats = buildGenerationStats(details.generationInfo ?? null);
   const meta = buildPostDetailsMeta(item);
   const canOpenCreator = Boolean(onCreatorOpen && item.creatorUsername);
   const commentCount = Math.max(0, item.commentCount ?? 0);
@@ -188,7 +197,11 @@ export function PostDetailsPage({
       >
         <View style={{ gap: 10 }}>
           {hostRendersPostText ? null : (
-            <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.pageTitle, fontWeight: '800' }}>
+            <Text
+              numberOfLines={DETAILS_TITLE_MAX_LINES}
+              selectable
+              style={{ color: appTheme.colors.text, ...appTheme.type.pageTitle, fontWeight: '800' }}
+            >
               {details.title}
             </Text>
           )}
@@ -225,16 +238,16 @@ export function PostDetailsPage({
         </View>
 
         {/* A creation's production facts are real information; a post's
-            "0 saves · 0 remixes · Showcase" was not. */}
-        {generationInfo ? (
-          <View style={{ flexDirection: 'row', gap: 10 }}>
-            <DetailStat label="Model" value={generationInfo.model} />
-            <DetailStat
-              label={generationInfo.duration ? 'Duration' : 'Cost'}
-              value={generationInfo.duration
-                ? `${generationInfo.duration}s`
-                : generationInfo.cost != null ? `${generationInfo.cost}` : '—'}
-            />
+            "0 saves · 0 remixes · Showcase" was not.
+            Cost used to be the fallback for a missing duration, so a video —
+            the expensive kind — never showed what it had cost. Each fact now
+            takes its own tile, and the row wraps rather than squeezing three
+            of them into a phone's width. */}
+        {generationStats.length > 0 ? (
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+            {generationStats.map((stat) => (
+              <DetailStat key={stat.label} label={stat.label} value={stat.value} />
+            ))}
           </View>
         ) : null}
 
@@ -246,7 +259,7 @@ export function PostDetailsPage({
             <DetailActionButton
               grow
               label={primaryAction.label}
-              icon={<Repeat2 size={18} color="#050505" />}
+              icon={<Repeat2 size={appTheme.icon.compact} color={appTheme.colors.textInverse} />}
               primary
               loading={remixLoading}
               onPress={() => void onRecreate(item)}
@@ -257,7 +270,7 @@ export function PostDetailsPage({
               disabled={!item.canSave}
               grow
               label={item.isSaved ? 'Saved' : 'Save'}
-              icon={<SaveHeart saved={item.isSaved} size={18} enabled={item.canSave} />}
+              icon={<SaveHeart saved={item.isSaved} size={appTheme.icon.compact} enabled={item.canSave} />}
               loading={saveLoading}
               onPress={() => onSave(item)}
             />
@@ -265,7 +278,7 @@ export function PostDetailsPage({
               disabled={!item.canShare}
               grow
               label="Share"
-              icon={<ShareGlyph size={18} color={item.canShare ? '#fff' : 'rgba(255,255,255,0.5)'} />}
+              icon={<ShareGlyph size={appTheme.icon.compact} color={appTheme.colors.text} />}
               onPress={() => void onShare(item)}
             />
             {onComments && item.canComment ? (
@@ -273,7 +286,7 @@ export function PostDetailsPage({
                 accessibilityLabel="Comments"
                 grow
                 label={commentCount > 0 ? formatCompactCount(commentCount) : 'Comment'}
-                icon={<MessageCircle size={18} color="#fff" />}
+                icon={<MessageCircle size={appTheme.icon.compact} color={appTheme.colors.text} />}
                 onPress={onComments}
               />
             ) : null}
@@ -334,7 +347,7 @@ export function PostDetailsPage({
               ) : sectionState === 'error' ? (
                 <View style={{ gap: 10 }}>
                   <ErrorText message={resourceQuery.error instanceof Error ? resourceQuery.error.message : 'Could not load these resources.'} />
-                  <DetailActionButton label="Try again" icon={<FileText size={18} color="#fff" />} onPress={() => void resourceQuery.refetch()} />
+                  <DetailActionButton label="Try again" icon={<FileText size={appTheme.icon.compact} color={appTheme.colors.text} />} onPress={() => void resourceQuery.refetch()} />
                 </View>
               ) : (
                 <>
@@ -346,7 +359,7 @@ export function PostDetailsPage({
                   <View style={{ gap: 10 }}>
                     <DetailActionButton
                       label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Get resources — Free' : 'Unlock with credits'}
-                      icon={<Lock size={18} color="#050505" />}
+                      icon={<Lock size={appTheme.icon.compact} color={appTheme.colors.textInverse} />}
                       loading={unlockMutation.isPending}
                       primary
                       onPress={() => {
@@ -411,7 +424,7 @@ function DetailsHeader({
       </Text>
       {onActionsOpen ? (
         <HeaderButton accessibilityLabel="More options" onPress={onActionsOpen}>
-          <MoreVertical size={22} color={appTheme.colors.text} />
+          <MoreVertical size={appTheme.icon.feature} color={appTheme.colors.text} />
         </HeaderButton>
       ) : (
         <View style={{ width: 48, height: 48 }} />
@@ -456,12 +469,16 @@ function ResourcesHeading({ pills }: { pills: Array<{ label: string; accent: Too
 }
 
 function ErrorText({ message }: { message: string }) {
-  return <Text selectable style={{ color: '#ff8a9a', fontSize: 13, fontWeight: '700' }}>{message}</Text>;
+  return (
+    <Text selectable style={{ color: appTheme.semantic.danger.foreground, ...appTheme.type.label }}>
+      {message}
+    </Text>
+  );
 }
 
 function DetailStat({ label, value }: { label: string; value: string }) {
   return (
-    <View style={{ flex: 1, borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: appTheme.colors.surfaceStrong, padding: appTheme.spacing.gap, gap: 4 }}>
+    <View style={{ flexGrow: 1, flexBasis: 148, borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: appTheme.colors.surfaceStrong, padding: appTheme.spacing.gap, gap: 4 }}>
       <Text numberOfLines={1} style={{ color: appTheme.colors.muted, ...appTheme.type.caption, textTransform: 'uppercase' }}>{label}</Text>
       <Text numberOfLines={1} style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{value}</Text>
     </View>
@@ -494,7 +511,8 @@ function CopyableText({ text, onCopy }: { text: string; onCopy: (text: string) =
       <Text selectable style={{ color: appTheme.colors.textSecondary, ...appTheme.type.bodySm }}>{text}</Text>
       <View style={{ flexDirection: 'row' }}>
         <ResourceAction
-          icon={<Copy size={14} color={appTheme.colors.success} />}
+          confirmLabel="Copied"
+          icon={<Copy size={appTheme.icon.xs} color={appTheme.colors.success} />}
           label="Copy"
           onPress={() => onCopy(text)}
         />
@@ -555,7 +573,7 @@ function ResourceKindRow({ kinds }: { kinds: PostResourceKind[] }) {
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
       {kinds.map((kind) => (
         <View key={kind} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.surfaceStrong, paddingHorizontal: 10, paddingVertical: 6 }}>
-          <FileText size={13} color={appTheme.colors.textSecondary} />
+          <FileText size={appTheme.icon.xs} color={appTheme.colors.textSecondary} />
           <Text style={{ color: appTheme.colors.text, ...appTheme.type.caption, fontWeight: '800' }}>{resourceKindLabel(kind)}</Text>
         </View>
       ))}

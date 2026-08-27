@@ -109,12 +109,14 @@ re-read the codebase broadly or ask for past-chat context.
   branch and **deliberately not merged** — `main` does not have F4, F6, N1, N2, N3 or S5. The user's
   call at the Phase 2 boundary was to keep accumulating on the branch, so branch from it rather than
   from `main`, and expect the merge question again at the next boundary. Phase 3 is under way: S5,
-  S6 (+S6a/b/c), S9, S8 and S11 are closed, and the next `todo` on the board is **S12, post details**
-  — after which the phase order is S10 → S4 → S13/S14. Two things carry into it: the composer's 21
-  off-ramp icon sizes are still the largest budget left in `hig-icon-size.test.ts` (S11 spent its
-  device time on gestures instead), and S11's iOS 26 finding — a full-screen back gesture that takes
-  any rightward drag and pops the screen — applies to **every** pushed screen, so any surface with a
-  horizontal drag needs `fullScreenGestureEnabled: false` on its own route.
+  S6 (+S6a/b/c), S9, S8, S11 and S12 are closed, and the next `todo` on the board is **S10, studio**
+  — after which the phase order is S4 → S13/S14, which closes Phase 3. Three things carry into it:
+  the composer's 21 off-ramp icon sizes are still the largest budget left in
+  `hig-icon-size.test.ts`; S12 found that a generation whose title is its whole prompt is a
+  Studio-side data shape, so **S10 owns it**; and S11's iOS 26 gesture hazard is narrower than it
+  was written — S12 verified that a **native** horizontal scroll view (a pager, a carousel) wins the
+  full-screen back pan and needs nothing, while a **JS** `PanResponder` drag loses it and needs
+  `fullScreenGestureEnabled: false` on its own route.
 - **Device mechanics learned in S6, for whoever drives them next:** the Simulator MCP's `tap` works
   headless on this Mac as well as `swipe`, so iOS is fully drivable; a surface is reachable by post
   id with `magicbooklet:///post/<id>`, and the live data has exactly one multi-media post
@@ -395,7 +397,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S9 creation tool | 3 | done | 2V/2D/4P | every spend says its price; the wait says what it is doing and how long it has been |
 | S8 create hub | 3 | done | 1V/1D/2P | a first creation is told what it costs; the icon ratchet can see a whole idiom it was blind to |
 | S11 post composer | 3 | done | 3V/2D/3P | the reorder can be finished, seen, and reached; a removal can be taken back |
-| S12 post details | 3 | todo | — | |
+| S12 post details | 3 | done | 5V/2D/4P | a post that cannot load says so and offers a way on; copying says it copied, everywhere; a video says what it cost |
 | S10 studio | 3 | todo | — | |
 | S4 home | 3 | todo | — | |
 | S13/S14 profiles | 3 | todo | — | |
@@ -1636,3 +1638,153 @@ button inconsistency with S9 → X3; the five dead components → the spun-out d
 hazard for the units after this — **any screen that grows a horizontal drag inherits the iOS 26
 gesture conflict**, and the only thing that stops it is that route's own
 `fullScreenGestureEnabled: false`.
+
+### S12 post details — audited 2026-08-27 · AND-pass: 2026-08-27
+Chapters read: Text views (`text-views`), Labels (`labels`), Image views (`image-views`),
+Page controls (`page-controls`), Loading (`loading`), Feedback (`feedback`), Gestures (`gestures`),
+Layout (`layout`).
+
+The surface is two screens wearing one name: `app/post/[id].tsx` — a written post read as a page,
+with its comments inline and a swipe-left second page — and `components/post-details-page.tsx`, which
+is *also* the reel's swipe-left page, so every fix here lands twice. Media posts never reach the
+first of those: this route is the canonical resolver for a shared link and redirects anything that
+isn't prose to the viewer, which is what makes its unloadable state matter more than it looks.
+
+- [V][both] **A post that could not load said one sentence and offered nothing.** "This post could
+  not be loaded.", centred, grey, on black — no back control (the arrow lived in the loaded branch
+  only), no retry, and no account of what had happened, while `refetchPost` sat unused three lines
+  above. The loading state was a bare spinner on the same empty screen. This is where a link to a
+  deleted or private post lands. Feedback: "show people when a command can't be carried out and help
+  them understand why"; Loading: "show something as soon as possible … if you make people wait for
+  loading to complete before displaying anything, they can interpret the lack of content as a
+  problem with your app" → **fixed**: both states keep the screen's own back control, and the
+  failure names itself ("This post isn't available"), says what probably happened, and offers
+  **Try again**, which is the refetch that was already in hand.
+- [V][both] **Copying confirmed itself with a haptic and nothing else.** The app has four copy
+  controls: the invite screen shows a "Link copied" notice *and* announces it; the details page
+  fired `Haptics.selectionAsync()` and changed nothing on screen; the marketplace asset and unlock
+  screens did neither. Feedback is explicit that this is the wrong number of channels — "when you
+  provide feedback using color, text, sound, and haptics, people can receive it whether they silence
+  their device, look away from the screen, or use VoiceOver" — and Design principles' Familiarity
+  says a behaviour established once applies throughout → **fixed** in the shared layer, not on this
+  screen: `lib/copy-to-clipboard.ts` writes, taps and announces, and the `ResourceAction` pill that
+  all three resource surfaces share takes a `confirmLabel` and wears "✓ Copied" for 1.8s. The invite
+  screen keeps its notice and gains the haptic. Four controls, one behaviour.
+  - Captured on both platforms: the pill green-tinted and reading *Copied* a frame after the tap,
+    and back to *Copy* three seconds later. Android draws its own system clipboard preview alongside
+    ours; iOS draws nothing of its own, which is the platform this most needed fixing on.
+- [V][both] **That way out could also be a control that answers a press by not moving.** The arrow
+  called `router.back()` unconditionally, and on an empty stack that does nothing — which is the
+  stack a cold launch from a shared link can produce, on the surface that exists to receive shared
+  links. → **fixed**: one `leavePost` (`canGoBack() ? back() : replace('/(tabs)/showcase')`) serves
+  the arrow *and* the post-deleted exit, which had the same bug. Stated plainly: the empty-stack
+  case could not be exercised here — a cold launch on a dev client opens the Expo launcher, not the
+  deep link — so this adopts the fallback `leaveViewer` already settled on rather than repairing an
+  observed failure.
+- [V][both] **The only visible way off the text post was the last thing a screen reader reached.**
+  The floating back arrow was the final child of the root view, after the pager that holds the post
+  *and its entire comment thread*; VoiceOver reads a screen in view-hierarchy order, so "Go back"
+  came after every comment → **fixed**: it is now the first child and stays on top by `zIndex`
+  rather than by being painted last. Verified on the Android emulator that z-order alone keeps it
+  above the pager (it does — `zIndex` reorders the ViewGroup there too), and on iOS that tapping it
+  still leaves the screen.
+  - **Stated plainly:** the ordering was reasoned from React Native's hierarchy rule and is pinned
+    structurally, not observed through VoiceOver — the simulator can't be driven for it here, and
+    the VoiceOver walkthrough of every surface is X5's pass.
+- [V][both] **A title that was a whole prompt buried the page.** `details.title` was unbounded at
+  `pageTitle` (30/36). For a creation whose title falls back to its prompt, that meant fifteen lines
+  of display type before the creator, the facts, the primary action or anything else — and the same
+  text printed again, in full, in the Prompt section directly beneath. Layout: "make essential
+  information easy to find by giving it sufficient space … don't obscure it by crowding it with
+  nonessential details. You can make secondary information available in other parts of the window"
+  → **fixed**: bounded to six lines. Six because a composed title is capped at `TITLE_MAX_LENGTH`
+  (100 characters ≈ five lines), so the bound cannot touch a real title — it only catches a prompt
+  wearing the slot. Captured before and after: the page now opens on title, byline, facts and every
+  action.
+- [D][both] **A creation's cost was hidden exactly where it was largest.** The stat row was
+  `Model` plus `duration ? 'Duration' : 'Cost'` — a video always has a duration, so a video never
+  said what it cost, and the cost an image did show was a bare `8` where Studio calls the same
+  number "8 credits". S9 settled that every spend says its price → **fixed**: `buildGenerationStats`
+  in the view model emits a tile per fact that exists, formatted through `formatCreditAmount` with
+  its unit, dropping zeroes the way `buildPostDetailsMeta` drops "0 saves"; the row wraps rather
+  than squeezing three tiles into a phone. Captured on iOS: `MODEL kling-3.0/video` · `DURATION 11s`
+  on the first row, `COST 220 credits` full-width on the second — 220 credits that were invisible
+  before.
+- [D][ios] **This screen's full-screen back gesture is off, and the pager is why.** Verified on
+  iOS 26.4: from the details page a rightward mid-screen drag pages back to the post; from the post
+  page the same drag does nothing; the left-edge swipe still pops the screen. The paging `FlatList`
+  is a native scroll view, and its recognizer outranks iOS 26's full-screen back pan with no option
+  set → **intentional, and not laid in the ledger**: the position is the one `post/new` chose
+  deliberately (edge swipe intact, full-screen variant gone), the labelled `Details` control means
+  the second page never depended on the gesture, and the drag that is consumed does rubber-band, so
+  Gestures' "indicate when a gesture isn't available" is met. Android counterpart: no swipe-back to
+  lose — hardware back runs through `useHardwareBack`, details → post then post → out, verified in
+  the pass below.
+  - **The mechanism, for the units after this one.** S11 left a hazard: "any screen that grows a
+    horizontal drag inherits the iOS 26 gesture conflict." Narrow it — S11's drag was a JS
+    `PanResponder`, which *loses* to the native back pan and needs
+    `fullScreenGestureEnabled: false`; a native horizontal scroll view *wins* it and needs nothing.
+    Pagers and carousels are safe; JS-driven drags are not.
+- [P][both] **An avatar with a photo showed an empty disc until the photo landed.** `CreatorAvatar`
+  drew its initial *instead of* the image rather than behind it, so the post page opened on a blank
+  circle where a face was about to be — caught on the very first capture of this unit, and gone a
+  second later once the details page warmed the cache. Images asks a placeholder to stand in while
+  content loads → **fixed in the primitive**: the initial is always drawn and the photo covers it,
+  which repairs every avatar in the app rather than this screen's.
+- [P][both] **Icon ratchet: the unit's three files went 9 → 0.** `app/post/[id].tsx` 4→0 (a 17 and
+  three 19s to `icon.compact`, which is the 18 the showcase card's overflow settled on in S5),
+  `post-details-page.tsx` 2→0, `post-resource-references.tsx` 3→0. Two blacks on one button went the
+  same way: the primary's label used `textInverse` while its glyph used `#050505`. The remaining raw
+  hexes in these files (`#000` for an empty details page, `#ff8a9a` for an error line) moved onto
+  `colors.app` and `semantic.danger`.
+- [P][both] **One title, set two ways.** The text post page drew its title at 25/31 — a step the
+  ramp does not have — while the details page drew the same post's title at `pageTitle`. Both are
+  `pageTitle` now.
+- [P][both] Verified clean: **everything worth taking away is selectable.** Title, body, prompt,
+  caption, resource text and error lines all carry `selectable`, which is what Text views and Labels
+  both ask for ("if a label contains useful information … consider letting people select and copy
+  it").
+- [P][both] Verified clean: **the second page is reachable without knowing the gesture.** A labelled
+  `Details` control sits in the action row and in the action sheet, so the swipe is Gestures'
+  "shortcut gesture to supplement standard gestures, not replace them". No page control, and none
+  wanted: Page controls describes "an ordered list of pages" of peers, which a post and its
+  provenance are not, and the control names its destination in a way dots cannot.
+
+Guard added: `__tests__/hig-post-details.test.ts` (20 cases) — the states that show no post keep the
+back control, and the error names itself, explains, and offers the retry it already had; one back
+control serves every state and has somewhere to go when there is nothing to go back to; it precedes the pager it floats over and stays on top by z-order; every
+clipboard write in `app/` and `components/` goes through the one helper, which reaches touch, sound
+and the screen reader; the pill wears its result and every copy control asks for one, and the
+confirmation clears itself and drops its timer with the pill; a video reports its cost as well as
+its length, spelled with its unit and pluralised, with absent facts left out; the page renders
+whatever the model produced instead of choosing between two, and the tiles wrap; the title is
+bounded above any composed title's length; one title style across the screen's two pages; the avatar
+draws its initial whether or not a photo is coming. `post-details-navigation.test.ts` and
+`post-resource-bundle-content.test.tsx` are updated in the same commit (the arrow's new shape, and
+`Check` in the icon mock).
+
+**AND-pass 2026-08-27** (mandatory: this unit moves a navigation control and changes feedback).
+Pixel_9a, Android 16, dev client on the worktree's Metro. Text post, details page, error state and
+an owner creation all captured. Hardware back from the details page returns to the post with the
+post intact; hardware back from the error state leaves the screen — no dead end. The back arrow
+still paints above the pager from first position in the tree. `COST 8 credits` on an image creation,
+where a bare `8` used to be. Copy confirmed and reverted on schedule. Edge-to-edge unchanged:
+content sits below the status bar in every state. `logcat` clear of `FATAL`/`SIGSEGV`, the app
+process alive throughout. The comment composer's keyboard is untouched by this unit and stays
+S6b's — the emulator answered the tap with Gboard's floating toolbar rather than a docked keyboard,
+so that box is *not* ticked here.
+
+**Device mechanic worth keeping — how to catch a transient control on iOS.** S11 recorded that a
+1.8s window cannot be caught by "act, then screenshot", because a tool round trip outlasts the
+window, and sent that work to Android. There is an iOS way: start a *paced* background burst
+(14 frames at 0.8s), fire the tap, then crop the same region out of every frame with
+`sips -c … --cropOffset` and `md5` the crops. The odd hashes out are the frames inside the window —
+here, 7 and 8 of 14 — and only those need reading. No image decoding, no OCR, two frames read
+instead of fourteen.
+
+**Open remainder**: a generation whose title is its prompt is a Studio-side data shape, not a
+rendering one → **S10**; `feed-card-shell.tsx` still carries a 17pt overflow glyph the ramp does not
+have, and it is the last file with that literal → whichever unit owns the feed card next; and the
+details page hides its vertical scroll indicator (`showsVerticalScrollIndicator={false}`) on a page
+that can run several screens, which is Scroll views' business and F3's to settle app-wide rather
+than one screen's to flip.

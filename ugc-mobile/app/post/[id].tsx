@@ -217,14 +217,39 @@ export default function PostScreen() {
 
   if (!item) {
     return (
-      <View style={{ flex: 1, backgroundColor: appTheme.colors.app, alignItems: 'center', justifyContent: 'center' }}>
-        {postQueryIsError ? (
-          <Text style={{ color: appTheme.colors.muted, ...appTheme.type.body }}>
-            This post could not be loaded.
-          </Text>
-        ) : (
-          <ActivityIndicator color={appTheme.colors.primary} />
-        )}
+      <View style={{ flex: 1, backgroundColor: appTheme.colors.app }}>
+        <BackControl topInset={topInset} />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: appTheme.spacing.panel, gap: appTheme.spacing.gap }}>
+          {postQueryIsError ? (
+            <>
+              <Text style={{ color: appTheme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800', textAlign: 'center' }}>
+                This post isn&apos;t available
+              </Text>
+              <Text style={{ color: appTheme.colors.muted, ...appTheme.type.bodySm, textAlign: 'center' }}>
+                It may have been deleted or made private. Check your connection and try again.
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Try again"
+                onPress={() => void refetchPost()}
+                style={({ pressed }) => ({
+                  minHeight: appTheme.touch.compact,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: 22,
+                  backgroundColor: appTheme.colors.surfaceStrong,
+                  opacity: pressed ? appTheme.opacity.pressed : 1,
+                  paddingHorizontal: 22,
+                })}
+              >
+                <Text style={{ color: appTheme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>Try again</Text>
+              </Pressable>
+            </>
+          ) : (
+            <ActivityIndicator color={appTheme.colors.primary} />
+          )}
+        </View>
       </View>
     );
   }
@@ -254,6 +279,13 @@ export default function PostScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: appTheme.colors.app }}>
+      {/* First in the tree, on top by z-order. VoiceOver reads a screen in
+          hierarchy order, and behind the pager this arrow — the only visible
+          way off the screen — came after the post and every one of its
+          comments. The details page carries its own header and its own way
+          back to the post, so the arrow steps aside there. */}
+      {onDetailsPage ? null : <BackControl topInset={topInset} />}
+
       <FlatList
         ref={pagerRef}
         data={pages}
@@ -342,31 +374,6 @@ export default function PostScreen() {
         )}
       />
 
-      {/* The details page carries its own header and its own way back to the
-          post; this arrow is the way off the screen, so it steps aside there. */}
-      {onDetailsPage ? null : (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-          onPress={() => router.back()}
-          hitSlop={8}
-          style={({ pressed }) => ({
-            position: 'absolute',
-            left: appTheme.spacing.gap,
-            top: topInset + 10,
-            height: 44,
-            width: 44,
-            borderRadius: 22,
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: appTheme.colors.surfaceStrong,
-            opacity: pressed ? appTheme.opacity.pressed : 1,
-          })}
-        >
-          <BackGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
-        </Pressable>
-      )}
-
       <ViewerActionSheet
         item={resolvedItem}
         visible={actionsVisible}
@@ -376,9 +383,53 @@ export default function PostScreen() {
         onRecreate={() => undefined}
         onShare={() => void shareItem()}
         onSourceRefresh={() => void refetchPost()}
-        onDeleted={() => router.back()}
+        onDeleted={leavePost}
       />
     </View>
+  );
+}
+
+/**
+ * The way off this screen, wherever the screen happens to be — loaded, loading
+ * or unable to load. A shared link lands here without knowing whether the post
+ * still exists, so the states that show no post still show the way back.
+ *
+ * A cold launch from that link may leave nothing behind this screen, and
+ * `router.back()` on an empty stack does nothing at all — which would make the
+ * one visible exit a control that answers a press by not moving. The viewer's
+ * `leaveViewer` settled the fallback: go where the post came from.
+ */
+function leavePost() {
+  if (router.canGoBack()) {
+    router.back();
+    return;
+  }
+  router.replace('/(tabs)/showcase' as never);
+}
+
+function BackControl({ topInset }: { topInset: number }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Go back"
+      onPress={leavePost}
+      hitSlop={8}
+      style={({ pressed }) => ({
+        position: 'absolute',
+        zIndex: 2,
+        left: appTheme.spacing.gap,
+        top: topInset + 10,
+        height: 44,
+        width: 44,
+        borderRadius: 22,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: appTheme.colors.surfaceStrong,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+      })}
+    >
+      <BackGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
+    </Pressable>
   );
 }
 
@@ -449,11 +500,14 @@ function TextPostContent({
             opacity: pressed ? appTheme.opacity.pressed : 1,
           })}
         >
-          <MoreVertical size={17} color={appTheme.colors.faint} />
+          <MoreVertical size={appTheme.icon.compact} color={appTheme.colors.faint} />
         </Pressable>
       </View>
 
-      <Text selectable style={{ color: appTheme.colors.text, fontSize: 25, lineHeight: 31, fontWeight: '800' }}>
+      {/* The same size the details page gives the same post's title: 25/31 was
+          a step the ramp does not have, and the two pages of one screen were
+          setting one title two ways. */}
+      <Text selectable style={{ color: appTheme.colors.text, ...appTheme.type.pageTitle, fontWeight: '800' }}>
         {content.title}
       </Text>
 
@@ -507,7 +561,7 @@ function TextPostContent({
                 key={slot.id}
                 accessibilityLabel={slot.a11yLabel ?? slot.label}
                 disabled={saving}
-                icon={<Heart size={19} color={heart.color} fill={heart.fill} />}
+                icon={<Heart size={appTheme.icon.compact} color={heart.color} fill={heart.fill} />}
                 label={slot.label}
                 onPress={onSave}
               />
@@ -518,7 +572,7 @@ function TextPostContent({
               <FeedCardAction
                 key={slot.id}
                 accessibilityLabel={slot.a11yLabel ?? slot.label}
-                icon={<MessageCircle size={19} color={appTheme.colors.faint} />}
+                icon={<MessageCircle size={appTheme.icon.compact} color={appTheme.colors.faint} />}
                 label={slot.label}
                 onPress={onComments}
               />
@@ -529,7 +583,7 @@ function TextPostContent({
               <FeedCardAction
                 key={slot.id}
                 accessibilityLabel={slot.a11yLabel ?? slot.label}
-                icon={<ShareGlyph size={18} color={appTheme.colors.faint} />}
+                icon={<ShareGlyph size={appTheme.icon.compact} color={appTheme.colors.faint} />}
                 label={slot.label}
                 onPress={onShare}
               />
@@ -540,7 +594,7 @@ function TextPostContent({
               <FeedCardAction
                 key={slot.id}
                 accessibilityLabel={slot.a11yLabel ?? slot.label}
-                icon={<FileText size={18} color={appTheme.colors.faint} />}
+                icon={<FileText size={appTheme.icon.compact} color={appTheme.colors.faint} />}
                 label={slot.label}
                 onPress={onDetails}
               />
@@ -551,7 +605,7 @@ function TextPostContent({
               <FeedCardAction
                 key={slot.id}
                 accessibilityLabel={slot.a11yLabel ?? slot.label}
-                icon={<Repeat2 size={19} color={appTheme.colors.primary} />}
+                icon={<Repeat2 size={appTheme.icon.compact} color={appTheme.colors.primary} />}
                 label={slot.label}
                 onPress={onActionsOpen}
                 tone="primary"
