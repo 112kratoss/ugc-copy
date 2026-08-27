@@ -1,6 +1,6 @@
 import { BricolageGrotesque_700Bold, BricolageGrotesque_800ExtraBold, useFonts } from '@expo-google-fonts/bricolage-grotesque';
 import { DarkTheme, ThemeProvider } from '@react-navigation/native';
-import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, focusManager, useQueryClient } from '@tanstack/react-query';
 import Constants from 'expo-constants';
 import { AppMetricsRoot } from 'expo-observe';
 import { Stack, router, usePathname } from 'expo-router';
@@ -9,7 +9,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
 import 'react-native-reanimated';
-import { View } from 'react-native';
+import { AppState, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-url-polyfill/auto';
@@ -48,6 +48,15 @@ const queryClient = new QueryClient({
       staleTime: 1000 * 45,
     },
   },
+});
+
+// Progress indicators: "perform automatic updates periodically — don't make
+// people manually refresh". React Query's focus refetch is inert on native
+// until the app's foreground state is wired to it; with the 45s staleTime
+// above, returning to the app refreshes what has actually gone stale and
+// nothing else.
+AppState.addEventListener('change', (state) => {
+  focusManager.setFocused(state === 'active');
 });
 
 const navigationTheme = {

@@ -429,13 +429,13 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S24 delete account | 4 | done | 0V/0D/2P | deletion says it is immediate; the goodbye alert now goes somewhere on purpose |
 | S26 notifications | 4 | done | 0V/1D/0P | permission asked only in context (verified); a badge that could only grow now retires when Alerts opens |
 | S0/S1/S27 launch/notfound/guest banner | 4 | done | 1V/0D/1P | the launch flash is fixed at its source (next native build); 404 recovery verified live |
-| X1 motion pass | 5 | todo | — | |
-| X2 haptics pass | 5 | todo | — | |
-| X3 writing pass | 5 | todo | — | |
-| X4 feedback/loading pass | 5 | todo | — | |
-| X5 accessibility pass | 5 | todo | — | |
-| X6 system integration pass | 5 | todo | — | |
-| X7 android dialect sweep | 5 | todo | — | |
+| X1 motion pass | 5 | done | 0V/0D/0P | verified: reduced-motion everywhere, 240ms caps, springs settle, sheets interruptible |
+| X2 haptics pass | 5 | done | 0V/1D/0P | one vocabulary; direct expo-haptics imports forbidden by guard |
+| X3 writing pass | 5 | done | 0V/0D/1P | 26 ASCII ellipses → …, guard added; per-unit copy audits carried the rest |
+| X4 feedback/loading pass | 5 | done | 0V/1D/0P | focusManager wired: the app refreshes itself on return; S20's note resolved |
+| X5 accessibility pass | 5 | done | 0V/0D/0P | verified via per-unit audits + live AX-size runs; VoiceOver narration order → physical device |
+| X6 system integration pass | 5 | done | 0V/0D/0P | system share + in-context permissions verified; Android permission strip → release-eng note |
+| X7 android dialect sweep | 5 | done | — | five-tab walk clean, back drains to launcher, edge-to-edge everywhere; every unit carried its own AND gate |
 | Play submit path in mobile-store-release | — | blocked | — | release-eng, not HIG; unblocks when Play production access approves |
 | Phase 6 close-out | 6 | todo | — | |
 
@@ -2864,3 +2864,52 @@ comments, bio) deliberately follow the reader uncapped — body-tier entry; the 
 single-line fields through `AppTextInput`. No numeric-entry fields exist on mobile, so the
 number-formatter clause is n/a.
 Phase-boundary gate: the full mobile suite passes — 161 files, 1,558 tests.
+
+### X1 motion pass — audited 2026-08-28 · AND-pass: 2026-08-28
+Chapters read: Motion (`motion`, re-read this session).
+Closed by verification: every file with its own animation (viewer, save-heart, comments sheet,
+create menu, side menu, reveal, both onboarding surfaces) already consumes the reduced-motion
+store; navigation transitions carry `reducedMotion ? 'none'` ternaries in the root layout; motion
+tokens cap durations at 240ms with springs tuned to settle; sheets are gesture-driven and
+interruptible; keyboard-following layout is functional positioning, not decorative motion. The
+purpose test was applied per surface as each unit landed.
+
+### X2 haptics pass / X3 writing pass — 2026-08-28
+Logged with their commit: one haptic dialect (all direct expo-haptics calls now speak the
+vocabulary; guard forbids the import elsewhere), one ellipsis (26 strings; guard forbids the ASCII
+form). Copy-to-clipboard's multi-channel feedback now routes its touch through the vocabulary too.
+
+### X4 feedback & loading pass — audited 2026-08-28 · AND-pass: 2026-08-28
+Loading, Feedback and Progress indicators were enforced per-unit throughout (skeletons, honest
+empties, error+retry everywhere, priced waits). The pass's one systemic fix: React Query's focus
+refetch was inert on native — no one had wired `focusManager` to `AppState` — so "perform automatic
+updates periodically; don't make people manually refresh" now holds app-wide: returning to the
+app refreshes exactly what the 45s staleTime says is stale. This also resolves S20's
+refresh-button note (the button stays as a manual affordance; the data no longer depends on it).
+Verified on both platforms with a background/foreground cycle — no crash, avatars visibly
+refreshed on return.
+
+### X5 accessibility pass — audited 2026-08-28 · AND-pass: 2026-08-28
+Closed by verification plus the F1 device runs: labels, roles, states, hints and grouped elements
+were audited per unit (every finding log carries them); the contrast and hit-target floors are
+guard-enforced (PR #83); Dynamic Type was verified live at AX sizes on both platforms (F1);
+reduced motion and reduced transparency have app-wide stories (X1, DV6 scrims are opacity-based,
+not blur-dependent). VoiceOver's full narration order remains a physical-device item for the next
+store build — the simulator drives labels, not speech.
+
+### X6 system integration pass — audited 2026-08-28 · AND-pass: 2026-08-28
+Sharing rides the system sheet everywhere it exists (S12, S21) with the per-platform Share glyph
+(F4); permission prompts are asked in context only (S26); the one iOS usage string
+(NSPhotoLibraryUsageDescription) says what the access is for in the product's own words.
+→ Release-eng note, not an alignment fix: the Android manifest requests `RECORD_AUDIO` and
+`SYSTEM_ALERT_WINDOW` (dependency artifacts — nothing in the app records audio); strip via
+`blockedPermissions` alongside the next native build to keep Play review clean.
+
+### X7 Android dialect sweep — audited 2026-08-28
+The dedicated full-app emulator pass on top of the per-unit AND gates: all five tab surfaces
+walked (home's menu affordance, page-control dots, credits pill; creator's Close control, priced
+Generate, segment tabs; showcase grid; alerts list; profile) — no status-bar bleed anywhere,
+edge-to-edge correct throughout; hardware back pops real history and drains cleanly to the
+launcher with no dead ends; predictive back is enabled in app.json; the notification channel
+exists (S26); keyboard insets were device-proven in S15 (docked-Gboard note); haptics map through
+one vocabulary (X2). Android is not behind: every unit in this program carries its own AND-pass.
