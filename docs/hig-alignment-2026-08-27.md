@@ -1163,9 +1163,10 @@ perform destructive actions.
   under their thumb). State lives in `lib/viewer-audio.ts`, one `useSyncExternalStore` for the
   process in the same shape `lib/motion` uses, persisted through AsyncStorage so the choice outlives
   the visit. Verified end-to-end on **both** platforms including a full app restart.
-  - **The default is still unmuted**, which is what the surface did before. Adopting the control is
-    the HIG requirement; changing what happens before anyone touches it is a product call, and it is
-    the open question this unit hands back (see *Open remainder*).
+  - **The default stays unmuted** — put to the user at the close of this unit and settled there.
+    Adopting the control was the HIG requirement; the default is a product call, and sound is part of
+    the content in a reel. Whoever wants silence taps once and the choice now persists, which is the
+    part that was missing. Do not re-open this in X4 or Phase 6.
 - [D][ios] **The two platforms disagreed about the audio session, silently, because of a library
   default.** expo-video's iOS `VideoPlayer.swift:18` defaults `audioMixingMode` to `.doNotMix`, and
   `VideoManager.swift:75–118` then removes `.mixWithOthers` from the category and calls
@@ -1255,8 +1256,8 @@ tab bar or blur.
   down for one run, tapped, confirmed to flip the glyph and to survive a force-stop and relaunch,
   and then moved back; its production position is verified by capture in the same pass.
 
-**Open remainder**: whether the reel should *start* muted rather than unmuted — the control now
-exists either way, and the default is a product decision → back to the user; the More sheet's
-scrolling and the unlabelled spinners → X4; "Comments" as a menu label where Menus asks for verbs →
-X3, which already owns button copy; re-checking the audio-session interruption on a physical iPhone,
-which no simulator on this Mac can show → next store build.
+**Open remainder**: the More sheet's scrolling and the unlabelled spinners → X4; "Comments" as a menu
+label where Menus asks for verbs → X3, which already owns button copy; re-checking the audio-session
+interruption on a physical iPhone, which no simulator on this Mac can show → next store build.
+The one question this unit put to the user — whether the reel should start muted — was answered
+**unmuted**, and is recorded above rather than left open.
