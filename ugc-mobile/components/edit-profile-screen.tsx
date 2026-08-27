@@ -1,3 +1,4 @@
+import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
@@ -5,16 +6,29 @@ import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { Camera, Check, ImageIcon } from 'lucide-react-native';
-import type { ComponentProps } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, TextInput, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
-import { PrimaryButton, SecondaryButton, StatusBlock } from '@/components/ui';
+import { AppText, AppTextInput, PrimaryButton, SecondaryButton, StatusBlock } from '@/components/ui';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
-import { hasEditProfileChanges } from '@/lib/edit-profile-form';
+import {
+  PROFILE_BIO_MAX_LENGTH,
+  PROFILE_DISPLAY_NAME_MAX_LENGTH,
+  PROFILE_USERNAME_MAX_LENGTH,
+  type EditProfileFieldErrors,
+  type UsernameAvailability,
+  hasEditProfileChanges,
+  normalizeUsername,
+  normalizeUsernameInput,
+  readUsernameRejection,
+  shouldCheckUsernameAvailability,
+  usernameHint,
+  validateProfileField,
+  validateProfileForm,
+} from '@/lib/edit-profile-form';
 import { getEditProfileScrollPadding } from '@/lib/edit-profile-layout';
 import { uploadProfileImage } from '@/lib/media';
 import { getProfileHandle, getProfileInitials, getProfileName } from '@/lib/profile-view-model';
@@ -23,9 +37,8 @@ import { CloseGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
 import type { ProfileResponse } from '@/lib/types';
 
-const USERNAME_PATTERN = /^[a-z0-9-]{3,24}$/;
-const MAX_DISPLAY_NAME_LENGTH = 60;
-const MAX_BIO_LENGTH = 280;
+/** Debounce before the availability round trip. The endpoint is rate limited. */
+const USERNAME_CHECK_DELAY_MS = 400;
 
 interface EditProfileForm {
   username: string;
@@ -34,8 +47,6 @@ interface EditProfileForm {
   avatarUrl: string;
   coverUrl: string;
 }
-
-type FieldErrors = Partial<Record<keyof EditProfileForm, string>>;
 
 const emptyForm: EditProfileForm = {
   username: '',
@@ -48,6 +59,7 @@ const emptyForm: EditProfileForm = {
 export function EditProfileScreen() {
   const { user, api, refreshProfile } = useAuth();
   const queryClient = useQueryClient();
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const topInset = resolvedTopInset(insets.top);
@@ -62,9 +74,15 @@ export function EditProfileScreen() {
   const [coverDraftUri, setCoverDraftUri] = useState<string | null>(null);
   const [avatarAsset, setAvatarAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [coverAsset, setCoverAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [fieldErrors, setFieldErrors] = useState<EditProfileFieldErrors>({});
   const [message, setMessage] = useState<string | null>(null);
+  const [photoAccessDenied, setPhotoAccessDenied] = useState(false);
   const [progressMessage, setProgressMessage] = useState<string | null>(null);
+  const [usernameAvailability, setUsernameAvailability] = useState<UsernameAvailability>('idle');
+  const [usernameMessage, setUsernameMessage] = useState<string | null>(null);
+  // Set once the screen is done with the changes, so the unsaved-work guard
+  // below lets a successful save — or an accepted discard — navigate away.
+  const [isLeaveAllowed, setIsLeaveAllowed] = useState(false);
   // Return advances through the form rather than dismissing the keyboard.
   const usernameRef = useRef<TextInput | null>(null);
   const bioRef = useRef<TextInput | null>(null);
@@ -84,38 +102,34 @@ export function EditProfileScreen() {
       setCoverAsset(null);
       setFieldErrors({});
       setMessage(null);
+      setPhotoAccessDenied(false);
       setProgressMessage(null);
+      setUsernameAvailability('idle');
+      setUsernameMessage(null);
     }
   }, [profileQuery.data]);
 
   const profile = profileQuery.data;
-  const previewName = getProfileName(
-    {
-      ...(profile ?? emptyProfile(user?.id ?? 'preview')),
-      username: normalizeUsername(form.username) || profile?.username || profile?.suggestedUsername || null,
+
+  /**
+   * The live preview of what the two identity fields will produce — the handle
+   * in particular, which is the normalised form of what was typed rather than
+   * the typing itself.
+   */
+  const preview = useMemo(() => {
+    const base = profile ?? emptyProfile(user?.id ?? 'preview');
+    const identity = {
+      ...base,
+      username: normalizeUsername(form.username) || base.username || base.suggestedUsername || null,
       displayName: form.displayName || null,
-      bio: form.bio || null,
-      avatarUrl: (avatarDraftUri ?? form.avatarUrl) || null,
-      coverUrl: (coverDraftUri ?? form.coverUrl) || null,
-    },
-    user?.email
-  );
-  const previewHandle = getProfileHandle(
-    {
-      ...(profile ?? emptyProfile(user?.id ?? 'preview')),
-      username: normalizeUsername(form.username) || profile?.username || profile?.suggestedUsername || null,
-      displayName: form.displayName || null,
-    },
-    user?.email
-  );
-  const previewInitials = getProfileInitials(
-    {
-      ...(profile ?? emptyProfile(user?.id ?? 'preview')),
-      username: normalizeUsername(form.username) || profile?.username || profile?.suggestedUsername || null,
-      displayName: form.displayName || null,
-    },
-    user?.email
-  );
+    };
+    return {
+      name: getProfileName({ ...identity, bio: form.bio || null }, user?.email),
+      handle: getProfileHandle(identity, user?.email),
+      initials: getProfileInitials(identity, user?.email),
+    };
+  }, [form.bio, form.displayName, form.username, profile, user?.email, user?.id]);
+
   const initialForm = useMemo(() => (profile ? formFromProfile(profile) : emptyForm), [profile]);
   const hasProfileChanges = hasEditProfileChanges({
     current: form,
@@ -123,7 +137,50 @@ export function EditProfileScreen() {
     hasAvatarDraft: Boolean(avatarAsset),
     hasCoverDraft: Boolean(coverAsset),
   });
-  const bioCount = form.bio.length;
+
+  /**
+   * The availability check onboarding already runs on this same handle. Without
+   * it a taken username was only discovered by `saveProfile` — which uploads
+   * the avatar and the cover *before* it PATCHes the profile, so the answer
+   * arrived after two uploads had run for nothing.
+   */
+  useEffect(() => {
+    if (!shouldCheckUsernameAvailability({
+      value: form.username,
+      displayName: form.displayName,
+      savedUsername: profile?.username,
+    })) {
+      setUsernameAvailability('idle');
+      setUsernameMessage(null);
+      return;
+    }
+
+    setUsernameAvailability('checking');
+    const timer = setTimeout(() => {
+      void api.validateProfile({
+        username: normalizeUsername(form.username),
+        displayName: form.displayName.trim(),
+      })
+        .then(() => {
+          setUsernameAvailability('available');
+          setUsernameMessage(null);
+        })
+        .catch((error) => {
+          const rejection = readUsernameRejection(error);
+          if (!rejection) {
+            // Offline, rate limited, or a server fault: no verdict on the name.
+            setUsernameAvailability('idle');
+            setUsernameMessage(null);
+            return;
+          }
+          setUsernameAvailability('taken');
+          setUsernameMessage(rejection);
+        });
+    }, USERNAME_CHECK_DELAY_MS);
+
+    return () => clearTimeout(timer);
+  }, [api, form.displayName, form.username, profile?.username]);
+
   const saveMutation = useMutation({
     mutationFn: saveProfile,
     onMutate: () => {
@@ -134,16 +191,12 @@ export function EditProfileScreen() {
       await refreshProfile();
       await queryClient.invalidateQueries({ queryKey: ['profile'] });
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      if (router.canGoBack()) {
-        router.back();
-      } else {
-        router.replace('/(tabs)/profile' as never);
-      }
+      leaveWithChangesSettled();
     },
     onError: async (error) => {
       setProgressMessage(null);
       if (error instanceof ApiError) {
-        const details = error.details as { fieldErrors?: FieldErrors } | undefined;
+        const details = error.details as { fieldErrors?: EditProfileFieldErrors } | undefined;
         if (details?.fieldErrors) {
           setFieldErrors((current) => ({ ...current, ...details.fieldErrors }));
         }
@@ -156,13 +209,54 @@ export function EditProfileScreen() {
     },
   });
 
+  const isSaving = saveMutation.isPending;
+  const canSave = hasProfileChanges
+    && profileQuery.isSuccess
+    && Boolean(profile)
+    && usernameAvailability !== 'taken';
+
+  /**
+   * Modality: "if closing a modal could result in loss of user-generated
+   * content, present an alert" — and this route is `presentation: 'modal'`, so
+   * the swipe-down discards the form too. One guard covers the Close control,
+   * the dismiss gesture and Android's hardware back; the composer's leave sheet
+   * is the same shape, minus the draft this screen has nowhere to keep.
+   */
+  usePreventRemove(hasProfileChanges && !isLeaveAllowed && !isSaving, ({ data }) => {
+    // `Alert`, not the app's action sheet, for two reasons that agree. Alerts
+    // is what one destructive confirmation is for — `lib/action-sheet.ts` says
+    // so itself, and the composer's sheet is a sheet because it has a second
+    // choice (save the draft) that this screen has nowhere to keep. And the
+    // sheet could not appear here anyway: `ActionSheetHost` is an in-window
+    // overlay by design (an RN Modal cannot report keyboard height on Android),
+    // and this route is `presentation: 'modal'` — a native modal presented
+    // above that window. Captured on the simulator: the screen was correctly
+    // held, and the sheet was nowhere, which traps a person on the form.
+    // "Keep editing" rather than "Cancel": the control they just pressed is
+    // named Cancel, so a Cancel that means *stay* reverses itself (ledger DV8).
+    Alert.alert('Discard your changes?', undefined, [
+      { text: 'Keep editing', style: 'cancel' },
+      {
+        text: 'Discard',
+        style: 'destructive',
+        onPress: () => {
+          setIsLeaveAllowed(true);
+          setTimeout(() => navigation.dispatch(data.action), 0);
+        },
+      },
+    ]);
+  });
+
   async function pickProfileImage(role: 'avatar' | 'cover') {
     setMessage(null);
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
-      setMessage('Allow photo access to choose a profile image.');
+      // Not a save failure — the old copy filed it under "Profile not saved",
+      // which named the wrong thing and offered no way to change the answer.
+      setPhotoAccessDenied(true);
       return;
     }
+    setPhotoAccessDenied(false);
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
@@ -195,7 +289,7 @@ export function EditProfileScreen() {
       throw new Error('Load your profile before saving changes.');
     }
 
-    const validationErrors = validateForm(form);
+    const validationErrors = validateProfileForm(form);
     setFieldErrors(validationErrors);
     if (Object.keys(validationErrors).length > 0) {
       throw new Error('Fix the highlighted profile fields.');
@@ -241,24 +335,61 @@ export function EditProfileScreen() {
     });
   }
 
+  function editField(field: 'username' | 'displayName' | 'bio', value: string) {
+    setForm((current) => ({ ...current, [field]: value }));
+    setFieldErrors((current) => ({ ...current, [field]: undefined }));
+  }
+
+  /**
+   * Text fields: "when creating a user name or password, validation needs to
+   * happen before people switch to another field."
+   */
+  function validateOnBlur(field: 'username' | 'displayName' | 'bio') {
+    setFieldErrors((current) => ({ ...current, [field]: validateProfileField(field, form[field]) }));
+  }
+
+  /**
+   * What the Close control does: *ask* to leave. It must not clear
+   * `isLeaveAllowed` first — doing so disarms the guard above, and the first
+   * capture of this screen showed exactly that, the form closing to Home with
+   * the edits gone and no confirmation.
+   */
+  function requestLeave() {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)/profile' as never);
+    }
+  }
+
+  /** Leaving with the work settled: nothing left to confirm. */
+  function leaveWithChangesSettled() {
+    setIsLeaveAllowed(true);
+    setTimeout(requestLeave, 0);
+  }
+
+  const header = (
+    <EditHeader
+      isSaving={isSaving}
+      topInset={topInset}
+      onClose={requestLeave}
+      onSave={canSave ? () => saveMutation.mutate() : undefined}
+    />
+  );
+
   if (!user) {
     return (
-      <EditProfileShell topInset={topInset} scrollBottomPadding={scrollBottomPadding} horizontalPadding={horizontalPadding}>
-        <EditHeader isSaving={false} onBack={leaveEditProfile} onSave={undefined} />
+      <EditProfileShell header={header} scrollBottomPadding={scrollBottomPadding} horizontalPadding={horizontalPadding}>
         <StatusBlock title="Sign in required" body="Sign in to update your Magicbooklet profile." />
         <PrimaryButton label="Sign in" accent="primary" onPress={() => router.replace('/auth' as never)} />
       </EditProfileShell>
     );
   }
 
-  return (
-    <EditProfileShell topInset={topInset} scrollBottomPadding={scrollBottomPadding} horizontalPadding={horizontalPadding}>
-      <EditHeader
-        isSaving={saveMutation.isPending}
-        onBack={leaveEditProfile}
-        onSave={hasProfileChanges && profileQuery.isSuccess && Boolean(profile) ? () => saveMutation.mutate() : undefined}
-      />
+  const username = usernameHint({ availability: usernameAvailability, message: usernameMessage });
 
+  return (
+    <EditProfileShell header={header} scrollBottomPadding={scrollBottomPadding} horizontalPadding={horizontalPadding}>
       {profileQuery.isLoading ? (
         <View style={{ minHeight: 360, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator color={appTheme.colors.primary} />
@@ -272,6 +403,16 @@ export function EditProfileScreen() {
         <>
           {progressMessage ? <StatusBlock tone="info" title="Updating profile" body={progressMessage} /> : null}
           {message ? <StatusBlock tone="danger" title="Profile not saved" body={message} /> : null}
+          {photoAccessDenied ? (
+            <View style={{ gap: appTheme.spacing.gap }}>
+              <StatusBlock
+                tone="warning"
+                title="Photo access is off"
+                body="Magicbooklet cannot open your photo library. Allow photo access in system settings to choose a display photo or cover."
+              />
+              <SecondaryButton label="Settings" onPress={() => { void Linking.openSettings(); }} />
+            </View>
+          ) : null}
 
           <View style={{ gap: 0 }}>
             <Pressable
@@ -293,20 +434,24 @@ export function EditProfileScreen() {
                 <Image source={{ uri: coverDraftUri ?? form.coverUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
               ) : (
                 <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: appTheme.colors.panelSoft }}>
-                  <ImageIcon size={26} color={appTheme.colors.muted} />
-                  <Text style={{ color: appTheme.colors.muted, fontSize: 13, fontWeight: '600' }}>Add a cover image</Text>
+                  <ImageIcon size={appTheme.icon.hero} color={appTheme.colors.muted} />
+                  <AppText variant="label" color="muted">Add a cover image</AppText>
                 </View>
               )}
               <LinearGradient colors={['rgba(3,4,13,0.08)', 'rgba(3,4,13,0.76)']} style={{ position: 'absolute', inset: 0 }} />
-              <View style={{ position: 'absolute', left: 18, right: 18, bottom: 18, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 14 }}>
-                <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
-                  <Text numberOfLines={1} style={{ color: appTheme.colors.text, fontSize: 22, fontWeight: '700' }}>{previewName}</Text>
-                  <Text style={{ color: appTheme.colors.primary, fontSize: 14, fontWeight: '700' }}>{previewHandle}</Text>
-                </View>
-                <ActionPill icon={<ImageIcon size={17} color={appTheme.colors.text} />} label="Change cover" />
+              <View style={{ position: 'absolute', right: 14, bottom: 14 }}>
+                <ActionPill icon={<ImageIcon size={appTheme.icon.sm} color={appTheme.colors.text} />} label="Change cover" />
               </View>
             </Pressable>
 
+            {/*
+              The name and handle used to sit inside the cover at `bottom: 18`,
+              where the avatar's `marginTop: -36` landed squarely on the handle —
+              captured on the simulator with only the "@" showing. They read
+              below the avatar row now, which is where the profile this previews
+              puts them (`profile-dashboard`'s hero card), and they get the full
+              width instead of the strip left over beside the pill.
+            */}
             <View style={{ marginTop: -36, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 14 }}>
               <Pressable
                 accessibilityRole="button"
@@ -327,49 +472,59 @@ export function EditProfileScreen() {
                     {avatarDraftUri || form.avatarUrl ? (
                       <Image source={{ uri: avatarDraftUri ?? form.avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
                     ) : (
-                      <Text style={{ color: appTheme.colors.text, fontSize: 24, fontWeight: '700' }}>{previewInitials}</Text>
+                      <AppText variant="sectionTitle">{preview.initials}</AppText>
                     )}
                   </View>
                 <View style={{ position: 'absolute', right: -2, bottom: 0, width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: appTheme.colors.primary, borderWidth: 3, borderColor: appTheme.colors.background }}>
-                  <Camera size={16} color={appTheme.colors.onPrimary} />
+                  <Camera size={appTheme.icon.sm} color={appTheme.colors.onPrimary} />
                 </View>
               </Pressable>
-              <Text style={{ color: appTheme.colors.muted, fontSize: 13, fontWeight: '600', paddingBottom: 12 }}>Tap photo to replace</Text>
+              <AppText variant="caption" color="muted" style={{ paddingBottom: 12 }}>Tap photo to replace</AppText>
             </View>
+
+            <View style={{ paddingHorizontal: 4, paddingTop: 12, gap: 4 }}>
+              <AppText variant="sectionTitle" numberOfLines={1}>{preview.name}</AppText>
+              <AppText variant="label" color="primary" numberOfLines={1}>{preview.handle}</AppText>
+            </View>
+
             {fieldErrors.avatarUrl || fieldErrors.coverUrl ? (
               <View style={{ paddingHorizontal: 4, paddingTop: 10, gap: 4 }}>
-                {fieldErrors.avatarUrl ? <ErrorText text={fieldErrors.avatarUrl} /> : null}
-                {fieldErrors.coverUrl ? <ErrorText text={fieldErrors.coverUrl} /> : null}
+                {fieldErrors.avatarUrl ? <FieldError text={fieldErrors.avatarUrl} /> : null}
+                {fieldErrors.coverUrl ? <FieldError text={fieldErrors.coverUrl} /> : null}
               </View>
             ) : null}
           </View>
 
           <GlassForm>
-            <ProfileTextField
+            <AppTextInput
               label="Display name"
               value={form.displayName}
-              onChangeText={(displayName) => {
-                setForm((current) => ({ ...current, displayName }));
-                setFieldErrors((current) => ({ ...current, displayName: undefined }));
-              }}
+              onChangeText={(displayName) => editField('displayName', displayName)}
+              onBlur={() => validateOnBlur('displayName')}
+              onClear={() => editField('displayName', '')}
               error={fieldErrors.displayName}
               placeholder="LunaDreams"
-              maxLength={MAX_DISPLAY_NAME_LENGTH}
+              maxLength={PROFILE_DISPLAY_NAME_MAX_LENGTH}
               autoCapitalize="words"
+              autoComplete="name"
               textContentType="name"
               returnKeyType="next"
               submitBehavior="submit"
               onSubmitEditing={() => usernameRef.current?.focus()}
             />
-            <ProfileTextField
+            <AppTextInput
               label="Username"
               value={form.username}
-              onChangeText={(username) => {
-                setForm((current) => ({ ...current, username }));
-                setFieldErrors((current) => ({ ...current, username: undefined }));
-              }}
+              // Lowercased, `@`-stripped and filtered as you type, the way the
+              // onboarding screen that claims this same handle already does it.
+              onChangeText={(next) => editField('username', normalizeUsernameInput(next))}
+              onBlur={() => validateOnBlur('username')}
+              onClear={() => editField('username', '')}
               error={fieldErrors.username}
-              placeholder="@lunadreams"
+              hint={fieldErrors.username ? undefined : username.text}
+              hintTone={username.tone}
+              placeholder="lunadreams"
+              maxLength={PROFILE_USERNAME_MAX_LENGTH}
               autoCapitalize="none"
               autoCorrect={false}
               spellCheck={false}
@@ -379,50 +534,39 @@ export function EditProfileScreen() {
               onSubmitEditing={() => bioRef.current?.focus()}
               inputRef={usernameRef}
             />
-            <ProfileTextField
+            <AppTextInput
               label="Bio"
               value={form.bio}
-              onChangeText={(bio) => {
-                setForm((current) => ({ ...current, bio }));
-                setFieldErrors((current) => ({ ...current, bio: undefined }));
-              }}
+              onChangeText={(bio) => editField('bio', bio)}
+              onBlur={() => validateOnBlur('bio')}
               error={fieldErrors.bio}
               placeholder="Fantasy worlds, motion stories, and AI art experiments."
               multiline
-              maxLength={MAX_BIO_LENGTH}
-              footer={`${bioCount}/${MAX_BIO_LENGTH}`}
+              maxLength={PROFILE_BIO_MAX_LENGTH}
+              footer={`${form.bio.length}/${PROFILE_BIO_MAX_LENGTH}`}
               inputRef={bioRef}
             />
           </GlassForm>
-
-          <SecondaryButton label="Cancel" disabled={saveMutation.isPending} onPress={leaveEditProfile} />
         </>
       )}
     </EditProfileShell>
   );
-
-  function leaveEditProfile() {
-    if (router.canGoBack()) {
-      router.back();
-    } else {
-      router.replace('/(tabs)/profile' as never);
-    }
-  }
 }
 
 function EditProfileShell({
   children,
-  topInset,
+  header,
   scrollBottomPadding,
   horizontalPadding,
 }: {
   children: React.ReactNode;
-  topInset: number;
+  header: React.ReactNode;
   scrollBottomPadding: number;
   horizontalPadding: number;
 }) {
   return (
-    <View style={{ flex: 1, backgroundColor: appTheme.colors.background, paddingTop: topInset }}>
+    <View style={{ flex: 1, backgroundColor: appTheme.colors.background }}>
+      {header}
       <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
       <ScrollView
         contentInsetAdjustmentBehavior="never"
@@ -445,56 +589,99 @@ function EditProfileShell({
   );
 }
 
+/**
+ * Pinned above the scroll view, the way the post composer's header is. It used
+ * to be the scroll view's first child, so the screen's title and its only Save
+ * control scrolled off as soon as you reached the bio — the field furthest from
+ * the button that commits it.
+ */
 function EditHeader({
   isSaving,
-  onBack,
+  topInset,
+  onClose,
   onSave,
 }: {
   isSaving: boolean;
-  onBack: () => void;
+  topInset: number;
+  onClose: () => void;
   onSave?: () => void;
 }) {
+  const disabled = !onSave || isSaving;
+
   return (
-    <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Cancel"
-        disabled={isSaving}
-        onPress={onBack}
-        style={({ pressed }) => ({
-          width: 48,
-          height: 48,
-          borderRadius: 24,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: appTheme.colors.panelSoft,
-          opacity: pressed ? 0.72 : isSaving ? 0.5 : 1,
-        })}
-      >
-        <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
-      </Pressable>
-      <Text accessibilityRole="header" style={{ flex: 1, textAlign: 'center', color: appTheme.colors.text, fontSize: 21, fontWeight: '700' }}>Edit Profile</Text>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Save profile"
-        disabled={!onSave || isSaving}
-        onPress={onSave}
-        style={({ pressed }) => ({
-          minWidth: 82,
-          minHeight: 48,
-          borderRadius: 24,
-          paddingHorizontal: 14,
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 7,
-          backgroundColor: !onSave || isSaving ? appTheme.colors.panelSoft : pressed ? appTheme.colors.primaryStrong : appTheme.colors.primary,
-          opacity: !onSave || isSaving ? appTheme.opacity.disabled : 1,
-        })}
-      >
-        {isSaving ? <ActivityIndicator color={appTheme.colors.onPrimary} size="small" /> : <Check size={16} color={onSave ? appTheme.colors.onPrimary : appTheme.colors.faint} />}
-        <Text style={{ color: onSave ? appTheme.colors.onPrimary : appTheme.colors.faint, fontSize: 14, fontWeight: '700' }}>Save</Text>
-      </Pressable>
+    <View
+      style={{
+        paddingTop: Math.max(8, topInset),
+        paddingHorizontal: 14,
+        paddingBottom: 8,
+        borderBottomWidth: 1,
+        borderBottomColor: appTheme.colors.borderSubtle,
+        backgroundColor: appTheme.colors.background,
+      }}
+    >
+      <View style={{ minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+        {/*
+          Named Cancel rather than Close, and pinned that way by N2's guard:
+          Sheets asks a Done button to be "paired with a Cancel button", and
+          Save is this sheet's Done. The duplication that used to sit under this
+          — a second control, also called Cancel, at the foot of the form — was
+          the real defect, and it is the one that went.
+        */}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Cancel"
+          accessibilityState={{ disabled: isSaving }}
+          disabled={isSaving}
+          onPress={onClose}
+          style={({ pressed }) => ({
+            width: appTheme.touch.default,
+            height: appTheme.touch.default,
+            borderRadius: appTheme.touch.default / 2,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: pressed ? appTheme.colors.surfaceStrong : 'transparent',
+            opacity: isSaving ? appTheme.opacity.disabled : 1,
+          })}
+        >
+          <CloseGlyph size={appTheme.icon.feature} color={appTheme.colors.text} />
+        </Pressable>
+        <AppText heading variant="cardTitle" accessibilityRole="header" numberOfLines={1} style={{ flex: 1 }}>
+          Edit profile
+        </AppText>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Save profile"
+          accessibilityState={{ disabled, busy: isSaving }}
+          disabled={disabled}
+          onPress={onSave}
+          style={({ pressed }) => ({
+            minWidth: 92,
+            minHeight: appTheme.touch.default,
+            borderRadius: appTheme.radii.pill,
+            paddingHorizontal: 14,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 7,
+            backgroundColor: disabled
+              ? appTheme.colors.panelSoft
+              : pressed ? appTheme.colors.primaryStrong : appTheme.colors.primary,
+            opacity: disabled ? appTheme.opacity.disabled : 1,
+          })}
+        >
+          {/*
+            Buttons: "you can also configure the button to display a different
+            label alongside the activity indicator ... 'Checkout' could change to
+            'Checking out…'". It used to spin beside a label still reading Save.
+          */}
+          {isSaving
+            ? <ActivityIndicator color={appTheme.colors.onPrimary} size="small" />
+            : <Check size={appTheme.icon.sm} color={disabled ? appTheme.colors.text : appTheme.colors.onPrimary} />}
+          <AppText variant="button" color={disabled ? 'text' : appTheme.colors.onPrimary}>
+            {isSaving ? 'Saving…' : 'Save'}
+          </AppText>
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -517,79 +704,21 @@ function GlassForm({ children }: { children: React.ReactNode }) {
   );
 }
 
-function ProfileTextField({
-  label,
-  error,
-  footer,
-  multiline,
-  inputRef,
-  ...props
-}: ComponentProps<typeof TextInput> & {
-  label: string;
-  error?: string;
-  footer?: string;
-  inputRef?: React.RefObject<TextInput | null>;
-}) {
+function ActionPill({ icon, label }: { icon: React.ReactNode; label: string }) {
   return (
-    <View style={{ gap: 8 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-        <Text style={{ color: appTheme.colors.textSecondary, fontSize: 12, fontWeight: '700' }}>{label}</Text>
-        {footer ? <Text style={{ color: appTheme.colors.faint, fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] }}>{footer}</Text> : null}
-      </View>
-      <TextInput
-        ref={inputRef}
-        accessibilityLabel={label}
-        aria-invalid={Boolean(error)}
-        placeholderTextColor={appTheme.colors.faint}
-        multiline={multiline}
-        textAlignVertical={multiline ? 'top' : 'center'}
-        style={{
-          minHeight: multiline ? 112 : appTheme.touch.roomy,
-          borderRadius: multiline ? 22 : 18,
-          borderCurve: 'continuous',
-          borderWidth: 1,
-          borderColor: error ? appTheme.colors.danger : appTheme.colors.border,
-          backgroundColor: appTheme.colors.surfaceInset,
-          color: appTheme.colors.text,
-          fontSize: 16,
-          fontWeight: '500',
-          paddingHorizontal: 15,
-          paddingVertical: multiline ? 14 : 0,
-        }}
-        {...props}
-      />
-      {error ? <ErrorText text={error} /> : null}
-    </View>
-  );
-}
-
-function ActionPill({
-  icon,
-  label,
-  onPress,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  onPress?: () => void;
-}) {
-  const content = (
-    <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 24, backgroundColor: appTheme.colors.overlayStrong, paddingHorizontal: 14, paddingVertical: 9 }}>
+    <View style={{ minHeight: appTheme.touch.default, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: appTheme.radii.pill, backgroundColor: appTheme.colors.overlayStrong, paddingHorizontal: 14, paddingVertical: 9 }}>
       {icon}
-      <Text style={{ color: appTheme.colors.text, fontSize: 13, fontWeight: '700' }}>{label}</Text>
+      <AppText variant="label">{label}</AppText>
     </View>
-  );
-
-  if (!onPress) return content;
-
-  return (
-    <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={({ pressed }) => ({ opacity: pressed ? 0.76 : 1 })}>
-      {content}
-    </Pressable>
   );
 }
 
-function ErrorText({ text }: { text: string }) {
-  return <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={{ color: appTheme.colors.danger, fontSize: 13, lineHeight: 18, fontWeight: '600' }}>{text}</Text>;
+function FieldError({ text }: { text: string }) {
+  return (
+    <AppText accessibilityRole="alert" accessibilityLiveRegion="polite" variant="caption" color="danger">
+      {text}
+    </AppText>
+  );
 }
 
 function formFromProfile(profile: ProfileResponse): EditProfileForm {
@@ -600,32 +729,6 @@ function formFromProfile(profile: ProfileResponse): EditProfileForm {
     avatarUrl: profile.avatarUrl ?? '',
     coverUrl: profile.coverUrl ?? '',
   };
-}
-
-function normalizeUsername(value: string) {
-  const normalized = value.trim().replace(/^@+/, '').toLowerCase();
-  return normalized.length > 0 ? normalized : null;
-}
-
-function validateForm(form: EditProfileForm): FieldErrors {
-  const errors: FieldErrors = {};
-  const username = normalizeUsername(form.username);
-
-  if (!username) {
-    errors.username = 'Choose a username for your profile.';
-  } else if (!USERNAME_PATTERN.test(username)) {
-    errors.username = 'Use 3-24 lowercase letters, numbers, or hyphens.';
-  }
-
-  if (form.displayName.trim().length > MAX_DISPLAY_NAME_LENGTH) {
-    errors.displayName = `Display name must be ${MAX_DISPLAY_NAME_LENGTH} characters or fewer.`;
-  }
-
-  if (form.bio.trim().length > MAX_BIO_LENGTH) {
-    errors.bio = `Bio must be ${MAX_BIO_LENGTH} characters or fewer.`;
-  }
-
-  return errors;
 }
 
 function emptyProfile(id: string): ProfileResponse {

@@ -54,7 +54,10 @@ const ICON_RAMP = new Set<number>([
  * `feed-card-shell`'s lone 17pt overflow glyph -- the literal S12 handed to
  * whichever unit owned the feed card next. Thirty off-ramp sizes retired in one
  * unit, the largest drop so far; it leaves the composer's 21 and the home side
- * menu's 11 as the only budgets still in double figures.
+ * menu's 11 as the only budgets still in double figures. S15 took the edit
+ * profile screen's 2 with it -- the empty cover's 26pt glyph to `icon.hero`,
+ * which is what the ramp reserves for an empty state, and the cover pill's 17
+ * to `icon.sm` beside its own label.
  */
 const LEGACY_SIZES: Record<string, number> = {
   'app/(tabs)/showcase.tsx': 0,
@@ -70,7 +73,7 @@ const LEGACY_SIZES: Record<string, number> = {
   'app/settings.tsx': 9,
   'app/viewer.tsx': 14,
   'components/creator-profile-screen.tsx': 0,
-  'components/edit-profile-screen.tsx': 2,
+  'components/edit-profile-screen.tsx': 0,
   'components/feed-card-shell.tsx': 0,
   'components/feed-pagination-footer.tsx': 0,
   'components/feed-video-preview.tsx': 0,

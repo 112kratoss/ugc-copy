@@ -737,7 +737,11 @@ function ProfileHeroCard({
             })}
           >
             <Pencil size={appTheme.icon.sm} color="#111114" />
-            <Text style={{ color: '#111114', fontSize: 14, fontWeight: '800' }}>Edit Profile</Text>
+            {/* The name the control has always had in its accessibility label,
+                now the name it draws — and the name the screen it opens gives
+                itself. S10's rule, on a smaller scale: a destination answers to
+                the control that reaches it. */}
+            <Text style={{ color: '#111114', fontSize: 14, fontWeight: '800' }}>Edit profile</Text>
           </Pressable>
         </View>
 

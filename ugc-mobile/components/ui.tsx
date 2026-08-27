@@ -17,9 +17,10 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Sparkles } from 'lucide-react-native';
+import { Sparkles, X } from 'lucide-react-native';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
+import { MIN_HIT_TARGET_PT } from '@/lib/hit-target';
 import { getAvatarInitial } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
@@ -904,6 +905,9 @@ export function SecondaryButton({
   );
 }
 
+/** Width reserved beside the text for a trailing in-field control. */
+const FIELD_CONTROL_SIZE = MIN_HIT_TARGET_PT;
+
 export function AppTextInput({
   label,
   multiline,
@@ -911,14 +915,39 @@ export function AppTextInput({
   accessibilityLabelledBy,
   accessibilityState,
   editable,
+  error,
+  footer,
+  hint,
+  hintTone = 'muted',
   inputRef,
   onBlur,
+  onClear,
   onFocus,
   placeholderTextColor = appTheme.colors.faint,
   style,
+  value,
   ...props
 }: TextInputProps & {
   label: string;
+  /**
+   * What is wrong with the current value. Draws the danger border and an
+   * announced message under the field — Feedback asks you to "show people when
+   * a command can't be carried out and help them understand why", and a field
+   * that only turns red has said the first half.
+   */
+  error?: string;
+  /** Right-aligned on the label row. A character count, typically. */
+  footer?: string;
+  /** A standing line under the field: what the field wants, or how it is doing. */
+  hint?: string;
+  hintTone?: 'muted' | 'success' | 'danger';
+  /**
+   * Clears the field. Text fields, iOS: "Display a Clear button in the trailing
+   * end of a text field to help people erase their input." Drawn rather than
+   * left to `clearButtonMode`, which exists only on iOS — this is the same
+   * control on both platforms. Single-line fields only.
+   */
+  onClear?: () => void;
   /** Lets a caller move focus to this field, e.g. from the previous field's Return key. */
   inputRef?: React.RefObject<TextInput | null>;
 }) {
@@ -926,58 +955,103 @@ export function AppTextInput({
   const labelId = `field-label-${generatedId.replace(/:/g, '')}`;
   const [focused, setFocused] = useState(false);
   const disabled = editable === false;
+  const showClear = Boolean(onClear) && !multiline && !disabled && Boolean(value);
+  const message = error ?? hint;
+  const messageColor = error ? 'danger' : hintTone;
 
   return (
     <View style={{ gap: appTheme.spacing.compact }}>
-      <AppText
-        nativeID={labelId}
-        variant="label"
-        color="textSecondary"
-        style={{ letterSpacing: 0.6, textTransform: 'uppercase' }}
-      >
-        {label}
-      </AppText>
-      <TextInput
-        {...props}
-        ref={inputRef}
-        accessibilityLabel={accessibilityLabel ?? label}
-        accessibilityLabelledBy={accessibilityLabelledBy ?? labelId}
-        accessibilityState={{ ...accessibilityState, disabled }}
-        editable={editable}
-        multiline={multiline}
-        onBlur={(event) => {
-          setFocused(false);
-          onBlur?.(event);
-        }}
-        onFocus={(event) => {
-          setFocused(true);
-          onFocus?.(event);
-        }}
-        placeholderTextColor={placeholderTextColor}
-        selectionColor={appTheme.colors.primary}
-        textAlignVertical={multiline ? 'top' : 'center'}
-        style={[
-          {
-            minHeight: multiline ? 120 : appTheme.touch.default,
-            // Border width stays put and the focus ring is drawn as an outline
-            // outside the box. Growing the border on focus instead would resize
-            // the field and nudge its text by a pixel on every tap.
-            borderWidth: 1,
-            borderColor: focused ? appTheme.state.focus.color : appTheme.colors.border,
-            outlineStyle: 'solid',
-            outlineColor: appTheme.state.focus.color,
-            outlineWidth: focused ? appTheme.state.focus.width : 0,
-            borderRadius: appTheme.radii.md,
-            borderCurve: 'continuous',
-            backgroundColor: disabled ? appTheme.colors.surface : appTheme.colors.surfaceInset,
-            color: disabled ? appTheme.colors.muted : appTheme.colors.text,
-            ...textRole('bodySm'),
-            paddingHorizontal: appTheme.spacing.card,
-            paddingVertical: appTheme.spacing.gap,
-          },
-          style,
-        ]}
-      />
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: appTheme.spacing.compact }}>
+        <AppText
+          nativeID={labelId}
+          variant="label"
+          color="textSecondary"
+          style={{ letterSpacing: 0.6, textTransform: 'uppercase' }}
+        >
+          {label}
+        </AppText>
+        {footer ? (
+          <AppText variant="caption" color="faint" style={{ fontVariant: ['tabular-nums'] }}>
+            {footer}
+          </AppText>
+        ) : null}
+      </View>
+      <View style={{ justifyContent: 'center' }}>
+        <TextInput
+          {...props}
+          ref={inputRef}
+          accessibilityLabel={accessibilityLabel ?? label}
+          accessibilityLabelledBy={accessibilityLabelledBy ?? labelId}
+          accessibilityState={{ ...accessibilityState, disabled }}
+          aria-invalid={Boolean(error)}
+          editable={editable}
+          multiline={multiline}
+          onBlur={(event) => {
+            setFocused(false);
+            onBlur?.(event);
+          }}
+          onFocus={(event) => {
+            setFocused(true);
+            onFocus?.(event);
+          }}
+          placeholderTextColor={placeholderTextColor}
+          selectionColor={appTheme.colors.primary}
+          textAlignVertical={multiline ? 'top' : 'center'}
+          value={value}
+          style={[
+            {
+              minHeight: multiline ? 120 : appTheme.touch.default,
+              // Border width stays put and the focus ring is drawn as an outline
+              // outside the box. Growing the border on focus instead would resize
+              // the field and nudge its text by a pixel on every tap.
+              borderWidth: 1,
+              borderColor: error
+                ? appTheme.colors.danger
+                : focused ? appTheme.state.focus.color : appTheme.colors.border,
+              outlineStyle: 'solid',
+              outlineColor: appTheme.state.focus.color,
+              outlineWidth: focused ? appTheme.state.focus.width : 0,
+              borderRadius: appTheme.radii.md,
+              borderCurve: 'continuous',
+              backgroundColor: disabled ? appTheme.colors.surface : appTheme.colors.surfaceInset,
+              color: disabled ? appTheme.colors.muted : appTheme.colors.text,
+              ...textRole('bodySm'),
+              paddingHorizontal: appTheme.spacing.card,
+              paddingVertical: appTheme.spacing.gap,
+            },
+            showClear ? { paddingRight: FIELD_CONTROL_SIZE } : null,
+            style,
+          ]}
+        />
+        {showClear ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Clear ${label.toLowerCase()}`}
+            onPress={onClear}
+            style={({ pressed }) => ({
+              position: 'absolute',
+              right: 0,
+              width: FIELD_CONTROL_SIZE,
+              height: FIELD_CONTROL_SIZE,
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: pressed ? appTheme.opacity.pressed : 1,
+            })}
+          >
+            <X size={appTheme.icon.compact} color={appTheme.colors.muted} />
+          </Pressable>
+        ) : null}
+      </View>
+      {message ? (
+        <AppText
+          accessibilityRole={error ? 'alert' : undefined}
+          accessibilityLiveRegion="polite"
+          variant="caption"
+          color={messageColor}
+        >
+          {message}
+        </AppText>
+      ) : null}
     </View>
   );
 }

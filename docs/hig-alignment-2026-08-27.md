@@ -112,8 +112,14 @@ re-read the codebase broadly or ask for past-chat context.
   branch from it rather than from `main`, do not offer to merge mid-phase, and expect the question
   again at the Phase 4/5 boundary. (Checked when asking, and worth re-checking next time: no
   `mobile-store-release` run was in flight, so a push would have been safe - that is the gate, not
-  the size of the diff.) **S2 and S3 are both done**; the next `todo` on the board is **S15 (edit profile)**,
-  which inherits `BrandLockup` and the `AppTextInput` label idiom S2 leaned on. Carrying further: the composer's 21 off-ramp icon
+  the size of the diff.) **S2, S3 and S15 are done**; the next `todo` on the board is **S16 (settings + help)**,
+  which is a list-and-toggle screen rather than a form, though `AppTextInput` now carries the error,
+  counter, hint and clear control that S15 put into it, so S21 and S24 inherit a finished field.
+  Two things S15 leaves for whoever needs them: **`ActionSheetHost` cannot draw over a
+  `presentation: 'modal'` route** (it is an in-window overlay by design, so a native modal is
+  presented above it — use `Alert` there; guarded in `hig-edit-profile.test.ts`), and **a profile
+  photo still cannot be removed, only replaced**, which is a product decision rather than an
+  alignment fix. Carrying further: the composer's 21 off-ramp icon
   sizes are the largest budget in `hig-icon-size.test.ts`, with the home side menu's 11 next; F3 owns
   the bounce-disabled pair (`home-dashboard`, the alerts list) plus the 17 hidden scroll indicators;
   the workspace menu's absence from Alerts and Profile needs the gesture layer lifted into the tabs
@@ -206,7 +212,7 @@ applied everywhere or it's a bug, not a choice.
 | DV6 | The raised centre control opens a menu instead of switching tabs | Tab bars | "Use a tab bar to support navigation, not to provide actions" — both menu entries navigate to sections (create tab, post composer), so it is navigation via a menu, in the platform-common shape for a creation affordance | single control, app-wide |
 | DV7 | The three creation surfaces are full-screen modals in substance but declared a tab and two pushes | Modality | The create tab, `create/[tool]` and `post/new` are each full-screen, self-contained and closed rather than backed out of. The create tab cannot become a modal route — it is a tab (DV5) — so promoting one of the other two would split a family the same menu opens. What Modality asks for, an obvious way out, each of them has, and all three now draw the same `CloseGlyph`. Pinned by `post-new-screen.test.ts` | all three creation surfaces |
 | DV9 | Tab switches cross-fade; iOS switches tabs instantly | Motion, Tab bars | Motion asks you to "generally avoid adding motion to UI interactions that occur frequently", and a tab switch is the app's most frequent. The bar is a custom component (DV3) on two platforms, where a shared cross-fade reads as one product rather than two; it is already routed through Reduce Motion, so the setting turns it off. Revisit in X1 with the rest of the motion inventory | all four tabs |
-| DV8 | A `cancel`-styled alert button titled "Keep …" rather than "Cancel" | Alerts | Four alerts confirm cancelling something ("Cancel upload", "Cancel creation"), where a button titled "Cancel" would collide with the action's own name. The decline says what keeping means instead. The three that do *not* have that collision ("Not now" ×3) are a real miss → X3 | 4 of 7; the other 3 are open |
+| DV8 | A `cancel`-styled alert button titled "Keep …" rather than "Cancel" | Alerts | Five alerts confirm cancelling something ("Cancel upload", "Cancel creation", and S15's leave-without-saving, whose own Close control is named Cancel), where a button titled "Cancel" would collide with the action's own name. The decline says what keeping means instead. The three that do *not* have that collision ("Not now" ×3) are a real miss → X3 | 5 of 8; the other 3 are open |
 
 ## HIG coverage matrix
 
@@ -409,7 +415,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S13/S14 profiles | 3 | done | 4V/4D/5P | a private post says so with a padlock, not a hue; the profile's own title is in the app's typeface on Android; a creator profile leads with the creator |
 | S2 auth | 4 | done | 4V/6D/4P | the way in is not painted as a failure; a mistake is answered in the app's words, above the keyboard |
 | S3 onboarding | 4 | done | 3V/3D/3P | the product's name is drawn once, in its own typeface; the flow can be left from the screen that opens it |
-| S15 edit profile | 4 | todo | — | |
+| S15 edit profile | 4 | done | 5V/4D/4P | the username is checked before the photos upload, not after; the form is the app's form; leaving no longer throws the work away in silence |
 | S16 settings/help | 4 | todo | — | |
 | S17(+a) pricing/IAP/ratings | 4 | todo | — | |
 | S7 unlocks | 4 | todo | — | |
@@ -2426,3 +2432,161 @@ thing on the simulator), so a top-right control in a dev build cannot be verifie
 on either. Both are unit-tested instead, which is the standing practice. Reaching the intro steps
 needs a signed-out session **and** an onboarding state below step 4; the S2 log's two safe
 signed-out recipes both produce that.
+
+### S15 edit profile — audited 2026-08-27 · AND-pass: 2026-08-27
+Chapters read: Entering data (`entering-data`), Text fields (`text-fields`), Virtual keyboards
+(`virtual-keyboards`), Labels (`labels`). Modality, Sheets, Alerts, Feedback, Layout, Buttons and
+Design principles were read earlier in the program and are reused.
+
+**The fastest way to see what was wrong with this screen is to diff it against `app/onboarding.tsx`.**
+That screen claims a display name and a username; this one changes the same two values later. The
+first normalises every keystroke, caps the length, states the rule under the field, and asks the
+server whether the handle is free while you type. The second did none of it — and its save path
+uploads the avatar and the cover *before* it PATCHes the profile, so the server's answer about the
+username arrived after two uploads had already run for nothing. Everything else here is the same
+shape: a screen that reimplemented what the app already had, and drifted.
+
+- [V][both] **The username was only checked after the images had uploaded.** Entering data: "people
+  can get frustrated when they have to go back and correct mistakes after filling out a lengthy
+  form … verify values as soon as people enter them." Text fields is more specific still — "when
+  creating a user name or password, validation needs to happen before people switch to another
+  field." Nothing on this screen validated before Save: `validateForm` ran inside the mutation, and
+  a name the server refuses was reported by a red banner reading "Fix the highlighted profile
+  fields." after the round trip → **fixed**: the same debounced `api.validateProfile` check
+  onboarding runs, and Save is disabled while a name stands refused. Captured on the simulator:
+  typing `creator-1a2b3c4d` puts the server's own sentence under the field and greys Save out, with
+  no save attempted and no upload made.
+  - The rejection is read carefully rather than eagerly: `readUsernameRejection` treats only a 400
+    or a 409 as a verdict. Offline the request fails and rate limiting answers 429 — neither is an
+    opinion about the name, and reading them as "taken" would block a save for a handle that is free.
+- [V][both] **The username field had no length cap and took any character.** The pattern allows
+  3–24 lowercase letters, numbers and hyphens; the field had no `maxLength` at all and no
+  normalisation, so sixty mixed-case characters went in and the error came back at save time →
+  **fixed**: `normalizeUsernameInput` on every keystroke (lowercase, leading `@` dropped, anything
+  outside the set filtered) — lifted from onboarding, which has always done exactly this — plus
+  `maxLength` on all three fields, so the two length errors became unreachable rather than merely
+  reported. Entering data prefers a field that cannot take a bad value.
+- [V][both] **A blank display name was accepted locally and refused by the server.**
+  `validateProfileUpdate` has required one all along ("Add a display name for your public
+  profile"); the screen's own `validateForm` only checked its maximum. Clearing the field and
+  pressing Save uploaded both images and then failed → **fixed** in the shared rule set, so the
+  blur check, the save check and the server now agree.
+- [V][both] **Leaving threw the work away in silence.** The route is `presentation: 'modal'`, so
+  there were three ways out — the Close control, the footer Cancel, and iOS's swipe-down — and none
+  of them looked at whether anything had been edited. A picked-but-unsaved photo went with them.
+  Modality: "if closing a modal could result in loss of user-generated content, present an alert"
+  → **fixed**: `usePreventRemove` covers the control, the dismiss gesture *and* Android's hardware
+  back from one place, exactly as the composer's leave guard does.
+  - **It took two tries, and the first failure is the interesting one.** The Close control called
+    the helper that sets `isLeaveAllowed` before navigating — which is the flag that *disarms* the
+    guard — so the screen closed to Home with the edits gone and no confirmation at all. Captured
+    that way on the simulator. Split into `requestLeave` (ask) and `leaveWithChangesSettled` (only
+    after a completed save or an accepted discard), and guarded so the two cannot be swapped back.
+  - **And the confirmation is an `Alert`, not the app's action sheet — for two reasons that agree.**
+    `lib/action-sheet.ts` says it itself: one destructive confirmation is what Alerts is for, and
+    the composer's sheet is a sheet because it has a second choice (save the draft) this screen has
+    nowhere to keep. The other reason is structural and worth recording for whoever adds the next
+    modal route: **`ActionSheetHost` cannot appear over a `presentation: 'modal'` screen.** It is an
+    in-window overlay on purpose (an RN `Modal` reports no keyboard height on Android — memory
+    `android-keyboard-insets-and-modals`), so it draws inside the root view controller while a
+    native modal is presented above it. The first build called `showActionSheet` here and the
+    result was worse than the bug: the screen was correctly held and *nothing appeared*, trapping
+    the person on the form. The sheet was not lost, either — it surfaced later on Home, once the
+    modal was gone. Guarded now: no `presentation: 'modal'` route calls `showActionSheet`, and a new
+    modal route trips the test so its author reads why.
+- [V][both] **The handle the screen previews was drawn underneath the avatar.** The cover's text
+  block sat at `bottom: 18` and the avatar row's `marginTop: -36` landed an 84pt circle squarely on
+  it: the first capture of this pass shows the "@" and nothing else. It is the *live preview of the
+  username being edited* — the one piece of feedback that field had → **fixed**: the name and
+  handle read below the avatar row, which is where the profile they preview puts them
+  (`profile-dashboard`'s hero card), and the "Change cover" pill moved to the cover's corner, so
+  the name gets the full width instead of the strip left over beside it.
+- [D][both] **The app's other form, outside the app's design system.** `ProfileTextField` was a
+  private field with no focus ring, no `selectionColor`, no `accessibilityLabelledBy`, hand-set
+  12/16pt type and a sentence-case label where `AppTextInput` draws an uppercase one. Exactly S2's
+  finding, on the screen S2 didn't touch → **fixed by extending the primitive, not the screen**:
+  `AppTextInput` gained `error`, `footer`, `hint`/`hintTone` and `onClear`, so the error border,
+  the announced message, the character counter and the clear control are now what every later form
+  inherits. S16, S21 and S24 are all forms; none of them will need to rebuild these.
+- [D][both] **No way to clear a field from inside it.** Text fields' iOS section is verbatim:
+  "Display a Clear button in the trailing end of a text field to help people erase their input."
+  → **fixed** in the primitive, 44×44 (`MIN_HIT_TARGET_PT`), drawn rather than left to
+  `clearButtonMode`, which exists only on iOS — the same cross-platform call S2 made. Single-line
+  fields only: on the bio it would sit over the text.
+- [D][both] **Two controls, one action.** The header's Close and a footer button both read Cancel
+  and both called the same function, 500pt apart — the duplication S2 removed from the auth footer
+  and S3 from the onboarding goal screen → **fixed**: the footer button is gone. The header
+  control *keeps* the name Cancel, and N2's guard is why: Sheets asks a Done button to be "paired
+  with a Cancel button", and Save is this sheet's Done. Removing the twin is what makes the name
+  unambiguous again.
+- [D][both] **The screen's title and its only Save control scrolled away.** `EditHeader` was the
+  scroll view's first child, so both left the screen as soon as you reached the bio — the field
+  furthest from the button that commits it, and the one the keyboard pushes hardest. The post
+  composer pins its header outside its ScrollView; this now does the same, and the Android capture
+  with the IME up shows Save still there while the focused field sits above the keyboard.
+- [D][both] **Icon ratchet: 2 → 0.** The empty cover's 26pt glyph took `icon.hero`, which is what
+  the ramp reserves for an empty state, and the cover pill's 17 took `icon.sm` beside its own
+  label. `components/edit-profile-screen.tsx` joins the files at zero; the composer's 21 and the
+  home side menu's 11 are still the only double-figure budgets.
+- [P][both] **A declined photo permission was reported as a failed save.** `pickProfileImage` set
+  the same `message` the save failure uses, so tapping Allow → Don't Allow produced a red panel
+  titled "Profile not saved" — naming the wrong thing, and offering no way to change the answer
+  → **fixed**: its own warning notice, and a **Settings** control that calls `Linking.openSettings()`,
+  which is the treatment S10 settled for a denied notification permission.
+- [P][both] **The waiting button did not say it was waiting.** Spinner beside a label still reading
+  Save. Buttons: "the label 'Checkout' could change to 'Checking out…'" → **fixed**: "Saving…",
+  the same change S2 made to the shared `PrimaryButton`.
+- [P][both] **The screen and the control that opens it disagreed about its name.** The control's
+  spoken name was already "Edit profile"; the name it *drew* and the title of the screen it opened
+  were both "Edit Profile". S10's rule at small scale — a destination answers to the control that
+  reaches it → **fixed** in all three places, which is a one-word correction to S13's surface.
+- [P][both] **Recorded, not built: a profile photo cannot be removed, only replaced.** The API takes
+  `null` for both `avatarUrl` and `coverUrl`, and the profile falls back to initials, but no control
+  exposes it — so a cover chosen once is permanent. Design principles' Agency is the rule, and the
+  gap is now much smaller than it was: the discard confirmation above means a *draft* is always
+  recoverable, and only an already-saved image is stuck. Exposing removal is a product decision
+  about a destructive action on a public profile, not an alignment fix, so it is flagged rather than
+  made — the same treatment S2 gave password recovery. Worth doing whenever S15 is next opened.
+- [P][both] Verified clean, and each checked rather than assumed: `textContentType="nickname"` on
+  the username is right and deliberately *not* `username`, which — unpaired with a password field —
+  would put the Passwords bar over a profile form; Return keys run `next` → `next` with
+  `submitBehavior="submit"`, so the keyboard stays up between fields (Virtual keyboards' "consider
+  customizing the Return key type"); the bio is `multiline` with a counter, which is what Text
+  fields means by matching a field's size to the text expected; and the clear control does *not*
+  fire validation, because clearing a field is the start of retyping it, not a detected problem.
+
+Guard added: `__tests__/hig-edit-profile.test.ts` (23 cases), backed by `lib/edit-profile-form.ts`
+as a testable rule layer — keystroke normalisation matches onboarding's; all three fields carry the
+API's own maximum; a display name is required; blur and save validate from one function; the
+availability check is debounced and skipped for a name the person already owns, an invalid one, or
+a blank display name; only a 400/409 is read as a verdict; Save refuses a refused name; the shared
+field carries the error, counter, hint and 44pt clear control and no screen draws its own; the
+leave guard exists and the Close control cannot disarm it; no `presentation: 'modal'` route calls
+`showActionSheet` (and a new modal route trips the list); the header is pinned above the scroller;
+the cover control draws neither the preview name nor the handle; the saving label changes; and the
+permission notice is not the save-failure notice. Extended: `hig-icon-size.test.ts` (this file to
+zero).
+
+**AND-pass 2026-08-27.** Pixel_9a, Android 16, dev client on this session's Metro. This unit touches
+a form and the keyboard, so the Android pass was mandatory rather than a spot-check. Captured: the
+new hero layout with the handle fully legible; the title in **Bricolage** (a `cardTitle` that is
+never re-weighted keeps its family — the S13 hazard's control case again); both clear controls, the
+hint line and the counter; **the docked Gboard up, with the focused bio fully visible above it and
+the pinned header still carrying Save** — the capture that proves the header finding; **hardware
+back with unsaved changes raising the system dialog**, in Android's own button order (KEEP EDITING
+left, DISCARD right), which is what using `Alert` rather than a custom dialog buys (D2); Discard
+verified to revert (the profile still read "Building" afterwards); and a full save round trip
+completing and navigating back. Edge-to-edge unchanged; `logcat` clear of `FATAL`/`SIGSEGV`/
+`libhwui`; the process survived every path.
+
+**Mechanics.** Two worth keeping. (1) The **Save control sits in the Android dev-launcher bubble's
+dead zone** — `input tap` on its centre was swallowed twice, and only a tap on its *left edge*
+reached it. The memory `android-dev-launcher-bubble-blocks-top-right-taps` says to unit-test
+top-right controls; the narrower truth is that the edge furthest from the bubble often still works,
+which is worth trying before giving up. (2) **A save can be exercised against production without
+changing anything**: the API trims every optional text field (`normalizeOptionalText`), so appending
+a trailing space to the bio enables Save, sends a real PATCH, and stores a byte-identical value.
+That runs the whole path — validation, request, refresh, navigation — on the user's own live profile
+with no visible edit. The emulator's Gboard also starts in floating one-handed mode, where it
+reports no height and covers nothing; `pm clear com.google.android.inputmethod.latin` docks it
+again, which is what makes a keyboard-inset capture meaningful.
