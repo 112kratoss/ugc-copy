@@ -101,6 +101,11 @@ re-read the codebase broadly or ask for past-chat context.
   platforms verify against the same Metro, per the parity protocol below. The worktree's
   `ugc-mobile/` has `.env.local` copied and `npm install` run; if "Cannot find module" ever appears
   inside packages there, run `npm ci` (corrupt worktree copy).
+- **Where the work currently sits (2026-08-27):** Phases 1–2 are closed on the `hig-alignment`
+  branch and **deliberately not merged** — `main` does not have F4, F6, N1, N2 or N3. The user's call
+  at the Phase 2 boundary was to keep accumulating on the branch, so branch from it rather than from
+  `main`, and expect the merge question again at the next boundary. Next `todo` on the board: **S5
+  showcase feed**, which opens Phase 3.
 - **Merging**: at phase boundaries, after `npm test` + `npm run typecheck` pass in the worktree's
   `ugc-mobile/`, ask the user before merging `hig-alignment` → `main` (and never push to `main`
   during an in-flight mobile store release). Store delivery rides the next release train
