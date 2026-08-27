@@ -107,11 +107,12 @@ re-read the codebase broadly or ask for past-chat context.
   inside packages there, run `npm ci` (corrupt worktree copy).
 - **Where the work currently sits (2026-08-27):** Phases 1-3 are closed on the `hig-alignment`
   branch and **deliberately not merged** - `main` has none of F4, F6, N1, N2, N3 or any Phase 3
-  surface. The user's call at the Phase 2 boundary was to keep accumulating on the branch, so branch
-  from it rather than from `main`. **Phase 3 closed with S13/S14**, so the next `todo` on the board
-  is **Phase 4**, starting at S2 (auth) - and this is a phase boundary, which per *Merging* below
-  means asking the user about `hig-alignment` -> `main` before starting it. Three things carry into
-  Phase 4: the composer's 21 off-ramp icon sizes are now the largest budget in
+  surface. **Phase 3 closed with S13/S14**, and the merge question was put again at that boundary:
+  the user's answer, as at Phase 2, was to keep accumulating on the branch. So branch from it rather
+  than from `main`, do not offer to merge mid-phase, and expect the question again at the Phase 4/5
+  boundary. (Checked when asking, and worth re-checking next time: no `mobile-store-release` run was
+  in flight, so a push would have been safe - that is the gate, not the size of the diff.) The next
+  `todo` on the board is **Phase 4**, starting at S2 (auth). Three things carry into it: the composer's 21 off-ramp icon sizes are now the largest budget in
   `hig-icon-size.test.ts`, with the home side menu's 11 next (S13/S14 took four files to zero and
   retired the last of S12's handoffs); F3 owns the bounce-disabled pair (`home-dashboard`, the
   alerts list) plus the 17 hidden scroll indicators, three of which are this unit's surfaces; and
