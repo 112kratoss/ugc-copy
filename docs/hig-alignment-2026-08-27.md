@@ -424,7 +424,7 @@ chapter) · SharePlay co-creation · push-to-start Live Activity for template ru
 | S19 templates | 4 | done | 0V/0D/3P | already the app's best-behaved commerce surface; icons and tokens snapped to the ramp |
 | S20 seller dashboard | 4 | done | 0V/0D/3P | numbers over charts (verified right); metrics readable by VoiceOver; enums stopped talking like the database |
 | S21 invite | 4 | done | 0V/1D/1P | Android stops claiming a share it cannot see; disclosure verified in the shared text |
-| S24 delete account | 4 | todo | — | |
+| S24 delete account | 4 | done | 0V/0D/2P | deletion says it is immediate; the goodbye alert now goes somewhere on purpose |
 | S26 notifications | 4 | todo | — | |
 | S0/S1/S27 launch/notfound/guest banner | 4 | todo | — | |
 | X1 motion pass | 5 | todo | — | |
@@ -2750,3 +2750,18 @@ distillations.
   dead imports dropped.
 iOS + AND-pass: verified on both with live zero-state metrics; the per-platform ShareGlyph renders
 its own shape on each OS (visible in the Link-visits card).
+
+### S24 delete account — audited 2026-08-28 · AND-pass: 2026-08-28
+Chapters read: Managing accounts (`managing-accounts`), Alerts (`alerts`).
+- Already right, and worth recording because Apple scrutinizes this flow: in-app deletion,
+  discoverable from settings (S16); type-DELETE friction naming the exact account; per-provider
+  re-authentication (password / Google / Apple); a failure notice that says plainly the account is
+  still active; a "Keep my account" way out; the completion notice ("notify people when deletion is
+  finished"). Subscription-billing clauses are n/a — the app sells consumable credits only, and
+  their loss is in the what-will-be-deleted list.
+- [P][both] The body never said deletion is immediate ("tell people when account deletion will
+  complete") → "…effective immediately."
+- [P][both] The success alert left the after-state to chance — an OK with no destination over a
+  screen whose account no longer exists → the OK now routes to the app's root deliberately.
+Verification is visual-only on both platforms by design: exercising the form on-device would
+delete the live test account. The flow's logic is pinned by delete-account-screen.test.tsx.
